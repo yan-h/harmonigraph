@@ -122,12 +122,14 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             egui::Stroke::new(2.0, color),
             egui::StrokeKind::Inside,
         );
-        painter.text(
+        outlined_text(
+            &painter,
             rect.left_top() + egui::vec2(10.0, 8.0),
             egui::Align2::LEFT_TOP,
-            "LEARN",
+            "LEARN".to_string(),
             egui::FontId::monospace(12.0),
             color,
+            theme::well().gamma_multiply(learn_pulse(now)),
         );
     }
 
@@ -152,12 +154,14 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             let color = theme::text().gamma_multiply(strength);
             // Monospace for in-lattice text: labels align across nodes and
             // match the technical feel of the readouts.
-            ui.painter().text(
+            outlined_text(
+                ui.painter(),
                 egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
                 egui::Align2::CENTER_TOP,
                 node.lattice_pos.note_name().to_string(),
                 egui::FontId::monospace(12.0),
                 color,
+                theme::well().gamma_multiply(strength),
             );
         }
     }
@@ -186,6 +190,36 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             ui.label(text);
         });
     }
+}
+
+/// Text drawn over the 3D view, haloed with a 1px outline so it stays
+/// readable whatever ends up behind it (bright nodes, edges, glow). The
+/// outline color should be the skin's recessed surface (`theme::well`),
+/// which contrasts with its text color by construction.
+fn outlined_text(
+    painter: &egui::Painter,
+    anchor: egui::Pos2,
+    align: egui::Align2,
+    text: String,
+    font: egui::FontId,
+    color: egui::Color32,
+    outline: egui::Color32,
+) {
+    let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
+    let pos = align.anchor_size(anchor, galley.size()).min;
+    for (dx, dy) in [
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (-1.0, 0.0),
+        (1.0, 0.0),
+        (-1.0, 1.0),
+        (0.0, 1.0),
+        (1.0, 1.0),
+    ] {
+        painter.galley(pos + egui::vec2(dx, dy), galley.clone(), outline);
+    }
+    painter.galley(pos, galley, color);
 }
 
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe
