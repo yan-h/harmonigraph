@@ -131,15 +131,15 @@ struct UiPersist {
 /// the shell's clock (the same clock used to timestamp `NoteEvent`s).
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     state.tuning = params::tuning_from_params(params);
-    state.view.highlight_time = params.get(params::ParamKey::HighlightTime);
-    state.view.octave_highlight_time = params.get(params::ParamKey::OctaveHighlightTime);
+    state.view.pitch_class_fade_time = params.get(params::ParamKey::PitchClassFade);
+    state.view.octave_fade_time = params.get(params::ParamKey::OctaveFade);
     state.view.darkest_pitch = params.get(params::ParamKey::DarkestPitch);
     state.view.brightest_pitch = params.get(params::ParamKey::BrightestPitch);
     // Voices must outlive the LONGER of the two fades or the octave
     // indicators get truncated when the note highlight ends first.
     state.tracker.prune(
         now,
-        state.view.highlight_time.max(state.view.octave_highlight_time),
+        state.view.pitch_class_fade_time.max(state.view.octave_fade_time),
     );
 
     // DockState has to be moved out while panes borrow the rest of `state`.

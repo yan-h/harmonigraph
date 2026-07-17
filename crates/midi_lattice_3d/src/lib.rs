@@ -47,10 +47,10 @@ pub struct MidiLattice3dParams {
     pub seven: FloatParam,
     #[id = "tuning-tolerance"]
     pub tolerance: FloatParam,
-    #[id = "highlight-time"]
-    pub highlight_time: FloatParam,
-    #[id = "octave-highlight-time"]
-    pub octave_highlight_time: FloatParam,
+    #[id = "pitch-class-fade"]
+    pub pitch_class_fade: FloatParam,
+    #[id = "octave-fade"]
+    pub octave_fade: FloatParam,
     #[id = "darkest-pitch"]
     pub darkest_pitch: FloatParam,
     #[id = "brightest-pitch"]
@@ -98,7 +98,7 @@ impl Default for MidiLattice3dParams {
                     factor: FloatRange::skew_factor(-2.5),
                 },
             ),
-            highlight_time: FloatParam::new(
+            pitch_class_fade: FloatParam::new(
                 "Pitch Class Fade (sec)",
                 1.0,
                 FloatRange::Skewed {
@@ -107,7 +107,7 @@ impl Default for MidiLattice3dParams {
                     factor: FloatRange::skew_factor(-2.0),
                 },
             ),
-            octave_highlight_time: FloatParam::new(
+            octave_fade: FloatParam::new(
                 "Octave Fade (sec)",
                 1.0,
                 FloatRange::Skewed {
@@ -132,8 +132,8 @@ impl MidiLattice3dParams {
             ParamKey::Five => &self.five,
             ParamKey::Seven => &self.seven,
             ParamKey::Tolerance => &self.tolerance,
-            ParamKey::HighlightTime => &self.highlight_time,
-            ParamKey::OctaveHighlightTime => &self.octave_highlight_time,
+            ParamKey::PitchClassFade => &self.pitch_class_fade,
+            ParamKey::OctaveFade => &self.octave_fade,
             ParamKey::DarkestPitch => &self.darkest_pitch,
             ParamKey::BrightestPitch => &self.brightest_pitch,
         }

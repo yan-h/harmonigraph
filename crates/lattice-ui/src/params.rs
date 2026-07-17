@@ -22,9 +22,9 @@ pub enum ParamKey {
     /// Node matching tolerance in cents.
     Tolerance,
     /// Seconds a note stays highlighted after release.
-    HighlightTime,
+    PitchClassFade,
     /// Seconds an octave indicator keeps fading after release.
-    OctaveHighlightTime,
+    OctaveFade,
     /// Pitch (MIDI note) shown darkest on pitch-colored channels (10-14 in
     /// MIDI convention).
     DarkestPitch,
@@ -43,8 +43,8 @@ impl ParamKey {
         ParamKey::Five,
         ParamKey::Seven,
         ParamKey::Tolerance,
-        ParamKey::HighlightTime,
-        ParamKey::OctaveHighlightTime,
+        ParamKey::PitchClassFade,
+        ParamKey::OctaveFade,
         ParamKey::DarkestPitch,
         ParamKey::BrightestPitch,
     ];
@@ -56,8 +56,8 @@ impl ParamKey {
             ParamKey::Five => "Major third (¢)",
             ParamKey::Seven => "Harmonic seventh (¢)",
             ParamKey::Tolerance => "Tolerance (¢)",
-            ParamKey::HighlightTime => "Pitch class fade (s)",
-            ParamKey::OctaveHighlightTime => "Octave fade (s)",
+            ParamKey::PitchClassFade => "Pitch class fade (s)",
+            ParamKey::OctaveFade => "Octave fade (s)",
             ParamKey::DarkestPitch => "Darkest pitch",
             ParamKey::BrightestPitch => "Brightest pitch",
         }
@@ -76,8 +76,8 @@ impl ParamKey {
                 tuning::SEVEN_JUST - MAX_TUNING_OFFSET..=tuning::SEVEN_JUST + MAX_TUNING_OFFSET
             }
             ParamKey::Tolerance => 0.001..=49.999,
-            ParamKey::HighlightTime => 0.0..=100.0,
-            ParamKey::OctaveHighlightTime => 0.0..=100.0,
+            ParamKey::PitchClassFade => 0.0..=100.0,
+            ParamKey::OctaveFade => 0.0..=100.0,
             // Same ranges as v1's grid params.
             ParamKey::DarkestPitch => 0.0..=60.0,
             ParamKey::BrightestPitch => 60.0..=120.0,
@@ -87,7 +87,7 @@ impl ParamKey {
     pub fn logarithmic(self) -> bool {
         matches!(
             self,
-            ParamKey::Tolerance | ParamKey::HighlightTime | ParamKey::OctaveHighlightTime
+            ParamKey::Tolerance | ParamKey::PitchClassFade | ParamKey::OctaveFade
         )
     }
 }

@@ -55,18 +55,18 @@ pub struct Voice {
 
 impl Voice {
     /// Envelope in `[0, 1]` driving the visual intensity of this voice:
-    /// 1 while held, then a linear decay over `highlight_time` seconds.
+    /// 1 while held, then a linear decay over `fade_time` seconds.
     /// Fancier envelope shapes belong in the scene layer once we experiment;
     /// this is the single source of truth for "is this voice still visible".
-    pub fn activation(&self, now: Time, highlight_time: f32) -> f32 {
+    pub fn activation(&self, now: Time, fade_time: f32) -> f32 {
         match self.state {
             VoiceState::Held => 1.0,
             VoiceState::Released { at } => {
-                if highlight_time <= 0.0 {
+                if fade_time <= 0.0 {
                     return 0.0;
                 }
                 let elapsed = (now - at).max(0.0) as f32;
-                (1.0 - elapsed / highlight_time).max(0.0)
+                (1.0 - elapsed / fade_time).max(0.0)
             }
         }
     }
@@ -122,11 +122,11 @@ impl NoteTracker {
         }
     }
 
-    /// Drop released voices whose highlight has fully decayed. Call once per
+    /// Drop released voices whose fade has fully completed. Call once per
     /// frame before iterating.
-    pub fn prune(&mut self, now: Time, highlight_time: f32) {
+    pub fn prune(&mut self, now: Time, fade_time: f32) {
         self.released
-            .retain(|v| v.activation(now, highlight_time) > 0.0);
+            .retain(|v| v.activation(now, fade_time) > 0.0);
     }
 
     /// All voices that should currently be visualized (held first).
@@ -167,10 +167,10 @@ mod tests {
 
         tracker.handle_event(off(1.0, 60));
         assert_eq!(tracker.held_count(), 0);
-        // Still visible mid-decay...
+        // Still visible mid-fade...
         tracker.prune(1.5, 1.0);
         assert_eq!(tracker.voices().count(), 1);
-        // ...gone after the highlight time has fully elapsed.
+        // ...gone after the fade time has fully elapsed.
         tracker.prune(2.1, 1.0);
         assert_eq!(tracker.voices().count(), 0);
     }

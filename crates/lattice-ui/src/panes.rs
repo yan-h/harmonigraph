@@ -360,7 +360,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // Voice bars: height follows the same envelope as the lattice glow,
     // weighted by velocity; color matches the lattice node color.
     for voice in state.tracker.voices() {
-        let activation = voice.activation(now, state.view.highlight_time);
+        let activation = voice.activation(now, state.view.pitch_class_fade_time);
         if activation <= 0.0 {
             continue;
         }

@@ -112,8 +112,8 @@ impl Default for StandaloneParams {
                 // Wide tolerance so 12-TET mock notes light up the justly
                 // tuned lattice out of the box.
                 (ParamKey::Tolerance, Cell::new(20.0)),
-                (ParamKey::HighlightTime, Cell::new(1.0)),
-                (ParamKey::OctaveHighlightTime, Cell::new(1.0)),
+                (ParamKey::PitchClassFade, Cell::new(1.0)),
+                (ParamKey::OctaveFade, Cell::new(1.0)),
                 (ParamKey::DarkestPitch, Cell::new(24.0)),
                 (ParamKey::BrightestPitch, Cell::new(108.0)),
             ],

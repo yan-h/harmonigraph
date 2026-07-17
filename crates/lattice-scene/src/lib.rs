@@ -68,13 +68,13 @@ pub struct ViewConfig {
     pub extent_threes: i32,
     pub extent_fives: i32,
     pub extent_sevens: i32,
-    /// Seconds a note stays highlighted after release (mirrors the plugin
-    /// parameter; the shell copies it in each frame).
-    pub highlight_time: f32,
+    /// Seconds a released note's pitch class keeps fading (mirrors the
+    /// plugin parameter; the shell copies it in each frame).
+    pub pitch_class_fade_time: f32,
     /// Seconds an octave indicator keeps fading after release; independent
     /// of the note highlight. serde(default) keeps older blobs loadable.
-    #[serde(default = "default_octave_highlight")]
-    pub octave_highlight_time: f32,
+    #[serde(default = "default_octave_fade")]
+    pub octave_fade_time: f32,
     /// How nodes indicate sounding octaves.
     pub octave_style: OctaveStyle,
     /// Pitch (MIDI note) mapped to the darkest gradient color on
@@ -92,7 +92,7 @@ fn default_true() -> bool {
     true
 }
 
-fn default_octave_highlight() -> f32 {
+fn default_octave_fade() -> f32 {
     1.0
 }
 
@@ -103,8 +103,8 @@ impl Default for ViewConfig {
             extent_threes: 3,
             extent_fives: 3,
             extent_sevens: 0,
-            highlight_time: 1.0,
-            octave_highlight_time: 1.0,
+            pitch_class_fade_time: 1.0,
+            octave_fade_time: 1.0,
             octave_style: OctaveStyle::default(),
             darkest_pitch: 24.0,
             brightest_pitch: 108.0,
@@ -272,7 +272,7 @@ pub fn derive_scene(
         // index voices by quantized pitch class instead.
         for voice in tracker.voices() {
             if tuning.matches(voice.pitch_class, node_pc) {
-                let a = voice.activation(now, view.highlight_time);
+                let a = voice.activation(now, view.pitch_class_fade_time);
                 if a > activation {
                     activation = a;
                     color = channel_color(
@@ -285,7 +285,7 @@ pub fn derive_scene(
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
                 octaves[slot] =
-                    octaves[slot].max(voice.activation(now, view.octave_highlight_time));
+                    octaves[slot].max(voice.activation(now, view.octave_fade_time));
             }
         }
 
@@ -385,8 +385,8 @@ mod tests {
             kind: NoteEventKind::Off, // ...and released
         });
 
-        // Half a highlight_time after the release.
-        let view = ViewConfig { highlight_time: 1.0, ..ViewConfig::default() };
+        // Half a pitch_class_fade_time after the release.
+        let view = ViewConfig { pitch_class_fade_time: 1.0, ..ViewConfig::default() };
         let scene = derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 0.6);
         let origin = scene
             .nodes
@@ -420,12 +420,12 @@ mod tests {
             kind: NoteEventKind::Off,
         });
         let view = ViewConfig {
-            highlight_time: 0.2,
-            octave_highlight_time: 2.0,
+            pitch_class_fade_time: 0.2,
+            octave_fade_time: 2.0,
             ..ViewConfig::default()
         };
         // Prune with the longer of the two, as root_ui does.
-        tracker.prune(1.0, view.highlight_time.max(view.octave_highlight_time));
+        tracker.prune(1.0, view.pitch_class_fade_time.max(view.octave_fade_time));
         let scene =
             derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 1.0);
         let origin = scene
@@ -433,7 +433,7 @@ mod tests {
             .iter()
             .find(|n| n.lattice_pos == LatticePos::ORIGIN)
             .unwrap();
-        assert_eq!(origin.activation, 0.0, "note highlight has ended");
+        assert_eq!(origin.activation, 0.0, "pitch class fade has ended");
         assert!(
             origin.octaves[4] > 0.0 && origin.octaves[4] < 0.75,
             "octave still mid-fade, got {}",
