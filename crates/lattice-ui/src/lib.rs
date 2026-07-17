@@ -149,6 +149,14 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     learn_step(state, params);
 
     state.tuning = params::tuning_from_params(params);
+    // Meantone mode locks the major third to four perfect fifths: derive it
+    // from the fifth here, so the whole pipeline (scene pitch classes,
+    // matching, readouts) sees the locked value without any meantone
+    // awareness of its own. The Five param is left untouched (inert while
+    // the lock is on).
+    if state.view.meantone {
+        state.tuning.five = lattice_core::tuning::meantone_third(state.tuning.three);
+    }
     state.frame_params = FrameParams {
         pitch_class_fade_time: params.get(params::ParamKey::PitchClassFade),
         octave_fade_time: params.get(params::ParamKey::OctaveFade),
@@ -225,6 +233,13 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
                 params.set(key, value);
             }
         }
+        // Auto-engage (or release) meantone mode from what was learned:
+        // when the chord pins down both a fifth and a third, turn meantone
+        // on iff they sit in the meantone relationship. Chords that fix
+        // only one of the two leave the mode as the user left it.
+        if let (Some(three), Some(five)) = (learned.three, learned.five) {
+            state.view.meantone = lattice_core::tuning::is_meantone(three, five);
+        }
         state
             .console
             .log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
@@ -246,6 +261,7 @@ mod tests {
         // Off is the only non-default octave style, so it proves the field
         // actually round-trips rather than matching the default by luck.
         state.view.octave_style = lattice_scene::OctaveStyle::Off;
+        state.view.meantone = true;
         let saved = state.save_persist();
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -254,6 +270,7 @@ mod tests {
         assert_eq!(restored.camera.distance, 42.0);
         assert_eq!(restored.view.extent_sevens, 3);
         assert_eq!(restored.view.octave_style, lattice_scene::OctaveStyle::Off);
+        assert!(restored.view.meantone);
     }
 
     #[test]
@@ -310,5 +327,64 @@ mod tests {
         state.learn_active = true;
         learn_step(&mut state, &backend);
         assert_eq!(backend.sets.borrow().len(), first.len() * 2);
+    }
+
+    /// Hold `notes` as channel-0 voices, each optionally bent by a per-note
+    /// tuning offset (cents). Used to synthesize just vs 12-TET chords.
+    fn hold_chord(state: &mut SharedState, notes: &[(u8, f32)]) {
+        for &(note, cents) in notes {
+            state.tracker.handle_event(lattice_core::NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: lattice_core::NoteEventKind::On { velocity: 1.0 },
+            });
+            if cents != 0.0 {
+                state.tracker.handle_event(lattice_core::NoteEvent {
+                    time: 0.0,
+                    channel: 0,
+                    note,
+                    kind: lattice_core::NoteEventKind::Tuning { semitones: cents / 100.0 },
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn learn_enables_meantone_from_a_12tet_triad() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let backend = RecordingBackend::default();
+        state.learn_active = true;
+        // Plain 12-TET C-E-G pins a 700¢ fifth and a 400¢ third; since
+        // 400 = 4·700 − 2400 this triad IS a meantone.
+        hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0)]);
+        learn_step(&mut state, &backend);
+        assert!(state.view.meantone, "a 12-TET triad should engage meantone");
+    }
+
+    #[test]
+    fn learn_disables_meantone_from_a_just_triad() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let backend = RecordingBackend::default();
+        state.learn_active = true;
+        state.view.meantone = true; // start engaged
+        // C + a JUST major third (386.31¢) + G. The just third sits a full
+        // syntonic comma below four fifths, so this is not a meantone.
+        let just_offset = lattice_core::tuning::FIVE_JUST - 400.0;
+        hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
+        learn_step(&mut state, &backend);
+        assert!(!state.view.meantone, "a just third should release meantone");
+    }
+
+    #[test]
+    fn learn_leaves_meantone_unchanged_without_a_third() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let backend = RecordingBackend::default();
+        state.learn_active = true;
+        state.view.meantone = true;
+        // A bare fifth fixes no third, so the meantone flag is left alone.
+        hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
+        learn_step(&mut state, &backend);
+        assert!(state.view.meantone, "a bare fifth shouldn't change the flag");
     }
 }

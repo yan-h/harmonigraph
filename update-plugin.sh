@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# Rebuild the plugin from the CURRENT checkout (works from a git worktree)
+# and swap the fresh binary into the MAIN checkout's target/bundled/ — the
+# location Bitwig scans — then re-sign ad-hoc (required on Apple Silicon,
+# where an invalid signature makes the dynamic loader refuse the binary).
+#
+# Run this after ANY change you want to see in the DAW, then rescan/restart
+# the plugin in Bitwig. Works from the main checkout or any worktree.
+#
+# Why this script exists (two footguns it sidesteps):
+#   1. `cargo xtask bundle` picks the *topmost* Cargo.toml ancestor, so run
+#      from a nested worktree it silently bundles the MAIN checkout's
+#      sources, not the branch (nice-plug-xtask's chdir_workspace_root).
+#   2. Each worktree has its own target/, but Bitwig only scans the main
+#      checkout's target/bundled/, so a branch build is invisible there
+#      until its binary is copied over.
+# Plain `cargo build` resolves the *nearest* workspace root (= the branch);
+# we then copy the artifact into the main checkout's bundles explicitly.
+set -euo pipefail
+
+PKG="midi_lattice_3d"
+NAME="MIDI Lattice 3D"
+
+# Current checkout (where the build output lands) and the main working tree
+# (first entry of `git worktree list`, whose target/bundled/ Bitwig scans).
+HERE="$(git rev-parse --show-toplevel)"
+MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+BUNDLED="$MAIN/target/bundled"
+DYLIB="$HERE/target/release/lib${PKG}.dylib"
+
+echo "Building $PKG (release) from $HERE ..."
+( cd "$HERE" && cargo build --release -p "$PKG" )
+[ -f "$DYLIB" ] || { echo "ERROR: $DYLIB not found after build" >&2; exit 1; }
+
+updated=0
+for EXT in clap vst3; do
+  BUNDLE="$BUNDLED/$NAME.$EXT"
+  if [ ! -d "$BUNDLE" ]; then
+    echo "WARNING: $BUNDLE missing — create the bundles once from the main" >&2
+    echo "         checkout: (cd \"$MAIN\" && cargo xtask bundle $PKG --release)" >&2
+    continue
+  fi
+  cp "$DYLIB" "$BUNDLE/Contents/MacOS/$NAME"
+  codesign --force --sign - "$BUNDLE"
+  codesign --verify --verbose=1 "$BUNDLE"
+  echo "Updated + signed: $BUNDLE"
+  updated=$((updated + 1))
+done
+
+echo
+if [ "$updated" -gt 0 ]; then
+  echo "Done ($updated bundle(s)). Rescan/restart the plugin in Bitwig."
+else
+  echo "No bundles updated — see warnings above." >&2
+  exit 1
+fi

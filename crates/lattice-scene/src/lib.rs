@@ -110,6 +110,12 @@ pub struct ViewConfig {
     /// nodes, so a chord's interval structure renders as geometry.
     #[serde(default)]
     pub show_chord_edges: bool,
+    /// Meantone mode: lock the major-third tuning to four perfect fifths
+    /// (temper out the syntonic comma). While on, the third-tuning value is
+    /// derived from the fifth (in `root_ui`) and note-name labels drop
+    /// their comma marks; Learn mode toggles this from the held chord.
+    #[serde(default)]
+    pub meantone: bool,
 }
 
 fn default_true() -> bool {
@@ -151,6 +157,7 @@ impl Default for ViewConfig {
             show_cents: true,
             node_style: NodeStyle::default(),
             show_chord_edges: false,
+            meantone: false,
         }
     }
 }

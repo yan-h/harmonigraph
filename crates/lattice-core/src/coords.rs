@@ -81,6 +81,16 @@ pub struct NoteName {
     pub syntonic_commas: i32,
 }
 
+impl NoteName {
+    /// The same spelling with the syntonic-comma marks dropped. In a
+    /// meantone temperament the syntonic comma is tempered out, so `E-`
+    /// (one just third up) and `E` (four fifths up) name the same pitch;
+    /// meantone mode spells both without the comma.
+    pub fn without_syntonic_commas(self) -> NoteName {
+        NoteName { syntonic_commas: 0, ..self }
+    }
+}
+
 impl std::fmt::Display for NoteName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.letter)?;
@@ -126,6 +136,28 @@ mod tests {
         assert_eq!(name.to_string(), "A+");
         // Two just thirds up: G♯ lowered by two commas.
         assert_eq!(LatticePos::new(0, 2, 0).note_name().to_string(), "G\u{266F}-2");
+    }
+
+    #[test]
+    fn meantone_spelling_drops_commas() {
+        // One just third up is E- in just spelling, plain E in meantone.
+        assert_eq!(
+            LatticePos::new(0, 1, 0).note_name().without_syntonic_commas().to_string(),
+            "E"
+        );
+        // Two just thirds up: G♯-2 becomes plain G♯.
+        assert_eq!(
+            LatticePos::new(0, 2, 0).note_name().without_syntonic_commas().to_string(),
+            "G\u{266F}"
+        );
+        // A name with no comma is unchanged (four fifths up is already E).
+        assert_eq!(
+            LatticePos::new(4, 0, 0).note_name().without_syntonic_commas().to_string(),
+            "E"
+        );
+        // Sharps/flats survive; only the comma is removed.
+        let name = NoteName { letter: 'B', sharps: -2, syntonic_commas: 2 };
+        assert_eq!(name.without_syntonic_commas().to_string(), "B\u{266D}\u{266D}");
     }
 
     #[test]

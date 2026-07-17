@@ -20,9 +20,20 @@ cargo test
 
 # Build the CLAP/VST3 bundles (output in <target-dir>/bundled/).
 cargo xtask bundle midi_lattice_3d --release
+
+# Rebuild + hot-swap the binary into the main checkout's bundles (works
+# from a git worktree; re-signs ad-hoc). Then rescan the plugin in the DAW.
+./update-plugin.sh
 ```
 
 Bundles land in `target/bundled/`.
+
+> **Testing a branch in the DAW:** the DAW scans the **main checkout's**
+> `target/bundled/`. `cargo xtask bundle` run from a worktree bundles the
+> *main* sources (it walks to the topmost `Cargo.toml`), and each worktree
+> has its own `target/`, so a branch build is otherwise invisible. Use
+> `./update-plugin.sh` — it builds the current branch and swaps the fresh,
+> re-signed binary into the bundles the DAW actually loads.
 
 ## Architecture
 
