@@ -19,9 +19,11 @@ struct Uniforms {
 struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
-    // x: activation 0..1, y: hovered 0/1, z: octave_mask (bits as f32),
+    // x: activation 0..1, y: hovered 0/1, z: unused,
     // w: outlined 0/1 (channel-14 voices render as a ring, not a disc)
     @location(2) params: vec4<f32>,
+    // Per-octave activation, 8 bits per slot, little-endian packed.
+    @location(3) octaves: vec3<u32>,
 };
 
 struct VsOut {
@@ -29,6 +31,7 @@ struct VsOut {
     @location(0) uv: vec2<f32>, // -1..1 across the quad
     @location(1) color: vec4<f32>,
     @location(2) params: vec4<f32>,
+    @location(3) @interpolate(flat) octaves: vec3<u32>,
 };
 
 @vertex
@@ -56,11 +59,20 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.uv = corner;
     out.color = inst.color;
     out.params = inst.params;
+    out.octaves = inst.octaves;
     return out;
 }
 
 // Number of octave slots the indicators display (MIDI octaves 0..9).
 const OCTAVE_SLOTS: u32 = 10u;
+
+// Activation level (0..1) of octave slot `i`, unpacked from 8-bit fields.
+// Each octave carries its OWN envelope so indicators fade independently
+// (a released C5 decays even while C4 holds the node fully lit).
+fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
+    let word = octaves[i / 4u];
+    return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
+}
 
 // Tick column geometry (modes 3..6), all in quad UV units.
 const TICK_X: f32 = 0.76; // column center
@@ -162,21 +174,29 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let rgb = in.color.rgb * brightness;
     let base_alpha = clamp(disc + glow, 0.0, 1.0);
 
-    // Octave indicators, composited over the disc/glow. Glyphs fade with
-    // the same activation envelope as the node so releases decay together.
+    // Octave indicators, composited over the disc/glow. Each slot fades on
+    // its own octave's envelope; the reference furniture follows the
+    // brightest slot so it disappears with the last sounding octave.
     let mode = u32(u.misc.z + 0.5);
-    let mask = u32(in.params.z + 0.5);
     var glyph = 0.0;
-    if mode != 0u && mask != 0u {
+    var max_level = 0.0;
+    if mode != 0u {
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-            if ((mask >> i) & 1u) != 0u {
-                glyph = max(glyph, octave_glyph(mode, i, in.uv, d));
+            let level = octave_level(in.octaves, i);
+            if level > 0.0 {
+                max_level = max(max_level, level);
+                glyph = max(
+                    glyph,
+                    octave_glyph(mode, i, in.uv, d) * (0.35 + 0.65 * level),
+                );
             }
         }
-        if mode >= 3u {
-            glyph = max(glyph, tick_reference(mode, in.uv));
+        if mode >= 3u && max_level > 0.0 {
+            glyph = max(
+                glyph,
+                tick_reference(mode, in.uv) * (0.35 + 0.65 * max_level),
+            );
         }
-        glyph = glyph * (0.35 + 0.65 * activation);
     }
     // Glyphs render in a lifted, whitened version of the node color so
     // they read against both the disc and the background.

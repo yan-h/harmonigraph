@@ -44,13 +44,18 @@ struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
     params: [f32; 4],
+    /// Per-octave activation, 8 bits per slot, little-endian packed
+    /// (slot 0 = lowest byte of the first word).
+    octaves: [u32; 3],
 }
 
 impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x4],
+        attributes: &wgpu::vertex_attr_array![
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3
+        ],
     };
 }
 
@@ -102,15 +107,23 @@ impl LatticeCallback {
 
         let instances = order
             .into_iter()
-            .map(|(_, n)| GpuInstance {
-                world_pos: n.world_pos.to_array(),
-                color: n.color.to_array(),
-                params: [
-                    n.activation,
-                    if n.hovered { 1.0 } else { 0.0 },
-                    n.octave_mask as f32,
-                    if n.outlined { 1.0 } else { 0.0 },
-                ],
+            .map(|(_, n)| {
+                let mut octaves = [0u32; 3];
+                for (slot, &level) in n.octaves.iter().enumerate() {
+                    let byte = (level.clamp(0.0, 1.0) * 255.0).round() as u32;
+                    octaves[slot / 4] |= byte << ((slot % 4) * 8);
+                }
+                GpuInstance {
+                    world_pos: n.world_pos.to_array(),
+                    color: n.color.to_array(),
+                    params: [
+                        n.activation,
+                        if n.hovered { 1.0 } else { 0.0 },
+                        0.0,
+                        if n.outlined { 1.0 } else { 0.0 },
+                    ],
+                    octaves,
+                }
             })
             .collect();
 

@@ -156,6 +156,9 @@ impl Camera {
     }
 }
 
+/// Octave indicator slots (MIDI octaves 0..=9).
+pub const OCTAVE_SLOTS: usize = 10;
+
 /// One lattice node, ready for instanced rendering.
 #[derive(Clone, Copy, Debug)]
 pub struct NodeInstance {
@@ -165,9 +168,10 @@ pub struct NodeInstance {
     pub color: Vec4,
     /// 0 = idle, 1 = fully lit. Held notes are 1; released notes decay.
     pub activation: f32,
-    /// Bit i set = the node's pitch class is sounding in MIDI octave i
-    /// (0..=15 clamped). Drives the per-node octave indicators.
-    pub octave_mask: u16,
+    /// Per-octave activation (slot = MIDI octave 0..=9, clamped): each
+    /// octave's indicator fades on its own voice's envelope, independent of
+    /// the node's overall activation.
+    pub octaves: [f32; OCTAVE_SLOTS],
     /// Render as an outline instead of a filled disc (channel 14, v1's
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
@@ -251,7 +255,7 @@ pub fn derive_scene(
         let node_pc = tuning.pitch_class(pos);
 
         let mut activation = 0.0f32;
-        let mut octave_mask = 0u16;
+        let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = skin::active_skin().node_idle;
         let mut outlined = false;
 
@@ -270,7 +274,8 @@ pub fn derive_scene(
                     );
                     outlined = voice.channel == 14;
                 }
-                octave_mask |= 1 << voice.octave.clamp(0, 15) as u16;
+                let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
+                octaves[slot] = octaves[slot].max(a);
             }
         }
 
@@ -279,7 +284,7 @@ pub fn derive_scene(
             world_pos: lattice_to_world(pos, view.spacing),
             color,
             activation,
-            octave_mask,
+            octaves,
             outlined,
             hovered: hovered == Some(pos),
             cents: node_pc.to_cents(),
@@ -353,6 +358,41 @@ mod tests {
     }
 
     #[test]
+    fn octaves_fade_independently() {
+        // Hold C4, tap-and-release C5: the octave-5 indicator must decay on
+        // its own envelope even though the node stays fully active.
+        let mut tracker = NoteTracker::new();
+        for (note, kind) in [
+            (60, NoteEventKind::On { velocity: 1.0 }), // C4 held
+            (72, NoteEventKind::On { velocity: 1.0 }), // C5 tapped...
+        ] {
+            tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind });
+        }
+        tracker.handle_event(NoteEvent {
+            time: 0.1,
+            channel: 0,
+            note: 72,
+            kind: NoteEventKind::Off, // ...and released
+        });
+
+        // Half a highlight_time after the release.
+        let view = ViewConfig { highlight_time: 1.0, ..ViewConfig::default() };
+        let scene = derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 0.6);
+        let origin = scene
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
+            .unwrap();
+        assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
+        assert_eq!(origin.octaves[4], 1.0, "held octave at full");
+        assert!(
+            origin.octaves[5] > 0.0 && origin.octaves[5] < 0.75,
+            "released octave mid-fade, got {}",
+            origin.octaves[5]
+        );
+    }
+
+    #[test]
     fn channel_14_voices_render_outlined() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent {
@@ -401,6 +441,6 @@ mod tests {
             .find(|n| n.lattice_pos == LatticePos::ORIGIN)
             .unwrap();
         assert_eq!(origin.activation, 1.0);
-        assert_eq!(origin.octave_mask, 1 << 4);
+        assert_eq!(origin.octaves[4], 1.0);
     }
 }
