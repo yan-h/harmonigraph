@@ -187,7 +187,9 @@ impl Editor for LatticeEditor {
                 shared: self.shared.clone(),
                 params: self.params.clone(),
             },
-            |_egui_ctx: &Context, _queue, _state: &mut WindowState| {},
+            |egui_ctx: &Context, _queue, _state: &mut WindowState| {
+                lattice_ui::theme::apply_theme(egui_ctx);
+            },
             move |ui: &mut egui::Ui, queue, state: &mut WindowState| {
                 let egui_ctx = ui.ctx().clone();
                 let egui_ctx = &egui_ctx;

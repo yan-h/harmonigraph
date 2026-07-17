@@ -24,6 +24,7 @@ fn main() -> eframe::Result {
         "MIDI Lattice 3D — dev harness",
         options,
         Box::new(|cc| {
+            lattice_ui::theme::apply_theme(&cc.egui_ctx);
             let render_state = cc
                 .wgpu_render_state
                 .as_ref()

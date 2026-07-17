@@ -3,6 +3,7 @@
 //! editor call [`root_ui`] once per egui frame; everything else is internal.
 
 pub mod params;
+pub mod theme;
 mod panes;
 
 use std::collections::VecDeque;
@@ -102,7 +103,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
     DockArea::new(&mut dock)
-        .style(egui_dock::Style::from_egui(ui.style()))
+        .style(theme::dock_style(ui.style()))
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     state.dock = dock;
 
