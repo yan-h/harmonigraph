@@ -56,7 +56,7 @@ impl ParamKey {
             ParamKey::Five => "Major third (¢)",
             ParamKey::Seven => "Harmonic seventh (¢)",
             ParamKey::Tolerance => "Tolerance (¢)",
-            ParamKey::HighlightTime => "Highlight (s)",
+            ParamKey::HighlightTime => "Pitch class fade (s)",
             ParamKey::OctaveHighlightTime => "Octave fade (s)",
             ParamKey::DarkestPitch => "Darkest pitch",
             ParamKey::BrightestPitch => "Brightest pitch",

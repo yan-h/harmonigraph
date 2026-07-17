@@ -99,7 +99,7 @@ impl Default for MidiLattice3dParams {
                 },
             ),
             highlight_time: FloatParam::new(
-                "Note Highlight (sec)",
+                "Pitch Class Fade (sec)",
                 1.0,
                 FloatRange::Skewed {
                     min: 0.0,
