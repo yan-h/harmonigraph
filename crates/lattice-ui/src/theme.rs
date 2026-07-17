@@ -70,36 +70,55 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(5);
 
 // ---- Fonts -----------------------------------------------------------------
 
-/// Install the product fonts: Atkinson Hyperlegible for all proportional
-/// text, Atkinson Hyperlegible Mono for monospace (numerals in ValueBars
-/// and readouts, the console). Both OFL; license texts ship next to the
-/// TTFs in `fonts/`. egui's bundled faces remain as fallbacks.
+/// The named family headings resolve to (Atkinson Bold first).
+pub const HEADING_FAMILY: &str = "heading";
+
+/// Install the product fonts: Atkinson Hyperlegible for proportional text
+/// (with its Bold in a dedicated heading family), Iosevka Fixed for
+/// monospace — chosen for its narrow numerals in ValueBars and readouts,
+/// and used by the console. All OFL; license texts ship next to the TTFs
+/// in `fonts/`. egui's bundled faces remain as fallbacks.
 fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
 
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(
-        "AtkinsonHyperlegible".to_owned(),
-        std::sync::Arc::new(FontData::from_static(include_bytes!(
-            "../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf"
-        ))),
-    );
-    fonts.font_data.insert(
-        "AtkinsonHyperlegibleMono".to_owned(),
-        std::sync::Arc::new(FontData::from_static(include_bytes!(
-            "../fonts/atkinsonhyperlegiblemono/AtkinsonHyperlegibleMono-Regular.ttf"
-        ))),
-    );
-    fonts
+    for (name, bytes) in [
+        (
+            "AtkinsonHyperlegible",
+            &include_bytes!("../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf")[..],
+        ),
+        (
+            "AtkinsonHyperlegibleBold",
+            &include_bytes!("../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf")[..],
+        ),
+        (
+            "IosevkaFixed",
+            &include_bytes!("../fonts/iosevka/IosevkaFixed-Regular.ttf")[..],
+        ),
+    ] {
+        fonts
+            .font_data
+            .insert(name.to_owned(), std::sync::Arc::new(FontData::from_static(bytes)));
+    }
+
+    let proportional = fonts
         .families
         .get_mut(&FontFamily::Proportional)
-        .expect("proportional family exists")
-        .insert(0, "AtkinsonHyperlegible".to_owned());
+        .expect("proportional family exists");
+    proportional.insert(0, "AtkinsonHyperlegible".to_owned());
+    // Headings: the Bold face first, then the regular proportional stack
+    // as fallback for any glyph Bold lacks.
+    let mut heading = proportional.clone();
+    heading.insert(0, "AtkinsonHyperlegibleBold".to_owned());
+    fonts
+        .families
+        .insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
+
     fonts
         .families
         .get_mut(&FontFamily::Monospace)
         .expect("monospace family exists")
-        .insert(0, "AtkinsonHyperlegibleMono".to_owned());
+        .insert(0, "IosevkaFixed".to_owned());
     ctx.set_fonts(fonts);
 }
 
@@ -116,7 +135,11 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     // Type roles (families come from install_fonts).
     style.text_styles = [
-        (TextStyle::Heading, FontId::proportional(17.0)),
+        // Headings differentiate by WEIGHT (Atkinson Bold), not size.
+        (
+            TextStyle::Heading,
+            FontId::new(13.5, egui::FontFamily::Name(HEADING_FAMILY.into())),
+        ),
         (TextStyle::Body, FontId::proportional(13.5)),
         (TextStyle::Button, FontId::proportional(13.5)),
         (TextStyle::Small, FontId::proportional(11.0)),
