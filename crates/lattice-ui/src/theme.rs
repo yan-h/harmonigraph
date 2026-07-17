@@ -106,6 +106,9 @@ fn install_fonts(ctx: &egui::Context) {
         .get_mut(&FontFamily::Proportional)
         .expect("proportional family exists");
     proportional.insert(0, "AtkinsonHyperlegible".to_owned());
+    // Per-glyph fallback for characters Atkinson lacks — notably the music
+    // accidentals in note names (Iosevka's subset keeps U+266D-266F).
+    proportional.push("IosevkaFixed".to_owned());
     // Headings: the Bold face first, then the regular proportional stack
     // as fallback for any glyph Bold lacks.
     let mut heading = proportional.clone();
