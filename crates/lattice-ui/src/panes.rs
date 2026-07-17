@@ -5,7 +5,6 @@
 use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
-use lattice_core::coords;
 use lattice_scene::{channel_color, derive_scene, NodeStyle, OctaveStyle};
 
 use crate::theme;
@@ -60,8 +59,18 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         return;
     }
 
-    // Camera input.
-    if response.dragged() {
+    // Camera input: plain drag orbits; shift-drag or middle-drag pans.
+    let shift = ui.input(|i| i.modifiers.shift);
+    let panning = response.dragged_by(egui::PointerButton::Middle)
+        || (response.dragged_by(egui::PointerButton::Primary) && shift);
+    if panning {
+        let delta = response.drag_delta();
+        let (right, up) = state.camera.right_up();
+        // Grab semantics: the content follows the pointer. Speed scales
+        // with distance so a pan feels the same at any zoom.
+        let k = state.camera.distance * 0.0016;
+        state.camera.target += up * (delta.y * k) - right * (delta.x * k);
+    } else if response.dragged_by(egui::PointerButton::Primary) {
         let delta = response.drag_delta();
         state.camera.yaw -= delta.x * 0.01;
         state.camera.pitch = (state.camera.pitch + delta.y * 0.01)
@@ -254,6 +263,10 @@ fn settings_pane(
         (&mut state.view.extent_threes, 1.0..=8.0, "Fifths extent"),
         (&mut state.view.extent_fives, 1.0..=8.0, "Thirds extent"),
         (&mut state.view.extent_sevens, 0.0..=4.0, "Sevenths extent"),
+        // Window center in lattice steps from C (v1's Grid X/Y/Z).
+        (&mut state.view.center_threes, -20.0..=20.0, "Fifths center"),
+        (&mut state.view.center_fives, -20.0..=20.0, "Thirds center"),
+        (&mut state.view.center_sevens, -20.0..=20.0, "Sevenths center"),
     ] {
         let mut value = *extent as f32;
         if ValueBar::new(&mut value, range, label).integer().show(ui).changed() {
@@ -377,11 +390,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 
     // Where the visible lattice nodes sit: small ticks along the bottom.
-    for pos in coords::positions_within(
-        -state.view.extent_threes..=state.view.extent_threes,
-        -state.view.extent_fives..=state.view.extent_fives,
-        -state.view.extent_sevens..=state.view.extent_sevens,
-    ) {
+    for pos in state.view.visible_positions() {
         let x = x_of(state.tuning.pitch_class(pos).to_cents());
         painter.line_segment(
             [
@@ -444,12 +453,10 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     if let Some(pointer) = response.hover_pos() {
         let cents = ((pointer.x - rect.left()) / rect.width() * 1200.0).clamp(0.0, 1200.0);
         let pc = lattice_core::PitchClass::from_cents(cents);
-        state.hovered = coords::positions_within(
-            -state.view.extent_threes..=state.view.extent_threes,
-            -state.view.extent_fives..=state.view.extent_fives,
-            -state.view.extent_sevens..=state.view.extent_sevens,
-        )
-        .find(|&pos| state.tuning.matches(pc, state.tuning.pitch_class(pos)));
+        state.hovered = state
+            .view
+            .visible_positions()
+            .find(|&pos| state.tuning.matches(pc, state.tuning.pitch_class(pos)));
         painter.text(
             egui::pos2(pointer.x + 6.0, rect.top() + 2.0),
             egui::Align2::LEFT_TOP,
@@ -496,12 +503,10 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             for voice in voices {
                 // The nearest visible lattice node this pitch class lights
                 // up, if any (multiple can match within tolerance).
-                let node = coords::positions_within(
-                    -state.view.extent_threes..=state.view.extent_threes,
-                    -state.view.extent_fives..=state.view.extent_fives,
-                    -state.view.extent_sevens..=state.view.extent_sevens,
-                )
-                .filter(|&pos| {
+                let node = state
+                    .view
+                    .visible_positions()
+                    .filter(|&pos| {
                     state
                         .tuning
                         .matches(voice.pitch_class, state.tuning.pitch_class(pos))

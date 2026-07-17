@@ -96,10 +96,20 @@ impl OctaveStyle {
 pub struct ViewConfig {
     /// World-space distance between adjacent nodes.
     pub spacing: f32,
-    /// Extent of the displayed lattice along each axis (± steps from origin).
+    /// Extent of the displayed lattice along each axis (± steps around the
+    /// center).
     pub extent_threes: i32,
     pub extent_fives: i32,
     pub extent_sevens: i32,
+    /// Center of the displayed window, in lattice steps from C (v1's Grid
+    /// X/Y/Z). The center node renders at the world origin, so panning the
+    /// window doesn't walk the content away from the camera.
+    #[serde(default)]
+    pub center_threes: i32,
+    #[serde(default)]
+    pub center_fives: i32,
+    #[serde(default)]
+    pub center_sevens: i32,
     /// Seconds a released note's pitch class keeps fading (mirrors the
     /// plugin parameter; the shell copies it in each frame).
     pub pitch_class_fade_time: f32,
@@ -131,6 +141,24 @@ fn default_true() -> bool {
     true
 }
 
+impl ViewConfig {
+    /// Every lattice position the view currently displays. ALL consumers
+    /// (scene derivation, spectral ticks, notes-pane mapping) must iterate
+    /// this same set so "on the lattice" means one thing.
+    pub fn visible_positions(&self) -> impl Iterator<Item = LatticePos> {
+        coords::positions_within(
+            self.center_threes - self.extent_threes..=self.center_threes + self.extent_threes,
+            self.center_fives - self.extent_fives..=self.center_fives + self.extent_fives,
+            self.center_sevens - self.extent_sevens..=self.center_sevens + self.extent_sevens,
+        )
+    }
+
+    /// The displayed window's center as a lattice position.
+    pub fn center(&self) -> LatticePos {
+        LatticePos::new(self.center_threes, self.center_fives, self.center_sevens)
+    }
+}
+
 fn default_octave_fade() -> f32 {
     1.0
 }
@@ -142,6 +170,9 @@ impl Default for ViewConfig {
             extent_threes: 3,
             extent_fives: 3,
             extent_sevens: 0,
+            center_threes: 0,
+            center_fives: 0,
+            center_sevens: 0,
             pitch_class_fade_time: 1.0,
             octave_fade_time: 1.0,
             octave_style: OctaveStyle::default(),
@@ -315,12 +346,9 @@ pub fn derive_scene(
     now: f64,
 ) -> Scene {
     let mut nodes = Vec::new();
+    let center = view.center();
 
-    for pos in coords::positions_within(
-        -view.extent_threes..=view.extent_threes,
-        -view.extent_fives..=view.extent_fives,
-        -view.extent_sevens..=view.extent_sevens,
-    ) {
+    for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
 
         let mut activation = 0.0f32;
@@ -351,9 +379,16 @@ pub fn derive_scene(
             }
         }
 
+        // World positions are relative to the window center, keeping the
+        // displayed region under the camera wherever the window pans.
+        let centered = LatticePos::new(
+            pos.threes - center.threes,
+            pos.fives - center.fives,
+            pos.sevens - center.sevens,
+        );
         nodes.push(NodeInstance {
             lattice_pos: pos,
-            world_pos: lattice_to_world(pos, view.spacing),
+            world_pos: lattice_to_world(centered, view.spacing),
             color,
             activation,
             octaves,
@@ -527,6 +562,37 @@ mod tests {
             "octave still mid-fade, got {}",
             origin.octaves[4]
         );
+    }
+
+    #[test]
+    fn window_center_pans_which_nodes_display() {
+        let view = ViewConfig {
+            center_threes: 5,
+            extent_threes: 1,
+            extent_fives: 0,
+            extent_sevens: 0,
+            ..ViewConfig::default()
+        };
+        let positions: Vec<_> = view.visible_positions().collect();
+        assert_eq!(
+            positions,
+            vec![
+                LatticePos::new(4, 0, 0),
+                LatticePos::new(5, 0, 0),
+                LatticePos::new(6, 0, 0)
+            ]
+        );
+
+        // The center node renders at the world origin.
+        let tracker = NoteTracker::new();
+        let scene =
+            derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 0.0);
+        let center_node = scene
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == LatticePos::new(5, 0, 0))
+            .unwrap();
+        assert_eq!(center_node.world_pos, Vec3::ZERO);
     }
 
     #[test]
