@@ -32,6 +32,7 @@ pub use egui_wgpu::wgpu;
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
 
 /// Entry points a (re)loaded shader must provide.
+#[cfg(any(test, feature = "hot-reload"))]
 const REQUIRED_ENTRY_POINTS: &[&str] = &["vs_main", "fs_main", "vs_edge", "fs_edge"];
 
 /// Watches the shader source on disk (dev builds only). The first sighting
@@ -76,8 +77,11 @@ impl ShaderWatcher {
 }
 
 /// Parse + validate WGSL and check our entry points exist, so a bad edit
-/// never reaches wgpu's panicking error handler.
-#[cfg(feature = "hot-reload")]
+/// never reaches wgpu's panicking error handler. Also exercised by a unit
+/// test against the baked-in source: plugin builds have no hot-reload, so
+/// without that test a broken commit would first surface as a crash inside
+/// a DAW at first paint.
+#[cfg(any(test, feature = "hot-reload"))]
 fn validate_wgsl(source: &str) -> Result<(), String> {
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|e| e.emit_to_string(source))?;
@@ -103,6 +107,11 @@ struct Uniforms {
     cam_up: [f32; 4],
     misc: [f32; 4],
 }
+
+// The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
+// growing the constant in lattice-scene past 12 would index out of bounds
+// at runtime here, so fail the build instead.
+const _: () = assert!(lattice_scene::OCTAVE_SLOTS <= 12);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -445,7 +454,9 @@ impl CallbackTrait for LatticeCallback {
         if recreate {
             callback_resources.insert(LatticeResources::new(device, self.target_format));
         }
-        let resources: &mut LatticeResources = callback_resources.get_mut().unwrap();
+        let resources: &mut LatticeResources = callback_resources
+            .get_mut()
+            .expect("inserted above when missing");
 
         // Dev builds: pick up edits to the .wgsl on disk. A broken edit is
         // rejected with a message; the previous pipeline keeps rendering.
@@ -526,5 +537,16 @@ impl CallbackTrait for LatticeCallback {
         render_pass.set_bind_group(0, &pane.bind_group, &[]);
         render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
         render_pass.draw(0..4, 0..pane.instance_count);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn baked_shader_validates() {
+        validate_wgsl(SHADER_SRC)
+            .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
     }
 }

@@ -69,7 +69,10 @@ fn linear_param(name: &str, key: ParamKey, default: f32) -> FloatParam {
 impl Default for MidiLattice3dParams {
     fn default() -> Self {
         MidiLattice3dParams {
-            editor_state: editor::EguiState::from_size(1000, 700),
+            editor_state: editor::EguiState::from_size(
+                editor::DEFAULT_SIZE.0,
+                editor::DEFAULT_SIZE.1,
+            ),
             ui_state: Arc::new(parking_lot::RwLock::new(String::new())),
             // 12-TET defaults, like v1: the lattice matches what a plain
             // MIDI keyboard sends until the user dials in a tuning.

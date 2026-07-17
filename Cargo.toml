@@ -55,6 +55,8 @@ nice-plug-xtask = "0.1.1"
 
 # Math / utility
 glam = { version = "0.30", features = ["serde"] }
+# LCH color math, same crate v1 used so channel colors match exactly.
+color_space = "0.5"
 # Shader validation for hot-reload (dev only); version tracks wgpu's.
 naga = "29"
 bytemuck = { version = "1", features = ["derive"] }

@@ -67,16 +67,13 @@ struct App {
     midi_tx: mpsc::Sender<NoteEvent>,
 }
 
-fn enumerate_ports() -> Vec<String> {
-    midir::MidiInput::new("midi-lattice-3d")
-        .map(|input| {
-            input
-                .ports()
-                .iter()
-                .filter_map(|p| input.port_name(p).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+fn enumerate_ports() -> Result<Vec<String>, midir::InitError> {
+    let input = midir::MidiInput::new("midi-lattice-3d")?;
+    Ok(input
+        .ports()
+        .iter()
+        .filter_map(|p| input.port_name(p).ok())
+        .collect())
 }
 
 impl App {
@@ -147,6 +144,12 @@ impl App {
     fn new(target_format: lattice_render::wgpu::TextureFormat) -> Self {
         let mut state = SharedState::new(target_format);
         state.log("dev harness started; mock MIDI is playing");
+        // An empty port list with no message would read as "no MIDI gear";
+        // tell the difference when enumeration itself failed.
+        let known_ports = enumerate_ports().unwrap_or_else(|err| {
+            state.log(format!("MIDI port enumeration failed: {err}"));
+            Vec::new()
+        });
         let (midi_tx, midi_rx) = mpsc::channel();
         App {
             state,
@@ -154,7 +157,7 @@ impl App {
             mock: MockMidi::default(),
             start: Instant::now(),
             source: MidiSource::Mock,
-            known_ports: enumerate_ports(),
+            known_ports,
             connection: None,
             midi_rx,
             midi_tx,
@@ -180,7 +183,12 @@ impl eframe::App for App {
                         switch_to = Some(MidiSource::Mock);
                     }
                     if ui.button("rescan").on_hover_text("Re-enumerate ports").clicked() {
-                        self.known_ports = enumerate_ports();
+                        match enumerate_ports() {
+                            Ok(ports) => self.known_ports = ports,
+                            Err(err) => self
+                                .state
+                                .log(format!("MIDI port enumeration failed: {err}")),
+                        }
                     }
                 });
                 for name in self.known_ports.clone() {

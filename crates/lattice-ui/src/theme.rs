@@ -113,27 +113,25 @@ fn install_fonts(ctx: &egui::Context) {
             .insert(name.to_owned(), std::sync::Arc::new(FontData::from_static(bytes)));
     }
 
-    let proportional = fonts
-        .families
-        .get_mut(&FontFamily::Proportional)
-        .expect("proportional family exists");
-    proportional.insert(0, "AtkinsonHyperlegible".to_owned());
-    // Per-glyph fallback for symbols Atkinson lacks — notably the music
-    // accidentals (Iosevka's subset keeps U+266D-266F).
-    proportional.push("IosevkaFixed".to_owned());
-    // Headings: the Bold face first, then the regular proportional stack
-    // as fallback for any glyph Bold lacks.
-    let mut heading = proportional.clone();
-    heading.insert(0, "AtkinsonHyperlegibleBold".to_owned());
-    fonts
-        .families
-        .insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
-
-    fonts
-        .families
-        .get_mut(&FontFamily::Monospace)
-        .expect("monospace family exists")
-        .insert(0, "IosevkaFixed".to_owned());
+    // This runs inside the plugin's editor-open path, where a panic takes
+    // the host down: if an egui upgrade ever drops the default families,
+    // degrade to egui's bundled fonts instead of crashing the DAW.
+    if let Some(proportional) = fonts.families.get_mut(&FontFamily::Proportional) {
+        proportional.insert(0, "AtkinsonHyperlegible".to_owned());
+        // Per-glyph fallback for symbols Atkinson lacks — notably the music
+        // accidentals (Iosevka's subset keeps U+266D-266F).
+        proportional.push("IosevkaFixed".to_owned());
+        // Headings: the Bold face first, then the regular proportional stack
+        // as fallback for any glyph Bold lacks.
+        let mut heading = proportional.clone();
+        heading.insert(0, "AtkinsonHyperlegibleBold".to_owned());
+        fonts
+            .families
+            .insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
+    }
+    if let Some(monospace) = fonts.families.get_mut(&FontFamily::Monospace) {
+        monospace.insert(0, "IosevkaFixed".to_owned());
+    }
     ctx.set_fonts(fonts);
 }
 

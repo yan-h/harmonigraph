@@ -30,6 +30,11 @@ use crate::{MidiLattice3dParams, PluginParamBackend};
 const ASSUMED_SURFACE_FORMAT: lattice_render::wgpu::TextureFormat =
     lattice_render::wgpu::TextureFormat::Bgra8Unorm;
 
+/// Editor size on first open, in logical pixels.
+pub(crate) const DEFAULT_SIZE: (u32, u32) = (1000, 700);
+/// Smallest size accepted from a host resize.
+const MIN_SIZE: (u32, u32) = (400, 300);
+
 /// Maps audio-clock timestamps (seconds on the plugin's sample clock)
 /// onto the GUI clock. A smoothed offset estimate preserves the relative
 /// spacing of events - re-stamping on arrival (the old approach) squashed
@@ -389,7 +394,7 @@ impl Editor for LatticeEditor {
     fn set_size(&self, width: u32, height: u32) -> bool {
         // A set_size with the current size must succeed without side
         // effects (hosts echo plugin-initiated resizes back through here).
-        let clamped = (width.max(400), height.max(300));
+        let clamped = (width.max(MIN_SIZE.0), height.max(MIN_SIZE.1));
         if clamped == self.egui_state.size() {
             return true;
         }
