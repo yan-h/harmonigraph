@@ -51,9 +51,10 @@ egui-baseview = { git = "https://github.com/BillyDM/egui-baseview.git", rev = "1
 # crates share window types.
 baseview = { git = "https://github.com/RustAudio/baseview.git", rev = "237d323c729f3aa99476ba3efa50129c5e86cad3" }
 
-# Plugin framework. Pinned to a revision for reproducible builds; bump
-# deliberately.
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
+# Plugin framework. Our fork = upstream f36931f + the host->plugin resize
+# patch (branch host-window-resize, see PATCHES.md). xtask has no reason to
+# diverge, so it stays on upstream.
+nih_plug = { git = "https://github.com/yan-h/nih-plug.git", rev = "3af64f6cb468eb847987fc002bd1e420de6a05ba" }
 nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
 
 # Math / utility

@@ -78,6 +78,12 @@ pub struct EguiState {
     size: AtomicCell<(u32, u32)>,
     #[serde(skip)]
     requested_size: AtomicCell<Option<(u32, u32)>>,
+    /// A size the host already applied to the parent window (native border
+    /// drag); the GUI thread must resize the child view/surface to match,
+    /// WITHOUT the request_resize round-trip used for plugin-initiated
+    /// resizes.
+    #[serde(skip)]
+    host_resized: AtomicCell<Option<(u32, u32)>>,
     #[serde(skip)]
     open: AtomicBool,
 }
@@ -87,6 +93,7 @@ impl EguiState {
         Arc::new(EguiState {
             size: AtomicCell::new((width, height)),
             requested_size: AtomicCell::new(None),
+            host_resized: AtomicCell::new(None),
             open: AtomicBool::new(false),
         })
     }
@@ -199,6 +206,22 @@ impl Editor for LatticeEditor {
                     }
                 }
 
+                // Host-initiated resize (native window border): the parent
+                // is already the new size; just bring the child view and
+                // render surface along. No request_resize round-trip.
+                if let Some((w, h)) = egui_state.host_resized.swap(None) {
+                    let scale = egui_ctx
+                        .input(|i| i.viewport().native_pixels_per_point)
+                        .unwrap_or(1.0);
+                    queue.resize(PhySize::new(
+                        (w as f32 * scale).round() as u32,
+                        (h as f32 * scale).round() as u32,
+                    ));
+                    egui_ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::Vec2::new(
+                        w as f32, h as f32,
+                    )));
+                }
+
                 // Peek — don't consume — the requested size: the host reads
                 // `Editor::size()` *during* `request_resize()`, and it must
                 // see the NEW size there. Consuming first (as nih_plug_egui
@@ -276,6 +299,20 @@ impl Editor for LatticeEditor {
             .requested_size
             .load()
             .unwrap_or_else(|| self.egui_state.size())
+    }
+
+    fn set_size(&self, width: u32, height: u32) -> bool {
+        // Also serves as the wrapper's resizability probe (called with the
+        // current size), which must succeed without side effects.
+        let clamped = (width.max(400), height.max(300));
+        if clamped == self.egui_state.size() {
+            return true;
+        }
+        // Report the new size immediately (the host may read size() right
+        // after); the GUI thread applies it to the view/surface next frame.
+        self.egui_state.size.store(clamped);
+        self.egui_state.host_resized.store(Some(clamped));
+        true
     }
 
     fn set_scale_factor(&self, factor: f32) -> bool {
