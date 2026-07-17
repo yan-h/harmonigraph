@@ -118,11 +118,13 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
                 0.35 + 0.65 * node.activation
             };
             let color = theme::text().gamma_multiply(strength);
+            // Monospace for in-lattice text: labels align across nodes and
+            // match the technical feel of the readouts.
             ui.painter().text(
                 egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
                 egui::Align2::CENTER_TOP,
                 node.lattice_pos.note_name().to_string(),
-                egui::TextStyle::Small.resolve(ui.style()),
+                egui::FontId::monospace(11.0),
                 color,
             );
         }
