@@ -22,10 +22,7 @@ cargo test
 cargo xtask bundle midi_lattice_3d --release
 ```
 
-> **Note:** `.cargo/config.toml` points the cargo target directory at
-> `~/.cache/midi-lattice-3d/target` so build artifacts stay out of Google
-> Drive sync. Bundles therefore land in
-> `~/.cache/midi-lattice-3d/target/bundled/`.
+Bundles land in `target/bundled/`.
 
 ## Architecture
 
