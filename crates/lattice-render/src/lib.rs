@@ -576,4 +576,25 @@ mod tests {
         let words = pack_octaves(&[2.0; lattice_scene::OCTAVE_SLOTS]);
         assert_eq!(words[0], 0xFFFF_FFFF);
     }
+
+    /// Build the real pipelines against a headless device. This validates
+    /// the vertex-layout <-> shader-input contract (attribute locations,
+    /// formats, strides) that neither the naga check (shader only) nor the
+    /// type system (Rust side only) covers — a mismatch otherwise panics
+    /// at first paint inside a host.
+    #[test]
+    fn pipelines_build_against_a_headless_device() {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("no GPU adapter available; skipping pipeline-build test");
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("headless device");
+        let _resources =
+            LatticeResources::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    }
 }

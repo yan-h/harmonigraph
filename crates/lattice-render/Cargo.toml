@@ -22,3 +22,5 @@ naga = { workspace = true, optional = true }
 [dev-dependencies]
 # The baked-shader validation test runs without the hot-reload feature.
 naga = { workspace = true }
+# Blocks on wgpu's async adapter/device setup in the pipeline-build test.
+pollster = "0.4"
