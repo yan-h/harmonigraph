@@ -288,7 +288,9 @@ impl Editor for LatticeEditor {
                 let backend = PluginParamBackend { params: &state.params, setter: &setter };
                 lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
-                resize_corner(egui_ctx, &egui_state, &mut shared.ui.console);
+                if SHOW_RESIZE_CORNER {
+                    resize_corner(egui_ctx, &egui_state, &mut shared.ui.console);
+                }
             },
         );
 
@@ -340,6 +342,13 @@ impl Editor for LatticeEditor {
 
     fn param_values_changed(&self) {}
 }
+
+/// Whether to show the in-window resize drag handle. Disabled for now:
+/// hosts with proper resize support (Bitwig at least) provide a native
+/// window border, which supersedes it. Kept as a fallback in case some
+/// host turns out not to honor `ResizeHint::resizable()` — flip this on
+/// and the full preview + resize-on-release path comes back.
+const SHOW_RESIZE_CORNER: bool = false;
 
 /// A drag handle in the bottom-right corner that requests a window resize
 /// from the host (replaces v1's resize hack; the host round-trip is the
