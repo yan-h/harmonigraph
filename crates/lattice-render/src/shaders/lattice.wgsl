@@ -32,6 +32,10 @@ struct Instance {
     @location(3) octaves: vec3<u32>,
     // Per-note animation seed: a small constant, NOT a timestamp.
     @location(4) seed: f32,
+    // The node's pitch class in cents (0..1200). Dots mode places each
+    // octave dot at the note's absolute-pitch angle, which needs the pitch
+    // class within the octave; unused by the other octave styles.
+    @location(5) cents: f32,
 };
 
 struct VsOut {
@@ -41,6 +45,7 @@ struct VsOut {
     @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) seed: f32,
+    @location(5) @interpolate(flat) cents: f32,
 };
 
 @vertex
@@ -77,6 +82,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.params = inst.params;
     out.octaves = inst.octaves;
     out.seed = inst.seed;
+    out.cents = inst.cents;
     return out;
 }
 
@@ -115,15 +121,28 @@ fn tick_pip(i: u32, uv: vec2<f32>) -> f32 {
     return 1.0 - smoothstep(0.0, 0.035, dx + dy);
 }
 
+// Octave slot of middle C (C4): MIDI 60 -> octave 4. Dots mode anchors this
+// slot straight up and measures every other dot's angle relative to it.
+const MIDDLE_C_SLOT: f32 = 4.0;
+// Dots mode: 45deg (pi/4) of rotation per octave, so two octaves reach the
+// horizontal. Clockwise as pitch rises.
+const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
+
 // Coverage (0..1) of the octave glyph for a SOUNDING slot `i`:
-//   1 = dots:     satellites orbiting the disc, clock position = octave
+//   1 = dots:     satellites around the disc, angle = absolute pitch
+//                 (middle C straight up, 45deg clockwise per octave)
 //   2 = rings:    concentric rings, inner ring = lowest octave
 //   3..6 = ticks: column right of the disc, bottom = lowest octave
 //                 (variants differ only in reference furniture, below)
-fn octave_glyph(mode: u32, i: u32, uv: vec2<f32>, d: f32) -> f32 {
+fn octave_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, d: f32) -> f32 {
     if mode == 1u {
-        // Start at 12 o'clock, go clockwise. (uv.y is up.)
-        let ang = 1.5707963 - 6.2831853 * f32(i) / f32(OCTAVE_SLOTS);
+        // Absolute-pitch clock: middle C (slot 4, pitch class 0) points
+        // straight up; each octave adds 45deg clockwise, and the pitch class
+        // within the octave (cents/1200) rotates the dot proportionally, so a
+        // note sits at its true pitch rather than snapping to the octave.
+        // (uv.y is up, so clockwise = subtracting from the angle.)
+        let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
+        let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
         let center = vec2<f32>(cos(ang), sin(ang)) * 0.74;
         return 1.0 - smoothstep(0.055, 0.095, distance(uv, center));
     } else if mode == 2u {
@@ -314,7 +333,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 max_level = max(max_level, level);
                 glyph = max(
                     glyph,
-                    octave_glyph(mode, i, in.uv, d) * level_floor(level),
+                    octave_glyph(mode, i, in.cents, in.uv, d) * level_floor(level),
                 );
             }
         }

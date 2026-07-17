@@ -25,7 +25,9 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 pub enum OctaveStyle {
     /// No octave indication.
     Off,
-    /// Small dots orbiting the disc; clock position = octave.
+    /// Small dots around the disc; angle tracks absolute pitch (middle C
+    /// straight up, 45deg clockwise per octave, pitch class within the
+    /// octave included).
     Dots,
     /// Concentric rings; inner ring = lowest octave.
     Rings,
