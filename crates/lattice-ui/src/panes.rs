@@ -228,9 +228,14 @@ fn settings_pane(
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
+        // A real Button (selectable labels draw no background when off, so
+        // toggle_value read as plain text next to Just/12-TET).
         let learn = ui
-            .toggle_value(&mut state.learn_active, "Learn")
+            .add(egui::Button::new("Learn").selected(state.learn_active))
             .on_hover_text("While active, continuously set the tuning from the held notes");
+        if learn.clicked() {
+            state.learn_active = !state.learn_active;
+        }
         if state.learn_active {
             // Pulsing armed ring so the engaged mode can't be missed.
             ui.painter().rect_stroke(
