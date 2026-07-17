@@ -127,7 +127,7 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
                 egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
                 egui::Align2::CENTER_TOP,
                 node.lattice_pos.note_name().to_string(),
-                egui::FontId::monospace(11.0),
+                egui::FontId::monospace(12.0),
                 color,
             );
         }
