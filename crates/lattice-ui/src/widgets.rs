@@ -26,15 +26,24 @@ pub struct ValueBar<'a> {
     eased: bool,
     decimals: usize,
     integer: bool,
+    /// Read-only: shows the value but takes no drag/type input and paints
+    /// dimmed. Used for the major-third bar while meantone mode drives it.
+    locked: bool,
 }
 
 impl<'a> ValueBar<'a> {
     pub fn new(value: &'a mut f32, range: RangeInclusive<f32>, label: &'a str) -> Self {
-        ValueBar { value, range, label, eased: false, decimals: 2, integer: false }
+        ValueBar { value, range, label, eased: false, decimals: 2, integer: false, locked: false }
     }
 
     pub fn eased(mut self, on: bool) -> Self {
         self.eased = on;
+        self
+    }
+
+    /// Render the bar read-only (dimmed, non-interactive).
+    pub fn locked(mut self, on: bool) -> Self {
+        self.locked = on;
         self
     }
 
@@ -90,67 +99,74 @@ impl<'a> ValueBar<'a> {
 
     pub fn show(self, ui: &mut Ui) -> Response {
         let width = ui.available_width();
-        let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::click_and_drag());
-        let edit_id = response.id.with("edit");
-        let focus_id = edit_id.with("focus_pending");
+        // Locked bars are read-only: sense hover (so a tooltip still works)
+        // but not clicks/drags.
+        let sense = if self.locked { Sense::hover() } else { Sense::click_and_drag() };
+        let (rect, mut response) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), sense);
 
-        // ---- Text-entry mode (double-click) ------------------------------
-        if let Some(mut text) = ui.data(|d| d.get_temp::<String>(edit_id)) {
-            let output = ui.put(
-                rect,
-                TextEdit::singleline(&mut text)
-                    .font(TextStyle::Monospace)
-                    .horizontal_align(egui::Align::Center),
-            );
-            // TextEdit never takes focus by itself; grab it on the first
-            // edit-mode frame so typing (and focus-loss commit) works at
-            // all.
-            if ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false) {
-                output.request_focus();
-                ui.data_mut(|d| d.remove_temp::<bool>(focus_id));
-            }
-            // Escape cancels; everything that drops focus (Enter included —
-            // egui surrenders TextEdit focus on both) commits. Enter is NOT
-            // checked globally: that would commit every bar in edit mode at
-            // once, focused or not.
-            let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
-            if cancelled || output.lost_focus() {
-                if !cancelled {
-                    if let Ok(v) = text.trim().parse::<f32>() {
-                        // Reject NaN/inf: NaN survives clamp() and would
-                        // poison the param (and the host's automation lane
-                        // in the plugin) in a state the bar can't display
-                        // or drag back out of.
-                        if v.is_finite() {
-                            let v = v.clamp(self.min(), self.max());
-                            *self.value = if self.integer { v.round() } else { v };
-                            response.mark_changed();
+        // Skip all editing (text-entry + drag) while locked; the value is
+        // driven from elsewhere (meantone derives the third from the fifth).
+        if !self.locked {
+            let edit_id = response.id.with("edit");
+            let focus_id = edit_id.with("focus_pending");
+
+            // ---- Text-entry mode (double-click) --------------------------
+            if let Some(mut text) = ui.data(|d| d.get_temp::<String>(edit_id)) {
+                let output = ui.put(
+                    rect,
+                    TextEdit::singleline(&mut text)
+                        .font(TextStyle::Monospace)
+                        .horizontal_align(egui::Align::Center),
+                );
+                // TextEdit never takes focus by itself; grab it on the first
+                // edit-mode frame so typing (and focus-loss commit) works at
+                // all.
+                if ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false) {
+                    output.request_focus();
+                    ui.data_mut(|d| d.remove_temp::<bool>(focus_id));
+                }
+                // Escape cancels; everything that drops focus (Enter included
+                // — egui surrenders TextEdit focus on both) commits. Enter is
+                // NOT checked globally: that would commit every bar in edit
+                // mode at once, focused or not.
+                let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
+                if cancelled || output.lost_focus() {
+                    if !cancelled {
+                        if let Ok(v) = text.trim().parse::<f32>() {
+                            // Reject NaN/inf: NaN survives clamp() and would
+                            // poison the param (and the host's automation lane
+                            // in the plugin) in a state the bar can't display
+                            // or drag back out of.
+                            if v.is_finite() {
+                                let v = v.clamp(self.min(), self.max());
+                                *self.value = if self.integer { v.round() } else { v };
+                                response.mark_changed();
+                            }
                         }
                     }
+                    ui.data_mut(|d| d.remove_temp::<String>(edit_id));
+                } else {
+                    ui.data_mut(|d| d.insert_temp(edit_id, text));
                 }
-                ui.data_mut(|d| d.remove_temp::<String>(edit_id));
-            } else {
-                ui.data_mut(|d| d.insert_temp(edit_id, text));
+                return response;
             }
-            return response;
-        }
 
-        // ---- Interaction ---------------------------------------------------
-        if response.double_clicked() {
-            ui.data_mut(|d| d.insert_temp(edit_id, self.format(*self.value)));
-            ui.data_mut(|d| d.insert_temp(focus_id, true));
-            return response;
-        }
-        // Drag-to-set only (no click-jump): a stray click can't yank a
-        // carefully tuned parameter, and it can't fight the double-click.
-        if response.dragged() {
-            if let Some(pointer) = response.interact_pointer_pos() {
-                let t = (pointer.x - rect.left()) / rect.width().max(1.0);
-                let new_value = self.value_at(t);
-                if new_value != *self.value {
-                    *self.value = new_value;
-                    response.mark_changed();
+            // ---- Interaction ---------------------------------------------
+            if response.double_clicked() {
+                ui.data_mut(|d| d.insert_temp(edit_id, self.format(*self.value)));
+                ui.data_mut(|d| d.insert_temp(focus_id, true));
+                return response;
+            }
+            // Drag-to-set only (no click-jump): a stray click can't yank a
+            // carefully tuned parameter, and it can't fight the double-click.
+            if response.dragged() {
+                if let Some(pointer) = response.interact_pointer_pos() {
+                    let t = (pointer.x - rect.left()) / rect.width().max(1.0);
+                    let new_value = self.value_at(t);
+                    if new_value != *self.value {
+                        *self.value = new_value;
+                        response.mark_changed();
+                    }
                 }
             }
         }
@@ -161,7 +177,10 @@ impl<'a> ValueBar<'a> {
         painter.rect_filled(rect, radius, theme::well());
 
         let t = self.to_t(*self.value);
-        let fill_color = if response.dragged() {
+        let fill_color = if self.locked {
+            // Dimmed fill: reads as inactive/derived, not something to drag.
+            theme::accent_fill().gamma_multiply(0.4)
+        } else if response.dragged() {
             theme::accent_fill_drag()
         } else if response.hovered() {
             theme::accent_fill_hover()
@@ -172,7 +191,7 @@ impl<'a> ValueBar<'a> {
         fill.set_width(rect.width() * t);
         painter.rect_filled(fill, radius, fill_color);
 
-        let text_color = if response.hovered() || response.dragged() {
+        let text_color = if !self.locked && (response.hovered() || response.dragged()) {
             theme::text()
         } else {
             theme::text_dim()
@@ -185,16 +204,20 @@ impl<'a> ValueBar<'a> {
             text_color,
         );
         // Values in monospace: digits align and don't wiggle as they
-        // change.
+        // change. Dimmed too while locked, to match the fill.
         painter.text(
             rect.right_center() - Vec2::new(8.0, 0.0),
             Align2::RIGHT_CENTER,
             self.format(*self.value),
             TextStyle::Monospace.resolve(ui.style()),
-            theme::text(),
+            if self.locked { theme::text_dim() } else { theme::text() },
         );
 
-        response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        if self.locked {
+            response
+        } else {
+            response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        }
     }
 }
 

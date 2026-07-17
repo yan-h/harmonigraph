@@ -116,7 +116,7 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         draw_learn_overlay(ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, state.view.show_cents);
+        draw_node_labels(ui, rect, &scene, state.view.show_cents, state.view.meantone);
     }
     hover_tooltip(response, state);
 }
@@ -151,6 +151,7 @@ fn draw_node_labels(
     rect: egui::Rect,
     scene: &lattice_scene::Scene,
     show_cents: bool,
+    meantone: bool,
 ) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     for node in &scene.nodes {
@@ -165,13 +166,17 @@ fn draw_node_labels(
         let strength = if node.hovered { 1.0 } else { visibility_floor(node.activation) };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);
+        // Meantone tempers out the syntonic comma, so drop the comma marks
+        // (E- and E name the same pitch).
+        let name = node.lattice_pos.note_name();
+        let name = if meantone { name.without_syntonic_commas() } else { name };
         // Monospace for in-lattice text: labels align across nodes and
         // match the technical feel of the readouts.
         outlined_text(
             ui.painter(),
             center,
             egui::Align2::CENTER_CENTER,
-            node.lattice_pos.note_name().to_string(),
+            name.to_string(),
             egui::FontId::monospace(12.0),
             theme::text().gamma_multiply(strength),
             outline,
@@ -239,13 +244,11 @@ fn hover_tooltip(response: egui::Response, state: &SharedState) {
         .filter(|v| state.tuning.matches(v.pitch_class, pc))
         .map(|v| v.display_octave().to_string())
         .collect();
+    let name = pos.note_name();
+    let name = if state.view.meantone { name.without_syntonic_commas() } else { name };
     let mut text = format!(
         "{}  ({}, {}, {})  {}",
-        pos.note_name(),
-        pos.threes,
-        pos.fives,
-        pos.sevens,
-        pc
+        name, pos.threes, pos.fives, pos.sevens, pc
     );
     if !octaves.is_empty() {
         text.push_str(&format!("  octaves: {}", octaves.join(" ")));
@@ -281,26 +284,47 @@ fn learn_pulse(now: f64) -> f32 {
     0.78 + 0.22 * (now * 2.0 * std::f64::consts::PI * 0.6).sin() as f32
 }
 
+/// One editable ValueBar for a parameter, with automation-gesture
+/// bracketing so a drag records as a single host gesture.
+fn param_bar(ui: &mut egui::Ui, params: &dyn ParamBackend, key: ParamKey) {
+    let mut value = params.get(key);
+    let response = ValueBar::new(&mut value, key.range(), key.label())
+        .eased(key.logarithmic())
+        .decimals(2)
+        .show(ui);
+    // Bracket drags so the host records one automation gesture per drag;
+    // one-shot changes (typed values) go through set() alone.
+    if response.drag_started() {
+        params.begin_set(key);
+    }
+    if response.changed() {
+        params.set(key, value);
+    }
+    if response.drag_stopped() {
+        params.end_set(key);
+    }
+}
+
 /// One ValueBar per parameter, with automation-gesture bracketing.
 fn param_bars(ui: &mut egui::Ui, params: &dyn ParamBackend, keys: &[ParamKey]) {
     for &key in keys {
-        let mut value = params.get(key);
-        let bar = ValueBar::new(&mut value, key.range(), key.label())
-            .eased(key.logarithmic())
-            .decimals(2);
-        let response = bar.show(ui);
-        // Bracket drags so the host records one automation gesture per
-        // drag; one-shot changes (typed values) go through set() alone.
-        if response.drag_started() {
-            params.begin_set(key);
-        }
-        if response.changed() {
-            params.set(key, value);
-        }
-        if response.drag_stopped() {
-            params.end_set(key);
-        }
+        param_bar(ui, params, key);
     }
+}
+
+/// The major-third bar while meantone mode drives it: read-only, showing
+/// the derived value (four fifths minus two octaves) the lattice actually
+/// uses. Distinct label + dimmed bar make the lock obvious.
+fn locked_third_bar(ui: &mut egui::Ui, params: &dyn ParamBackend) {
+    let mut derived = tuning::meantone_third(params.get(ParamKey::Three));
+    ValueBar::new(&mut derived, ParamKey::Five.range(), "Major third (¢, locked)")
+        .decimals(2)
+        .locked(true)
+        .show(ui)
+        .on_hover_text(
+            "Meantone: the major third follows the perfect fifth \
+             (four fifths minus two octaves)",
+        );
 }
 
 fn tuning_pane(
@@ -309,18 +333,50 @@ fn tuning_pane(
     params: &dyn ParamBackend,
     now: f64,
 ) {
-    param_bars(ui, params, &ParamKey::TUNING);
+    // Tuning sliders. In meantone mode the major third is locked to four
+    // perfect fifths, so its bar is shown read-only at the derived value.
+    for &key in &ParamKey::TUNING {
+        if key == ParamKey::Five && state.view.meantone {
+            locked_third_bar(ui, params);
+        } else {
+            param_bar(ui, params, key);
+        }
+    }
 
     ui.horizontal(|ui| {
         if ui.button("Just").clicked() {
             params.set(ParamKey::Three, tuning::THREE_JUST);
             params.set(ParamKey::Five, tuning::FIVE_JUST);
             params.set(ParamKey::Seven, tuning::SEVEN_JUST);
+            // Just intonation keeps the syntonic comma, so it isn't a
+            // meantone: drop the lock instead of silently overriding the
+            // just third we just set.
+            state.view.meantone = false;
         }
         if ui.button("12-TET").clicked() {
             params.set(ParamKey::Three, tuning::THREE_12TET);
             params.set(ParamKey::Five, tuning::FIVE_12TET);
             params.set(ParamKey::Seven, tuning::SEVEN_12TET);
+            // 12-TET is itself a meantone (400 = 4·700 − 2400), so it's
+            // consistent either way; leave the lock as the user has it.
+        }
+        // Meantone mode: lock the major third to four perfect fifths.
+        let meantone = ui
+            .add(egui::Button::new("Meantone").selected(state.view.meantone))
+            .on_hover_text(
+                "Lock the major third to four perfect fifths (temper out \
+                 the syntonic comma); note-name labels drop their comma marks",
+            );
+        if meantone.clicked() {
+            if state.view.meantone {
+                // Turning off: keep the third where the lock left it so the
+                // now-editable bar doesn't jump.
+                params.set(
+                    ParamKey::Five,
+                    tuning::meantone_third(params.get(ParamKey::Three)),
+                );
+            }
+            state.view.meantone = !state.view.meantone;
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
@@ -592,7 +648,12 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .show(ui, |ui| {
             for voice in voices {
                 let node = nearest_visible_node(&state.view, &state.tuning, voice.pitch_class)
-                    .map(|pos| pos.note_name().to_string());
+                    .map(|pos| {
+                        let name = pos.note_name();
+                        let name =
+                            if state.view.meantone { name.without_syntonic_commas() } else { name };
+                        name.to_string()
+                    });
                 let line = format!(
                     "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",
                     name = KEY_NAMES[usize::from(voice.note % 12)],

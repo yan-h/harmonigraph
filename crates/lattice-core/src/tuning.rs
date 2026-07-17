@@ -18,6 +18,31 @@ pub const SEVEN_12TET: f32 = 1000.0;
 pub const CENTS_TO_MICROCENTS: u32 = 1_000_000;
 pub const OCTAVE_MICROCENTS: u32 = 1_200 * CENTS_TO_MICROCENTS;
 
+/// The syntonic comma (81/80, ~21.506¢): the gap between four just fifths
+/// and a just major third. Meantone temperaments temper it out.
+pub const SYNTONIC_COMMA: f32 = 4.0 * THREE_JUST - 2.0 * 1200.0 - FIVE_JUST;
+
+/// The meantone major third implied by a given fifth: four fifths stacked,
+/// dropped two octaves. In any meantone temperament the major third equals
+/// this exactly, so the prime-5 (thirds) axis stops being independent of
+/// the prime-3 (fifths) axis — the defining property of meantone.
+pub fn meantone_third(fifth_cents: f32) -> f32 {
+    4.0 * fifth_cents - 2.0 * 1200.0
+}
+
+/// How close (in cents) a fifth/third pair must sit to the meantone
+/// relationship to count as meantone. Well under the syntonic comma
+/// (~21.5¢) so just intonation is correctly rejected, while 12-TET
+/// (400 = 4·700 − 2400) and the meantone family are accepted.
+pub const MEANTONE_TOLERANCE: f32 = 5.0;
+
+/// Whether a fifth/third pair is (close to) a meantone temperament: the
+/// major third within [`MEANTONE_TOLERANCE`] of four fifths minus two
+/// octaves. Used to auto-engage meantone mode when learning a chord.
+pub fn is_meantone(fifth_cents: f32, third_cents: f32) -> bool {
+    (third_cents - meantone_third(fifth_cents)).abs() <= MEANTONE_TOLERANCE
+}
+
 /// A pitch class in microcents, always in `[0, OCTAVE_MICROCENTS)`.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Copy, Clone, Debug, Hash)]
 pub struct PitchClass(u32);
@@ -239,6 +264,30 @@ mod tests {
         // Two just fifths = 1403.91¢ ≡ 203.91¢ (a just major second).
         let pc = tuning.pitch_class(LatticePos::new(2, 0, 0));
         assert!(pc.distance_to(PitchClass::from_cents(203.91)) <= PitchClassDistance::from_cents(0.01));
+    }
+
+    #[test]
+    fn quarter_comma_meantone_third_is_just() {
+        // The quarter-comma fifth is the just fifth flattened by a quarter
+        // of the syntonic comma; four of them (minus two octaves) land on
+        // exactly the just major third.
+        let fifth = THREE_JUST - SYNTONIC_COMMA / 4.0;
+        assert!((meantone_third(fifth) - FIVE_JUST).abs() < 0.001);
+    }
+
+    #[test]
+    fn is_meantone_accepts_meantone_rejects_just() {
+        // 12-TET is a meantone (400 = 4·700 − 2400).
+        assert!(is_meantone(THREE_12TET, FIVE_12TET));
+        // Quarter-comma meantone.
+        let quarter = THREE_JUST - SYNTONIC_COMMA / 4.0;
+        assert!(is_meantone(quarter, FIVE_JUST));
+        // Just intonation keeps the comma, so it is NOT meantone: the just
+        // third sits a full syntonic comma below four just fifths.
+        assert!(!is_meantone(THREE_JUST, FIVE_JUST));
+        // A third a hair (< tolerance) off still counts.
+        assert!(is_meantone(THREE_12TET, FIVE_12TET + MEANTONE_TOLERANCE - 0.1));
+        assert!(!is_meantone(THREE_12TET, FIVE_12TET + MEANTONE_TOLERANCE + 0.1));
     }
 
     #[test]
