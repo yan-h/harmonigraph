@@ -363,7 +363,9 @@ fn tuning_pane(
 /// What the grid shows: per-axis extents and window center.
 fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     for (extent, range, label) in [
-        (&mut state.view.extent_threes, 1.0..=8.0, "Fifths extent"),
+        // Ranges must contain the ViewConfig defaults (10/6) or the bar
+        // could never drag back to them.
+        (&mut state.view.extent_threes, 1.0..=12.0, "Fifths extent"),
         (&mut state.view.extent_fives, 1.0..=8.0, "Thirds extent"),
         (&mut state.view.extent_sevens, 0.0..=4.0, "Sevenths extent"),
         // Window center in lattice steps from C (v1's Grid X/Y/Z).

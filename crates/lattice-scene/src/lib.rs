@@ -138,8 +138,10 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            extent_threes: 3,
-            extent_fives: 3,
+            // A tall window of fifths and a wide band of thirds out of the
+            // box; sevenths stay opt-in.
+            extent_threes: 10,
+            extent_fives: 6,
             extent_sevens: 0,
             center_threes: 0,
             center_fives: 0,
@@ -755,9 +757,12 @@ mod tests {
 
     #[test]
     fn chord_edges_connect_adjacent_active_nodes() {
-        // Just intonation makes lattice pitch classes unique within the
-        // default extents (under 12-TET, enharmonic duplicate nodes light
-        // up too and produce parallel edges - correct, but noisy to pin).
+        // A deliberately small window (±3/±3): just intonation keeps pitch
+        // classes unique at that size, so the edge count is exact. Wider
+        // windows bring in schisma near-duplicates — e.g. (8, 1, 0) sits
+        // ~2¢ from C, within this test's 5¢ tolerance — which light up and
+        // add parallel edges (correct behavior, but noisy to pin; same
+        // reason 12-TET's enharmonic duplicates are avoided here).
         // C and G (a fifth apart, one step on the prime-3 axis) held
         // together with a wide-enough tolerance: exactly one edge.
         let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
@@ -770,7 +775,12 @@ mod tests {
                 kind: NoteEventKind::On { velocity: 1.0 },
             });
         }
-        let view = ViewConfig { show_chord_edges: true, ..ViewConfig::default() };
+        let view = ViewConfig {
+            show_chord_edges: true,
+            extent_threes: 3,
+            extent_fives: 3,
+            ..ViewConfig::default()
+        };
         let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
         assert_eq!(scene.edges.len(), 1);
         assert_eq!(scene.edges[0].strength, 1.0);
