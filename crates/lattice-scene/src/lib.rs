@@ -94,7 +94,7 @@ impl Default for ViewConfig {
             spacing: 1.0,
             extent_threes: 3,
             extent_fives: 3,
-            extent_sevens: 1,
+            extent_sevens: 0,
             highlight_time: 1.0,
             octave_style: OctaveStyle::default(),
             darkest_pitch: 24.0,
