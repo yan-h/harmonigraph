@@ -76,6 +76,14 @@ pub struct ViewConfig {
     pub darkest_pitch: f32,
     /// Pitch mapped to the brightest gradient color.
     pub brightest_pitch: f32,
+    /// Draw note-name labels on hovered and sounding nodes.
+    /// serde(default) keeps older persisted blobs loadable.
+    #[serde(default = "default_true")]
+    pub show_labels: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ViewConfig {
@@ -89,6 +97,7 @@ impl Default for ViewConfig {
             octave_style: OctaveStyle::default(),
             darkest_pitch: 24.0,
             brightest_pitch: 108.0,
+            show_labels: true,
         }
     }
 }
@@ -287,22 +296,30 @@ pub fn derive_scene(
 }
 
 impl Scene {
+    /// Project a world position into viewport pixels (origin top-left).
+    /// `None` when behind the camera.
+    pub fn project(&self, viewport_px: Vec2, world: Vec3) -> Option<Vec2> {
+        let view_proj = self.camera.view_proj(viewport_px.x / viewport_px.y.max(1.0));
+        let clip = view_proj * world.extend(1.0);
+        if clip.w <= 0.0 {
+            return None;
+        }
+        let ndc = clip.truncate() / clip.w;
+        Some(Vec2::new(
+            (ndc.x * 0.5 + 0.5) * viewport_px.x,
+            (1.0 - (ndc.y * 0.5 + 0.5)) * viewport_px.y,
+        ))
+    }
+
     /// CPU picking: the node whose screen projection is nearest the pointer,
     /// within `max_px`. Every pane that wants "hover a pitch class" uses
     /// this and writes the result to the shared UI state.
     pub fn pick(&self, viewport_px: Vec2, pointer_px: Vec2, max_px: f32) -> Option<LatticePos> {
-        let view_proj = self.camera.view_proj(viewport_px.x / viewport_px.y.max(1.0));
         let mut best: Option<(f32, LatticePos)> = None;
         for node in &self.nodes {
-            let clip = view_proj * node.world_pos.extend(1.0);
-            if clip.w <= 0.0 {
+            let Some(px) = self.project(viewport_px, node.world_pos) else {
                 continue;
-            }
-            let ndc = clip.truncate() / clip.w;
-            let px = Vec2::new(
-                (ndc.x * 0.5 + 0.5) * viewport_px.x,
-                (1.0 - (ndc.y * 0.5 + 0.5)) * viewport_px.y,
-            );
+            };
             let d = px.distance(pointer_px);
             if d <= max_px && best.map_or(true, |(bd, _)| d < bd) {
                 best = Some((d, node.lattice_pos));

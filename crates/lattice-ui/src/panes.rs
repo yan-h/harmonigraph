@@ -99,6 +99,35 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     ui.painter()
         .add(lattice_paint_callback(rect, &scene, state.target_format, 0));
 
+    // Note-name labels on hovered and sounding nodes, drawn as egui text
+    // over the 3D view (projected with the same camera as the nodes).
+    if state.view.show_labels {
+        let viewport = glam::Vec2::new(rect.width(), rect.height());
+        for node in &scene.nodes {
+            if !(node.hovered || node.activation > 0.0) {
+                continue;
+            }
+            let Some(p) = scene.project(viewport, node.world_pos) else {
+                continue;
+            };
+            // Fade with the activation envelope; hovered idle nodes get a
+            // dim but readable label.
+            let strength = if node.hovered {
+                1.0
+            } else {
+                0.35 + 0.65 * node.activation
+            };
+            let color = theme::TEXT.gamma_multiply(strength);
+            ui.painter().text(
+                egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
+                egui::Align2::CENTER_TOP,
+                node.lattice_pos.note_name().to_string(),
+                egui::TextStyle::Small.resolve(ui.style()),
+                color,
+            );
+        }
+    }
+
     // Hover tooltip: pitch class + sounding octaves.
     if let Some(pos) = state.hovered {
         let pc = state.tuning.pitch_class(pos);
@@ -109,8 +138,12 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             .map(|v| v.octave.to_string())
             .collect();
         let mut text = format!(
-            "({}, {}, {})  {}",
-            pos.threes, pos.fives, pos.sevens, pc
+            "{}  ({}, {}, {})  {}",
+            pos.note_name(),
+            pos.threes,
+            pos.fives,
+            pos.sevens,
+            pc
         );
         if !octaves.is_empty() {
             text.push_str(&format!("  octaves: {}", octaves.join(" ")));
@@ -201,6 +234,8 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Octave indicator style: kept as switchable design candidates so they
     // can be compared live while notes play. The Ticks variants differ in
     // the reference frame showing where the octave range starts/ends.
+    ui.checkbox(&mut state.view.show_labels, "Note labels");
+
     ui.horizontal(|ui| {
         ui.label("Octaves");
         for (style, label) in [
