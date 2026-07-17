@@ -236,6 +236,15 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // the reference frame showing where the octave range starts/ends.
     ui.checkbox(&mut state.view.show_labels, "Note labels");
 
+    // UI font candidates (see theme::UiFont): compare live, then we delete
+    // the losers.
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Font");
+        for font in crate::theme::UiFont::ALL {
+            ui.selectable_value(&mut state.ui_font, font, font.label());
+        }
+    });
+
     ui.horizontal(|ui| {
         ui.label("Octaves");
         for (style, label) in [
