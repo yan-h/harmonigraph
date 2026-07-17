@@ -120,7 +120,12 @@ impl LatticeCallback {
                 view_proj: view_proj.to_cols_array(),
                 cam_right: right.extend(0.0).to_array(),
                 cam_up: up.extend(0.0).to_array(),
-                misc: [scene.time, scene.node_radius, 0.0, 0.0],
+                misc: [
+                    scene.time,
+                    scene.node_radius,
+                    scene.octave_style.shader_index() as f32,
+                    0.0,
+                ],
             },
             target_format,
             pane_id,

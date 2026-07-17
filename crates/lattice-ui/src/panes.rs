@@ -5,7 +5,7 @@
 use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::derive_scene;
+use lattice_scene::{derive_scene, OctaveStyle};
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::ValueBar;
@@ -156,6 +156,20 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             *extent = value as i32;
         }
     }
+
+    // Octave indicator style: kept as switchable design candidates so they
+    // can be compared live while notes play.
+    ui.horizontal(|ui| {
+        ui.label("Octaves");
+        for (style, label) in [
+            (OctaveStyle::Dots, "Dots"),
+            (OctaveStyle::Rings, "Rings"),
+            (OctaveStyle::Ticks, "Ticks"),
+            (OctaveStyle::Off, "Off"),
+        ] {
+            ui.selectable_value(&mut state.view.octave_style, style, label);
+        }
+    });
 
     ui.separator();
     // Cross-pane highlight demo: this pane reacts to the lattice hover.

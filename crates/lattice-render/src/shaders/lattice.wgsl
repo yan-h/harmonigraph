@@ -9,7 +9,8 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
-    // x: time (s), y: base node radius (world units), z/w: unused
+    // x: time (s), y: base node radius (world units),
+    // z: octave display mode (0 off, 1 dots, 2 rings, 3 ticks), w: unused
     misc: vec4<f32>,
 };
 
@@ -57,6 +58,31 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     return out;
 }
 
+// Number of octave slots the indicators display (MIDI octaves 0..9).
+const OCTAVE_SLOTS: u32 = 10u;
+
+// Coverage (0..1) of the octave glyph for slot `i` at quad position `uv`.
+// Each mode maps the octave index to a different geometry:
+//   1 = dots:  satellites orbiting the disc, clock position = octave
+//   2 = rings: concentric rings, inner ring = lowest octave
+//   3 = ticks: a column right of the disc, bottom tick = lowest octave
+fn octave_glyph(mode: u32, i: u32, uv: vec2<f32>, d: f32) -> f32 {
+    if mode == 1u {
+        // Start at 12 o'clock, go clockwise. (uv.y is up.)
+        let ang = 1.5707963 - 6.2831853 * f32(i) / f32(OCTAVE_SLOTS);
+        let center = vec2<f32>(cos(ang), sin(ang)) * 0.74;
+        return 1.0 - smoothstep(0.055, 0.095, distance(uv, center));
+    } else if mode == 2u {
+        let r = 0.56 + 0.042 * f32(i);
+        return 1.0 - smoothstep(0.008, 0.024, abs(d - r));
+    } else {
+        let y = -0.62 + 1.24 * f32(i) / f32(OCTAVE_SLOTS - 1u);
+        let dx = max(abs(uv.x - 0.76) - 0.10, 0.0);
+        let dy = max(abs(uv.y - y) - 0.030, 0.0);
+        return 1.0 - smoothstep(0.0, 0.035, dx + dy);
+    }
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
@@ -74,11 +100,30 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let brightness = 0.35 + 0.65 * activation + 0.2 * hovered;
     let rgb = in.color.rgb * brightness;
+    let base_alpha = clamp(disc + glow, 0.0, 1.0);
 
-    let alpha = clamp(disc + glow, 0.0, 1.0);
+    // Octave indicators, composited over the disc/glow. Glyphs fade with
+    // the same activation envelope as the node so releases decay together.
+    let mode = u32(u.misc.z + 0.5);
+    let mask = u32(in.params.z + 0.5);
+    var glyph = 0.0;
+    if mode != 0u && mask != 0u {
+        for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+            if ((mask >> i) & 1u) != 0u {
+                glyph = max(glyph, octave_glyph(mode, i, in.uv, d));
+            }
+        }
+        glyph = glyph * (0.35 + 0.65 * activation);
+    }
+    // Glyphs render in a lifted, whitened version of the node color so
+    // they read against both the disc and the background.
+    let glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.55);
+
+    // "Over" composite: glyph over (disc + glow), premultiplied.
+    let alpha = glyph + base_alpha * (1.0 - glyph);
     if alpha < 0.01 {
         discard;
     }
-    // Premultiplied alpha output (pipeline blend state expects it).
-    return vec4<f32>(rgb * alpha, alpha);
+    let out_rgb = glyph_rgb * glyph + rgb * base_alpha * (1.0 - glyph);
+    return vec4<f32>(out_rgb, alpha);
 }

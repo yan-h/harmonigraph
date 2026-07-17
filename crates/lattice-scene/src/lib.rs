@@ -16,6 +16,34 @@ pub fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
     )
 }
 
+/// How a node indicates which octaves its pitch class is sounding in.
+/// All modes read the same per-node octave bitmask; the fragment shader
+/// draws the glyphs. Kept as options side by side for design comparison.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum OctaveStyle {
+    /// No octave indication.
+    Off,
+    /// Small dots orbiting the disc; clock position = octave.
+    #[default]
+    Dots,
+    /// Concentric rings; inner ring = lowest octave.
+    Rings,
+    /// A column of ticks beside the disc; bottom = lowest octave.
+    Ticks,
+}
+
+impl OctaveStyle {
+    /// Index used by the shader (uniform `misc.z`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            OctaveStyle::Off => 0,
+            OctaveStyle::Dots => 1,
+            OctaveStyle::Rings => 2,
+            OctaveStyle::Ticks => 3,
+        }
+    }
+}
+
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
 #[derive(Clone, Debug)]
@@ -29,6 +57,8 @@ pub struct ViewConfig {
     /// Seconds a note stays highlighted after release (mirrors the plugin
     /// parameter; the shell copies it in each frame).
     pub highlight_time: f32,
+    /// How nodes indicate sounding octaves.
+    pub octave_style: OctaveStyle,
 }
 
 impl Default for ViewConfig {
@@ -39,6 +69,7 @@ impl Default for ViewConfig {
             extent_fives: 3,
             extent_sevens: 1,
             highlight_time: 1.0,
+            octave_style: OctaveStyle::default(),
         }
     }
 }
@@ -120,6 +151,7 @@ pub struct Scene {
     pub time: f32,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
+    pub octave_style: OctaveStyle,
 }
 
 /// Per-channel color palette (channels 0-8 distinct, like v1). Channels 9+
@@ -201,6 +233,7 @@ pub fn derive_scene(
         camera,
         time: now as f32,
         node_radius: view.spacing * 0.25,
+        octave_style: view.octave_style,
     }
 }
 
