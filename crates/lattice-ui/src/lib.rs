@@ -10,7 +10,7 @@ mod panes;
 use std::collections::VecDeque;
 
 use egui_dock::{DockArea, DockState, NodeIndex};
-use lattice_core::{LatticePos, NoteTracker, Tuning};
+use lattice_core::{LatticePos, NoteTracker, PitchClass, Tuning};
 use lattice_render::wgpu::TextureFormat;
 use lattice_scene::{Camera, ViewConfig};
 use params::ParamBackend;
@@ -62,6 +62,11 @@ pub struct SharedState {
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
+    /// While true, tuning params continuously re-learn from the held notes
+    /// (v1's learn mode). Runtime-only; never persisted.
+    pub learn_active: bool,
+    /// Held pitch classes the last learn ran against (change detection).
+    last_learned_classes: Option<Vec<PitchClass>>,
     dock: DockState<panes::Tab>,
 }
 
@@ -83,6 +88,8 @@ impl SharedState {
             hovered: None,
             console: Console::default(),
             target_format,
+            learn_active: false,
+            last_learned_classes: None,
             dock,
         }
     }
@@ -130,6 +137,41 @@ struct UiPersist {
 /// standalone harness wraps a frameless CentralPanel). `now` is seconds on
 /// the shell's clock (the same clock used to timestamp `NoteEvent`s).
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+    // Learn mode: whenever the set of held pitch classes changes, re-infer
+    // the tuning from it (instantly, as in v1). Change-detected so the
+    // host only sees param sets when something actually changed.
+    if state.learn_active {
+        let mut classes: Vec<PitchClass> = state
+            .tracker
+            .voices()
+            .filter(|v| v.state == lattice_core::VoiceState::Held)
+            .map(|v| v.pitch_class)
+            .collect();
+        classes.sort_unstable();
+        classes.dedup();
+        if state.last_learned_classes.as_ref() != Some(&classes) {
+            if !classes.is_empty() {
+                let learned = lattice_core::tuning::learn_tuning(&classes);
+                for (value, key) in [
+                    (learned.c_offset, params::ParamKey::COffset),
+                    (learned.three, params::ParamKey::Three),
+                    (learned.five, params::ParamKey::Five),
+                    (learned.seven, params::ParamKey::Seven),
+                ] {
+                    if let Some(value) = value {
+                        params.set(key, value);
+                    }
+                }
+                state
+                    .console
+                    .log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
+            }
+            state.last_learned_classes = Some(classes);
+        }
+    } else {
+        state.last_learned_classes = None;
+    }
+
     state.tuning = params::tuning_from_params(params);
     state.view.pitch_class_fade_time = params.get(params::ParamKey::PitchClassFade);
     state.view.octave_fade_time = params.get(params::ParamKey::OctaveFade);

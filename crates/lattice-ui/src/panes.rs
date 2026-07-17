@@ -196,35 +196,10 @@ fn settings_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamB
             params.set(ParamKey::Five, tuning::FIVE_12TET);
             params.set(ParamKey::Seven, tuning::SEVEN_12TET);
         }
-        // v1's tuning-learn: infer C offset and prime tunings from the
-        // currently held pitch classes (hold a justly tuned chord, click).
-        let learn = ui
-            .button("Learn")
-            .on_hover_text("Set tuning from the currently held notes");
-        if learn.clicked() {
-            let classes: Vec<_> = state
-                .tracker
-                .voices()
-                .filter(|v| v.state == lattice_core::VoiceState::Held)
-                .map(|v| v.pitch_class)
-                .collect();
-            let learned = tuning::learn_tuning(&classes);
-            for (value, key) in [
-                (learned.c_offset, ParamKey::COffset),
-                (learned.three, ParamKey::Three),
-                (learned.five, ParamKey::Five),
-                (learned.seven, ParamKey::Seven),
-            ] {
-                if let Some(value) = value {
-                    params.set(key, value);
-                }
-            }
-            state.console.log(format!(
-                "learn: {} held classes -> {:?}",
-                classes.len(),
-                learned
-            ));
-        }
+        // v1's tuning-learn mode: while engaged, the tuning re-learns
+        // instantly whenever the set of held notes changes (see root_ui).
+        ui.toggle_value(&mut state.learn_active, "Learn")
+            .on_hover_text("While active, continuously set the tuning from the held notes");
     });
 
     ui.separator();
