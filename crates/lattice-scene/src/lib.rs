@@ -3,6 +3,8 @@
 //! [`Scene`] and knows nothing about MIDI; the core knows nothing about
 //! cameras or colors. Animation/envelope *policy* lives here.
 
+pub mod skin;
+
 use glam::{Mat4, Vec2, Vec3, Vec4};
 use lattice_core::{coords, LatticePos, NoteTracker, Tuning};
 
@@ -229,8 +231,6 @@ pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitc
     }
 }
 
-const IDLE_COLOR: Vec4 = Vec4::new(0.16, 0.17, 0.20, 1.0);
-
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 pub fn derive_scene(
@@ -252,7 +252,7 @@ pub fn derive_scene(
 
         let mut activation = 0.0f32;
         let mut octave_mask = 0u16;
-        let mut color = IDLE_COLOR;
+        let mut color = skin::active_skin().node_idle;
         let mut outlined = false;
 
         // O(nodes × voices); fine at this scale. If extents grow large,

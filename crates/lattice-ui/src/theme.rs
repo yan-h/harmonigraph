@@ -1,47 +1,70 @@
-//! The UI theme: one place to tweak how panel chrome looks.
-//!
-//! Colors deliberately stay close to egui's dark defaults (the current
-//! scheme); what this module changes is the *shape* of things — rounding,
-//! spacing, strokes, hover behavior — plus named constants so palette
-//! experiments are one-file edits.
-//!
-//! Keep in loose sync with the lattice's own colors in `lattice-scene`
-//! (IDLE_COLOR, channel palette). TODO(skins): fold both into a single
-//! `Skin` struct feeding egui visuals AND shader uniforms.
+//! The UI theme: how panel chrome looks. Every color comes from the
+//! active `lattice_scene::skin::Skin`, which also feeds the 3D scene — a
+//! look is defined in exactly one struct. This module owns the *shapes*:
+//! rounding, spacing, strokes, hover behavior, and the egui/dock plumbing.
 
 use egui::{Color32, CornerRadius, FontId, Stroke, TextStyle, Vec2};
+use lattice_scene::skin::active_skin;
 
-// ---- Palette -------------------------------------------------------------
+// ---- Palette accessors ----------------------------------------------------
+// All colors come from the active Skin (lattice_scene::skin), the single
+// place a look is defined; these helpers just convert to egui colors.
+
+fn c(rgb: [u8; 3]) -> Color32 {
+    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
 
 /// Window/panel background.
-pub const PANEL: Color32 = Color32::from_rgb(24, 25, 29);
+pub fn panel() -> Color32 {
+    c(active_skin().panel)
+}
 /// Recessed areas: console scrollback, text edits, plot backgrounds.
-pub const WELL: Color32 = Color32::from_rgb(15, 16, 19);
+pub fn well() -> Color32 {
+    c(active_skin().well)
+}
 /// Resting widget fill (buttons, slider tracks).
-pub const WIDGET: Color32 = Color32::from_rgb(41, 43, 50);
+pub fn widget() -> Color32 {
+    c(active_skin().widget)
+}
 /// Hovered widget fill.
-pub const WIDGET_HOVER: Color32 = Color32::from_rgb(54, 57, 66);
-/// Accent: selections, slider fill, hover strokes. A desaturated cousin of
-/// the channel-0 lattice red would also work here; blue-gray for now.
-pub const ACCENT: Color32 = Color32::from_rgb(110, 140, 200);
+pub fn widget_hover() -> Color32 {
+    c(active_skin().widget_hover)
+}
+/// Accent: selections, slider fill, hover strokes.
+pub fn accent() -> Color32 {
+    c(active_skin().accent)
+}
 /// Primary text.
-pub const TEXT: Color32 = Color32::from_rgb(222, 224, 228);
+pub fn text() -> Color32 {
+    c(active_skin().text)
+}
 /// Secondary text (labels, weak()).
-pub const TEXT_DIM: Color32 = Color32::from_rgb(140, 144, 152);
-
+pub fn text_dim() -> Color32 {
+    c(active_skin().text_dim)
+}
 // Opaque accent mixes (accent blended into the surface colors). Alpha-based
 // accents (gamma_multiply) made dragged widgets translucent, which read as
 // a glitch; everything below is fully opaque.
 /// ValueBar fill at rest.
-pub const ACCENT_FILL: Color32 = Color32::from_rgb(58, 70, 94);
+pub fn accent_fill() -> Color32 {
+    c(active_skin().accent_fill)
+}
 /// ValueBar fill, hovered.
-pub const ACCENT_FILL_HOVER: Color32 = Color32::from_rgb(70, 86, 118);
+pub fn accent_fill_hover() -> Color32 {
+    c(active_skin().accent_fill_hover)
+}
 /// ValueBar fill while dragging.
-pub const ACCENT_FILL_DRAG: Color32 = Color32::from_rgb(88, 109, 150);
+pub fn accent_fill_drag() -> Color32 {
+    c(active_skin().accent_fill_drag)
+}
 /// Pressed/active widget fill (buttons).
-pub const ACCENT_ACTIVE: Color32 = Color32::from_rgb(76, 92, 125);
+pub fn accent_active() -> Color32 {
+    c(active_skin().accent_active)
+}
 /// Hover/focus stroke color.
-pub const ACCENT_EDGE: Color32 = Color32::from_rgb(90, 111, 152);
+pub fn accent_edge() -> Color32 {
+    c(active_skin().accent_edge)
+}
 
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(5);
 
@@ -76,15 +99,15 @@ pub fn apply_theme(ctx: &egui::Context) {
     style.spacing.slider_rail_height = 4.0;
 
     let visuals = &mut style.visuals;
-    visuals.panel_fill = PANEL;
-    visuals.window_fill = PANEL;
-    visuals.extreme_bg_color = WELL;
+    visuals.panel_fill = panel();
+    visuals.window_fill = panel();
+    visuals.extreme_bg_color = well();
     visuals.faint_bg_color = Color32::from_rgb(30, 31, 36);
 
     // Text selection keeps alpha (it overlays glyphs); widget states below
     // are opaque.
-    visuals.selection.bg_fill = ACCENT.gamma_multiply(0.35);
-    visuals.selection.stroke = Stroke::new(1.0, ACCENT);
+    visuals.selection.bg_fill = accent().gamma_multiply(0.35);
+    visuals.selection.stroke = Stroke::new(1.0, accent());
     visuals.slider_trailing_fill = true;
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(6);
@@ -93,35 +116,35 @@ pub fn apply_theme(ctx: &egui::Context) {
     // carry information (hover/focus), slight hover growth.
     let w = &mut visuals.widgets;
 
-    w.noninteractive.bg_fill = PANEL;
+    w.noninteractive.bg_fill = panel();
     w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(40, 42, 48));
-    w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_DIM);
+    w.noninteractive.fg_stroke = Stroke::new(1.0, text_dim());
     w.noninteractive.corner_radius = WIDGET_RADIUS;
 
-    w.inactive.bg_fill = WIDGET;
-    w.inactive.weak_bg_fill = WIDGET;
+    w.inactive.bg_fill = widget();
+    w.inactive.weak_bg_fill = widget();
     w.inactive.bg_stroke = Stroke::NONE;
-    w.inactive.fg_stroke = Stroke::new(1.0, TEXT);
+    w.inactive.fg_stroke = Stroke::new(1.0, text());
     w.inactive.corner_radius = WIDGET_RADIUS;
 
-    w.hovered.bg_fill = WIDGET_HOVER;
-    w.hovered.weak_bg_fill = WIDGET_HOVER;
-    w.hovered.bg_stroke = Stroke::new(1.0, ACCENT_EDGE);
-    w.hovered.fg_stroke = Stroke::new(1.2, TEXT);
+    w.hovered.bg_fill = widget_hover();
+    w.hovered.weak_bg_fill = widget_hover();
+    w.hovered.bg_stroke = Stroke::new(1.0, accent_edge());
+    w.hovered.fg_stroke = Stroke::new(1.2, text());
     w.hovered.corner_radius = WIDGET_RADIUS;
     w.hovered.expansion = 1.0;
 
-    w.active.bg_fill = ACCENT_ACTIVE;
-    w.active.weak_bg_fill = ACCENT_ACTIVE;
-    w.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    w.active.bg_fill = accent_active();
+    w.active.weak_bg_fill = accent_active();
+    w.active.bg_stroke = Stroke::new(1.0, accent());
     w.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
     w.active.corner_radius = WIDGET_RADIUS;
     w.active.expansion = 1.0;
 
-    w.open.bg_fill = WIDGET;
-    w.open.weak_bg_fill = WIDGET;
-    w.open.bg_stroke = Stroke::new(1.0, ACCENT_EDGE);
-    w.open.fg_stroke = Stroke::new(1.0, TEXT);
+    w.open.bg_fill = widget();
+    w.open.weak_bg_fill = widget();
+    w.open.bg_stroke = Stroke::new(1.0, accent_edge());
+    w.open.fg_stroke = Stroke::new(1.0, text());
     w.open.corner_radius = WIDGET_RADIUS;
 
     ctx.set_style_of(egui::Theme::Dark, style);
@@ -143,15 +166,15 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     // Separators: slim bands in the well color, accent when grabbed.
     style.separator.width = 4.0;
     style.separator.extra_interact_width = 6.0;
-    style.separator.color_idle = WELL;
-    style.separator.color_hovered = ACCENT_EDGE;
-    style.separator.color_dragged = ACCENT;
+    style.separator.color_idle = well();
+    style.separator.color_hovered = accent_edge();
+    style.separator.color_dragged = accent();
 
     // Tab bar: a quiet strip of the same surface, divided from the body by
     // a hairline; the active tab fills seamlessly into the body below it.
-    style.tab_bar.bg_fill = WELL;
+    style.tab_bar.bg_fill = well();
     style.tab_bar.height = 26.0;
-    style.tab_bar.hline_color = WELL;
+    style.tab_bar.hline_color = well();
     style.tab_bar.corner_radius = CornerRadius::ZERO;
 
     // Tabs: no outlines anywhere; active = body color, inactive = recessed.
@@ -164,24 +187,24 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     ] {
         t.outline_color = Color32::TRANSPARENT;
         t.corner_radius = CornerRadius::ZERO;
-        t.bg_fill = PANEL;
-        t.text_color = TEXT;
+        t.bg_fill = panel();
+        t.text_color = text();
     }
     for t in [&mut tab.inactive, &mut tab.hovered, &mut tab.inactive_with_kb_focus] {
         t.outline_color = Color32::TRANSPARENT;
         t.corner_radius = CornerRadius::ZERO;
-        t.bg_fill = WELL;
-        t.text_color = TEXT_DIM;
+        t.bg_fill = well();
+        t.text_color = text_dim();
     }
     tab.hovered.bg_fill = Color32::from_rgb(30, 31, 36);
-    tab.hovered.text_color = TEXT;
+    tab.hovered.text_color = text();
     tab.hline_below_active_tab_name = false;
 
     // Tab bodies: the boxes-within-boxes look came from here — a stroke
     // rectangle around every pane. Kill it; bodies are just the surface.
     tab.tab_body.stroke = Stroke::NONE;
     tab.tab_body.corner_radius = CornerRadius::ZERO;
-    tab.tab_body.bg_fill = PANEL;
+    tab.tab_body.bg_fill = panel();
     tab.tab_body.inner_margin = egui::Margin::same(8);
 
     style

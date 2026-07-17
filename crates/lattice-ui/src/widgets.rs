@@ -134,24 +134,24 @@ impl<'a> ValueBar<'a> {
         // ---- Paint ----------------------------------------------------------
         let radius = CornerRadius::same(2);
         let painter = ui.painter();
-        painter.rect_filled(rect, radius, theme::WELL);
+        painter.rect_filled(rect, radius, theme::well());
 
         let t = self.to_t(*self.value);
         let fill_color = if response.dragged() {
-            theme::ACCENT_FILL_DRAG
+            theme::accent_fill_drag()
         } else if response.hovered() {
-            theme::ACCENT_FILL_HOVER
+            theme::accent_fill_hover()
         } else {
-            theme::ACCENT_FILL
+            theme::accent_fill()
         };
         let mut fill = rect;
         fill.set_width(rect.width() * t);
         painter.rect_filled(fill, radius, fill_color);
 
         let text_color = if response.hovered() || response.dragged() {
-            theme::TEXT
+            theme::text()
         } else {
-            theme::TEXT_DIM
+            theme::text_dim()
         };
         painter.text(
             rect.left_center() + Vec2::new(8.0, 0.0),
@@ -165,7 +165,7 @@ impl<'a> ValueBar<'a> {
             Align2::RIGHT_CENTER,
             self.format(*self.value),
             TextStyle::Body.resolve(ui.style()),
-            theme::TEXT,
+            theme::text(),
         );
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)

@@ -117,7 +117,7 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             } else {
                 0.35 + 0.65 * node.activation
             };
-            let color = theme::TEXT.gamma_multiply(strength);
+            let color = theme::text().gamma_multiply(strength);
             ui.painter().text(
                 egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
                 egui::Align2::CENTER_TOP,
@@ -304,7 +304,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         return;
     }
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, theme::WELL);
+    painter.rect_filled(rect, 0.0, theme::well());
 
     let x_of = |cents: f32| rect.left() + rect.width() * (cents / 1200.0);
 
@@ -313,14 +313,14 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         let x = x_of(i as f32 * 100.0);
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            egui::Stroke::new(1.0, theme::PANEL),
+            egui::Stroke::new(1.0, theme::panel()),
         );
         painter.text(
             egui::pos2(x + 3.0, rect.bottom() - 2.0),
             egui::Align2::LEFT_BOTTOM,
             format!("{}", i * 100),
             egui::TextStyle::Small.resolve(ui.style()),
-            theme::TEXT_DIM,
+            theme::text_dim(),
         );
     }
 
@@ -336,7 +336,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
                 egui::pos2(x, rect.bottom() - 10.0),
                 egui::pos2(x, rect.bottom() - 4.0),
             ],
-            egui::Stroke::new(1.0, theme::TEXT_DIM),
+            egui::Stroke::new(1.0, theme::text_dim()),
         );
     }
 
@@ -353,7 +353,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
                 egui::pos2(x + half_width, rect.bottom()),
             ),
             0.0,
-            theme::ACCENT_FILL,
+            theme::accent_fill(),
         );
     }
 
@@ -403,7 +403,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             egui::Align2::LEFT_TOP,
             format!("{cents:.0} cents"),
             egui::TextStyle::Small.resolve(ui.style()),
-            theme::TEXT,
+            theme::text(),
         );
     }
 }
