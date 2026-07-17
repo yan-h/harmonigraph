@@ -158,14 +158,25 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     }
 
     // Octave indicator style: kept as switchable design candidates so they
-    // can be compared live while notes play.
+    // can be compared live while notes play. The Ticks variants differ in
+    // the reference frame showing where the octave range starts/ends.
     ui.horizontal(|ui| {
         ui.label("Octaves");
         for (style, label) in [
+            (OctaveStyle::Off, "Off"),
             (OctaveStyle::Dots, "Dots"),
             (OctaveStyle::Rings, "Rings"),
-            (OctaveStyle::Ticks, "Ticks"),
-            (OctaveStyle::Off, "Off"),
+        ] {
+            ui.selectable_value(&mut state.view.octave_style, style, label);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Ticks");
+        for (style, label) in [
+            (OctaveStyle::TicksRail, "Rail"),
+            (OctaveStyle::TicksLadder, "Ladder"),
+            (OctaveStyle::TicksCaps, "Caps"),
+            (OctaveStyle::TicksMid, "Mid-C mark"),
         ] {
             ui.selectable_value(&mut state.view.octave_style, style, label);
         }

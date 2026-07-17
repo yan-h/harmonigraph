@@ -24,12 +24,21 @@ pub enum OctaveStyle {
     /// No octave indication.
     Off,
     /// Small dots orbiting the disc; clock position = octave.
-    #[default]
     Dots,
     /// Concentric rings; inner ring = lowest octave.
     Rings,
-    /// A column of ticks beside the disc; bottom = lowest octave.
-    Ticks,
+    /// Tick column with a faint full-height rail as the reference frame.
+    TicksRail,
+    /// Tick column with every octave slot shown as a dim pip (LED-meter
+    /// style); lit pips = sounding octaves.
+    #[default]
+    TicksLadder,
+    /// Tick column with a rail plus emphasized end caps at the bottom and
+    /// top of the octave range.
+    TicksCaps,
+    /// Ladder plus a brighter marker line at the middle-C octave (4), as a
+    /// musically meaningful anchor.
+    TicksMid,
 }
 
 impl OctaveStyle {
@@ -39,7 +48,10 @@ impl OctaveStyle {
             OctaveStyle::Off => 0,
             OctaveStyle::Dots => 1,
             OctaveStyle::Rings => 2,
-            OctaveStyle::Ticks => 3,
+            OctaveStyle::TicksRail => 3,
+            OctaveStyle::TicksLadder => 4,
+            OctaveStyle::TicksCaps => 5,
+            OctaveStyle::TicksMid => 6,
         }
     }
 }

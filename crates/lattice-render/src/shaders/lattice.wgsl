@@ -61,11 +61,29 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 // Number of octave slots the indicators display (MIDI octaves 0..9).
 const OCTAVE_SLOTS: u32 = 10u;
 
-// Coverage (0..1) of the octave glyph for slot `i` at quad position `uv`.
-// Each mode maps the octave index to a different geometry:
-//   1 = dots:  satellites orbiting the disc, clock position = octave
-//   2 = rings: concentric rings, inner ring = lowest octave
-//   3 = ticks: a column right of the disc, bottom tick = lowest octave
+// Tick column geometry (modes 3..6), all in quad UV units.
+const TICK_X: f32 = 0.76; // column center
+const TICK_HALF_W: f32 = 0.10;
+const TICK_HALF_H: f32 = 0.030;
+const TICK_Y_MIN: f32 = -0.62;
+const TICK_Y_MAX: f32 = 0.62;
+
+fn tick_slot_y(i: u32) -> f32 {
+    return TICK_Y_MIN + (TICK_Y_MAX - TICK_Y_MIN) * f32(i) / f32(OCTAVE_SLOTS - 1u);
+}
+
+// Coverage of the tick pip for slot `i`.
+fn tick_pip(i: u32, uv: vec2<f32>) -> f32 {
+    let dx = max(abs(uv.x - TICK_X) - TICK_HALF_W, 0.0);
+    let dy = max(abs(uv.y - tick_slot_y(i)) - TICK_HALF_H, 0.0);
+    return 1.0 - smoothstep(0.0, 0.035, dx + dy);
+}
+
+// Coverage (0..1) of the octave glyph for a SOUNDING slot `i`:
+//   1 = dots:     satellites orbiting the disc, clock position = octave
+//   2 = rings:    concentric rings, inner ring = lowest octave
+//   3..6 = ticks: column right of the disc, bottom = lowest octave
+//                 (variants differ only in reference furniture, below)
 fn octave_glyph(mode: u32, i: u32, uv: vec2<f32>, d: f32) -> f32 {
     if mode == 1u {
         // Start at 12 o'clock, go clockwise. (uv.y is up.)
@@ -76,11 +94,48 @@ fn octave_glyph(mode: u32, i: u32, uv: vec2<f32>, d: f32) -> f32 {
         let r = 0.56 + 0.042 * f32(i);
         return 1.0 - smoothstep(0.008, 0.024, abs(d - r));
     } else {
-        let y = -0.62 + 1.24 * f32(i) / f32(OCTAVE_SLOTS - 1u);
-        let dx = max(abs(uv.x - 0.76) - 0.10, 0.0);
-        let dy = max(abs(uv.y - y) - 0.030, 0.0);
-        return 1.0 - smoothstep(0.0, 0.035, dx + dy);
+        return tick_pip(i, uv);
     }
+}
+
+// Reference furniture for the tick variants: static geometry showing where
+// the octave range begins and ends, so a lit tick has an absolute position.
+// Returns coverage ALREADY scaled to its intended dimness relative to a lit
+// tick (1.0).
+fn tick_reference(mode: u32, uv: vec2<f32>) -> f32 {
+    var ref_cov = 0.0;
+
+    // Rail: a faint spine the full height of the column (modes 3 and 5).
+    if mode == 3u || mode == 5u {
+        let dx = max(abs(uv.x - TICK_X) - 0.016, 0.0);
+        let dy = max(abs(uv.y) - (TICK_Y_MAX + 0.02), 0.0);
+        ref_cov = max(ref_cov, 0.22 * (1.0 - smoothstep(0.0, 0.03, dx + dy)));
+    }
+
+    // Ladder: every slot as a dim pip (modes 4 and 6).
+    if mode == 4u || mode == 6u {
+        for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+            ref_cov = max(ref_cov, 0.20 * tick_pip(i, uv));
+        }
+    }
+
+    // End caps: emphasized bars just past the bottom and top slots (mode 5).
+    if mode == 5u {
+        let dx = max(abs(uv.x - TICK_X) - 0.13, 0.0);
+        let dy_bot = max(abs(uv.y - (TICK_Y_MIN - 0.075)) - 0.014, 0.0);
+        let dy_top = max(abs(uv.y - (TICK_Y_MAX + 0.075)) - 0.014, 0.0);
+        let dy = min(dy_bot, dy_top);
+        ref_cov = max(ref_cov, 0.45 * (1.0 - smoothstep(0.0, 0.03, dx + dy)));
+    }
+
+    // Middle-C octave marker: a brighter line through slot 4 (mode 6).
+    if mode == 6u {
+        let dx = max(abs(uv.x - TICK_X) - 0.14, 0.0);
+        let dy = max(abs(uv.y - tick_slot_y(4u)) - 0.010, 0.0);
+        ref_cov = max(ref_cov, 0.45 * (1.0 - smoothstep(0.0, 0.025, dx + dy)));
+    }
+
+    return ref_cov;
 }
 
 @fragment
@@ -112,6 +167,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             if ((mask >> i) & 1u) != 0u {
                 glyph = max(glyph, octave_glyph(mode, i, in.uv, d));
             }
+        }
+        if mode >= 3u {
+            glyph = max(glyph, tick_reference(mode, in.uv));
         }
         glyph = glyph * (0.35 + 0.65 * activation);
     }
