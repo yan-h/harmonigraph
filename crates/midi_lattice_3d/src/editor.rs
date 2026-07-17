@@ -30,15 +30,59 @@ use crate::{MidiLattice3dParams, PluginParamBackend};
 const ASSUMED_SURFACE_FORMAT: lattice_render::wgpu::TextureFormat =
     lattice_render::wgpu::TextureFormat::Bgra8Unorm;
 
+/// Maps audio-clock timestamps (seconds on the plugin's sample clock)
+/// onto the GUI clock. A smoothed offset estimate preserves the relative
+/// spacing of events - re-stamping on arrival (the old approach) squashed
+/// every event in a batch onto the same GUI frame time.
+pub(crate) struct ClockMapper {
+    /// Estimated `gui_time - audio_time` (includes average delivery
+    /// latency, which is fine: it's constant-ish, so spacing survives).
+    offset: Option<f64>,
+}
+
+impl ClockMapper {
+    /// An offset jump larger than this means the audio clock restarted
+    /// (transport reset, sample-rate change): snap instead of smoothing.
+    const SNAP_THRESHOLD: f64 = 1.0;
+    const SMOOTHING: f64 = 0.05;
+
+    pub fn new() -> Self {
+        ClockMapper { offset: None }
+    }
+
+    /// Feed one observation per drained batch: the newest audio timestamp
+    /// in the batch against the current GUI time.
+    pub fn observe(&mut self, newest_audio_time: f64, gui_now: f64) {
+        let candidate = gui_now - newest_audio_time;
+        self.offset = Some(match self.offset {
+            None => candidate,
+            Some(prev) if (candidate - prev).abs() > Self::SNAP_THRESHOLD => candidate,
+            Some(prev) => prev + (candidate - prev) * Self::SMOOTHING,
+        });
+    }
+
+    /// Map an audio timestamp to GUI time (clamped: never in the future).
+    pub fn map(&self, audio_time: f64, gui_now: f64) -> f64 {
+        match self.offset {
+            Some(offset) => (audio_time + offset).min(gui_now),
+            None => gui_now,
+        }
+    }
+}
+
 /// State shared between the plugin (which owns the ring buffer producer)
 /// and the GUI thread. Lives for the whole plugin lifetime; the editor
 /// window may open and close many times around it.
 pub struct EditorShared {
     consumer: rtrb::Consumer<CoreNoteEvent>,
     ui: SharedState,
-    /// GUI clock epoch. Note events are re-stamped with this clock when
-    /// drained (see below).
+    /// GUI clock epoch; audio event times are mapped onto this clock.
     start: Instant,
+    /// Audio->GUI clock mapping (see ClockMapper).
+    clock: ClockMapper,
+    /// Reused per-frame drain scratch (events are batched so the clock
+    /// observation can use the newest timestamp before mapping).
+    drain_buf: Vec<CoreNoteEvent>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
     /// Param key currently inside a begin_set/end_set automation gesture.
@@ -51,6 +95,8 @@ impl EditorShared {
             consumer,
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             start: Instant::now(),
+            clock: ClockMapper::new(),
+            drain_buf: Vec::new(),
             last_frame: None,
             gesture: std::cell::Cell::new(None),
         }
@@ -285,19 +331,22 @@ impl Editor for LatticeEditor {
                 let shared = &mut *shared;
                 let now = shared.start.elapsed().as_secs_f64();
 
-                // Drain note events from the audio thread. Events are
-                // re-stamped with the GUI clock on arrival: sub-frame
-                // accuracy doesn't matter visually, and it keeps the decay
-                // clock and event clock trivially consistent.
-                // TODO: estimate the audio→GUI clock offset instead, so
-                // event *spacing* within a frame is preserved.
-                let mut drained_any = false;
-                while let Ok(mut event) = shared.consumer.pop() {
-                    event.time = now;
-                    shared.ui.tracker.handle_event(event);
-                    drained_any = true;
+                // Drain note events from the audio thread and map their
+                // sample-clock timestamps onto the GUI clock through the
+                // smoothed offset estimate, preserving intra-batch spacing
+                // (a fast run of notes no longer quantizes to GUI frames).
+                shared.drain_buf.clear();
+                while let Ok(event) = shared.consumer.pop() {
+                    shared.drain_buf.push(event);
                 }
-                if drained_any {
+                if let Some(newest) = shared.drain_buf.last() {
+                    shared.clock.observe(newest.time, now);
+                    let EditorShared { drain_buf, clock, ui, .. } = shared;
+                    for event in drain_buf.iter() {
+                        let mut event = *event;
+                        event.time = clock.map(event.time, now);
+                        ui.tracker.handle_event(event);
+                    }
                     // New MIDI must render this tick, not at the idle poll.
                     egui_ctx.request_repaint();
                 }
@@ -510,5 +559,48 @@ impl Drop for LatticeEditorHandle {
         *self.params.ui_state.write() = self.shared.lock().ui.save_persist();
         self.egui_state.open.store(false, Ordering::Release);
         self.window.close();
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::ClockMapper;
+
+    #[test]
+    fn preserves_intra_batch_spacing() {
+        let mut clock = ClockMapper::new();
+        // Audio clock at ~100s, GUI clock at ~7s.
+        clock.observe(100.0, 7.0);
+        let a = clock.map(99.950, 7.0);
+        let b = clock.map(99.995, 7.0);
+        assert!((b - a - 0.045).abs() < 1e-9, "spacing lost: {a} {b}");
+    }
+
+    #[test]
+    fn never_maps_into_the_future() {
+        let mut clock = ClockMapper::new();
+        clock.observe(100.0, 7.0);
+        assert!(clock.map(120.0, 7.0) <= 7.0);
+    }
+
+    #[test]
+    fn snaps_on_transport_reset() {
+        let mut clock = ClockMapper::new();
+        clock.observe(100.0, 7.0);
+        // Transport reset: audio clock restarts near zero.
+        clock.observe(0.1, 7.5);
+        let mapped = clock.map(0.1, 7.5);
+        assert!((mapped - 7.5).abs() < 1e-9, "did not snap: {mapped}");
+    }
+
+    #[test]
+    fn smooths_small_jitter() {
+        let mut clock = ClockMapper::new();
+        clock.observe(100.0, 7.0); // offset -93
+        clock.observe(101.0, 8.1); // candidate -92.9: jitter, not a reset
+        let mapped = clock.map(101.0, 9.0);
+        // Offset moved only 5% of the way toward the new candidate.
+        assert!((mapped - (101.0 - 93.0 + 0.005)).abs() < 1e-9, "got {mapped}");
     }
 }
