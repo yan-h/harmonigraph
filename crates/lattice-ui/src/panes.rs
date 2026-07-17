@@ -179,9 +179,10 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 }
 
-/// Attention pulse for armed-mode indicators, in [0.3, 1].
+/// Attention pulse for armed-mode indicators: a slow, shallow breathe
+/// (calm "armed", not "alarmed").
 fn learn_pulse(now: f64) -> f32 {
-    0.65 + 0.35 * (now * 2.0 * std::f64::consts::PI * 1.2).sin() as f32
+    0.78 + 0.22 * (now * 2.0 * std::f64::consts::PI * 0.6).sin() as f32
 }
 
 /// One ValueBar per parameter, with automation-gesture bracketing.
