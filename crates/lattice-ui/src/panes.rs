@@ -2,12 +2,13 @@
 //! a body function; it immediately participates in docking, and gets the
 //! shared state (hover, console, tracker) for free.
 
-use egui::{Sense, Slider};
+use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
 use lattice_scene::derive_scene;
 
 use crate::params::{ParamBackend, ParamKey};
+use crate::widgets::ValueBar;
 use crate::SharedState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,10 +123,10 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 
     for key in ParamKey::ALL {
         let mut value = params.get(key);
-        let slider = Slider::new(&mut value, key.range())
-            .text(key.label())
-            .logarithmic(key.logarithmic());
-        if ui.add(slider).changed() {
+        let bar = ValueBar::new(&mut value, key.range(), key.label())
+            .eased(key.logarithmic())
+            .decimals(2);
+        if bar.show(ui).changed() {
             params.set(key, value);
         }
     }
@@ -145,9 +146,16 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 
     ui.separator();
     ui.heading("View");
-    ui.add(Slider::new(&mut state.view.extent_threes, 1..=8).text("Fifths extent"));
-    ui.add(Slider::new(&mut state.view.extent_fives, 1..=8).text("Thirds extent"));
-    ui.add(Slider::new(&mut state.view.extent_sevens, 0..=4).text("Sevenths extent"));
+    for (extent, range, label) in [
+        (&mut state.view.extent_threes, 1.0..=8.0, "Fifths extent"),
+        (&mut state.view.extent_fives, 1.0..=8.0, "Thirds extent"),
+        (&mut state.view.extent_sevens, 0.0..=4.0, "Sevenths extent"),
+    ] {
+        let mut value = *extent as f32;
+        if ValueBar::new(&mut value, range, label).integer().show(ui).changed() {
+            *extent = value as i32;
+        }
+    }
 
     ui.separator();
     // Cross-pane highlight demo: this pane reacts to the lattice hover.

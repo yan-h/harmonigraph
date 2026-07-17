@@ -4,6 +4,7 @@
 
 pub mod params;
 pub mod theme;
+pub mod widgets;
 mod panes;
 
 use std::collections::VecDeque;

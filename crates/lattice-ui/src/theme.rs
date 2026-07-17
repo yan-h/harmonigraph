@@ -29,6 +29,20 @@ pub const TEXT: Color32 = Color32::from_rgb(222, 224, 228);
 /// Secondary text (labels, weak()).
 pub const TEXT_DIM: Color32 = Color32::from_rgb(140, 144, 152);
 
+// Opaque accent mixes (accent blended into the surface colors). Alpha-based
+// accents (gamma_multiply) made dragged widgets translucent, which read as
+// a glitch; everything below is fully opaque.
+/// ValueBar fill at rest.
+pub const ACCENT_FILL: Color32 = Color32::from_rgb(58, 70, 94);
+/// ValueBar fill, hovered.
+pub const ACCENT_FILL_HOVER: Color32 = Color32::from_rgb(70, 86, 118);
+/// ValueBar fill while dragging.
+pub const ACCENT_FILL_DRAG: Color32 = Color32::from_rgb(88, 109, 150);
+/// Pressed/active widget fill (buttons).
+pub const ACCENT_ACTIVE: Color32 = Color32::from_rgb(76, 92, 125);
+/// Hover/focus stroke color.
+pub const ACCENT_EDGE: Color32 = Color32::from_rgb(90, 111, 152);
+
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(5);
 
 // ---- Application ----------------------------------------------------------
@@ -67,11 +81,11 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.extreme_bg_color = WELL;
     visuals.faint_bg_color = Color32::from_rgb(30, 31, 36);
 
+    // Text selection keeps alpha (it overlays glyphs); widget states below
+    // are opaque.
     visuals.selection.bg_fill = ACCENT.gamma_multiply(0.35);
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
     visuals.slider_trailing_fill = true;
-    // Slim circular handle to match the thinner rail.
-    visuals.handle_shape = egui::style::HandleShape::Circle;
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(6);
 
@@ -92,13 +106,13 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     w.hovered.bg_fill = WIDGET_HOVER;
     w.hovered.weak_bg_fill = WIDGET_HOVER;
-    w.hovered.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.6));
+    w.hovered.bg_stroke = Stroke::new(1.0, ACCENT_EDGE);
     w.hovered.fg_stroke = Stroke::new(1.2, TEXT);
     w.hovered.corner_radius = WIDGET_RADIUS;
     w.hovered.expansion = 1.0;
 
-    w.active.bg_fill = ACCENT.gamma_multiply(0.5);
-    w.active.weak_bg_fill = ACCENT.gamma_multiply(0.5);
+    w.active.bg_fill = ACCENT_ACTIVE;
+    w.active.weak_bg_fill = ACCENT_ACTIVE;
     w.active.bg_stroke = Stroke::new(1.0, ACCENT);
     w.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
     w.active.corner_radius = WIDGET_RADIUS;
@@ -106,7 +120,7 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     w.open.bg_fill = WIDGET;
     w.open.weak_bg_fill = WIDGET;
-    w.open.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.4));
+    w.open.bg_stroke = Stroke::new(1.0, ACCENT_EDGE);
     w.open.fg_stroke = Stroke::new(1.0, TEXT);
     w.open.corner_radius = WIDGET_RADIUS;
 
@@ -130,7 +144,7 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     style.separator.width = 4.0;
     style.separator.extra_interact_width = 6.0;
     style.separator.color_idle = WELL;
-    style.separator.color_hovered = ACCENT.gamma_multiply(0.5);
+    style.separator.color_hovered = ACCENT_EDGE;
     style.separator.color_dragged = ACCENT;
 
     // Tab bar: a quiet strip of the same surface, divided from the body by
