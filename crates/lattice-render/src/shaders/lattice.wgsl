@@ -13,7 +13,7 @@ struct Uniforms {
     //    per-note animation uses the instance age/seed, which stay small
     //    and precise however long the session runs),
     // y: base node radius (world units),
-    // z: octave display mode (0 off, 1 dots, 2 rings, 3..6 ticks),
+    // z: octave display mode (0 off, 1 dots),
     // w: node style (0 steady, 1 breathe, 2 corona, 3 sparks, 4 wire)
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z, w unused. The
@@ -113,59 +113,28 @@ fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
     return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
 }
 
-// Tick column geometry (modes 3..6), all in quad UV units.
-const TICK_X: f32 = 0.76; // column center
-const TICK_HALF_W: f32 = 0.10;
-const TICK_HALF_H: f32 = 0.030;
-const TICK_Y_MIN: f32 = -0.62;
-const TICK_Y_MAX: f32 = 0.62;
-
-fn tick_slot_y(i: u32) -> f32 {
-    return TICK_Y_MIN + (TICK_Y_MAX - TICK_Y_MIN) * f32(i) / f32(OCTAVE_SLOTS - 1u);
-}
-
-// Coverage of the tick pip for slot `i`.
-fn tick_pip(i: u32, uv: vec2<f32>) -> f32 {
-    let dx = max(abs(uv.x - TICK_X) - TICK_HALF_W, 0.0);
-    let dy = max(abs(uv.y - tick_slot_y(i)) - TICK_HALF_H, 0.0);
-    return 1.0 - smoothstep(0.0, 0.035, dx + dy);
-}
-
-// Octave slot of middle C (C4): MIDI 60 -> octave 4. Dots mode anchors this
-// slot straight up and measures every other dot's angle relative to it.
+// Octave slot of middle C (C4): MIDI 60 -> octave 4. The dots anchor this
+// slot straight up and measure every other dot's angle relative to it.
 const MIDDLE_C_SLOT: f32 = 4.0;
-// Dots mode: 45deg (pi/4) of rotation per octave, so two octaves reach the
-// horizontal. Clockwise as pitch rises.
+// 45deg (pi/4) of rotation per octave, so two octaves reach the horizontal.
+// Clockwise as pitch rises.
 const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
-// Dots geometry, in quad UV units: the ring the dots orbit, and the dot's
-// solid-core / fade-edge radii.
-const DOT_ORBIT: f32 = 0.74;
-const DOT_CORE: f32 = 0.08;
-const DOT_EDGE: f32 = 0.13;
+// Dots geometry, in quad UV units: the ring the dots orbit (kept close to the
+// disc edge ~0.5), and the dot's solid-core / fade-edge radii.
+const DOT_ORBIT: f32 = 0.67;
+const DOT_CORE: f32 = 0.10;
+const DOT_EDGE: f32 = 0.15;
 
-// Coverage (0..1) of the octave glyph for a SOUNDING slot `i`:
-//   1 = dots:     satellites around the disc, angle = absolute pitch
-//                 (middle C straight up, 45deg clockwise per octave)
-//   2 = rings:    concentric rings, inner ring = lowest octave
-//   3..6 = ticks: column right of the disc, bottom = lowest octave
-//                 (variants differ only in reference furniture, below)
-fn octave_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, d: f32) -> f32 {
-    if mode == 1u {
-        // Absolute-pitch clock: middle C (slot 4, pitch class 0) points
-        // straight up; each octave adds 45deg clockwise, and the pitch class
-        // within the octave (cents/1200) rotates the dot proportionally, so a
-        // note sits at its true pitch rather than snapping to the octave.
-        // (uv.y is up, so clockwise = subtracting from the angle.)
-        let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
-        let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
-        let center = vec2<f32>(cos(ang), sin(ang)) * DOT_ORBIT;
-        return 1.0 - smoothstep(DOT_CORE, DOT_EDGE, distance(uv, center));
-    } else if mode == 2u {
-        let r = 0.56 + 0.042 * f32(i);
-        return 1.0 - smoothstep(0.008, 0.024, abs(d - r));
-    } else {
-        return tick_pip(i, uv);
-    }
+// Coverage (0..1) of the dot for a SOUNDING octave slot `i` on a node whose
+// pitch class is `cents`: a satellite around the disc whose angle is the
+// note's absolute pitch (middle C straight up, 45deg clockwise per octave,
+// pitch class within the octave included).
+fn octave_dot(i: u32, cents: f32, uv: vec2<f32>) -> f32 {
+    // (uv.y is up, so clockwise = subtracting from the angle.)
+    let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
+    let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
+    let center = vec2<f32>(cos(ang), sin(ang)) * DOT_ORBIT;
+    return 1.0 - smoothstep(DOT_CORE, DOT_EDGE, distance(uv, center));
 }
 
 // Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch
@@ -185,9 +154,9 @@ fn dot_pitch_color(pitch: f32) -> vec3<f32> {
 // in the gap between the disc edge (~0.5) and the dots' inner reach
 // (~DOT_ORBIT - DOT_EDGE), so a lit dot never overlaps a tick; the caller
 // tints them with the node color so they read as part of the disc.
-const DOTS_REF_R: f32 = 0.55;        // tick mid-radius (disc edge ~0.5, dots at DOT_ORBIT)
-const DOTS_REF_HALF_LEN: f32 = 0.05; // radial half-length
-const DOTS_REF_HALF_W: f32 = 0.02;   // tangential half-width
+const DOTS_REF_R: f32 = 0.51;         // tick mid-radius (disc edge ~0.5, dots at DOT_ORBIT)
+const DOTS_REF_HALF_LEN: f32 = 0.035; // radial half-length
+const DOTS_REF_HALF_W: f32 = 0.018;   // tangential half-width
 fn dots_reference(uv: vec2<f32>) -> f32 {
     var dirs = array<vec2<f32>, 4>(
         vec2<f32>(0.0, 1.0),  // up:    middle C
@@ -207,46 +176,6 @@ fn dots_reference(uv: vec2<f32>) -> f32 {
     // Dimmed relative to a lit dot; the caller further scales by the note's
     // fade so the frame appears only while the node sounds.
     return cov * 0.4;
-}
-
-// Reference furniture for the tick variants: static geometry showing where
-// the octave range begins and ends, so a lit tick has an absolute position.
-// Returns coverage ALREADY scaled to its intended dimness relative to a lit
-// tick (1.0).
-fn tick_reference(mode: u32, uv: vec2<f32>) -> f32 {
-    var ref_cov = 0.0;
-
-    // Rail: a faint spine the full height of the column (modes 3 and 5).
-    if mode == 3u || mode == 5u {
-        let dx = max(abs(uv.x - TICK_X) - 0.016, 0.0);
-        let dy = max(abs(uv.y) - (TICK_Y_MAX + 0.02), 0.0);
-        ref_cov = max(ref_cov, 0.22 * (1.0 - smoothstep(0.0, 0.03, dx + dy)));
-    }
-
-    // Ladder: every slot as a dim pip (modes 4 and 6).
-    if mode == 4u || mode == 6u {
-        for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-            ref_cov = max(ref_cov, 0.20 * tick_pip(i, uv));
-        }
-    }
-
-    // End caps: emphasized bars just past the bottom and top slots (mode 5).
-    if mode == 5u {
-        let dx = max(abs(uv.x - TICK_X) - 0.13, 0.0);
-        let dy_bot = max(abs(uv.y - (TICK_Y_MIN - 0.075)) - 0.014, 0.0);
-        let dy_top = max(abs(uv.y - (TICK_Y_MAX + 0.075)) - 0.014, 0.0);
-        let dy = min(dy_bot, dy_top);
-        ref_cov = max(ref_cov, 0.45 * (1.0 - smoothstep(0.0, 0.03, dx + dy)));
-    }
-
-    // Middle-C octave marker: a brighter line through slot 4 (mode 6).
-    if mode == 6u {
-        let dx = max(abs(uv.x - TICK_X) - 0.14, 0.0);
-        let dy = max(abs(uv.y - tick_slot_y(4u)) - 0.010, 0.0);
-        ref_cov = max(ref_cov, 0.45 * (1.0 - smoothstep(0.0, 0.025, dx + dy)));
-    }
-
-    return ref_cov;
 }
 
 // ---- Style helpers ---------------------------------------------------------
@@ -389,43 +318,33 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
     }
 
+    // Dots octave indicator (mode 1; 0 is off). Each slot fades on its own
+    // envelope. Whichever element covers a pixel most strongly owns its color
+    // there: dots are tinted by their own pitch, the reference by node color.
     if mode != 0u {
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level > 0.0 {
                 max_level = max(max_level, level);
-                let cov = octave_glyph(mode, i, in.cents, in.uv, d) * level_floor(level);
+                let cov = octave_dot(i, in.cents, in.uv) * level_floor(level);
                 if cov > glyph {
                     glyph = cov;
-                    if mode == 1u {
-                        // Slot i is MIDI octave i, whose C is MIDI (i+1)*12;
-                        // add this node's pitch class for the dot's true pitch.
-                        let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
-                        glyph_rgb =
-                            mix(dot_pitch_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
-                    } else {
-                        glyph_rgb = node_glyph_rgb;
-                    }
+                    // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
+                    // this node's pitch class for the dot's true pitch.
+                    let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
+                    glyph_rgb = mix(dot_pitch_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
                 }
             }
         }
-        // Reference frame, faded with the brightest slot: cardinal C ticks
-        // for dots, the tick furniture for modes 3..6.
+        // Faint cardinal C-octave tick frame, faded with the brightest slot so
+        // it appears only while the node sounds.
         if max_level > 0.0 {
-            if mode == 1u {
-                let rc = dots_reference(in.uv) * level_floor(max_level);
-                if rc > glyph {
-                    glyph = rc;
-                    // Node-colored, only lightly lifted, so the ticks blend
-                    // into the disc rather than reading as separate marks.
-                    glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.4);
-                }
-            } else if mode >= 3u {
-                let rc = tick_reference(mode, in.uv) * level_floor(max_level);
-                if rc > glyph {
-                    glyph = rc;
-                    glyph_rgb = node_glyph_rgb;
-                }
+            let rc = dots_reference(in.uv) * level_floor(max_level);
+            if rc > glyph {
+                glyph = rc;
+                // Node-colored, only lightly lifted, so the ticks blend into
+                // the disc rather than reading as separate marks.
+                glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.4);
             }
         }
     }

@@ -19,8 +19,7 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 }
 
 /// How a node indicates which octaves its pitch class is sounding in.
-/// All modes read the same per-node octave bitmask; the fragment shader
-/// draws the glyphs. Kept as options side by side for design comparison.
+/// The fragment shader draws the glyphs from the per-node octave bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OctaveStyle {
     /// No octave indication.
@@ -28,21 +27,8 @@ pub enum OctaveStyle {
     /// Small dots around the disc; angle tracks absolute pitch (middle C
     /// straight up, 45deg clockwise per octave, pitch class within the
     /// octave included).
-    Dots,
-    /// Concentric rings; inner ring = lowest octave.
-    Rings,
-    /// Tick column with a faint full-height rail as the reference frame.
-    TicksRail,
-    /// Tick column with every octave slot shown as a dim pip (LED-meter
-    /// style); lit pips = sounding octaves.
     #[default]
-    TicksLadder,
-    /// Tick column with a rail plus emphasized end caps at the bottom and
-    /// top of the octave range.
-    TicksCaps,
-    /// Ladder plus a brighter marker line at the middle-C octave (4), as a
-    /// musically meaningful anchor.
-    TicksMid,
+    Dots,
 }
 
 /// How held/active notes are rendered. All styles share the same instance
@@ -83,11 +69,6 @@ impl OctaveStyle {
         match self {
             OctaveStyle::Off => 0,
             OctaveStyle::Dots => 1,
-            OctaveStyle::Rings => 2,
-            OctaveStyle::TicksRail => 3,
-            OctaveStyle::TicksLadder => 4,
-            OctaveStyle::TicksCaps => 5,
-            OctaveStyle::TicksMid => 6,
         }
     }
 }
