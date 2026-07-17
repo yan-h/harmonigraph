@@ -20,7 +20,11 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   HOST window's rects win, so the plugin's cursor appeared to depend on
   whatever Bitwig had behind the window. Now the desired cursor is stored
   and re-asserted from a `resetCursorRects` override, with
-  `invalidateCursorRectsForView` forcing a rebuild on change.
+  `invalidateCursorRectsForView` forcing a rebuild on change. Because
+  cursor rects only activate once the window becomes KEY (first click), a
+  `cursorUpdate:` override (delivered via the tracking area's
+  CursorUpdate | ActiveInActiveApp options) plus direct application on
+  change-while-hovered cover the freshly opened, not-yet-clicked window.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
   re-apply the `kCFRunLoop*` lines and the cursor-rect ownership patch.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every

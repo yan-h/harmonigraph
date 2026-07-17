@@ -119,6 +119,7 @@ pub trait ViewImpl: Sized {
     fn view_will_move_to_window(this: ViewRef<Self>, new_window: Option<&NSWindow>);
     fn update_tracking_areas(this: ViewRef<Self>);
     fn reset_cursor_rects(this: ViewRef<Self>);
+    fn cursor_update(this: ViewRef<Self>, event: &NSEvent);
     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent);
     fn scroll_wheel(this: ViewRef<Self>, event: &NSEvent);
     fn dragging_entered(

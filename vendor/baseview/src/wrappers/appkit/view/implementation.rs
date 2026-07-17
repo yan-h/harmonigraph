@@ -64,6 +64,10 @@ pub unsafe fn create_view_class<V: ViewImpl>() -> &'static AnyClass {
             sel!(resetCursorRects),
             reset_cursor_rects::<V> as extern "C-unwind" fn(_, _),
         );
+        class.add_method(
+            sel!(cursorUpdate:),
+            cursor_update::<V> as extern "C-unwind" fn(_, _, _),
+        );
 
         class.add_method(sel!(mouseMoved:), mouse_moved::<V> as extern "C-unwind" fn(_, _, _) -> _);
         class.add_method(
@@ -203,6 +207,10 @@ extern "C-unwind" fn update_tracking_areas<V: ViewImpl>(this: &View<V>, _self: S
 
 extern "C-unwind" fn reset_cursor_rects<V: ViewImpl>(this: &View<V>, _sel: Sel) {
     V::reset_cursor_rects(this.inner_ref());
+}
+
+extern "C-unwind" fn cursor_update<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+    V::cursor_update(this.inner_ref(), event);
 }
 
 extern "C-unwind" fn mouse_moved<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {

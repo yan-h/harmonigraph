@@ -165,6 +165,12 @@ impl<'a> Window<'a> {
         if let Some(window) = self.view.window() {
             window.invalidateCursorRectsForView(&self.view);
         }
+        // Cursor rects only apply while the window is key; if the pointer
+        // is over the view right now, apply the change directly so it also
+        // works before the first click on a freshly opened window.
+        if self.inner.state.mouse_inside.get() {
+            Cursor::from(cursor).load().set();
+        }
     }
 
     #[cfg(feature = "opengl")]
@@ -180,6 +186,9 @@ pub(crate) struct WindowSharedState {
     /// The cursor this view wants; re-asserted from resetCursorRects so it
     /// survives AppKit cursor-rect rebuilds (see set_mouse_cursor).
     pub mouse_cursor: Cell<MouseCursor>,
+    /// Whether the pointer is currently over the view (tracking-area
+    /// enter/exit); used to apply cursor changes immediately.
+    pub mouse_inside: Cell<bool>,
 }
 
 impl WindowSharedState {
@@ -188,6 +197,7 @@ impl WindowSharedState {
             window_info: WindowInfo::from_logical_size(options.size, 1.0).into(),
             closed: false.into(),
             mouse_cursor: MouseCursor::default().into(),
+            mouse_inside: false.into(),
         }
     }
 }

@@ -357,6 +357,14 @@ impl ViewImpl for BaseviewView {
         this.view.addTrackingArea(&tracking_area);
     }
 
+    fn cursor_update(this: ViewRef<Self>, _event: &NSEvent) {
+        // Sent via the tracking area (CursorUpdate | ActiveInActiveApp),
+        // which works even while the window is NOT key — cursor RECTS only
+        // activate once the window becomes key (i.e. after a click), so
+        // this path covers the freshly-opened, not-yet-clicked window.
+        Cursor::from(this.state.mouse_cursor.get()).load().set();
+    }
+
     fn reset_cursor_rects(this: ViewRef<Self>) {
         // Re-assert the desired cursor over the whole view whenever AppKit
         // rebuilds cursor rects; without this, the host window's own rects
@@ -551,10 +559,12 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_entered(this: ViewRef<Self>) {
+        this.state.mouse_inside.set(true);
         Self::trigger_event(this, Event::Mouse(MouseEvent::CursorEntered));
     }
 
     fn mouse_exited(this: ViewRef<Self>) {
+        this.state.mouse_inside.set(false);
         Self::trigger_event(this, Event::Mouse(MouseEvent::CursorLeft));
     }
 
