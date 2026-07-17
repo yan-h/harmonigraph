@@ -33,10 +33,23 @@ impl LatticePos {
         }
     }
 
-    /// Chebyshev distance from the origin; used for culling the (infinite)
-    /// lattice to a displayable region.
-    pub fn radius(&self) -> i32 {
-        self.threes.abs().max(self.fives.abs()).max(self.sevens.abs())
+    /// Whether two positions are exactly one unit step apart along exactly
+    /// one prime axis — i.e. separated by one interval. Chord edges connect
+    /// such pairs.
+    pub fn is_adjacent(self, other: LatticePos) -> bool {
+        let d = self - other;
+        d.threes.abs() + d.fives.abs() + d.sevens.abs() == 1
+    }
+}
+
+impl std::ops::Sub for LatticePos {
+    type Output = LatticePos;
+    fn sub(self, rhs: LatticePos) -> LatticePos {
+        LatticePos::new(
+            self.threes - rhs.threes,
+            self.fives - rhs.fives,
+            self.sevens - rhs.sevens,
+        )
     }
 }
 
@@ -56,33 +69,6 @@ pub fn positions_within(
         })
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn note_names_walk_the_lattice() {
-        // Origin is C; one fifth up is G; one just third up is E lowered
-        // by a syntonic comma; one harmonic seventh up from C is Bb-ish.
-        assert_eq!(LatticePos::ORIGIN.note_name().to_string(), "C");
-        assert_eq!(LatticePos::new(1, 0, 0).note_name().to_string(), "G");
-        assert_eq!(LatticePos::new(0, 1, 0).note_name().to_string(), "E-");
-        // The comma count only appears past one: two just thirds up is
-        // G# lowered by two syntonic commas.
-        assert_eq!(LatticePos::new(0, 2, 0).note_name().to_string(), "G\u{266F}-2");
-        assert_eq!(LatticePos::new(0, 0, 1).note_name().to_string(), "B\u{266D}");
-        // Flats stack: two fifths down from C is Bb... one fifth down is F.
-        assert_eq!(LatticePos::new(-1, 0, 0).note_name().to_string(), "F");
-    }
-
-    #[test]
-    fn positions_within_counts() {
-        let count = positions_within(-2..=2, -1..=1, 0..=0).count();
-        assert_eq!(count, (5 * 3));
-    }
-}
-
 
 /// A note's spelled name: letter, sharps (negative = flats), and syntonic
 /// comma adjustments. Formats with real accidentals, e.g. `G`, `F♯`,
@@ -110,5 +96,52 @@ impl std::fmt::Display for NoteName {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn note_names_walk_the_lattice() {
+        // Origin is C; one fifth up is G; one just third up is E lowered
+        // by a syntonic comma; one harmonic seventh up from C is Bb-ish.
+        assert_eq!(LatticePos::ORIGIN.note_name().to_string(), "C");
+        assert_eq!(LatticePos::new(1, 0, 0).note_name().to_string(), "G");
+        assert_eq!(LatticePos::new(0, 1, 0).note_name().to_string(), "E-");
+        assert_eq!(LatticePos::new(0, 0, 1).note_name().to_string(), "B\u{266D}");
+        // Flats stack: two fifths down from C is Bb... one fifth down is F.
+        assert_eq!(LatticePos::new(-1, 0, 0).note_name().to_string(), "F");
+    }
+
+    #[test]
+    fn note_names_stack_accidentals_and_commas() {
+        let name = NoteName { letter: 'B', sharps: -2, syntonic_commas: 2 };
+        assert_eq!(name.to_string(), "B\u{266D}\u{266D}+2");
+        let name = NoteName { letter: 'F', sharps: 2, syntonic_commas: 0 };
+        assert_eq!(name.to_string(), "F\u{266F}\u{266F}");
+        // A single comma shows as a bare sign; the count appears past one.
+        let name = NoteName { letter: 'A', sharps: 0, syntonic_commas: 1 };
+        assert_eq!(name.to_string(), "A+");
+        // Two just thirds up: G♯ lowered by two commas.
+        assert_eq!(LatticePos::new(0, 2, 0).note_name().to_string(), "G\u{266F}-2");
+    }
+
+    #[test]
+    fn adjacency_is_one_step_on_one_axis() {
+        let origin = LatticePos::ORIGIN;
+        assert!(origin.is_adjacent(LatticePos::new(1, 0, 0)));
+        assert!(origin.is_adjacent(LatticePos::new(0, -1, 0)));
+        // Not adjacent: itself, diagonals, two steps.
+        assert!(!origin.is_adjacent(origin));
+        assert!(!origin.is_adjacent(LatticePos::new(1, 1, 0)));
+        assert!(!origin.is_adjacent(LatticePos::new(2, 0, 0)));
+    }
+
+    #[test]
+    fn positions_within_counts() {
+        let count = positions_within(-2..=2, -1..=1, 0..=0).count();
+        assert_eq!(count, (5 * 3));
     }
 }

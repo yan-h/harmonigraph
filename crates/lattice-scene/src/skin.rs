@@ -4,10 +4,10 @@
 //! scene reads its colors directly.
 //!
 //! Only one built-in skin exists so far (the original dark look). Adding a
-//! skin = another `Skin` value; switching at runtime = calling `set_skin`
-//! before the shells apply the theme (live re-skinning needs the theme
-//! re-applied and is future work, as are shader-side skin uniforms like
-//! glow strength).
+//! skin = another `Skin` value plus a way to select it (a `set_skin`
+//! existed briefly and was removed as unused — see git history; live
+//! re-skinning needs the theme re-applied and is future work, as are
+//! shader-side skin uniforms like glow strength).
 
 use std::sync::OnceLock;
 
@@ -15,8 +15,6 @@ use glam::Vec4;
 
 #[derive(Clone, Debug)]
 pub struct Skin {
-    pub name: &'static str,
-
     // ---- 3D scene ----
     /// Fill color of idle (non-sounding) lattice nodes, linear-ish RGBA.
     pub node_idle: Vec4,
@@ -26,6 +24,11 @@ pub struct Skin {
     pub panel: [u8; 3],
     /// Recessed areas: console scrollback, tab bar, meters.
     pub well: [u8; 3],
+    /// Subtly raised surface between panel and widget: hovered tabs,
+    /// faint striping.
+    pub surface_faint: [u8; 3],
+    /// Hairline strokes around noninteractive chrome.
+    pub hairline: [u8; 3],
     /// Resting widget fill.
     pub widget: [u8; 3],
     /// Hovered widget fill.
@@ -58,10 +61,11 @@ impl Default for Skin {
     /// and scene used before the skin mechanism existed.
     fn default() -> Self {
         Skin {
-            name: "lattice-dark",
             node_idle: Vec4::new(0.16, 0.17, 0.20, 1.0),
             panel: [24, 25, 29],
             well: [15, 16, 19],
+            surface_faint: [30, 31, 36],
+            hairline: [40, 42, 48],
             widget: [41, 43, 50],
             widget_hover: [54, 57, 66],
             accent: [110, 140, 200],
@@ -81,14 +85,7 @@ impl Default for Skin {
 
 static ACTIVE: OnceLock<Skin> = OnceLock::new();
 
-/// The active skin. Defaults to [`Skin::default`] unless [`set_skin`] ran
-/// first.
+/// The active skin (currently always [`Skin::default`]).
 pub fn active_skin() -> &'static Skin {
     ACTIVE.get_or_init(Skin::default)
-}
-
-/// Install a skin. Must run before anything reads [`active_skin`] (i.e.
-/// before the shells apply the theme); later calls are ignored.
-pub fn set_skin(skin: Skin) {
-    let _ = ACTIVE.set(skin);
 }

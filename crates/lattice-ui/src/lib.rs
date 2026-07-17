@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use egui_dock::{DockArea, DockState, NodeIndex};
 use lattice_core::{LatticePos, NoteTracker, PitchClass, Tuning};
 use lattice_render::wgpu::TextureFormat;
-use lattice_scene::{Camera, ViewConfig};
+use lattice_scene::{Camera, FrameParams, ViewConfig};
 use params::ParamBackend;
 
 /// Scrollback for the debug console pane. Shells and panes log via
@@ -54,6 +54,10 @@ pub struct SharedState {
     /// [`root_ui`] so core/scene code never touches the param system.
     pub tuning: Tuning,
     pub view: ViewConfig,
+    /// Per-frame mirrors of the appearance parameters, refreshed alongside
+    /// `tuning` (the param system owns the real values; these are never
+    /// persisted).
+    pub frame_params: FrameParams,
     pub camera: Camera,
     /// The pitch-class node the pointer is over, if any — shared so *every*
     /// pane can highlight it (lattice glow, tuning pane readout, ...).
@@ -73,8 +77,8 @@ pub struct SharedState {
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
         // Default layout: big lattice view, tuning on the right, console and
-        // spectral stub tucked below it. Users can re-dock at runtime.
-        // TODO: persist the layout (DockState is serde-serializable).
+        // spectral stub tucked below it. Users can re-dock at runtime; the
+        // result persists via UiPersist.
         let mut dock = DockState::new(vec![panes::Tab::Lattice]);
         let surface = dock.main_surface_mut();
         let [_, right] = surface.split_right(
@@ -88,6 +92,7 @@ impl SharedState {
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),
             view: ViewConfig::default(),
+            frame_params: FrameParams::default(),
             camera: Camera::default(),
             hovered: None,
             console: Console::default(),
@@ -141,51 +146,23 @@ struct UiPersist {
 /// standalone harness wraps a frameless CentralPanel). `now` is seconds on
 /// the shell's clock (the same clock used to timestamp `NoteEvent`s).
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    // Learn mode: whenever the set of held pitch classes changes, re-infer
-    // the tuning from it (instantly, as in v1). Change-detected so the
-    // host only sees param sets when something actually changed.
-    if state.learn_active {
-        let mut classes: Vec<PitchClass> = state
-            .tracker
-            .voices()
-            .filter(|v| v.state == lattice_core::VoiceState::Held)
-            .map(|v| v.pitch_class)
-            .collect();
-        classes.sort_unstable();
-        classes.dedup();
-        if state.last_learned_classes.as_ref() != Some(&classes) {
-            if !classes.is_empty() {
-                let learned = lattice_core::tuning::learn_tuning(&classes);
-                for (value, key) in [
-                    (learned.c_offset, params::ParamKey::COffset),
-                    (learned.three, params::ParamKey::Three),
-                    (learned.five, params::ParamKey::Five),
-                    (learned.seven, params::ParamKey::Seven),
-                ] {
-                    if let Some(value) = value {
-                        params.set(key, value);
-                    }
-                }
-                state
-                    .console
-                    .log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
-            }
-            state.last_learned_classes = Some(classes);
-        }
-    } else {
-        state.last_learned_classes = None;
-    }
+    learn_step(state, params);
 
     state.tuning = params::tuning_from_params(params);
-    state.view.pitch_class_fade_time = params.get(params::ParamKey::PitchClassFade);
-    state.view.octave_fade_time = params.get(params::ParamKey::OctaveFade);
-    state.view.darkest_pitch = params.get(params::ParamKey::DarkestPitch);
-    state.view.brightest_pitch = params.get(params::ParamKey::BrightestPitch);
+    state.frame_params = FrameParams {
+        pitch_class_fade_time: params.get(params::ParamKey::PitchClassFade),
+        octave_fade_time: params.get(params::ParamKey::OctaveFade),
+        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
+        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
+    };
     // Voices must outlive the LONGER of the two fades or the octave
     // indicators get truncated when the note highlight ends first.
     state.tracker.prune(
         now,
-        state.view.pitch_class_fade_time.max(state.view.octave_fade_time),
+        state
+            .frame_params
+            .pitch_class_fade_time
+            .max(state.frame_params.octave_fade_time),
     );
 
     // DockState has to be moved out while panes borrow the rest of `state`.
@@ -200,16 +177,59 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     state.dock = dock;
 
     // Render continuously only while something is animating (sounding or
-    // decaying voices); otherwise poll at 20 Hz so newly arriving MIDI
-    // still shows up promptly. egui repaints on input events by itself,
-    // so interaction never waits on this. The plugin shell additionally
-    // requests a repaint the moment it drains new note events.
+    // decaying voices); otherwise poll so newly arriving MIDI still shows
+    // up promptly. egui repaints on input events by itself, so interaction
+    // never waits on this. The plugin shell additionally requests a
+    // repaint the moment it drains new note events.
     if state.tracker.voices().next().is_some() || state.learn_active {
         ui.ctx().request_repaint();
     } else {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(50));
+        ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
     }
+}
+
+/// Repaint cadence while nothing animates: newly arriving MIDI shows up
+/// within one poll even without an input event.
+const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// One tick of learn mode (v1 semantics): while armed, whenever the set of
+/// held pitch classes changes, re-infer the tuning and write it through the
+/// param backend. Change-detected so the host only sees parameter sets when
+/// something actually changed. No egui types — testable with a stub
+/// backend.
+fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
+    if !state.learn_active {
+        state.last_learned_classes = None;
+        return;
+    }
+    let mut classes: Vec<PitchClass> = state
+        .tracker
+        .voices()
+        .filter(|v| v.state == lattice_core::VoiceState::Held)
+        .map(|v| v.pitch_class)
+        .collect();
+    classes.sort_unstable();
+    classes.dedup();
+    if state.last_learned_classes.as_ref() == Some(&classes) {
+        return;
+    }
+    if !classes.is_empty() {
+        let learned = lattice_core::learn_tuning(&classes);
+        for (value, key) in [
+            (learned.c_offset, params::ParamKey::COffset),
+            (learned.three, params::ParamKey::Three),
+            (learned.five, params::ParamKey::Five),
+            (learned.seven, params::ParamKey::Seven),
+        ] {
+            if let Some(value) = value {
+                params.set(key, value);
+            }
+        }
+        state
+            .console
+            .log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
+    }
+    state.last_learned_classes = Some(classes);
 }
 
 
@@ -243,5 +263,53 @@ mod tests {
         let default_distance = state.camera.distance;
         state.load_persist("not json at all");
         assert_eq!(state.camera.distance, default_distance);
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        sets: std::cell::RefCell<Vec<(params::ParamKey, f32)>>,
+    }
+
+    impl ParamBackend for RecordingBackend {
+        fn get(&self, _key: params::ParamKey) -> f32 {
+            0.0
+        }
+        fn set(&self, key: params::ParamKey, value: f32) {
+            self.sets.borrow_mut().push((key, value));
+        }
+    }
+
+    #[test]
+    fn learn_step_writes_params_only_when_the_chord_changes() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let backend = RecordingBackend::default();
+        state.learn_active = true;
+        // Hold C and G (a 12-TET fifth: within learn range of just).
+        for note in [60u8, 67] {
+            state.tracker.handle_event(lattice_core::NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: lattice_core::NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+
+        learn_step(&mut state, &backend);
+        let first = backend.sets.borrow().clone();
+        assert!(
+            first.iter().any(|(k, v)| *k == params::ParamKey::Three && *v == 700.0),
+            "the fifth should be learned from C+G, got {first:?}"
+        );
+
+        // Same chord again: change detection must suppress further writes.
+        learn_step(&mut state, &backend);
+        assert_eq!(backend.sets.borrow().len(), first.len());
+
+        // Disarming clears the memory so re-arming re-learns.
+        state.learn_active = false;
+        learn_step(&mut state, &backend);
+        state.learn_active = true;
+        learn_step(&mut state, &backend);
+        assert_eq!(backend.sets.borrow().len(), first.len() * 2);
     }
 }

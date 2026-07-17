@@ -6,11 +6,11 @@
 pub mod skin;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
-use lattice_core::{coords, LatticePos, NoteTracker, Tuning};
+use lattice_core::{coords, ChannelRole, LatticePos, NoteTracker, Tuning};
 
 /// Axis mapping, matching v1's orientation: major thirds run horizontally
 /// (x), fifths vertically (y), and harmonic sevenths in depth (z).
-pub fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
+fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
     Vec3::new(
         pos.fives as f32 * spacing,
         pos.threes as f32 * spacing,
@@ -110,20 +110,8 @@ pub struct ViewConfig {
     pub center_fives: i32,
     #[serde(default)]
     pub center_sevens: i32,
-    /// Seconds a released note's pitch class keeps fading (mirrors the
-    /// plugin parameter; the shell copies it in each frame).
-    pub pitch_class_fade_time: f32,
-    /// Seconds an octave indicator keeps fading after release; independent
-    /// of the note highlight. serde(default) keeps older blobs loadable.
-    #[serde(default = "default_octave_fade")]
-    pub octave_fade_time: f32,
     /// How nodes indicate sounding octaves.
     pub octave_style: OctaveStyle,
-    /// Pitch (MIDI note) mapped to the darkest gradient color on
-    /// pitch-colored channels (9-13). Mirrors a plugin parameter.
-    pub darkest_pitch: f32,
-    /// Pitch mapped to the brightest gradient color.
-    pub brightest_pitch: f32,
     /// Draw note-name labels on hovered and sounding nodes.
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
@@ -163,10 +151,6 @@ impl ViewConfig {
     }
 }
 
-fn default_octave_fade() -> f32 {
-    1.0
-}
-
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
@@ -177,15 +161,41 @@ impl Default for ViewConfig {
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
-            pitch_class_fade_time: 1.0,
-            octave_fade_time: 1.0,
             octave_style: OctaveStyle::default(),
-            darkest_pitch: 24.0,
-            brightest_pitch: 108.0,
             show_labels: true,
             show_cents: true,
             node_style: NodeStyle::default(),
             show_chord_edges: false,
+        }
+    }
+}
+
+/// Per-frame mirrors of the host-automatable appearance parameters. The
+/// shell copies these from its param backend every frame (see root_ui).
+/// Deliberately NOT part of [`ViewConfig`] or the persist blob: the param
+/// system owns these values, and persisting a copy would create a second
+/// source of truth that's dead on arrival at load time.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameParams {
+    /// Seconds a released note's pitch class keeps fading.
+    pub pitch_class_fade_time: f32,
+    /// Seconds an octave indicator keeps fading after release; independent
+    /// of the note highlight.
+    pub octave_fade_time: f32,
+    /// Pitch (MIDI note) mapped to the darkest gradient color on
+    /// pitch-gradient channels.
+    pub darkest_pitch: f32,
+    /// Pitch mapped to the brightest gradient color.
+    pub brightest_pitch: f32,
+}
+
+impl Default for FrameParams {
+    fn default() -> Self {
+        FrameParams {
+            pitch_class_fade_time: 1.0,
+            octave_fade_time: 1.0,
+            darkest_pitch: 24.0,
+            brightest_pitch: 108.0,
         }
     }
 }
@@ -213,6 +223,41 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// Yaw/pitch radians per dragged pixel.
+    const ORBIT_SPEED: f32 = 0.01;
+    /// Pan speed per pixel, scaled by distance so a pan feels the same at
+    /// any zoom.
+    const PAN_SPEED: f32 = 0.0016;
+    /// Multiplicative zoom rate per scroll unit.
+    const ZOOM_RATE: f32 = 0.002;
+    /// Keep pitch shy of the poles so look_at's up vector stays valid.
+    pub const PITCH_LIMIT: f32 = 1.5;
+    /// Zoom clamp; CLIP_NEAR/CLIP_FAR must bracket it with margin.
+    pub const MIN_DISTANCE: f32 = 2.0;
+    pub const MAX_DISTANCE: f32 = 80.0;
+
+    /// Orbit around the target by a drag delta in pixels.
+    pub fn orbit(&mut self, delta: Vec2) {
+        self.yaw -= delta.x * Self::ORBIT_SPEED;
+        self.pitch = (self.pitch + delta.y * Self::ORBIT_SPEED)
+            .clamp(-Self::PITCH_LIMIT, Self::PITCH_LIMIT);
+    }
+
+    /// Pan the target by a drag delta in pixels, grab-style: the content
+    /// follows the pointer.
+    pub fn pan(&mut self, delta: Vec2) {
+        let (right, up) = self.right_up();
+        let k = self.distance * Self::PAN_SPEED;
+        self.target += up * (delta.y * k) - right * (delta.x * k);
+    }
+
+    /// Zoom by a scroll delta (positive = closer), clamped to the working
+    /// range.
+    pub fn zoom(&mut self, scroll: f32) {
+        self.distance = (self.distance * (1.0 - scroll * Self::ZOOM_RATE))
+            .clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
+    }
+
     pub fn eye(&self) -> Vec3 {
         let dir = Vec3::new(
             self.pitch.cos() * self.yaw.sin(),
@@ -229,7 +274,7 @@ impl Camera {
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         // perspective_rh produces 0..1 clip-space depth, which is what wgpu
         // expects.
-        Mat4::perspective_rh(self.fov_y, aspect.max(0.01), 0.1, 200.0) * self.view()
+        Mat4::perspective_rh(self.fov_y, aspect.max(0.01), CLIP_NEAR, CLIP_FAR) * self.view()
     }
 
     /// Camera-space right/up axes in world space, for billboarding.
@@ -241,6 +286,13 @@ impl Camera {
         (right, up)
     }
 }
+
+/// Camera clip planes; must bracket Camera::MIN/MAX_DISTANCE with margin.
+const CLIP_NEAR: f32 = 0.1;
+const CLIP_FAR: f32 = 200.0;
+
+/// Node radius as a fraction of the lattice spacing.
+const NODE_RADIUS_FACTOR: f32 = 0.25;
 
 /// Octave indicator slots (MIDI octaves 0..=9).
 pub const OCTAVE_SLOTS: usize = 10;
@@ -258,15 +310,20 @@ pub struct NodeInstance {
     /// octave's indicator fades on its own voice's envelope, independent of
     /// the node's overall activation.
     pub octaves: [f32; OCTAVE_SLOTS],
-    /// Start time (scene clock seconds) of the strongest voice lighting
-    /// this node; 0 when idle. Animated node styles derive per-note phase
-    /// and age from it.
-    pub phase: f32,
+    /// Seconds since the strongest voice lighting this node started; 0
+    /// when idle. Computed in f64 and handed to the shader small: absolute
+    /// f32 seconds lose millisecond precision within a day of DAW uptime,
+    /// which would visibly quantize the animation.
+    pub age: f32,
+    /// Small per-note constant seeding animation variety (derived from the
+    /// note-on time, wrapped). NOT a timestamp — only ever used as a seed.
+    pub seed: f32,
     /// Render as an outline instead of a filled disc (channel 14, v1's
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
     pub hovered: bool,
-    /// The node's pitch class in cents, for labels/tooltips.
+    /// The node's pitch class in cents under the current tuning, for the
+    /// in-lattice cents readout.
     pub cents: f32,
 }
 
@@ -286,7 +343,9 @@ pub struct EdgeInstance {
 pub struct Scene {
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
-    /// Seconds since app start; available to shaders for animation.
+    /// Seconds for global shader animation, wrapped hourly so f32
+    /// precision holds in long sessions. Per-note animation uses
+    /// [`NodeInstance`]'s `age`/`seed` instead (unwrapped age math).
     pub time: f32,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
@@ -309,22 +368,24 @@ fn lch(l: f64, c: f64, h: f64) -> Vec4 {
     )
 }
 
-/// Ported verbatim from v1 (`editor/color.rs`): channels 0-8 have fixed
-/// LCH colors; 9-13 are colored by pitch height on an LCH gradient between
-/// `darkest_pitch` and `brightest_pitch` (MIDI note numbers); 14 renders as
-/// an outline; 15 never reaches here (ignored by the tracker).
+/// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
+/// lives in [`ChannelRole`]. Gradient channels are colored by pitch height
+/// on an LCH ramp between `darkest_pitch` and `brightest_pitch` (MIDI note
+/// numbers).
 pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
-    match channel {
-        0 => lch(48.0, 45.0, 32.0),   // red
-        1 => lch(65.0, 60.0, 68.0),   // orange
-        2 => lch(80.0, 42.0, 83.0),   // yellow
-        3 => lch(65.0, 50.0, 120.0),  // green
-        4 => lch(60.0, 40.0, 280.0),  // blue
-        5 => lch(50.0, 55.0, 305.0),  // purple
-        6 => lch(70.0, 30.0, 340.0),  // pink
-        7 => lch(80.0, 0.0, 0.0),     // white
-        8 => lch(0.0, 0.0, 0.0),      // black
-        9..=13 => {
+    match ChannelRole::of(channel) {
+        ChannelRole::FixedColor => match channel {
+            0 => lch(48.0, 45.0, 32.0),  // red
+            1 => lch(65.0, 60.0, 68.0),  // orange
+            2 => lch(80.0, 42.0, 83.0),  // yellow
+            3 => lch(65.0, 50.0, 120.0), // green
+            4 => lch(60.0, 40.0, 280.0), // blue
+            5 => lch(50.0, 55.0, 305.0), // purple
+            6 => lch(70.0, 30.0, 340.0), // pink
+            7 => lch(80.0, 0.0, 0.0),    // white
+            _ => lch(0.0, 0.0, 0.0),     // 8: black
+        },
+        ChannelRole::PitchGradient => {
             let t = f64::from(
                 (pitch.clamp(darkest_pitch, brightest_pitch) - darkest_pitch)
                     / (brightest_pitch - darkest_pitch).max(0.01),
@@ -335,8 +396,9 @@ pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitc
                 (-100.0 + t * 190.0).rem_euclid(360.0),
             )
         }
-        // Channel 14: drawn as an outline; the color is a bright neutral.
-        _ => Vec4::new(0.85, 0.85, 0.88, 1.0),
+        // Outline voices get a bright neutral (the ring shape is the
+        // signal). Ignored never reaches here — the tracker drops it.
+        ChannelRole::Outline | ChannelRole::Ignored => Vec4::new(0.85, 0.85, 0.88, 1.0),
     }
 }
 
@@ -346,6 +408,7 @@ pub fn derive_scene(
     tracker: &NoteTracker,
     tuning: &Tuning,
     view: &ViewConfig,
+    frame: &FrameParams,
     camera: Camera,
     hovered: Option<LatticePos>,
     now: f64,
@@ -360,107 +423,131 @@ pub fn derive_scene(
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = skin::active_skin().node_idle;
         let mut outlined = false;
-        let mut phase = 0.0f32;
+        let mut age = 0.0f32;
+        let mut seed = 0.0f32;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
         for voice in tracker.voices() {
             if tuning.matches(voice.pitch_class, node_pc) {
-                let a = voice.activation(now, view.pitch_class_fade_time);
+                let a = voice.activation(now, frame.pitch_class_fade_time);
                 if a > activation {
                     activation = a;
                     color = channel_color(
                         voice.channel,
                         voice.pitch,
-                        view.darkest_pitch,
-                        view.brightest_pitch,
+                        frame.darkest_pitch,
+                        frame.brightest_pitch,
                     );
-                    outlined = voice.channel == 14;
-                    phase = voice.on_time as f32;
+                    outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
+                    // Subtract in f64, then narrow: both endpoints are
+                    // large after long sessions; only the difference is
+                    // safe as f32.
+                    age = (now - voice.on_time).max(0.0) as f32;
+                    seed = (voice.on_time % 256.0) as f32;
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
                 octaves[slot] =
-                    octaves[slot].max(voice.activation(now, view.octave_fade_time));
+                    octaves[slot].max(voice.activation(now, frame.octave_fade_time));
             }
         }
 
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
-        let centered = LatticePos::new(
-            pos.threes - center.threes,
-            pos.fives - center.fives,
-            pos.sevens - center.sevens,
-        );
+        let centered = pos - center;
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos: lattice_to_world(centered, view.spacing),
             color,
             activation,
             octaves,
-            phase,
+            age,
+            seed,
             outlined,
             hovered: hovered == Some(pos),
             cents: node_pc.to_cents(),
         });
     }
 
-    // Chord edges: every pair of active nodes exactly one lattice step
-    // apart gets a beam. O(active^2), and active counts are tiny.
-    let mut edges = Vec::new();
-    if view.show_chord_edges {
-        let active: Vec<&NodeInstance> =
-            nodes.iter().filter(|n| n.activation > 0.0).collect();
-        for (i, a) in active.iter().enumerate() {
-            for b in &active[i + 1..] {
-                let dt = (a.lattice_pos.threes - b.lattice_pos.threes).abs();
-                let df = (a.lattice_pos.fives - b.lattice_pos.fives).abs();
-                let ds = (a.lattice_pos.sevens - b.lattice_pos.sevens).abs();
-                if dt + df + ds == 1 {
-                    edges.push(EdgeInstance {
-                        a: a.world_pos,
-                        b: b.world_pos,
-                        color: (a.color + b.color) * 0.5,
-                        strength: a.activation.min(b.activation),
-                    });
-                }
-            }
-        }
-    }
+    let edges = if view.show_chord_edges { derive_edges(&nodes) } else { Vec::new() };
 
     Scene {
         nodes,
         camera,
-        time: now as f32,
-        node_radius: view.spacing * 0.25,
+        time: (now % 3600.0) as f32,
+        node_radius: view.spacing * NODE_RADIUS_FACTOR,
         octave_style: view.octave_style,
         node_style: view.node_style,
         edges,
     }
 }
 
-impl Scene {
+/// Chord edges: every pair of active, lattice-adjacent nodes gets a beam.
+/// O(active²), and active counts are tiny.
+fn derive_edges(nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
+    let active: Vec<&NodeInstance> = nodes.iter().filter(|n| n.activation > 0.0).collect();
+    let mut edges = Vec::new();
+    for (i, a) in active.iter().enumerate() {
+        for b in &active[i + 1..] {
+            if a.lattice_pos.is_adjacent(b.lattice_pos) {
+                edges.push(EdgeInstance {
+                    a: a.world_pos,
+                    b: b.world_pos,
+                    color: (a.color + b.color) * 0.5,
+                    strength: a.activation.min(b.activation),
+                });
+            }
+        }
+    }
+    edges
+}
+
+/// Cached projection for one (camera, viewport) pair: build once, then
+/// project many points (labels, picking) without rebuilding the
+/// view-projection matrix per node.
+pub struct Projector {
+    view_proj: Mat4,
+    viewport_px: Vec2,
+}
+
+impl Projector {
     /// Project a world position into viewport pixels (origin top-left).
     /// `None` when behind the camera.
-    pub fn project(&self, viewport_px: Vec2, world: Vec3) -> Option<Vec2> {
-        let view_proj = self.camera.view_proj(viewport_px.x / viewport_px.y.max(1.0));
-        let clip = view_proj * world.extend(1.0);
+    pub fn project(&self, world: Vec3) -> Option<Vec2> {
+        let clip = self.view_proj * world.extend(1.0);
         if clip.w <= 0.0 {
             return None;
         }
         let ndc = clip.truncate() / clip.w;
         Some(Vec2::new(
-            (ndc.x * 0.5 + 0.5) * viewport_px.x,
-            (1.0 - (ndc.y * 0.5 + 0.5)) * viewport_px.y,
+            (ndc.x * 0.5 + 0.5) * self.viewport_px.x,
+            (1.0 - (ndc.y * 0.5 + 0.5)) * self.viewport_px.y,
         ))
+    }
+}
+
+impl Scene {
+    pub fn projector(&self, viewport_px: Vec2) -> Projector {
+        Projector {
+            view_proj: self.camera.view_proj(viewport_px.x / viewport_px.y.max(1.0)),
+            viewport_px,
+        }
+    }
+
+    /// Convenience for one-off projections; per-node loops should reuse a
+    /// [`Scene::projector`].
+    pub fn project(&self, viewport_px: Vec2, world: Vec3) -> Option<Vec2> {
+        self.projector(viewport_px).project(world)
     }
 
     /// CPU picking: the node whose screen projection is nearest the pointer,
     /// within `max_px`. Every pane that wants "hover a pitch class" uses
     /// this and writes the result to the shared UI state.
     pub fn pick(&self, viewport_px: Vec2, pointer_px: Vec2, max_px: f32) -> Option<LatticePos> {
+        let projector = self.projector(viewport_px);
         let mut best: Option<(f32, LatticePos)> = None;
         for node in &self.nodes {
-            let Some(px) = self.project(viewport_px, node.world_pos) else {
+            let Some(px) = projector.project(node.world_pos) else {
                 continue;
             };
             let d = px.distance(pointer_px);
@@ -477,17 +564,26 @@ mod tests {
     use super::*;
     use lattice_core::{NoteEvent, NoteEventKind};
 
+    fn scene_of(
+        tracker: &NoteTracker,
+        tuning: &Tuning,
+        view: &ViewConfig,
+        frame: &FrameParams,
+        now: f64,
+    ) -> Scene {
+        derive_scene(tracker, tuning, view, frame, Camera::default(), None, now)
+    }
+
+    fn origin_node(scene: &Scene) -> &NodeInstance {
+        scene
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
+            .unwrap()
+    }
+
     #[test]
     fn pitch_colored_channels_vary_with_pitch() {
-        let mut tracker = NoteTracker::new();
-        for note in [24, 108] {
-            tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 9,
-                note,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
-        }
         let low = channel_color(9, 24.0, 24.0, 108.0);
         let high = channel_color(9, 108.0, 24.0, 108.0);
         assert_ne!(low, high);
@@ -514,13 +610,10 @@ mod tests {
         });
 
         // Half a pitch_class_fade_time after the release.
-        let view = ViewConfig { pitch_class_fade_time: 1.0, ..ViewConfig::default() };
-        let scene = derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 0.6);
-        let origin = scene
-            .nodes
-            .iter()
-            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
-            .unwrap();
+        let frame = FrameParams { pitch_class_fade_time: 1.0, ..FrameParams::default() };
+        let scene =
+            scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 0.6);
+        let origin = origin_node(&scene);
         assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
         assert_eq!(origin.octaves[4], 1.0, "held octave at full");
         assert!(
@@ -547,26 +640,50 @@ mod tests {
             note: 60,
             kind: NoteEventKind::Off,
         });
-        let view = ViewConfig {
+        let frame = FrameParams {
             pitch_class_fade_time: 0.2,
             octave_fade_time: 2.0,
-            ..ViewConfig::default()
+            ..FrameParams::default()
         };
         // Prune with the longer of the two, as root_ui does.
-        tracker.prune(1.0, view.pitch_class_fade_time.max(view.octave_fade_time));
+        tracker.prune(1.0, frame.pitch_class_fade_time.max(frame.octave_fade_time));
         let scene =
-            derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 1.0);
-        let origin = scene
-            .nodes
-            .iter()
-            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
-            .unwrap();
+            scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 1.0);
+        let origin = origin_node(&scene);
         assert_eq!(origin.activation, 0.0, "pitch class fade has ended");
         assert!(
             origin.octaves[4] > 0.0 && origin.octaves[4] < 0.75,
             "octave still mid-fade, got {}",
             origin.octaves[4]
         );
+    }
+
+    #[test]
+    fn age_and_seed_derive_from_the_note_on_time() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 10.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene = scene_of(
+            &tracker,
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            12.5,
+        );
+        let origin = origin_node(&scene);
+        assert!((origin.age - 2.5).abs() < 1e-6);
+        assert!((origin.seed - 10.0).abs() < 1e-6);
+        // Idle nodes carry neutral animation inputs.
+        let idle = scene
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == LatticePos::new(1, 1, 0))
+            .unwrap();
+        assert_eq!((idle.age, idle.seed), (0.0, 0.0));
     }
 
     #[test]
@@ -591,7 +708,7 @@ mod tests {
         // The center node renders at the world origin.
         let tracker = NoteTracker::new();
         let scene =
-            derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 0.0);
+            scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
         let center_node = scene
             .nodes
             .iter()
@@ -618,7 +735,7 @@ mod tests {
             });
         }
         let view = ViewConfig { show_chord_edges: true, ..ViewConfig::default() };
-        let scene = derive_scene(&tracker, &tuning, &view, Camera::default(), None, 0.0);
+        let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
         assert_eq!(scene.edges.len(), 1);
         assert_eq!(scene.edges[0].strength, 1.0);
 
@@ -632,7 +749,7 @@ mod tests {
                 kind: NoteEventKind::On { velocity: 1.0 },
             });
         }
-        let scene = derive_scene(&tracker, &tuning, &view, Camera::default(), None, 0.0);
+        let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
         assert_eq!(scene.edges.len(), 0);
     }
 
@@ -645,20 +762,14 @@ mod tests {
             note: 60,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
-        let scene = derive_scene(
+        let scene = scene_of(
             &tracker,
             &Tuning::default(),
             &ViewConfig::default(),
-            Camera::default(),
-            None,
+            &FrameParams::default(),
             0.0,
         );
-        let origin = scene
-            .nodes
-            .iter()
-            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
-            .unwrap();
-        assert!(origin.outlined);
+        assert!(origin_node(&scene).outlined);
     }
 
     #[test]
@@ -671,20 +782,93 @@ mod tests {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
         let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-        let scene = derive_scene(
+        let scene = scene_of(
             &tracker,
             &tuning,
             &ViewConfig::default(),
-            Camera::default(),
-            None,
+            &FrameParams::default(),
             0.0,
         );
-        let origin = scene
-            .nodes
-            .iter()
-            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
-            .unwrap();
+        let origin = origin_node(&scene);
         assert_eq!(origin.activation, 1.0);
         assert_eq!(origin.octaves[4], 1.0);
+    }
+
+    #[test]
+    fn camera_target_projects_to_viewport_center() {
+        let camera = Camera::default();
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            0.0,
+        );
+        let viewport = Vec2::new(800.0, 600.0);
+        let p = scene.project(viewport, camera.target).unwrap();
+        assert!((p.x - 400.0).abs() < 0.5, "x = {}", p.x);
+        assert!((p.y - 300.0).abs() < 0.5, "y = {}", p.y);
+    }
+
+    #[test]
+    fn points_behind_the_camera_do_not_project() {
+        let camera = Camera::default();
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            0.0,
+        );
+        // Continue from the target through the eye and beyond it.
+        let behind = camera.eye() + (camera.eye() - camera.target);
+        assert_eq!(scene.project(Vec2::new(800.0, 600.0), behind), None);
+    }
+
+    #[test]
+    fn pick_selects_the_node_nearest_the_pointer() {
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            0.0,
+        );
+        let viewport = Vec2::new(800.0, 600.0);
+        // Pointer exactly on the projected origin node must pick it, not a
+        // neighbor; a pointer far outside every node picks nothing.
+        let origin_px = scene.project(viewport, Vec3::ZERO).unwrap();
+        assert_eq!(scene.pick(viewport, origin_px, 24.0), Some(LatticePos::ORIGIN));
+        assert_eq!(scene.pick(viewport, Vec2::new(-500.0, -500.0), 24.0), None);
+    }
+
+    #[test]
+    fn camera_right_up_is_orthonormal_to_the_view() {
+        let camera = Camera::default();
+        let (right, up) = camera.right_up();
+        assert!((right.length() - 1.0).abs() < 1e-5);
+        assert!((up.length() - 1.0).abs() < 1e-5);
+        assert!(right.dot(up).abs() < 1e-5);
+        let view_dir = (camera.target - camera.eye()).normalize();
+        assert!(right.dot(view_dir).abs() < 1e-5);
+        assert!(up.dot(view_dir).abs() < 1e-5);
+    }
+
+    #[test]
+    fn camera_input_respects_clamps() {
+        let mut camera = Camera::default();
+        camera.orbit(Vec2::new(0.0, 10_000.0));
+        assert_eq!(camera.pitch, Camera::PITCH_LIMIT);
+        camera.orbit(Vec2::new(0.0, -100_000.0));
+        assert_eq!(camera.pitch, -Camera::PITCH_LIMIT);
+        camera.zoom(1e6);
+        assert_eq!(camera.distance, Camera::MIN_DISTANCE);
+        camera.zoom(-1e9);
+        assert_eq!(camera.distance, Camera::MAX_DISTANCE);
+        // Panning moves the target in the view plane, never toward the eye.
+        let before = camera.eye() - camera.target;
+        camera.pan(Vec2::new(40.0, -25.0));
+        let after = camera.eye() - camera.target;
+        assert!((before - after).length() < 1e-4);
     }
 }

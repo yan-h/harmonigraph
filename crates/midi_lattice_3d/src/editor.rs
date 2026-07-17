@@ -11,7 +11,7 @@ use std::time::Instant;
 use baseview::{PhySize, Size, WindowHandle, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
 use egui::Context;
-use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig};
+use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, Queue};
 use lattice_core::notes::NoteEvent as CoreNoteEvent;
 use lattice_ui::SharedState;
 use nice_plug::prelude::{Editor, GuiContext, ParamSetter, ParentWindowHandle, ResizeHint};
@@ -29,6 +29,11 @@ use crate::{MidiLattice3dParams, PluginParamBackend};
 /// upstreaming RenderState access in egui-baseview).
 const ASSUMED_SURFACE_FORMAT: lattice_render::wgpu::TextureFormat =
     lattice_render::wgpu::TextureFormat::Bgra8Unorm;
+
+/// Editor size on first open, in logical pixels.
+pub(crate) const DEFAULT_SIZE: (u32, u32) = (1000, 700);
+/// Smallest size accepted from a host resize.
+const MIN_SIZE: (u32, u32) = (400, 300);
 
 /// Maps audio-clock timestamps (seconds on the plugin's sample clock)
 /// onto the GUI clock. A smoothed offset estimate preserves the relative
@@ -100,6 +105,103 @@ impl EditorShared {
             last_frame: None,
             gesture: std::cell::Cell::new(None),
         }
+    }
+
+    /// Record a GUI frame, logging a console warning when the event loop
+    /// stalled since the previous one (run-loop mode issues, host
+    /// blocking, ...) so freezes stay attributable.
+    fn note_frame(&mut self) {
+        let gap = self.last_frame.map(|t| t.elapsed().as_secs_f64());
+        self.last_frame = Some(Instant::now());
+        if let Some(gap) = gap.filter(|g| *g > 0.1) {
+            self.ui
+                .console
+                .log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
+        }
+    }
+
+    /// Drain note events from the audio thread into the tracker, mapping
+    /// their sample-clock timestamps onto the GUI clock. The batch is
+    /// collected FIRST so the mapper can observe the newest timestamp
+    /// before mapping any event — that ordering is what preserves
+    /// intra-batch spacing (a fast run of notes must not quantize to GUI
+    /// frames). Returns true when events arrived, in which case the
+    /// caller should repaint this tick rather than at the idle poll.
+    fn drain_into_tracker(&mut self, now: f64) -> bool {
+        self.drain_buf.clear();
+        while let Ok(event) = self.consumer.pop() {
+            self.drain_buf.push(event);
+        }
+        let Some(newest) = self.drain_buf.last() else {
+            return false;
+        };
+        self.clock.observe(newest.time, now);
+        for event in &self.drain_buf {
+            let mut event = *event;
+            event.time = self.clock.map(event.time, now);
+            self.ui.tracker.handle_event(event);
+        }
+        true
+    }
+}
+
+/// Logical → physical pixels for queue.resize.
+fn physical(size: (u32, u32), scale: f32) -> PhySize {
+    PhySize::new(
+        (size.0 as f32 * scale).round() as u32,
+        (size.1 as f32 * scale).round() as u32,
+    )
+}
+
+/// Apply window resizes negotiated outside the frame loop. Two paths:
+///
+/// - Host-initiated (native window border): the parent is already the new
+///   size; just bring the child view and render surface along, with no
+///   request_resize round-trip.
+/// - Plugin-initiated (Editor::set_size): PEEK — don't consume — the
+///   requested size, because the host reads `Editor::size()` *during*
+///   `request_resize()` and must see the NEW size there. Consuming first
+///   (as nih_plug_egui does) makes the host resize the parent to the
+///   previous size while the child resizes to the new one; the mismatch
+///   shows up as content shifted toward the bottom (macOS anchors child
+///   views bottom-left).
+///
+/// Context::pixels_per_point() is the scale the renderer itself uses; the
+/// input's viewport info is not reliably populated on this stack (reading
+/// it as 1.0 halves the surface on Retina). queue.resize takes physical
+/// pixels and — in our patched egui-baseview — also resizes the child
+/// view to the matching logical size (macOS baseview emits no Resized
+/// event for programmatic resizes, so that patch is the only thing
+/// keeping view and surface in sync).
+fn apply_pending_resizes(
+    egui_state: &EguiState,
+    egui_ctx: &Context,
+    queue: &mut Queue,
+    context: &dyn GuiContext,
+    console: &mut lattice_ui::Console,
+) {
+    if let Some((w, h)) = egui_state.host_resized.swap(None) {
+        let scale = egui_ctx.pixels_per_point();
+        queue.resize(physical((w, h), scale));
+        console.log(format!("host resize {}x{} (scale {:.2})", w, h, scale));
+    }
+
+    if let Some(new_size) = egui_state.requested_size.load() {
+        let t0 = Instant::now();
+        let accepted = context.request_resize();
+        let roundtrip_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        console.log(format!(
+            "request_resize {}x{} -> {} ({:.1} ms)",
+            new_size.0,
+            new_size.1,
+            if accepted { "accepted" } else { "REFUSED" },
+            roundtrip_ms,
+        ));
+        if accepted {
+            queue.resize(physical(new_size, egui_ctx.pixels_per_point()));
+            egui_state.size.store(new_size);
+        }
+        egui_state.requested_size.store(None);
     }
 }
 
@@ -246,109 +348,27 @@ impl Editor for LatticeEditor {
                 }
             },
             move |ui: &mut egui::Ui, queue, state: &mut WindowState| {
-                let egui_ctx = ui.ctx().clone();
-                let egui_ctx = &egui_ctx;
                 let setter = ParamSetter::new(context.as_ref());
 
-                // Host-negotiated resizing, as in nih_plug_egui: the GUI
-                // stores a requested size, we ask the host, and only apply
-                // it if the host agrees.
-                {
-                    // Diagnostics: the GUI is driven by a frame timer, so a
-                    // long gap between updates means the event loop stalled
-                    // (run-loop mode issues, host blocking, ...). Surface
-                    // stalls in the console to make freezes attributable.
-                    let mut shared = state.shared.lock();
-                    let gap = shared.last_frame.map(|t| t.elapsed().as_secs_f64());
-                    shared.last_frame = Some(Instant::now());
-                    if let Some(gap) = gap.filter(|g| *g > 0.1) {
-                        shared
-                            .ui
-                            .console
-                            .log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
-                    }
-                }
-
-                // Host-initiated resize (native window border): the parent
-                // is already the new size; just bring the child view and
-                // render surface along. No request_resize round-trip.
-                if let Some((w, h)) = egui_state.host_resized.swap(None) {
-                    // Context::pixels_per_point() is the value the renderer
-                    // itself uses; the input's viewport info is not reliably
-                    // populated on this stack (reading it as 1.0 halves the
-                    // surface on Retina: 2x-zoomed, bottom-left-anchored
-                    // content).
-                    let scale = egui_ctx.pixels_per_point();
-                    // queue.resize takes physical pixels and (in our patched
-                    // egui-baseview) also resizes the child view to the
-                    // matching logical size, so no separate InnerSize
-                    // command is needed.
-                    queue.resize(PhySize::new(
-                        (w as f32 * scale).round() as u32,
-                        (h as f32 * scale).round() as u32,
-                    ));
-                    state.shared.lock().ui.console.log(format!(
-                        "host resize {}x{} (scale {:.2})",
-                        w, h, scale
-                    ));
-                }
-
-                // Peek — don't consume — the requested size: the host reads
-                // `Editor::size()` *during* `request_resize()`, and it must
-                // see the NEW size there. Consuming first (as nih_plug_egui
-                // does) makes the host resize the parent window to the
-                // previous size while we resize the child to the new one;
-                // the mismatch shows up as content shifted toward the
-                // bottom (macOS anchors child views bottom-left).
-                if let Some(new_size) = egui_state.requested_size.load() {
-                    let t0 = Instant::now();
-                    let accepted = context.request_resize();
-                    let roundtrip_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                    state.shared.lock().ui.console.log(format!(
-                        "request_resize {}x{} -> {} ({:.1} ms)",
-                        new_size.0,
-                        new_size.1,
-                        if accepted { "accepted" } else { "REFUSED" },
-                        roundtrip_ms,
-                    ));
-                    if accepted {
-                        // queue.resize takes physical pixels; the patched
-                        // egui-baseview resizes the render surface AND the
-                        // child view (macOS baseview emits no Resized event
-                        // for programmatic resizes, so this is the only
-                        // thing keeping them in sync).
-                        let scale = egui_ctx.pixels_per_point();
-                        queue.resize(PhySize::new(
-                            (new_size.0 as f32 * scale).round() as u32,
-                            (new_size.1 as f32 * scale).round() as u32,
-                        ));
-                        egui_state.size.store(new_size);
-                    }
-                    egui_state.requested_size.store(None);
-                }
-
+                // One lock for the whole frame. Uncontended by design: the
+                // audio thread only ever touches the rtrb producer, and the
+                // editor-drop path runs on this same GUI thread.
                 let mut shared = state.shared.lock();
                 let shared = &mut *shared;
-                let now = shared.start.elapsed().as_secs_f64();
 
-                // Drain note events from the audio thread and map their
-                // sample-clock timestamps onto the GUI clock through the
-                // smoothed offset estimate, preserving intra-batch spacing
-                // (a fast run of notes no longer quantizes to GUI frames).
-                shared.drain_buf.clear();
-                while let Ok(event) = shared.consumer.pop() {
-                    shared.drain_buf.push(event);
-                }
-                if let Some(newest) = shared.drain_buf.last() {
-                    shared.clock.observe(newest.time, now);
-                    let EditorShared { drain_buf, clock, ui, .. } = shared;
-                    for event in drain_buf.iter() {
-                        let mut event = *event;
-                        event.time = clock.map(event.time, now);
-                        ui.tracker.handle_event(event);
-                    }
+                shared.note_frame();
+                apply_pending_resizes(
+                    &egui_state,
+                    ui.ctx(),
+                    queue,
+                    context.as_ref(),
+                    &mut shared.ui.console,
+                );
+
+                let now = shared.start.elapsed().as_secs_f64();
+                if shared.drain_into_tracker(now) {
                     // New MIDI must render this tick, not at the idle poll.
-                    egui_ctx.request_repaint();
+                    ui.ctx().request_repaint();
                 }
 
                 let backend = PluginParamBackend {
@@ -357,10 +377,6 @@ impl Editor for LatticeEditor {
                     gesture: &shared.gesture,
                 };
                 lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
-
-                if SHOW_RESIZE_CORNER {
-                    resize_corner(egui_ctx, &egui_state, &mut shared.ui.console);
-                }
             },
         );
 
@@ -382,6 +398,10 @@ impl Editor for LatticeEditor {
             .unwrap_or_else(|| self.egui_state.size())
     }
 
+    // Hosts with proper resize support (Bitwig at least) provide a native
+    // window border on this hint. An in-window drag-corner fallback for
+    // hosts that ignore it existed until mid-2026 — recover it from git
+    // history (`resize_corner` in this file) if such a host turns up.
     fn resize_hint(&self) -> ResizeHint {
         ResizeHint::resizable()
     }
@@ -389,7 +409,7 @@ impl Editor for LatticeEditor {
     fn set_size(&self, width: u32, height: u32) -> bool {
         // A set_size with the current size must succeed without side
         // effects (hosts echo plugin-initiated resizes back through here).
-        let clamped = (width.max(400), height.max(300));
+        let clamped = (width.max(MIN_SIZE.0), height.max(MIN_SIZE.1));
         if clamped == self.egui_state.size() {
             return true;
         }
@@ -418,129 +438,6 @@ impl Editor for LatticeEditor {
     fn param_values_changed(&self) {}
 }
 
-/// Whether to show the in-window resize drag handle. Disabled for now:
-/// hosts with proper resize support (Bitwig at least) provide a native
-/// window border, which supersedes it. Kept as a fallback in case some
-/// host turns out not to honor `ResizeHint::resizable()` — flip this on
-/// and the full preview + resize-on-release path comes back.
-const SHOW_RESIZE_CORNER: bool = false;
-
-/// A drag handle in the bottom-right corner that requests a window resize
-/// from the host (replaces v1's resize hack; the host round-trip is the
-/// sanctioned path).
-fn resize_corner(ctx: &Context, egui_state: &EguiState, console: &mut lattice_ui::Console) {
-    const CORNER: f32 = 24.0;
-    let screen = ctx.content_rect();
-    let corner_rect = egui::Rect::from_min_max(
-        screen.max - egui::vec2(CORNER, CORNER),
-        screen.max,
-    );
-
-    egui::Area::new(egui::Id::new("window_resize_corner"))
-        .fixed_pos(corner_rect.min)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            let response = ui.allocate_response(egui::vec2(CORNER, CORNER), egui::Sense::drag());
-            let color = if response.hovered() || response.dragged() {
-                ui.visuals().strong_text_color()
-            } else {
-                ui.visuals().weak_text_color()
-            };
-            // Diagonal grip lines.
-            let painter = ui.painter();
-            let max = corner_rect.max;
-            for i in 1..=3 {
-                let offset = i as f32 * 4.0;
-                painter.line_segment(
-                    [max - egui::vec2(offset, 2.0), max - egui::vec2(2.0, offset)],
-                    egui::Stroke::new(1.5, color),
-                );
-            }
-
-            // Resize by drag *delta* from the size at drag start, not by
-            // absolute pointer position: grabbing the handle anywhere but
-            // its exact corner must not snap the window to the pointer.
-            let anchor_id = egui::Id::new("window_resize_anchor");
-            if response.drag_started() {
-                if let Some(pointer) = response.interact_pointer_pos() {
-                    let (w, h) = egui_state.size();
-                    ctx.data_mut(|d| d.insert_temp(anchor_id, (pointer, w, h)));
-                    console.log(format!(
-                        "resize drag start at ({:.0},{:.0}), size {}x{}",
-                        pointer.x, pointer.y, w, h
-                    ));
-                }
-            }
-
-            if response.dragged() || response.drag_stopped() {
-                let anchor: Option<(egui::Pos2, u32, u32)> = ctx.data(|d| d.get_temp(anchor_id));
-                if let (Some(pointer), Some((start_pointer, start_w, start_h))) =
-                    (response.interact_pointer_pos(), anchor)
-                {
-                    let width =
-                        ((start_w as f32 + (pointer.x - start_pointer.x)).max(400.0)).round() as u32;
-                    let height =
-                        ((start_h as f32 + (pointer.y - start_pointer.y)).max(300.0)).round() as u32;
-
-                    if response.drag_stopped() {
-                        // The one and only host round-trip, on release.
-                        if (width, height) != egui_state.size() {
-                            egui_state.requested_size.store(Some((width, height)));
-                        }
-                        console.log(format!("resize drag stop -> {}x{}", width, height));
-                    } else {
-                        // Mid-drag: preview only, no host round-trips.
-                        // Live-resizing the window during the drag makes
-                        // some hosts (observed in Bitwig/macOS) break
-                        // AppKit's drag capture when they apply the resize:
-                        // pointer updates stop for the rest of the drag and
-                        // the window freezes until release. One resize on
-                        // release also eliminates live-resize flicker.
-                        draw_resize_preview(ui, pointer, width, height);
-                    }
-                }
-            }
-        });
-}
-
-/// Ghost outline + size readout shown while dragging the resize corner.
-/// Drawn in window coordinates: when shrinking you see the target outline;
-/// when growing (target extends past the current window) the readout near
-/// the pointer carries the information.
-fn draw_resize_preview(ui: &egui::Ui, pointer: egui::Pos2, width: u32, height: u32) {
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("window_resize_preview"),
-    ));
-    let visuals = ui.visuals();
-    let color = visuals.selection.stroke.color;
-
-    let target = egui::Rect::from_min_size(
-        egui::Pos2::ZERO,
-        egui::vec2(width as f32, height as f32),
-    );
-    painter.rect_stroke(
-        target,
-        egui::CornerRadius::same(2),
-        egui::Stroke::new(2.0, color),
-        egui::StrokeKind::Inside,
-    );
-
-    let label_pos = pointer - egui::vec2(16.0, 16.0);
-    let galley = painter.layout_no_wrap(
-        format!("{} × {}", width, height),
-        egui::FontId::proportional(14.0),
-        color,
-    );
-    let bg = egui::Rect::from_min_size(
-        label_pos - egui::vec2(galley.size().x, galley.size().y),
-        galley.size(),
-    )
-    .expand(4.0);
-    painter.rect_filled(bg, egui::CornerRadius::same(3), visuals.extreme_bg_color);
-    painter.galley(bg.shrink(4.0).min, galley, color);
-}
-
 struct LatticeEditorHandle {
     egui_state: Arc<EguiState>,
     shared: Arc<Mutex<EditorShared>>,
@@ -565,7 +462,42 @@ impl Drop for LatticeEditorHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::ClockMapper;
+    use super::{ClockMapper, EditorShared};
+    use lattice_core::notes::{NoteEvent, NoteEventKind};
+
+    #[test]
+    fn drain_observes_the_batch_before_mapping_it() {
+        // The audio clock reads ~100s while the GUI clock reads ~7s; the
+        // drained voices must land on the GUI clock with their intra-batch
+        // spacing intact. (This is the integration the ClockMapper unit
+        // tests below can't cover: observe-newest-THEN-map ordering.)
+        let (mut producer, consumer) = rtrb::RingBuffer::new(64);
+        let mut shared = EditorShared::new(consumer);
+        for (note, time) in [(60u8, 99.950), (64u8, 99.995)] {
+            producer
+                .push(NoteEvent {
+                    time,
+                    channel: 0,
+                    note,
+                    kind: NoteEventKind::On { velocity: 1.0 },
+                })
+                .unwrap();
+        }
+
+        assert!(shared.drain_into_tracker(7.0), "events arrived -> repaint");
+        let mut on_times: Vec<f64> =
+            shared.ui.tracker.voices().map(|v| v.on_time).collect();
+        on_times.sort_by(f64::total_cmp);
+        assert_eq!(on_times.len(), 2);
+        assert!(
+            (on_times[1] - on_times[0] - 0.045).abs() < 1e-9,
+            "spacing lost: {on_times:?}"
+        );
+        assert!(on_times[1] <= 7.0, "never maps into the GUI future");
+
+        // Empty ring: no work, no repaint request.
+        assert!(!shared.drain_into_tracker(7.1));
+    }
 
     #[test]
     fn preserves_intra_batch_spacing() {

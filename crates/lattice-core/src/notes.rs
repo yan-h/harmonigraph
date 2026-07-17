@@ -21,6 +21,36 @@ pub enum NoteEventKind {
     /// Per-note tuning offset in semitones (CLAP note expression / MPE),
     /// relative to the note's equal-tempered pitch. v1's PolyTuning.
     Tuning { semitones: f32 },
+    /// Release every held voice at once (transport reset: per-note offs
+    /// may never arrive). `channel` and `note` are meaningless here.
+    AllOff,
+}
+
+/// What a MIDI channel means for tracking and rendering, inherited verbatim
+/// from midi_lattice v1. Channels are zero-indexed here (v1's docs speak in
+/// 1-indexed MIDI convention). This is the single source of truth for the
+/// channel policy; the tracker and the scene's coloring both match on it.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ChannelRole {
+    /// Fixed per-channel color (channels 0-8).
+    FixedColor,
+    /// Colored by pitch height on a gradient (channels 9-13).
+    PitchGradient,
+    /// Rendered as an outline ring instead of a filled disc (channel 14).
+    Outline,
+    /// Never tracked or displayed (channel 15).
+    Ignored,
+}
+
+impl ChannelRole {
+    pub fn of(channel: u8) -> ChannelRole {
+        match channel {
+            0..=8 => ChannelRole::FixedColor,
+            9..=13 => ChannelRole::PitchGradient,
+            14 => ChannelRole::Outline,
+            _ => ChannelRole::Ignored,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -54,6 +84,29 @@ pub struct Voice {
 }
 
 impl Voice {
+    fn new(channel: u8, note: u8, velocity: f32, on_time: Time) -> Voice {
+        let mut voice = Voice {
+            channel,
+            note,
+            velocity,
+            pitch: 0.0,
+            pitch_class: PitchClass::from_cents(0.0),
+            octave: 0,
+            on_time,
+            state: VoiceState::Held,
+        };
+        voice.set_pitch(f32::from(note));
+        voice
+    }
+
+    /// `pitch_class` and `octave` are pure functions of `pitch`; every
+    /// write goes through here so the three fields can never disagree.
+    fn set_pitch(&mut self, pitch: f32) {
+        self.pitch = pitch;
+        self.pitch_class = PitchClass::from_cents(pitch * 100.0);
+        self.octave = (pitch / 12.0).floor() as i8 - 1;
+    }
+
     /// The octave number for display, in Bitwig's convention where middle
     /// C (MIDI 60) is C3. (The internal `octave` field uses the C4 = middle
     /// C convention inherited from note/12 arithmetic.)
@@ -93,24 +146,17 @@ impl NoteTracker {
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
-        // v1 semantics: the last channel (15 zero-indexed / 16 in MIDI
-        // convention) is ignored entirely.
-        if event.channel == 15 {
-            return;
-        }
         match event.kind {
+            // Control event: applies regardless of the event's channel.
+            NoteEventKind::AllOff => self.all_notes_off(event.time),
+            _ if ChannelRole::of(event.channel) == ChannelRole::Ignored => {}
             NoteEventKind::On { velocity } => {
-                let voice = Voice {
-                    channel: event.channel,
-                    note: event.note,
-                    velocity,
-                    pitch: f32::from(event.note),
-                    pitch_class: PitchClass::from_midi_note(event.note),
-                    octave: (event.note / 12) as i8 - 1,
-                    on_time: event.time,
-                    state: VoiceState::Held,
-                };
-                self.held.insert((event.channel, event.note), voice);
+                // A retrigger without an Off silently replaces the held
+                // voice (same key); the old voice gets no release fade.
+                self.held.insert(
+                    (event.channel, event.note),
+                    Voice::new(event.channel, event.note, velocity, event.time),
+                );
             }
             NoteEventKind::Off => {
                 if let Some(mut voice) = self.held.remove(&(event.channel, event.note)) {
@@ -120,10 +166,8 @@ impl NoteTracker {
             }
             NoteEventKind::Tuning { semitones } => {
                 if let Some(voice) = self.held.get_mut(&(event.channel, event.note)) {
-                    voice.pitch = f32::from(event.note) + semitones;
-                    voice.pitch_class = PitchClass::from_cents(voice.pitch * 100.0);
-                    // Octave indicators should track the sounding pitch too.
-                    voice.octave = (voice.pitch / 12.0).floor() as i8 - 1;
+                    // Octave indicators track the sounding pitch too.
+                    voice.set_pitch(f32::from(event.note) + semitones);
                 }
             }
         }
@@ -228,5 +272,49 @@ mod tests {
         let voice = tracker.voices().next().unwrap();
         assert_eq!(voice.octave, 4);
         assert_eq!(voice.pitch_class, PitchClass::from_midi_note(0));
+    }
+
+    #[test]
+    fn retrigger_without_off_replaces_the_held_voice() {
+        // Pins existing behavior: no release fade for the first voice.
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(on(1.0, 60));
+        assert_eq!(tracker.voices().count(), 1);
+        assert_eq!(tracker.voices().next().unwrap().on_time, 1.0);
+    }
+
+    #[test]
+    fn all_off_releases_every_channel() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 3,
+            note: 64,
+            kind: NoteEventKind::On { velocity: 0.5 },
+        });
+        tracker.handle_event(NoteEvent {
+            time: 1.0,
+            channel: 0,
+            note: 0,
+            kind: NoteEventKind::AllOff,
+        });
+        assert_eq!(tracker.held_count(), 0);
+        // Released voices fade out rather than vanish.
+        tracker.prune(1.5, 1.0);
+        assert_eq!(tracker.voices().count(), 2);
+        tracker.prune(2.1, 1.0);
+        assert_eq!(tracker.voices().count(), 0);
+    }
+
+    #[test]
+    fn channel_role_boundaries_match_v1() {
+        assert_eq!(ChannelRole::of(0), ChannelRole::FixedColor);
+        assert_eq!(ChannelRole::of(8), ChannelRole::FixedColor);
+        assert_eq!(ChannelRole::of(9), ChannelRole::PitchGradient);
+        assert_eq!(ChannelRole::of(13), ChannelRole::PitchGradient);
+        assert_eq!(ChannelRole::of(14), ChannelRole::Outline);
+        assert_eq!(ChannelRole::of(15), ChannelRole::Ignored);
     }
 }
