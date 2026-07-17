@@ -121,8 +121,8 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     style.dock_area_padding = None;
     style.main_surface_border_stroke = Stroke::NONE;
 
-    // Separators: hairlines in the well color, accent when grabbed.
-    style.separator.width = 1.0;
+    // Separators: slim bands in the well color, accent when grabbed.
+    style.separator.width = 4.0;
     style.separator.extra_interact_width = 6.0;
     style.separator.color_idle = WELL;
     style.separator.color_hovered = ACCENT.gamma_multiply(0.5);
@@ -144,13 +144,13 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
         &mut tab.focused_with_kb_focus,
     ] {
         t.outline_color = Color32::TRANSPARENT;
-        t.corner_radius = CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 };
+        t.corner_radius = CornerRadius::ZERO;
         t.bg_fill = PANEL;
         t.text_color = TEXT;
     }
     for t in [&mut tab.inactive, &mut tab.hovered, &mut tab.inactive_with_kb_focus] {
         t.outline_color = Color32::TRANSPARENT;
-        t.corner_radius = CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 };
+        t.corner_radius = CornerRadius::ZERO;
         t.bg_fill = WELL;
         t.text_color = TEXT_DIM;
     }
