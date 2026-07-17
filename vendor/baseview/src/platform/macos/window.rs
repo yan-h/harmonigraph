@@ -155,8 +155,16 @@ impl<'a> Window<'a> {
     }
 
     pub fn set_mouse_cursor(&self, cursor: MouseCursor) {
-        let native_cursor = Cursor::from(cursor);
-        self.view.addCursorRect_cursor(self.view.bounds(), &native_cursor.load());
+        // Cursor rects added outside resetCursorRects are discarded the
+        // next time AppKit rebuilds them, after which whatever the host
+        // window's underlying views declare wins (the plugin cursor then
+        // appears to depend on what's BEHIND the plugin window). Remember
+        // the cursor and force a rebuild; the resetCursorRects override
+        // re-asserts it every time AppKit asks.
+        self.inner.state.mouse_cursor.set(cursor);
+        if let Some(window) = self.view.window() {
+            window.invalidateCursorRectsForView(&self.view);
+        }
     }
 
     #[cfg(feature = "opengl")]
@@ -169,6 +177,9 @@ pub(crate) struct WindowSharedState {
     /// The last known window info for this window.
     pub window_info: Cell<WindowInfo>,
     pub closed: Cell<bool>,
+    /// The cursor this view wants; re-asserted from resetCursorRects so it
+    /// survives AppKit cursor-rect rebuilds (see set_mouse_cursor).
+    pub mouse_cursor: Cell<MouseCursor>,
 }
 
 impl WindowSharedState {
@@ -176,6 +187,7 @@ impl WindowSharedState {
         Self {
             window_info: WindowInfo::from_logical_size(options.size, 1.0).into(),
             closed: false.into(),
+            mouse_cursor: MouseCursor::default().into(),
         }
     }
 }

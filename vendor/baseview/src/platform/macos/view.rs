@@ -1,5 +1,6 @@
 #![allow(deprecated)] // Allow use of NSFilenamesPboardType for now
 
+use super::cursor::Cursor;
 use super::keyboard::{make_modifiers, KeyboardState};
 use super::window::WindowSharedState;
 use crate::wrappers::appkit::*;
@@ -354,6 +355,14 @@ impl ViewImpl for BaseviewView {
         let tracking_area = new_tracking_area(this.view);
 
         this.view.addTrackingArea(&tracking_area);
+    }
+
+    fn reset_cursor_rects(this: ViewRef<Self>) {
+        // Re-assert the desired cursor over the whole view whenever AppKit
+        // rebuilds cursor rects; without this, the host window's own rects
+        // take over after any invalidation.
+        let cursor = Cursor::from(this.state.mouse_cursor.get());
+        this.view.addCursorRect_cursor(this.view.bounds(), &cursor.load());
     }
 
     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent) {

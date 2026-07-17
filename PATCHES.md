@@ -13,8 +13,16 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   Default-mode timers stop firing while the run loop is in an event-tracking
   mode (native drags/resizes, menu tracking), freezing plugin GUIs until
   mouse release.
+- **Patch 2** (4 sites: `src/platform/macos/{window,view}.rs`,
+  `src/wrappers/appkit/view.rs` + `view/implementation.rs`): own the mouse
+  cursor properly. `set_mouse_cursor` used a one-shot `addCursorRect`,
+  which AppKit discards on the next cursor-rect rebuild — after which the
+  HOST window's rects win, so the plugin's cursor appeared to depend on
+  whatever Bitwig had behind the window. Now the desired cursor is stored
+  and re-asserted from a `resetCursorRects` override, with
+  `invalidateCursorRectsForView` forcing a rebuild on change.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
-  re-apply the `kCFRunLoop*` lines.
+  re-apply the `kCFRunLoop*` lines and the cursor-rect ownership patch.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
   baseview-based plugin. baseview and nice-plug are both RustAudio projects,
   so the fix would land in exactly the stack this plugin uses.
