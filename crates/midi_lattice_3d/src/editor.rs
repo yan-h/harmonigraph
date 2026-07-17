@@ -353,27 +353,63 @@ fn resize_corner(ctx: &Context, egui_state: &EguiState, console: &mut lattice_ui
                     let height =
                         ((start_h as f32 + (pointer.y - start_pointer.y)).max(300.0)).round() as u32;
 
-                    // Host resizes are asynchronous, so every live request
-                    // causes a transient parent/child mismatch (visible
-                    // jitter). Throttle mid-drag requests, but always send
-                    // a final one on release so the window settles exactly
-                    // where the drag ended.
-                    const MIN_REQUEST_INTERVAL: f64 = 0.08;
-                    let now = ctx.input(|i| i.time);
-                    let last_id = egui::Id::new("window_resize_last_request");
-                    let last: f64 = ctx.data(|d| d.get_temp(last_id)).unwrap_or(f64::NEG_INFINITY);
-                    let due = response.drag_stopped() || now - last >= MIN_REQUEST_INTERVAL;
-
-                    if due && (width, height) != egui_state.size() {
-                        egui_state.requested_size.store(Some((width, height)));
-                        ctx.data_mut(|d| d.insert_temp(last_id, now));
+                    if response.drag_stopped() {
+                        // The one and only host round-trip, on release.
+                        if (width, height) != egui_state.size() {
+                            egui_state.requested_size.store(Some((width, height)));
+                        }
+                        console.log(format!("resize drag stop -> {}x{}", width, height));
+                    } else {
+                        // Mid-drag: preview only, no host round-trips.
+                        // Live-resizing the window during the drag makes
+                        // some hosts (observed in Bitwig/macOS) break
+                        // AppKit's drag capture when they apply the resize:
+                        // pointer updates stop for the rest of the drag and
+                        // the window freezes until release. One resize on
+                        // release also eliminates live-resize flicker.
+                        draw_resize_preview(ctx, pointer, width, height);
                     }
-                }
-                if response.drag_stopped() {
-                    console.log("resize drag stop");
                 }
             }
         });
+}
+
+/// Ghost outline + size readout shown while dragging the resize corner.
+/// Drawn in window coordinates: when shrinking you see the target outline;
+/// when growing (target extends past the current window) the readout near
+/// the pointer carries the information.
+fn draw_resize_preview(ctx: &Context, pointer: egui::Pos2, width: u32, height: u32) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("window_resize_preview"),
+    ));
+    let visuals = &ctx.style().visuals;
+    let color = visuals.selection.stroke.color;
+
+    let target = egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(width as f32, height as f32),
+    );
+    painter.rect_stroke(
+        target,
+        egui::CornerRadius::same(2),
+        egui::Stroke::new(2.0, color),
+        egui::StrokeKind::Inside,
+    );
+
+    let label_pos = pointer - egui::vec2(16.0, 16.0);
+    let galley = painter.layout_no_wrap(
+        format!("{} × {}", width, height),
+        egui::FontId::proportional(14.0),
+        color,
+    );
+    let bg = egui::Rect::from_min_size(
+        label_pos - egui::vec2(galley.size().x, galley.size().y),
+        galley.size(),
+    )
+    .expand(4.0);
+    painter.rect_filled(bg, egui::CornerRadius::same(3), visuals.extreme_bg_color);
+    painter.galley(bg.shrink(4.0).min, galley, color);
 }
 
 struct LatticeEditorHandle {
