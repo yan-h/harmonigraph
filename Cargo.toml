@@ -9,6 +9,8 @@ members = [
     "crates/midi_lattice_3d",
     "xtask",
 ]
+# The vendored crate is its own workspace, only referenced via [patch].
+exclude = ["vendor/baseview"]
 
 [workspace.package]
 version = "0.1.0"
@@ -62,6 +64,14 @@ crossbeam = "0.8"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 raw-window-handle = "0.5"
+
+# Vendored baseview (the rev egui-baseview pins, 237d323) with one fix: the
+# macOS frame timer runs in kCFRunLoopCommonModes instead of the default
+# mode, so the GUI keeps updating during mouse-tracking loops (native window
+# resize etc.) instead of freezing until mouse release. See
+# vendor/baseview/src/macos/window.rs. TODO: upstream this.
+[patch."https://github.com/RustAudio/baseview.git"]
+baseview = { path = "vendor/baseview" }
 
 [profile.release]
 lto = "thin"
