@@ -17,7 +17,7 @@ use crate::SharedState;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
-    Tuning,
+    Settings,
     Console,
     Spectral,
 }
@@ -34,7 +34,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Lattice => "Lattice".into(),
-            Tab::Tuning => "Tuning".into(),
+            Tab::Settings => "Settings".into(),
             Tab::Console => "Console".into(),
             Tab::Spectral => "Spectral".into(),
         }
@@ -43,7 +43,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
-            Tab::Tuning => tuning_pane(ui, self.state, self.params),
+            Tab::Settings => settings_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now),
         }
@@ -176,7 +176,7 @@ fn param_bars(ui: &mut egui::Ui, params: &dyn ParamBackend, keys: &[ParamKey]) {
     }
 }
 
-fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+fn settings_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     ui.heading("Tuning");
     param_bars(ui, params, &ParamKey::TUNING);
 
