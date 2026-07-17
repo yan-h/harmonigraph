@@ -22,6 +22,15 @@ pub fn panel() -> Color32 {
 pub fn well() -> Color32 {
     c(active_skin().well)
 }
+/// Subtly raised surface between panel and widget (hovered tabs, faint
+/// striping).
+pub fn surface_faint() -> Color32 {
+    c(active_skin().surface_faint)
+}
+/// Hairline strokes around noninteractive chrome.
+pub fn hairline() -> Color32 {
+    c(active_skin().hairline)
+}
 /// Resting widget fill (buttons, slider tracks).
 pub fn widget() -> Color32 {
     c(active_skin().widget)
@@ -173,7 +182,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.panel_fill = panel();
     visuals.window_fill = panel();
     visuals.extreme_bg_color = well();
-    visuals.faint_bg_color = Color32::from_rgb(30, 31, 36);
+    visuals.faint_bg_color = surface_faint();
 
     // Text selection keeps alpha (it overlays glyphs); widget states below
     // are opaque.
@@ -188,7 +197,7 @@ pub fn apply_theme(ctx: &egui::Context) {
     let w = &mut visuals.widgets;
 
     w.noninteractive.bg_fill = panel();
-    w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(40, 42, 48));
+    w.noninteractive.bg_stroke = Stroke::new(1.0, hairline());
     w.noninteractive.fg_stroke = Stroke::new(1.0, text_dim());
     w.noninteractive.corner_radius = WIDGET_RADIUS;
 
@@ -267,7 +276,7 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
         t.bg_fill = well();
         t.text_color = text_dim();
     }
-    tab.hovered.bg_fill = Color32::from_rgb(30, 31, 36);
+    tab.hovered.bg_fill = surface_faint();
     tab.hovered.text_color = text();
     tab.hline_below_active_tab_name = false;
 

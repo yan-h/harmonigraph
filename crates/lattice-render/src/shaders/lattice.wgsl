@@ -83,6 +83,12 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 // Number of octave slots the indicators display (MIDI octaves 0..9).
 const OCTAVE_SLOTS: u32 = 10u;
 
+// Dimmest-visible convention, shared with the UI panes (visibility_floor
+// in lattice-ui): quiet elements sit at 35% and scale up to full.
+fn level_floor(level: f32) -> f32 {
+    return 0.35 + 0.65 * level;
+}
+
 // Activation level (0..1) of octave slot `i`, unpacked from 8-bit fields.
 // Each octave carries its OWN envelope so indicators fade independently
 // (a released C5 decays even while C4 holds the node fully lit).
@@ -276,7 +282,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             + 0.25 * hovered * exp(-3.0 * d) * window;
     }
 
-    let brightness = 0.35 + 0.65 * activation + 0.2 * hovered;
+    let brightness = level_floor(activation) + 0.2 * hovered;
     let rgb = in.color.rgb * brightness;
     let base_alpha = clamp(disc + glow, 0.0, 1.0);
 
@@ -308,14 +314,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 max_level = max(max_level, level);
                 glyph = max(
                     glyph,
-                    octave_glyph(mode, i, in.uv, d) * (0.35 + 0.65 * level),
+                    octave_glyph(mode, i, in.uv, d) * level_floor(level),
                 );
             }
         }
         if mode >= 3u && max_level > 0.0 {
             glyph = max(
                 glyph,
-                tick_reference(mode, in.uv) * (0.35 + 0.65 * max_level),
+                tick_reference(mode, in.uv) * level_floor(max_level),
             );
         }
     }

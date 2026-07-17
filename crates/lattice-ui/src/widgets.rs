@@ -10,6 +10,13 @@ use egui::{
 
 use crate::theme;
 
+/// Row height of a ValueBar (taller than the theme's interact_size: these
+/// are the primary controls and carry two text runs).
+const BAR_HEIGHT: f32 = 20.0;
+/// Corner rounding, deliberately tighter than theme::WIDGET_RADIUS so the
+/// bars read as a meter, not a button.
+const BAR_RADIUS: u8 = 2;
+
 pub struct ValueBar<'a> {
     value: &'a mut f32,
     range: RangeInclusive<f32>,
@@ -82,11 +89,11 @@ impl<'a> ValueBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let height = 20.0;
         let width = ui.available_width();
         let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, height), Sense::click_and_drag());
+            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::click_and_drag());
         let edit_id = response.id.with("edit");
+        let focus_id = edit_id.with("focus_pending");
 
         // ---- Text-entry mode (double-click) ------------------------------
         if let Some(mut text) = ui.data(|d| d.get_temp::<String>(edit_id)) {
@@ -96,14 +103,30 @@ impl<'a> ValueBar<'a> {
                     .font(TextStyle::Monospace)
                     .horizontal_align(egui::Align::Center),
             );
-            let committed = ui.input(|i| i.key_pressed(Key::Enter));
+            // TextEdit never takes focus by itself; grab it on the first
+            // edit-mode frame so typing (and focus-loss commit) works at
+            // all.
+            if ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false) {
+                output.request_focus();
+                ui.data_mut(|d| d.remove_temp::<bool>(focus_id));
+            }
+            // Escape cancels; everything that drops focus (Enter included —
+            // egui surrenders TextEdit focus on both) commits. Enter is NOT
+            // checked globally: that would commit every bar in edit mode at
+            // once, focused or not.
             let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
-            if committed || cancelled || output.lost_focus() {
+            if cancelled || output.lost_focus() {
                 if !cancelled {
                     if let Ok(v) = text.trim().parse::<f32>() {
-                        let v = v.clamp(self.min(), self.max());
-                        *self.value = if self.integer { v.round() } else { v };
-                        response.mark_changed();
+                        // Reject NaN/inf: NaN survives clamp() and would
+                        // poison the param (and the host's automation lane
+                        // in the plugin) in a state the bar can't display
+                        // or drag back out of.
+                        if v.is_finite() {
+                            let v = v.clamp(self.min(), self.max());
+                            *self.value = if self.integer { v.round() } else { v };
+                            response.mark_changed();
+                        }
                     }
                 }
                 ui.data_mut(|d| d.remove_temp::<String>(edit_id));
@@ -116,6 +139,7 @@ impl<'a> ValueBar<'a> {
         // ---- Interaction ---------------------------------------------------
         if response.double_clicked() {
             ui.data_mut(|d| d.insert_temp(edit_id, self.format(*self.value)));
+            ui.data_mut(|d| d.insert_temp(focus_id, true));
             return response;
         }
         // Drag-to-set only (no click-jump): a stray click can't yank a
@@ -132,7 +156,7 @@ impl<'a> ValueBar<'a> {
         }
 
         // ---- Paint ----------------------------------------------------------
-        let radius = CornerRadius::same(2);
+        let radius = CornerRadius::same(BAR_RADIUS);
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
 
@@ -171,5 +195,44 @@ impl<'a> ValueBar<'a> {
         );
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn round_trips(range: RangeInclusive<f32>, eased: bool) {
+        let mut value = 0.0;
+        let bar = ValueBar::new(&mut value, range, "test").eased(eased);
+        for i in 0..=10 {
+            let t = i as f32 / 10.0;
+            let v = bar.value_at(t);
+            assert!(
+                (bar.to_t(v) - t).abs() < 1e-4,
+                "t {t} -> value {v} -> t {}",
+                bar.to_t(v)
+            );
+        }
+    }
+
+    #[test]
+    fn linear_positions_round_trip() {
+        round_trips(-600.0..=600.0, false);
+    }
+
+    #[test]
+    fn eased_positions_round_trip() {
+        // min > 0 exercises the geometric branch; min == 0 the cubic one.
+        round_trips(0.001..=49.999, true);
+        round_trips(0.0..=100.0, true);
+    }
+
+    #[test]
+    fn integer_bars_snap() {
+        let mut value = 0.0;
+        let bar = ValueBar::new(&mut value, 1.0..=8.0, "test").integer();
+        let v = bar.value_at(0.37);
+        assert_eq!(v, v.round());
     }
 }

@@ -142,40 +142,7 @@ struct UiPersist {
 /// standalone harness wraps a frameless CentralPanel). `now` is seconds on
 /// the shell's clock (the same clock used to timestamp `NoteEvent`s).
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    // Learn mode: whenever the set of held pitch classes changes, re-infer
-    // the tuning from it (instantly, as in v1). Change-detected so the
-    // host only sees param sets when something actually changed.
-    if state.learn_active {
-        let mut classes: Vec<PitchClass> = state
-            .tracker
-            .voices()
-            .filter(|v| v.state == lattice_core::VoiceState::Held)
-            .map(|v| v.pitch_class)
-            .collect();
-        classes.sort_unstable();
-        classes.dedup();
-        if state.last_learned_classes.as_ref() != Some(&classes) {
-            if !classes.is_empty() {
-                let learned = lattice_core::tuning::learn_tuning(&classes);
-                for (value, key) in [
-                    (learned.c_offset, params::ParamKey::COffset),
-                    (learned.three, params::ParamKey::Three),
-                    (learned.five, params::ParamKey::Five),
-                    (learned.seven, params::ParamKey::Seven),
-                ] {
-                    if let Some(value) = value {
-                        params.set(key, value);
-                    }
-                }
-                state
-                    .console
-                    .log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
-            }
-            state.last_learned_classes = Some(classes);
-        }
-    } else {
-        state.last_learned_classes = None;
-    }
+    learn_step(state, params);
 
     state.tuning = params::tuning_from_params(params);
     state.frame_params = FrameParams {
@@ -206,16 +173,59 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     state.dock = dock;
 
     // Render continuously only while something is animating (sounding or
-    // decaying voices); otherwise poll at 20 Hz so newly arriving MIDI
-    // still shows up promptly. egui repaints on input events by itself,
-    // so interaction never waits on this. The plugin shell additionally
-    // requests a repaint the moment it drains new note events.
+    // decaying voices); otherwise poll so newly arriving MIDI still shows
+    // up promptly. egui repaints on input events by itself, so interaction
+    // never waits on this. The plugin shell additionally requests a
+    // repaint the moment it drains new note events.
     if state.tracker.voices().next().is_some() || state.learn_active {
         ui.ctx().request_repaint();
     } else {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(50));
+        ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
     }
+}
+
+/// Repaint cadence while nothing animates: newly arriving MIDI shows up
+/// within one poll even without an input event.
+const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// One tick of learn mode (v1 semantics): while armed, whenever the set of
+/// held pitch classes changes, re-infer the tuning and write it through the
+/// param backend. Change-detected so the host only sees parameter sets when
+/// something actually changed. No egui types — testable with a stub
+/// backend.
+fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
+    if !state.learn_active {
+        state.last_learned_classes = None;
+        return;
+    }
+    let mut classes: Vec<PitchClass> = state
+        .tracker
+        .voices()
+        .filter(|v| v.state == lattice_core::VoiceState::Held)
+        .map(|v| v.pitch_class)
+        .collect();
+    classes.sort_unstable();
+    classes.dedup();
+    if state.last_learned_classes.as_ref() == Some(&classes) {
+        return;
+    }
+    if !classes.is_empty() {
+        let learned = lattice_core::learn_tuning(&classes);
+        for (value, key) in [
+            (learned.c_offset, params::ParamKey::COffset),
+            (learned.three, params::ParamKey::Three),
+            (learned.five, params::ParamKey::Five),
+            (learned.seven, params::ParamKey::Seven),
+        ] {
+            if let Some(value) = value {
+                params.set(key, value);
+            }
+        }
+        state
+            .console
+            .log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
+    }
+    state.last_learned_classes = Some(classes);
 }
 
 
@@ -249,5 +259,53 @@ mod tests {
         let default_distance = state.camera.distance;
         state.load_persist("not json at all");
         assert_eq!(state.camera.distance, default_distance);
+    }
+
+    #[derive(Default)]
+    struct RecordingBackend {
+        sets: std::cell::RefCell<Vec<(params::ParamKey, f32)>>,
+    }
+
+    impl ParamBackend for RecordingBackend {
+        fn get(&self, _key: params::ParamKey) -> f32 {
+            0.0
+        }
+        fn set(&self, key: params::ParamKey, value: f32) {
+            self.sets.borrow_mut().push((key, value));
+        }
+    }
+
+    #[test]
+    fn learn_step_writes_params_only_when_the_chord_changes() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let backend = RecordingBackend::default();
+        state.learn_active = true;
+        // Hold C and G (a 12-TET fifth: within learn range of just).
+        for note in [60u8, 67] {
+            state.tracker.handle_event(lattice_core::NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: lattice_core::NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+
+        learn_step(&mut state, &backend);
+        let first = backend.sets.borrow().clone();
+        assert!(
+            first.iter().any(|(k, v)| *k == params::ParamKey::Three && *v == 700.0),
+            "the fifth should be learned from C+G, got {first:?}"
+        );
+
+        // Same chord again: change detection must suppress further writes.
+        learn_step(&mut state, &backend);
+        assert_eq!(backend.sets.borrow().len(), first.len());
+
+        // Disarming clears the memory so re-arming re-learns.
+        state.learn_active = false;
+        learn_step(&mut state, &backend);
+        state.learn_active = true;
+        learn_step(&mut state, &backend);
+        assert_eq!(backend.sets.borrow().len(), first.len() * 2);
     }
 }

@@ -24,6 +24,11 @@ pub struct Skin {
     pub panel: [u8; 3],
     /// Recessed areas: console scrollback, tab bar, meters.
     pub well: [u8; 3],
+    /// Subtly raised surface between panel and widget: hovered tabs,
+    /// faint striping.
+    pub surface_faint: [u8; 3],
+    /// Hairline strokes around noninteractive chrome.
+    pub hairline: [u8; 3],
     /// Resting widget fill.
     pub widget: [u8; 3],
     /// Hovered widget fill.
@@ -59,6 +64,8 @@ impl Default for Skin {
             node_idle: Vec4::new(0.16, 0.17, 0.20, 1.0),
             panel: [24, 25, 29],
             well: [15, 16, 19],
+            surface_faint: [30, 31, 36],
+            hairline: [40, 42, 48],
             widget: [41, 43, 50],
             widget_hover: [54, 57, 66],
             accent: [110, 140, 200],
