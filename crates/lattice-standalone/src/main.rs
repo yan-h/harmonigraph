@@ -1,11 +1,12 @@
 //! Standalone dev harness: the full UI + renderer running in a plain window
-//! with a mock MIDI source, so visual iteration never requires a DAW.
+//! with a mock MIDI source or a hardware MIDI input, so visual iteration
+//! never requires a DAW.
 //!
-//! Run with `cargo run -p lattice-standalone`.
-//!
-//! TODO: real MIDI input (midir) and/or replaying a recorded event log.
+//! Run with `cargo run -p lattice-standalone`. A floating "MIDI input"
+//! window picks between the mock progression and any connected port.
 
 use std::cell::Cell;
+use std::sync::mpsc;
 use std::time::Instant;
 
 use lattice_core::{NoteEvent, NoteEventKind};
@@ -44,11 +45,100 @@ fn main() -> eframe::Result {
     )
 }
 
+/// Where the harness gets its notes.
+#[derive(Clone, PartialEq, Eq)]
+enum MidiSource {
+    Mock,
+    /// A hardware/virtual port, by name (stable across re-enumeration).
+    Port(String),
+}
+
 struct App {
     state: SharedState,
     params: StandaloneParams,
     mock: MockMidi,
     start: Instant,
+    source: MidiSource,
+    /// Names of the known input ports (refreshed on demand).
+    known_ports: Vec<String>,
+    /// Held open while a hardware source is selected.
+    connection: Option<midir::MidiInputConnection<()>>,
+    midi_rx: mpsc::Receiver<NoteEvent>,
+    midi_tx: mpsc::Sender<NoteEvent>,
+}
+
+fn enumerate_ports() -> Vec<String> {
+    midir::MidiInput::new("midi-lattice-3d")
+        .map(|input| {
+            input
+                .ports()
+                .iter()
+                .filter_map(|p| input.port_name(p).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+impl App {
+    /// (Re)connect to the named port; back to mock on any failure.
+    fn connect(&mut self, name: &str) {
+        self.connection = None;
+        let Ok(input) = midir::MidiInput::new("midi-lattice-3d") else {
+            self.source = MidiSource::Mock;
+            return;
+        };
+        let Some(port) = input
+            .ports()
+            .into_iter()
+            .find(|p| input.port_name(p).as_deref() == Ok(name))
+        else {
+            self.state.log(format!("MIDI port not found: {name}"));
+            self.source = MidiSource::Mock;
+            return;
+        };
+
+        let tx = self.midi_tx.clone();
+        let epoch = self.start;
+        match input.connect(
+            &port,
+            "lattice-in",
+            move |_stamp, message, _| {
+                if let Some(event) = parse_midi(message, epoch.elapsed().as_secs_f64()) {
+                    let _ = tx.send(event);
+                }
+            },
+            (),
+        ) {
+            Ok(connection) => {
+                self.connection = Some(connection);
+                self.source = MidiSource::Port(name.to_owned());
+                self.state.log(format!("MIDI input: {name}"));
+            }
+            Err(err) => {
+                self.state.log(format!("MIDI connect failed: {err}"));
+                self.source = MidiSource::Mock;
+            }
+        }
+    }
+}
+
+/// Note on/off from a raw MIDI message (velocity-0 note-on = off, per the
+/// spec). Everything else is ignored for now.
+fn parse_midi(message: &[u8], time: f64) -> Option<NoteEvent> {
+    let (&status, rest) = message.split_first()?;
+    let (&note, rest) = rest.split_first()?;
+    let &velocity = rest.first()?;
+    let channel = status & 0x0F;
+    match status & 0xF0 {
+        0x90 if velocity > 0 => Some(NoteEvent {
+            time,
+            channel,
+            note,
+            kind: NoteEventKind::On { velocity: f32::from(velocity) / 127.0 },
+        }),
+        0x80 | 0x90 => Some(NoteEvent { time, channel, note, kind: NoteEventKind::Off }),
+        _ => None,
+    }
 }
 
 impl App {
@@ -57,11 +147,17 @@ impl App {
     fn new(target_format: lattice_render::wgpu::TextureFormat) -> Self {
         let mut state = SharedState::new(target_format);
         state.log("dev harness started; mock MIDI is playing");
+        let (midi_tx, midi_rx) = mpsc::channel();
         App {
             state,
             params: StandaloneParams::default(),
             mock: MockMidi::default(),
             start: Instant::now(),
+            source: MidiSource::Mock,
+            known_ports: enumerate_ports(),
+            connection: None,
+            midi_rx,
+            midi_tx,
         }
     }
 }
@@ -70,8 +166,51 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = self.start.elapsed().as_secs_f64();
 
+        // Source picker: mock progression or a hardware port.
+        let mut switch_to: Option<MidiSource> = None;
+        egui::Window::new("MIDI input")
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
+            .resizable(false)
+            .show(ui.ctx(), |ui| {
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(self.source == MidiSource::Mock, "Mock")
+                        .clicked()
+                    {
+                        switch_to = Some(MidiSource::Mock);
+                    }
+                    if ui.button("rescan").on_hover_text("Re-enumerate ports").clicked() {
+                        self.known_ports = enumerate_ports();
+                    }
+                });
+                for name in self.known_ports.clone() {
+                    let selected = self.source == MidiSource::Port(name.clone());
+                    if ui.selectable_label(selected, &name).clicked() && !selected {
+                        switch_to = Some(MidiSource::Port(name));
+                    }
+                }
+            });
+        if let Some(source) = switch_to {
+            // Silence whatever the previous source left sounding.
+            self.state.tracker.all_notes_off(now);
+            match source {
+                MidiSource::Mock => {
+                    self.connection = None;
+                    self.source = MidiSource::Mock;
+                    self.mock = MockMidi::default();
+                    self.state.log("MIDI input: mock progression");
+                }
+                MidiSource::Port(name) => self.connect(&name),
+            }
+        }
+
         let mut events = Vec::new();
-        self.mock.poll(now, &mut events);
+        if self.source == MidiSource::Mock {
+            self.mock.poll(now, &mut events);
+        }
+        while let Ok(event) = self.midi_rx.try_recv() {
+            events.push(event);
+        }
         for event in events {
             self.state.log(format!(
                 "{:7.2}s ch{:<2} note {:<3} {}",
