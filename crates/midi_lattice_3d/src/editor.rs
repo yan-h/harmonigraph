@@ -216,9 +216,12 @@ impl Editor for LatticeEditor {
                 // is already the new size; just bring the child view and
                 // render surface along. No request_resize round-trip.
                 if let Some((w, h)) = egui_state.host_resized.swap(None) {
-                    let scale = egui_ctx
-                        .input(|i| i.viewport().native_pixels_per_point)
-                        .unwrap_or(1.0);
+                    // Context::pixels_per_point() is the value the renderer
+                    // itself uses; the input's viewport info is not reliably
+                    // populated on this stack (reading it as 1.0 halves the
+                    // surface on Retina: 2x-zoomed, bottom-left-anchored
+                    // content).
+                    let scale = egui_ctx.pixels_per_point();
                     queue.resize(PhySize::new(
                         (w as f32 * scale).round() as u32,
                         (h as f32 * scale).round() as u32,
@@ -226,6 +229,10 @@ impl Editor for LatticeEditor {
                     egui_ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::Vec2::new(
                         w as f32, h as f32,
                     )));
+                    state.shared.lock().ui.console.log(format!(
+                        "host resize {}x{} (scale {:.2})",
+                        w, h, scale
+                    ));
                 }
 
                 // Peek — don't consume — the requested size: the host reads
@@ -250,13 +257,8 @@ impl Editor for LatticeEditor {
                         // `queue.resize` takes PHYSICAL pixels, and on macOS
                         // baseview never emits a Resized event for
                         // programmatic resizes, so this is the only thing
-                        // keeping the render surface in sync. Passing
-                        // logical points here (as nih_plug_egui does) shrinks
-                        // the surface by the DPI factor on Retina displays:
-                        // blurry output and dead mouse regions.
-                        let scale = egui_ctx
-                            .input(|i| i.viewport().native_pixels_per_point)
-                            .unwrap_or(1.0);
+                        // keeping the render surface in sync.
+                        let scale = egui_ctx.pixels_per_point();
                         queue.resize(PhySize::new(
                             (new_size.0 as f32 * scale).round() as u32,
                             (new_size.1 as f32 * scale).round() as u32,
