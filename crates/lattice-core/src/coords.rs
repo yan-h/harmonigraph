@@ -67,7 +67,10 @@ mod tests {
         // by a syntonic comma; one harmonic seventh up from C is Bb-ish.
         assert_eq!(LatticePos::ORIGIN.note_name().to_string(), "C");
         assert_eq!(LatticePos::new(1, 0, 0).note_name().to_string(), "G");
-        assert_eq!(LatticePos::new(0, 1, 0).note_name().to_string(), "E-1");
+        assert_eq!(LatticePos::new(0, 1, 0).note_name().to_string(), "E-");
+        // The comma count only appears past one: two just thirds up is
+        // G# lowered by two syntonic commas.
+        assert_eq!(LatticePos::new(0, 2, 0).note_name().to_string(), "G\u{266F}-2");
         assert_eq!(LatticePos::new(0, 0, 1).note_name().to_string(), "B\u{266D}");
         // Flats stack: two fifths down from C is Bb... one fifth down is F.
         assert_eq!(LatticePos::new(-1, 0, 0).note_name().to_string(), "F");
@@ -83,7 +86,7 @@ mod tests {
 
 /// A note's spelled name: letter, sharps (negative = flats), and syntonic
 /// comma adjustments. Formats with real accidentals, e.g. `G`, `F♯`,
-/// `E♭-1`, `B♭♭+2` (the UI's font stack guarantees the glyphs).
+/// `E♭-`, `B♭♭+2` (the UI's font stack guarantees the glyphs).
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub struct NoteName {
     pub letter: char,
@@ -98,8 +101,13 @@ impl std::fmt::Display for NoteName {
         for _ in 0..self.sharps.abs() {
             write!(f, "{}", if self.sharps > 0 { '\u{266F}' } else { '\u{266D}' })?;
         }
+        // A single comma is common enough that the count is noise: bare
+        // `+`/`-` for one, `+2`/`-2`... beyond.
         if self.syntonic_commas != 0 {
-            write!(f, "{:+}", self.syntonic_commas)?;
+            write!(f, "{}", if self.syntonic_commas > 0 { '+' } else { '-' })?;
+            if self.syntonic_commas.abs() > 1 {
+                write!(f, "{}", self.syntonic_commas.abs())?;
+            }
         }
         Ok(())
     }
