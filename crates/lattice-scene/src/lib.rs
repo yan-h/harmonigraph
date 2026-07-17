@@ -10,7 +10,7 @@ use lattice_core::{coords, LatticePos, NoteTracker, Tuning};
 
 /// Axis mapping, matching v1's orientation: major thirds run horizontally
 /// (x), fifths vertically (y), and harmonic sevenths in depth (z).
-pub fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
+fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
     Vec3::new(
         pos.fives as f32 * spacing,
         pos.threes as f32 * spacing,
@@ -261,8 +261,6 @@ pub struct NodeInstance {
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
     pub hovered: bool,
-    /// The node's pitch class in cents, for labels/tooltips.
-    pub cents: f32,
 }
 
 /// A glowing beam between two simultaneously sounding, lattice-adjacent
@@ -395,7 +393,6 @@ pub fn derive_scene(
             phase,
             outlined,
             hovered: hovered == Some(pos),
-            cents: node_pc.to_cents(),
         });
     }
 

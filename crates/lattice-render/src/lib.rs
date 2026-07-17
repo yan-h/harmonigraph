@@ -23,7 +23,6 @@
 use std::collections::HashMap;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
-use glam::Vec3;
 use lattice_scene::Scene;
 
 // Shells name texture formats through this re-export so every crate agrees
@@ -529,6 +528,3 @@ impl CallbackTrait for LatticeCallback {
         render_pass.draw(0..4, 0..pane.instance_count);
     }
 }
-
-/// Convenience: keep `Vec3` available to shells without a direct glam dep.
-pub type WorldVec = Vec3;

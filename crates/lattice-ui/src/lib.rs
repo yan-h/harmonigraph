@@ -73,8 +73,8 @@ pub struct SharedState {
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
         // Default layout: big lattice view, tuning on the right, console and
-        // spectral stub tucked below it. Users can re-dock at runtime.
-        // TODO: persist the layout (DockState is serde-serializable).
+        // spectral stub tucked below it. Users can re-dock at runtime; the
+        // result persists via UiPersist.
         let mut dock = DockState::new(vec![panes::Tab::Lattice]);
         let surface = dock.main_surface_mut();
         let [_, right] = surface.split_right(NodeIndex::root(), 0.72, vec![panes::Tab::Settings]);

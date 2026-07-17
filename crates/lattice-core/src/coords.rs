@@ -33,11 +33,6 @@ impl LatticePos {
         }
     }
 
-    /// Chebyshev distance from the origin; used for culling the (infinite)
-    /// lattice to a displayable region.
-    pub fn radius(&self) -> i32 {
-        self.threes.abs().max(self.fives.abs()).max(self.sevens.abs())
-    }
 }
 
 /// Iterate every lattice position within the given per-axis extents

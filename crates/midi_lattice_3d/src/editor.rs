@@ -357,10 +357,6 @@ impl Editor for LatticeEditor {
                     gesture: &shared.gesture,
                 };
                 lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
-
-                if SHOW_RESIZE_CORNER {
-                    resize_corner(egui_ctx, &egui_state, &mut shared.ui.console);
-                }
             },
         );
 
@@ -382,6 +378,10 @@ impl Editor for LatticeEditor {
             .unwrap_or_else(|| self.egui_state.size())
     }
 
+    // Hosts with proper resize support (Bitwig at least) provide a native
+    // window border on this hint. An in-window drag-corner fallback for
+    // hosts that ignore it existed until mid-2026 — recover it from git
+    // history (`resize_corner` in this file) if such a host turns up.
     fn resize_hint(&self) -> ResizeHint {
         ResizeHint::resizable()
     }
@@ -416,129 +416,6 @@ impl Editor for LatticeEditor {
     fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {}
 
     fn param_values_changed(&self) {}
-}
-
-/// Whether to show the in-window resize drag handle. Disabled for now:
-/// hosts with proper resize support (Bitwig at least) provide a native
-/// window border, which supersedes it. Kept as a fallback in case some
-/// host turns out not to honor `ResizeHint::resizable()` — flip this on
-/// and the full preview + resize-on-release path comes back.
-const SHOW_RESIZE_CORNER: bool = false;
-
-/// A drag handle in the bottom-right corner that requests a window resize
-/// from the host (replaces v1's resize hack; the host round-trip is the
-/// sanctioned path).
-fn resize_corner(ctx: &Context, egui_state: &EguiState, console: &mut lattice_ui::Console) {
-    const CORNER: f32 = 24.0;
-    let screen = ctx.content_rect();
-    let corner_rect = egui::Rect::from_min_max(
-        screen.max - egui::vec2(CORNER, CORNER),
-        screen.max,
-    );
-
-    egui::Area::new(egui::Id::new("window_resize_corner"))
-        .fixed_pos(corner_rect.min)
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            let response = ui.allocate_response(egui::vec2(CORNER, CORNER), egui::Sense::drag());
-            let color = if response.hovered() || response.dragged() {
-                ui.visuals().strong_text_color()
-            } else {
-                ui.visuals().weak_text_color()
-            };
-            // Diagonal grip lines.
-            let painter = ui.painter();
-            let max = corner_rect.max;
-            for i in 1..=3 {
-                let offset = i as f32 * 4.0;
-                painter.line_segment(
-                    [max - egui::vec2(offset, 2.0), max - egui::vec2(2.0, offset)],
-                    egui::Stroke::new(1.5, color),
-                );
-            }
-
-            // Resize by drag *delta* from the size at drag start, not by
-            // absolute pointer position: grabbing the handle anywhere but
-            // its exact corner must not snap the window to the pointer.
-            let anchor_id = egui::Id::new("window_resize_anchor");
-            if response.drag_started() {
-                if let Some(pointer) = response.interact_pointer_pos() {
-                    let (w, h) = egui_state.size();
-                    ctx.data_mut(|d| d.insert_temp(anchor_id, (pointer, w, h)));
-                    console.log(format!(
-                        "resize drag start at ({:.0},{:.0}), size {}x{}",
-                        pointer.x, pointer.y, w, h
-                    ));
-                }
-            }
-
-            if response.dragged() || response.drag_stopped() {
-                let anchor: Option<(egui::Pos2, u32, u32)> = ctx.data(|d| d.get_temp(anchor_id));
-                if let (Some(pointer), Some((start_pointer, start_w, start_h))) =
-                    (response.interact_pointer_pos(), anchor)
-                {
-                    let width =
-                        ((start_w as f32 + (pointer.x - start_pointer.x)).max(400.0)).round() as u32;
-                    let height =
-                        ((start_h as f32 + (pointer.y - start_pointer.y)).max(300.0)).round() as u32;
-
-                    if response.drag_stopped() {
-                        // The one and only host round-trip, on release.
-                        if (width, height) != egui_state.size() {
-                            egui_state.requested_size.store(Some((width, height)));
-                        }
-                        console.log(format!("resize drag stop -> {}x{}", width, height));
-                    } else {
-                        // Mid-drag: preview only, no host round-trips.
-                        // Live-resizing the window during the drag makes
-                        // some hosts (observed in Bitwig/macOS) break
-                        // AppKit's drag capture when they apply the resize:
-                        // pointer updates stop for the rest of the drag and
-                        // the window freezes until release. One resize on
-                        // release also eliminates live-resize flicker.
-                        draw_resize_preview(ui, pointer, width, height);
-                    }
-                }
-            }
-        });
-}
-
-/// Ghost outline + size readout shown while dragging the resize corner.
-/// Drawn in window coordinates: when shrinking you see the target outline;
-/// when growing (target extends past the current window) the readout near
-/// the pointer carries the information.
-fn draw_resize_preview(ui: &egui::Ui, pointer: egui::Pos2, width: u32, height: u32) {
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("window_resize_preview"),
-    ));
-    let visuals = ui.visuals();
-    let color = visuals.selection.stroke.color;
-
-    let target = egui::Rect::from_min_size(
-        egui::Pos2::ZERO,
-        egui::vec2(width as f32, height as f32),
-    );
-    painter.rect_stroke(
-        target,
-        egui::CornerRadius::same(2),
-        egui::Stroke::new(2.0, color),
-        egui::StrokeKind::Inside,
-    );
-
-    let label_pos = pointer - egui::vec2(16.0, 16.0);
-    let galley = painter.layout_no_wrap(
-        format!("{} × {}", width, height),
-        egui::FontId::proportional(14.0),
-        color,
-    );
-    let bg = egui::Rect::from_min_size(
-        label_pos - egui::vec2(galley.size().x, galley.size().y),
-        galley.size(),
-    )
-    .expand(4.0);
-    painter.rect_filled(bg, egui::CornerRadius::same(3), visuals.extreme_bg_color);
-    painter.galley(bg.shrink(4.0).min, galley, color);
 }
 
 struct LatticeEditorHandle {

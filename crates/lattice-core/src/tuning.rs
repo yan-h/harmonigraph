@@ -23,20 +23,12 @@ pub const OCTAVE_MICROCENTS: u32 = 1_200 * CENTS_TO_MICROCENTS;
 pub struct PitchClass(u32);
 
 impl PitchClass {
-    pub const fn from_microcents(microcents: u32) -> Self {
-        PitchClass(microcents % OCTAVE_MICROCENTS)
-    }
-
     pub fn from_cents(cents: f32) -> Self {
         PitchClass((cents.rem_euclid(1200.0) * CENTS_TO_MICROCENTS as f32).round() as u32)
     }
 
     pub fn from_midi_note(note: u8) -> Self {
         PitchClass(u32::from(note % 12) * 100 * CENTS_TO_MICROCENTS)
-    }
-
-    pub const fn to_microcents(self) -> u32 {
-        self.0
     }
 
     pub fn to_cents(self) -> f32 {
