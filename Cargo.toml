@@ -9,8 +9,8 @@ members = [
     "crates/midi_lattice_3d",
     "xtask",
 ]
-# The vendored crate is its own workspace, only referenced via [patch].
-exclude = ["vendor/baseview"]
+# The vendored crates are their own workspaces, only referenced via [patch].
+exclude = ["vendor/baseview", "vendor/egui-baseview"]
 
 [workspace.package]
 version = "0.1.0"
@@ -26,36 +26,31 @@ lattice-render = { path = "crates/lattice-render" }
 lattice-ui = { path = "crates/lattice-ui" }
 
 # GUI stack. These versions are coupled:
-#   egui-baseview 0.7 -> egui 0.33 / egui-wgpu 0.33 / wgpu 27
-#   eframe must match egui, egui_dock 0.18 -> egui 0.33
+#   egui-baseview 0.3 -> egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview 0.1
+#   eframe must match egui, egui_dock 0.20 -> egui 0.35
 # When bumping egui, bump all of these together.
-egui = "0.33"
-egui-wgpu = "0.33"
-eframe = { version = "0.33", default-features = false, features = [
+egui = "0.35"
+egui-wgpu = "0.35"
+eframe = { version = "0.35", default-features = false, features = [
     "wgpu",
     "default_fonts",
     "wayland",
     "x11",
 ] }
-egui_dock = "0.18"
-# 0.7 (egui 0.33 + wgpu backend) is not on crates.io yet; pinned to the
-# revision it was scaffolded against.
-egui-baseview = { git = "https://github.com/BillyDM/egui-baseview.git", rev = "11f487fe915d6208961064e619474b98f971594a", default-features = false, features = [
+egui_dock = "0.20"
+egui-baseview = { version = "0.3", default-features = false, features = [
     "wgpu",
-    "default_fonts",
     # Required when default features are off: the crate's log macros come
-    # from either `tracing` or `nih_log`.
+    # from either `tracing` or `nice-log`.
     "tracing",
 ] }
-# Must be the same baseview revision that egui-baseview pins, so the two
-# crates share window types.
-baseview = { git = "https://github.com/RustAudio/baseview.git", rev = "237d323c729f3aa99476ba3efa50129c5e86cad3" }
+# Patched below ([patch.crates-io]) with the macOS run-loop fix; see PATCHES.md.
+baseview = "0.1.4"
 
-# Plugin framework. Our fork = upstream f36931f + the host->plugin resize
-# patch (branch host-window-resize, see PATCHES.md). xtask has no reason to
-# diverge, so it stays on upstream.
-nih_plug = { git = "https://github.com/yan-h/nih-plug.git", rev = "3af64f6cb468eb847987fc002bd1e420de6a05ba" }
-nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
+# Plugin framework: the community continuation of nih-plug. Host->plugin
+# window resizing is supported natively (ResizeHint / Editor::set_size).
+nice-plug = "0.1.10"
+nice-plug-xtask = "0.1.1"
 
 # Math / utility
 glam = "0.30"
@@ -66,13 +61,14 @@ parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 raw-window-handle = "0.5"
 
-# Vendored baseview (the rev egui-baseview pins, 237d323) with one fix: the
-# macOS frame timer runs in kCFRunLoopCommonModes instead of the default
-# mode, so the GUI keeps updating during mouse-tracking loops (native window
-# resize etc.) instead of freezing until mouse release. See
-# vendor/baseview/src/macos/window.rs. TODO: upstream this.
-[patch."https://github.com/RustAudio/baseview.git"]
+# Vendored crates with small fixes (see PATCHES.md; both worth upstreaming):
+# - baseview 0.1.4: macOS frame timer in kCFRunLoopCommonModes so the GUI
+#   keeps updating during mouse-tracking loops instead of freezing.
+# - egui-baseview 0.3.0: Queue::resize physical->logical unit fix so windows
+#   aren't resized pixels_per_point times too large on scaled displays.
+[patch.crates-io]
 baseview = { path = "vendor/baseview" }
+egui-baseview = { path = "vendor/egui-baseview" }
 
 [profile.release]
 lto = "thin"

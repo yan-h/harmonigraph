@@ -16,7 +16,7 @@ lattice-core = { workspace = true }
 lattice-ui = { workspace = true }
 lattice-render = { workspace = true }
 
-nih_plug = { workspace = true }
+nice-plug = { workspace = true }
 egui = { workspace = true }
 egui-baseview = { workspace = true }
 baseview = { workspace = true }

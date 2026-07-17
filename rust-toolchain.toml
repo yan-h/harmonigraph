@@ -1,4 +1,4 @@
-# egui 0.33 / wgpu 27 need rustc >= 1.88. Pinned for reproducible builds;
+# egui 0.35 / wgpu 29 need rustc >= 1.92. Pinned for reproducible builds;
 # bump freely.
 [toolchain]
-channel = "1.90"
+channel = "1.92"

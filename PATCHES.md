@@ -1,37 +1,43 @@
 # Carried patches against upstream dependencies
 
-Two dependencies carry local patches. Keep this file current when bumping
-either; both diffs are small and deliberately minimal.
+Two dependencies carry local patches, both wired in via `[patch.crates-io]`
+in the workspace `Cargo.toml`. Keep this file current when bumping either.
 
 ## baseview — vendored at `vendor/baseview/`
 
-- **Upstream base**: `RustAudio/baseview` @ `237d323c729f3aa99476ba3efa50129c5e86cad3`
-  (the revision egui-baseview pins; wired in via `[patch]` in the workspace
-  `Cargo.toml`).
-- **Patch** (3 lines, `src/macos/window.rs`): register the macOS frame timer
-  in `kCFRunLoopCommonModes` instead of `kCFRunLoopDefaultMode`. Default-mode
-  timers stop firing while the run loop is in an event-tracking mode (native
-  drags/resizes, menu tracking), freezing plugin GUIs until mouse release.
-- **Upgrade**: re-apply the three `kCFRunLoop*` lines onto the new revision.
+- **Upstream base**: `baseview 0.1.4` from crates.io (the version
+  egui-baseview 0.3 pins; wired in via `[patch.crates-io]` in the workspace
+  `Cargo.toml`, which covers both our direct dependency and egui-baseview's).
+- **Patch** (3 lines, `src/wrappers/appkit/timer.rs`): register the macOS
+  frame timer in `kCFRunLoopCommonModes` instead of `kCFRunLoopDefaultMode`.
+  Default-mode timers stop firing while the run loop is in an event-tracking
+  mode (native drags/resizes, menu tracking), freezing plugin GUIs until
+  mouse release.
+- **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
+  re-apply the `kCFRunLoop*` lines.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
-  baseview-based plugin.
+  baseview-based plugin. baseview and nice-plug are both RustAudio projects,
+  so the fix would land in exactly the stack this plugin uses.
 
-## nih-plug — fork at `yan-h/nih-plug`, branch `host-window-resize`
+## egui-baseview — vendored at `vendor/egui-baseview/`
 
-- **Upstream base**: `robbert-vdh/nih-plug` @ `f36931f7af4646065488a9845d8f8c2f95252c23`.
-- **Consumed as**: git dependency on the fork (pinned rev in workspace
-  `Cargo.toml`). `nih_plug_xtask` stays on upstream (no divergence).
-- **Patch** (1 commit): implements the upstream `TODO: Host->Plugin resizing`.
-  - `Editor::set_size(width, height) -> bool`, defaulted to reject (old
-    behavior). Same unscaled-logical-pixel convention as `Editor::size()`.
-  - Wrappers advertise resizability by probing `set_size` with the current
-    size (a no-op resize that implementations must accept without side
-    effects).
-  - CLAP: `can_resize`, `adjust_size`, `set_size`; VST3: `canResize`,
-    `onSize`, `checkSizeConstraint`.
-- **Upgrade**: `git rebase` the branch onto the new upstream rev, re-pin. If
-  upstream has implemented host→plugin resizing itself, drop the patch and
-  migrate our editor to their API.
-- **Upstreaming**: worth offering, but resize API design is opinionated
-  territory; expect discussion. The probe-based resizability detection is
-  the part most likely to get bikeshedded.
+- **Upstream base**: `egui-baseview 0.3.0` from crates.io (the RustAudio
+  fork used by nice-plug).
+- **Patch** (2 call sites, `src/window.rs`): after a `Queue::resize()`, the
+  window resize triggered by the physical-size change passed physical
+  pixels to `Window::resize()`, which takes logical points — on scaled
+  displays the window/view ended up `pixels_per_point` times too large
+  (2x-zoomed, bottom-left-anchored content on Retina). Convert with
+  `points_per_pixel` at both call sites (build path and `on_frame`).
+- **Upgrade**: download the new crates.io tarball into
+  `vendor/egui-baseview`, re-apply the two conversions.
+- **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
+  helper on any HiDPI display. PR to the RustAudio repo.
+
+## Historical: nih-plug fork (retired)
+
+Before migrating to nice-plug (which supports host→plugin window resizing
+natively via `ResizeHint`/`Editor::set_size`), this project carried a
+nih-plug fork implementing that feature: `yan-h/nih-plug`, branch
+`host-window-resize`. The branch is kept for reference but is no longer a
+dependency.
