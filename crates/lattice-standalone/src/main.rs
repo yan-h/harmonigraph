@@ -243,45 +243,48 @@ impl eframe::App for App {
     }
 }
 
-/// Plain-value parameter store for the harness.
+/// Plain-value parameter store for the harness: one Cell per ParamKey,
+/// built from ParamKey::ALL so a newly added parameter can't be missed.
 struct StandaloneParams {
-    values: [(ParamKey, Cell<f32>); 9],
+    values: [(ParamKey, Cell<f32>); ParamKey::ALL.len()],
 }
 
 impl Default for StandaloneParams {
     fn default() -> Self {
-        let tuning = lattice_core::Tuning::just();
-        StandaloneParams {
-            values: [
-                (ParamKey::COffset, Cell::new(tuning.c_offset)),
-                (ParamKey::Three, Cell::new(tuning.three)),
-                (ParamKey::Five, Cell::new(tuning.five)),
-                (ParamKey::Seven, Cell::new(tuning.seven)),
-                // Wide tolerance so 12-TET mock notes light up the justly
-                // tuned lattice out of the box.
-                (ParamKey::Tolerance, Cell::new(20.0)),
-                (ParamKey::PitchClassFade, Cell::new(1.0)),
-                (ParamKey::OctaveFade, Cell::new(1.0)),
-                (ParamKey::DarkestPitch, Cell::new(24.0)),
-                (ParamKey::BrightestPitch, Cell::new(108.0)),
-            ],
-        }
+        let params = StandaloneParams {
+            values: ParamKey::ALL.map(|key| (key, Cell::new(key.default_value()))),
+        };
+        // Demo overrides, applied on top of the shared defaults so the
+        // deliberate divergence from the plugin stays visible as a delta:
+        // a justly tuned lattice, with the tolerance wide enough that the
+        // 12-TET mock notes light it up out of the box.
+        let just = lattice_core::Tuning::just();
+        params.set(ParamKey::COffset, just.c_offset);
+        params.set(ParamKey::Three, just.three);
+        params.set(ParamKey::Five, just.five);
+        params.set(ParamKey::Seven, just.seven);
+        params.set(ParamKey::Tolerance, 20.0);
+        params
+    }
+}
+
+impl StandaloneParams {
+    fn cell(&self, key: ParamKey) -> &Cell<f32> {
+        self.values
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+            .expect("built from ParamKey::ALL, so every key is present")
     }
 }
 
 impl ParamBackend for StandaloneParams {
     fn get(&self, key: ParamKey) -> f32 {
-        self.values
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, v)| v.get())
-            .unwrap_or(0.0)
+        self.cell(key).get()
     }
 
     fn set(&self, key: ParamKey, value: f32) {
-        if let Some((_, v)) = self.values.iter().find(|(k, _)| *k == key) {
-            v.set(value);
-        }
+        self.cell(key).set(value);
     }
 }
 

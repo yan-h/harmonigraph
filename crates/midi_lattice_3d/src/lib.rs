@@ -57,13 +57,18 @@ pub struct MidiLattice3dParams {
     pub brightest_pitch: FloatParam,
 }
 
-fn linear_param(name: &str, key: ParamKey, default: f32) -> FloatParam {
+/// Build a FloatParam entirely from the ParamKey metadata (name, default,
+/// range, skew) so the host-facing parameters can never drift from what
+/// the UI clamps and displays.
+fn param_for_key(key: ParamKey) -> FloatParam {
     let range = key.range();
-    FloatParam::new(
-        name,
-        default,
-        FloatRange::Linear { min: *range.start(), max: *range.end() },
-    )
+    let (min, max) = (*range.start(), *range.end());
+    let range = if key.logarithmic() {
+        FloatRange::Skewed { min, max, factor: FloatRange::skew_factor(key.skew_steepness()) }
+    } else {
+        FloatRange::Linear { min, max }
+    };
+    FloatParam::new(key.host_name(), key.default_value(), range)
 }
 
 impl Default for MidiLattice3dParams {
@@ -74,55 +79,15 @@ impl Default for MidiLattice3dParams {
                 editor::DEFAULT_SIZE.1,
             ),
             ui_state: Arc::new(parking_lot::RwLock::new(String::new())),
-            // 12-TET defaults, like v1: the lattice matches what a plain
-            // MIDI keyboard sends until the user dials in a tuning.
-            c_offset: linear_param("C Offset (cents)", ParamKey::COffset, 0.0),
-            three: linear_param(
-                "Perfect Fifth (cents)",
-                ParamKey::Three,
-                lattice_core::tuning::THREE_12TET,
-            ),
-            five: linear_param(
-                "Major Third (cents)",
-                ParamKey::Five,
-                lattice_core::tuning::FIVE_12TET,
-            ),
-            seven: linear_param(
-                "Harmonic Seventh (cents)",
-                ParamKey::Seven,
-                lattice_core::tuning::SEVEN_12TET,
-            ),
-            tolerance: FloatParam::new(
-                "Tuning Tolerance (cents)",
-                0.5,
-                FloatRange::Skewed {
-                    min: 0.001,
-                    max: 49.999,
-                    factor: FloatRange::skew_factor(-2.5),
-                },
-            ),
-            pitch_class_fade: FloatParam::new(
-                "Pitch Class Fade (sec)",
-                1.0,
-                FloatRange::Skewed {
-                    min: 0.0,
-                    max: 100.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            ),
-            octave_fade: FloatParam::new(
-                "Octave Fade (sec)",
-                1.0,
-                FloatRange::Skewed {
-                    min: 0.0,
-                    max: 100.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
-            ),
-            // Pitch-height coloring range for channels 10-14 (MIDI
-            // convention), as in v1.
-            darkest_pitch: linear_param("Darkest Pitch", ParamKey::DarkestPitch, 24.0),
-            brightest_pitch: linear_param("Brightest Pitch", ParamKey::BrightestPitch, 108.0),
+            c_offset: param_for_key(ParamKey::COffset),
+            three: param_for_key(ParamKey::Three),
+            five: param_for_key(ParamKey::Five),
+            seven: param_for_key(ParamKey::Seven),
+            tolerance: param_for_key(ParamKey::Tolerance),
+            pitch_class_fade: param_for_key(ParamKey::PitchClassFade),
+            octave_fade: param_for_key(ParamKey::OctaveFade),
+            darkest_pitch: param_for_key(ParamKey::DarkestPitch),
+            brightest_pitch: param_for_key(ParamKey::BrightestPitch),
         }
     }
 }
