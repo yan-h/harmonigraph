@@ -44,6 +44,9 @@ pub struct Skin {
     pub accent_active: [u8; 3],
     /// Hover/focus stroke color.
     pub accent_edge: [u8; 3],
+    /// Armed-mode indicator (learn mode): amber, distinct from both the
+    /// accent and the warning red.
+    pub armed: [u8; 3],
     /// Warning text (e.g. notes not represented on the lattice).
     pub warning_text: [u8; 3],
     /// Background band behind warning rows.
@@ -69,6 +72,7 @@ impl Default for Skin {
             accent_fill_drag: [88, 109, 150],
             accent_active: [76, 92, 125],
             accent_edge: [90, 111, 152],
+            armed: [235, 171, 82],
             warning_text: [232, 130, 120],
             warning_bg: [58, 30, 28],
         }

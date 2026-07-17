@@ -65,6 +65,10 @@ pub fn accent_active() -> Color32 {
 pub fn accent_edge() -> Color32 {
     c(active_skin().accent_edge)
 }
+/// Armed-mode indicator (learn mode).
+pub fn armed() -> Color32 {
+    c(active_skin().armed)
+}
 /// Warning text (e.g. notes not represented on the lattice).
 pub fn warning_text() -> Color32 {
     c(active_skin().warning_text)

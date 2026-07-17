@@ -45,7 +45,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
-            Tab::Settings => settings_pane(ui, self.state, self.params),
+            Tab::Settings => settings_pane(ui, self.state, self.params, self.now),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now),
             Tab::Notes => notes_pane(ui, self.state),
@@ -101,6 +101,26 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
 
     ui.painter()
         .add(lattice_paint_callback(rect, &scene, state.target_format, 0));
+
+    // Learn mode is armed: show it ON the lattice too, so the mode is
+    // obvious even when the Settings tab (and its Learn toggle) is hidden.
+    if state.learn_active {
+        let color = theme::armed().gamma_multiply(learn_pulse(now));
+        let painter = ui.painter_at(rect);
+        painter.rect_stroke(
+            rect.shrink(1.5),
+            0,
+            egui::Stroke::new(2.0, color),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            rect.left_top() + egui::vec2(10.0, 8.0),
+            egui::Align2::LEFT_TOP,
+            "LEARN",
+            egui::FontId::monospace(12.0),
+            color,
+        );
+    }
 
     // Note-name labels on hovered and sounding nodes, drawn as egui text
     // over the 3D view (projected with the same camera as the nodes).
@@ -159,6 +179,11 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 }
 
+/// Attention pulse for armed-mode indicators, in [0.3, 1].
+fn learn_pulse(now: f64) -> f32 {
+    0.65 + 0.35 * (now * 2.0 * std::f64::consts::PI * 1.2).sin() as f32
+}
+
 /// One ValueBar per parameter, with automation-gesture bracketing.
 fn param_bars(ui: &mut egui::Ui, params: &dyn ParamBackend, keys: &[ParamKey]) {
     for &key in keys {
@@ -181,7 +206,12 @@ fn param_bars(ui: &mut egui::Ui, params: &dyn ParamBackend, keys: &[ParamKey]) {
     }
 }
 
-fn settings_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+fn settings_pane(
+    ui: &mut egui::Ui,
+    state: &mut SharedState,
+    params: &dyn ParamBackend,
+    now: f64,
+) {
     ui.heading("Tuning");
     param_bars(ui, params, &ParamKey::TUNING);
 
@@ -198,8 +228,18 @@ fn settings_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamB
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
-        ui.toggle_value(&mut state.learn_active, "Learn")
+        let learn = ui
+            .toggle_value(&mut state.learn_active, "Learn")
             .on_hover_text("While active, continuously set the tuning from the held notes");
+        if state.learn_active {
+            // Pulsing armed ring so the engaged mode can't be missed.
+            ui.painter().rect_stroke(
+                learn.rect.expand(2.0),
+                egui::CornerRadius::same(6),
+                egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
+                egui::StrokeKind::Outside,
+            );
+        }
     });
 
     ui.separator();

@@ -200,7 +200,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // still shows up promptly. egui repaints on input events by itself,
     // so interaction never waits on this. The plugin shell additionally
     // requests a repaint the moment it drains new note events.
-    if state.tracker.voices().next().is_some() {
+    if state.tracker.voices().next().is_some() || state.learn_active {
         ui.ctx().request_repaint();
     } else {
         ui.ctx()
