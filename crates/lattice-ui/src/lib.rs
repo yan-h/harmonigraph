@@ -90,6 +90,39 @@ impl SharedState {
     pub fn log(&mut self, line: impl Into<String>) {
         self.console.log(line);
     }
+
+    /// Serialize the parts of the UI worth restoring across sessions
+    /// (dock layout, camera, view settings). Parameters are NOT included —
+    /// they live in the host's plugin state.
+    pub fn save_persist(&self) -> String {
+        // RON rather than JSON: dock layout rects can be NaN (before first
+        // layout), which JSON cannot round-trip.
+        ron::to_string(&UiPersist {
+            dock: self.dock.clone(),
+            camera: self.camera,
+            view: self.view.clone(),
+        })
+        .unwrap_or_default()
+    }
+
+    /// Restore state saved by [`save_persist`]. Unknown/corrupt input is
+    /// ignored (fresh defaults win over a broken restore).
+    pub fn load_persist(&mut self, serialized: &str) {
+        if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
+            self.dock = persist.dock;
+            self.camera = persist.camera;
+            self.view = persist.view;
+        }
+    }
+}
+
+/// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
+/// failed deserialize silently falls back to defaults.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct UiPersist {
+    dock: DockState<panes::Tab>,
+    camera: Camera,
+    view: ViewConfig,
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
@@ -124,5 +157,39 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     } else {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(50));
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persist_round_trips_camera_and_view() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        state.camera.distance = 42.0;
+        state.view.extent_sevens = 3;
+        state.view.octave_style = lattice_scene::OctaveStyle::TicksCaps;
+        let saved = state.save_persist();
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.camera.yaw, 1.23);
+        assert_eq!(restored.camera.distance, 42.0);
+        assert_eq!(restored.view.extent_sevens, 3);
+        assert_eq!(
+            restored.view.octave_style,
+            lattice_scene::OctaveStyle::TicksCaps
+        );
+    }
+
+    #[test]
+    fn corrupt_persist_is_ignored() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let default_distance = state.camera.distance;
+        state.load_persist("not json at all");
+        assert_eq!(state.camera.distance, default_distance);
     }
 }

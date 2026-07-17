@@ -11,7 +11,7 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::ValueBar;
 use crate::SharedState;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
     Tuning,

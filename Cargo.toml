@@ -36,8 +36,9 @@ eframe = { version = "0.35", default-features = false, features = [
     "default_fonts",
     "wayland",
     "x11",
+    "persistence",
 ] }
-egui_dock = "0.20"
+egui_dock = { version = "0.20", features = ["serde"] }
 egui-baseview = { version = "0.3", default-features = false, features = [
     "wgpu",
     # Required when default features are off: the crate's log macros come
@@ -53,12 +54,15 @@ nice-plug = "0.1.10"
 nice-plug-xtask = "0.1.1"
 
 # Math / utility
-glam = "0.30"
+glam = { version = "0.30", features = ["serde"] }
 bytemuck = { version = "1", features = ["derive"] }
 rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
+# Persist format: RON round-trips NaN/inf floats (fresh egui_dock layout
+# rects are NaN; JSON turns them into null and fails to restore).
+ron = "0.8"
 raw-window-handle = "0.5"
 
 # Vendored crates with small fixes (see PATCHES.md; both worth upstreaming):

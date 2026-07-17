@@ -10,3 +10,4 @@ lattice-core = { workspace = true }
 glam = { workspace = true }
 # LCH color math, same crate v1 used so channel colors match exactly.
 color_space = "0.5"
+serde = { workspace = true }

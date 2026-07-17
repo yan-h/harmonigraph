@@ -190,8 +190,14 @@ impl Editor for LatticeEditor {
                 shared: self.shared.clone(),
                 params: self.params.clone(),
             },
-            |egui_ctx: &Context, _queue, _state: &mut WindowState| {
+            |egui_ctx: &Context, _queue, state: &mut WindowState| {
                 lattice_ui::theme::apply_theme(egui_ctx);
+                // Restore dock layout / camera / view settings persisted
+                // with the plugin state (saved when the editor closes).
+                let serialized = state.params.ui_state.read().clone();
+                if !serialized.is_empty() {
+                    state.shared.lock().ui.load_persist(&serialized);
+                }
             },
             move |ui: &mut egui::Ui, queue, state: &mut WindowState| {
                 let egui_ctx = ui.ctx().clone();
@@ -310,7 +316,12 @@ impl Editor for LatticeEditor {
         );
 
         self.egui_state.open.store(true, Ordering::Release);
-        Box::new(LatticeEditorHandle { egui_state: self.egui_state.clone(), window })
+        Box::new(LatticeEditorHandle {
+            egui_state: self.egui_state.clone(),
+            shared: self.shared.clone(),
+            params: self.params.clone(),
+            window,
+        })
     }
 
     fn size(&self) -> (u32, u32) {
@@ -483,6 +494,8 @@ fn draw_resize_preview(ui: &egui::Ui, pointer: egui::Pos2, width: u32, height: u
 
 struct LatticeEditorHandle {
     egui_state: Arc<EguiState>,
+    shared: Arc<Mutex<EditorShared>>,
+    params: Arc<MidiLattice3dParams>,
     window: WindowHandle,
 }
 
@@ -492,6 +505,9 @@ unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
+        // Persist the UI state (dock layout, camera, view settings) into
+        // the plugin state so the host saves it with the project.
+        *self.params.ui_state.write() = self.shared.lock().ui.save_persist();
         self.egui_state.open.store(false, Ordering::Release);
         self.window.close();
     }

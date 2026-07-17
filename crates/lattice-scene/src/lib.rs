@@ -19,7 +19,7 @@ pub fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 /// How a node indicates which octaves its pitch class is sounding in.
 /// All modes read the same per-node octave bitmask; the fragment shader
 /// draws the glyphs. Kept as options side by side for design comparison.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OctaveStyle {
     /// No octave indication.
     Off,
@@ -58,7 +58,7 @@ impl OctaveStyle {
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ViewConfig {
     /// World-space distance between adjacent nodes.
     pub spacing: f32,
@@ -94,7 +94,7 @@ impl Default for ViewConfig {
 }
 
 /// Simple orbit camera. Angles in radians.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub target: Vec3,
     pub yaw: f32,

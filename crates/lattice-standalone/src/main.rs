@@ -12,6 +12,8 @@ use lattice_core::{NoteEvent, NoteEventKind};
 use lattice_ui::params::{ParamBackend, ParamKey};
 use lattice_ui::SharedState;
 
+const UI_STATE_STORAGE_KEY: &str = "midi-lattice-3d-ui-state";
+
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
@@ -29,7 +31,15 @@ fn main() -> eframe::Result {
                 .wgpu_render_state
                 .as_ref()
                 .expect("eframe was built with the wgpu backend");
-            Ok(Box::new(App::new(render_state.target_format)))
+            let mut app = App::new(render_state.target_format);
+            // Restore dock layout / camera / view settings from eframe's
+            // storage (mirrors the plugin's persist blob).
+            if let Some(serialized) =
+                cc.storage.and_then(|s| s.get_string(UI_STATE_STORAGE_KEY))
+            {
+                app.state.load_persist(&serialized);
+            }
+            Ok(Box::new(app))
         }),
     )
 }
@@ -78,6 +88,10 @@ impl eframe::App for App {
         }
 
         lattice_ui::root_ui(ui, &mut self.state, &self.params, now);
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(UI_STATE_STORAGE_KEY, self.state.save_persist());
     }
 }
 

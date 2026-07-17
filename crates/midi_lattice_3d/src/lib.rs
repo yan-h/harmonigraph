@@ -32,6 +32,11 @@ pub struct MidiLattice3dParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<editor::EguiState>,
 
+    /// Serialized UI state (dock layout, camera, view settings), persisted
+    /// with the plugin state. See SharedState::save_persist.
+    #[persist = "ui-state"]
+    pub ui_state: Arc<parking_lot::RwLock<String>>,
+
     #[id = "tuning-c-offset"]
     pub c_offset: FloatParam,
     #[id = "tuning-three"]
@@ -63,6 +68,7 @@ impl Default for MidiLattice3dParams {
     fn default() -> Self {
         MidiLattice3dParams {
             editor_state: editor::EguiState::from_size(1000, 700),
+            ui_state: Arc::new(parking_lot::RwLock::new(String::new())),
             // 12-TET defaults, like v1: the lattice matches what a plain
             // MIDI keyboard sends until the user dials in a tuning.
             c_offset: linear_param("C Offset (cents)", ParamKey::COffset, 0.0),
