@@ -83,8 +83,6 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 - **Depth/bloom**: the lattice draws into egui's pass (no depth buffer;
   CPU-sorted back-to-front). For dense scenes or post-processing, render
   to an offscreen texture in `prepare()` instead.
-- **Clock reconciliation**: GUI re-stamps note events on arrival; fine
-  visually, but sub-frame event spacing is lost.
 - **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
 - **Spectral audio FFT**: the pane is MIDI-derived today.
