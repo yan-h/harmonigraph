@@ -258,7 +258,9 @@ mod tests {
         state.camera.yaw = 1.23;
         state.camera.distance = 42.0;
         state.view.extent_sevens = 3;
-        state.view.octave_style = lattice_scene::OctaveStyle::TicksCaps;
+        // Off is the only non-default octave style, so it proves the field
+        // actually round-trips rather than matching the default by luck.
+        state.view.octave_style = lattice_scene::OctaveStyle::Off;
         state.view.meantone = true;
         let saved = state.save_persist();
 
@@ -267,10 +269,7 @@ mod tests {
         assert_eq!(restored.camera.yaw, 1.23);
         assert_eq!(restored.camera.distance, 42.0);
         assert_eq!(restored.view.extent_sevens, 3);
-        assert_eq!(
-            restored.view.octave_style,
-            lattice_scene::OctaveStyle::TicksCaps
-        );
+        assert_eq!(restored.view.octave_style, lattice_scene::OctaveStyle::Off);
         assert!(restored.view.meantone);
     }
 
