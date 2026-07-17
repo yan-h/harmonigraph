@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use egui_dock::{DockArea, DockState, NodeIndex};
 use lattice_core::{LatticePos, NoteTracker, PitchClass, Tuning};
 use lattice_render::wgpu::TextureFormat;
-use lattice_scene::{Camera, ViewConfig};
+use lattice_scene::{Camera, FrameParams, ViewConfig};
 use params::ParamBackend;
 
 /// Scrollback for the debug console pane. Shells and panes log via
@@ -54,6 +54,10 @@ pub struct SharedState {
     /// [`root_ui`] so core/scene code never touches the param system.
     pub tuning: Tuning,
     pub view: ViewConfig,
+    /// Per-frame mirrors of the appearance parameters, refreshed alongside
+    /// `tuning` (the param system owns the real values; these are never
+    /// persisted).
+    pub frame_params: FrameParams,
     pub camera: Camera,
     /// The pitch-class node the pointer is over, if any — shared so *every*
     /// pane can highlight it (lattice glow, tuning pane readout, ...).
@@ -84,6 +88,7 @@ impl SharedState {
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),
             view: ViewConfig::default(),
+            frame_params: FrameParams::default(),
             camera: Camera::default(),
             hovered: None,
             console: Console::default(),
@@ -173,15 +178,20 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     }
 
     state.tuning = params::tuning_from_params(params);
-    state.view.pitch_class_fade_time = params.get(params::ParamKey::PitchClassFade);
-    state.view.octave_fade_time = params.get(params::ParamKey::OctaveFade);
-    state.view.darkest_pitch = params.get(params::ParamKey::DarkestPitch);
-    state.view.brightest_pitch = params.get(params::ParamKey::BrightestPitch);
+    state.frame_params = FrameParams {
+        pitch_class_fade_time: params.get(params::ParamKey::PitchClassFade),
+        octave_fade_time: params.get(params::ParamKey::OctaveFade),
+        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
+        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
+    };
     // Voices must outlive the LONGER of the two fades or the octave
     // indicators get truncated when the note highlight ends first.
     state.tracker.prune(
         now,
-        state.view.pitch_class_fade_time.max(state.view.octave_fade_time),
+        state
+            .frame_params
+            .pitch_class_fade_time
+            .max(state.frame_params.octave_fade_time),
     );
 
     // DockState has to be moved out while panes borrow the rest of `state`.

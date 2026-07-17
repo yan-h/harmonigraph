@@ -118,10 +118,13 @@ const _: () = assert!(lattice_scene::OCTAVE_SLOTS <= 12);
 struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
+    /// x: activation, y: hovered, z: age (s since note-on), w: outlined.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
+    /// Per-note animation seed (small constant, not a timestamp).
+    seed: f32,
 }
 
 impl GpuInstance {
@@ -129,9 +132,21 @@ impl GpuInstance {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32
         ],
     };
+}
+
+/// Pack the per-octave activation levels into the bit layout
+/// `octave_level()` in lattice.wgsl unpacks: 8 bits per slot,
+/// little-endian (slot 0 = lowest byte of the first word).
+fn pack_octaves(levels: &[f32; lattice_scene::OCTAVE_SLOTS]) -> [u32; 3] {
+    let mut octaves = [0u32; 3];
+    for (slot, &level) in levels.iter().enumerate() {
+        let byte = (level.clamp(0.0, 1.0) * 255.0).round() as u32;
+        octaves[slot / 4] |= byte << ((slot % 4) * 8);
+    }
+    octaves
 }
 
 /// One chord edge (a beam between two active adjacent nodes).
@@ -204,23 +219,17 @@ impl LatticeCallback {
 
         let instances = order
             .into_iter()
-            .map(|(_, n)| {
-                let mut octaves = [0u32; 3];
-                for (slot, &level) in n.octaves.iter().enumerate() {
-                    let byte = (level.clamp(0.0, 1.0) * 255.0).round() as u32;
-                    octaves[slot / 4] |= byte << ((slot % 4) * 8);
-                }
-                GpuInstance {
-                    world_pos: n.world_pos.to_array(),
-                    color: n.color.to_array(),
-                    params: [
-                        n.activation,
-                        if n.hovered { 1.0 } else { 0.0 },
-                        n.phase,
-                        if n.outlined { 1.0 } else { 0.0 },
-                    ],
-                    octaves,
-                }
+            .map(|(_, n)| GpuInstance {
+                world_pos: n.world_pos.to_array(),
+                color: n.color.to_array(),
+                params: [
+                    n.activation,
+                    if n.hovered { 1.0 } else { 0.0 },
+                    n.age,
+                    if n.outlined { 1.0 } else { 0.0 },
+                ],
+                octaves: pack_octaves(&n.octaves),
+                seed: n.seed,
             })
             .collect();
 
@@ -548,5 +557,23 @@ mod tests {
     fn baked_shader_validates() {
         validate_wgsl(SHADER_SRC)
             .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
+    }
+
+    #[test]
+    fn octave_packing_matches_the_documented_layout() {
+        let mut levels = [0.0f32; lattice_scene::OCTAVE_SLOTS];
+        levels[0] = 1.0; // lowest byte of word 0
+        levels[3] = 0.5; // highest byte of word 0
+        levels[4] = 1.0; // lowest byte of word 1
+        levels[9] = 1.0; // second byte of word 2
+        let words = pack_octaves(&levels);
+        assert_eq!(words[0] & 0xFF, 255);
+        assert_eq!((words[0] >> 24) & 0xFF, 128);
+        assert_eq!(words[1] & 0xFF, 255);
+        assert_eq!(words[2] & 0xFF, 0);
+        assert_eq!((words[2] >> 8) & 0xFF, 255);
+        // Out-of-range levels clamp instead of corrupting neighbors.
+        let words = pack_octaves(&[2.0; lattice_scene::OCTAVE_SLOTS]);
+        assert_eq!(words[0], 0xFFFF_FFFF);
     }
 }

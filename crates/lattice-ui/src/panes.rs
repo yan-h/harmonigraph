@@ -91,6 +91,7 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         &state.tracker,
         &state.tuning,
         &state.view,
+        &state.frame_params,
         state.camera,
         state.hovered,
         now,
@@ -134,12 +135,12 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // Note-name labels on hovered and sounding nodes, drawn as egui text
     // over the 3D view (projected with the same camera as the nodes).
     if state.view.show_labels {
-        let viewport = glam::Vec2::new(rect.width(), rect.height());
+        let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
         for node in &scene.nodes {
             if !(node.hovered || node.activation > 0.0) {
                 continue;
             }
-            let Some(p) = scene.project(viewport, node.world_pos) else {
+            let Some(p) = projector.project(node.world_pos) else {
                 continue;
             };
             // Fade with the activation envelope; hovered idle nodes get a
@@ -421,7 +422,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // Voice bars: height follows the same envelope as the lattice glow,
     // weighted by velocity; color matches the lattice node color.
     for voice in state.tracker.voices() {
-        let activation = voice.activation(now, state.view.pitch_class_fade_time);
+        let activation = voice.activation(now, state.frame_params.pitch_class_fade_time);
         if activation <= 0.0 {
             continue;
         }
@@ -431,8 +432,8 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         let c = channel_color(
             voice.channel,
             voice.pitch,
-            state.view.darkest_pitch,
-            state.view.brightest_pitch,
+            state.frame_params.darkest_pitch,
+            state.frame_params.brightest_pitch,
         );
         let color = egui::Color32::from_rgb(
             (c.x * 255.0) as u8,

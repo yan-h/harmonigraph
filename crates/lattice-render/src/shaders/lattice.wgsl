@@ -9,7 +9,10 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
-    // x: time (s), y: base node radius (world units),
+    // x: global time (s, wraps hourly; unused by the built-in styles —
+    //    per-note animation uses the instance age/seed, which stay small
+    //    and precise however long the session runs),
+    // y: base node radius (world units),
     // z: octave display mode (0 off, 1 dots, 2 rings, 3..6 ticks),
     // w: node style (0 steady, 1 breathe, 2 corona, 3 sparks, 4 wire)
     misc: vec4<f32>,
@@ -22,11 +25,13 @@ const TAU: f32 = 6.2831853;
 struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
-    // x: activation 0..1, y: hovered 0/1, z: phase (note start time, s),
+    // x: activation 0..1, y: hovered 0/1, z: age (s since note-on),
     // w: outlined 0/1 (channel-14 voices render as a ring, not a disc)
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
+    // Per-note animation seed: a small constant, NOT a timestamp.
+    @location(4) seed: f32,
 };
 
 struct VsOut {
@@ -35,6 +40,7 @@ struct VsOut {
     @location(1) color: vec4<f32>,
     @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
+    @location(4) seed: f32,
 };
 
 @vertex
@@ -54,10 +60,10 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // the disc radius to leave room for the glow.
     var radius = u.misc.y * (0.55 + 0.35 * activation + 0.15 * hovered) * 2.0;
 
-    // Breathe style: held nodes pulse in size, each on its own phase
+    // Breathe style: held nodes pulse in size on their own age
     // (oscillation starts neutral at note-on).
     if u32(u.misc.w + 0.5) == 1u {
-        let beat = (u.misc.x - inst.params.z) * TAU * 0.8;
+        let beat = inst.params.z * TAU * 0.8;
         radius = radius * (1.0 + 0.10 * activation * sin(beat));
     }
 
@@ -70,6 +76,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
+    out.seed = inst.seed;
     return out;
 }
 
@@ -188,9 +195,9 @@ fn seg_dist(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
 
 // Wire style: distance-field wireframe of a tumbling octahedron, projected
 // orthographically into the billboard plane. Returns line coverage.
-fn wire_octahedron(uv: vec2<f32>, t: f32, phase: f32) -> f32 {
-    let yaw = (t - phase) * 0.6 + phase * 2.3;
-    let pitch = (t - phase) * 0.37 + phase * 1.1;
+fn wire_octahedron(uv: vec2<f32>, age: f32, seed: f32) -> f32 {
+    let yaw = age * 0.6 + seed * 2.3;
+    let pitch = age * 0.37 + seed * 1.1;
     let cy = cos(yaw);
     let sy = sin(yaw);
     let cp = cos(pitch);
@@ -233,8 +240,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let hovered = in.params.y;
 
     let style = u32(u.misc.w + 0.5);
-    let t = u.misc.x;
-    let phase = in.params.z;
+    let age = in.params.z;
+    let seed = in.seed;
 
     // Solid disc occupies the inner half of the quad; channel-14 voices
     // render as an outline ring instead (v1 semantics).
@@ -246,7 +253,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Wire style: active nodes morph from disc into a tumbling wireframe
     // octahedron (idle nodes stay discs in every style).
     if style == 4u && activation > 0.0 {
-        disc = mix(disc, wire_octahedron(in.uv, t, phase), activation);
+        disc = mix(disc, wire_octahedron(in.uv, age, seed), activation);
     }
 
     // Soft additive-looking glow for active nodes. The exponential alone
@@ -258,12 +265,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Breathe: glow strength pulses in sync with the vertex-side size pulse.
     if style == 1u {
-        glow = glow * (1.0 + 0.35 * activation * sin((t - phase) * TAU * 0.8));
+        glow = glow * (1.0 + 0.35 * activation * sin(age * TAU * 0.8));
     }
     // Corona: replace the smooth glow with a noise-flickered flame edge
     // whose reach flutters over time, seeded per note.
     if style == 2u && activation > 0.0 {
-        let flame = pow(vnoise(in.uv * 4.0 + vec2<f32>(t * 1.4 + phase * 9.0, t * 1.1)), 2.0);
+        let flame = pow(vnoise(in.uv * 4.0 + vec2<f32>(age * 1.4 + seed * 9.0, age * 1.1)), 2.0);
         glow = activation * exp(-4.5 * max(d - 0.44, 0.0) * (2.4 - 1.8 * flame)) * window
             * (0.55 + 0.45 * flame)
             + 0.25 * hovered * exp(-3.0 * d) * window;
@@ -286,8 +293,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         for (var k = 0u; k < 3u; k = k + 1u) {
             let fk = f32(k);
             let dir = select(1.0, -1.0, k == 1u);
-            let ang = dir * (t - phase) * (1.6 + 0.5 * fk) + fk * 2.094 + phase * 5.0;
-            let orbit = 0.60 + 0.10 * sin((t - phase) * (0.7 + 0.3 * fk) + fk * 1.7);
+            let ang = dir * age * (1.6 + 0.5 * fk) + fk * 2.094 + seed * 5.0;
+            let orbit = 0.60 + 0.10 * sin(age * (0.7 + 0.3 * fk) + fk * 1.7);
             let pos = vec2<f32>(cos(ang), sin(ang)) * orbit;
             let spark = 1.0 - smoothstep(0.02, 0.075, distance(in.uv, pos));
             glyph = max(glyph, spark * activation);
