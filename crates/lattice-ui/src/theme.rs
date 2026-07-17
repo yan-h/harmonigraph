@@ -52,11 +52,14 @@ pub fn apply_theme(ctx: &egui::Context) {
     ]
     .into();
 
-    // Air. egui's defaults are tuned for dense tooling UIs.
+    // Air between elements, but compact controls: interact_size drives
+    // the height of sliders/DragValue boxes and was reading oversized next
+    // to 13px text.
     style.spacing.item_spacing = Vec2::new(8.0, 7.0);
-    style.spacing.button_padding = Vec2::new(10.0, 5.0);
-    style.spacing.interact_size = Vec2::new(40.0, 22.0);
+    style.spacing.button_padding = Vec2::new(9.0, 4.0);
+    style.spacing.interact_size = Vec2::new(36.0, 17.0);
     style.spacing.slider_width = 160.0;
+    style.spacing.slider_rail_height = 4.0;
 
     let visuals = &mut style.visuals;
     visuals.panel_fill = PANEL;
@@ -67,6 +70,8 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.selection.bg_fill = ACCENT.gamma_multiply(0.35);
     visuals.selection.stroke = Stroke::new(1.0, ACCENT);
     visuals.slider_trailing_fill = true;
+    // Slim circular handle to match the thinner rail.
+    visuals.handle_shape = egui::style::HandleShape::Circle;
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(6);
 
