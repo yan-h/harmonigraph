@@ -1,0 +1,31 @@
+--- a/src/window.rs	2006-07-23 18:21:28
++++ b/src/window.rs	2026-07-16 22:02:51
+@@ -237,9 +237,12 @@
+         (build)(&egui_ctx, &mut queue, &mut state);
+ 
+         if physical_size != old_physical_size {
++            // `physical_size` is in physical pixels, but `Window::resize()`
++            // takes logical points; convert or the window ends up
++            // `pixels_per_point` times too large on scaled displays.
+             window.resize(baseview::Size {
+-                width: physical_size.width as f64,
+-                height: physical_size.height as f64,
++                width: physical_size.width as f64 * points_per_pixel as f64,
++                height: physical_size.height as f64 * points_per_pixel as f64,
+             });
+         }
+ 
+@@ -411,9 +414,11 @@
+         }
+ 
+         if self.physical_size != old_physical_size {
++            // As in `new()`: convert physical pixels to the logical points
++            // `Window::resize()` expects.
+             window.resize(baseview::Size {
+-                width: self.physical_size.width.max(1) as f64,
+-                height: self.physical_size.height.max(1) as f64,
++                width: (self.physical_size.width.max(1) as f64) * self.points_per_pixel as f64,
++                height: (self.physical_size.height.max(1) as f64) * self.points_per_pixel as f64,
+             });
+         }
+ 

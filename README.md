@@ -66,10 +66,16 @@ values in the harness), so every pane runs unmodified in both shells.
 centralized in the workspace `Cargo.toml` — bump the whole cluster
 together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 
+## Features beyond v1
+
+- Octave indicators (six switchable styles), note-name labels with comma
+  spelling, a spectral pitch-class meter with two-way hover sync, tuning
+  learn from held chords, per-note tuning (MPE), v1's full channel
+  semantics, host-native window resizing, UI state persistence, and
+  single-gesture parameter automation.
+
 ## Known gaps / next steps
 
-- **Octave indicators**: the octave mask reaches the shader but isn't drawn
-  yet (design question: rings vs. dot stacks vs. glow layers).
 - **Surface format assumption**: the plugin editor assumes a `Bgra8Unorm`
   swapchain (see `ASSUMED_SURFACE_FORMAT` in `editor.rs`) because
   egui-baseview doesn't expose its wgpu `RenderState`. Correct on
@@ -79,9 +85,8 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   to an offscreen texture in `prepare()` instead.
 - **Clock reconciliation**: GUI re-stamps note events on arrival; fine
   visually, but sub-frame event spacing is lost.
-- **Port from v1**: MPE/pitch-bend handling, channel 10–16 semantics,
-  tuning auto-detection from chords, pitch-height coloring.
-- **Persistence**: dock layout and camera aren't saved yet (`DockState`
-  is serde-serializable; add a `#[persist]` blob).
+- **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
+  skins, live re-skinning, and shader-side skin uniforms.
+- **Spectral audio FFT**: the pane is MIDI-derived today.
 - **Shader hot-reload** in the standalone harness (watch the .wgsl file).
-- **Note names**: nodes have cents; add SDF/billboard text labels.
+- **Upstreaming**: prepared fixes in `docs/upstream/`.
