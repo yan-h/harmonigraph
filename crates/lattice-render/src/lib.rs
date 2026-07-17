@@ -23,7 +23,6 @@
 use std::collections::HashMap;
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
-use glam::Vec3;
 use lattice_scene::Scene;
 
 // Shells name texture formats through this re-export so every crate agrees
@@ -33,6 +32,7 @@ pub use egui_wgpu::wgpu;
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
 
 /// Entry points a (re)loaded shader must provide.
+#[cfg(any(test, feature = "hot-reload"))]
 const REQUIRED_ENTRY_POINTS: &[&str] = &["vs_main", "fs_main", "vs_edge", "fs_edge"];
 
 /// Watches the shader source on disk (dev builds only). The first sighting
@@ -77,8 +77,11 @@ impl ShaderWatcher {
 }
 
 /// Parse + validate WGSL and check our entry points exist, so a bad edit
-/// never reaches wgpu's panicking error handler.
-#[cfg(feature = "hot-reload")]
+/// never reaches wgpu's panicking error handler. Also exercised by a unit
+/// test against the baked-in source: plugin builds have no hot-reload, so
+/// without that test a broken commit would first surface as a crash inside
+/// a DAW at first paint.
+#[cfg(any(test, feature = "hot-reload"))]
 fn validate_wgsl(source: &str) -> Result<(), String> {
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|e| e.emit_to_string(source))?;
@@ -105,15 +108,23 @@ struct Uniforms {
     misc: [f32; 4],
 }
 
+// The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
+// growing the constant in lattice-scene past 12 would index out of bounds
+// at runtime here, so fail the build instead.
+const _: () = assert!(lattice_scene::OCTAVE_SLOTS <= 12);
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
+    /// x: activation, y: hovered, z: age (s since note-on), w: outlined.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
+    /// Per-note animation seed (small constant, not a timestamp).
+    seed: f32,
 }
 
 impl GpuInstance {
@@ -121,9 +132,21 @@ impl GpuInstance {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32
         ],
     };
+}
+
+/// Pack the per-octave activation levels into the bit layout
+/// `octave_level()` in lattice.wgsl unpacks: 8 bits per slot,
+/// little-endian (slot 0 = lowest byte of the first word).
+fn pack_octaves(levels: &[f32; lattice_scene::OCTAVE_SLOTS]) -> [u32; 3] {
+    let mut octaves = [0u32; 3];
+    for (slot, &level) in levels.iter().enumerate() {
+        let byte = (level.clamp(0.0, 1.0) * 255.0).round() as u32;
+        octaves[slot / 4] |= byte << ((slot % 4) * 8);
+    }
+    octaves
 }
 
 /// One chord edge (a beam between two active adjacent nodes).
@@ -196,23 +219,17 @@ impl LatticeCallback {
 
         let instances = order
             .into_iter()
-            .map(|(_, n)| {
-                let mut octaves = [0u32; 3];
-                for (slot, &level) in n.octaves.iter().enumerate() {
-                    let byte = (level.clamp(0.0, 1.0) * 255.0).round() as u32;
-                    octaves[slot / 4] |= byte << ((slot % 4) * 8);
-                }
-                GpuInstance {
-                    world_pos: n.world_pos.to_array(),
-                    color: n.color.to_array(),
-                    params: [
-                        n.activation,
-                        if n.hovered { 1.0 } else { 0.0 },
-                        n.phase,
-                        if n.outlined { 1.0 } else { 0.0 },
-                    ],
-                    octaves,
-                }
+            .map(|(_, n)| GpuInstance {
+                world_pos: n.world_pos.to_array(),
+                color: n.color.to_array(),
+                params: [
+                    n.activation,
+                    if n.hovered { 1.0 } else { 0.0 },
+                    n.age,
+                    if n.outlined { 1.0 } else { 0.0 },
+                ],
+                octaves: pack_octaves(&n.octaves),
+                seed: n.seed,
             })
             .collect();
 
@@ -446,7 +463,9 @@ impl CallbackTrait for LatticeCallback {
         if recreate {
             callback_resources.insert(LatticeResources::new(device, self.target_format));
         }
-        let resources: &mut LatticeResources = callback_resources.get_mut().unwrap();
+        let resources: &mut LatticeResources = callback_resources
+            .get_mut()
+            .expect("inserted above when missing");
 
         // Dev builds: pick up edits to the .wgsl on disk. A broken edit is
         // rejected with a message; the previous pipeline keeps rendering.
@@ -530,5 +549,52 @@ impl CallbackTrait for LatticeCallback {
     }
 }
 
-/// Convenience: keep `Vec3` available to shells without a direct glam dep.
-pub type WorldVec = Vec3;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn baked_shader_validates() {
+        validate_wgsl(SHADER_SRC)
+            .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
+    }
+
+    #[test]
+    fn octave_packing_matches_the_documented_layout() {
+        let mut levels = [0.0f32; lattice_scene::OCTAVE_SLOTS];
+        levels[0] = 1.0; // lowest byte of word 0
+        levels[3] = 0.5; // highest byte of word 0
+        levels[4] = 1.0; // lowest byte of word 1
+        levels[9] = 1.0; // second byte of word 2
+        let words = pack_octaves(&levels);
+        assert_eq!(words[0] & 0xFF, 255);
+        assert_eq!((words[0] >> 24) & 0xFF, 128);
+        assert_eq!(words[1] & 0xFF, 255);
+        assert_eq!(words[2] & 0xFF, 0);
+        assert_eq!((words[2] >> 8) & 0xFF, 255);
+        // Out-of-range levels clamp instead of corrupting neighbors.
+        let words = pack_octaves(&[2.0; lattice_scene::OCTAVE_SLOTS]);
+        assert_eq!(words[0], 0xFFFF_FFFF);
+    }
+
+    /// Build the real pipelines against a headless device. This validates
+    /// the vertex-layout <-> shader-input contract (attribute locations,
+    /// formats, strides) that neither the naga check (shader only) nor the
+    /// type system (Rust side only) covers — a mismatch otherwise panics
+    /// at first paint inside a host.
+    #[test]
+    fn pipelines_build_against_a_headless_device() {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("no GPU adapter available; skipping pipeline-build test");
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("headless device");
+        let _resources =
+            LatticeResources::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    }
+}

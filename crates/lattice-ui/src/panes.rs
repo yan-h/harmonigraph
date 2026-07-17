@@ -59,28 +59,22 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         return;
     }
 
-    // Camera input: plain drag orbits; shift-drag or middle-drag pans.
+    // Camera input: plain drag orbits; shift-drag or middle-drag pans
+    // (speeds and clamps live on Camera itself).
     let shift = ui.input(|i| i.modifiers.shift);
     let panning = response.dragged_by(egui::PointerButton::Middle)
         || (response.dragged_by(egui::PointerButton::Primary) && shift);
     if panning {
         let delta = response.drag_delta();
-        let (right, up) = state.camera.right_up();
-        // Grab semantics: the content follows the pointer. Speed scales
-        // with distance so a pan feels the same at any zoom.
-        let k = state.camera.distance * 0.0016;
-        state.camera.target += up * (delta.y * k) - right * (delta.x * k);
+        state.camera.pan(glam::Vec2::new(delta.x, delta.y));
     } else if response.dragged_by(egui::PointerButton::Primary) {
         let delta = response.drag_delta();
-        state.camera.yaw -= delta.x * 0.01;
-        state.camera.pitch = (state.camera.pitch + delta.y * 0.01)
-            .clamp(-1.5, 1.5);
+        state.camera.orbit(glam::Vec2::new(delta.x, delta.y));
     }
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {
-            state.camera.distance = (state.camera.distance * (1.0 - scroll * 0.002))
-                .clamp(2.0, 80.0);
+            state.camera.zoom(scroll);
         }
     }
     if response.double_clicked() {
@@ -91,6 +85,7 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         &state.tracker,
         &state.tuning,
         &state.view,
+        &state.frame_params,
         state.camera,
         state.hovered,
         now,
@@ -111,81 +106,108 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     ui.painter()
         .add(lattice_paint_callback(rect, &scene, state.target_format, 0));
 
-    // Learn mode is armed: show it ON the lattice too, so the mode is
-    // obvious even when the Settings tab (and its Learn toggle) is hidden.
     if state.learn_active {
-        let color = theme::armed().gamma_multiply(learn_pulse(now));
-        let painter = ui.painter_at(rect);
-        painter.rect_stroke(
-            rect.shrink(1.5),
-            0,
-            egui::Stroke::new(2.0, color),
-            egui::StrokeKind::Inside,
-        );
-        painter.text(
-            rect.left_top() + egui::vec2(10.0, 8.0),
-            egui::Align2::LEFT_TOP,
-            "LEARN",
+        draw_learn_overlay(ui, rect, now);
+    }
+    if state.view.show_labels {
+        draw_node_labels(ui, rect, &scene);
+    }
+    hover_tooltip(response, state);
+}
+
+/// Learn mode is armed: show it ON the lattice too, so the mode is obvious
+/// even when the Settings tab (and its Learn toggle) is hidden.
+fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
+    let color = theme::armed().gamma_multiply(learn_pulse(now));
+    let painter = ui.painter_at(rect);
+    painter.rect_stroke(
+        rect.shrink(1.5),
+        0,
+        egui::Stroke::new(2.0, color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.left_top() + egui::vec2(10.0, 8.0),
+        egui::Align2::LEFT_TOP,
+        "LEARN",
+        egui::FontId::monospace(12.0),
+        color,
+    );
+}
+
+/// Note-name labels on hovered and sounding nodes, drawn as egui text over
+/// the 3D view (projected with the same camera as the nodes).
+fn draw_node_labels(ui: &egui::Ui, rect: egui::Rect, scene: &lattice_scene::Scene) {
+    let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+    for node in &scene.nodes {
+        if !(node.hovered || node.activation > 0.0) {
+            continue;
+        }
+        let Some(p) = projector.project(node.world_pos) else {
+            continue;
+        };
+        // Fade with the activation envelope; hovered idle nodes get a dim
+        // but readable label.
+        let strength = if node.hovered { 1.0 } else { visibility_floor(node.activation) };
+        let color = theme::text().gamma_multiply(strength);
+        // Monospace for in-lattice text: labels align across nodes and
+        // match the technical feel of the readouts.
+        ui.painter().text(
+            egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
+            egui::Align2::CENTER_TOP,
+            node.lattice_pos.note_name().to_string(),
             egui::FontId::monospace(12.0),
             color,
         );
     }
+}
 
-    // Note-name labels on hovered and sounding nodes, drawn as egui text
-    // over the 3D view (projected with the same camera as the nodes).
-    if state.view.show_labels {
-        let viewport = glam::Vec2::new(rect.width(), rect.height());
-        for node in &scene.nodes {
-            if !(node.hovered || node.activation > 0.0) {
-                continue;
-            }
-            let Some(p) = scene.project(viewport, node.world_pos) else {
-                continue;
-            };
-            // Fade with the activation envelope; hovered idle nodes get a
-            // dim but readable label.
-            let strength = if node.hovered {
-                1.0
-            } else {
-                0.35 + 0.65 * node.activation
-            };
-            let color = theme::text().gamma_multiply(strength);
-            // Monospace for in-lattice text: labels align across nodes and
-            // match the technical feel of the readouts.
-            ui.painter().text(
-                egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
-                egui::Align2::CENTER_TOP,
-                node.lattice_pos.note_name().to_string(),
-                egui::FontId::monospace(12.0),
-                color,
-            );
-        }
+/// Hover tooltip: pitch class + sounding octaves.
+fn hover_tooltip(response: egui::Response, state: &SharedState) {
+    let Some(pos) = state.hovered else {
+        return;
+    };
+    let pc = state.tuning.pitch_class(pos);
+    let octaves: Vec<String> = state
+        .tracker
+        .voices()
+        .filter(|v| state.tuning.matches(v.pitch_class, pc))
+        .map(|v| v.display_octave().to_string())
+        .collect();
+    let mut text = format!(
+        "{}  ({}, {}, {})  {}",
+        pos.note_name(),
+        pos.threes,
+        pos.fives,
+        pos.sevens,
+        pc
+    );
+    if !octaves.is_empty() {
+        text.push_str(&format!("  octaves: {}", octaves.join(" ")));
     }
+    response.on_hover_ui(|ui| {
+        ui.label(text);
+    });
+}
 
-    // Hover tooltip: pitch class + sounding octaves.
-    if let Some(pos) = state.hovered {
-        let pc = state.tuning.pitch_class(pos);
-        let octaves: Vec<String> = state
-            .tracker
-            .voices()
-            .filter(|v| state.tuning.matches(v.pitch_class, pc))
-            .map(|v| v.display_octave().to_string())
-            .collect();
-        let mut text = format!(
-            "{}  ({}, {}, {})  {}",
-            pos.note_name(),
-            pos.threes,
-            pos.fives,
-            pos.sevens,
-            pc
-        );
-        if !octaves.is_empty() {
-            text.push_str(&format!("  octaves: {}", octaves.join(" ")));
-        }
-        response.on_hover_ui(|ui| {
-            ui.label(text);
-        });
-    }
+/// The dimmest-visible convention shared with the shader (level_floor in
+/// lattice.wgsl): quiet elements sit at 35% and scale up to full.
+fn visibility_floor(level: f32) -> f32 {
+    0.35 + 0.65 * level
+}
+
+/// The visible lattice node whose pitch class most closely matches `pc`
+/// under the current tuning (several can match when the tolerance is
+/// wide). Every pane that answers "which node is this pitch class" uses
+/// this, so they can't disagree.
+fn nearest_visible_node(
+    view: &lattice_scene::ViewConfig,
+    tuning: &lattice_core::Tuning,
+    pc: lattice_core::PitchClass,
+) -> Option<lattice_core::LatticePos> {
+    view.visible_positions()
+        .filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos)))
+        .min_by_key(|&pos| pc.distance_to(tuning.pitch_class(pos)))
 }
 
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe
@@ -421,18 +443,18 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // Voice bars: height follows the same envelope as the lattice glow,
     // weighted by velocity; color matches the lattice node color.
     for voice in state.tracker.voices() {
-        let activation = voice.activation(now, state.view.pitch_class_fade_time);
+        let activation = voice.activation(now, state.frame_params.pitch_class_fade_time);
         if activation <= 0.0 {
             continue;
         }
         let x = x_of(voice.pitch_class.to_cents());
         let height =
-            rect.height() * 0.85 * activation * (0.35 + 0.65 * voice.velocity);
+            rect.height() * 0.85 * activation * visibility_floor(voice.velocity);
         let c = channel_color(
             voice.channel,
             voice.pitch,
-            state.view.darkest_pitch,
-            state.view.brightest_pitch,
+            state.frame_params.darkest_pitch,
+            state.frame_params.brightest_pitch,
         );
         let color = egui::Color32::from_rgb(
             (c.x * 255.0) as u8,
@@ -453,10 +475,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     if let Some(pointer) = response.hover_pos() {
         let cents = ((pointer.x - rect.left()) / rect.width() * 1200.0).clamp(0.0, 1200.0);
         let pc = lattice_core::PitchClass::from_cents(cents);
-        state.hovered = state
-            .view
-            .visible_positions()
-            .find(|&pos| state.tuning.matches(pc, state.tuning.pitch_class(pos)));
+        state.hovered = nearest_visible_node(&state.view, &state.tuning, pc);
         painter.text(
             egui::pos2(pointer.x + 6.0, rect.top() + 2.0),
             egui::Align2::LEFT_TOP,
@@ -501,22 +520,8 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for voice in voices {
-                // The nearest visible lattice node this pitch class lights
-                // up, if any (multiple can match within tolerance).
-                let node = state
-                    .view
-                    .visible_positions()
-                    .filter(|&pos| {
-                    state
-                        .tuning
-                        .matches(voice.pitch_class, state.tuning.pitch_class(pos))
-                })
-                .min_by_key(|&pos| {
-                    voice
-                        .pitch_class
-                        .distance_to(state.tuning.pitch_class(pos))
-                })
-                .map(|pos| pos.note_name().to_string());
+                let node = nearest_visible_node(&state.view, &state.tuning, voice.pitch_class)
+                    .map(|pos| pos.note_name().to_string());
                 let line = format!(
                     "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",
                     name = KEY_NAMES[usize::from(voice.note % 12)],

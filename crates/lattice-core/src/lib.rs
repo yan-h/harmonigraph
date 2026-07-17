@@ -6,6 +6,6 @@ pub mod coords;
 pub mod notes;
 pub mod tuning;
 
-pub use coords::LatticePos;
-pub use notes::{NoteEvent, NoteEventKind, NoteTracker, Voice, VoiceState};
-pub use tuning::{PitchClass, PitchClassDistance, Tuning};
+pub use coords::{positions_within, LatticePos, NoteName};
+pub use notes::{ChannelRole, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState};
+pub use tuning::{learn_tuning, LearnedTuning, PitchClass, PitchClassDistance, Tuning};

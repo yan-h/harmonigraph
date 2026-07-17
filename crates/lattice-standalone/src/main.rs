@@ -65,18 +65,18 @@ struct App {
     connection: Option<midir::MidiInputConnection<()>>,
     midi_rx: mpsc::Receiver<NoteEvent>,
     midi_tx: mpsc::Sender<NoteEvent>,
+    /// Echo every note event to the console (hardware MIDI can flood the
+    /// scrollback during real playing; toggle in the source picker).
+    log_events: bool,
 }
 
-fn enumerate_ports() -> Vec<String> {
-    midir::MidiInput::new("midi-lattice-3d")
-        .map(|input| {
-            input
-                .ports()
-                .iter()
-                .filter_map(|p| input.port_name(p).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+fn enumerate_ports() -> Result<Vec<String>, midir::InitError> {
+    let input = midir::MidiInput::new("midi-lattice-3d")?;
+    Ok(input
+        .ports()
+        .iter()
+        .filter_map(|p| input.port_name(p).ok())
+        .collect())
 }
 
 impl App {
@@ -147,6 +147,12 @@ impl App {
     fn new(target_format: lattice_render::wgpu::TextureFormat) -> Self {
         let mut state = SharedState::new(target_format);
         state.log("dev harness started; mock MIDI is playing");
+        // An empty port list with no message would read as "no MIDI gear";
+        // tell the difference when enumeration itself failed.
+        let known_ports = enumerate_ports().unwrap_or_else(|err| {
+            state.log(format!("MIDI port enumeration failed: {err}"));
+            Vec::new()
+        });
         let (midi_tx, midi_rx) = mpsc::channel();
         App {
             state,
@@ -154,24 +160,23 @@ impl App {
             mock: MockMidi::default(),
             start: Instant::now(),
             source: MidiSource::Mock,
-            known_ports: enumerate_ports(),
+            known_ports,
             connection: None,
             midi_rx,
             midi_tx,
+            log_events: true,
         }
     }
-}
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let now = self.start.elapsed().as_secs_f64();
-
-        // Source picker: mock progression or a hardware port.
+    /// Floating source-picker window. Returns the source the user picked,
+    /// if any (applied by the caller so the switch happens outside the
+    /// window closure).
+    fn source_picker(&mut self, ctx: &egui::Context) -> Option<MidiSource> {
         let mut switch_to: Option<MidiSource> = None;
         egui::Window::new("MIDI input")
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
             .resizable(false)
-            .show(ui.ctx(), |ui| {
+            .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(self.source == MidiSource::Mock, "Mock")
@@ -180,30 +185,43 @@ impl eframe::App for App {
                         switch_to = Some(MidiSource::Mock);
                     }
                     if ui.button("rescan").on_hover_text("Re-enumerate ports").clicked() {
-                        self.known_ports = enumerate_ports();
+                        match enumerate_ports() {
+                            Ok(ports) => self.known_ports = ports,
+                            Err(err) => self
+                                .state
+                                .log(format!("MIDI port enumeration failed: {err}")),
+                        }
                     }
+                    ui.checkbox(&mut self.log_events, "Log events");
                 });
-                for name in self.known_ports.clone() {
-                    let selected = self.source == MidiSource::Port(name.clone());
-                    if ui.selectable_label(selected, &name).clicked() && !selected {
-                        switch_to = Some(MidiSource::Port(name));
+                for name in &self.known_ports {
+                    let selected =
+                        matches!(&self.source, MidiSource::Port(current) if current == name);
+                    if ui.selectable_label(selected, name).clicked() && !selected {
+                        switch_to = Some(MidiSource::Port(name.clone()));
                     }
                 }
             });
-        if let Some(source) = switch_to {
-            // Silence whatever the previous source left sounding.
-            self.state.tracker.all_notes_off(now);
-            match source {
-                MidiSource::Mock => {
-                    self.connection = None;
-                    self.source = MidiSource::Mock;
-                    self.mock = MockMidi::default();
-                    self.state.log("MIDI input: mock progression");
-                }
-                MidiSource::Port(name) => self.connect(&name),
-            }
-        }
+        switch_to
+    }
 
+    fn switch_source(&mut self, source: MidiSource, now: f64) {
+        // Silence whatever the previous source left sounding.
+        self.state.tracker.all_notes_off(now);
+        match source {
+            MidiSource::Mock => {
+                self.connection = None;
+                self.source = MidiSource::Mock;
+                self.mock = MockMidi::default();
+                self.state.log("MIDI input: mock progression");
+            }
+            MidiSource::Port(name) => self.connect(&name),
+        }
+    }
+
+    /// Gather this frame's events from the active source: the mock
+    /// progression's poll plus anything the midir callback thread queued.
+    fn collect_events(&mut self, now: f64) -> Vec<NoteEvent> {
         let mut events = Vec::new();
         if self.source == MidiSource::Mock {
             self.mock.poll(now, &mut events);
@@ -211,18 +229,33 @@ impl eframe::App for App {
         while let Ok(event) = self.midi_rx.try_recv() {
             events.push(event);
         }
-        for event in events {
-            self.state.log(format!(
-                "{:7.2}s ch{:<2} note {:<3} {}",
-                event.time,
-                event.channel + 1,
-                event.note,
-                match event.kind {
-                    NoteEventKind::On { .. } => "on",
-                    NoteEventKind::Off => "off",
-                    NoteEventKind::Tuning { .. } => "tune",
-                }
-            ));
+        events
+    }
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let now = self.start.elapsed().as_secs_f64();
+
+        if let Some(source) = self.source_picker(ui.ctx()) {
+            self.switch_source(source, now);
+        }
+
+        for event in self.collect_events(now) {
+            if self.log_events {
+                self.state.log(format!(
+                    "{:7.2}s ch{:<2} note {:<3} {}",
+                    event.time,
+                    event.channel + 1,
+                    event.note,
+                    match event.kind {
+                        NoteEventKind::On { .. } => "on",
+                        NoteEventKind::Off => "off",
+                        NoteEventKind::Tuning { .. } => "tune",
+                        NoteEventKind::AllOff => "all-off",
+                    }
+                ));
+            }
             self.state.tracker.handle_event(event);
         }
 
@@ -234,45 +267,48 @@ impl eframe::App for App {
     }
 }
 
-/// Plain-value parameter store for the harness.
+/// Plain-value parameter store for the harness: one Cell per ParamKey,
+/// built from ParamKey::ALL so a newly added parameter can't be missed.
 struct StandaloneParams {
-    values: [(ParamKey, Cell<f32>); 9],
+    values: [(ParamKey, Cell<f32>); ParamKey::ALL.len()],
 }
 
 impl Default for StandaloneParams {
     fn default() -> Self {
-        let tuning = lattice_core::Tuning::just();
-        StandaloneParams {
-            values: [
-                (ParamKey::COffset, Cell::new(tuning.c_offset)),
-                (ParamKey::Three, Cell::new(tuning.three)),
-                (ParamKey::Five, Cell::new(tuning.five)),
-                (ParamKey::Seven, Cell::new(tuning.seven)),
-                // Wide tolerance so 12-TET mock notes light up the justly
-                // tuned lattice out of the box.
-                (ParamKey::Tolerance, Cell::new(20.0)),
-                (ParamKey::PitchClassFade, Cell::new(1.0)),
-                (ParamKey::OctaveFade, Cell::new(1.0)),
-                (ParamKey::DarkestPitch, Cell::new(24.0)),
-                (ParamKey::BrightestPitch, Cell::new(108.0)),
-            ],
-        }
+        let params = StandaloneParams {
+            values: ParamKey::ALL.map(|key| (key, Cell::new(key.default_value()))),
+        };
+        // Demo overrides, applied on top of the shared defaults so the
+        // deliberate divergence from the plugin stays visible as a delta:
+        // a justly tuned lattice, with the tolerance wide enough that the
+        // 12-TET mock notes light it up out of the box.
+        let just = lattice_core::Tuning::just();
+        params.set(ParamKey::COffset, just.c_offset);
+        params.set(ParamKey::Three, just.three);
+        params.set(ParamKey::Five, just.five);
+        params.set(ParamKey::Seven, just.seven);
+        params.set(ParamKey::Tolerance, 20.0);
+        params
+    }
+}
+
+impl StandaloneParams {
+    fn cell(&self, key: ParamKey) -> &Cell<f32> {
+        self.values
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+            .expect("built from ParamKey::ALL, so every key is present")
     }
 }
 
 impl ParamBackend for StandaloneParams {
     fn get(&self, key: ParamKey) -> f32 {
-        self.values
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, v)| v.get())
-            .unwrap_or(0.0)
+        self.cell(key).get()
     }
 
     fn set(&self, key: ParamKey, value: f32) {
-        if let Some((_, v)) = self.values.iter().find(|(k, _)| *k == key) {
-            v.set(value);
-        }
+        self.cell(key).set(value);
     }
 }
 
@@ -325,5 +361,78 @@ impl MockMidi {
             }
         }
         self.last = Some(current);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_midi_handles_note_messages() {
+        let on = parse_midi(&[0x90, 60, 100], 1.0).unwrap();
+        assert_eq!((on.channel, on.note, on.time), (0, 60, 1.0));
+        assert!(matches!(
+            on.kind,
+            NoteEventKind::On { velocity } if (velocity - 100.0 / 127.0).abs() < 1e-6
+        ));
+
+        // Velocity-0 note-on is a note-off, per the MIDI spec.
+        let implicit_off = parse_midi(&[0x91, 60, 0], 0.0).unwrap();
+        assert_eq!(implicit_off.kind, NoteEventKind::Off);
+        assert_eq!(implicit_off.channel, 1);
+
+        // Real note-off, with the channel nibble split out.
+        let off = parse_midi(&[0x85, 61, 40], 0.0).unwrap();
+        assert_eq!((off.kind, off.channel, off.note), (NoteEventKind::Off, 5, 61));
+
+        // Non-note and truncated messages are ignored.
+        assert_eq!(parse_midi(&[0xB0, 1, 2], 0.0), None); // CC
+        assert_eq!(parse_midi(&[0x90, 60], 0.0), None);
+        assert_eq!(parse_midi(&[], 0.0), None);
+    }
+
+    #[test]
+    fn mock_releases_each_chord_before_the_next_starts() {
+        let mut mock = MockMidi::default();
+        let mut events = Vec::new();
+
+        mock.poll(0.1, &mut events);
+        let first_chord = events.len();
+        assert!(first_chord > 0);
+        assert!(events.iter().all(|e| matches!(e.kind, NoteEventKind::On { .. })));
+
+        // Same chord phase again: nothing new is emitted.
+        events.clear();
+        mock.poll(0.2, &mut events);
+        assert!(events.is_empty());
+
+        // Gate closes: exactly the first chord's notes are released.
+        events.clear();
+        mock.poll(CHORD_GATE + 0.01, &mut events);
+        assert_eq!(events.len(), first_chord);
+        assert!(events.iter().all(|e| e.kind == NoteEventKind::Off));
+
+        // Next period: the following chord starts cleanly.
+        events.clear();
+        mock.poll(CHORD_PERIOD + 0.01, &mut events);
+        assert!(!events.is_empty());
+        assert!(events.iter().all(|e| matches!(e.kind, NoteEventKind::On { .. })));
+    }
+
+    #[test]
+    fn mock_skipping_the_gap_still_releases_the_held_chord() {
+        // A slow frame can jump from mid-chord straight into the next
+        // period; the previous chord must still be released first.
+        let mut mock = MockMidi::default();
+        let mut events = Vec::new();
+        mock.poll(0.1, &mut events);
+        let first_chord = events.len();
+
+        events.clear();
+        mock.poll(CHORD_PERIOD + 0.1, &mut events);
+        let offs = events.iter().filter(|e| e.kind == NoteEventKind::Off).count();
+        assert_eq!(offs, first_chord, "held chord must be released");
+        assert!(events.len() > offs, "and the new chord must start");
     }
 }
