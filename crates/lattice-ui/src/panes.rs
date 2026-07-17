@@ -133,8 +133,10 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         );
     }
 
-    // Note-name labels on hovered and sounding nodes, drawn as egui text
-    // over the 3D view (projected with the same camera as the nodes).
+    // Labels on hovered and sounding nodes, drawn as egui text over the
+    // 3D view (projected with the same camera as the nodes): the note
+    // name centered on the node, optionally its pitch class in cents
+    // just below.
     if state.view.show_labels {
         let viewport = glam::Vec2::new(rect.width(), rect.height());
         for node in &scene.nodes {
@@ -151,18 +153,30 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             } else {
                 0.35 + 0.65 * node.activation
             };
-            let color = theme::text().gamma_multiply(strength);
+            let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
+            let outline = theme::well().gamma_multiply(strength);
             // Monospace for in-lattice text: labels align across nodes and
             // match the technical feel of the readouts.
             outlined_text(
                 ui.painter(),
-                egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
-                egui::Align2::CENTER_TOP,
+                center,
+                egui::Align2::CENTER_CENTER,
                 node.lattice_pos.note_name().to_string(),
                 egui::FontId::monospace(12.0),
-                color,
-                theme::well().gamma_multiply(strength),
+                theme::text().gamma_multiply(strength),
+                outline,
             );
+            if state.view.show_cents {
+                outlined_text(
+                    ui.painter(),
+                    center + egui::vec2(0.0, 9.0),
+                    egui::Align2::CENTER_TOP,
+                    format!("{:.2}", node.cents),
+                    egui::FontId::monospace(10.0),
+                    theme::text_dim().gamma_multiply(strength),
+                    outline,
+                );
+            }
         }
     }
 
@@ -321,6 +335,11 @@ fn settings_pane(
     ui.heading("Appearance");
     param_bars(ui, params, &ParamKey::APPEARANCE);
     ui.checkbox(&mut state.view.show_labels, "Note labels");
+    // Cents ride on the labels, so the toggle grays out with them off.
+    ui.add_enabled(
+        state.view.show_labels,
+        egui::Checkbox::new(&mut state.view.show_cents, "Cent values"),
+    );
 
     // Held-note render style: switchable experiments (idle nodes look the
     // same in all of them). Compare live while notes play.

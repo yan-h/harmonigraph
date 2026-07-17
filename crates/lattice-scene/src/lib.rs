@@ -128,6 +128,10 @@ pub struct ViewConfig {
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
     pub show_labels: bool,
+    /// Under each note-name label, also show the node's pitch class in
+    /// cents. Only meaningful while `show_labels` is on.
+    #[serde(default = "default_true")]
+    pub show_cents: bool,
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
@@ -179,6 +183,7 @@ impl Default for ViewConfig {
             darkest_pitch: 24.0,
             brightest_pitch: 108.0,
             show_labels: true,
+            show_cents: true,
             node_style: NodeStyle::default(),
             show_chord_edges: false,
         }
