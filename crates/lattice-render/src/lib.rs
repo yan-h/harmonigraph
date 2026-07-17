@@ -109,7 +109,7 @@ impl LatticeCallback {
                     n.activation,
                     if n.hovered { 1.0 } else { 0.0 },
                     n.octave_mask as f32,
-                    0.0,
+                    if n.outlined { 1.0 } else { 0.0 },
                 ],
             })
             .collect();

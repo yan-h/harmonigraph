@@ -19,7 +19,8 @@ struct Uniforms {
 struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
-    // x: activation 0..1, y: hovered 0/1, z: octave_mask (bits as f32), w: unused
+    // x: activation 0..1, y: hovered 0/1, z: octave_mask (bits as f32),
+    // w: outlined 0/1 (channel-14 voices render as a ring, not a disc)
     @location(2) params: vec4<f32>,
 };
 
@@ -144,8 +145,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let activation = in.params.x;
     let hovered = in.params.y;
 
-    // Solid disc occupies the inner half of the quad.
-    let disc = 1.0 - smoothstep(0.42, 0.5, d);
+    // Solid disc occupies the inner half of the quad; channel-14 voices
+    // render as an outline ring instead (v1 semantics).
+    let outlined = in.params.w;
+    let filled = 1.0 - smoothstep(0.42, 0.5, d);
+    let ring = (1.0 - smoothstep(0.42, 0.5, d)) * smoothstep(0.30, 0.38, d);
+    let disc = mix(filled, ring, outlined);
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
     // window it so it fades to exactly zero (with zero slope) inside the

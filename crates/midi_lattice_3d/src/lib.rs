@@ -44,6 +44,10 @@ pub struct MidiLattice3dParams {
     pub tolerance: FloatParam,
     #[id = "highlight-time"]
     pub highlight_time: FloatParam,
+    #[id = "darkest-pitch"]
+    pub darkest_pitch: FloatParam,
+    #[id = "brightest-pitch"]
+    pub brightest_pitch: FloatParam,
 }
 
 fn linear_param(name: &str, key: ParamKey, default: f32) -> FloatParam {
@@ -95,6 +99,10 @@ impl Default for MidiLattice3dParams {
                     factor: FloatRange::skew_factor(-2.0),
                 },
             ),
+            // Pitch-height coloring range for channels 10-14 (MIDI
+            // convention), as in v1.
+            darkest_pitch: linear_param("Darkest Pitch", ParamKey::DarkestPitch, 24.0),
+            brightest_pitch: linear_param("Brightest Pitch", ParamKey::BrightestPitch, 108.0),
         }
     }
 }
@@ -108,6 +116,8 @@ impl MidiLattice3dParams {
             ParamKey::Seven => &self.seven,
             ParamKey::Tolerance => &self.tolerance,
             ParamKey::HighlightTime => &self.highlight_time,
+            ParamKey::DarkestPitch => &self.darkest_pitch,
+            ParamKey::BrightestPitch => &self.brightest_pitch,
         }
     }
 }

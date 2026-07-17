@@ -23,6 +23,11 @@ pub enum ParamKey {
     Tolerance,
     /// Seconds a note stays highlighted after release.
     HighlightTime,
+    /// Pitch (MIDI note) shown darkest on pitch-colored channels (10-14 in
+    /// MIDI convention).
+    DarkestPitch,
+    /// Pitch shown brightest on pitch-colored channels.
+    BrightestPitch,
 }
 
 /// Range for the tuning of each prime harmonic, in cents around just
@@ -30,13 +35,15 @@ pub enum ParamKey {
 pub const MAX_TUNING_OFFSET: f32 = 40.0;
 
 impl ParamKey {
-    pub const ALL: [ParamKey; 6] = [
+    pub const ALL: [ParamKey; 8] = [
         ParamKey::COffset,
         ParamKey::Three,
         ParamKey::Five,
         ParamKey::Seven,
         ParamKey::Tolerance,
         ParamKey::HighlightTime,
+        ParamKey::DarkestPitch,
+        ParamKey::BrightestPitch,
     ];
 
     pub fn label(self) -> &'static str {
@@ -47,6 +54,8 @@ impl ParamKey {
             ParamKey::Seven => "Harmonic seventh (¢)",
             ParamKey::Tolerance => "Tolerance (¢)",
             ParamKey::HighlightTime => "Highlight (s)",
+            ParamKey::DarkestPitch => "Darkest pitch",
+            ParamKey::BrightestPitch => "Brightest pitch",
         }
     }
 
@@ -64,6 +73,9 @@ impl ParamKey {
             }
             ParamKey::Tolerance => 0.001..=49.999,
             ParamKey::HighlightTime => 0.0..=100.0,
+            // Same ranges as v1's grid params.
+            ParamKey::DarkestPitch => 0.0..=60.0,
+            ParamKey::BrightestPitch => 60.0..=120.0,
         }
     }
 

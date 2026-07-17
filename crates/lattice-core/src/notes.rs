@@ -40,6 +40,9 @@ pub struct Voice {
     pub channel: u8,
     pub note: u8,
     pub velocity: f32,
+    /// The sounding pitch in MIDI note units, including any per-note
+    /// tuning (PolyTuning/MPE). Equal to `note` until a tuning arrives.
+    pub pitch: f32,
     pub pitch_class: PitchClass,
     /// MIDI octave (C4 = middle C = note 60 → octave 4).
     pub octave: i8,
@@ -68,10 +71,6 @@ impl Voice {
 
 /// Tracks held voices plus a tail of recently released ones (so releases can
 /// fade out instead of vanishing).
-///
-/// TODO(port): v1's `midi.rs` additionally understands MPE-style per-note
-/// pitch bend and channel semantics (channels 10–14 colored by pitch, 15
-/// outlined, 16 ignored). Port that logic here, keyed off the same events.
 #[derive(Default)]
 pub struct NoteTracker {
     held: HashMap<(u8, u8), Voice>,
@@ -84,12 +83,18 @@ impl NoteTracker {
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
+        // v1 semantics: the last channel (15 zero-indexed / 16 in MIDI
+        // convention) is ignored entirely.
+        if event.channel == 15 {
+            return;
+        }
         match event.kind {
             NoteEventKind::On { velocity } => {
                 let voice = Voice {
                     channel: event.channel,
                     note: event.note,
                     velocity,
+                    pitch: f32::from(event.note),
                     pitch_class: PitchClass::from_midi_note(event.note),
                     octave: (event.note / 12) as i8 - 1,
                     on_time: event.time,
@@ -156,6 +161,18 @@ mod tests {
         assert_eq!(tracker.voices().count(), 1);
         // ...gone after the highlight time has fully elapsed.
         tracker.prune(2.1, 1.0);
+        assert_eq!(tracker.voices().count(), 0);
+    }
+
+    #[test]
+    fn channel_15_is_ignored() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 15,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 0.8 },
+        });
         assert_eq!(tracker.voices().count(), 0);
     }
 

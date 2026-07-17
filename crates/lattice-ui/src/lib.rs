@@ -99,6 +99,8 @@ impl SharedState {
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     state.tuning = params::tuning_from_params(params);
     state.view.highlight_time = params.get(params::ParamKey::HighlightTime);
+    state.view.darkest_pitch = params.get(params::ParamKey::DarkestPitch);
+    state.view.brightest_pitch = params.get(params::ParamKey::BrightestPitch);
     state.tracker.prune(now, state.view.highlight_time);
 
     // DockState has to be moved out while panes borrow the rest of `state`.

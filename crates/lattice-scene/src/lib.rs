@@ -71,6 +71,11 @@ pub struct ViewConfig {
     pub highlight_time: f32,
     /// How nodes indicate sounding octaves.
     pub octave_style: OctaveStyle,
+    /// Pitch (MIDI note) mapped to the darkest gradient color on
+    /// pitch-colored channels (9-13). Mirrors a plugin parameter.
+    pub darkest_pitch: f32,
+    /// Pitch mapped to the brightest gradient color.
+    pub brightest_pitch: f32,
 }
 
 impl Default for ViewConfig {
@@ -82,6 +87,8 @@ impl Default for ViewConfig {
             extent_sevens: 1,
             highlight_time: 1.0,
             octave_style: OctaveStyle::default(),
+            darkest_pitch: 24.0,
+            brightest_pitch: 108.0,
         }
     }
 }
@@ -150,6 +157,9 @@ pub struct NodeInstance {
     /// Bit i set = the node's pitch class is sounding in MIDI octave i
     /// (0..=15 clamped). Drives the per-node octave indicators.
     pub octave_mask: u16,
+    /// Render as an outline instead of a filled disc (channel 14, v1's
+    /// "channel 15" in MIDI convention).
+    pub outlined: bool,
     pub hovered: bool,
     /// The node's pitch class in cents, for labels/tooltips.
     pub cents: f32,
@@ -166,28 +176,47 @@ pub struct Scene {
     pub octave_style: OctaveStyle,
 }
 
-/// Per-channel color palette (channels 0-8 distinct, like v1). Channels 9+
-/// fall back to a pitch-height gradient. TODO(port): v1's full channel
-/// semantics (10-14 by pitch, 15 outlined, 16 ignored) and the
-/// darkest/brightest pitch params.
-fn channel_color(channel: u8, note: u8) -> Vec4 {
-    const PALETTE: [[f32; 3]; 9] = [
-        [0.95, 0.35, 0.25],
-        [0.25, 0.65, 0.95],
-        [0.35, 0.85, 0.40],
-        [0.95, 0.75, 0.25],
-        [0.75, 0.40, 0.95],
-        [0.25, 0.90, 0.85],
-        [0.95, 0.45, 0.70],
-        [0.60, 0.70, 0.30],
-        [0.55, 0.55, 0.95],
-    ];
-    if (channel as usize) < PALETTE.len() {
-        let [r, g, b] = PALETTE[channel as usize];
-        Vec4::new(r, g, b, 1.0)
-    } else {
-        let t = f32::from(note) / 127.0;
-        Vec4::new(0.3 + 0.7 * t, 0.4, 1.0 - 0.7 * t, 1.0)
+fn lch(l: f64, c: f64, h: f64) -> Vec4 {
+    // The conversion is unclamped and out-of-gamut LCH inputs yield values
+    // outside 0..255 (v1's graphics stack clamped downstream; we must do it
+    // ourselves before handing colors to the shader).
+    let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
+    Vec4::new(
+        (rgb.r.clamp(0.0, 255.0) / 255.0) as f32,
+        (rgb.g.clamp(0.0, 255.0) / 255.0) as f32,
+        (rgb.b.clamp(0.0, 255.0) / 255.0) as f32,
+        1.0,
+    )
+}
+
+/// Ported verbatim from v1 (`editor/color.rs`): channels 0-8 have fixed
+/// LCH colors; 9-13 are colored by pitch height on an LCH gradient between
+/// `darkest_pitch` and `brightest_pitch` (MIDI note numbers); 14 renders as
+/// an outline; 15 never reaches here (ignored by the tracker).
+fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
+    match channel {
+        0 => lch(48.0, 45.0, 32.0),   // red
+        1 => lch(65.0, 60.0, 68.0),   // orange
+        2 => lch(80.0, 42.0, 83.0),   // yellow
+        3 => lch(65.0, 50.0, 120.0),  // green
+        4 => lch(60.0, 40.0, 280.0),  // blue
+        5 => lch(50.0, 55.0, 305.0),  // purple
+        6 => lch(70.0, 30.0, 340.0),  // pink
+        7 => lch(80.0, 0.0, 0.0),     // white
+        8 => lch(0.0, 0.0, 0.0),      // black
+        9..=13 => {
+            let t = f64::from(
+                (pitch.clamp(darkest_pitch, brightest_pitch) - darkest_pitch)
+                    / (brightest_pitch - darkest_pitch).max(0.01),
+            );
+            lch(
+                t * 80.0,
+                85.0 - t * 60.0,
+                (-100.0 + t * 190.0).rem_euclid(360.0),
+            )
+        }
+        // Channel 14: drawn as an outline; the color is a bright neutral.
+        _ => Vec4::new(0.85, 0.85, 0.88, 1.0),
     }
 }
 
@@ -215,6 +244,7 @@ pub fn derive_scene(
         let mut activation = 0.0f32;
         let mut octave_mask = 0u16;
         let mut color = IDLE_COLOR;
+        let mut outlined = false;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -223,7 +253,13 @@ pub fn derive_scene(
                 let a = voice.activation(now, view.highlight_time);
                 if a > activation {
                     activation = a;
-                    color = channel_color(voice.channel, voice.note);
+                    color = channel_color(
+                        voice.channel,
+                        voice.pitch,
+                        view.darkest_pitch,
+                        view.brightest_pitch,
+                    );
+                    outlined = voice.channel == 14;
                 }
                 octave_mask |= 1 << voice.octave.clamp(0, 15) as u16;
             }
@@ -235,6 +271,7 @@ pub fn derive_scene(
             color,
             activation,
             octave_mask,
+            outlined,
             hovered: hovered == Some(pos),
             cents: node_pc.to_cents(),
         });
@@ -279,6 +316,49 @@ impl Scene {
 mod tests {
     use super::*;
     use lattice_core::{NoteEvent, NoteEventKind};
+
+    #[test]
+    fn pitch_colored_channels_vary_with_pitch() {
+        let mut tracker = NoteTracker::new();
+        for note in [24, 108] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 9,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let low = channel_color(9, 24.0, 24.0, 108.0);
+        let high = channel_color(9, 108.0, 24.0, 108.0);
+        assert_ne!(low, high);
+        // Brightest pitch should be, well, brighter.
+        assert!(high.truncate().length() > low.truncate().length());
+    }
+
+    #[test]
+    fn channel_14_voices_render_outlined() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 14,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene = derive_scene(
+            &tracker,
+            &Tuning::default(),
+            &ViewConfig::default(),
+            Camera::default(),
+            None,
+            0.0,
+        );
+        let origin = scene
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
+            .unwrap();
+        assert!(origin.outlined);
+    }
 
     #[test]
     fn held_note_lights_matching_nodes() {

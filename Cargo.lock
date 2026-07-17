@@ -429,6 +429,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "color_space"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52fdfaf2bee6357023bf7f95b15a8ef0b82759d2bce705cc45efcae9ae10f0ff"
+
+[[package]]
 name = "com-scrape-types"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1185,7 +1191,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -1585,6 +1591,7 @@ dependencies = [
 name = "lattice-scene"
 version = "0.1.0"
 dependencies = [
+ "color_space",
  "glam",
  "lattice-core",
 ]
@@ -1825,7 +1832,7 @@ dependencies = [
  "once_cell",
  "termcolor",
  "time",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -1853,7 +1860,7 @@ dependencies = [
  "serde_json",
  "vst3",
  "widestring",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -2625,7 +2632,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "rustix 1.1.4",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
