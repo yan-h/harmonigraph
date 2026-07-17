@@ -179,13 +179,14 @@ fn dot_pitch_color(pitch: f32) -> vec3<f32> {
 }
 
 // Faint C-octave reference frame for the dots style: short radial ticks
-// sitting just OUTSIDE the dot orbit at the four cardinals, pointing at where
-// a C would land — up = middle C (C3 in the C3=middle-C naming), left/right =
-// -/+2 octaves (C1 / C5), down = +/-4 octaves. Kept beyond the dots (which
-// reach ~DOT_ORBIT + DOT_EDGE) so a lit dot never overlaps a tick; a note's
-// dots read against these fixed anchors like marks on a dial.
-const DOTS_REF_R: f32 = 0.93;        // tick mid-radius (dots orbit at DOT_ORBIT)
-const DOTS_REF_HALF_LEN: f32 = 0.04; // radial half-length
+// hugging the disc rim (just INSIDE the dot orbit) at the four cardinals,
+// pointing at where a C would land — up = middle C (C3 in the C3=middle-C
+// naming), left/right = -/+2 octaves (C1 / C5), down = +/-4 octaves. They sit
+// in the gap between the disc edge (~0.5) and the dots' inner reach
+// (~DOT_ORBIT - DOT_EDGE), so a lit dot never overlaps a tick; the caller
+// tints them with the node color so they read as part of the disc.
+const DOTS_REF_R: f32 = 0.55;        // tick mid-radius (disc edge ~0.5, dots at DOT_ORBIT)
+const DOTS_REF_HALF_LEN: f32 = 0.05; // radial half-length
 const DOTS_REF_HALF_W: f32 = 0.02;   // tangential half-width
 fn dots_reference(uv: vec2<f32>) -> f32 {
     var dirs = array<vec2<f32>, 4>(
@@ -415,7 +416,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 let rc = dots_reference(in.uv) * level_floor(max_level);
                 if rc > glyph {
                     glyph = rc;
-                    glyph_rgb = vec3<f32>(0.80, 0.82, 0.90);
+                    // Node-colored, only lightly lifted, so the ticks blend
+                    // into the disc rather than reading as separate marks.
+                    glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.4);
                 }
             } else if mode >= 3u {
                 let rc = tick_reference(mode, in.uv) * level_floor(max_level);
