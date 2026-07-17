@@ -112,8 +112,15 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     state.dock = dock;
 
-    // The lattice animates continuously (decays, shader time), so keep
-    // frames coming. TODO: only request repaints while something is
-    // actually animating.
-    ui.ctx().request_repaint();
+    // Render continuously only while something is animating (sounding or
+    // decaying voices); otherwise poll at 20 Hz so newly arriving MIDI
+    // still shows up promptly. egui repaints on input events by itself,
+    // so interaction never waits on this. The plugin shell additionally
+    // requests a repaint the moment it drains new note events.
+    if state.tracker.voices().next().is_some() {
+        ui.ctx().request_repaint();
+    } else {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
 }

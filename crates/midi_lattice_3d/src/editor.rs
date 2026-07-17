@@ -285,9 +285,15 @@ impl Editor for LatticeEditor {
                 // clock and event clock trivially consistent.
                 // TODO: estimate the audio→GUI clock offset instead, so
                 // event *spacing* within a frame is preserved.
+                let mut drained_any = false;
                 while let Ok(mut event) = shared.consumer.pop() {
                     event.time = now;
                     shared.ui.tracker.handle_event(event);
+                    drained_any = true;
+                }
+                if drained_any {
+                    // New MIDI must render this tick, not at the idle poll.
+                    egui_ctx.request_repaint();
                 }
 
                 let backend = PluginParamBackend {
