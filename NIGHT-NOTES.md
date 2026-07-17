@@ -1,3 +1,38 @@
+# Session notes
+
+## Afternoon session — 2026-07-17 (~3h autonomous block)
+
+Seven commits, oldest first; audit as before (`git log`, standalone,
+Bitwig for plugin items). Rendering experiments are all switchable with
+the previous look as default.
+
+- **0385a6f — Shader hot-reload (standalone)**: edit `lattice.wgsl`, save,
+  see it. Broken WGSL is rejected (naga-validated) and logged; the old
+  pipeline keeps rendering. *Audit*: run the standalone from a terminal,
+  touch the shader, watch stderr.
+- **6cf8a21 — Held-note render styles**: Appearance → Node style:
+  Steady / Breathe / Corona / Sparks / Wire. *Audit*: hold chords, cycle
+  styles; idle nodes identical everywhere.
+- **b62a3fe — Chord edges**: Appearance checkbox; held adjacent nodes get
+  beams (a just triad = a lit triangle). Parallel beams under 12-TET are
+  enharmonic duplicates, working as intended. *Audit*: hold C-E-G with
+  Just tuning + tolerance up.
+- **02e6d5b — Grid window center + camera pan**: View section center bars
+  (v1 Grid X/Y/Z); shift-drag or middle-drag pans, double-click resets.
+  *Audit*: pan center; Notes-pane `node` column and spectral ticks follow.
+- **d4496d8 — Clock reconciliation**: fast runs keep their timing instead
+  of quantizing to GUI frames. *Audit*: unit tests; play fast arpeggios.
+- **93e129b — Hardware MIDI in the standalone**: floating "MIDI input"
+  window, bottom-right; pick a CoreMIDI port. *Audit*: needs your
+  controller — the one item not verifiable without hardware.
+- **(this commit) — Upstream docs**: combined patch files + drafts for
+  four upstream fixes in `docs/upstream/`; nothing submitted.
+
+Deliberately deferred: second skin + live re-skinning, offscreen depth
+pass, spectral audio FFT (unchanged from the overnight list).
+
+---
+
 # Overnight session notes — 2026-07-17
 
 Eleven commits, one per feature, oldest first. Each entry: what changed and

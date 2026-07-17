@@ -88,5 +88,6 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 - **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
 - **Spectral audio FFT**: the pane is MIDI-derived today.
-- **Shader hot-reload** in the standalone harness (watch the .wgsl file).
+- **Render styles**: Node style / Chord edges are switchable experiments;
+  prune the losers after evaluation.
 - **Upstreaming**: prepared fixes in `docs/upstream/`.

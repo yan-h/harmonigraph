@@ -1,5 +1,5 @@
 --- a/src/window.rs	2006-07-23 18:21:28
-+++ b/src/window.rs	2026-07-16 22:02:51
++++ b/src/window.rs	2026-07-17 06:19:14
 @@ -237,9 +237,12 @@
          (build)(&egui_ctx, &mut queue, &mut state);
  
@@ -15,7 +15,7 @@
              });
          }
  
-@@ -411,9 +414,11 @@
+@@ -411,18 +414,28 @@
          }
  
          if self.physical_size != old_physical_size {
@@ -29,3 +29,25 @@
              });
          }
  
+         let now = Instant::now();
+-        let do_repaint_now = if let Some(t) = self.repaint_after {
+-            now >= t || viewport_output.repaint_delay.is_zero()
+-        } else {
+-            viewport_output.repaint_delay.is_zero()
+-        };
++        // Texture updates (font atlas rebuilds after set_fonts, new images)
++        // are only uploaded inside render(); skipping this frame would drop
++        // them permanently, leaving egui's glyph coordinates pointing into a
++        // stale atlas (scrambled text). Force a render whenever deltas are
++        // pending.
++        let has_texture_updates = !full_output.textures_delta.set.is_empty()
++            || !full_output.textures_delta.free.is_empty();
++        let do_repaint_now = has_texture_updates
++            || if let Some(t) = self.repaint_after {
++                now >= t || viewport_output.repaint_delay.is_zero()
++            } else {
++                viewport_output.repaint_delay.is_zero()
++            };
+ 
+         if do_repaint_now {
+             self.renderer.render(

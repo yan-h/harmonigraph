@@ -1,0 +1,172 @@
+--- a/src/wrappers/appkit/timer.rs	2006-07-23 18:21:28
++++ b/src/wrappers/appkit/timer.rs	2026-07-16 22:02:51
+@@ -1,7 +1,7 @@
+ use block2::RcBlock;
+ use objc2::rc::Weak;
+ use objc2_core_foundation::{
+-    kCFAllocatorDefault, kCFRunLoopDefaultMode, CFRetained, CFRunLoop, CFRunLoopTimer,
++    kCFAllocatorDefault, kCFRunLoopCommonModes, CFRetained, CFRunLoop, CFRunLoopTimer,
+     CFTimeInterval,
+ };
+ 
+@@ -20,7 +20,10 @@
+         let timer =
+             unsafe { CFRunLoopTimer::with_handler(allocator, 0.0, interval, 0, 0, Some(&block)) }?;
+ 
+-        let loop_mode = unsafe { kCFRunLoopDefaultMode };
++        // Common modes rather than the default mode: default-mode timers do not
++        // fire during event-tracking run loops (native window resizing etc.),
++        // which freezes the GUI until mouse release.
++        let loop_mode = unsafe { kCFRunLoopCommonModes };
+         run_loop.add_timer(Some(&timer), loop_mode);
+ 
+         Some(Self { run_loop: Weak::from_retained(&run_loop.into()), timer })
+@@ -33,7 +36,10 @@
+             return;
+         };
+ 
+-        let loop_mode = unsafe { kCFRunLoopDefaultMode };
++        // Common modes rather than the default mode: default-mode timers do not
++        // fire during event-tracking run loops (native window resizing etc.),
++        // which freezes the GUI until mouse release.
++        let loop_mode = unsafe { kCFRunLoopCommonModes };
+ 
+         run_loop.remove_timer(Some(&self.timer), loop_mode);
+     }
+--- a/src/platform/macos/window.rs	2006-07-23 18:21:28
++++ b/src/platform/macos/window.rs	2026-07-17 07:38:53
+@@ -155,8 +155,22 @@
+     }
+ 
+     pub fn set_mouse_cursor(&self, cursor: MouseCursor) {
+-        let native_cursor = Cursor::from(cursor);
+-        self.view.addCursorRect_cursor(self.view.bounds(), &native_cursor.load());
++        // Cursor rects added outside resetCursorRects are discarded the
++        // next time AppKit rebuilds them, after which whatever the host
++        // window's underlying views declare wins (the plugin cursor then
++        // appears to depend on what's BEHIND the plugin window). Remember
++        // the cursor and force a rebuild; the resetCursorRects override
++        // re-asserts it every time AppKit asks.
++        self.inner.state.mouse_cursor.set(cursor);
++        if let Some(window) = self.view.window() {
++            window.invalidateCursorRectsForView(&self.view);
++        }
++        // Cursor rects only apply while the window is key; if the pointer
++        // is over the view right now, apply the change directly so it also
++        // works before the first click on a freshly opened window.
++        if self.inner.state.mouse_inside.get() {
++            Cursor::from(cursor).load().set();
++        }
+     }
+ 
+     #[cfg(feature = "opengl")]
+@@ -169,6 +183,12 @@
+     /// The last known window info for this window.
+     pub window_info: Cell<WindowInfo>,
+     pub closed: Cell<bool>,
++    /// The cursor this view wants; re-asserted from resetCursorRects so it
++    /// survives AppKit cursor-rect rebuilds (see set_mouse_cursor).
++    pub mouse_cursor: Cell<MouseCursor>,
++    /// Whether the pointer is currently over the view (tracking-area
++    /// enter/exit); used to apply cursor changes immediately.
++    pub mouse_inside: Cell<bool>,
+ }
+ 
+ impl WindowSharedState {
+@@ -176,6 +196,8 @@
+         Self {
+             window_info: WindowInfo::from_logical_size(options.size, 1.0).into(),
+             closed: false.into(),
++            mouse_cursor: MouseCursor::default().into(),
++            mouse_inside: false.into(),
+         }
+     }
+ }
+--- a/src/platform/macos/view.rs	2006-07-23 18:21:28
++++ b/src/platform/macos/view.rs	2026-07-17 07:38:53
+@@ -1,5 +1,6 @@
+ #![allow(deprecated)] // Allow use of NSFilenamesPboardType for now
+ 
++use super::cursor::Cursor;
+ use super::keyboard::{make_modifiers, KeyboardState};
+ use super::window::WindowSharedState;
+ use crate::wrappers::appkit::*;
+@@ -356,6 +357,22 @@
+         this.view.addTrackingArea(&tracking_area);
+     }
+ 
++    fn cursor_update(this: ViewRef<Self>, _event: &NSEvent) {
++        // Sent via the tracking area (CursorUpdate | ActiveInActiveApp),
++        // which works even while the window is NOT key — cursor RECTS only
++        // activate once the window becomes key (i.e. after a click), so
++        // this path covers the freshly-opened, not-yet-clicked window.
++        Cursor::from(this.state.mouse_cursor.get()).load().set();
++    }
++
++    fn reset_cursor_rects(this: ViewRef<Self>) {
++        // Re-assert the desired cursor over the whole view whenever AppKit
++        // rebuilds cursor rects; without this, the host window's own rects
++        // take over after any invalidation.
++        let cursor = Cursor::from(this.state.mouse_cursor.get());
++        this.view.addCursorRect_cursor(this.view.bounds(), &cursor.load());
++    }
++
+     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent) {
+         let point = this.view.convertPoint_fromView(event.locationInWindow(), None);
+ 
+@@ -542,10 +559,12 @@
+     }
+ 
+     fn mouse_entered(this: ViewRef<Self>) {
++        this.state.mouse_inside.set(true);
+         Self::trigger_event(this, Event::Mouse(MouseEvent::CursorEntered));
+     }
+ 
+     fn mouse_exited(this: ViewRef<Self>) {
++        this.state.mouse_inside.set(false);
+         Self::trigger_event(this, Event::Mouse(MouseEvent::CursorLeft));
+     }
+ 
+--- a/src/wrappers/appkit/view.rs	2006-07-23 18:21:28
++++ b/src/wrappers/appkit/view.rs	2026-07-17 07:38:53
+@@ -118,6 +118,8 @@
+     fn hit_test(this: ViewRef<'_, Self>, point: NSPoint) -> Option<&NSView>;
+     fn view_will_move_to_window(this: ViewRef<Self>, new_window: Option<&NSWindow>);
+     fn update_tracking_areas(this: ViewRef<Self>);
++    fn reset_cursor_rects(this: ViewRef<Self>);
++    fn cursor_update(this: ViewRef<Self>, event: &NSEvent);
+     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent);
+     fn scroll_wheel(this: ViewRef<Self>, event: &NSEvent);
+     fn dragging_entered(
+--- a/src/wrappers/appkit/view/implementation.rs	2006-07-23 18:21:28
++++ b/src/wrappers/appkit/view/implementation.rs	2026-07-17 07:38:53
+@@ -59,6 +59,14 @@
+         class.add_method(
+             sel!(updateTrackingAreas:),
+             update_tracking_areas::<V> as extern "C-unwind" fn(_, _, _) -> _,
++        );
++        class.add_method(
++            sel!(resetCursorRects),
++            reset_cursor_rects::<V> as extern "C-unwind" fn(_, _),
++        );
++        class.add_method(
++            sel!(cursorUpdate:),
++            cursor_update::<V> as extern "C-unwind" fn(_, _, _),
+         );
+ 
+         class.add_method(sel!(mouseMoved:), mouse_moved::<V> as extern "C-unwind" fn(_, _, _) -> _);
+@@ -197,6 +205,14 @@
+     V::update_tracking_areas(this.inner_ref());
+ }
+ 
++extern "C-unwind" fn reset_cursor_rects<V: ViewImpl>(this: &View<V>, _sel: Sel) {
++    V::reset_cursor_rects(this.inner_ref());
++}
++
++extern "C-unwind" fn cursor_update<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
++    V::cursor_update(this.inner_ref(), event);
++}
++
+ extern "C-unwind" fn mouse_moved<V: ViewImpl>(this: &View<V>, _sel: Sel, event: &NSEvent) {
+     V::mouse_moved(this.inner_ref(), event);
+ }
