@@ -266,7 +266,7 @@ impl CallbackTrait for LatticeCallback {
         // changed (it can't today, but this keeps the invariant explicit).
         let recreate = callback_resources
             .get::<LatticeResources>()
-            .map_or(true, |r| r.target_format != self.target_format);
+            .is_none_or(|r| r.target_format != self.target_format);
         if recreate {
             callback_resources.insert(LatticeResources::new(device, self.target_format));
         }

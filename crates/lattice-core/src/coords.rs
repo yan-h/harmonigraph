@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn positions_within_counts() {
         let count = positions_within(-2..=2, -1..=1, 0..=0).count();
-        assert_eq!(count, 5 * 3 * 1);
+        assert_eq!(count, (5 * 3));
     }
 }
 

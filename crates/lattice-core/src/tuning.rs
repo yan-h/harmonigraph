@@ -6,9 +6,9 @@
 //! when pitch classes are used as map keys.
 
 /// Just tunings for primes 3, 5, and 7, in cents.
-pub const THREE_JUST: f32 = 701.955001;
-pub const FIVE_JUST: f32 = 386.313714;
-pub const SEVEN_JUST: f32 = 968.825906;
+pub const THREE_JUST: f32 = 701.955;
+pub const FIVE_JUST: f32 = 386.313_72;
+pub const SEVEN_JUST: f32 = 968.825_9;
 
 /// 12-TET approximations for primes 3, 5, and 7, in cents.
 pub const THREE_12TET: f32 = 700.0;

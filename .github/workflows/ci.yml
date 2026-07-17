@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # macOS: the primary (currently only verified) target, and the vendored
+    # baseview/egui-baseview patches are macOS-specific.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rustup picks the toolchain from rust-toolchain.toml automatically.
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace

@@ -321,7 +321,7 @@ impl Scene {
                 continue;
             };
             let d = px.distance(pointer_px);
-            if d <= max_px && best.map_or(true, |(bd, _)| d < bd) {
+            if d <= max_px && best.is_none_or(|(bd, _)| d < bd) {
                 best = Some((d, node.lattice_pos));
             }
         }

@@ -64,7 +64,7 @@ impl<'a> ValueBar<'a> {
     }
 
     /// Fill fraction -> value, with integer snapping.
-    fn from_t(&self, t: f32) -> f32 {
+    fn value_at(&self, t: f32) -> f32 {
         let (min, max) = (self.min(), self.max());
         let t = t.clamp(0.0, 1.0);
         let v = if !self.eased {
@@ -123,7 +123,7 @@ impl<'a> ValueBar<'a> {
         if response.dragged() {
             if let Some(pointer) = response.interact_pointer_pos() {
                 let t = (pointer.x - rect.left()) / rect.width().max(1.0);
-                let new_value = self.from_t(t);
+                let new_value = self.value_at(t);
                 if new_value != *self.value {
                     *self.value = new_value;
                     response.mark_changed();
