@@ -154,10 +154,9 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 }
 
-fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
-    ui.heading("Tuning");
-
-    for key in ParamKey::ALL {
+/// One ValueBar per parameter, with automation-gesture bracketing.
+fn param_bars(ui: &mut egui::Ui, params: &dyn ParamBackend, keys: &[ParamKey]) {
+    for &key in keys {
         let mut value = params.get(key);
         let bar = ValueBar::new(&mut value, key.range(), key.label())
             .eased(key.logarithmic())
@@ -175,6 +174,11 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             params.end_set(key);
         }
     }
+}
+
+fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+    ui.heading("Tuning");
+    param_bars(ui, params, &ParamKey::TUNING);
 
     ui.horizontal(|ui| {
         if ui.button("Just").clicked() {

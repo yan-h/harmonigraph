@@ -49,6 +49,23 @@ impl ParamKey {
         ParamKey::BrightestPitch,
     ];
 
+    /// The structural tuning parameters (Tuning section of the UI).
+    pub const TUNING: [ParamKey; 5] = [
+        ParamKey::COffset,
+        ParamKey::Three,
+        ParamKey::Five,
+        ParamKey::Seven,
+        ParamKey::Tolerance,
+    ];
+
+    /// The cosmetic parameters (Appearance section of the UI).
+    pub const APPEARANCE: [ParamKey; 4] = [
+        ParamKey::PitchClassFade,
+        ParamKey::OctaveFade,
+        ParamKey::DarkestPitch,
+        ParamKey::BrightestPitch,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             ParamKey::COffset => "C offset (¢)",
