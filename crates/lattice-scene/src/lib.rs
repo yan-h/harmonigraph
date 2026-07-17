@@ -193,7 +193,7 @@ fn lch(l: f64, c: f64, h: f64) -> Vec4 {
 /// LCH colors; 9-13 are colored by pitch height on an LCH gradient between
 /// `darkest_pitch` and `brightest_pitch` (MIDI note numbers); 14 renders as
 /// an outline; 15 never reaches here (ignored by the tracker).
-fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
+pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
     match channel {
         0 => lch(48.0, 45.0, 32.0),   // red
         1 => lch(65.0, 60.0, 68.0),   // orange

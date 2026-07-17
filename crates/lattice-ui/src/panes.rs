@@ -5,7 +5,10 @@
 use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{derive_scene, OctaveStyle};
+use lattice_core::coords;
+use lattice_scene::{channel_color, derive_scene, OctaveStyle};
+
+use crate::theme;
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::ValueBar;
@@ -42,7 +45,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
-            Tab::Spectral => spectral_pane(ui),
+            Tab::Spectral => spectral_pane(ui, self.state, self.now),
         }
     }
 }
@@ -253,8 +256,119 @@ fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         });
 }
 
-fn spectral_pane(ui: &mut egui::Ui) {
-    ui.weak("Spectral view: not yet implemented.");
-    // TODO: needs audio (or per-voice frequency) data plumbed from the
-    // shell; the pane pattern is the same as the lattice pane.
+/// Pitch-class meter: sounding voices as bars on a 0-1200 cents axis.
+/// MIDI-derived (velocity/activation weighted), not an audio FFT — that
+/// upgrade needs audio analysis plumbed from the audio thread.
+///
+/// Hover sync goes both ways: the lattice-hovered pitch class shows as a
+/// band here, and hovering a position here highlights the matching lattice
+/// node (if one is in view).
+fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    if rect.width() < 10.0 || rect.height() < 10.0 {
+        return;
+    }
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme::WELL);
+
+    let x_of = |cents: f32| rect.left() + rect.width() * (cents / 1200.0);
+
+    // 12-TET reference grid.
+    for i in 0..12 {
+        let x = x_of(i as f32 * 100.0);
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            egui::Stroke::new(1.0, theme::PANEL),
+        );
+        painter.text(
+            egui::pos2(x + 3.0, rect.bottom() - 2.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{}", i * 100),
+            egui::TextStyle::Small.resolve(ui.style()),
+            theme::TEXT_DIM,
+        );
+    }
+
+    // Where the visible lattice nodes sit: small ticks along the bottom.
+    for pos in coords::positions_within(
+        -state.view.extent_threes..=state.view.extent_threes,
+        -state.view.extent_fives..=state.view.extent_fives,
+        -state.view.extent_sevens..=state.view.extent_sevens,
+    ) {
+        let x = x_of(state.tuning.pitch_class(pos).to_cents());
+        painter.line_segment(
+            [
+                egui::pos2(x, rect.bottom() - 10.0),
+                egui::pos2(x, rect.bottom() - 4.0),
+            ],
+            egui::Stroke::new(1.0, theme::TEXT_DIM),
+        );
+    }
+
+    // Cross-pane highlight: the pitch class hovered in ANY pane shows as a
+    // tolerance-wide band.
+    if let Some(pos) = state.hovered {
+        let pc = state.tuning.pitch_class(pos);
+        let half_width =
+            (rect.width() * (state.tuning.tolerance / 1200.0)).max(1.5);
+        let x = x_of(pc.to_cents());
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(x - half_width, rect.top()),
+                egui::pos2(x + half_width, rect.bottom()),
+            ),
+            0.0,
+            theme::ACCENT_FILL,
+        );
+    }
+
+    // Voice bars: height follows the same envelope as the lattice glow,
+    // weighted by velocity; color matches the lattice node color.
+    for voice in state.tracker.voices() {
+        let activation = voice.activation(now, state.view.highlight_time);
+        if activation <= 0.0 {
+            continue;
+        }
+        let x = x_of(voice.pitch_class.to_cents());
+        let height =
+            rect.height() * 0.85 * activation * (0.35 + 0.65 * voice.velocity);
+        let c = channel_color(
+            voice.channel,
+            voice.pitch,
+            state.view.darkest_pitch,
+            state.view.brightest_pitch,
+        );
+        let color = egui::Color32::from_rgb(
+            (c.x * 255.0) as u8,
+            (c.y * 255.0) as u8,
+            (c.z * 255.0) as u8,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(x, rect.bottom()),
+                egui::pos2(x, rect.bottom() - height),
+            ],
+            egui::Stroke::new(3.0, color),
+        );
+    }
+
+    // Hovering here highlights the matching lattice node (if in view) and
+    // shows the cents under the cursor.
+    if let Some(pointer) = response.hover_pos() {
+        let cents = ((pointer.x - rect.left()) / rect.width() * 1200.0).clamp(0.0, 1200.0);
+        let pc = lattice_core::PitchClass::from_cents(cents);
+        state.hovered = coords::positions_within(
+            -state.view.extent_threes..=state.view.extent_threes,
+            -state.view.extent_fives..=state.view.extent_fives,
+            -state.view.extent_sevens..=state.view.extent_sevens,
+        )
+        .find(|&pos| state.tuning.matches(pc, state.tuning.pitch_class(pos)));
+        painter.text(
+            egui::pos2(pointer.x + 6.0, rect.top() + 2.0),
+            egui::Align2::LEFT_TOP,
+            format!("{cents:.0} cents"),
+            egui::TextStyle::Small.resolve(ui.style()),
+            theme::TEXT,
+        );
+    }
 }
