@@ -67,9 +67,15 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     let activation = inst.params.x;
     let hovered = inst.params.y;
 
+    // Size holds at full through the release fade so a note dims WITHOUT
+    // shrinking; it only eases back to idle size in the last moments, once
+    // it's nearly gone (min caps the boosted activation at 1). Brightness and
+    // glow still follow the raw `activation`, so the note fades normally.
+    let size_activation = min(activation * 5.0, 1.0);
+
     // Lit nodes grow a little; hover grows a little more. The quad is twice
     // the disc radius to leave room for the glow.
-    var radius = u.misc.y * (0.55 + 0.35 * activation + 0.15 * hovered) * 2.0;
+    var radius = u.misc.y * (0.55 + 0.35 * size_activation + 0.15 * hovered) * 2.0;
 
     // Breathe style: held nodes pulse in size on their own age
     // (oscillation starts neutral at note-on).
