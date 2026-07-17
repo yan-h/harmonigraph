@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use baseview::{PhySize, Size, WindowHandle, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
-use egui::{Context, ViewportCommand};
+use egui::Context;
 use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig};
 use lattice_core::notes::NoteEvent as CoreNoteEvent;
 use lattice_ui::SharedState;
@@ -222,13 +222,14 @@ impl Editor for LatticeEditor {
                     // surface on Retina: 2x-zoomed, bottom-left-anchored
                     // content).
                     let scale = egui_ctx.pixels_per_point();
+                    // queue.resize takes physical pixels and (in our patched
+                    // egui-baseview) also resizes the child view to the
+                    // matching logical size, so no separate InnerSize
+                    // command is needed.
                     queue.resize(PhySize::new(
                         (w as f32 * scale).round() as u32,
                         (h as f32 * scale).round() as u32,
                     ));
-                    egui_ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::Vec2::new(
-                        w as f32, h as f32,
-                    )));
                     state.shared.lock().ui.console.log(format!(
                         "host resize {}x{} (scale {:.2})",
                         w, h, scale
@@ -254,21 +255,16 @@ impl Editor for LatticeEditor {
                         roundtrip_ms,
                     ));
                     if accepted {
-                        // `queue.resize` takes PHYSICAL pixels, and on macOS
-                        // baseview never emits a Resized event for
-                        // programmatic resizes, so this is the only thing
-                        // keeping the render surface in sync.
+                        // queue.resize takes physical pixels; the patched
+                        // egui-baseview resizes the render surface AND the
+                        // child view (macOS baseview emits no Resized event
+                        // for programmatic resizes, so this is the only
+                        // thing keeping them in sync).
                         let scale = egui_ctx.pixels_per_point();
                         queue.resize(PhySize::new(
                             (new_size.0 as f32 * scale).round() as u32,
                             (new_size.1 as f32 * scale).round() as u32,
                         ));
-                        // This resizes the baseview child view (logical
-                        // units) to match the host-resized parent.
-                        egui_ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::Vec2::new(
-                            new_size.0 as f32,
-                            new_size.1 as f32,
-                        )));
                         egui_state.size.store(new_size);
                     }
                     egui_state.requested_size.store(None);

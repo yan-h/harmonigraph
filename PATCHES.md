@@ -1,6 +1,7 @@
 # Carried patches against upstream dependencies
 
-One dependency carries a local patch. Keep this file current when bumping it.
+Two dependencies carry local patches, both wired in via `[patch.crates-io]`
+in the workspace `Cargo.toml`. Keep this file current when bumping either.
 
 ## baseview — vendored at `vendor/baseview/`
 
@@ -17,6 +18,21 @@ One dependency carries a local patch. Keep this file current when bumping it.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
   baseview-based plugin. baseview and nice-plug are both RustAudio projects,
   so the fix would land in exactly the stack this plugin uses.
+
+## egui-baseview — vendored at `vendor/egui-baseview/`
+
+- **Upstream base**: `egui-baseview 0.3.0` from crates.io (the RustAudio
+  fork used by nice-plug).
+- **Patch** (2 call sites, `src/window.rs`): after a `Queue::resize()`, the
+  window resize triggered by the physical-size change passed physical
+  pixels to `Window::resize()`, which takes logical points — on scaled
+  displays the window/view ended up `pixels_per_point` times too large
+  (2x-zoomed, bottom-left-anchored content on Retina). Convert with
+  `points_per_pixel` at both call sites (build path and `on_frame`).
+- **Upgrade**: download the new crates.io tarball into
+  `vendor/egui-baseview`, re-apply the two conversions.
+- **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
+  helper on any HiDPI display. PR to the RustAudio repo.
 
 ## Historical: nih-plug fork (retired)
 

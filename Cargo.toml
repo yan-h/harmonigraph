@@ -9,8 +9,8 @@ members = [
     "crates/midi_lattice_3d",
     "xtask",
 ]
-# The vendored crate is its own workspace, only referenced via [patch].
-exclude = ["vendor/baseview"]
+# The vendored crates are their own workspaces, only referenced via [patch].
+exclude = ["vendor/baseview", "vendor/egui-baseview"]
 
 [workspace.package]
 version = "0.1.0"
@@ -61,12 +61,14 @@ parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 raw-window-handle = "0.5"
 
-# Vendored baseview 0.1.4 with one fix: the macOS frame timer runs in
-# kCFRunLoopCommonModes instead of the default mode, so the GUI keeps
-# updating during mouse-tracking loops (native window resize etc.) instead
-# of freezing until mouse release. See PATCHES.md. TODO: upstream this.
+# Vendored crates with small fixes (see PATCHES.md; both worth upstreaming):
+# - baseview 0.1.4: macOS frame timer in kCFRunLoopCommonModes so the GUI
+#   keeps updating during mouse-tracking loops instead of freezing.
+# - egui-baseview 0.3.0: Queue::resize physical->logical unit fix so windows
+#   aren't resized pixels_per_point times too large on scaled displays.
 [patch.crates-io]
 baseview = { path = "vendor/baseview" }
+egui-baseview = { path = "vendor/egui-baseview" }
 
 [profile.release]
 lto = "thin"
