@@ -24,7 +24,11 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   cursor rects only activate once the window becomes KEY (first click), a
   `cursorUpdate:` override (delivered via the tracking area's
   CursorUpdate | ActiveInActiveApp options) plus direct application on
-  change-while-hovered cover the freshly opened, not-yet-clicked window.
+  change-while-hovered were added for the freshly opened window as well.
+  KNOWN LIMITATION: in Bitwig the cursor still doesn't take until the
+  plugin window is first clicked (the host's not-yet-key window appears
+  not to deliver tracking/cursorUpdate events); accepted as cosmetic —
+  everything is correct from the first click on.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
   re-apply the `kCFRunLoop*` lines and the cursor-rect ownership patch.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
