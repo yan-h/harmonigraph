@@ -95,13 +95,6 @@ fn install_fonts(ctx: &egui::Context) {
             "IosevkaFixed",
             &include_bytes!("../fonts/iosevka/IosevkaFixed-Regular.ttf")[..],
         ),
-        // Three glyphs only (music accidentals): heads BOTH family lists so
-        // its flat/natural/sharp always win. Iosevka's sharp reads like a
-        // natural (crossbars barely project); DejaVu's is unambiguous.
-        (
-            "Accidentals",
-            &include_bytes!("../fonts/dejavu-accidentals/DejaVuSans-Accidentals.ttf")[..],
-        ),
     ] {
         fonts
             .font_data
@@ -112,9 +105,9 @@ fn install_fonts(ctx: &egui::Context) {
         .families
         .get_mut(&FontFamily::Proportional)
         .expect("proportional family exists");
-    proportional.insert(0, "Accidentals".to_owned());
-    proportional.insert(1, "AtkinsonHyperlegible".to_owned());
-    // Per-glyph fallback for other symbols Atkinson lacks.
+    proportional.insert(0, "AtkinsonHyperlegible".to_owned());
+    // Per-glyph fallback for symbols Atkinson lacks — notably the music
+    // accidentals (Iosevka's subset keeps U+266D-266F).
     proportional.push("IosevkaFixed".to_owned());
     // Headings: the Bold face first, then the regular proportional stack
     // as fallback for any glyph Bold lacks.
@@ -124,12 +117,11 @@ fn install_fonts(ctx: &egui::Context) {
         .families
         .insert(FontFamily::Name(HEADING_FAMILY.into()), heading);
 
-    let monospace = fonts
+    fonts
         .families
         .get_mut(&FontFamily::Monospace)
-        .expect("monospace family exists");
-    monospace.insert(0, "Accidentals".to_owned());
-    monospace.insert(1, "IosevkaFixed".to_owned());
+        .expect("monospace family exists")
+        .insert(0, "IosevkaFixed".to_owned());
     ctx.set_fonts(fonts);
 }
 
