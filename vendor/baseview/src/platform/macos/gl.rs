@@ -1,0 +1,123 @@
+#![allow(deprecated)] // OpenGL is deprecated on macOS
+
+use crate::gl::{GlConfig, GlError, Profile};
+use objc2::rc::Retained;
+use objc2::AllocAnyThread;
+use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSOpenGLContext, NSOpenGLContextParameter, NSOpenGLPFAAccelerated, NSOpenGLPFAAlphaSize,
+    NSOpenGLPFAColorSize, NSOpenGLPFADepthSize, NSOpenGLPFADoubleBuffer, NSOpenGLPFAMultisample,
+    NSOpenGLPFAOpenGLProfile, NSOpenGLPFASampleBuffers, NSOpenGLPFASamples, NSOpenGLPFAStencilSize,
+    NSOpenGLPixelFormat, NSOpenGLProfileVersion3_2Core, NSOpenGLProfileVersion4_1Core,
+    NSOpenGLProfileVersionLegacy, NSOpenGLView, NSView,
+};
+use objc2_core_foundation::{CFBundle, CFString};
+use objc2_foundation::NSSize;
+use std::ffi::c_void;
+use std::ptr::NonNull;
+
+pub type CreationFailedError = ();
+pub struct GlContext {
+    pub(crate) view: Retained<NSOpenGLView>,
+    context: Retained<NSOpenGLContext>,
+}
+
+impl GlContext {
+    pub(crate) fn create(parent_view: &NSView, config: GlConfig) -> Result<GlContext, GlError> {
+        let version = if config.version < (3, 2) && config.profile == Profile::Compatibility {
+            NSOpenGLProfileVersionLegacy
+        } else if config.version == (3, 2) && config.profile == Profile::Core {
+            NSOpenGLProfileVersion3_2Core
+        } else if config.version > (3, 2) && config.profile == Profile::Core {
+            NSOpenGLProfileVersion4_1Core
+        } else {
+            return Err(GlError::VersionNotSupported);
+        };
+
+        #[rustfmt::skip]
+        let mut attrs = vec![
+            NSOpenGLPFAOpenGLProfile, version,
+            NSOpenGLPFAColorSize, (config.red_bits + config.blue_bits + config.green_bits) as u32,
+            NSOpenGLPFAAlphaSize, config.alpha_bits as u32,
+            NSOpenGLPFADepthSize, config.depth_bits as u32,
+            NSOpenGLPFAStencilSize, config.stencil_bits as u32,
+            NSOpenGLPFAAccelerated,
+        ];
+
+        if let Some(samples) = config.samples {
+            #[rustfmt::skip]
+            attrs.extend_from_slice(&[
+                NSOpenGLPFAMultisample,
+                NSOpenGLPFASampleBuffers, 1,
+                NSOpenGLPFASamples, samples as u32,
+            ]);
+        }
+
+        if config.double_buffer {
+            attrs.push(NSOpenGLPFADoubleBuffer);
+        }
+
+        attrs.push(0);
+
+        // SAFETY: Attribs pointer is valid (coming from the above vec) and null-terminated
+        let pixel_format = unsafe {
+            NSOpenGLPixelFormat::initWithAttributes(
+                NSOpenGLPixelFormat::alloc(),
+                // PANIC: This cannot panic, as the pointer comes from the vec
+                NonNull::new(attrs.as_mut_ptr()).unwrap(),
+            )
+        }
+        .ok_or(GlError::CreationFailed(()))?;
+
+        let view = NSOpenGLView::initWithFrame_pixelFormat(
+            // PANIC: This cannot panic, as the pointer comes from the vec
+            NSOpenGLView::alloc(MainThreadMarker::new().unwrap()),
+            parent_view.frame(),
+            Some(&pixel_format),
+        )
+        .ok_or(GlError::CreationFailed(()))?;
+
+        view.setWantsBestResolutionOpenGLSurface(true);
+
+        view.display();
+        parent_view.addSubview(&view);
+
+        let context = view.openGLContext().ok_or(GlError::CreationFailed(()))?;
+
+        let value = config.vsync as i32;
+
+        // SAFETY: pointer is a valid &i32, and is valid for SwapInterval
+        unsafe {
+            context.setValues_forParameter((&value).into(), NSOpenGLContextParameter::SwapInterval);
+        }
+
+        Ok(GlContext { view, context })
+    }
+
+    pub unsafe fn make_current(&self) {
+        self.context.makeCurrentContext();
+    }
+
+    pub unsafe fn make_not_current(&self) {
+        NSOpenGLContext::clearCurrentContext();
+    }
+
+    pub fn get_proc_address(&self, symbol: &str) -> *const c_void {
+        let symbol_name = CFString::from_str(symbol);
+        let framework_name = CFString::from_static_str("com.apple.opengl");
+        let framework = CFBundle::bundle_with_identifier(Some(&framework_name)).unwrap();
+
+        CFBundle::function_pointer_for_name(&framework, Some(&symbol_name))
+    }
+
+    pub fn swap_buffers(&self) {
+        self.context.flushBuffer();
+        self.view.setNeedsDisplay(true);
+    }
+
+    /// On macOS the `NSOpenGLView` needs to be resized separtely from our main view.
+    pub(crate) fn resize(&self, size: NSSize) {
+        self.view.setFrameSize(size);
+        self.view.setNeedsDisplay(true);
+    }
+}

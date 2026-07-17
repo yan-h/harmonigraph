@@ -1,4 +1,4 @@
-//! The nih-plug shell: parameters, MIDI ingestion, and plugin-format
+//! The nice-plug shell: parameters, MIDI ingestion, and plugin-format
 //! exports. All interesting logic lives in the `lattice-*` crates; this
 //! crate only adapts them to the plugin world.
 
@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use lattice_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
 use lattice_ui::params::{ParamBackend, ParamKey};
-use nih_plug::prelude::*;
+use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
 mod editor;
@@ -112,7 +112,7 @@ impl MidiLattice3dParams {
     }
 }
 
-/// Adapts nih-plug's parameter system to the UI's `ParamBackend`, so panes
+/// Adapts nice-plug's parameter system to the UI's `ParamBackend`, so panes
 /// don't know they're running inside a plugin.
 pub(crate) struct PluginParamBackend<'a> {
     pub params: &'a MidiLattice3dParams,
@@ -245,5 +245,5 @@ impl Vst3Plugin for MidiLattice3d {
         &[Vst3SubCategory::Fx, Vst3SubCategory::Analyzer];
 }
 
-nih_export_clap!(MidiLattice3d);
-nih_export_vst3!(MidiLattice3d);
+nice_export_clap!(MidiLattice3d);
+nice_export_vst3!(MidiLattice3d);

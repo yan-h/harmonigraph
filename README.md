@@ -5,9 +5,9 @@ three-axis harmonic lattice (perfect fifths / major thirds / harmonic
 sevenths, each with adjustable tuning), lit up by incoming MIDI notes with
 per-octave indicators. Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
-Stack: Rust, [nih-plug](https://github.com/robbert-vdh/nih-plug), egui 0.33,
-wgpu 27 (egui-baseview's wgpu backend in the plugin, eframe's in the
-standalone harness).
+Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
+community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
+wgpu backend in the plugin, eframe's in the standalone harness).
 
 ## Everyday commands
 
@@ -41,8 +41,9 @@ lattice-ui      egui_dock pane shell: Lattice / Tuning / Console / Spectral
                 tabs, SharedState (incl. cross-pane hover), ParamBackend
                 trait abstracting "where params live".
 lattice-standalone  eframe dev harness with a mock chord progression.
-midi_lattice_3d     nih-plug shell: params, MIDI → rtrb ring buffer,
-                    custom wgpu egui editor (editor.rs), CLAP/VST3 exports.
+midi_lattice_3d     nice-plug shell: params, MIDI → rtrb ring buffer,
+                    custom wgpu egui editor (editor.rs) with host-native
+                    window resizing, CLAP/VST3 exports.
 ```
 
 Data flow in the plugin: audio thread converts host MIDI to `NoteEvent`s
@@ -60,13 +61,10 @@ values in the harness), so every pane runs unmodified in both shells.
 
 ## Version coupling
 
-`egui-baseview 0.7` pins egui 0.33 / egui-wgpu 0.33 / wgpu 27 and a
-specific baseview git revision; `eframe` and `egui_dock` must match the
-egui version, and our `baseview` dependency must stay on the same revision
-as egui-baseview's. All of this is centralized in the workspace
-`Cargo.toml` — bump the whole cluster together.
-
-nih-plug is pinned to a git revision (also in workspace `Cargo.toml`).
+`egui-baseview 0.3` pins egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview
+0.1; `eframe` and `egui_dock` must match the egui version. All of this is
+centralized in the workspace `Cargo.toml` — bump the whole cluster
+together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 
 ## Known gaps / next steps
 

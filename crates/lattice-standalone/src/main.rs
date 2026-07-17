@@ -56,7 +56,7 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = self.start.elapsed().as_secs_f64();
 
         let mut events = Vec::new();
@@ -75,7 +75,7 @@ impl eframe::App for App {
             self.state.tracker.handle_event(event);
         }
 
-        lattice_ui::root_ui(ctx, &mut self.state, &self.params, now);
+        lattice_ui::root_ui(ui, &mut self.state, &self.params, now);
     }
 }
 

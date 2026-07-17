@@ -90,9 +90,11 @@ impl SharedState {
     }
 }
 
-/// Draw one frame of the whole UI. `now` is seconds on the shell's clock
-/// (the same clock used to timestamp `NoteEvent`s).
-pub fn root_ui(ctx: &egui::Context, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+/// Draw one frame of the whole UI into `ui`, which is expected to cover the
+/// window (egui-baseview hands the plugin editor exactly that; the
+/// standalone harness wraps a frameless CentralPanel). `now` is seconds on
+/// the shell's clock (the same clock used to timestamp `NoteEvent`s).
+pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     state.tuning = params::tuning_from_params(params);
     state.view.highlight_time = params.get(params::ParamKey::HighlightTime);
     state.tracker.prune(now, state.view.highlight_time);
@@ -100,12 +102,12 @@ pub fn root_ui(ctx: &egui::Context, state: &mut SharedState, params: &dyn ParamB
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
     DockArea::new(&mut dock)
-        .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
-        .show(ctx, &mut panes::Viewer { state, params, now });
+        .style(egui_dock::Style::from_egui(ui.style()))
+        .show_inside(ui, &mut panes::Viewer { state, params, now });
     state.dock = dock;
 
     // The lattice animates continuously (decays, shader time), so keep
     // frames coming. TODO: only request repaints while something is
     // actually animating.
-    ctx.request_repaint();
+    ui.ctx().request_repaint();
 }

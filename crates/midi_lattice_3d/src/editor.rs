@@ -1,19 +1,20 @@
-//! A nih-plug `Editor` implementation running egui on egui-baseview's
-//! **wgpu** backend (nih_plug_egui is OpenGL-only, which is deprecated on
-//! macOS and can't host our wgpu paint callbacks). Adapted from
-//! nih_plug_egui's editor glue (ISC licensed).
+//! A nice-plug `Editor` implementation running egui on egui-baseview's
+//! **wgpu** backend (nice-plug-egui defaults to OpenGL, which is deprecated
+//! on macOS and can't host our wgpu paint callbacks; it also doesn't opt in
+//! to host->plugin resizing). Adapted from nice-plug-egui's editor glue
+//! (ISC licensed).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use baseview::{PhySize, Size, WindowHandle, WindowOpenOptions, WindowScalePolicy};
+use baseview::{PhySize, Size, WindowHandle, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
 use egui::{Context, ViewportCommand};
-use egui_baseview::{EguiWindow, GraphicsConfig};
+use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig};
 use lattice_core::notes::NoteEvent as CoreNoteEvent;
 use lattice_ui::SharedState;
-use nih_plug::prelude::{Editor, GuiContext, ParamSetter, ParentWindowHandle};
+use nice_plug::prelude::{Editor, GuiContext, ParamSetter, ParentWindowHandle, ResizeHint};
 use parking_lot::Mutex;
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
@@ -74,7 +75,7 @@ pub fn create(
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EguiState {
     /// Size in logical pixels (before DPI scaling).
-    #[serde(with = "nih_plug::params::persist::serialize_atomic_cell")]
+    #[serde(with = "nice_plug::params::persist::serialize_atomic_cell")]
     size: AtomicCell<(u32, u32)>,
     #[serde(skip)]
     requested_size: AtomicCell<Option<(u32, u32)>>,
@@ -107,7 +108,7 @@ impl EguiState {
     }
 }
 
-impl<'a> nih_plug::params::persist::PersistentField<'a, EguiState> for Arc<EguiState> {
+impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<EguiState> {
     fn set(&self, new_value: EguiState) {
         self.size.store(new_value.size.load());
     }
@@ -171,20 +172,25 @@ impl Editor for LatticeEditor {
 
         let window = EguiWindow::open_parented(
             &ParentWindowHandleAdapter(parent),
-            WindowOpenOptions {
-                title: String::from("MIDI Lattice 3D"),
-                size: Size::new(f64::from(unscaled_width), f64::from(unscaled_height)),
-                scale: scaling_factor
-                    .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
-                    .unwrap_or(WindowScalePolicy::SystemScaleFactor),
-            },
-            GraphicsConfig::default(),
+            EguiWindowSettings::new()
+                .with_logical_size(Size::new(
+                    f64::from(unscaled_width),
+                    f64::from(unscaled_height),
+                ))
+                .with_scale_policy(
+                    scaling_factor
+                        .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
+                        .unwrap_or(WindowScalePolicy::SystemScaleFactor),
+                )
+                .with_graphics_config(GraphicsConfig::default()),
             WindowState {
                 shared: self.shared.clone(),
                 params: self.params.clone(),
             },
             |_egui_ctx: &Context, _queue, _state: &mut WindowState| {},
-            move |egui_ctx: &Context, queue, state: &mut WindowState| {
+            move |ui: &mut egui::Ui, queue, state: &mut WindowState| {
+                let egui_ctx = ui.ctx().clone();
+                let egui_ctx = &egui_ctx;
                 let setter = ParamSetter::new(context.as_ref());
 
                 // Host-negotiated resizing, as in nih_plug_egui: the GUI
@@ -282,7 +288,7 @@ impl Editor for LatticeEditor {
                 }
 
                 let backend = PluginParamBackend { params: &state.params, setter: &setter };
-                lattice_ui::root_ui(egui_ctx, &mut shared.ui, &backend, now);
+                lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
                 resize_corner(egui_ctx, &egui_state, &mut shared.ui.console);
             },
@@ -301,9 +307,13 @@ impl Editor for LatticeEditor {
             .unwrap_or_else(|| self.egui_state.size())
     }
 
+    fn resize_hint(&self) -> ResizeHint {
+        ResizeHint::resizable()
+    }
+
     fn set_size(&self, width: u32, height: u32) -> bool {
-        // Also serves as the wrapper's resizability probe (called with the
-        // current size), which must succeed without side effects.
+        // A set_size with the current size must succeed without side
+        // effects (hosts echo plugin-initiated resizes back through here).
         let clamped = (width.max(400), height.max(300));
         if clamped == self.egui_state.size() {
             return true;
@@ -404,7 +414,7 @@ fn resize_corner(ctx: &Context, egui_state: &EguiState, console: &mut lattice_ui
                         // pointer updates stop for the rest of the drag and
                         // the window freezes until release. One resize on
                         // release also eliminates live-resize flicker.
-                        draw_resize_preview(ctx, pointer, width, height);
+                        draw_resize_preview(ui, pointer, width, height);
                     }
                 }
             }
@@ -415,12 +425,12 @@ fn resize_corner(ctx: &Context, egui_state: &EguiState, console: &mut lattice_ui
 /// Drawn in window coordinates: when shrinking you see the target outline;
 /// when growing (target extends past the current window) the readout near
 /// the pointer carries the information.
-fn draw_resize_preview(ctx: &Context, pointer: egui::Pos2, width: u32, height: u32) {
-    let painter = ctx.layer_painter(egui::LayerId::new(
+fn draw_resize_preview(ui: &egui::Ui, pointer: egui::Pos2, width: u32, height: u32) {
+    let painter = ui.ctx().layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("window_resize_preview"),
     ));
-    let visuals = &ctx.style().visuals;
+    let visuals = ui.visuals();
     let color = visuals.selection.stroke.color;
 
     let target = egui::Rect::from_min_size(
