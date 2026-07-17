@@ -116,6 +116,10 @@ pub struct ViewConfig {
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
     pub show_labels: bool,
+    /// Under each note-name label, also show the node's pitch class in
+    /// cents. Only meaningful while `show_labels` is on.
+    #[serde(default = "default_true")]
+    pub show_cents: bool,
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
@@ -159,6 +163,7 @@ impl Default for ViewConfig {
             center_sevens: 0,
             octave_style: OctaveStyle::default(),
             show_labels: true,
+            show_cents: true,
             node_style: NodeStyle::default(),
             show_chord_edges: false,
         }
@@ -317,6 +322,9 @@ pub struct NodeInstance {
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
     pub hovered: bool,
+    /// The node's pitch class in cents under the current tuning, for the
+    /// in-lattice cents readout.
+    pub cents: f32,
 }
 
 /// A glowing beam between two simultaneously sounding, lattice-adjacent
@@ -457,6 +465,7 @@ pub fn derive_scene(
             seed,
             outlined,
             hovered: hovered == Some(pos),
+            cents: node_pc.to_cents(),
         });
     }
 

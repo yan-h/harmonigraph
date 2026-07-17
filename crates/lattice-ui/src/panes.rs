@@ -16,7 +16,9 @@ use crate::SharedState;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
-    Settings,
+    Tuning,
+    View,
+    Appearance,
     Console,
     Spectral,
     Notes,
@@ -34,7 +36,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Lattice => "Lattice".into(),
-            Tab::Settings => "Settings".into(),
+            Tab::Tuning => "Tuning".into(),
+            Tab::View => "View".into(),
+            Tab::Appearance => "Appearance".into(),
             Tab::Console => "Console".into(),
             Tab::Spectral => "Spectral".into(),
             Tab::Notes => "Notes".into(),
@@ -44,7 +48,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
-            Tab::Settings => settings_pane(ui, self.state, self.params, self.now),
+            Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
+            Tab::View => view_pane(ui, self.state),
+            Tab::Appearance => appearance_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now),
             Tab::Notes => notes_pane(ui, self.state),
@@ -110,13 +116,13 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         draw_learn_overlay(ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene);
+        draw_node_labels(ui, rect, &scene, state.view.show_cents);
     }
     hover_tooltip(response, state);
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
-/// even when the Settings tab (and its Learn toggle) is hidden.
+/// even when the Tuning tab (and its Learn toggle) is hidden.
 fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
     let color = theme::armed().gamma_multiply(learn_pulse(now));
     let painter = ui.painter_at(rect);
@@ -126,18 +132,26 @@ fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
         egui::Stroke::new(2.0, color),
         egui::StrokeKind::Inside,
     );
-    painter.text(
+    outlined_text(
+        &painter,
         rect.left_top() + egui::vec2(10.0, 8.0),
         egui::Align2::LEFT_TOP,
-        "LEARN",
+        "LEARN".to_string(),
         egui::FontId::monospace(12.0),
         color,
+        theme::well().gamma_multiply(learn_pulse(now)),
     );
 }
 
-/// Note-name labels on hovered and sounding nodes, drawn as egui text over
-/// the 3D view (projected with the same camera as the nodes).
-fn draw_node_labels(ui: &egui::Ui, rect: egui::Rect, scene: &lattice_scene::Scene) {
+/// Labels on hovered and sounding nodes, drawn as egui text over the 3D
+/// view (projected with the same camera as the nodes): the note name
+/// centered on the node, optionally its pitch class in cents just below.
+fn draw_node_labels(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    scene: &lattice_scene::Scene,
+    show_cents: bool,
+) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     for node in &scene.nodes {
         if !(node.hovered || node.activation > 0.0) {
@@ -149,17 +163,68 @@ fn draw_node_labels(ui: &egui::Ui, rect: egui::Rect, scene: &lattice_scene::Scen
         // Fade with the activation envelope; hovered idle nodes get a dim
         // but readable label.
         let strength = if node.hovered { 1.0 } else { visibility_floor(node.activation) };
-        let color = theme::text().gamma_multiply(strength);
+        let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
+        let outline = theme::well().gamma_multiply(strength);
         // Monospace for in-lattice text: labels align across nodes and
         // match the technical feel of the readouts.
-        ui.painter().text(
-            egui::pos2(rect.min.x + p.x, rect.min.y + p.y + 14.0),
-            egui::Align2::CENTER_TOP,
+        outlined_text(
+            ui.painter(),
+            center,
+            egui::Align2::CENTER_CENTER,
             node.lattice_pos.note_name().to_string(),
             egui::FontId::monospace(12.0),
-            color,
+            theme::text().gamma_multiply(strength),
+            outline,
         );
+        if show_cents {
+            outlined_text(
+                ui.painter(),
+                center + egui::vec2(0.0, 9.0),
+                egui::Align2::CENTER_TOP,
+                format!("{:.2}", node.cents),
+                egui::FontId::monospace(10.0),
+                theme::text_dim().gamma_multiply(strength),
+                outline,
+            );
+        }
     }
+}
+
+/// Text drawn over the 3D view, haloed so it stays readable whatever
+/// ends up behind it (bright nodes, edges, glow). The outline color
+/// should be the skin's recessed surface (`theme::well`), which
+/// contrasts with its text color by construction.
+///
+/// The halo is the galley stamped around two rings: a tight opaque ring
+/// for contrast and a wider faint one that fades the edge out. Every
+/// sample sits at the same radius, snapped to whole physical pixels —
+/// mixed cardinal/diagonal offsets and sub-pixel radii both read as a
+/// lumpy outline on high-DPI displays.
+fn outlined_text(
+    painter: &egui::Painter,
+    anchor: egui::Pos2,
+    align: egui::Align2,
+    text: String,
+    font: egui::FontId,
+    color: egui::Color32,
+    outline: egui::Color32,
+) {
+    let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
+    let pos = align.anchor_size(anchor, galley.size()).min;
+    let ppp = painter.ctx().pixels_per_point();
+    let snap = |pt: f32| (pt * ppp).round().max(1.0) / ppp;
+    // Soft ring first so the crisp ring and fill paint over it. Stamp
+    // alpha is well below the intended rim alpha because neighboring
+    // stamps overlap and accumulate.
+    for (radius, alpha) in [(snap(2.0), 0.15), (snap(1.2), 1.0)] {
+        let ring = outline.gamma_multiply(alpha);
+        for i in 0..16 {
+            let angle = std::f32::consts::TAU * i as f32 / 16.0;
+            let off = egui::vec2(angle.cos(), angle.sin()) * radius;
+            painter.galley(pos + off, galley.clone(), ring);
+        }
+    }
+    painter.galley(pos, galley, color);
 }
 
 /// Hover tooltip: pitch class + sounding octaves.
@@ -238,13 +303,12 @@ fn param_bars(ui: &mut egui::Ui, params: &dyn ParamBackend, keys: &[ParamKey]) {
     }
 }
 
-fn settings_pane(
+fn tuning_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
     params: &dyn ParamBackend,
     now: f64,
 ) {
-    ui.heading("Tuning");
     param_bars(ui, params, &ParamKey::TUNING);
 
     ui.horizontal(|ui| {
@@ -280,7 +344,24 @@ fn settings_pane(
     });
 
     ui.separator();
-    ui.heading("View");
+    // Cross-pane highlight demo: this pane reacts to the lattice hover,
+    // reporting the hovered node's pitch class under the current tuning.
+    match state.hovered {
+        Some(pos) => {
+            let pc = state.tuning.pitch_class(pos);
+            ui.label(format!(
+                "Hovered: ({}, {}, {}) = {}",
+                pos.threes, pos.fives, pos.sevens, pc
+            ));
+        }
+        None => {
+            ui.weak("Hover a node to inspect it");
+        }
+    }
+}
+
+/// What the grid shows: per-axis extents and window center.
+fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     for (extent, range, label) in [
         (&mut state.view.extent_threes, 1.0..=8.0, "Fifths extent"),
         (&mut state.view.extent_fives, 1.0..=8.0, "Thirds extent"),
@@ -295,13 +376,18 @@ fn settings_pane(
             *extent = value as i32;
         }
     }
+}
 
-    ui.separator();
-    // Cosmetic settings, apart from the structural View section: how things
-    // fade and color, not what the grid shows.
-    ui.heading("Appearance");
+/// Cosmetic settings, apart from the structural View pane: how things
+/// fade and color, not what the grid shows.
+fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     param_bars(ui, params, &ParamKey::APPEARANCE);
     ui.checkbox(&mut state.view.show_labels, "Note labels");
+    // Cents ride on the labels, so the toggle grays out with them off.
+    ui.add_enabled(
+        state.view.show_labels,
+        egui::Checkbox::new(&mut state.view.show_cents, "Cent values"),
+    );
 
     // Held-note render style: switchable experiments (idle nodes look the
     // same in all of them). Compare live while notes play.
@@ -344,21 +430,6 @@ fn settings_pane(
             ui.selectable_value(&mut state.view.octave_style, style, label);
         }
     });
-
-    ui.separator();
-    // Cross-pane highlight demo: this pane reacts to the lattice hover.
-    match state.hovered {
-        Some(pos) => {
-            let pc = state.tuning.pitch_class(pos);
-            ui.label(format!(
-                "Hovered: ({}, {}, {}) = {}",
-                pos.threes, pos.fives, pos.sevens, pc
-            ));
-        }
-        None => {
-            ui.weak("Hover a node to inspect it");
-        }
-    }
 }
 
 fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
