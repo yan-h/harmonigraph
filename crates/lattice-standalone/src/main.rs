@@ -97,7 +97,7 @@ impl eframe::App for App {
 
 /// Plain-value parameter store for the harness.
 struct StandaloneParams {
-    values: [(ParamKey, Cell<f32>); 8],
+    values: [(ParamKey, Cell<f32>); 9],
 }
 
 impl Default for StandaloneParams {
@@ -113,6 +113,7 @@ impl Default for StandaloneParams {
                 // tuned lattice out of the box.
                 (ParamKey::Tolerance, Cell::new(20.0)),
                 (ParamKey::HighlightTime, Cell::new(1.0)),
+                (ParamKey::OctaveHighlightTime, Cell::new(1.0)),
                 (ParamKey::DarkestPitch, Cell::new(24.0)),
                 (ParamKey::BrightestPitch, Cell::new(108.0)),
             ],

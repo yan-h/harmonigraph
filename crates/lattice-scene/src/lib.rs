@@ -71,6 +71,10 @@ pub struct ViewConfig {
     /// Seconds a note stays highlighted after release (mirrors the plugin
     /// parameter; the shell copies it in each frame).
     pub highlight_time: f32,
+    /// Seconds an octave indicator keeps fading after release; independent
+    /// of the note highlight. serde(default) keeps older blobs loadable.
+    #[serde(default = "default_octave_highlight")]
+    pub octave_highlight_time: f32,
     /// How nodes indicate sounding octaves.
     pub octave_style: OctaveStyle,
     /// Pitch (MIDI note) mapped to the darkest gradient color on
@@ -88,6 +92,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_octave_highlight() -> f32 {
+    1.0
+}
+
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
@@ -96,6 +104,7 @@ impl Default for ViewConfig {
             extent_fives: 3,
             extent_sevens: 0,
             highlight_time: 1.0,
+            octave_highlight_time: 1.0,
             octave_style: OctaveStyle::default(),
             darkest_pitch: 24.0,
             brightest_pitch: 108.0,
@@ -275,7 +284,8 @@ pub fn derive_scene(
                     outlined = voice.channel == 14;
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
-                octaves[slot] = octaves[slot].max(a);
+                octaves[slot] =
+                    octaves[slot].max(voice.activation(now, view.octave_highlight_time));
             }
         }
 
@@ -389,6 +399,45 @@ mod tests {
             origin.octaves[5] > 0.0 && origin.octaves[5] < 0.75,
             "released octave mid-fade, got {}",
             origin.octaves[5]
+        );
+    }
+
+    #[test]
+    fn octave_fade_time_is_independent_of_note_fade() {
+        // Note fade short, octave fade long: after the note highlight ends,
+        // the disc goes idle but the octave indicator is still fading.
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Off,
+        });
+        let view = ViewConfig {
+            highlight_time: 0.2,
+            octave_highlight_time: 2.0,
+            ..ViewConfig::default()
+        };
+        // Prune with the longer of the two, as root_ui does.
+        tracker.prune(1.0, view.highlight_time.max(view.octave_highlight_time));
+        let scene =
+            derive_scene(&tracker, &Tuning::default(), &view, Camera::default(), None, 1.0);
+        let origin = scene
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == LatticePos::ORIGIN)
+            .unwrap();
+        assert_eq!(origin.activation, 0.0, "note highlight has ended");
+        assert!(
+            origin.octaves[4] > 0.0 && origin.octaves[4] < 0.75,
+            "octave still mid-fade, got {}",
+            origin.octaves[4]
         );
     }
 

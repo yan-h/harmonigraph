@@ -49,6 +49,8 @@ pub struct MidiLattice3dParams {
     pub tolerance: FloatParam,
     #[id = "highlight-time"]
     pub highlight_time: FloatParam,
+    #[id = "octave-highlight-time"]
+    pub octave_highlight_time: FloatParam,
     #[id = "darkest-pitch"]
     pub darkest_pitch: FloatParam,
     #[id = "brightest-pitch"]
@@ -105,6 +107,15 @@ impl Default for MidiLattice3dParams {
                     factor: FloatRange::skew_factor(-2.0),
                 },
             ),
+            octave_highlight_time: FloatParam::new(
+                "Octave Fade (sec)",
+                1.0,
+                FloatRange::Skewed {
+                    min: 0.0,
+                    max: 100.0,
+                    factor: FloatRange::skew_factor(-2.0),
+                },
+            ),
             // Pitch-height coloring range for channels 10-14 (MIDI
             // convention), as in v1.
             darkest_pitch: linear_param("Darkest Pitch", ParamKey::DarkestPitch, 24.0),
@@ -122,6 +133,7 @@ impl MidiLattice3dParams {
             ParamKey::Seven => &self.seven,
             ParamKey::Tolerance => &self.tolerance,
             ParamKey::HighlightTime => &self.highlight_time,
+            ParamKey::OctaveHighlightTime => &self.octave_highlight_time,
             ParamKey::DarkestPitch => &self.darkest_pitch,
             ParamKey::BrightestPitch => &self.brightest_pitch,
         }
