@@ -446,7 +446,7 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     voices.sort_by(|a, b| b.pitch.total_cmp(&a.pitch));
 
     ui.monospace(
-        egui::RichText::new("note  oct  ch     cents")
+        egui::RichText::new("note  oct     cents  ch")
             .monospace()
             .color(theme::text_dim()),
     );
@@ -455,11 +455,11 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .show(ui, |ui| {
             for voice in voices {
                 ui.monospace(format!(
-                    "{name:<4} {oct:>4} {ch:>3}  {cents:>8.2}\u{a2}",
+                    "{name:<4} {oct:>4} {cents:>8.2}\u{a2} {ch:>3}",
                     name = KEY_NAMES[usize::from(voice.note % 12)],
                     oct = voice.display_octave(),
-                    ch = voice.channel + 1,
                     cents = voice.pitch_class.to_cents(),
+                    ch = voice.channel + 1,
                 ));
             }
         });
