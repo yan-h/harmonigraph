@@ -65,6 +65,14 @@ pub fn accent_active() -> Color32 {
 pub fn accent_edge() -> Color32 {
     c(active_skin().accent_edge)
 }
+/// Warning text (e.g. notes not represented on the lattice).
+pub fn warning_text() -> Color32 {
+    c(active_skin().warning_text)
+}
+/// Background band behind warning rows.
+pub fn warning_bg() -> Color32 {
+    c(active_skin().warning_bg)
+}
 
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(5);
 

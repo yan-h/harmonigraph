@@ -474,14 +474,22 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                         .distance_to(state.tuning.pitch_class(pos))
                 })
                 .map(|pos| pos.note_name().to_string());
-                ui.monospace(format!(
+                let line = format!(
                     "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",
                     name = KEY_NAMES[usize::from(voice.note % 12)],
                     oct = voice.display_octave(),
                     cents = voice.pitch_class.to_cents(),
                     node = node.as_deref().unwrap_or("--"),
                     ch = voice.channel + 1,
-                ));
+                );
+                let mut text = egui::RichText::new(line).monospace();
+                if node.is_none() {
+                    // Sounding but invisible on the lattice: flag the row.
+                    text = text
+                        .color(theme::warning_text())
+                        .background_color(theme::warning_bg());
+                }
+                ui.label(text);
             }
         });
 }
