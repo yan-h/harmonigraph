@@ -182,7 +182,22 @@ impl Editor for LatticeEditor {
                 // it if the host agrees.
                 if let Some(new_size) = egui_state.requested_size.swap(None) {
                     if context.request_resize() {
-                        queue.resize(PhySize::new(new_size.0, new_size.1));
+                        // `queue.resize` takes PHYSICAL pixels, and on macOS
+                        // baseview never emits a Resized event for
+                        // programmatic resizes, so this is the only thing
+                        // keeping the render surface in sync. Passing
+                        // logical points here (as nih_plug_egui does) shrinks
+                        // the surface by the DPI factor on Retina displays:
+                        // blurry output and dead mouse regions.
+                        let scale = egui_ctx
+                            .input(|i| i.viewport().native_pixels_per_point)
+                            .unwrap_or(1.0);
+                        queue.resize(PhySize::new(
+                            (new_size.0 as f32 * scale).round() as u32,
+                            (new_size.1 as f32 * scale).round() as u32,
+                        ));
+                        // This resizes the baseview child view (logical
+                        // units) to match the host-resized parent.
                         egui_ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::Vec2::new(
                             new_size.0 as f32,
                             new_size.1 as f32,
@@ -280,7 +295,11 @@ fn resize_corner(ctx: &Context, egui_state: &EguiState) {
                 if let Some(pointer) = response.interact_pointer_pos() {
                     let width = pointer.x.max(400.0).round() as u32;
                     let height = pointer.y.max(300.0).round() as u32;
-                    egui_state.requested_size.store(Some((width, height)));
+                    // Only request when something changed: a held-still drag
+                    // shouldn't spam the host with resize requests.
+                    if (width, height) != egui_state.size() {
+                        egui_state.requested_size.store(Some((width, height)));
+                    }
                 }
             }
         });
