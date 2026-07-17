@@ -73,7 +73,7 @@ impl SharedState {
         let mut dock = DockState::new(vec![panes::Tab::Lattice]);
         let surface = dock.main_surface_mut();
         let [_, right] = surface.split_right(NodeIndex::root(), 0.72, vec![panes::Tab::Settings]);
-        surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Spectral]);
+        surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Spectral, panes::Tab::Notes]);
 
         SharedState {
             tracker: NoteTracker::new(),

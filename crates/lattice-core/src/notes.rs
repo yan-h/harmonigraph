@@ -54,6 +54,13 @@ pub struct Voice {
 }
 
 impl Voice {
+    /// The octave number for display, in Bitwig's convention where middle
+    /// C (MIDI 60) is C3. (The internal `octave` field uses the C4 = middle
+    /// C convention inherited from note/12 arithmetic.)
+    pub fn display_octave(&self) -> i8 {
+        self.octave - 1
+    }
+
     /// Envelope in `[0, 1]` driving the visual intensity of this voice:
     /// 1 while held, then a linear decay over `fade_time` seconds.
     /// Fancier envelope shapes belong in the scene layer once we experiment;
