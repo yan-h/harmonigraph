@@ -77,7 +77,11 @@ impl SharedState {
         // TODO: persist the layout (DockState is serde-serializable).
         let mut dock = DockState::new(vec![panes::Tab::Lattice]);
         let surface = dock.main_surface_mut();
-        let [_, right] = surface.split_right(NodeIndex::root(), 0.72, vec![panes::Tab::Settings]);
+        let [_, right] = surface.split_right(
+            NodeIndex::root(),
+            0.72,
+            vec![panes::Tab::Tuning, panes::Tab::View, panes::Tab::Appearance],
+        );
         surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Spectral, panes::Tab::Notes]);
 
         SharedState {

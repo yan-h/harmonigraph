@@ -16,7 +16,9 @@ use crate::SharedState;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
-    Settings,
+    Tuning,
+    View,
+    Appearance,
     Console,
     Spectral,
     Notes,
@@ -34,7 +36,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
             Tab::Lattice => "Lattice".into(),
-            Tab::Settings => "Settings".into(),
+            Tab::Tuning => "Tuning".into(),
+            Tab::View => "View".into(),
+            Tab::Appearance => "Appearance".into(),
             Tab::Console => "Console".into(),
             Tab::Spectral => "Spectral".into(),
             Tab::Notes => "Notes".into(),
@@ -44,7 +48,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
-            Tab::Settings => settings_pane(ui, self.state, self.params, self.now),
+            Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
+            Tab::View => view_pane(ui, self.state),
+            Tab::Appearance => appearance_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now),
             Tab::Notes => notes_pane(ui, self.state),
@@ -112,7 +118,7 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         .add(lattice_paint_callback(rect, &scene, state.target_format, 0));
 
     // Learn mode is armed: show it ON the lattice too, so the mode is
-    // obvious even when the Settings tab (and its Learn toggle) is hidden.
+    // obvious even when the Tuning tab (and its Learn toggle) is hidden.
     if state.learn_active {
         let color = theme::armed().gamma_multiply(learn_pulse(now));
         let painter = ui.painter_at(rect);
@@ -271,13 +277,12 @@ fn param_bars(ui: &mut egui::Ui, params: &dyn ParamBackend, keys: &[ParamKey]) {
     }
 }
 
-fn settings_pane(
+fn tuning_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
     params: &dyn ParamBackend,
     now: f64,
 ) {
-    ui.heading("Tuning");
     param_bars(ui, params, &ParamKey::TUNING);
 
     ui.horizontal(|ui| {
@@ -313,7 +318,24 @@ fn settings_pane(
     });
 
     ui.separator();
-    ui.heading("View");
+    // Cross-pane highlight demo: this pane reacts to the lattice hover,
+    // reporting the hovered node's pitch class under the current tuning.
+    match state.hovered {
+        Some(pos) => {
+            let pc = state.tuning.pitch_class(pos);
+            ui.label(format!(
+                "Hovered: ({}, {}, {}) = {}",
+                pos.threes, pos.fives, pos.sevens, pc
+            ));
+        }
+        None => {
+            ui.weak("Hover a node to inspect it");
+        }
+    }
+}
+
+/// What the grid shows: per-axis extents and window center.
+fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     for (extent, range, label) in [
         (&mut state.view.extent_threes, 1.0..=8.0, "Fifths extent"),
         (&mut state.view.extent_fives, 1.0..=8.0, "Thirds extent"),
@@ -328,11 +350,11 @@ fn settings_pane(
             *extent = value as i32;
         }
     }
+}
 
-    ui.separator();
-    // Cosmetic settings, apart from the structural View section: how things
-    // fade and color, not what the grid shows.
-    ui.heading("Appearance");
+/// Cosmetic settings, apart from the structural View pane: how things
+/// fade and color, not what the grid shows.
+fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     param_bars(ui, params, &ParamKey::APPEARANCE);
     ui.checkbox(&mut state.view.show_labels, "Note labels");
     // Cents ride on the labels, so the toggle grays out with them off.
@@ -382,21 +404,6 @@ fn settings_pane(
             ui.selectable_value(&mut state.view.octave_style, style, label);
         }
     });
-
-    ui.separator();
-    // Cross-pane highlight demo: this pane reacts to the lattice hover.
-    match state.hovered {
-        Some(pos) => {
-            let pc = state.tuning.pitch_class(pos);
-            ui.label(format!(
-                "Hovered: ({}, {}, {}) = {}",
-                pos.threes, pos.fives, pos.sevens, pc
-            ));
-        }
-        None => {
-            ui.weak("Hover a node to inspect it");
-        }
-    }
 }
 
 fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
