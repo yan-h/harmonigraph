@@ -186,7 +186,7 @@ impl LatticeCallback {
                     params: [
                         n.activation,
                         if n.hovered { 1.0 } else { 0.0 },
-                        0.0,
+                        n.phase,
                         if n.outlined { 1.0 } else { 0.0 },
                     ],
                     octaves,
@@ -204,7 +204,7 @@ impl LatticeCallback {
                     scene.time,
                     scene.node_radius,
                     scene.octave_style.shader_index() as f32,
-                    0.0,
+                    scene.node_style.shader_index() as f32,
                 ],
             },
             target_format,

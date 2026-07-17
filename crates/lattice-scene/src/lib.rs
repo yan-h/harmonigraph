@@ -43,6 +43,38 @@ pub enum OctaveStyle {
     TicksMid,
 }
 
+/// How held/active notes are rendered. All styles share the same instance
+/// data (activation + per-note phase); the fragment/vertex shader switches
+/// on a uniform. Kept as switchable candidates for live comparison — idle
+/// nodes look identical in every style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum NodeStyle {
+    /// The original look: steady disc + glow.
+    #[default]
+    Steady,
+    /// Held nodes pulse size/glow on per-note phases.
+    Breathe,
+    /// Noise-driven flame edge around held discs.
+    Corona,
+    /// Bright particles orbiting held nodes.
+    Sparks,
+    /// Held nodes become slowly tumbling wireframe octahedra.
+    Wire,
+}
+
+impl NodeStyle {
+    /// Index used by the shader (uniform `misc.w`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            NodeStyle::Steady => 0,
+            NodeStyle::Breathe => 1,
+            NodeStyle::Corona => 2,
+            NodeStyle::Sparks => 3,
+            NodeStyle::Wire => 4,
+        }
+    }
+}
+
 impl OctaveStyle {
     /// Index used by the shader (uniform `misc.z`).
     pub fn shader_index(self) -> u32 {
@@ -86,6 +118,9 @@ pub struct ViewConfig {
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
     pub show_labels: bool,
+    /// How held notes are rendered (see NodeStyle).
+    #[serde(default)]
+    pub node_style: NodeStyle,
 }
 
 fn default_true() -> bool {
@@ -109,6 +144,7 @@ impl Default for ViewConfig {
             darkest_pitch: 24.0,
             brightest_pitch: 108.0,
             show_labels: true,
+            node_style: NodeStyle::default(),
         }
     }
 }
@@ -181,6 +217,10 @@ pub struct NodeInstance {
     /// octave's indicator fades on its own voice's envelope, independent of
     /// the node's overall activation.
     pub octaves: [f32; OCTAVE_SLOTS],
+    /// Start time (scene clock seconds) of the strongest voice lighting
+    /// this node; 0 when idle. Animated node styles derive per-note phase
+    /// and age from it.
+    pub phase: f32,
     /// Render as an outline instead of a filled disc (channel 14, v1's
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
@@ -198,6 +238,7 @@ pub struct Scene {
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
     pub octave_style: OctaveStyle,
+    pub node_style: NodeStyle,
 }
 
 fn lch(l: f64, c: f64, h: f64) -> Vec4 {
@@ -267,6 +308,7 @@ pub fn derive_scene(
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = skin::active_skin().node_idle;
         let mut outlined = false;
+        let mut phase = 0.0f32;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -282,6 +324,7 @@ pub fn derive_scene(
                         view.brightest_pitch,
                     );
                     outlined = voice.channel == 14;
+                    phase = voice.on_time as f32;
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
                 octaves[slot] =
@@ -295,6 +338,7 @@ pub fn derive_scene(
             color,
             activation,
             octaves,
+            phase,
             outlined,
             hovered: hovered == Some(pos),
             cents: node_pc.to_cents(),
@@ -307,6 +351,7 @@ pub fn derive_scene(
         time: now as f32,
         node_radius: view.spacing * 0.25,
         octave_style: view.octave_style,
+        node_style: view.node_style,
     }
 }
 

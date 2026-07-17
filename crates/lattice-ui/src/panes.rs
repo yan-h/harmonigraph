@@ -6,7 +6,7 @@ use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
 use lattice_core::coords;
-use lattice_scene::{channel_color, derive_scene, OctaveStyle};
+use lattice_scene::{channel_color, derive_scene, NodeStyle, OctaveStyle};
 
 use crate::theme;
 
@@ -267,6 +267,21 @@ fn settings_pane(
     ui.heading("Appearance");
     param_bars(ui, params, &ParamKey::APPEARANCE);
     ui.checkbox(&mut state.view.show_labels, "Note labels");
+
+    // Held-note render style: switchable experiments (idle nodes look the
+    // same in all of them). Compare live while notes play.
+    ui.horizontal(|ui| {
+        ui.label("Node style");
+        for (style, label) in [
+            (NodeStyle::Steady, "Steady"),
+            (NodeStyle::Breathe, "Breathe"),
+            (NodeStyle::Corona, "Corona"),
+            (NodeStyle::Sparks, "Sparks"),
+            (NodeStyle::Wire, "Wire"),
+        ] {
+            ui.selectable_value(&mut state.view.node_style, style, label);
+        }
+    });
 
     // Octave indicator style: kept as switchable design candidates so they
     // can be compared live while notes play. The Ticks variants differ in
