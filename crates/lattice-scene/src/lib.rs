@@ -6,7 +6,7 @@
 pub mod skin;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
-use lattice_core::{coords, LatticePos, NoteTracker, Tuning};
+use lattice_core::{coords, ChannelRole, LatticePos, NoteTracker, Tuning};
 
 /// Axis mapping, matching v1's orientation: major thirds run horizontally
 /// (x), fifths vertically (y), and harmonic sevenths in depth (z).
@@ -302,22 +302,24 @@ fn lch(l: f64, c: f64, h: f64) -> Vec4 {
     )
 }
 
-/// Ported verbatim from v1 (`editor/color.rs`): channels 0-8 have fixed
-/// LCH colors; 9-13 are colored by pitch height on an LCH gradient between
-/// `darkest_pitch` and `brightest_pitch` (MIDI note numbers); 14 renders as
-/// an outline; 15 never reaches here (ignored by the tracker).
+/// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
+/// lives in [`ChannelRole`]. Gradient channels are colored by pitch height
+/// on an LCH ramp between `darkest_pitch` and `brightest_pitch` (MIDI note
+/// numbers).
 pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
-    match channel {
-        0 => lch(48.0, 45.0, 32.0),   // red
-        1 => lch(65.0, 60.0, 68.0),   // orange
-        2 => lch(80.0, 42.0, 83.0),   // yellow
-        3 => lch(65.0, 50.0, 120.0),  // green
-        4 => lch(60.0, 40.0, 280.0),  // blue
-        5 => lch(50.0, 55.0, 305.0),  // purple
-        6 => lch(70.0, 30.0, 340.0),  // pink
-        7 => lch(80.0, 0.0, 0.0),     // white
-        8 => lch(0.0, 0.0, 0.0),      // black
-        9..=13 => {
+    match ChannelRole::of(channel) {
+        ChannelRole::FixedColor => match channel {
+            0 => lch(48.0, 45.0, 32.0),  // red
+            1 => lch(65.0, 60.0, 68.0),  // orange
+            2 => lch(80.0, 42.0, 83.0),  // yellow
+            3 => lch(65.0, 50.0, 120.0), // green
+            4 => lch(60.0, 40.0, 280.0), // blue
+            5 => lch(50.0, 55.0, 305.0), // purple
+            6 => lch(70.0, 30.0, 340.0), // pink
+            7 => lch(80.0, 0.0, 0.0),    // white
+            _ => lch(0.0, 0.0, 0.0),     // 8: black
+        },
+        ChannelRole::PitchGradient => {
             let t = f64::from(
                 (pitch.clamp(darkest_pitch, brightest_pitch) - darkest_pitch)
                     / (brightest_pitch - darkest_pitch).max(0.01),
@@ -328,8 +330,9 @@ pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitc
                 (-100.0 + t * 190.0).rem_euclid(360.0),
             )
         }
-        // Channel 14: drawn as an outline; the color is a bright neutral.
-        _ => Vec4::new(0.85, 0.85, 0.88, 1.0),
+        // Outline voices get a bright neutral (the ring shape is the
+        // signal). Ignored never reaches here — the tracker drops it.
+        ChannelRole::Outline | ChannelRole::Ignored => Vec4::new(0.85, 0.85, 0.88, 1.0),
     }
 }
 
@@ -368,7 +371,7 @@ pub fn derive_scene(
                         view.darkest_pitch,
                         view.brightest_pitch,
                     );
-                    outlined = voice.channel == 14;
+                    outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
                     phase = voice.on_time as f32;
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
@@ -379,11 +382,7 @@ pub fn derive_scene(
 
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
-        let centered = LatticePos::new(
-            pos.threes - center.threes,
-            pos.fives - center.fives,
-            pos.sevens - center.sevens,
-        );
+        let centered = pos - center;
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos: lattice_to_world(centered, view.spacing),
@@ -404,10 +403,7 @@ pub fn derive_scene(
             nodes.iter().filter(|n| n.activation > 0.0).collect();
         for (i, a) in active.iter().enumerate() {
             for b in &active[i + 1..] {
-                let dt = (a.lattice_pos.threes - b.lattice_pos.threes).abs();
-                let df = (a.lattice_pos.fives - b.lattice_pos.fives).abs();
-                let ds = (a.lattice_pos.sevens - b.lattice_pos.sevens).abs();
-                if dt + df + ds == 1 {
+                if a.lattice_pos.is_adjacent(b.lattice_pos) {
                     edges.push(EdgeInstance {
                         a: a.world_pos,
                         b: b.world_pos,

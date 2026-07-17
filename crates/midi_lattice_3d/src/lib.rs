@@ -243,9 +243,16 @@ impl Plugin for MidiLattice3d {
 
     fn reset(&mut self) {
         self.samples_processed = 0;
-        // TODO: signal the GUI to clear held notes (e.g. a Reset event in
-        // the ring buffer); after a transport reset, note-offs may never
-        // arrive and voices would stick until their next note-on.
+        // After a transport reset, note-offs for held notes may never
+        // arrive; tell the GUI to release everything. Time 0.0 is the
+        // restarted sample clock's epoch (the editor's ClockMapper snaps
+        // its offset on a jump this large).
+        let _ = self.note_producer.push(CoreNoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 0,
+            kind: NoteEventKind::AllOff,
+        });
     }
 
     fn process(

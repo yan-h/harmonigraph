@@ -116,13 +116,13 @@ impl Default for Tuning {
 }
 
 impl Tuning {
+    /// The 12-TET default with the three prime steps retuned to just.
     pub fn just() -> Self {
         Tuning {
-            c_offset: 0.0,
             three: THREE_JUST,
             five: FIVE_JUST,
             seven: SEVEN_JUST,
-            tolerance: 0.5,
+            ..Tuning::default()
         }
     }
 
@@ -142,42 +142,6 @@ impl Tuning {
         played.distance_to(node) <= PitchClassDistance::from_cents(self.tolerance)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::coords::LatticePos;
-
-    #[test]
-    fn pitch_class_wraps_at_octave() {
-        assert_eq!(PitchClass::from_cents(1250.0), PitchClass::from_cents(50.0));
-        assert_eq!(PitchClass::from_cents(-100.0), PitchClass::from_cents(1100.0));
-    }
-
-    #[test]
-    fn distance_wraps_around() {
-        let a = PitchClass::from_cents(10.0);
-        let b = PitchClass::from_cents(1190.0);
-        assert_eq!(a.distance_to(b), PitchClassDistance::from_cents(20.0));
-    }
-
-    #[test]
-    fn just_fifth_stack() {
-        let tuning = Tuning::just();
-        // Two just fifths = 1403.91¢ ≡ 203.91¢ (a just major second).
-        let pc = tuning.pitch_class(LatticePos::new(2, 0, 0));
-        assert!(pc.distance_to(PitchClass::from_cents(203.91)) <= PitchClassDistance::from_cents(0.01));
-    }
-
-    #[test]
-    fn matching_respects_tolerance() {
-        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
-        let node = tuning.pitch_class(LatticePos::new(1, 0, 0)); // 701.955
-        assert!(tuning.matches(PitchClass::from_cents(700.0), node));
-        assert!(!tuning.matches(PitchClass::from_cents(690.0), node));
-    }
-}
-
 
 /// Result of [`learn_tuning`]: parameters that could be inferred from the
 /// sounding pitch classes. `None` = nothing close enough was sounding.
@@ -252,8 +216,38 @@ pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
 }
 
 #[cfg(test)]
-mod learn_tests {
+mod tests {
     use super::*;
+    use crate::coords::LatticePos;
+
+    #[test]
+    fn pitch_class_wraps_at_octave() {
+        assert_eq!(PitchClass::from_cents(1250.0), PitchClass::from_cents(50.0));
+        assert_eq!(PitchClass::from_cents(-100.0), PitchClass::from_cents(1100.0));
+    }
+
+    #[test]
+    fn distance_wraps_around() {
+        let a = PitchClass::from_cents(10.0);
+        let b = PitchClass::from_cents(1190.0);
+        assert_eq!(a.distance_to(b), PitchClassDistance::from_cents(20.0));
+    }
+
+    #[test]
+    fn just_fifth_stack() {
+        let tuning = Tuning::just();
+        // Two just fifths = 1403.91¢ ≡ 203.91¢ (a just major second).
+        let pc = tuning.pitch_class(LatticePos::new(2, 0, 0));
+        assert!(pc.distance_to(PitchClass::from_cents(203.91)) <= PitchClassDistance::from_cents(0.01));
+    }
+
+    #[test]
+    fn matching_respects_tolerance() {
+        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
+        let node = tuning.pitch_class(LatticePos::new(1, 0, 0)); // 701.955
+        assert!(tuning.matches(PitchClass::from_cents(700.0), node));
+        assert!(!tuning.matches(PitchClass::from_cents(690.0), node));
+    }
 
     #[test]
     fn learns_just_intervals_from_a_chord() {
@@ -292,5 +286,13 @@ mod learn_tests {
             PitchClass::from_cents(900.0),
         ];
         assert_eq!(learn_tuning(&classes), LearnedTuning::default());
+    }
+
+    #[test]
+    fn c_offset_learns_negative_from_a_flat_c() {
+        // A pitch class just below C must come out as a small negative
+        // offset, not +1190.
+        let classes = [PitchClass::from_cents(1190.0)];
+        assert_eq!(learn_tuning(&classes).c_offset, Some(-10.0));
     }
 }

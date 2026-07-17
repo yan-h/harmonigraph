@@ -229,6 +229,7 @@ impl eframe::App for App {
                     NoteEventKind::On { .. } => "on",
                     NoteEventKind::Off => "off",
                     NoteEventKind::Tuning { .. } => "tune",
+                    NoteEventKind::AllOff => "all-off",
                 }
             ));
             self.state.tracker.handle_event(event);
