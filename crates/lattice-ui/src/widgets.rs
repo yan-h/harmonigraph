@@ -93,7 +93,7 @@ impl<'a> ValueBar<'a> {
             let output = ui.put(
                 rect,
                 TextEdit::singleline(&mut text)
-                    .font(TextStyle::Body)
+                    .font(TextStyle::Monospace)
                     .horizontal_align(egui::Align::Center),
             );
             let committed = ui.input(|i| i.key_pressed(Key::Enter));
@@ -160,11 +160,13 @@ impl<'a> ValueBar<'a> {
             TextStyle::Body.resolve(ui.style()),
             text_color,
         );
+        // Values in monospace: digits align and don't wiggle as they
+        // change.
         painter.text(
             rect.right_center() - Vec2::new(8.0, 0.0),
             Align2::RIGHT_CENTER,
             self.format(*self.value),
-            TextStyle::Body.resolve(ui.style()),
+            TextStyle::Monospace.resolve(ui.style()),
             theme::text(),
         );
 

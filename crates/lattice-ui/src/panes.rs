@@ -236,15 +236,6 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // the reference frame showing where the octave range starts/ends.
     ui.checkbox(&mut state.view.show_labels, "Note labels");
 
-    // UI font candidates (see theme::UiFont): compare live, then we delete
-    // the losers.
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Font");
-        for font in crate::theme::UiFont::ALL {
-            ui.selectable_value(&mut state.ui_font, font, font.label());
-        }
-    });
-
     ui.horizontal(|ui| {
         ui.label("Octaves");
         for (style, label) in [
@@ -328,7 +319,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             egui::pos2(x + 3.0, rect.bottom() - 2.0),
             egui::Align2::LEFT_BOTTOM,
             format!("{}", i * 100),
-            egui::TextStyle::Small.resolve(ui.style()),
+            egui::FontId::monospace(10.0),
             theme::text_dim(),
         );
     }
@@ -411,7 +402,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             egui::pos2(pointer.x + 6.0, rect.top() + 2.0),
             egui::Align2::LEFT_TOP,
             format!("{cents:.0} cents"),
-            egui::TextStyle::Small.resolve(ui.style()),
+            egui::FontId::monospace(10.5),
             theme::text(),
         );
     }

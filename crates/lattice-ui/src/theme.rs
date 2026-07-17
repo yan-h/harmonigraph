@@ -68,87 +68,38 @@ pub fn accent_edge() -> Color32 {
 
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(5);
 
-// ---- UI font ---------------------------------------------------------------
+// ---- Fonts -----------------------------------------------------------------
 
-/// Candidate UI faces, embedded for side-by-side comparison (switcher in
-/// the View section). All OFL/UFL licensed; license texts ship next to the
-/// TTFs in `fonts/`. Losers get deleted once one wins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum UiFont {
-    /// egui's bundled default.
-    #[default]
-    UbuntuLight,
-    Inter,
-    IbmPlexSans,
-    FiraSans,
-    SourceSans3,
-    AtkinsonHyperlegible,
-}
-
-impl UiFont {
-    pub const ALL: [UiFont; 6] = [
-        UiFont::UbuntuLight,
-        UiFont::Inter,
-        UiFont::IbmPlexSans,
-        UiFont::FiraSans,
-        UiFont::SourceSans3,
-        UiFont::AtkinsonHyperlegible,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            UiFont::UbuntuLight => "Ubuntu",
-            UiFont::Inter => "Inter",
-            UiFont::IbmPlexSans => "Plex",
-            UiFont::FiraSans => "Fira",
-            UiFont::SourceSans3 => "Source",
-            UiFont::AtkinsonHyperlegible => "Atkinson",
-        }
-    }
-
-    /// The font-data key registered with egui (None = egui's default).
-    fn font_name(self) -> Option<&'static str> {
-        match self {
-            UiFont::UbuntuLight => None,
-            UiFont::Inter => Some("Inter"),
-            UiFont::IbmPlexSans => Some("IBMPlexSans"),
-            UiFont::FiraSans => Some("FiraSans"),
-            UiFont::SourceSans3 => Some("SourceSans3"),
-            UiFont::AtkinsonHyperlegible => Some("AtkinsonHyperlegible"),
-        }
-    }
-}
-
-/// Install the chosen proportional face. All candidates are registered;
-/// the chosen one is prepended to the Proportional family so every
-/// proportional text role uses it (fallbacks, including emoji and the
-/// default face, stay in the list). Monospace (the console) keeps Hack.
-/// Cheap enough to call whenever the selection changes.
-pub fn apply_font(ctx: &egui::Context, font: UiFont) {
+/// Install the product fonts: Atkinson Hyperlegible for all proportional
+/// text, Atkinson Hyperlegible Mono for monospace (numerals in ValueBars
+/// and readouts, the console). Both OFL; license texts ship next to the
+/// TTFs in `fonts/`. egui's bundled faces remain as fallbacks.
+fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontFamily};
 
     let mut fonts = FontDefinitions::default();
-    for (name, bytes) in [
-        ("Inter", &include_bytes!("../fonts/inter/Inter-Regular.ttf")[..]),
-        ("IBMPlexSans", &include_bytes!("../fonts/ibmplexsans/IBMPlexSans-Regular.ttf")[..]),
-        ("FiraSans", &include_bytes!("../fonts/firasans/FiraSans-Regular.ttf")[..]),
-        ("SourceSans3", &include_bytes!("../fonts/sourcesans3/SourceSans3-Regular.ttf")[..]),
-        (
-            "AtkinsonHyperlegible",
-            &include_bytes!("../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf")[..],
-        ),
-    ] {
-        fonts
-            .font_data
-            .insert(name.to_owned(), std::sync::Arc::new(FontData::from_static(bytes)));
-    }
-    if let Some(name) = font.font_name() {
-        fonts
-            .families
-            .get_mut(&FontFamily::Proportional)
-            .expect("proportional family exists")
-            .insert(0, name.to_owned());
-    }
+    fonts.font_data.insert(
+        "AtkinsonHyperlegible".to_owned(),
+        std::sync::Arc::new(FontData::from_static(include_bytes!(
+            "../fonts/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "AtkinsonHyperlegibleMono".to_owned(),
+        std::sync::Arc::new(FontData::from_static(include_bytes!(
+            "../fonts/atkinsonhyperlegiblemono/AtkinsonHyperlegibleMono-Regular.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .get_mut(&FontFamily::Proportional)
+        .expect("proportional family exists")
+        .insert(0, "AtkinsonHyperlegible".to_owned());
+    fonts
+        .families
+        .get_mut(&FontFamily::Monospace)
+        .expect("monospace family exists")
+        .insert(0, "AtkinsonHyperlegibleMono".to_owned());
     ctx.set_fonts(fonts);
 }
 
@@ -157,13 +108,13 @@ pub fn apply_font(ctx: &egui::Context, font: UiFont) {
 /// Apply the theme to a context. Each shell calls this once at startup
 /// (eframe's creation context; the plugin editor's build closure).
 pub fn apply_theme(ctx: &egui::Context) {
+    install_fonts(ctx);
     // The lattice is a dark-background instrument; pin the UI to dark
     // rather than following the host/system preference.
     ctx.set_theme(egui::ThemePreference::Dark);
     let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
 
-    // Type roles. Default fonts for now; embedding a custom face via
-    // ctx.set_fonts() slots in here later.
+    // Type roles (families come from install_fonts).
     style.text_styles = [
         (TextStyle::Heading, FontId::proportional(17.0)),
         (TextStyle::Body, FontId::proportional(13.5)),

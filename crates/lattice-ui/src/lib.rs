@@ -62,11 +62,6 @@ pub struct SharedState {
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
-    /// The UI face (candidate comparison; see theme::UiFont).
-    pub ui_font: theme::UiFont,
-    /// The face currently installed in the egui context; root_ui re-installs
-    /// when it differs from `ui_font`.
-    applied_font: Option<theme::UiFont>,
     dock: DockState<panes::Tab>,
 }
 
@@ -88,8 +83,6 @@ impl SharedState {
             hovered: None,
             console: Console::default(),
             target_format,
-            ui_font: theme::UiFont::default(),
-            applied_font: None,
             dock,
         }
     }
@@ -108,7 +101,6 @@ impl SharedState {
             dock: self.dock.clone(),
             camera: self.camera,
             view: self.view.clone(),
-            ui_font: self.ui_font,
         })
         .unwrap_or_default()
     }
@@ -120,7 +112,6 @@ impl SharedState {
             self.dock = persist.dock;
             self.camera = persist.camera;
             self.view = persist.view;
-            self.ui_font = persist.ui_font;
         }
     }
 }
@@ -132,8 +123,6 @@ struct UiPersist {
     dock: DockState<panes::Tab>,
     camera: Camera,
     view: ViewConfig,
-    #[serde(default)]
-    ui_font: theme::UiFont,
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
@@ -141,15 +130,6 @@ struct UiPersist {
 /// standalone harness wraps a frameless CentralPanel). `now` is seconds on
 /// the shell's clock (the same clock used to timestamp `NoteEvent`s).
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    // Install the selected UI face when it changes (and on the first
-    // frame). set_fonts takes effect next frame; cheap when unchanged.
-    if state.applied_font != Some(state.ui_font) {
-        theme::apply_font(ui.ctx(), state.ui_font);
-        state.applied_font = Some(state.ui_font);
-        // The rebuilt font atlas must reach the GPU promptly.
-        ui.ctx().request_repaint();
-    }
-
     state.tuning = params::tuning_from_params(params);
     state.view.highlight_time = params.get(params::ParamKey::HighlightTime);
     state.view.darkest_pitch = params.get(params::ParamKey::DarkestPitch);
