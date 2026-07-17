@@ -104,6 +104,10 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
     DockArea::new(&mut dock)
         .style(theme::dock_style(ui.style()))
+        // The pane set is fixed; closing/collapsing chrome is just noise.
+        .show_close_buttons(false)
+        .show_leaf_close_all_buttons(false)
+        .show_leaf_collapse_buttons(false)
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     state.dock = dock;
 
