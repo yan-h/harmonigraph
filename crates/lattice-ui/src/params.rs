@@ -74,11 +74,21 @@ impl ParamKey {
 
 /// Read/write access to the automatable parameters.
 ///
-/// TODO: split `set` into begin/set/end gesture methods so host automation
-/// records slider drags as single gestures.
+/// Continuous edits (drags) should be bracketed with `begin_set`/`end_set`
+/// so hosts record them as one automation gesture. `set` alone is fine for
+/// one-shot changes (preset buttons, typed values) — backends wrap those in
+/// an implicit gesture.
 pub trait ParamBackend {
     fn get(&self, key: ParamKey) -> f32;
     fn set(&self, key: ParamKey, value: f32);
+    /// Start of a continuous edit (e.g. drag). Default: no-op.
+    fn begin_set(&self, key: ParamKey) {
+        let _ = key;
+    }
+    /// End of a continuous edit. Default: no-op.
+    fn end_set(&self, key: ParamKey) {
+        let _ = key;
+    }
 }
 
 /// Assemble a [`lattice_core::Tuning`] from the current parameter values.

@@ -126,8 +126,17 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         let bar = ValueBar::new(&mut value, key.range(), key.label())
             .eased(key.logarithmic())
             .decimals(2);
-        if bar.show(ui).changed() {
+        let response = bar.show(ui);
+        // Bracket drags so the host records one automation gesture per
+        // drag; one-shot changes (typed values) go through set() alone.
+        if response.drag_started() {
+            params.begin_set(key);
+        }
+        if response.changed() {
             params.set(key, value);
+        }
+        if response.drag_stopped() {
+            params.end_set(key);
         }
     }
 

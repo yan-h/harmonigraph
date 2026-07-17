@@ -41,6 +41,8 @@ pub struct EditorShared {
     start: Instant,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
+    /// Param key currently inside a begin_set/end_set automation gesture.
+    gesture: std::cell::Cell<Option<lattice_ui::params::ParamKey>>,
 }
 
 impl EditorShared {
@@ -50,6 +52,7 @@ impl EditorShared {
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             start: Instant::now(),
             last_frame: None,
+            gesture: std::cell::Cell::new(None),
         }
     }
 }
@@ -287,7 +290,11 @@ impl Editor for LatticeEditor {
                     shared.ui.tracker.handle_event(event);
                 }
 
-                let backend = PluginParamBackend { params: &state.params, setter: &setter };
+                let backend = PluginParamBackend {
+                    params: &state.params,
+                    setter: &setter,
+                    gesture: &shared.gesture,
+                };
                 lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
                 if SHOW_RESIZE_CORNER {

@@ -117,6 +117,10 @@ impl MidiLattice3dParams {
 pub(crate) struct PluginParamBackend<'a> {
     pub params: &'a MidiLattice3dParams,
     pub setter: &'a ParamSetter<'a>,
+    /// The key currently inside an explicit begin_set/end_set gesture, if
+    /// any. Lives in EditorShared so it survives across frames (this
+    /// adapter is rebuilt every frame).
+    pub gesture: &'a std::cell::Cell<Option<ParamKey>>,
 }
 
 impl ParamBackend for PluginParamBackend<'_> {
@@ -126,11 +130,32 @@ impl ParamBackend for PluginParamBackend<'_> {
 
     fn set(&self, key: ParamKey, value: f32) {
         let param = self.params.param_for(key);
-        // TODO: expose begin/end gestures through ParamBackend so a slider
-        // drag records as one automation gesture instead of many.
-        self.setter.begin_set_parameter(param);
-        self.setter.set_parameter(param, value);
-        self.setter.end_set_parameter(param);
+        if self.gesture.get() == Some(key) {
+            // Inside an explicit gesture (drag): just set.
+            self.setter.set_parameter(param, value);
+        } else {
+            // One-shot change: implicit single-value gesture.
+            self.setter.begin_set_parameter(param);
+            self.setter.set_parameter(param, value);
+            self.setter.end_set_parameter(param);
+        }
+    }
+
+    fn begin_set(&self, key: ParamKey) {
+        // Close a dangling gesture first (shouldn't happen, but a host
+        // seeing unbalanced begin/end is worse than a spurious end).
+        if let Some(previous) = self.gesture.get() {
+            self.setter.end_set_parameter(self.params.param_for(previous));
+        }
+        self.setter.begin_set_parameter(self.params.param_for(key));
+        self.gesture.set(Some(key));
+    }
+
+    fn end_set(&self, key: ParamKey) {
+        if self.gesture.get() == Some(key) {
+            self.setter.end_set_parameter(self.params.param_for(key));
+            self.gesture.set(None);
+        }
     }
 }
 
