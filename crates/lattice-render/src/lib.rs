@@ -33,7 +33,7 @@ pub use egui_wgpu::wgpu;
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
 
 /// Entry points a (re)loaded shader must provide.
-const REQUIRED_ENTRY_POINTS: &[&str] = &["vs_main", "fs_main"];
+const REQUIRED_ENTRY_POINTS: &[&str] = &["vs_main", "fs_main", "vs_edge", "fs_edge"];
 
 /// Watches the shader source on disk (dev builds only). The first sighting
 /// of the file only records a baseline mtime; edits after launch trigger
@@ -126,6 +126,27 @@ impl GpuInstance {
     };
 }
 
+/// One chord edge (a beam between two active adjacent nodes).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuEdge {
+    /// xyz: endpoint A, w: strength.
+    a_strength: [f32; 4],
+    /// xyz: endpoint B, w: unused.
+    b_pad: [f32; 4],
+    color: [f32; 4],
+}
+
+impl GpuEdge {
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<GpuEdge>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![
+            0 => Float32x4, 1 => Float32x4, 2 => Float32x4
+        ],
+    };
+}
+
 /// Build the egui shape that renders `scene` into `rect`. `pane_id` must be
 /// unique per lattice view shown in the same frame (each gets its own GPU
 /// buffers; the pipeline is shared).
@@ -145,6 +166,7 @@ pub fn lattice_paint_callback(
 /// Per-frame, per-pane draw data, computed on the UI thread.
 struct LatticeCallback {
     instances: Vec<GpuInstance>,
+    edges: Vec<GpuEdge>,
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
@@ -194,8 +216,19 @@ impl LatticeCallback {
             })
             .collect();
 
+        let edges = scene
+            .edges
+            .iter()
+            .map(|e| GpuEdge {
+                a_strength: [e.a.x, e.a.y, e.a.z, e.strength],
+                b_pad: [e.b.x, e.b.y, e.b.z, 0.0],
+                color: e.color.to_array(),
+            })
+            .collect();
+
         LatticeCallback {
             instances,
+            edges,
             uniforms: Uniforms {
                 view_proj: view_proj.to_cols_array(),
                 cam_right: right.extend(0.0).to_array(),
@@ -216,6 +249,7 @@ impl LatticeCallback {
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
 struct LatticeResources {
     pipeline: wgpu::RenderPipeline,
+    edge_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
@@ -229,15 +263,22 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
+    edge_buffer: wgpu::Buffer,
+    edge_capacity: usize,
+    edge_count: u32,
 }
 
-/// Build the node pipeline from WGSL source (startup uses the baked-in
-/// source; hot-reload rebuilds from disk).
+/// Build one of our pipelines from WGSL source (startup uses the baked-in
+/// source; hot-reload rebuilds from disk). Node and edge pipelines share
+/// the module, bind group layout, blending, and topology; only entry
+/// points and vertex layout differ.
 fn create_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
+    entry_points: (&str, &str),
+    vertex_layout: wgpu::VertexBufferLayout<'_>,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
@@ -255,13 +296,13 @@ fn create_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(entry_points.0),
             compilation_options: Default::default(),
-            buffers: &[GpuInstance::LAYOUT],
+            buffers: &[vertex_layout],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(entry_points.1),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
@@ -283,6 +324,33 @@ fn create_pipeline(
     })
 }
 
+/// Build both pipelines from one source.
+fn create_pipelines(
+    device: &wgpu::Device,
+    shader_src: &str,
+    target_format: wgpu::TextureFormat,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    (
+        create_pipeline(
+            device,
+            shader_src,
+            target_format,
+            bind_group_layout,
+            ("vs_main", "fs_main"),
+            GpuInstance::LAYOUT,
+        ),
+        create_pipeline(
+            device,
+            shader_src,
+            target_format,
+            bind_group_layout,
+            ("vs_edge", "fs_edge"),
+            GpuEdge::LAYOUT,
+        ),
+    )
+}
+
 impl LatticeResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -298,10 +366,12 @@ impl LatticeResources {
                 count: None,
             }],
         });
-        let pipeline = create_pipeline(device, SHADER_SRC, target_format, &bind_group_layout);
+        let (pipeline, edge_pipeline) =
+            create_pipelines(device, SHADER_SRC, target_format, &bind_group_layout);
 
         LatticeResources {
             pipeline,
+            edge_pipeline,
             bind_group_layout,
             target_format,
             panes: HashMap::new(),
@@ -333,6 +403,9 @@ impl LatticeResources {
                 instance_buffer: create_instance_buffer(device, 256),
                 instance_capacity: 256,
                 instance_count: 0,
+                edge_buffer: create_edge_buffer(device, 64),
+                edge_capacity: 64,
+                edge_count: 0,
             }
         })
     }
@@ -342,6 +415,15 @@ fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffe
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("lattice_instances"),
         size: (capacity * std::mem::size_of::<GpuInstance>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn create_edge_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lattice_edges"),
+        size: (capacity * std::mem::size_of::<GpuEdge>()) as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
@@ -372,12 +454,14 @@ impl CallbackTrait for LatticeCallback {
         if let Some(source) = resources.watcher.poll() {
             match validate_wgsl(&source) {
                 Ok(()) => {
-                    resources.pipeline = create_pipeline(
+                    let (pipeline, edge_pipeline) = create_pipelines(
                         device,
                         &source,
                         resources.target_format,
                         &resources.bind_group_layout,
                     );
+                    resources.pipeline = pipeline;
+                    resources.edge_pipeline = edge_pipeline;
                     eprintln!("[lattice-render] shader hot-reloaded");
                 }
                 Err(err) => {
@@ -400,6 +484,16 @@ impl CallbackTrait for LatticeCallback {
                 bytemuck::cast_slice(&self.instances),
             );
         }
+
+        if self.edges.len() > pane.edge_capacity {
+            pane.edge_capacity = self.edges.len().next_power_of_two();
+            pane.edge_buffer = create_edge_buffer(device, pane.edge_capacity);
+        }
+        pane.edge_count = self.edges.len() as u32;
+        if !self.edges.is_empty() {
+            queue.write_buffer(&pane.edge_buffer, 0, bytemuck::cast_slice(&self.edges));
+        }
+
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
 
         Vec::new()
@@ -419,6 +513,14 @@ impl CallbackTrait for LatticeCallback {
         };
         if pane.instance_count == 0 {
             return;
+        }
+
+        // Edges draw under the nodes so discs own the joints.
+        if pane.edge_count > 0 {
+            render_pass.set_pipeline(&resources.edge_pipeline);
+            render_pass.set_bind_group(0, &pane.bind_group, &[]);
+            render_pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
+            render_pass.draw(0..4, 0..pane.edge_count);
         }
 
         render_pass.set_pipeline(&resources.pipeline);

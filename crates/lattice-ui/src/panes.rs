@@ -282,6 +282,8 @@ fn settings_pane(
             ui.selectable_value(&mut state.view.node_style, style, label);
         }
     });
+    ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
+        .on_hover_text("Light up lattice edges between simultaneously held nodes");
 
     // Octave indicator style: kept as switchable design candidates so they
     // can be compared live while notes play. The Ticks variants differ in

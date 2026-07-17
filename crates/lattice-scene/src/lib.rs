@@ -121,6 +121,10 @@ pub struct ViewConfig {
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
+    /// Light up lattice edges between simultaneously sounding adjacent
+    /// nodes, so a chord's interval structure renders as geometry.
+    #[serde(default)]
+    pub show_chord_edges: bool,
 }
 
 fn default_true() -> bool {
@@ -145,6 +149,7 @@ impl Default for ViewConfig {
             brightest_pitch: 108.0,
             show_labels: true,
             node_style: NodeStyle::default(),
+            show_chord_edges: false,
         }
     }
 }
@@ -229,6 +234,18 @@ pub struct NodeInstance {
     pub cents: f32,
 }
 
+/// A glowing beam between two simultaneously sounding, lattice-adjacent
+/// nodes (one unit step along exactly one prime axis = one interval).
+#[derive(Clone, Copy, Debug)]
+pub struct EdgeInstance {
+    pub a: Vec3,
+    pub b: Vec3,
+    pub color: Vec4,
+    /// min of the two nodes' activations: the beam fades with whichever
+    /// endpoint fades first.
+    pub strength: f32,
+}
+
 /// Everything the renderer needs for one frame.
 pub struct Scene {
     pub nodes: Vec<NodeInstance>,
@@ -239,6 +256,8 @@ pub struct Scene {
     pub node_radius: f32,
     pub octave_style: OctaveStyle,
     pub node_style: NodeStyle,
+    /// Chord edges (empty when the toggle is off).
+    pub edges: Vec<EdgeInstance>,
 }
 
 fn lch(l: f64, c: f64, h: f64) -> Vec4 {
@@ -345,6 +364,29 @@ pub fn derive_scene(
         });
     }
 
+    // Chord edges: every pair of active nodes exactly one lattice step
+    // apart gets a beam. O(active^2), and active counts are tiny.
+    let mut edges = Vec::new();
+    if view.show_chord_edges {
+        let active: Vec<&NodeInstance> =
+            nodes.iter().filter(|n| n.activation > 0.0).collect();
+        for (i, a) in active.iter().enumerate() {
+            for b in &active[i + 1..] {
+                let dt = (a.lattice_pos.threes - b.lattice_pos.threes).abs();
+                let df = (a.lattice_pos.fives - b.lattice_pos.fives).abs();
+                let ds = (a.lattice_pos.sevens - b.lattice_pos.sevens).abs();
+                if dt + df + ds == 1 {
+                    edges.push(EdgeInstance {
+                        a: a.world_pos,
+                        b: b.world_pos,
+                        color: (a.color + b.color) * 0.5,
+                        strength: a.activation.min(b.activation),
+                    });
+                }
+            }
+        }
+    }
+
     Scene {
         nodes,
         camera,
@@ -352,6 +394,7 @@ pub fn derive_scene(
         node_radius: view.spacing * 0.25,
         octave_style: view.octave_style,
         node_style: view.node_style,
+        edges,
     }
 }
 
@@ -484,6 +527,42 @@ mod tests {
             "octave still mid-fade, got {}",
             origin.octaves[4]
         );
+    }
+
+    #[test]
+    fn chord_edges_connect_adjacent_active_nodes() {
+        // Just intonation makes lattice pitch classes unique within the
+        // default extents (under 12-TET, enharmonic duplicate nodes light
+        // up too and produce parallel edges - correct, but noisy to pin).
+        // C and G (a fifth apart, one step on the prime-3 axis) held
+        // together with a wide-enough tolerance: exactly one edge.
+        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 67] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let view = ViewConfig { show_chord_edges: true, ..ViewConfig::default() };
+        let scene = derive_scene(&tracker, &tuning, &view, Camera::default(), None, 0.0);
+        assert_eq!(scene.edges.len(), 1);
+        assert_eq!(scene.edges[0].strength, 1.0);
+
+        // C and F# (nothing within a step and 5 cents): no edge.
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 66] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let scene = derive_scene(&tracker, &tuning, &view, Camera::default(), None, 0.0);
+        assert_eq!(scene.edges.len(), 0);
     }
 
     #[test]

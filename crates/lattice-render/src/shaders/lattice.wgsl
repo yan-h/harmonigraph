@@ -324,3 +324,71 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let out_rgb = glyph_rgb * glyph + rgb * base_alpha * (1.0 - glyph);
     return vec4<f32>(out_rgb, alpha);
 }
+
+// ---- Chord edges -----------------------------------------------------------
+// Beams between simultaneously sounding, lattice-adjacent nodes: a held
+// chord's interval structure rendered as geometry. Drawn under the nodes.
+
+struct EdgeInstance {
+    // xyz: endpoint A, w: strength (min of the two node activations)
+    @location(0) a_strength: vec4<f32>,
+    // xyz: endpoint B, w: unused
+    @location(1) b_pad: vec4<f32>,
+    @location(2) color: vec4<f32>,
+};
+
+struct EdgeVsOut {
+    @builtin(position) clip_pos: vec4<f32>,
+    // x: 0..1 along the edge, y: -1..1 across it
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) strength: f32,
+};
+
+@vertex
+fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> EdgeVsOut {
+    var corners = array<vec2<f32>, 4>(
+        vec2<f32>(0.0, -1.0),
+        vec2<f32>(1.0, -1.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+    );
+    let corner = corners[vertex_index];
+
+    let a = inst.a_strength.xyz;
+    let b = inst.b_pad.xyz;
+    let axis = b - a;
+    // Billboard the beam's width: perpendicular to both the edge and the
+    // view direction, falling back to camera-up for edge-on views.
+    let view_dir = cross(u.cam_right.xyz, u.cam_up.xyz);
+    var perp = cross(normalize(axis), view_dir);
+    let plen = length(perp);
+    if plen < 1e-4 {
+        perp = u.cam_up.xyz;
+    } else {
+        perp = perp / plen;
+    }
+    let half_width = u.misc.y * 0.35;
+    let world = a + axis * corner.x + perp * corner.y * half_width;
+
+    var out: EdgeVsOut;
+    out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
+    out.uv = corner;
+    out.color = inst.color;
+    out.strength = inst.a_strength.w;
+    return out;
+}
+
+@fragment
+fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
+    // Soft-edged beam with a brighter core; the ends taper so the node
+    // discs own the joints.
+    let across = 1.0 - smoothstep(0.15, 1.0, abs(in.uv.y));
+    let along = smoothstep(0.0, 0.10, in.uv.x) * (1.0 - smoothstep(0.90, 1.0, in.uv.x));
+    let alpha = in.strength * across * along * 0.85;
+    if alpha < 0.01 {
+        discard;
+    }
+    let rgb = in.color.rgb * (0.55 + 0.45 * across);
+    return vec4<f32>(rgb * alpha, alpha);
+}
