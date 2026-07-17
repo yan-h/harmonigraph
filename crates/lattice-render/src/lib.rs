@@ -106,12 +106,22 @@ struct Uniforms {
     cam_right: [f32; 4],
     cam_up: [f32; 4],
     misc: [f32; 4],
+    /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z, w unused. The
+    /// dots style maps a dot's pitch through these to index `dot_ramp`.
+    misc2: [f32; 4],
+    /// Pitch->color lookup for the dots octave style (see lattice_scene's
+    /// `pitch_ramp_lut`), matching the node disc gradient.
+    dot_ramp: [[f32; 4]; lattice_scene::DOT_RAMP_N],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
 // growing the constant in lattice-scene past 12 would index out of bounds
 // at runtime here, so fail the build instead.
 const _: () = assert!(lattice_scene::OCTAVE_SLOTS <= 12);
+
+// The shader declares `dot_ramp` with a literal length; keep the two in
+// lockstep so the uniform buffer and the WGSL agree.
+const _: () = assert!(lattice_scene::DOT_RAMP_N == 16);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -125,6 +135,9 @@ struct GpuInstance {
     octaves: [u32; 3],
     /// Per-note animation seed (small constant, not a timestamp).
     seed: f32,
+    /// The node's pitch class in cents (0..1200); dots mode uses it to place
+    /// each octave dot at the note's absolute-pitch angle.
+    cents: f32,
 }
 
 impl GpuInstance {
@@ -132,7 +145,7 @@ impl GpuInstance {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32, 5 => Float32
         ],
     };
 }
@@ -230,6 +243,7 @@ impl LatticeCallback {
                 ],
                 octaves: pack_octaves(&n.octaves),
                 seed: n.seed,
+                cents: n.cents,
             })
             .collect();
 
@@ -256,6 +270,8 @@ impl LatticeCallback {
                     scene.octave_style.shader_index() as f32,
                     scene.node_style.shader_index() as f32,
                 ],
+                misc2: [scene.darkest_pitch, scene.brightest_pitch, 0.0, 0.0],
+                dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
             },
             target_format,
             pane_id,

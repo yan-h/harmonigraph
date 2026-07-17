@@ -19,28 +19,16 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 }
 
 /// How a node indicates which octaves its pitch class is sounding in.
-/// All modes read the same per-node octave bitmask; the fragment shader
-/// draws the glyphs. Kept as options side by side for design comparison.
+/// The fragment shader draws the glyphs from the per-node octave bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OctaveStyle {
     /// No octave indication.
     Off,
-    /// Small dots orbiting the disc; clock position = octave.
-    Dots,
-    /// Concentric rings; inner ring = lowest octave.
-    Rings,
-    /// Tick column with a faint full-height rail as the reference frame.
-    TicksRail,
-    /// Tick column with every octave slot shown as a dim pip (LED-meter
-    /// style); lit pips = sounding octaves.
+    /// Small dots around the disc; angle tracks absolute pitch (middle C
+    /// straight up, 45deg clockwise per octave, pitch class within the
+    /// octave included).
     #[default]
-    TicksLadder,
-    /// Tick column with a rail plus emphasized end caps at the bottom and
-    /// top of the octave range.
-    TicksCaps,
-    /// Ladder plus a brighter marker line at the middle-C octave (4), as a
-    /// musically meaningful anchor.
-    TicksMid,
+    Dots,
 }
 
 /// How held/active notes are rendered. All styles share the same instance
@@ -81,11 +69,6 @@ impl OctaveStyle {
         match self {
             OctaveStyle::Off => 0,
             OctaveStyle::Dots => 1,
-            OctaveStyle::Rings => 2,
-            OctaveStyle::TicksRail => 3,
-            OctaveStyle::TicksLadder => 4,
-            OctaveStyle::TicksCaps => 5,
-            OctaveStyle::TicksMid => 6,
         }
     }
 }
@@ -299,6 +282,10 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// Octave indicator slots (MIDI octaves 0..=9).
 pub const OCTAVE_SLOTS: usize = 10;
 
+/// Samples in the pitch->color lookup the dots octave style uses to tint
+/// each dot by its own octave's pitch. The shader mirrors this length.
+pub const DOT_RAMP_N: usize = 16;
+
 /// One lattice node, ready for instanced rendering.
 #[derive(Clone, Copy, Debug)]
 pub struct NodeInstance {
@@ -355,6 +342,13 @@ pub struct Scene {
     pub node_style: NodeStyle,
     /// Chord edges (empty when the toggle is off).
     pub edges: Vec<EdgeInstance>,
+    /// Pitch->color lookup for the dots octave style, matching the disc
+    /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
+    pub dot_ramp: [Vec4; DOT_RAMP_N],
+    /// Gradient endpoints (MIDI notes) the shader maps a dot's pitch through
+    /// to index `dot_ramp`; mirror the disc coloring's `FrameParams`.
+    pub darkest_pitch: f32,
+    pub brightest_pitch: f32,
 }
 
 fn lch(l: f64, c: f64, h: f64) -> Vec4 {
@@ -368,6 +362,30 @@ fn lch(l: f64, c: f64, h: f64) -> Vec4 {
         (rgb.b.clamp(0.0, 255.0) / 255.0) as f32,
         1.0,
     )
+}
+
+/// Normalized pitch height in 0..1 across the gradient range: 0 at
+/// `darkest_pitch`, 1 at `brightest_pitch` (both MIDI note numbers).
+fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
+    f64::from(
+        (pitch.clamp(darkest_pitch, brightest_pitch) - darkest_pitch)
+            / (brightest_pitch - darkest_pitch).max(0.01),
+    )
+}
+
+/// The pitch-gradient LCH ramp as a function of normalized height `t`
+/// (0..1). Shared by the node disc color and the dots octave style's
+/// per-dot tint, so a dot is the same color as the disc that pitch lights.
+fn pitch_ramp_lch(t: f64) -> Vec4 {
+    lch(t * 80.0, 85.0 - t * 60.0, (-100.0 + t * 190.0).rem_euclid(360.0))
+}
+
+/// The pitch ramp sampled into [`DOT_RAMP_N`] colors evenly spaced over the
+/// full `t` range, for the shader's per-dot color lookup (the shader maps a
+/// dot's pitch to a `t` and indexes this). Endpoints of the disc gradient
+/// are applied shader-side, so this LUT itself is range-independent.
+pub fn pitch_ramp_lut() -> [Vec4; DOT_RAMP_N] {
+    std::array::from_fn(|k| pitch_ramp_lch(k as f64 / (DOT_RAMP_N - 1) as f64))
 }
 
 /// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
@@ -388,15 +406,7 @@ pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitc
             _ => lch(0.0, 0.0, 0.0),     // 8: black
         },
         ChannelRole::PitchGradient => {
-            let t = f64::from(
-                (pitch.clamp(darkest_pitch, brightest_pitch) - darkest_pitch)
-                    / (brightest_pitch - darkest_pitch).max(0.01),
-            );
-            lch(
-                t * 80.0,
-                85.0 - t * 60.0,
-                (-100.0 + t * 190.0).rem_euclid(360.0),
-            )
+            pitch_ramp_lch(pitch_ramp_t(pitch, darkest_pitch, brightest_pitch))
         }
         // Outline voices get a bright neutral (the ring shape is the
         // signal). Ignored never reaches here — the tracker drops it.
@@ -481,6 +491,9 @@ pub fn derive_scene(
         octave_style: view.octave_style,
         node_style: view.node_style,
         edges,
+        dot_ramp: pitch_ramp_lut(),
+        darkest_pitch: frame.darkest_pitch,
+        brightest_pitch: frame.brightest_pitch,
     }
 }
 
@@ -591,6 +604,29 @@ mod tests {
         assert_ne!(low, high);
         // Brightest pitch should be, well, brighter.
         assert!(high.truncate().length() > low.truncate().length());
+    }
+
+    #[test]
+    fn dot_ramp_lut_reproduces_the_pitch_gradient() {
+        // The dots octave style tints each dot by sampling `pitch_ramp_lut`
+        // the way the shader does (linear interp across DOT_RAMP_N entries).
+        // Reconstructing that here must land on the disc's gradient color for
+        // the same pitch, so a dot is the color of the disc its pitch lights.
+        let lut = pitch_ramp_lut();
+        let (dark, bright) = (24.0f32, 108.0f32);
+        for pitch in [24.0f32, 36.0, 54.0, 60.0, 72.0, 96.0, 108.0] {
+            let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
+            let f = t * (DOT_RAMP_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            let i1 = (i0 + 1).min(DOT_RAMP_N - 1);
+            let lut_color = lut[i0].lerp(lut[i1], f - f.floor());
+            // Same pitch through the disc path (channel 9 is pitch-gradient).
+            let disc = channel_color(9, pitch, dark, bright);
+            assert!(
+                (lut_color - disc).truncate().length() < 0.05,
+                "pitch {pitch}: lut {lut_color:?} vs disc {disc:?}"
+            );
+        }
     }
 
     #[test]

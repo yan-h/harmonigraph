@@ -408,27 +408,11 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
 
-    // Octave indicator style: kept as switchable design candidates so they
-    // can be compared live while notes play. The Ticks variants differ in
-    // the reference frame showing where the octave range starts/ends.
+    // Octave indicator: dots around the disc positioned by absolute pitch,
+    // or off.
     ui.horizontal(|ui| {
         ui.label("Octaves");
-        for (style, label) in [
-            (OctaveStyle::Off, "Off"),
-            (OctaveStyle::Dots, "Dots"),
-            (OctaveStyle::Rings, "Rings"),
-        ] {
-            ui.selectable_value(&mut state.view.octave_style, style, label);
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label("Ticks");
-        for (style, label) in [
-            (OctaveStyle::TicksRail, "Rail"),
-            (OctaveStyle::TicksLadder, "Ladder"),
-            (OctaveStyle::TicksCaps, "Caps"),
-            (OctaveStyle::TicksMid, "Mid-C mark"),
-        ] {
+        for (style, label) in [(OctaveStyle::Off, "Off"), (OctaveStyle::Dots, "Dots")] {
             ui.selectable_value(&mut state.view.octave_style, style, label);
         }
     });
