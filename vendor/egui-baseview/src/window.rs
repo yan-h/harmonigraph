@@ -423,11 +423,19 @@ where
         }
 
         let now = Instant::now();
-        let do_repaint_now = if let Some(t) = self.repaint_after {
-            now >= t || viewport_output.repaint_delay.is_zero()
-        } else {
-            viewport_output.repaint_delay.is_zero()
-        };
+        // Texture updates (font atlas rebuilds after set_fonts, new images)
+        // are only uploaded inside render(); skipping this frame would drop
+        // them permanently, leaving egui's glyph coordinates pointing into a
+        // stale atlas (scrambled text). Force a render whenever deltas are
+        // pending.
+        let has_texture_updates = !full_output.textures_delta.set.is_empty()
+            || !full_output.textures_delta.free.is_empty();
+        let do_repaint_now = has_texture_updates
+            || if let Some(t) = self.repaint_after {
+                now >= t || viewport_output.repaint_delay.is_zero()
+            } else {
+                viewport_output.repaint_delay.is_zero()
+            };
 
         if do_repaint_now {
             self.renderer.render(

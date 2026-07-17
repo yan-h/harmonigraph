@@ -146,6 +146,8 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     if state.applied_font != Some(state.ui_font) {
         theme::apply_font(ui.ctx(), state.ui_font);
         state.applied_font = Some(state.ui_font);
+        // The rebuilt font atlas must reach the GPU promptly.
+        ui.ctx().request_repaint();
     }
 
     state.tuning = params::tuning_from_params(params);

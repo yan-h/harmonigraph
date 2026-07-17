@@ -23,12 +23,19 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
 
 - **Upstream base**: `egui-baseview 0.3.0` from crates.io (the RustAudio
   fork used by nice-plug).
-- **Patch** (2 call sites, `src/window.rs`): after a `Queue::resize()`, the
-  window resize triggered by the physical-size change passed physical
+- **Patch 1** (2 call sites, `src/window.rs`): after a `Queue::resize()`,
+  the window resize triggered by the physical-size change passed physical
   pixels to `Window::resize()`, which takes logical points — on scaled
   displays the window/view ended up `pixels_per_point` times too large
   (2x-zoomed, bottom-left-anchored content on Retina). Convert with
   `points_per_pixel` at both call sites (build path and `on_frame`).
+- **Patch 2** (1 site, `src/window.rs` `on_frame`): texture deltas (font
+  atlas rebuilds after `set_fonts`, new images) are only uploaded inside
+  `render()`, but frames with no repaint due skip `render()` and drop the
+  deltas permanently — glyph coordinates then point into a stale atlas
+  (scrambled text). Force a render whenever `textures_delta` is non-empty.
+  Only visible for apps that throttle repaints; always-repaint apps mask
+  it.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
