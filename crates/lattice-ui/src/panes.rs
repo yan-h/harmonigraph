@@ -192,10 +192,16 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 }
 
-/// Text drawn over the 3D view, haloed with a 1px outline so it stays
-/// readable whatever ends up behind it (bright nodes, edges, glow). The
-/// outline color should be the skin's recessed surface (`theme::well`),
-/// which contrasts with its text color by construction.
+/// Text drawn over the 3D view, haloed so it stays readable whatever
+/// ends up behind it (bright nodes, edges, glow). The outline color
+/// should be the skin's recessed surface (`theme::well`), which
+/// contrasts with its text color by construction.
+///
+/// The halo is the galley stamped around two rings: a tight opaque ring
+/// for contrast and a wider faint one that fades the edge out. Every
+/// sample sits at the same radius, snapped to whole physical pixels —
+/// mixed cardinal/diagonal offsets and sub-pixel radii both read as a
+/// lumpy outline on high-DPI displays.
 fn outlined_text(
     painter: &egui::Painter,
     anchor: egui::Pos2,
@@ -207,17 +213,18 @@ fn outlined_text(
 ) {
     let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
     let pos = align.anchor_size(anchor, galley.size()).min;
-    for (dx, dy) in [
-        (-1.0, -1.0),
-        (0.0, -1.0),
-        (1.0, -1.0),
-        (-1.0, 0.0),
-        (1.0, 0.0),
-        (-1.0, 1.0),
-        (0.0, 1.0),
-        (1.0, 1.0),
-    ] {
-        painter.galley(pos + egui::vec2(dx, dy), galley.clone(), outline);
+    let ppp = painter.ctx().pixels_per_point();
+    let snap = |pt: f32| (pt * ppp).round().max(1.0) / ppp;
+    // Soft ring first so the crisp ring and fill paint over it. Stamp
+    // alpha is well below the intended rim alpha because neighboring
+    // stamps overlap and accumulate.
+    for (radius, alpha) in [(snap(2.0), 0.15), (snap(1.2), 1.0)] {
+        let ring = outline.gamma_multiply(alpha);
+        for i in 0..16 {
+            let angle = std::f32::consts::TAU * i as f32 / 16.0;
+            let off = egui::vec2(angle.cos(), angle.sin()) * radius;
+            painter.galley(pos + off, galley.clone(), ring);
+        }
     }
     painter.galley(pos, galley, color);
 }
