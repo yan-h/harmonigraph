@@ -9,6 +9,6 @@ publish = false
 [dependencies]
 lattice-core = { workspace = true }
 lattice-ui = { workspace = true }
-lattice-render = { workspace = true }
+lattice-render = { workspace = true, features = ["hot-reload"] }
 eframe = { workspace = true }
 egui = { workspace = true }

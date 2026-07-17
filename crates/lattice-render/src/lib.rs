@@ -14,8 +14,11 @@
 //! render the scene into our own offscreen texture + depth buffer in
 //! `prepare()` and composite that texture here instead.
 //!
-//! TODO: shader hot-reload in the standalone harness (watch the .wgsl file,
-//! rebuild the pipeline on change instead of using `include_str!`).
+//! With the `hot-reload` feature (enabled by the standalone harness), the
+//! .wgsl file is watched on disk and the pipeline rebuilds on save —
+//! validated first, so a broken edit logs an error and keeps the old
+//! pipeline instead of crashing. Release plugin builds keep `include_str!`
+//! only.
 
 use std::collections::HashMap;
 
@@ -28,6 +31,70 @@ use lattice_scene::Scene;
 pub use egui_wgpu::wgpu;
 
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
+
+/// Entry points a (re)loaded shader must provide.
+const REQUIRED_ENTRY_POINTS: &[&str] = &["vs_main", "fs_main"];
+
+/// Watches the shader source on disk (dev builds only). The first sighting
+/// of the file only records a baseline mtime; edits after launch trigger
+/// reloads.
+#[cfg(feature = "hot-reload")]
+struct ShaderWatcher {
+    path: std::path::PathBuf,
+    mtime: Option<std::time::SystemTime>,
+    next_check: std::time::Instant,
+}
+
+#[cfg(feature = "hot-reload")]
+impl ShaderWatcher {
+    fn new() -> Self {
+        ShaderWatcher {
+            path: std::path::PathBuf::from(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/shaders/lattice.wgsl"
+            )),
+            mtime: None,
+            next_check: std::time::Instant::now(),
+        }
+    }
+
+
+    /// Returns the new shader source when the file changed since last poll.
+    fn poll(&mut self) -> Option<String> {
+        let now = std::time::Instant::now();
+        if now < self.next_check {
+            return None;
+        }
+        self.next_check = now + std::time::Duration::from_millis(500);
+
+        let mtime = std::fs::metadata(&self.path).and_then(|m| m.modified()).ok()?;
+        match self.mtime.replace(mtime) {
+            None => None, // baseline; the baked shader is current
+            Some(previous) if previous == mtime => None,
+            Some(_) => std::fs::read_to_string(&self.path).ok(),
+        }
+    }
+}
+
+/// Parse + validate WGSL and check our entry points exist, so a bad edit
+/// never reaches wgpu's panicking error handler.
+#[cfg(feature = "hot-reload")]
+fn validate_wgsl(source: &str) -> Result<(), String> {
+    let module = naga::front::wgsl::parse_str(source)
+        .map_err(|e| e.emit_to_string(source))?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .map_err(|e| format!("{e:?}"))?;
+    for required in REQUIRED_ENTRY_POINTS {
+        if !module.entry_points.iter().any(|ep| ep.name == *required) {
+            return Err(format!("missing entry point `{required}`"));
+        }
+    }
+    Ok(())
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -152,6 +219,8 @@ struct LatticeResources {
     bind_group_layout: wgpu::BindGroupLayout,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
+    #[cfg(feature = "hot-reload")]
+    watcher: ShaderWatcher,
 }
 
 struct PaneBuffers {
@@ -162,13 +231,60 @@ struct PaneBuffers {
     instance_count: u32,
 }
 
+/// Build the node pipeline from WGSL source (startup uses the baked-in
+/// source; hot-reload rebuilds from disk).
+fn create_pipeline(
+    device: &wgpu::Device,
+    shader_src: &str,
+    target_format: wgpu::TextureFormat,
+    bind_group_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lattice_shader"),
+        source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+    });
+
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lattice_pipeline_layout"),
+        bind_group_layouts: &[Some(bind_group_layout)],
+        ..Default::default()
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("lattice_pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[GpuInstance::LAYOUT],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                // Shader outputs premultiplied alpha.
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        // Must match the egui render pass, which is created without
+        // MSAA in both eframe (default) and egui-baseview (default).
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl LatticeResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("lattice_shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
-        });
-
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -182,50 +298,15 @@ impl LatticeResources {
                 count: None,
             }],
         });
-
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("lattice_pipeline_layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            ..Default::default()
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("lattice_pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[GpuInstance::LAYOUT],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    // Shader outputs premultiplied alpha.
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            // Must match the egui render pass, which is created without
-            // MSAA in both eframe (default) and egui-baseview (default).
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = create_pipeline(device, SHADER_SRC, target_format, &bind_group_layout);
 
         LatticeResources {
             pipeline,
             bind_group_layout,
             target_format,
             panes: HashMap::new(),
+            #[cfg(feature = "hot-reload")]
+            watcher: ShaderWatcher::new(),
         }
     }
 
@@ -284,6 +365,26 @@ impl CallbackTrait for LatticeCallback {
             callback_resources.insert(LatticeResources::new(device, self.target_format));
         }
         let resources: &mut LatticeResources = callback_resources.get_mut().unwrap();
+
+        // Dev builds: pick up edits to the .wgsl on disk. A broken edit is
+        // rejected with a message; the previous pipeline keeps rendering.
+        #[cfg(feature = "hot-reload")]
+        if let Some(source) = resources.watcher.poll() {
+            match validate_wgsl(&source) {
+                Ok(()) => {
+                    resources.pipeline = create_pipeline(
+                        device,
+                        &source,
+                        resources.target_format,
+                        &resources.bind_group_layout,
+                    );
+                    eprintln!("[lattice-render] shader hot-reloaded");
+                }
+                Err(err) => {
+                    eprintln!("[lattice-render] shader reload REJECTED, keeping old pipeline:\n{err}");
+                }
+            }
+        }
 
         let pane = resources.pane_buffers(device, self.pane_id);
 

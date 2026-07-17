@@ -5,9 +5,16 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+# Dev-only: watch the .wgsl on disk and rebuild the pipeline on change.
+# Enabled by the standalone harness; release plugin bundles are built
+# per-package and never activate it.
+hot-reload = ["dep:naga"]
+
 [dependencies]
 lattice-scene = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
+naga = { workspace = true, optional = true }

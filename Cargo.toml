@@ -55,6 +55,8 @@ nice-plug-xtask = "0.1.1"
 
 # Math / utility
 glam = { version = "0.30", features = ["serde"] }
+# Shader validation for hot-reload (dev only); version tracks wgpu's.
+naga = "29"
 bytemuck = { version = "1", features = ["derive"] }
 rtrb = "0.3"
 crossbeam = "0.8"

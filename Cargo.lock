@@ -1631,6 +1631,7 @@ dependencies = [
  "egui-wgpu",
  "glam",
  "lattice-scene",
+ "naga",
 ]
 
 [[package]]
