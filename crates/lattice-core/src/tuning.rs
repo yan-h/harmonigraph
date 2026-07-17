@@ -51,6 +51,27 @@ impl PitchClass {
     }
 }
 
+impl std::ops::Add for PitchClass {
+    type Output = PitchClass;
+    fn add(self, rhs: PitchClass) -> PitchClass {
+        PitchClass((self.0 + rhs.0) % OCTAVE_MICROCENTS)
+    }
+}
+
+impl std::ops::Neg for PitchClass {
+    type Output = PitchClass;
+    fn neg(self) -> PitchClass {
+        PitchClass((OCTAVE_MICROCENTS - self.0) % OCTAVE_MICROCENTS)
+    }
+}
+
+impl std::ops::Sub for PitchClass {
+    type Output = PitchClass;
+    fn sub(self, rhs: PitchClass) -> PitchClass {
+        self + -rhs
+    }
+}
+
 impl std::fmt::Display for PitchClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:.2}¢", self.to_cents())
@@ -162,5 +183,122 @@ mod tests {
         let node = tuning.pitch_class(LatticePos::new(1, 0, 0)); // 701.955
         assert!(tuning.matches(PitchClass::from_cents(700.0), node));
         assert!(!tuning.matches(PitchClass::from_cents(690.0), node));
+    }
+}
+
+
+/// Result of [`learn_tuning`]: parameters that could be inferred from the
+/// sounding pitch classes. `None` = nothing close enough was sounding.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct LearnedTuning {
+    /// Offset of C from 0 in zero-centered cents (-600..=600).
+    pub c_offset: Option<f32>,
+    pub three: Option<f32>,
+    pub five: Option<f32>,
+    pub seven: Option<f32>,
+}
+
+/// How close an interval must be to its just value to be learned (v1).
+const LEARN_RANGE_CENTS: f32 = 40.0;
+/// How close a pitch class must be to C to retune the C offset (v1).
+const LEARN_C_RANGE_CENTS: f32 = 50.0;
+
+/// Infer tuning parameters from a set of sounding pitch classes, ported
+/// from v1's tuning-learn button:
+/// - C offset: the sounding pitch class closest to C (within 50 cents).
+/// - Primes 3/5/7: over every pair of pitch classes, both interval
+///   directions are candidates (a fourth implies a fifth, because octaves
+///   are assumed perfectly tuned); the candidate closest to the just
+///   interval wins, if within 40 cents.
+pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
+    let mut classes = pitch_classes.to_vec();
+    classes.sort_unstable();
+    classes.dedup();
+
+    let mut learned = LearnedTuning::default();
+
+    // C offset.
+    let c = PitchClass::from_cents(0.0);
+    let mut best_c: Option<PitchClass> = None;
+    for &pc in &classes {
+        if pc.distance_to(c) <= PitchClassDistance::from_cents(LEARN_C_RANGE_CENTS)
+            && best_c.is_none_or(|b| pc.distance_to(c) < b.distance_to(c))
+        {
+            best_c = Some(pc);
+        }
+    }
+    learned.c_offset = best_c.map(|pc| {
+        let cents = pc.to_cents();
+        if cents > 600.0 { cents - 1200.0 } else { cents }
+    });
+
+    // Prime intervals.
+    let mut best = [
+        (PitchClass::from_cents(THREE_JUST), None::<PitchClass>),
+        (PitchClass::from_cents(FIVE_JUST), None),
+        (PitchClass::from_cents(SEVEN_JUST), None),
+    ];
+    for (i, &a) in classes.iter().enumerate() {
+        for &b in &classes[i + 1..] {
+            for interval in [a - b, b - a] {
+                for (target, best_so_far) in &mut best {
+                    let diff = interval.distance_to(*target);
+                    if diff <= PitchClassDistance::from_cents(LEARN_RANGE_CENTS)
+                        && best_so_far.is_none_or(|b| diff < b.distance_to(*target))
+                    {
+                        *best_so_far = Some(interval);
+                    }
+                }
+            }
+        }
+    }
+    learned.three = best[0].1.map(PitchClass::to_cents);
+    learned.five = best[1].1.map(PitchClass::to_cents);
+    learned.seven = best[2].1.map(PitchClass::to_cents);
+
+    learned
+}
+
+#[cfg(test)]
+mod learn_tests {
+    use super::*;
+
+    #[test]
+    fn learns_just_intervals_from_a_chord() {
+        // C + just E + just G, all as exact pitch classes.
+        let classes = [
+            PitchClass::from_cents(10.0), // slightly sharp C
+            PitchClass::from_cents(10.0 + FIVE_JUST),
+            PitchClass::from_cents(10.0 + THREE_JUST),
+        ];
+        let learned = learn_tuning(&classes);
+        assert_eq!(learned.c_offset, Some(10.0));
+        let three = learned.three.unwrap();
+        assert!((three - THREE_JUST).abs() < 0.01, "three = {three}");
+        let five = learned.five.unwrap();
+        assert!((five - FIVE_JUST).abs() < 0.01, "five = {five}");
+        assert_eq!(learned.seven, None);
+    }
+
+    #[test]
+    fn fourth_implies_fifth() {
+        // C and the F below it (inverted just fifth).
+        let classes = [
+            PitchClass::from_cents(0.0),
+            PitchClass::from_cents(1200.0 - THREE_JUST),
+        ];
+        let learned = learn_tuning(&classes);
+        let three = learned.three.unwrap();
+        assert!((three - THREE_JUST).abs() < 0.01, "three = {three}");
+    }
+
+    #[test]
+    fn nothing_close_learns_nothing() {
+        // A tritone-ish dyad: no prime interval within range, no C.
+        let classes = [
+            PitchClass::from_cents(300.0),
+            PitchClass::from_cents(900.0),
+        ];
+        assert_eq!(learn_tuning(&classes), LearnedTuning::default());
     }
 }
