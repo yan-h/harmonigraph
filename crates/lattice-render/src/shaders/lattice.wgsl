@@ -65,8 +65,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Solid disc occupies the inner half of the quad.
     let disc = 1.0 - smoothstep(0.42, 0.5, d);
-    // Soft additive-looking glow for active nodes.
-    let glow = (0.6 * activation + 0.25 * hovered) * exp(-3.0 * d);
+    // Soft additive-looking glow for active nodes. The exponential alone
+    // never reaches zero, so the quad boundary showed as a boxy halo;
+    // window it so it fades to exactly zero (with zero slope) inside the
+    // quad edge.
+    let window = 1.0 - smoothstep(0.5, 0.95, d);
+    let glow = (0.6 * activation + 0.25 * hovered) * exp(-3.0 * d) * window;
 
     let brightness = 0.35 + 0.65 * activation + 0.2 * hovered;
     let rgb = in.color.rgb * brightness;
