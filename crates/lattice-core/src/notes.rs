@@ -18,6 +18,9 @@ pub type Time = f64;
 pub enum NoteEventKind {
     On { velocity: f32 },
     Off,
+    /// Per-note tuning offset in semitones (CLAP note expression / MPE),
+    /// relative to the note's equal-tempered pitch. v1's PolyTuning.
+    Tuning { semitones: f32 },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -108,6 +111,14 @@ impl NoteTracker {
                     self.released.push(voice);
                 }
             }
+            NoteEventKind::Tuning { semitones } => {
+                if let Some(voice) = self.held.get_mut(&(event.channel, event.note)) {
+                    voice.pitch = f32::from(event.note) + semitones;
+                    voice.pitch_class = PitchClass::from_cents(voice.pitch * 100.0);
+                    // Octave indicators should track the sounding pitch too.
+                    voice.octave = (voice.pitch / 12.0).floor() as i8 - 1;
+                }
+            }
         }
     }
 
@@ -162,6 +173,33 @@ mod tests {
         // ...gone after the highlight time has fully elapsed.
         tracker.prune(2.1, 1.0);
         assert_eq!(tracker.voices().count(), 0);
+    }
+
+    #[test]
+    fn tuning_bends_pitch_class_and_octave() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60)); // C4
+        // Bend up a whole tone: D, still octave 4.
+        tracker.handle_event(NoteEvent {
+            time: 0.1,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: 2.0 },
+        });
+        let voice = tracker.voices().next().unwrap();
+        assert_eq!(voice.pitch, 62.0);
+        assert_eq!(voice.pitch_class, PitchClass::from_midi_note(2));
+        assert_eq!(voice.octave, 4);
+
+        // Bend down past the octave boundary: B3.
+        tracker.handle_event(NoteEvent {
+            time: 0.2,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: -1.0 },
+        });
+        let voice = tracker.voices().next().unwrap();
+        assert_eq!(voice.octave, 3);
     }
 
     #[test]

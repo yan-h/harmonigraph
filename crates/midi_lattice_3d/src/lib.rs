@@ -244,6 +244,11 @@ impl Plugin for MidiLattice3d {
                 | NoteEvent::Choke { timing, channel, note, .. } => {
                     Some((timing, channel, note, NoteEventKind::Off))
                 }
+                // Per-note tuning (CLAP note expression / MPE via the
+                // host); v1 supported this as PolyTuning.
+                NoteEvent::PolyTuning { timing, channel, note, tuning, .. } => {
+                    Some((timing, channel, note, NoteEventKind::Tuning { semitones: tuning }))
+                }
                 _ => None,
             };
             if let Some((timing, channel, note, kind)) = mapped {

@@ -71,6 +71,7 @@ impl eframe::App for App {
                 match event.kind {
                     NoteEventKind::On { .. } => "on",
                     NoteEventKind::Off => "off",
+                    NoteEventKind::Tuning { .. } => "tune",
                 }
             ));
             self.state.tracker.handle_event(event);
