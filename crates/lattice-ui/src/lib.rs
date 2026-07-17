@@ -1,0 +1,111 @@
+//! The shared UI shell: dockable panes, cross-pane hover state, and the
+//! per-frame root function. Both the standalone harness and the plugin
+//! editor call [`root_ui`] once per egui frame; everything else is internal.
+
+pub mod params;
+mod panes;
+
+use std::collections::VecDeque;
+
+use egui_dock::{DockArea, DockState, NodeIndex};
+use lattice_core::{LatticePos, NoteTracker, Tuning};
+use lattice_render::wgpu::TextureFormat;
+use lattice_scene::{Camera, ViewConfig};
+use params::ParamBackend;
+
+/// Scrollback for the debug console pane. Shells and panes log via
+/// [`SharedState::log`].
+pub struct Console {
+    lines: VecDeque<String>,
+    max_lines: usize,
+}
+
+impl Default for Console {
+    fn default() -> Self {
+        Console { lines: VecDeque::new(), max_lines: 500 }
+    }
+}
+
+impl Console {
+    pub fn log(&mut self, line: impl Into<String>) {
+        if self.lines.len() == self.max_lines {
+            self.lines.pop_front();
+        }
+        self.lines.push_back(line.into());
+    }
+
+    pub fn lines(&self) -> impl Iterator<Item = &str> {
+        self.lines.iter().map(String::as_str)
+    }
+
+    pub fn clear(&mut self) {
+        self.lines.clear();
+    }
+}
+
+/// Everything the UI reads and mutates each frame. One instance lives in the
+/// shell (inside the editor state in the plugin, inside the app in the
+/// standalone harness).
+pub struct SharedState {
+    pub tracker: NoteTracker,
+    /// Snapshot of the tuning parameters, refreshed each frame in
+    /// [`root_ui`] so core/scene code never touches the param system.
+    pub tuning: Tuning,
+    pub view: ViewConfig,
+    pub camera: Camera,
+    /// The pitch-class node the pointer is over, if any — shared so *every*
+    /// pane can highlight it (lattice glow, tuning pane readout, ...).
+    pub hovered: Option<LatticePos>,
+    pub console: Console,
+    /// Surface format of the shell's swapchain; the lattice render pipeline
+    /// must match it.
+    pub target_format: TextureFormat,
+    dock: DockState<panes::Tab>,
+}
+
+impl SharedState {
+    pub fn new(target_format: TextureFormat) -> Self {
+        // Default layout: big lattice view, tuning on the right, console and
+        // spectral stub tucked below it. Users can re-dock at runtime.
+        // TODO: persist the layout (DockState is serde-serializable).
+        let mut dock = DockState::new(vec![panes::Tab::Lattice]);
+        let surface = dock.main_surface_mut();
+        let [_, right] = surface.split_right(NodeIndex::root(), 0.72, vec![panes::Tab::Tuning]);
+        surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Spectral]);
+
+        SharedState {
+            tracker: NoteTracker::new(),
+            tuning: Tuning::default(),
+            view: ViewConfig::default(),
+            camera: Camera::default(),
+            hovered: None,
+            console: Console::default(),
+            target_format,
+            dock,
+        }
+    }
+
+    pub fn log(&mut self, line: impl Into<String>) {
+        self.console.log(line);
+    }
+}
+
+/// Draw one frame of the whole UI. `now` is seconds on the shell's clock
+/// (the same clock used to timestamp `NoteEvent`s).
+pub fn root_ui(ctx: &egui::Context, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+    state.tuning = params::tuning_from_params(params);
+    state.view.highlight_time = params.get(params::ParamKey::HighlightTime);
+    state.tracker.prune(now, state.view.highlight_time);
+
+    // DockState has to be moved out while panes borrow the rest of `state`.
+    let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
+    DockArea::new(&mut dock)
+        .style(egui_dock::Style::from_egui(ctx.style().as_ref()))
+        .show(ctx, &mut panes::Viewer { state, params, now });
+    state.dock = dock;
+
+    // The lattice animates continuously (decays, shader time), so keep
+    // frames coming. TODO: only request repaints while something is
+    // actually animating.
+    ctx.request_repaint();
+}

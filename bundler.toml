@@ -1,0 +1,4 @@
+# Metadata for NIH-plug's `cargo xtask bundle <package>` plugin bundler.
+
+[midi_lattice_3d]
+name = "MIDI Lattice 3D"

@@ -1,0 +1,313 @@
+//! The wgpu lattice renderer, packaged as an egui paint callback.
+//!
+//! The same code path runs in both shells: the standalone harness (eframe
+//! with the wgpu backend) and the plugin editor (egui-baseview with the wgpu
+//! backend). A pane that wants to show the lattice allocates a rect and
+//! adds [`lattice_paint_callback`] to the painter; pipelines and buffers are
+//! created lazily on first paint and cached in egui-wgpu's
+//! `CallbackResources`.
+//!
+//! Rendering model: one instanced draw of camera-facing quads (billboards),
+//! sorted back-to-front on the CPU (the egui render pass has no depth
+//! buffer). This is plenty for a lattice-sized scene. When effects need
+//! depth testing or post-processing (bloom etc.), the upgrade path is to
+//! render the scene into our own offscreen texture + depth buffer in
+//! `prepare()` and composite that texture here instead.
+//!
+//! TODO: shader hot-reload in the standalone harness (watch the .wgsl file,
+//! rebuild the pipeline on change instead of using `include_str!`).
+
+use std::collections::HashMap;
+
+use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
+use glam::Vec3;
+use lattice_scene::Scene;
+
+// Shells name texture formats through this re-export so every crate agrees
+// on the wgpu version.
+pub use egui_wgpu::wgpu;
+
+const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    view_proj: [f32; 16],
+    cam_right: [f32; 4],
+    cam_up: [f32; 4],
+    misc: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuInstance {
+    world_pos: [f32; 3],
+    color: [f32; 4],
+    params: [f32; 4],
+}
+
+impl GpuInstance {
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<GpuInstance>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x4],
+    };
+}
+
+/// Build the egui shape that renders `scene` into `rect`. `pane_id` must be
+/// unique per lattice view shown in the same frame (each gets its own GPU
+/// buffers; the pipeline is shared).
+pub fn lattice_paint_callback(
+    rect: egui::Rect,
+    scene: &Scene,
+    target_format: wgpu::TextureFormat,
+    pane_id: u64,
+) -> egui::PaintCallback {
+    let aspect = rect.width() / rect.height().max(1.0);
+    egui_wgpu::Callback::new_paint_callback(
+        rect,
+        LatticeCallback::from_scene(scene, aspect, target_format, pane_id),
+    )
+}
+
+/// Per-frame, per-pane draw data, computed on the UI thread.
+struct LatticeCallback {
+    instances: Vec<GpuInstance>,
+    uniforms: Uniforms,
+    target_format: wgpu::TextureFormat,
+    pane_id: u64,
+}
+
+impl LatticeCallback {
+    fn from_scene(
+        scene: &Scene,
+        aspect: f32,
+        target_format: wgpu::TextureFormat,
+        pane_id: u64,
+    ) -> Self {
+        let camera = scene.camera;
+        let view_proj = camera.view_proj(aspect);
+        let (right, up) = camera.right_up();
+
+        // Sort back-to-front along the view direction: no depth buffer in
+        // the egui pass, so alpha blending relies on draw order.
+        let eye = camera.eye();
+        let forward = (camera.target - eye).normalize_or_zero();
+        let mut order: Vec<(f32, &lattice_scene::NodeInstance)> = scene
+            .nodes
+            .iter()
+            .map(|n| ((n.world_pos - eye).dot(forward), n))
+            .collect();
+        order.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        let instances = order
+            .into_iter()
+            .map(|(_, n)| GpuInstance {
+                world_pos: n.world_pos.to_array(),
+                color: n.color.to_array(),
+                params: [
+                    n.activation,
+                    if n.hovered { 1.0 } else { 0.0 },
+                    n.octave_mask as f32,
+                    0.0,
+                ],
+            })
+            .collect();
+
+        LatticeCallback {
+            instances,
+            uniforms: Uniforms {
+                view_proj: view_proj.to_cols_array(),
+                cam_right: right.extend(0.0).to_array(),
+                cam_up: up.extend(0.0).to_array(),
+                misc: [scene.time, scene.node_radius, 0.0, 0.0],
+            },
+            target_format,
+            pane_id,
+        }
+    }
+}
+
+/// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
+struct LatticeResources {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    target_format: wgpu::TextureFormat,
+    panes: HashMap<u64, PaneBuffers>,
+}
+
+struct PaneBuffers {
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    instance_buffer: wgpu::Buffer,
+    instance_capacity: usize,
+    instance_count: u32,
+}
+
+impl LatticeResources {
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lattice_shader"),
+            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lattice_bind_group_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("lattice_pipeline_layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("lattice_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[GpuInstance::LAYOUT],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    // Shader outputs premultiplied alpha.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            // Must match the egui render pass, which is created without
+            // MSAA in both eframe (default) and egui-baseview (default).
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        LatticeResources {
+            pipeline,
+            bind_group_layout,
+            target_format,
+            panes: HashMap::new(),
+        }
+    }
+
+    fn pane_buffers(&mut self, device: &wgpu::Device, pane_id: u64) -> &mut PaneBuffers {
+        let layout = &self.bind_group_layout;
+        self.panes.entry(pane_id).or_insert_with(|| {
+            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lattice_uniforms"),
+                size: std::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lattice_bind_group"),
+                layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+            });
+            PaneBuffers {
+                uniform_buffer,
+                bind_group,
+                instance_buffer: create_instance_buffer(device, 256),
+                instance_capacity: 256,
+                instance_count: 0,
+            }
+        })
+    }
+}
+
+fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lattice_instances"),
+        size: (capacity * std::mem::size_of::<GpuInstance>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+impl CallbackTrait for LatticeCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen_descriptor: &ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        // Lazily (re)create shared resources. Recreate if the target format
+        // changed (it can't today, but this keeps the invariant explicit).
+        let recreate = callback_resources
+            .get::<LatticeResources>()
+            .map_or(true, |r| r.target_format != self.target_format);
+        if recreate {
+            callback_resources.insert(LatticeResources::new(device, self.target_format));
+        }
+        let resources: &mut LatticeResources = callback_resources.get_mut().unwrap();
+
+        let pane = resources.pane_buffers(device, self.pane_id);
+
+        if self.instances.len() > pane.instance_capacity {
+            pane.instance_capacity = self.instances.len().next_power_of_two();
+            pane.instance_buffer = create_instance_buffer(device, pane.instance_capacity);
+        }
+        pane.instance_count = self.instances.len() as u32;
+        if !self.instances.is_empty() {
+            queue.write_buffer(
+                &pane.instance_buffer,
+                0,
+                bytemuck::cast_slice(&self.instances),
+            );
+        }
+        queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
+
+        Vec::new()
+    }
+
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        callback_resources: &CallbackResources,
+    ) {
+        let Some(resources) = callback_resources.get::<LatticeResources>() else {
+            return;
+        };
+        let Some(pane) = resources.panes.get(&self.pane_id) else {
+            return;
+        };
+        if pane.instance_count == 0 {
+            return;
+        }
+
+        render_pass.set_pipeline(&resources.pipeline);
+        render_pass.set_bind_group(0, &pane.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+        render_pass.draw(0..4, 0..pane.instance_count);
+    }
+}
+
+/// Convenience: keep `Vec3` available to shells without a direct glam dep.
+pub type WorldVec = Vec3;

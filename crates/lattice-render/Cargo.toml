@@ -1,0 +1,13 @@
+[package]
+name = "lattice-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+lattice-scene = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }

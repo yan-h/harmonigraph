@@ -1,0 +1,10 @@
+[package]
+name = "lattice-scene"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+lattice-core = { workspace = true }
+glam = { workspace = true }

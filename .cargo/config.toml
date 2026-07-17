@@ -1,0 +1,12 @@
+# This project lives inside Google Drive. Keeping the cargo target directory
+# out of the synced folder avoids syncing many GB of build artifacts (and the
+# file-watcher churn slows builds down). Delete this override if you move the
+# project to a local path.
+[build]
+target-dir = "/Users/yan/.cache/midi-lattice-3d/target"
+
+[alias]
+# `cargo xtask bundle midi_lattice_3d --release` builds the CLAP/VST3 bundles.
+# xtask runs in release mode so serde etc. aren't compiled twice.
+xtask = "run --package xtask --release --"
+xtask-debug = "run --package xtask --"

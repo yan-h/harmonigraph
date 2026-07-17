@@ -1,0 +1,76 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lattice-core",
+    "crates/lattice-scene",
+    "crates/lattice-render",
+    "crates/lattice-ui",
+    "crates/lattice-standalone",
+    "crates/midi_lattice_3d",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Yan Han <yanhan13@gmail.com>"]
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+# Internal crates
+lattice-core = { path = "crates/lattice-core" }
+lattice-scene = { path = "crates/lattice-scene" }
+lattice-render = { path = "crates/lattice-render" }
+lattice-ui = { path = "crates/lattice-ui" }
+
+# GUI stack. These versions are coupled:
+#   egui-baseview 0.7 -> egui 0.33 / egui-wgpu 0.33 / wgpu 27
+#   eframe must match egui, egui_dock 0.18 -> egui 0.33
+# When bumping egui, bump all of these together.
+egui = "0.33"
+egui-wgpu = "0.33"
+eframe = { version = "0.33", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    "wayland",
+    "x11",
+] }
+egui_dock = "0.18"
+# 0.7 (egui 0.33 + wgpu backend) is not on crates.io yet; pinned to the
+# revision it was scaffolded against.
+egui-baseview = { git = "https://github.com/BillyDM/egui-baseview.git", rev = "11f487fe915d6208961064e619474b98f971594a", default-features = false, features = [
+    "wgpu",
+    "default_fonts",
+    # Required when default features are off: the crate's log macros come
+    # from either `tracing` or `nih_log`.
+    "tracing",
+] }
+# Must be the same baseview revision that egui-baseview pins, so the two
+# crates share window types.
+baseview = { git = "https://github.com/RustAudio/baseview.git", rev = "237d323c729f3aa99476ba3efa50129c5e86cad3" }
+
+# Plugin framework. Pinned to a revision for reproducible builds; bump
+# deliberately.
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
+nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
+
+# Math / utility
+glam = "0.30"
+bytemuck = { version = "1", features = ["derive"] }
+rtrb = "0.3"
+crossbeam = "0.8"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+raw-window-handle = "0.5"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+# Plugin GUIs are unusable in unoptimized debug builds; opt-level 2 keeps
+# dev iteration usable while still compiling fast-ish.
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
