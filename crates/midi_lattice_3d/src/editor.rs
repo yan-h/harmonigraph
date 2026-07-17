@@ -38,6 +38,8 @@ pub struct EditorShared {
     /// GUI clock epoch. Note events are re-stamped with this clock when
     /// drained (see below).
     start: Instant,
+    /// When the previous GUI update ran; used to detect event-loop stalls.
+    last_frame: Option<Instant>,
 }
 
 impl EditorShared {
@@ -46,6 +48,7 @@ impl EditorShared {
             consumer,
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             start: Instant::now(),
+            last_frame: None,
         }
     }
 }
@@ -180,6 +183,22 @@ impl Editor for LatticeEditor {
                 // Host-negotiated resizing, as in nih_plug_egui: the GUI
                 // stores a requested size, we ask the host, and only apply
                 // it if the host agrees.
+                {
+                    // Diagnostics: the GUI is driven by a frame timer, so a
+                    // long gap between updates means the event loop stalled
+                    // (run-loop mode issues, host blocking, ...). Surface
+                    // stalls in the console to make freezes attributable.
+                    let mut shared = state.shared.lock();
+                    let gap = shared.last_frame.map(|t| t.elapsed().as_secs_f64());
+                    shared.last_frame = Some(Instant::now());
+                    if let Some(gap) = gap.filter(|g| *g > 0.1) {
+                        shared
+                            .ui
+                            .console
+                            .log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
+                    }
+                }
+
                 // Peek — don't consume — the requested size: the host reads
                 // `Editor::size()` *during* `request_resize()`, and it must
                 // see the NEW size there. Consuming first (as nih_plug_egui
@@ -188,7 +207,17 @@ impl Editor for LatticeEditor {
                 // the mismatch shows up as content shifted toward the
                 // bottom (macOS anchors child views bottom-left).
                 if let Some(new_size) = egui_state.requested_size.load() {
-                    if context.request_resize() {
+                    let t0 = Instant::now();
+                    let accepted = context.request_resize();
+                    let roundtrip_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    state.shared.lock().ui.console.log(format!(
+                        "request_resize {}x{} -> {} ({:.1} ms)",
+                        new_size.0,
+                        new_size.1,
+                        if accepted { "accepted" } else { "REFUSED" },
+                        roundtrip_ms,
+                    ));
+                    if accepted {
                         // `queue.resize` takes PHYSICAL pixels, and on macOS
                         // baseview never emits a Resized event for
                         // programmatic resizes, so this is the only thing
@@ -232,7 +261,7 @@ impl Editor for LatticeEditor {
                 let backend = PluginParamBackend { params: &state.params, setter: &setter };
                 lattice_ui::root_ui(egui_ctx, &mut shared.ui, &backend, now);
 
-                resize_corner(egui_ctx, &egui_state);
+                resize_corner(egui_ctx, &egui_state, &mut shared.ui.console);
             },
         );
 
@@ -270,7 +299,7 @@ impl Editor for LatticeEditor {
 /// A drag handle in the bottom-right corner that requests a window resize
 /// from the host (replaces v1's resize hack; the host round-trip is the
 /// sanctioned path).
-fn resize_corner(ctx: &Context, egui_state: &EguiState) {
+fn resize_corner(ctx: &Context, egui_state: &EguiState, console: &mut lattice_ui::Console) {
     const CORNER: f32 = 24.0;
     let screen = ctx.content_rect();
     let corner_rect = egui::Rect::from_min_max(
@@ -299,10 +328,30 @@ fn resize_corner(ctx: &Context, egui_state: &EguiState) {
                 );
             }
 
-            if response.dragged() || response.drag_stopped() {
+            // Resize by drag *delta* from the size at drag start, not by
+            // absolute pointer position: grabbing the handle anywhere but
+            // its exact corner must not snap the window to the pointer.
+            let anchor_id = egui::Id::new("window_resize_anchor");
+            if response.drag_started() {
                 if let Some(pointer) = response.interact_pointer_pos() {
-                    let width = pointer.x.max(400.0).round() as u32;
-                    let height = pointer.y.max(300.0).round() as u32;
+                    let (w, h) = egui_state.size();
+                    ctx.data_mut(|d| d.insert_temp(anchor_id, (pointer, w, h)));
+                    console.log(format!(
+                        "resize drag start at ({:.0},{:.0}), size {}x{}",
+                        pointer.x, pointer.y, w, h
+                    ));
+                }
+            }
+
+            if response.dragged() || response.drag_stopped() {
+                let anchor: Option<(egui::Pos2, u32, u32)> = ctx.data(|d| d.get_temp(anchor_id));
+                if let (Some(pointer), Some((start_pointer, start_w, start_h))) =
+                    (response.interact_pointer_pos(), anchor)
+                {
+                    let width =
+                        ((start_w as f32 + (pointer.x - start_pointer.x)).max(400.0)).round() as u32;
+                    let height =
+                        ((start_h as f32 + (pointer.y - start_pointer.y)).max(300.0)).round() as u32;
 
                     // Host resizes are asynchronous, so every live request
                     // causes a transient parent/child mismatch (visible
@@ -319,6 +368,9 @@ fn resize_corner(ctx: &Context, egui_state: &EguiState) {
                         egui_state.requested_size.store(Some((width, height)));
                         ctx.data_mut(|d| d.insert_temp(last_id, now));
                     }
+                }
+                if response.drag_stopped() {
+                    console.log("resize drag stop");
                 }
             }
         });
