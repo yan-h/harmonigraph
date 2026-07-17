@@ -423,41 +423,43 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
 }
 
 
-/// Debug printout of all held notes, grouped by exact pitch class (as
-/// sounding, including per-note tuning), each listing the octaves it is
-/// present in. Octave numbers use Bitwig's convention (middle C = C3).
+/// Debug printout of all held notes, one line per voice, sorted by
+/// descending absolute pitch. Note names use the 12-TET spelling of the
+/// MIDI key; octave numbers use Bitwig's convention (middle C = C3). The
+/// pitch and cents columns show the actual sounding values (including
+/// per-note tuning).
 fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use std::collections::BTreeMap;
+    const KEY_NAMES: [&str; 12] = [
+        "C", "C\u{266F}", "D", "D\u{266F}", "E", "F",
+        "F\u{266F}", "G", "G\u{266F}", "A", "A\u{266F}", "B",
+    ];
 
-    let mut by_pitch_class: BTreeMap<lattice_core::PitchClass, Vec<i8>> = BTreeMap::new();
-    for voice in state
+    let mut voices: Vec<_> = state
         .tracker
         .voices()
         .filter(|v| v.state == lattice_core::VoiceState::Held)
-    {
-        by_pitch_class
-            .entry(voice.pitch_class)
-            .or_default()
-            .push(voice.display_octave());
-    }
-
-    if by_pitch_class.is_empty() {
+        .collect();
+    if voices.is_empty() {
         ui.weak("No held notes.");
         return;
     }
+    voices.sort_by(|a, b| b.pitch.total_cmp(&a.pitch));
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (pitch_class, mut octaves) in by_pitch_class {
-                octaves.sort_unstable();
-                octaves.dedup();
-                let octaves = octaves
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                ui.monospace(format!("{:>10}  octaves {}", pitch_class.to_string(), octaves));
+            for voice in voices {
+                let name = format!(
+                    "{}{}",
+                    KEY_NAMES[usize::from(voice.note % 12)],
+                    voice.display_octave()
+                );
+                ui.monospace(format!(
+                    "{name:<5} ch{ch:<3} pitch {pitch:7.2}  {cents:>8.2}\u{a2}",
+                    ch = voice.channel + 1,
+                    pitch = voice.pitch,
+                    cents = voice.pitch_class.to_cents(),
+                ));
             }
         });
 }
