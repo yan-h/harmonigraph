@@ -425,9 +425,9 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
 
 /// Debug printout of all held notes, one line per voice, sorted by
 /// descending absolute pitch. Note names use the 12-TET spelling of the
-/// MIDI key; octave numbers use Bitwig's convention (middle C = C3). The
-/// pitch and cents columns show the actual sounding values (including
-/// per-note tuning).
+/// MIDI key; octave numbers use Bitwig's convention (middle C = C3); the
+/// cents column shows the sounding pitch class (including per-note
+/// tuning).
 fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     const KEY_NAMES: [&str; 12] = [
         "C", "C\u{266F}", "D", "D\u{266F}", "E", "F",
@@ -445,19 +445,20 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     }
     voices.sort_by(|a, b| b.pitch.total_cmp(&a.pitch));
 
+    ui.monospace(
+        egui::RichText::new("note  oct  ch     cents")
+            .monospace()
+            .color(theme::text_dim()),
+    );
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for voice in voices {
-                let name = format!(
-                    "{}{}",
-                    KEY_NAMES[usize::from(voice.note % 12)],
-                    voice.display_octave()
-                );
                 ui.monospace(format!(
-                    "{name:<5} ch{ch:<3} pitch {pitch:7.2}  {cents:>8.2}\u{a2}",
+                    "{name:<4} {oct:>4} {ch:>3}  {cents:>8.2}\u{a2}",
+                    name = KEY_NAMES[usize::from(voice.note % 12)],
+                    oct = voice.display_octave(),
                     ch = voice.channel + 1,
-                    pitch = voice.pitch,
                     cents = voice.pitch_class.to_cents(),
                 ));
             }
