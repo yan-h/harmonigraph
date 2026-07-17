@@ -235,11 +235,16 @@ fn tuning_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         }
     }
 
+    ui.separator();
+    // Cosmetic settings, apart from the structural View section: how things
+    // fade and color, not what the grid shows.
+    ui.heading("Appearance");
+    param_bars(ui, params, &ParamKey::APPEARANCE);
+    ui.checkbox(&mut state.view.show_labels, "Note labels");
+
     // Octave indicator style: kept as switchable design candidates so they
     // can be compared live while notes play. The Ticks variants differ in
     // the reference frame showing where the octave range starts/ends.
-    ui.checkbox(&mut state.view.show_labels, "Note labels");
-
     ui.horizontal(|ui| {
         ui.label("Octaves");
         for (style, label) in [
