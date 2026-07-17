@@ -178,27 +178,34 @@ fn dot_pitch_color(pitch: f32) -> vec3<f32> {
     return mix(u.dot_ramp[i0].rgb, u.dot_ramp[i1].rgb, f - floor(f));
 }
 
-// Faint C-octave reference frame for the dots style: thin rings at the four
-// cardinals, where a C sits — up = middle C (C3 in the C3=middle-C naming),
-// left/right = +/-2 octaves (C1 / C5), down = +/-4 octaves. A sounding
-// note's dots read against these anchors; a C's dot nests inside its ring.
-// Radius sits just outside the dot so a lit dot shows inside it.
-const DOTS_REF_RING: f32 = 0.155;
+// Faint C-octave reference frame for the dots style: short radial ticks
+// sitting just OUTSIDE the dot orbit at the four cardinals, pointing at where
+// a C would land — up = middle C (C3 in the C3=middle-C naming), left/right =
+// -/+2 octaves (C1 / C5), down = +/-4 octaves. Kept beyond the dots (which
+// reach ~DOT_ORBIT + DOT_EDGE) so a lit dot never overlaps a tick; a note's
+// dots read against these fixed anchors like marks on a dial.
+const DOTS_REF_R: f32 = 0.93;        // tick mid-radius (dots orbit at DOT_ORBIT)
+const DOTS_REF_HALF_LEN: f32 = 0.04; // radial half-length
+const DOTS_REF_HALF_W: f32 = 0.02;   // tangential half-width
 fn dots_reference(uv: vec2<f32>) -> f32 {
     var dirs = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, DOT_ORBIT),  // up:    middle C
-        vec2<f32>(DOT_ORBIT, 0.0),  // right: +2 octaves
-        vec2<f32>(0.0, -DOT_ORBIT), // down:  +/-4 octaves
-        vec2<f32>(-DOT_ORBIT, 0.0), // left:  -2 octaves
+        vec2<f32>(0.0, 1.0),  // up:    middle C
+        vec2<f32>(1.0, 0.0),  // right: +2 octaves
+        vec2<f32>(0.0, -1.0), // down:  +/-4 octaves
+        vec2<f32>(-1.0, 0.0), // left:  -2 octaves
     );
     var cov = 0.0;
     for (var k = 0u; k < 4u; k = k + 1u) {
-        let ring = 1.0 - smoothstep(0.02, 0.045, abs(distance(uv, dirs[k]) - DOTS_REF_RING));
-        cov = max(cov, ring);
+        let n = dirs[k];
+        let radial = dot(uv, n);                        // outward along the cardinal
+        let tang = abs(dot(uv, vec2<f32>(-n.y, n.x)));  // sideways offset
+        let dr = max(abs(radial - DOTS_REF_R) - DOTS_REF_HALF_LEN, 0.0);
+        let ds = max(tang - DOTS_REF_HALF_W, 0.0);
+        cov = max(cov, 1.0 - smoothstep(0.0, 0.02, dr + ds));
     }
     // Dimmed relative to a lit dot; the caller further scales by the note's
     // fade so the frame appears only while the node sounds.
-    return cov * 0.38;
+    return cov * 0.4;
 }
 
 // Reference furniture for the tick variants: static geometry showing where
@@ -401,7 +408,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 }
             }
         }
-        // Reference frame, faded with the brightest slot: cardinal C rings
+        // Reference frame, faded with the brightest slot: cardinal C ticks
         // for dots, the tick furniture for modes 3..6.
         if max_level > 0.0 {
             if mode == 1u {
