@@ -427,7 +427,9 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
 /// descending absolute pitch. Note names use the 12-TET spelling of the
 /// MIDI key; octave numbers use Bitwig's convention (middle C = C3); the
 /// cents column shows the sounding pitch class (including per-note
-/// tuning).
+/// tuning); the node column shows which lattice position the pitch class
+/// lights up under the current tuning/tolerance and view extents ("--"
+/// = sounding but not represented anywhere on the visible lattice).
 fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     const KEY_NAMES: [&str; 12] = [
         "C", "C\u{266F}", "D", "D\u{266F}", "E", "F",
@@ -446,7 +448,7 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     voices.sort_by(|a, b| b.pitch.total_cmp(&a.pitch));
 
     ui.monospace(
-        egui::RichText::new("note  oct     cents  ch")
+        egui::RichText::new("note  oct     cents  node     ch")
             .monospace()
             .color(theme::text_dim()),
     );
@@ -454,11 +456,30 @@ fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for voice in voices {
+                // The nearest visible lattice node this pitch class lights
+                // up, if any (multiple can match within tolerance).
+                let node = coords::positions_within(
+                    -state.view.extent_threes..=state.view.extent_threes,
+                    -state.view.extent_fives..=state.view.extent_fives,
+                    -state.view.extent_sevens..=state.view.extent_sevens,
+                )
+                .filter(|&pos| {
+                    state
+                        .tuning
+                        .matches(voice.pitch_class, state.tuning.pitch_class(pos))
+                })
+                .min_by_key(|&pos| {
+                    voice
+                        .pitch_class
+                        .distance_to(state.tuning.pitch_class(pos))
+                })
+                .map(|pos| pos.note_name().to_string());
                 ui.monospace(format!(
-                    "{name:<4} {oct:>4} {cents:>8.2}\u{a2} {ch:>3}",
+                    "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",
                     name = KEY_NAMES[usize::from(voice.note % 12)],
                     oct = voice.display_octave(),
                     cents = voice.pitch_class.to_cents(),
+                    node = node.as_deref().unwrap_or("--"),
                     ch = voice.channel + 1,
                 ));
             }
