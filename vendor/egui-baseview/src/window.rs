@@ -438,7 +438,7 @@ where
             };
 
         if do_repaint_now {
-            self.renderer.render(
+            let presented = self.renderer.render(
                 window,
                 self.bg_color,
                 self.physical_size,
@@ -447,7 +447,11 @@ where
                 &mut full_output,
             );
 
-            self.repaint_after = None;
+            // A skipped present (occluded window, lost/outdated surface)
+            // must not consume the repaint request: retry next tick, so
+            // the first frame after the surface comes back is fresh
+            // rather than the pre-occlusion ghost.
+            self.repaint_after = if presented { None } else { Some(now) };
         } else if let Some(repaint_after) = now.checked_add(viewport_output.repaint_delay) {
             // Schedule to repaint after the requested time has elapsed.
             self.repaint_after = Some(repaint_after);
@@ -713,6 +717,14 @@ where
                         .get_mut(&self.viewport_id)
                         .unwrap()
                         .focused = Some(false);
+                }
+                baseview::WindowEvent::Occluded(occluded) => {
+                    if !occluded {
+                        // Re-exposed after occlusion: the compositor may
+                        // have kept showing a stale snapshot of the
+                        // window; repaint and present a fresh frame now.
+                        self.repaint_after = Some(Instant::now());
+                    }
                 }
                 baseview::WindowEvent::WillClose => {}
             },

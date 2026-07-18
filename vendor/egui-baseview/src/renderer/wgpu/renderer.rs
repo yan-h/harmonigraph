@@ -150,6 +150,9 @@ impl Renderer {
         }
     }
 
+    /// Returns whether a frame was actually presented; `false` means the
+    /// surface wasn't available (occluded window, outdated/lost surface)
+    /// and the caller should retry rather than treat the frame as shown.
     pub fn render(
         &mut self,
         window: &baseview::Window<'_>,
@@ -158,7 +161,7 @@ impl Renderer {
         pixels_per_point: f32,
         egui_ctx: &mut egui::Context,
         full_output: &mut FullOutput,
-    ) {
+    ) -> bool {
         let PhySize {
             width: canvas_width,
             height: canvas_height,
@@ -210,7 +213,9 @@ impl Renderer {
         let mut recreate_surface = false;
         let output_frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => Some(texture),
-            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => return,
+            wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
+                return false;
+            }
             wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
                 None
             }
@@ -232,7 +237,7 @@ impl Renderer {
             }
 
             self.configure_surface(self.width, self.height);
-            return;
+            return false;
         };
 
         {
@@ -293,6 +298,7 @@ impl Renderer {
             .submit(user_cmd_bufs.into_iter().chain([encoded]));
 
         output_frame.present();
+        true
     }
 }
 

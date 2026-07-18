@@ -29,8 +29,20 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   plugin window is first clicked (the host's not-yet-key window appears
   not to deliver tracking/cursorUpdate events); accepted as cosmetic —
   everything is correct from the first click on.
+- **Patch 3** (3 files: `src/event.rs`,
+  `src/wrappers/appkit/notification_center.rs`,
+  `src/platform/macos/view.rs`): new `WindowEvent::Occluded(bool)`
+  (mirroring winit's event), emitted from an
+  `NSWindowDidChangeOcclusionStateNotification` observer filtered to the
+  view's own window. On re-expose the view is also marked
+  `setNeedsDisplay` so AppKit commits a fresh frame over whatever stale
+  snapshot the compositor kept while the window was hidden. Together with
+  the egui-baseview patch below, this fixes the outdated ghost image that
+  stayed on screen after tabbing away from the host and back, until the
+  window was clicked. macOS only; other platforms never emit the event.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
-  re-apply the `kCFRunLoop*` lines and the cursor-rect ownership patch.
+  re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, and
+  the occlusion-event patch.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
   baseview-based plugin. baseview and nice-plug are both RustAudio projects,
   so the fix would land in exactly the stack this plugin uses.
@@ -52,8 +64,18 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   (scrambled text). Force a render whenever `textures_delta` is non-empty.
   Only visible for apps that throttle repaints; always-repaint apps mask
   it.
+- **Patch 3** (`src/window.rs` + both renderers): stale-frame ("ghost")
+  recovery after window occlusion. `Renderer::render` now returns whether
+  a frame was actually presented; a skipped present (occluded window,
+  outdated/lost surface — the wgpu renderer's early-return paths) no
+  longer consumes the repaint request, so rendering retries next tick
+  instead of freezing on the last presented frame. The new
+  `baseview::WindowEvent::Occluded(false)` (see the baseview patch above)
+  schedules an immediate repaint so the first frame after re-expose is
+  fresh.
 - **Upgrade**: download the new crates.io tarball into
-  `vendor/egui-baseview`, re-apply the two conversions.
+  `vendor/egui-baseview`, re-apply the two conversions, the
+  texture-delta forced render, and the occlusion/skipped-present patch.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

@@ -113,6 +113,12 @@ pub enum WindowEvent {
     Resized(WindowInfo),
     Focused,
     Unfocused,
+    /// The window's occlusion state changed: `true` means nothing of it is
+    /// visible on screen (covered by other windows, app switched away),
+    /// `false` means it was (re)exposed. After a re-expose the compositor
+    /// may still be showing a stale snapshot of the window, so handlers
+    /// should repaint. Currently only emitted on macOS.
+    Occluded(bool),
     WillClose,
 }
 
