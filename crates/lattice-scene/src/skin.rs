@@ -61,29 +61,37 @@ pub struct Skin {
 }
 
 impl Default for Skin {
-    /// The original dark look; values identical to the constants the theme
-    /// and scene used before the skin mechanism existed.
+    /// The dark look. Backgrounds (`panel`/`well`) stay at the original deep
+    /// values — the instrument reads as dark on purpose — but the whole
+    /// foreground/structure band above them was collapsed into a near-
+    /// invisible cluster (widget vs panel 1.24, hairline 1.22, slider fill
+    /// vs track 2.01, surface_faint 1.07). This pass lifts that band so the
+    /// chrome is legible: dividers, resting buttons, hovered surfaces, and
+    /// slider fills now separate clearly from the background, and secondary
+    /// text (labels, inactive tabs, console, disclosure arrows — all routed
+    /// through `text_dim`) rises from ~5.5:1 to ~8:1. Idle nodes and the
+    /// grid brighten to match. See git history for the pre-pass values.
     fn default() -> Self {
         Skin {
-            node_idle: Vec4::new(0.16, 0.17, 0.20, 1.0),
-            grid_line: Vec4::new(0.16, 0.17, 0.20, 0.55),
+            node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
+            grid_line: Vec4::new(0.27, 0.29, 0.34, 0.62),
             panel: [24, 25, 29],
             well: [15, 16, 19],
-            surface_faint: [30, 31, 36],
-            hairline: [40, 42, 48],
-            widget: [41, 43, 50],
-            widget_hover: [54, 57, 66],
-            accent: [110, 140, 200],
-            text: [222, 224, 228],
-            text_dim: [140, 144, 152],
-            accent_fill: [58, 70, 94],
-            accent_fill_hover: [70, 86, 118],
-            accent_fill_drag: [88, 109, 150],
-            accent_active: [76, 92, 125],
-            accent_edge: [90, 111, 152],
-            armed: [235, 171, 82],
-            warning_text: [232, 130, 120],
-            warning_bg: [58, 30, 28],
+            surface_faint: [46, 48, 57],
+            hairline: [64, 67, 77],
+            widget: [62, 66, 77],
+            widget_hover: [84, 88, 102],
+            accent: [124, 156, 216],
+            text: [228, 230, 234],
+            text_dim: [172, 177, 188],
+            accent_fill: [76, 95, 132],
+            accent_fill_hover: [98, 122, 168],
+            accent_fill_drag: [120, 150, 206],
+            accent_active: [100, 124, 172],
+            accent_edge: [130, 160, 216],
+            armed: [238, 178, 92],
+            warning_text: [236, 142, 132],
+            warning_bg: [64, 33, 31],
         }
     }
 }
