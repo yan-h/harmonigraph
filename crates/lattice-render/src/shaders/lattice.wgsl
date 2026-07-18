@@ -159,12 +159,13 @@ const PETAL_W: f32 = 0.105;   // tangential half-width at the widest point
 
 // Slices geometry, quad UV units: annular pizza-slice sectors filling the
 // ring around the disc. The inner radius sits off the disc edge (~0.5) so
-// a gap ring separates slice from disc; the constant angular width leaves
-// gaps between neighbors (slots are 0.785 rad apart) and gives the
-// natural pizza taper toward the center.
+// a gap ring separates slice from disc. Neighboring slices (slots are
+// 0.785 rad apart) are separated by a CONSTANT-thickness gap: the slice
+// edges are radial lines offset SLICE_GAP_HALF from the sector bisectors,
+// not constant-angle edges (those read as a V that widens outward).
 const SLICE_IN: f32 = 0.56;
 const SLICE_OUT: f32 = 0.93;
-const SLICE_HALF_ANG: f32 = 0.30;
+const SLICE_GAP_HALF: f32 = 0.06;
 
 // Coverage (0..1) of the indicator glyph for a SOUNDING octave slot `i` on
 // a node whose pitch class is `cents`. All styles share the dots angle
@@ -218,15 +219,23 @@ fn octave_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, time: f32, aa: f32
         return aa_inside(0.115, distance(uv, e * 0.50), aa);
     }
     // Slices: annular sectors (the outer stretch of a pizza slice), crisp
-    // screen-constant edges. The angular soft band is aa converted to
-    // radians at this pixel's radius. The angle to the slot direction is
-    // atan2(|cross|, dot) — scale-invariant, no seam, and where it is
-    // degenerate (uv ~ 0) the ring factor is already zero.
+    // screen-constant edges. The sector bisector directions b1/b2 bound
+    // this slot's wedge; the cross products against them give BOTH the
+    // side-of-line tests (which wedge owns the pixel — the hard boundary
+    // is invisible, buried mid-gap where coverage is zero) and the
+    // Euclidean distance to each edge line, thresholded at SLICE_GAP_HALF
+    // for a gap of constant thickness at every radius.
     let dd = length(uv);
     let ring = aa_inside(SLICE_OUT, dd, aa) * (1.0 - aa_inside(SLICE_IN, dd, aa));
-    let delta = atan2(abs(uv.x * e.y - uv.y * e.x), dot(uv, e));
-    let sector = aa_inside(SLICE_HALF_ANG, delta, aa / max(dd, 0.25));
-    return ring * sector;
+    let hb = DOTS_RAD_PER_OCTAVE * 0.5;
+    let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
+    let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
+    let c1 = uv.x * b1.y - uv.y * b1.x;
+    let c2 = uv.x * b2.y - uv.y * b2.x;
+    let own = select(0.0, 1.0, c1 > 0.0 && c2 < 0.0);
+    let g = (1.0 - aa_inside(SLICE_GAP_HALF, abs(c1), aa))
+        * (1.0 - aa_inside(SLICE_GAP_HALF, abs(c2), aa));
+    return ring * own * g;
 }
 
 // Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch

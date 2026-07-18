@@ -39,7 +39,8 @@ pub enum OctaveStyle {
     /// angle.
     Bumps,
     /// Annular pizza-slice sectors filling the ring around the disc, with
-    /// a gap ring off the rim and angular gaps between neighbors.
+    /// a gap ring off the rim and constant-thickness gaps between
+    /// neighbors.
     Slices,
 }
 
