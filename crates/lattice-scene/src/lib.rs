@@ -186,7 +186,7 @@ pub struct ViewConfig {
     /// their comma marks; Learn mode toggles this from the held chord.
     #[serde(default)]
     pub meantone: bool,
-    /// Overlay the audio-derived pitch-class spectrum in the Spectral pane
+    /// Overlay the audio-derived pitch spectrum in the Spectral pane
     /// (plugin: the input bus; standalone: the mock synth). Off by default:
     /// the pane's MIDI-only look is unchanged until asked.
     #[serde(default)]

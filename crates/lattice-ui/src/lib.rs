@@ -45,14 +45,14 @@ impl Console {
     }
 }
 
-/// Audio-derived pitch-class spectrum shown in the Spectral pane. The
-/// shell feeds mono samples every frame from wherever its audio comes from
+/// Audio-derived pitch spectrum shown in the Spectral pane. The shell
+/// feeds mono samples every frame from wherever its audio comes from
 /// (plugin: input bus via a ring buffer; standalone: the mock synth); the
 /// pane asks for a display refresh when it draws. Runtime-only.
 pub struct AudioSpectrum {
     analyzer: lattice_core::spectrum::SpectrumAnalyzer,
     /// Smoothed display buckets (power; the pane maps to height).
-    display: [f32; lattice_core::spectrum::PC_BINS],
+    display: [f32; lattice_core::spectrum::SPECTRUM_BINS],
     /// When the FFT last ran, on the shell clock. The FFT is throttled
     /// well below frame rate — it feeds a meter, not an oscilloscope.
     last_fft: Option<f64>,
@@ -65,7 +65,7 @@ impl Default for AudioSpectrum {
     fn default() -> Self {
         AudioSpectrum {
             analyzer: lattice_core::spectrum::SpectrumAnalyzer::new(48_000.0),
-            display: [0.0; lattice_core::spectrum::PC_BINS],
+            display: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             last_fft: None,
             last_samples: None,
         }
@@ -93,12 +93,12 @@ impl AudioSpectrum {
 
     /// Advance the display (runs the FFT at most every FFT_INTERVAL) and
     /// return the buckets to draw, or None while no audio is flowing.
-    pub fn display(&mut self, now: f64) -> Option<&[f32; lattice_core::spectrum::PC_BINS]> {
+    pub fn display(&mut self, now: f64) -> Option<&[f32; lattice_core::spectrum::SPECTRUM_BINS]> {
         if !self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS) {
             return None;
         }
         if self.last_fft.is_none_or(|t| now - t >= Self::FFT_INTERVAL) {
-            if let Some(fresh) = self.analyzer.pitch_class_spectrum() {
+            if let Some(fresh) = self.analyzer.pitch_spectrum() {
                 for (shown, new) in self.display.iter_mut().zip(fresh) {
                     *shown += (new - *shown) * Self::SMOOTHING;
                 }
@@ -155,19 +155,28 @@ pub struct CameraPreset {
     pub pitch: f32,
 }
 
+/// The default pane arrangement: big lattice with the Spectral pane in
+/// its own strip directly below it (sharing the pitch intuition: what
+/// sounds is what lights up), tuning column on the right, console and
+/// notes tucked below that. Users can re-dock at runtime; the result
+/// persists via UiPersist, and the View pane's "Reset layout" button
+/// returns here.
+fn default_dock() -> DockState<panes::Tab> {
+    let mut dock = DockState::new(vec![panes::Tab::Lattice]);
+    let surface = dock.main_surface_mut();
+    let [lattice, right] = surface.split_right(
+        NodeIndex::root(),
+        0.72,
+        vec![panes::Tab::Tuning, panes::Tab::View, panes::Tab::Appearance],
+    );
+    surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Notes]);
+    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+    dock
+}
+
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        // Default layout: big lattice view, tuning on the right, console and
-        // spectral stub tucked below it. Users can re-dock at runtime; the
-        // result persists via UiPersist.
-        let mut dock = DockState::new(vec![panes::Tab::Lattice]);
-        let surface = dock.main_surface_mut();
-        let [_, right] = surface.split_right(
-            NodeIndex::root(),
-            0.72,
-            vec![panes::Tab::Tuning, panes::Tab::View, panes::Tab::Appearance],
-        );
-        surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Spectral, panes::Tab::Notes]);
+        let dock = default_dock();
 
         SharedState {
             tracker: NoteTracker::new(),
@@ -189,6 +198,12 @@ impl SharedState {
 
     pub fn log(&mut self, line: impl Into<String>) {
         self.console.log(line);
+    }
+
+    /// Discard the (persisted) dock arrangement and return to the default
+    /// layout. Camera, view settings, and presets are untouched.
+    pub fn reset_dock_layout(&mut self) {
+        self.dock = default_dock();
     }
 
     /// Serialize the parts of the UI worth restoring across sessions
@@ -266,10 +281,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
     DockArea::new(&mut dock)
         .style(theme::dock_style(ui.style()))
-        // The pane set is fixed; closing/collapsing chrome is just noise.
+        // The pane set is fixed, so closing chrome stays off — but the
+        // collapse arrow earns its pixels: the Lattice and Spectral panes
+        // fold down to their tab bar when screen space is tight.
         .show_close_buttons(false)
         .show_leaf_close_all_buttons(false)
-        .show_leaf_collapse_buttons(false)
+        .show_leaf_collapse_buttons(true)
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     state.dock = dock;
 
@@ -520,7 +537,7 @@ mod tests {
             .max_by(|a, b| a.1.total_cmp(b.1))
             .map(|(i, _)| i as i32)
             .unwrap();
-        assert!((peak - 180).abs() <= 1, "440 Hz should peak at ~900c, got bucket {peak}");
+        assert!((peak - 114).abs() <= 1, "440 Hz should peak at A4 (bucket 114), got {peak}");
 
         // Once samples stop, the curve hides instead of freezing.
         assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());

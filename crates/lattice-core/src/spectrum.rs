@@ -1,5 +1,6 @@
-//! Pitch-class spectrum analysis: fold an audio signal's FFT onto the
-//! 0..1200-cent axis the Spectral pane draws.
+//! Pitch spectrum analysis: map an audio signal's FFT onto the absolute
+//! log-frequency (MIDI pitch) axis the Spectral pane draws, so every
+//! partial displays at its actual pitch.
 //!
 //! Everything here is pure sample-in, buckets-out logic — no threads, no
 //! clocks, no allocation after construction — so the shells can feed it
@@ -9,23 +10,30 @@
 //! no dependencies); at 8192 points a few times per second it is nowhere
 //! near a bottleneck.
 
-/// Pitch-class resolution of the folded spectrum: 5-cent buckets.
-pub const PC_BINS: usize = 240;
+/// The spectrum's pitch axis: MIDI notes [MIN, MAX), which is C-1..C9 in
+/// Bitwig's octave convention (middle C = C3) — ten octaves, ~16 Hz to
+/// ~16.7 kHz, the tonally useful slice of the audible range. The axis is
+/// linear in MIDI pitch, i.e. logarithmic in frequency, so every octave
+/// gets equal width.
+pub const SPECTRUM_MIN_MIDI: f32 = 12.0;
+pub const SPECTRUM_MAX_MIDI: f32 = 132.0;
+/// Axis resolution: 2 buckets per semitone (50 cents).
+pub const BINS_PER_SEMITONE: usize = 2;
+pub const SPECTRUM_BINS: usize =
+    (SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) as usize * BINS_PER_SEMITONE;
+
+/// Frequency of a (fractional) MIDI pitch at A440.
+pub fn midi_to_hz(midi: f32) -> f32 {
+    440.0 * ((midi - 69.0) / 12.0).exp2()
+}
 
 /// Analysis window length in samples (~0.17 s at 48 kHz — steady enough
-/// for a meter, short enough to follow chord changes).
+/// for a meter, short enough to follow chord changes). At the axis floor
+/// (~16 Hz) one FFT bin spans several semitones, so the lowest octave
+/// reads coarse; that is inherent to the window length, not a bug.
 const FFT_SIZE: usize = 8192;
 
-/// Fold range. Below ~55 Hz a bin is wider than a semitone and the fold
-/// smears; above 5 kHz there is little tonal energy and much cymbal.
-const FOLD_MIN_HZ: f32 = 55.0;
-const FOLD_MAX_HZ: f32 = 5_000.0;
-
-/// 12-TET C relative to A440 (261.6256 Hz): the 0-cent reference of the
-/// pitch-class axis, matching how MIDI notes map with a zero C-offset.
-const C_REF_HZ: f32 = 261.625_58;
-
-/// Rolling analyzer: push mono samples as they arrive, ask for the folded
+/// Rolling analyzer: push mono samples as they arrive, ask for the
 /// spectrum whenever the display wants a fresh frame.
 pub struct SpectrumAnalyzer {
     sample_rate: f32,
@@ -82,19 +90,18 @@ impl SpectrumAnalyzer {
         self.filled = (self.filled + samples.len()).min(FFT_SIZE);
     }
 
-    /// The current pitch-class power spectrum, or None until a full
-    /// window has been seen.
+    /// The current power spectrum over the MIDI-pitch axis, or None until
+    /// a full window has been seen.
     ///
     /// Bucket values are absolute power: a full-scale sine contributes
-    /// ~1.0 to its pitch class regardless of window position or sample
-    /// rate, so successive frames are comparable and the display can
-    /// apply a fixed mapping. Only local spectral peaks are folded — each
-    /// deposits its main lobe's power at its parabolically refined
-    /// frequency, split linearly between the two nearest buckets on the
-    /// circular cent axis. (Folding every bin instead would smear each
-    /// note across the +/-40 cents its skirt bins land on: at C4 one FFT
-    /// bin is ~38 cents wide.)
-    pub fn pitch_class_spectrum(&mut self) -> Option<[f32; PC_BINS]> {
+    /// ~1.0 at its pitch regardless of window position or sample rate,
+    /// so successive frames are comparable and the display can apply a
+    /// fixed mapping. Only local spectral peaks are deposited — each
+    /// contributes its main lobe's power at its parabolically refined
+    /// frequency, split linearly between the two nearest buckets. (Using
+    /// every bin instead would smear each note across the width its
+    /// skirt bins span: at C4 one FFT bin is ~38 cents wide.)
+    pub fn pitch_spectrum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
         if self.filled < FFT_SIZE {
             return None;
         }
@@ -113,12 +120,14 @@ impl SpectrumAnalyzer {
         let norm = 2.0 / window_sum;
 
         let bin_hz = self.sample_rate / FFT_SIZE as f32;
-        let lo = (FOLD_MIN_HZ / bin_hz).ceil() as usize;
-        let hi = ((FOLD_MAX_HZ / bin_hz) as usize).min(FFT_SIZE / 2 - 2);
+        // Analyze the overlap of the pitch axis and what the FFT resolves
+        // (skip DC and the first bin; stay clear of Nyquist).
+        let lo = (midi_to_hz(SPECTRUM_MIN_MIDI) / bin_hz).ceil().max(2.0) as usize;
+        let hi = ((midi_to_hz(SPECTRUM_MAX_MIDI) / bin_hz) as usize).min(FFT_SIZE / 2 - 2);
 
         let mag = |k: usize| (self.re[k] * self.re[k] + self.im[k] * self.im[k]).sqrt();
 
-        let mut buckets = [0.0f32; PC_BINS];
+        let mut buckets = [0.0f32; SPECTRUM_BINS];
         for k in lo..=hi {
             let m = mag(k);
             let (prev, next) = (mag(k - 1), mag(k + 1));
@@ -138,20 +147,22 @@ impl SpectrumAnalyzer {
                 }
             }
             let freq = bin * bin_hz;
-            let cents = (1200.0 * (freq / C_REF_HZ).log2()).rem_euclid(1200.0);
+            let midi = 69.0 + 12.0 * (freq / 440.0).log2();
 
-            // Linear split across the two nearest 5-cent buckets (the axis
-            // is circular: 1199.9 cents neighbors bucket 0).
-            let pos = cents / (1200.0 / PC_BINS as f32);
+            // Linear split across the two nearest buckets; partials
+            // outside the axis are dropped, not wrapped.
+            let pos = (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
+            if !(0.0..(SPECTRUM_BINS - 1) as f32).contains(&pos) {
+                continue;
+            }
             let base = pos.floor();
             let frac = pos - base;
-            let b0 = (base as usize) % PC_BINS;
-            let b1 = (b0 + 1) % PC_BINS;
+            let b0 = base as usize;
             // The whole main lobe's power, not just the center bin's, so
             // the reading stays level as a tone drifts between bins.
             let power = (prev * prev + m * m + next * next) * norm * norm;
             buckets[b0] += power * (1.0 - frac);
-            buckets[b1] += power * frac;
+            buckets[b0 + 1] += power * frac;
         }
         Some(buckets)
     }
@@ -200,7 +211,7 @@ mod tests {
     use super::*;
 
     /// Feed a sum of sines and return the folded spectrum.
-    fn analyze(freqs_amps: &[(f32, f32)], sample_rate: f32) -> [f32; PC_BINS] {
+    fn analyze(freqs_amps: &[(f32, f32)], sample_rate: f32) -> [f32; SPECTRUM_BINS] {
         let mut analyzer = SpectrumAnalyzer::new(sample_rate);
         // Push in awkward chunk sizes to exercise the ring seam.
         let samples: Vec<f32> = (0..FFT_SIZE + 1234)
@@ -215,42 +226,39 @@ mod tests {
         for chunk in samples.chunks(701) {
             analyzer.push_samples(chunk);
         }
-        analyzer.pitch_class_spectrum().expect("window filled")
+        analyzer.pitch_spectrum().expect("window filled")
     }
 
-    fn peak_bucket(buckets: &[f32; PC_BINS]) -> usize {
-        (0..PC_BINS).max_by(|&a, &b| buckets[a].total_cmp(&buckets[b])).unwrap()
+    fn peak_bucket(buckets: &[f32; SPECTRUM_BINS]) -> usize {
+        (0..SPECTRUM_BINS).max_by(|&a, &b| buckets[a].total_cmp(&buckets[b])).unwrap()
     }
 
-    fn bucket_of_cents(cents: f32) -> usize {
-        ((cents / 5.0).round() as usize) % PC_BINS
+    fn bucket_of_midi(midi: f32) -> usize {
+        ((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).round() as usize
     }
 
-    /// Circular distance in buckets.
     fn dist(a: usize, b: usize) -> usize {
-        let d = a.abs_diff(b);
-        d.min(PC_BINS - d)
+        a.abs_diff(b)
     }
 
     #[test]
     fn empty_analyzer_reports_nothing() {
         let mut analyzer = SpectrumAnalyzer::new(48_000.0);
-        assert!(analyzer.pitch_class_spectrum().is_none());
+        assert!(analyzer.pitch_spectrum().is_none());
         analyzer.push_samples(&vec![0.1; FFT_SIZE - 1]);
-        assert!(analyzer.pitch_class_spectrum().is_none(), "one short of a window");
+        assert!(analyzer.pitch_spectrum().is_none(), "one short of a window");
         analyzer.push_samples(&[0.1]);
-        assert!(analyzer.pitch_class_spectrum().is_some());
+        assert!(analyzer.pitch_spectrum().is_some());
     }
 
     #[test]
-    fn a440_folds_to_900_cents() {
-        // A above C: 1200*log2(440/261.6256) = 900 cents exactly in 12-TET.
+    fn a440_lands_on_a4() {
         let buckets = analyze(&[(440.0, 0.8)], 48_000.0);
         let peak = peak_bucket(&buckets);
         assert!(
-            dist(peak, bucket_of_cents(900.0)) <= 1,
-            "peak at bucket {peak} ({}c), expected ~900c",
-            peak * 5
+            dist(peak, bucket_of_midi(69.0)) <= 1,
+            "peak at bucket {peak}, expected A4 (bucket {})",
+            bucket_of_midi(69.0)
         );
         // Absolute calibration: amplitude 0.8 -> power ~0.64 at the peak
         // (split across at most two buckets, windowing spreads a little).
@@ -262,22 +270,22 @@ mod tests {
     }
 
     #[test]
-    fn dyad_shows_both_pitch_classes() {
-        // 12-TET C4 + E4: 0 and 400 cents.
+    fn dyad_shows_both_pitches() {
+        // 12-TET C4 + E4 (MIDI 60 and 64).
         let buckets = analyze(&[(261.6256, 0.5), (329.6276, 0.5)], 48_000.0);
-        let c = bucket_of_cents(0.0);
-        let e = bucket_of_cents(400.0);
-        let floor = buckets.iter().sum::<f32>() / PC_BINS as f32;
+        let c = bucket_of_midi(60.0);
+        let e = bucket_of_midi(64.0);
+        let floor = buckets.iter().sum::<f32>() / SPECTRUM_BINS as f32;
         let near = |target: usize| {
-            (0..PC_BINS)
+            (0..SPECTRUM_BINS)
                 .filter(|&b| dist(b, target) <= 1)
                 .map(|b| buckets[b])
                 .fold(0.0f32, f32::max)
         };
-        assert!(near(c) > floor * 20.0, "C peak missing");
-        assert!(near(e) > floor * 20.0, "E peak missing");
-        // And nothing comparable elsewhere (e.g. no image at 400+600c).
-        let stray = (0..PC_BINS)
+        assert!(near(c) > floor * 20.0, "C4 peak missing");
+        assert!(near(e) > floor * 20.0, "E4 peak missing");
+        // And nothing comparable elsewhere.
+        let stray = (0..SPECTRUM_BINS)
             .filter(|&b| dist(b, c) > 3 && dist(b, e) > 3)
             .map(|b| buckets[b])
             .fold(0.0f32, f32::max);
@@ -285,27 +293,38 @@ mod tests {
     }
 
     #[test]
-    fn octaves_fold_to_the_same_bucket() {
-        // A3 + A4 + A5 all land on 900 cents.
+    fn octaves_show_as_separate_peaks() {
+        // A3 + A4 + A5: distinct pitches a MIDI octave apart, no folding.
         let buckets = analyze(&[(220.0, 0.4), (440.0, 0.4), (880.0, 0.4)], 48_000.0);
-        let peak = peak_bucket(&buckets);
-        assert!(dist(peak, bucket_of_cents(900.0)) <= 1);
-        // The folded peak carries all three notes' power.
-        let neighborhood: f32 = (0..PC_BINS)
-            .filter(|&b| dist(b, peak) <= 1)
-            .map(|b| buckets[b])
-            .sum();
-        assert!(neighborhood > 0.3, "expected stacked octave power, got {neighborhood}");
+        let floor = buckets.iter().sum::<f32>() / SPECTRUM_BINS as f32;
+        for midi in [57.0, 69.0, 81.0] {
+            let target = bucket_of_midi(midi);
+            let level = (0..SPECTRUM_BINS)
+                .filter(|&b| dist(b, target) <= 1)
+                .map(|b| buckets[b])
+                .fold(0.0f32, f32::max);
+            assert!(level > floor * 20.0, "missing peak at MIDI {midi}");
+        }
+    }
+
+    #[test]
+    fn out_of_range_partials_are_dropped_not_wrapped() {
+        // ~12.5 Hz sits below the axis floor (C-1 ~ 16.35 Hz); it must not
+        // alias to some in-range bucket. (An inaudible test tone, but the
+        // guard matters for subsonic rumble in real material.)
+        let buckets = analyze(&[(12.5, 0.8)], 48_000.0);
+        let total: f32 = buckets.iter().sum();
+        assert!(total < 0.05, "sub-axis energy leaked in: {total}");
     }
 
     #[test]
     fn sample_rate_change_resets_the_window() {
         let mut analyzer = SpectrumAnalyzer::new(48_000.0);
         analyzer.push_samples(&vec![0.2; FFT_SIZE]);
-        assert!(analyzer.pitch_class_spectrum().is_some());
+        assert!(analyzer.pitch_spectrum().is_some());
         analyzer.set_sample_rate(44_100.0);
         assert!(
-            analyzer.pitch_class_spectrum().is_none(),
+            analyzer.pitch_spectrum().is_none(),
             "stale samples must not be analyzed under a new clock"
         );
     }
