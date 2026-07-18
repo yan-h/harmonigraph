@@ -214,6 +214,21 @@ impl Renderer {
         let output_frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => Some(texture),
             wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
+                // Flush this frame's staged uploads before bailing. The
+                // update_texture/update_buffers calls above already pushed
+                // egui's per-frame vertex, index and texture data into the
+                // queue's pending writes, and those staging buffers are only
+                // reclaimed by a submit() (via wgpu-core's pre_submit). Returning
+                // without submitting strands them: a backgrounded window whose
+                // surface reports Occluded/Timeout on every timer tick then piles
+                // up staging buffers at the frame rate — gigabytes within minutes
+                // — freed only when it regains focus and the next presented
+                // frame's submit drains the whole backlog at once. No drawable
+                // was acquired, so this submits the uploads without presenting;
+                // the window stays frozen (expected while hidden) but flat.
+                self.render_state
+                    .queue
+                    .submit(user_cmd_bufs.into_iter().chain([encoder.finish()]));
                 return false;
             }
             wgpu::CurrentSurfaceTexture::Suboptimal(_) | wgpu::CurrentSurfaceTexture::Outdated => {
@@ -237,6 +252,12 @@ impl Renderer {
             }
 
             self.configure_surface(self.width, self.height);
+            // Same staged-upload reclamation as the Occluded/Timeout arm above:
+            // flush so pending writes don't accumulate across frames while the
+            // surface stays unavailable (Suboptimal/Outdated/Lost).
+            self.render_state
+                .queue
+                .submit(user_cmd_bufs.into_iter().chain([encoder.finish()]));
             return false;
         };
 
