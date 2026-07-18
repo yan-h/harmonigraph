@@ -73,9 +73,27 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   `baseview::WindowEvent::Occluded(false)` (see the baseview patch above)
   schedules an immediate repaint so the first frame after re-expose is
   fresh.
+- **Patch 4** (2 sites, `src/renderer/wgpu/renderer.rs` `render`): flush
+  staged uploads on the surface-not-available early returns. `render`
+  uploads egui's per-frame vertex/index/texture data (via `update_buffers`
+  /`update_texture`, i.e. `queue.write_*`) BEFORE it acquires the surface
+  texture; those staging buffers live in wgpu's pending writes and are only
+  reclaimed by a `submit()` (through wgpu-core `pre_submit`). The
+  Occluded/Timeout and Suboptimal/Outdated/Lost arms returned WITHOUT
+  submitting, stranding that frame's staging buffers. Combined with Patch 3
+  (a skipped present retries every timer tick), a backgrounded plugin window
+  re-ran `render` ~66×/s and accumulated staging buffers into the
+  *gigabytes* within minutes — the memory dropped instantly on refocus,
+  when the next presented frame's `submit` finally drained the backlog. Fix:
+  each early return now submits `user_cmd_bufs` + the upload encoder (no
+  drawable acquired, so nothing presents — the window stays frozen while
+  hidden, which is expected — but pending writes drain and `maintain` runs
+  every tick, so memory stays flat). Root-caused from a 26 GB balloon while
+  tabbed away from Bitwig.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
-  texture-delta forced render, and the occlusion/skipped-present patch.
+  texture-delta forced render, the occlusion/skipped-present patch, and the
+  staged-upload flush.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 
