@@ -185,9 +185,19 @@ fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        // Fade with the activation envelope; hovered idle nodes get a dim
-        // but readable label.
-        let strength = if node.hovered { 1.0 } else { visibility_floor(node.activation) };
+        // Fade with the activation envelope. visibility_floor keeps the
+        // label readable through most of the release, but on its own it
+        // bottoms out at 35% and then pops to nothing when the voice is
+        // pruned at activation 0. Ease that last stretch out with a
+        // smoothstep tail so the label fades gradually to zero instead.
+        // Hovered nodes get a full, steady label.
+        const LABEL_FADE_TAIL: f32 = 0.25;
+        let strength = if node.hovered {
+            1.0
+        } else {
+            let t = (node.activation / LABEL_FADE_TAIL).clamp(0.0, 1.0);
+            visibility_floor(node.activation) * t * t * (3.0 - 2.0 * t)
+        };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);
         // Meantone tempers out the syntonic comma, so drop the comma marks
