@@ -5,9 +5,7 @@
 use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{
-    channel_color, derive_scene, Camera, GridStyle, NodeStyle, OctaveStyle, Projection,
-};
+use lattice_scene::{channel_color, derive_scene, Camera, NodeStyle, OctaveStyle, Projection};
 
 use crate::theme;
 
@@ -629,37 +627,17 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
 
-    // Background grid: how (whether) it differentiates sevens layers.
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Grid style");
-        for (style, label, hover) in [
-            (GridStyle::Uniform, "Uniform", "One faint color everywhere"),
-            (
-                GridStyle::LayerTint,
-                "Layer tint",
-                "Each sevenths layer's lines take their own hue; links between layers stay neutral",
-            ),
-            (
-                GridStyle::LayerFade,
-                "Layer fade",
-                "The center sheet at full strength; each layer outward fades",
-            ),
-            (
-                GridStyle::DashedLinks,
-                "Dashed links",
-                "Links along the sevenths axis draw dashed; in-sheet lines stay solid",
-            ),
-            (
-                GridStyle::HomeSheet,
-                "Home sheet",
-                "Only the center sheet keeps its idle grid; other layers show \
-                 lines only while played notes light them",
-            ),
-        ] {
-            ui.selectable_value(&mut state.view.grid_style, style, label)
-                .on_hover_text(hover);
-        }
-    });
+    // Background grid: two independent aids for reading sevens layers.
+    ui.checkbox(&mut state.view.grid_home_only, "Idle grid on home sheet only")
+        .on_hover_text(
+            "Off-sheet grid lines and the links between sheets appear only \
+             while played notes light them",
+        );
+    ui.checkbox(&mut state.view.grid_dash_off_home, "Dashed off-home lines")
+        .on_hover_text(
+            "Grid lines off the home sheet (and links between sheets) draw \
+             dashed; the home sheet stays solid",
+        );
 
     // Octave indicator: dots around the disc positioned by absolute pitch,
     // or off.

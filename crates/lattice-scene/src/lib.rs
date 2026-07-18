@@ -18,28 +18,6 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
     )
 }
 
-/// How the background grid indicates sevens (z) layers, to keep depth
-/// readable when the lattice extends along the sevenths axis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum GridStyle {
-    /// One faint color everywhere (the original look).
-    #[default]
-    Uniform,
-    /// In-sheet lines take a hue per sevens layer; the links between
-    /// layers stay neutral. Layers become instantly distinguishable.
-    LayerTint,
-    /// The center sheet draws at full grid strength; each layer outward
-    /// (and the links, half a step) fades progressively.
-    LayerFade,
-    /// Links along the sevens axis render dashed, so connective tissue
-    /// between sheets reads differently from the sheets themselves.
-    DashedLinks,
-    /// Only the home (center) sheet draws its idle grid. Off-sheet lines
-    /// and cross-layer links appear only while lit by played notes, so
-    /// depth structure materializes exactly where the music goes.
-    HomeSheet,
-}
-
 /// How a node indicates which octaves its pitch class is sounding in.
 /// The fragment shader draws the glyphs from the per-node octave bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -185,9 +163,16 @@ pub struct ViewConfig {
     /// nodes, so a chord's interval structure renders as geometry.
     #[serde(default)]
     pub show_chord_edges: bool,
-    /// How the background grid indicates sevens layers.
+    /// Draw the idle (unlit) grid only on the home (center) sheet;
+    /// off-home lines and cross-layer links appear only while played
+    /// notes light them. Independent of `grid_dash_off_home`.
     #[serde(default)]
-    pub grid_style: GridStyle,
+    pub grid_home_only: bool,
+    /// Render off-home grid lines (other sheets' lines and the links
+    /// between sheets) dashed, so the home sheet reads solid and depth
+    /// structure reads secondary.
+    #[serde(default)]
+    pub grid_dash_off_home: bool,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
     /// derived from the fifth (in `root_ui`) and note-name labels drop
@@ -235,7 +220,8 @@ impl Default for ViewConfig {
             show_cents: true,
             node_style: NodeStyle::default(),
             show_chord_edges: false,
-            grid_style: GridStyle::default(),
+            grid_home_only: false,
+            grid_dash_off_home: false,
             meantone: false,
         }
     }
@@ -762,53 +748,23 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
             let Some(neighbor) = index.get(&step) else {
                 continue;
             };
-            let along_sevens = axis == 2;
-            let rel = p.sevens - view.center_sevens;
-
-            // Style pass: how this segment communicates its sevens layer.
-            let mut color = base;
-            let mut strength = base.w;
-            let mut dashed = false;
-            match view.grid_style {
-                GridStyle::Uniform => {}
-                GridStyle::LayerTint => {
-                    // Hue walks per layer; the center sheet and the
-                    // cross-layer links keep the neutral base.
-                    if !along_sevens && rel != 0 {
-                        color = lch(
-                            34.0,
-                            30.0,
-                            (210.0 + 55.0 * f64::from(rel)).rem_euclid(360.0),
-                        );
-                    }
-                }
-                GridStyle::LayerFade => {
-                    let depth = if along_sevens {
-                        rel.abs().min((rel + 1).abs()) as f32 + 0.5
-                    } else {
-                        rel.abs() as f32
-                    };
-                    strength = base.w * 0.6f32.powf(depth);
-                }
-                GridStyle::DashedLinks => dashed = along_sevens,
-                GridStyle::HomeSheet => {
-                    if along_sevens || rel != 0 {
-                        strength = 0.0;
-                    }
-                }
-            }
+            // Off-home = anything but the center sheet's own lines:
+            // other sheets' in-sheet lines and every cross-layer link.
+            let off_home = axis == 2 || p.sevens != view.center_sevens;
+            let dashed = view.grid_dash_off_home && off_home;
+            let strength = if view.grid_home_only && off_home { 0.0 } else { base.w };
 
             let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
             let lit = node.activation.min(neighbor.activation);
-            // Fully invisible (idle off-sheet in HomeSheet): skip the
-            // instance instead of shipping a discarded quad.
+            // Fully invisible (idle off-home under grid_home_only): skip
+            // the instance instead of shipping a discarded quad.
             if strength <= 0.0 && lit <= 0.0 {
                 continue;
             }
             grid.push(EdgeInstance {
                 a: node.world_pos + dir * inset,
                 b: neighbor.world_pos - dir * inset,
-                color: color.lerp((node.color + neighbor.color) * 0.5, lit),
+                color: base.lerp((node.color + neighbor.color) * 0.5, lit),
                 strength: strength + (GRID_LIT_OPACITY - strength) * lit,
                 dashed,
             });
@@ -1194,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn grid_styles_differentiate_sevens_layers() {
+    fn grid_toggles_control_off_home_lines() {
         // A window one sevens layer deep on each side of the center.
         let view = ViewConfig {
             extent_threes: 1,
@@ -1202,56 +1158,44 @@ mod tests {
             extent_sevens: 1,
             ..ViewConfig::default()
         };
-        let scene_with = |style: GridStyle| {
+        let scene_with = |home_only: bool, dash: bool| {
             scene_of(
                 &NoteTracker::new(),
                 &Tuning::default(),
-                &ViewConfig { grid_style: style, ..view.clone() },
+                &ViewConfig {
+                    grid_home_only: home_only,
+                    grid_dash_off_home: dash,
+                    ..view.clone()
+                },
                 &FrameParams::default(),
                 0.0,
             )
         };
-        let base = skin::active_skin().grid_line;
-        // Sevens steps run along world z; in-sheet steps stay within one
-        // z plane.
-        let along_sevens = |s: &&EdgeInstance| (s.b.z - s.a.z).abs() > 0.25;
-        let in_sheet_off_center = |s: &&EdgeInstance| !along_sevens(s) && s.a.z.abs() > 0.5;
+        // Off-home = a cross-layer link (z-delta) or a line on z != 0.
+        let off_home =
+            |s: &EdgeInstance| (s.b.z - s.a.z).abs() > 0.25 || s.a.z.abs() > 0.5;
 
-        // Uniform: everything identical, nothing dashed.
-        let scene = scene_with(GridStyle::Uniform);
-        assert!(scene.grid.iter().all(|s| s.color == base && !s.dashed));
+        // Both off: the full uniform grid, nothing dashed.
+        let scene = scene_with(false, false);
+        let full_count = scene.grid.len();
+        assert!(scene.grid.iter().any(|s| off_home(s)));
+        assert!(scene.grid.iter().all(|s| !s.dashed && s.strength > 0.0));
 
-        // LayerTint: off-center sheets tint, links and center stay base.
-        let scene = scene_with(GridStyle::LayerTint);
-        assert!(scene.grid.iter().filter(in_sheet_off_center).all(|s| s.color != base));
-        assert!(scene.grid.iter().filter(along_sevens).all(|s| s.color == base));
+        // Home-only: idle off-home segments are dropped entirely.
+        let scene = scene_with(true, false);
+        assert!(!scene.grid.is_empty() && scene.grid.len() < full_count);
+        assert!(scene.grid.iter().all(|s| !off_home(s) && s.strength > 0.0));
 
-        // LayerFade: off-center strength drops below the center sheet's.
-        let scene = scene_with(GridStyle::LayerFade);
-        let center_max = scene
-            .grid
-            .iter()
-            .filter(|s| !along_sevens(s) && s.a.z.abs() < 0.5)
-            .map(|s| s.strength)
-            .fold(0.0f32, f32::max);
-        assert!(scene.grid.iter().filter(in_sheet_off_center).all(|s| s.strength < center_max));
-
-        // DashedLinks: exactly the sevens-axis segments flag dashed.
-        let scene = scene_with(GridStyle::DashedLinks);
+        // Dashed off-home: exactly the off-home segments flag dashed.
+        let scene = scene_with(false, true);
+        assert_eq!(scene.grid.len(), full_count);
         for s in &scene.grid {
-            assert_eq!(s.dashed, (s.b.z - s.a.z).abs() > 0.25, "{:?}->{:?}", s.a, s.b);
+            assert_eq!(s.dashed, off_home(s), "{:?}->{:?}", s.a, s.b);
         }
 
-        // HomeSheet with nothing played: only the center sheet's in-sheet
-        // segments survive (off-sheet and cross-layer ones are dropped
-        // entirely, not just dimmed).
-        let scene = scene_with(GridStyle::HomeSheet);
-        assert!(!scene.grid.is_empty());
-        for s in &scene.grid {
-            assert!((s.b.z - s.a.z).abs() < 0.25, "link survived: {:?}->{:?}", s.a, s.b);
-            assert!(s.a.z.abs() < 0.5, "off-sheet line survived: {:?}", s.a);
-            assert!(s.strength > 0.0);
-        }
+        // Combined: only solid home-sheet lines remain while idle.
+        let scene = scene_with(true, true);
+        assert!(scene.grid.iter().all(|s| !off_home(s) && !s.dashed));
     }
 
     #[test]
