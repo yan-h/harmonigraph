@@ -627,17 +627,6 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
 
-    // Background grid: two independent aids for reading sevens layers.
-    ui.checkbox(&mut state.view.grid_home_only, "Idle grid on home sheet only")
-        .on_hover_text(
-            "Off-sheet grid lines and the links between sheets appear only \
-             while played notes light them",
-        );
-    ui.checkbox(&mut state.view.grid_dash_links, "Dashed sevenths links")
-        .on_hover_text(
-            "The z-axis links between sheets draw dashed; in-sheet lines \
-             stay solid",
-        );
 
     // Octave indicator: dots around the disc positioned by absolute pitch,
     // or off.

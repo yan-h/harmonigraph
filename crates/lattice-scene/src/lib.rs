@@ -163,16 +163,6 @@ pub struct ViewConfig {
     /// nodes, so a chord's interval structure renders as geometry.
     #[serde(default)]
     pub show_chord_edges: bool,
-    /// Draw the idle (unlit) grid only on the home (center) sheet;
-    /// off-home lines and cross-layer links appear only while played
-    /// notes light them. Independent of `grid_dash_off_home`.
-    #[serde(default)]
-    pub grid_home_only: bool,
-    /// Render the sevens-axis (z) links between sheets dashed, so the
-    /// connective tissue between layers reads differently from the
-    /// sheets themselves.
-    #[serde(default)]
-    pub grid_dash_links: bool,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
     /// derived from the fifth (in `root_ui`) and note-name labels drop
@@ -220,8 +210,6 @@ impl Default for ViewConfig {
             show_cents: true,
             node_style: NodeStyle::default(),
             show_chord_edges: false,
-            grid_home_only: false,
-            grid_dash_links: false,
             meantone: false,
         }
     }
@@ -494,8 +482,8 @@ pub struct EdgeInstance {
     /// min of the two nodes' activations: the beam fades with whichever
     /// endpoint fades first. (Grid segments: line opacity.)
     pub strength: f32,
-    /// Grid segments only: render as short dashes
-    /// ([`GridStyle::DashedLinks`]). Never set on chord beams.
+    /// Grid segments only: render as short dashes (the sevens-axis links
+    /// between sheets). Never set on chord beams.
     pub dashed: bool,
 }
 
@@ -722,11 +710,12 @@ const GRID_INSET_FACTOR: f32 = 1.05;
 const GRID_LIT_OPACITY: f32 = 0.85;
 
 /// The faint background grid: idle positions draw no disc, so these
-/// segments between every adjacent pair of visible positions carry the
-/// lattice's structure instead, inset at both ends so each node position
-/// keeps a clear circular gap. A segment whose two endpoint notes both
-/// sound lights up with their blended color, fading with whichever
-/// endpoint fades first (like a chord edge).
+/// segments carry the lattice's structure instead, inset at both ends so
+/// each node position keeps a clear circular gap. Only the home (center)
+/// sheet draws an idle grid; other sheets' lines light when both
+/// endpoints sound, and the dashed sevens-axis links light as the chain
+/// from any sounding off-sheet note down to the home sheet. Lit segments
+/// take the sounding notes' color and fade with their envelope.
 fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * GRID_INSET_FACTOR;
     let base = skin::active_skin().grid_line;
@@ -748,24 +737,49 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
             let Some(neighbor) = index.get(&step) else {
                 continue;
             };
-            // Off-home = anything but the center sheet's own lines:
-            // other sheets' in-sheet lines and every cross-layer link.
-            let off_home = axis == 2 || p.sevens != view.center_sevens;
-            let dashed = view.grid_dash_links && axis == 2;
-            let strength = if view.grid_home_only && off_home { 0.0 } else { base.w };
+            let along_sevens = axis == 2;
+            // Only the home (center) sheet draws an idle grid; other
+            // sheets' lines and the links between sheets stay invisible
+            // until the music lights them. Links render dashed.
+            let on_home = !along_sevens && p.sevens == view.center_sevens;
+            let idle = if on_home { base.w } else { 0.0 };
+            let dashed = along_sevens;
 
-            let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
-            let lit = node.activation.min(neighbor.activation);
-            // Fully invisible (idle off-home under grid_home_only): skip
-            // the instance instead of shipping a discarded quad.
-            if strength <= 0.0 && lit <= 0.0 {
+            // Both endpoints sounding lights any segment.
+            let mut lit = node.activation.min(neighbor.activation);
+            let mut lit_color = (node.color + neighbor.color) * 0.5;
+
+            // A sevens link also lights as part of the chain from any
+            // sounding node beyond it (away from the home sheet) down to
+            // the home sheet, so an off-sheet note always hangs from a
+            // visible chain even while the notes under it are silent.
+            if along_sevens {
+                let (lo, hi) = if p.sevens >= view.center_sevens {
+                    (p.sevens + 1, view.center_sevens + view.extent_sevens)
+                } else {
+                    (view.center_sevens - view.extent_sevens, p.sevens)
+                };
+                for s in lo..=hi {
+                    if let Some(n) = index.get(&LatticePos::new(p.threes, p.fives, s)) {
+                        if n.activation > lit {
+                            lit = n.activation;
+                            lit_color = n.color;
+                        }
+                    }
+                }
+            }
+
+            // Fully invisible: skip the instance instead of shipping a
+            // discarded quad.
+            if idle <= 0.0 && lit <= 0.0 {
                 continue;
             }
+            let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
             grid.push(EdgeInstance {
                 a: node.world_pos + dir * inset,
                 b: neighbor.world_pos - dir * inset,
-                color: base.lerp((node.color + neighbor.color) * 0.5, lit),
-                strength: strength + (GRID_LIT_OPACITY - strength) * lit,
+                color: base.lerp(lit_color, lit),
+                strength: idle + (GRID_LIT_OPACITY - idle) * lit,
                 dashed,
             });
         }
@@ -1150,54 +1164,59 @@ mod tests {
     }
 
     #[test]
-    fn grid_toggles_control_off_home_lines() {
-        // A window one sevens layer deep on each side of the center.
+    fn off_sheet_grid_appears_only_where_the_music_reaches() {
+        // A window two sevens layers deep above/below the center, so the
+        // chain rule has an intermediate link to prove itself on.
         let view = ViewConfig {
             extent_threes: 1,
             extent_fives: 0,
-            extent_sevens: 1,
+            extent_sevens: 2,
             ..ViewConfig::default()
         };
-        let scene_with = |home_only: bool, dash: bool| {
-            scene_of(
-                &NoteTracker::new(),
-                &Tuning::default(),
-                &ViewConfig {
-                    grid_home_only: home_only,
-                    grid_dash_links: dash,
-                    ..view.clone()
-                },
-                &FrameParams::default(),
-                0.0,
-            )
-        };
-        // A cross-layer (sevens-axis) link spans z; in-sheet lines don't.
         let is_link = |s: &EdgeInstance| (s.b.z - s.a.z).abs() > 0.25;
-        // Off-home = a cross-layer link or a line on z != 0.
         let off_home = |s: &EdgeInstance| is_link(s) || s.a.z.abs() > 0.5;
 
-        // Both off: the full uniform grid, nothing dashed.
-        let scene = scene_with(false, false);
-        let full_count = scene.grid.len();
-        assert!(scene.grid.iter().any(|s| off_home(s)));
-        assert!(scene.grid.iter().all(|s| !s.dashed && s.strength > 0.0));
+        // Idle: only the home sheet's solid lines exist.
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert!(!scene.grid.is_empty());
+        assert!(scene.grid.iter().all(|s| !off_home(s) && !s.dashed && s.strength > 0.0));
 
-        // Home-only: idle off-home segments are dropped entirely.
-        let scene = scene_with(true, false);
-        assert!(!scene.grid.is_empty() && scene.grid.len() < full_count);
-        assert!(scene.grid.iter().all(|s| !off_home(s) && s.strength > 0.0));
-
-        // Dashed links: exactly the sevens-axis links flag dashed —
-        // off-sheet in-sheet lines stay solid.
-        let scene = scene_with(false, true);
-        assert_eq!(scene.grid.len(), full_count);
-        for s in &scene.grid {
-            assert_eq!(s.dashed, is_link(s), "{:?}->{:?}", s.a, s.b);
+        // Hold the note two sevens steps up from C (12-TET default:
+        // 2 × 1000¢ → pitch class 800¢ = G#/Ab, MIDI 68). It lights node
+        // (0,0,2) only, yet BOTH links of the chain down to the home
+        // sheet must display, dashed, in that note's color — the nodes
+        // under it are silent.
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 68,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene =
+            scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        let column_links: Vec<&EdgeInstance> = scene
+            .grid
+            .iter()
+            .filter(|s| is_link(s) && s.a.x.abs() < 0.01 && s.a.y.abs() < 0.01)
+            .collect();
+        // The two links spanning 0->1 and 1->2; nothing below the sheet.
+        assert_eq!(column_links.len(), 2, "{column_links:?}");
+        for link in &column_links {
+            assert!(link.a.z > -0.5 && link.dashed && link.strength > 0.5, "{link:?}");
         }
-
-        // Combined: only solid home-sheet lines remain while idle.
-        let scene = scene_with(true, true);
-        assert!(scene.grid.iter().all(|s| !off_home(s) && !s.dashed));
+        // No off-sheet IN-SHEET lines appeared: the played node's sheet
+        // neighbors are silent, so only the chain and home sheet render.
+        assert!(scene
+            .grid
+            .iter()
+            .all(|s| is_link(s) || s.a.z.abs() < 0.5));
     }
 
     #[test]
