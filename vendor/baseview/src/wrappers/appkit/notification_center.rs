@@ -1,13 +1,16 @@
 use block2::RcBlock;
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
-use objc2_app_kit::{NSWindowDidBecomeKeyNotification, NSWindowDidResignKeyNotification};
+use objc2_app_kit::{
+    NSWindowDidBecomeKeyNotification, NSWindowDidChangeOcclusionStateNotification,
+    NSWindowDidResignKeyNotification,
+};
 use objc2_foundation::{NSNotification, NSNotificationCenter};
 use std::ptr::NonNull;
 
 pub struct NotificationCenterObserver {
     notification_center: Weak<NSNotificationCenter>,
-    handlers: [Retained<ProtocolObject<dyn NSObjectProtocol>>; 2],
+    handlers: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
 }
 
 impl NotificationCenterObserver {
@@ -22,7 +25,7 @@ impl NotificationCenterObserver {
         // SAFETY: block does not need to be sendable, as a `None` queue specifies the block
         // will run on the calling thread, which for Window operations is the main thread.
         let handlers = unsafe {
-            [
+            vec![
                 notification_center.addObserverForName_object_queue_usingBlock(
                     Some(NSWindowDidBecomeKeyNotification),
                     None,
@@ -36,6 +39,31 @@ impl NotificationCenterObserver {
                     &block,
                 ),
             ]
+        };
+
+        Self { notification_center: Weak::from_retained(&notification_center), handlers }
+    }
+
+    /// Observe `NSWindowDidChangeOcclusionStateNotification` for every
+    /// window (the handler filters to its own window, as with key-change
+    /// notifications above).
+    pub fn register_window_occlusion_change(handler: impl Fn(&NSNotification) + 'static) -> Self {
+        let notification_center = NSNotificationCenter::defaultCenter();
+
+        let block = RcBlock::new(move |n: NonNull<NSNotification>| {
+            let n = unsafe { n.as_ref() };
+            handler(n);
+        });
+
+        // SAFETY: as above — a `None` queue runs the block on the posting
+        // (main) thread.
+        let handlers = unsafe {
+            vec![notification_center.addObserverForName_object_queue_usingBlock(
+                Some(NSWindowDidChangeOcclusionStateNotification),
+                None,
+                None,
+                &block,
+            )]
         };
 
         Self { notification_center: Weak::from_retained(&notification_center), handlers }

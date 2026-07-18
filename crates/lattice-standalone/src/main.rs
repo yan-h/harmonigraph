@@ -73,6 +73,62 @@ struct App {
     /// Echo every note event to the console (hardware MIDI can flood the
     /// scrollback during real playing; toggle in the source picker).
     log_events: bool,
+    /// Scripted self-screenshot (see [`SelfShot`]); None in normal runs.
+    self_shot: Option<SelfShot>,
+}
+
+/// Env-gated self-screenshot for scripted visual verification:
+/// `LATTICE_SCREENSHOT=/path/out.png` renders normally, captures the
+/// window after `LATTICE_SCREENSHOT_DELAY_S` seconds (default 2 — long
+/// enough for the mock progression to light things up), writes the PNG,
+/// and exits. The app captures its own swapchain via egui, so macOS
+/// screen-recording permissions never get in the way of automation.
+struct SelfShot {
+    path: String,
+    at: f64,
+    requested: bool,
+}
+
+impl SelfShot {
+    fn from_env() -> Option<Self> {
+        let path = std::env::var("LATTICE_SCREENSHOT").ok()?;
+        let at = std::env::var("LATTICE_SCREENSHOT_DELAY_S")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2.0);
+        Some(SelfShot { path, at, requested: false })
+    }
+
+    /// One tick of the capture state machine; call every frame.
+    fn step(&mut self, ctx: &egui::Context, now: f64) {
+        if !self.requested && now >= self.at {
+            self.requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        }
+        let image = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = image {
+            let [w, h] = image.size;
+            if let Err(err) = image::save_buffer(
+                &self.path,
+                image.as_raw(),
+                w as u32,
+                h as u32,
+                image::ExtendedColorType::Rgba8,
+            ) {
+                eprintln!("screenshot failed: {err}");
+                std::process::exit(1);
+            }
+            eprintln!("screenshot saved: {}", self.path);
+            // Exit without eframe's save(): a scripted run must not
+            // overwrite the interactively persisted UI state.
+            std::process::exit(0);
+        }
+    }
 }
 
 fn enumerate_ports() -> Result<Vec<String>, midir::InitError> {
@@ -259,6 +315,7 @@ impl App {
             midi_tx,
             decoder: MidiDecoder::default(),
             log_events: true,
+            self_shot: SelfShot::from_env(),
         }
     }
 
@@ -387,6 +444,10 @@ impl eframe::App for App {
         }
 
         lattice_ui::root_ui(ui, &mut self.state, &self.params, now);
+
+        if let Some(shot) = &mut self.self_shot {
+            shot.step(ui.ctx(), now);
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

@@ -74,6 +74,21 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Notes => notes_pane(ui, self.state),
         }
     }
+
+    /// The Spectral display paints its own well-colored plot surface, so
+    /// the default 8px body margin reads as a pointless border around it:
+    /// drop the margin and let the plot fill the whole tab.
+    fn tab_style_override(
+        &self,
+        tab: &Tab,
+        global_style: &egui_dock::TabStyle,
+    ) -> Option<egui_dock::TabStyle> {
+        matches!(tab, Tab::Spectral).then(|| {
+            let mut style = global_style.clone();
+            style.tab_body.inner_margin = egui::Margin::ZERO;
+            style
+        })
+    }
 }
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
@@ -351,7 +366,9 @@ fn tuning_pane(
         }
     }
 
-    ui.horizontal(|ui| {
+    // button_row: the toggle switches are shorter than the padded preset
+    // buttons, so a plain horizontal row would seat them a few pixels high.
+    button_row(ui, |ui| {
         if ui.button("Just").clicked() {
             params.set(ParamKey::Three, tuning::THREE_JUST);
             params.set(ParamKey::Five, tuning::FIVE_JUST);
@@ -369,33 +386,25 @@ fn tuning_pane(
             // consistent either way; leave the lock as the user has it.
         }
         // Meantone mode: lock the major third to four perfect fifths.
-        let meantone = ui
-            .add(egui::Button::new("Meantone").selected(state.view.meantone))
+        // Toggle switches, not buttons: Meantone and Learn are persistent
+        // modes and must not read like the momentary presets beside them.
+        let meantone = crate::widgets::toggle_switch(ui, &mut state.view.meantone, "Meantone")
             .on_hover_text(
                 "Lock the major third to four perfect fifths (temper out \
                  the syntonic comma); note-name labels drop their comma marks",
             );
-        if meantone.clicked() {
-            if state.view.meantone {
-                // Turning off: keep the third where the lock left it so the
-                // now-editable bar doesn't jump.
-                params.set(
-                    ParamKey::Five,
-                    tuning::meantone_third(params.get(ParamKey::Three)),
-                );
-            }
-            state.view.meantone = !state.view.meantone;
+        if meantone.changed() && !state.view.meantone {
+            // Turning off: keep the third where the lock left it so the
+            // now-editable bar doesn't jump.
+            params.set(
+                ParamKey::Five,
+                tuning::meantone_third(params.get(ParamKey::Three)),
+            );
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
-        // A real Button (selectable labels draw no background when off, so
-        // toggle_value read as plain text next to Just/12-TET).
-        let learn = ui
-            .add(egui::Button::new("Learn").selected(state.learn_active))
+        let learn = crate::widgets::toggle_switch(ui, &mut state.learn_active, "Learn")
             .on_hover_text("While active, continuously set the tuning from the held notes");
-        if learn.clicked() {
-            state.learn_active = !state.learn_active;
-        }
         if state.learn_active {
             // Pulsing armed ring so the engaged mode can't be missed.
             ui.painter().rect_stroke(
@@ -922,8 +931,12 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 
     // Voice bars at the voice's ACTUAL pitch (per-note tuning and MPE
-    // bends slide the bar): height follows the same envelope as the
+    // bends slide the bar): length follows the same envelope as the
     // lattice glow, weighted by velocity; color matches the node color.
+    // They hang from the TOP: the audio spectrum's fundamental rises from
+    // the bottom at the same x, so a bottom-up bar sat exactly on the peak
+    // it should be compared against. Hanging bars point down at the peak
+    // instead of hiding it.
     if cfg.show_voice_bars {
         for voice in state.tracker.voices() {
             let activation = voice.activation(now, state.frame_params.pitch_class_fade_time);
@@ -946,8 +959,8 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             );
             painter.line_segment(
                 [
-                    egui::pos2(x, rect.bottom()),
-                    egui::pos2(x, rect.bottom() - height),
+                    egui::pos2(x, rect.top()),
+                    egui::pos2(x, rect.top() + height),
                 ],
                 egui::Stroke::new(3.0, color),
             );

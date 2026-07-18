@@ -15,7 +15,7 @@ use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2::{msg_send, AllocAnyThread};
 use objc2_app_kit::{
     NSApplication, NSDragOperation, NSDraggingInfo, NSEvent, NSFilenamesPboardType, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindow,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowOcclusionState,
 };
 use objc2_foundation::{NSArray, NSNotification, NSPoint, NSRect, NSSize, NSString};
 use std::cell::{Cell, RefCell};
@@ -36,6 +36,7 @@ pub(crate) struct BaseviewView {
 
     frame_timer: Cell<Option<TimerHandle>>,
     notification_center_observer: Cell<Option<NotificationCenterObserver>>,
+    occlusion_observer: Cell<Option<NotificationCenterObserver>>,
 
     keyboard_state: KeyboardState,
 
@@ -63,6 +64,7 @@ impl BaseviewView {
             frame_timer: None.into(),
             window_handler: None.into(),
             notification_center_observer: None.into(),
+            occlusion_observer: None.into(),
             parenting,
 
             #[cfg(feature = "opengl")]
@@ -113,6 +115,14 @@ impl BaseviewView {
                 }
             });
             view.notification_center_observer.set(Some(observer));
+
+            let occlusion_view = Weak::new(view.view);
+            let observer = NotificationCenterObserver::register_window_occlusion_change(move |n| {
+                if let Some(view) = occlusion_view.load() {
+                    BaseviewView::handle_occlusion_notification(view.inner_ref(), n);
+                }
+            });
+            view.occlusion_observer.set(Some(observer));
 
             // Send an initial Resized event so users get the correct scale factor and physical size.
             Self::trigger_deferrable_event(
@@ -212,6 +222,29 @@ impl BaseviewView {
                 break;
             }
         }
+    }
+
+    fn handle_occlusion_notification(this: ViewRef<Self>, notification: &NSNotification) {
+        let Some(window) = this.view.window() else { return };
+        let Some(notification_object) = notification.object().and_then(|o| o.downcast().ok())
+        else {
+            return;
+        };
+
+        // Unlike focus, occlusion is a property of the whole window: no
+        // first-responder check — every embedded view wants to know.
+        if window != notification_object {
+            return;
+        }
+
+        let visible = window.occlusionState().contains(NSWindowOcclusionState::Visible);
+        if visible {
+            // Re-exposed: the compositor may still be showing a stale
+            // snapshot of the window. Mark the view dirty so AppKit
+            // commits a fresh frame instead of the pre-occlusion ghost.
+            this.view.setNeedsDisplay(true);
+        }
+        Self::trigger_deferrable_event(this, Event::Window(WindowEvent::Occluded(!visible)));
     }
 
     fn fetch_view_size(view: &NSView) -> WindowInfo {

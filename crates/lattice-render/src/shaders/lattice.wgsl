@@ -533,7 +533,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level > 0.0 {
-                let cov = octave_glyph(mode, i, in.cents, in.uv, aa) * level_floor(level);
+                // The 35% dimmest-visible floor is right while the octave
+                // sounds, but a released glyph must END at nothing: without
+                // this taper it holds 35% brightness all the way down the
+                // fade and then pops off. Ease the last 15% of the envelope
+                // to zero instead.
+                let tail = smoothstep(0.0, 0.15, level);
+                let cov = octave_glyph(mode, i, in.cents, in.uv, aa)
+                    * level_floor(level) * tail;
                 if cov > glyph {
                     glyph = cov;
                     // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add

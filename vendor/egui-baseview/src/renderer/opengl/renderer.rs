@@ -74,6 +74,9 @@ impl Renderer {
         self.painter.max_texture_side()
     }
 
+    /// Returns whether a frame was presented (the GL path always
+    /// presents; the return type matches the wgpu renderer, which can
+    /// fail to acquire a surface).
     pub fn render(
         &mut self,
         window: &Window,
@@ -82,7 +85,7 @@ impl Renderer {
         pixels_per_point: f32,
         egui_ctx: &mut egui::Context,
         full_output: &mut FullOutput,
-    ) {
+    ) -> bool {
         let PhySize {
             width: canvas_width,
             height: canvas_height,
@@ -123,6 +126,7 @@ impl Renderer {
             context.swap_buffers();
             context.make_not_current();
         }
+        true
     }
 }
 
