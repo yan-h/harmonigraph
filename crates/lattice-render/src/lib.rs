@@ -8,11 +8,15 @@
 //! `CallbackResources`.
 //!
 //! Rendering model: one instanced draw of camera-facing quads (billboards),
-//! sorted back-to-front on the CPU (the egui render pass has no depth
-//! buffer). This is plenty for a lattice-sized scene. When effects need
-//! depth testing or post-processing (bloom etc.), the upgrade path is to
-//! render the scene into our own offscreen texture + depth buffer in
-//! `prepare()` and composite that texture here instead.
+//! sorted back-to-front on the CPU, rendered in `prepare()` into a per-pane
+//! offscreen color + depth target and composited into the egui pass in
+//! `paint()` as one textured quad (blit.wgsl). Owning the pass is what
+//! makes the render-scale option (super/sub-sampling) possible, and gives
+//! post-processing (bloom etc.) a texture to read; the depth buffer is
+//! written (pass-through `Always` test, so draw order still composites
+//! exactly like the pre-offscreen renderer) but not yet read by anything.
+//! `offscreen_composite_matches_direct_draw` in the tests pins down that
+//! this path reproduces the old direct-to-egui-pass output.
 //!
 //! With the `hot-reload` feature (enabled by the standalone harness), the
 //! .wgsl file is watched on disk and the pipeline rebuilds on save —
@@ -30,6 +34,14 @@ use lattice_scene::Scene;
 pub use egui_wgpu::wgpu;
 
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
+const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
+
+/// Depth format of the offscreen pass. Written for future depth-reading
+/// effects; the scene pipelines test `Always` so it never affects output.
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// Clamp on the render-scale view setting, over whatever the UI offers.
+const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
 /// Entry points a (re)loaded shader must provide.
 #[cfg(any(test, feature = "hot-reload"))]
@@ -200,10 +212,9 @@ pub fn lattice_paint_callback(
     target_format: wgpu::TextureFormat,
     pane_id: u64,
 ) -> egui::PaintCallback {
-    let aspect = rect.width() / rect.height().max(1.0);
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        LatticeCallback::from_scene(scene, aspect, target_format, pane_id),
+        LatticeCallback::from_scene(scene, rect.size(), target_format, pane_id),
     )
 }
 
@@ -214,15 +225,22 @@ struct LatticeCallback {
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    /// The callback rect's size in egui points; `prepare` multiplies by the
+    /// screen's pixels-per-point and `render_scale` to size the offscreen
+    /// target.
+    size_points: [f32; 2],
+    /// Copied from the scene (a view setting); see [`RENDER_SCALE_RANGE`].
+    render_scale: f32,
 }
 
 impl LatticeCallback {
     fn from_scene(
         scene: &Scene,
-        aspect: f32,
+        size_points: egui::Vec2,
         target_format: wgpu::TextureFormat,
         pane_id: u64,
     ) -> Self {
+        let aspect = size_points.x / size_points.y.max(1.0);
         let camera = scene.camera;
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
@@ -289,6 +307,8 @@ impl LatticeCallback {
             },
             target_format,
             pane_id,
+            size_points: [size_points.x, size_points.y],
+            render_scale: scene.render_scale,
         }
     }
 }
@@ -297,7 +317,10 @@ impl LatticeCallback {
 struct LatticeResources {
     pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
+    composite_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    composite_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
     #[cfg(feature = "hot-reload")]
@@ -313,12 +336,85 @@ struct PaneBuffers {
     edge_buffer: wgpu::Buffer,
     edge_capacity: usize,
     edge_count: u32,
+    offscreen: Option<Offscreen>,
 }
 
-/// Build one of our pipelines from WGSL source (startup uses the baked-in
-/// source; hot-reload rebuilds from disk). Node and edge pipelines share
-/// the module, bind group layout, blending, and topology; only entry
+/// The per-pane offscreen render target, recreated when the pane's pixel
+/// size (or render scale) changes.
+struct Offscreen {
+    color_view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+    /// Binds the color texture + shared sampler for the composite blit.
+    composite_bind_group: wgpu::BindGroup,
+    size: [u32; 2],
+}
+
+impl Offscreen {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        composite_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        size: [u32; 2],
+    ) -> Self {
+        let extent = wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        };
+        let color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lattice_offscreen_color"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lattice_offscreen_depth"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lattice_composite_bind_group"),
+            layout: composite_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+        Offscreen {
+            color_view,
+            depth_view: depth.create_view(&wgpu::TextureViewDescriptor::default()),
+            composite_bind_group,
+            size,
+        }
+    }
+}
+
+/// Build one of the scene pipelines from WGSL source (startup uses the
+/// baked-in source; hot-reload rebuilds from disk). Node and edge pipelines
+/// share the module, bind group layout, blending, and topology; only entry
 /// points and vertex layout differ.
+///
+/// `depth` is true for the production pipelines, which render into the
+/// offscreen pass and must declare its depth attachment. The parity test
+/// builds depthless variants to reproduce the old draw-directly-into-the-
+/// egui-pass renderer as its reference.
 fn create_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
@@ -326,6 +422,7 @@ fn create_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     entry_points: (&str, &str),
     vertex_layout: wgpu::VertexBufferLayout<'_>,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
@@ -362,21 +459,29 @@ fn create_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleStrip,
             ..Default::default()
         },
-        depth_stencil: None,
-        // Must match the egui render pass, which is created without
-        // MSAA in both eframe (default) and egui-baseview (default).
+        // The depth buffer is written for future depth-reading effects but
+        // never rejects a fragment (`Always`): translucent glows composite
+        // by draw order, exactly as they did directly in the egui pass.
+        depth_stencil: depth.then(|| wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
     })
 }
 
-/// Build both pipelines from one source.
+/// Build both scene pipelines from one source.
 fn create_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
+    depth: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     (
         create_pipeline(
@@ -386,6 +491,7 @@ fn create_pipelines(
             bind_group_layout,
             ("vs_main", "fs_main"),
             GpuInstance::LAYOUT,
+            depth,
         ),
         create_pipeline(
             device,
@@ -394,8 +500,56 @@ fn create_pipelines(
             bind_group_layout,
             ("vs_edge", "fs_edge"),
             GpuEdge::LAYOUT,
+            depth,
         ),
     )
+}
+
+/// The composite pipeline: blit the offscreen texture over the egui pass
+/// (premultiplied, so the pane background shows through empty space). Runs
+/// in the egui render pass, which has no depth attachment.
+fn create_composite_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+    composite_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("lattice_blit_shader"),
+        source: wgpu::ShaderSource::Wgsl(BLIT_SRC.into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("lattice_composite_pipeline_layout"),
+        bind_group_layouts: &[Some(composite_layout)],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("lattice_composite_pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_blit"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_blit"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 impl LatticeResources {
@@ -414,12 +568,49 @@ impl LatticeResources {
             }],
         });
         let (pipeline, edge_pipeline) =
-            create_pipelines(device, SHADER_SRC, target_format, &bind_group_layout);
+            create_pipelines(device, SHADER_SRC, target_format, &bind_group_layout, true);
+
+        let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lattice_composite_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let composite_pipeline =
+            create_composite_pipeline(device, target_format, &composite_layout);
+        // Linear filtering: identity when render scale is 1 (texel-aligned
+        // sampling), smooth resampling at any other scale.
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("lattice_composite_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         LatticeResources {
             pipeline,
             edge_pipeline,
+            composite_pipeline,
             bind_group_layout,
+            composite_layout,
+            sampler,
             target_format,
             panes: HashMap::new(),
             #[cfg(feature = "hot-reload")]
@@ -427,9 +618,20 @@ impl LatticeResources {
         }
     }
 
-    fn pane_buffers(&mut self, device: &wgpu::Device, pane_id: u64) -> &mut PaneBuffers {
+    /// Fetch (or create) a pane's GPU objects, and when `offscreen_size` is
+    /// given, make sure its offscreen target exists at exactly that pixel
+    /// size (pane resizes and render-scale changes recreate it).
+    fn pane_buffers(
+        &mut self,
+        device: &wgpu::Device,
+        pane_id: u64,
+        offscreen_size: Option<[u32; 2]>,
+    ) -> &mut PaneBuffers {
+        let format = self.target_format;
         let layout = &self.bind_group_layout;
-        self.panes.entry(pane_id).or_insert_with(|| {
+        let composite_layout = &self.composite_layout;
+        let sampler = &self.sampler;
+        let pane = self.panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lattice_uniforms"),
                 size: std::mem::size_of::<Uniforms>() as u64,
@@ -453,8 +655,16 @@ impl LatticeResources {
                 edge_buffer: create_edge_buffer(device, 64),
                 edge_capacity: 64,
                 edge_count: 0,
+                offscreen: None,
             }
-        })
+        });
+        if let Some(size) = offscreen_size {
+            if pane.offscreen.as_ref().is_none_or(|o| o.size != size) {
+                pane.offscreen =
+                    Some(Offscreen::new(device, format, composite_layout, sampler, size));
+            }
+        }
+        pane
     }
 }
 
@@ -481,8 +691,8 @@ impl CallbackTrait for LatticeCallback {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _screen_descriptor: &ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        screen_descriptor: &ScreenDescriptor,
+        egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         // Lazily (re)create shared resources. Recreate if the target format
@@ -508,6 +718,7 @@ impl CallbackTrait for LatticeCallback {
                         &source,
                         resources.target_format,
                         &resources.bind_group_layout,
+                        true,
                     );
                     resources.pipeline = pipeline;
                     resources.edge_pipeline = edge_pipeline;
@@ -519,7 +730,22 @@ impl CallbackTrait for LatticeCallback {
             }
         }
 
-        let pane = resources.pane_buffers(device, self.pane_id);
+        // Offscreen pixel size: the callback rect at native resolution,
+        // scaled by the render-scale view setting.
+        let scale = self
+            .render_scale
+            .clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
+        let px = screen_descriptor.pixels_per_point * scale;
+        let max_dim = device.limits().max_texture_dimension_2d;
+        let size = [
+            ((self.size_points[0] * px).round() as u32).clamp(1, max_dim),
+            ((self.size_points[1] * px).round() as u32).clamp(1, max_dim),
+        ];
+        // Nothing to draw (matches paint()'s early-out): skip the offscreen
+        // target and pass entirely.
+        let offscreen_size = (!self.instances.is_empty()).then_some(size);
+
+        let pane = resources.pane_buffers(device, self.pane_id, offscreen_size);
 
         if self.instances.len() > pane.instance_capacity {
             pane.instance_capacity = self.instances.len().next_power_of_two();
@@ -545,6 +771,54 @@ impl CallbackTrait for LatticeCallback {
 
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
 
+        // The scene pass: draw into the pane's offscreen target, on the
+        // encoder egui-wgpu executes before its own render pass. paint()
+        // then just composites the finished texture.
+        let pane = resources
+            .panes
+            .get(&self.pane_id)
+            .expect("created by pane_buffers above");
+        if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| pane.instance_count > 0) {
+            let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("lattice_scene_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &offscreen.color_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // Transparent black: premultiplied "nothing", so
+                        // compositing over the pane background reproduces
+                        // drawing straight into the egui pass.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &offscreen.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            // Edges draw under the nodes so discs own the joints.
+            if pane.edge_count > 0 {
+                pass.set_pipeline(&resources.edge_pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
+                pass.draw(0..4, 0..pane.edge_count);
+            }
+            pass.set_pipeline(&resources.pipeline);
+            pass.set_bind_group(0, &pane.bind_group, &[]);
+            pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+            pass.draw(0..4, 0..pane.instance_count);
+        }
+
         Vec::new()
     }
 
@@ -563,19 +837,15 @@ impl CallbackTrait for LatticeCallback {
         if pane.instance_count == 0 {
             return;
         }
+        let Some(offscreen) = &pane.offscreen else {
+            return;
+        };
 
-        // Edges draw under the nodes so discs own the joints.
-        if pane.edge_count > 0 {
-            render_pass.set_pipeline(&resources.edge_pipeline);
-            render_pass.set_bind_group(0, &pane.bind_group, &[]);
-            render_pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
-            render_pass.draw(0..4, 0..pane.edge_count);
-        }
-
-        render_pass.set_pipeline(&resources.pipeline);
-        render_pass.set_bind_group(0, &pane.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-        render_pass.draw(0..4, 0..pane.instance_count);
+        // The scene was rendered in prepare(); stretch it over the
+        // viewport (egui-wgpu sets the viewport to the callback rect).
+        render_pass.set_pipeline(&resources.composite_pipeline);
+        render_pass.set_bind_group(0, &offscreen.composite_bind_group, &[]);
+        render_pass.draw(0..4, 0..1);
     }
 }
 
@@ -626,5 +896,279 @@ mod tests {
                 .expect("headless device");
         let _resources =
             LatticeResources::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+    }
+
+    fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        else {
+            eprintln!("no GPU adapter available; skipping");
+            return None;
+        };
+        let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("headless device");
+        Some(pair)
+    }
+
+    /// A scene exercising every draw path: lit + idle + outlined + hovered
+    /// nodes with octave indicators, a chord beam, and solid + dashed grid
+    /// lines, all overlapping so blend order matters.
+    fn parity_scene() -> Scene {
+        use glam::{Vec3, Vec4};
+        use lattice_core::LatticePos;
+
+        let mut nodes = Vec::new();
+        for i in 0..6u32 {
+            let f = i as f32;
+            let mut octaves = [0.0f32; lattice_scene::OCTAVE_SLOTS];
+            octaves[(i as usize) % lattice_scene::OCTAVE_SLOTS] = 1.0 - f * 0.1;
+            octaves[(i as usize + 5) % lattice_scene::OCTAVE_SLOTS] = 0.4;
+            nodes.push(lattice_scene::NodeInstance {
+                lattice_pos: LatticePos::new(i as i32 - 3, i as i32 % 2, 0),
+                // Cluster tightly around the origin so discs overlap and
+                // draw order shows in the output.
+                world_pos: Vec3::new(f * 0.45 - 1.1, (f % 3.0) * 0.4 - 0.4, f * 0.3 - 0.75),
+                color: Vec4::new(0.25 + f * 0.12, 0.55 - f * 0.05, 0.95 - f * 0.1, 1.0),
+                activation: if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 },
+                octaves,
+                age: f * 0.65,
+                seed: f * 0.13,
+                outlined: i == 4,
+                hovered: i == 1,
+                scale: 0.9 + f * 0.06,
+                on_home: i % 2 == 0,
+                cents: f * 190.0,
+            });
+        }
+        let edges = vec![lattice_scene::EdgeInstance {
+            a: nodes[0].world_pos,
+            b: nodes[3].world_pos,
+            color: Vec4::new(0.9, 0.6, 0.3, 1.0),
+            strength: 0.85,
+            dashed: false,
+        }];
+        let grid = vec![
+            lattice_scene::EdgeInstance {
+                a: Vec3::new(-1.8, -0.6, -0.3),
+                b: Vec3::new(1.6, -0.6, -0.3),
+                color: Vec4::new(0.16, 0.17, 0.20, 0.55),
+                strength: 0.55,
+                dashed: false,
+            },
+            lattice_scene::EdgeInstance {
+                a: Vec3::new(-1.2, 0.7, -0.6),
+                b: Vec3::new(1.2, 0.4, 0.6),
+                color: Vec4::new(0.16, 0.17, 0.20, 0.55),
+                strength: 0.4,
+                dashed: true,
+            },
+        ];
+        Scene {
+            nodes,
+            camera: lattice_scene::Camera::default(),
+            time: 1.25,
+            node_radius: 0.34,
+            octave_style: Default::default(),
+            node_style: Default::default(),
+            edges,
+            grid,
+            dot_ramp: std::array::from_fn(|k| {
+                Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
+            }),
+            darkest_pitch: 24.0,
+            brightest_pitch: 108.0,
+            render_scale: 1.0,
+        }
+    }
+
+    /// Render into a fresh texture cleared to `clear`, handing the pass to
+    /// `draw`, and return the texture for readback.
+    fn render_to_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: [u32; 2],
+        format: wgpu::TextureFormat,
+        clear: wgpu::Color,
+        draw: impl FnOnce(&mut wgpu::RenderPass<'static>),
+    ) -> wgpu::Texture {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("parity_target"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("parity_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(clear),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            draw(&mut pass);
+        }
+        queue.submit([encoder.finish()]);
+        texture
+    }
+
+    fn readback(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        size: [u32; 2],
+    ) -> Vec<u8> {
+        let bytes_per_row = size[0] * 4; // 256-wide RGBA rows are aligned
+        assert_eq!(bytes_per_row % 256, 0, "test sizes keep rows aligned");
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("parity_readback"),
+            size: (bytes_per_row * size[1]) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        slice.get_mapped_range().to_vec()
+    }
+
+    /// The refactor's core claim: rendering offscreen (with the depth
+    /// attachment) and compositing through blit.wgsl reproduces what the
+    /// old renderer produced by drawing straight into the egui pass. Runs
+    /// the same scene through both paths and compares pixels; tolerance 3
+    /// covers the 8-bit quantization of the intermediate texture.
+    #[test]
+    fn offscreen_composite_matches_direct_draw() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        const SIZE: [u32; 2] = [256, 256];
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let scene = parity_scene();
+        let cb = LatticeCallback::from_scene(
+            &scene,
+            egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+            format,
+            7,
+        );
+
+        // prepare(): uploads buffers and renders the offscreen scene pass.
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor {
+            size_in_pixels: SIZE,
+            pixels_per_point: 1.0,
+        };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let user_bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(user_bufs.into_iter().chain([encoder.finish()]));
+
+        let clear = wgpu::Color {
+            r: 0.07,
+            g: 0.08,
+            b: 0.09,
+            a: 1.0,
+        };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+
+        // Path A: composite the offscreen texture, as paint() now does.
+        let composite_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+
+        // Path B: the pre-offscreen renderer — same buffers and draw order,
+        // depthless pipelines, straight into the target pass.
+        let res: &LatticeResources = resources.get().expect("prepare created resources");
+        let (node_pipeline, edge_pipeline) =
+            create_pipelines(&device, SHADER_SRC, format, &res.bind_group_layout, false);
+        let pane = res.panes.get(&7).expect("prepare created the pane");
+        let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
+            if pane.edge_count > 0 {
+                pass.set_pipeline(&edge_pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
+                pass.draw(0..4, 0..pane.edge_count);
+            }
+            pass.set_pipeline(&node_pipeline);
+            pass.set_bind_group(0, &pane.bind_group, &[]);
+            pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+            pass.draw(0..4, 0..pane.instance_count);
+        });
+
+        let composite = readback(&device, &queue, &composite_tex, SIZE);
+        let direct = readback(&device, &queue, &direct_tex, SIZE);
+
+        // Guard against vacuous success: the scene must actually have drawn
+        // over the clear color somewhere.
+        let bg = [18u8, 20, 23, 255]; // clear color as 8-bit RGBA
+        assert!(
+            direct
+                .chunks(4)
+                .any(|px| px.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 8)),
+            "direct render drew nothing; the parity comparison is vacuous"
+        );
+
+        let (mut max_diff, mut at) = (0u8, 0usize);
+        for (i, (&a, &b)) in composite.iter().zip(&direct).enumerate() {
+            if a.abs_diff(b) > max_diff {
+                max_diff = a.abs_diff(b);
+                at = i;
+            }
+        }
+        assert!(
+            max_diff <= 3,
+            "offscreen+composite diverges from direct draw: max channel diff \
+             {max_diff} at byte {at} (composite {:?} vs direct {:?})",
+            &composite[at & !3..(at & !3) + 4],
+            &direct[at & !3..(at & !3) + 4],
+        );
     }
 }

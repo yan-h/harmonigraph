@@ -186,10 +186,19 @@ pub struct ViewConfig {
     /// their comma marks; Learn mode toggles this from the held chord.
     #[serde(default)]
     pub meantone: bool,
+    /// Offscreen render resolution as a multiple of the pane's native pixel
+    /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
+    /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
+    #[serde(default = "default_render_scale")]
+    pub render_scale: f32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_render_scale() -> f32 {
+    1.0
 }
 
 impl ViewConfig {
@@ -228,6 +237,7 @@ impl Default for ViewConfig {
             node_style: NodeStyle::default(),
             show_chord_edges: false,
             meantone: false,
+            render_scale: default_render_scale(),
         }
     }
 }
@@ -536,6 +546,9 @@ pub struct Scene {
     /// to index `dot_ramp`; mirror the disc coloring's `FrameParams`.
     pub darkest_pitch: f32,
     pub brightest_pitch: f32,
+    /// Offscreen render resolution multiplier (see [`ViewConfig`]); the
+    /// renderer sizes its offscreen color+depth target by this.
+    pub render_scale: f32,
 }
 
 fn lch(l: f64, c: f64, h: f64) -> Vec4 {
@@ -698,6 +711,7 @@ pub fn derive_scene(
         dot_ramp: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
+        render_scale: view.render_scale,
     }
 }
 

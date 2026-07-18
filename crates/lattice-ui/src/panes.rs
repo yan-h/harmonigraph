@@ -584,6 +584,16 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             *extent = value as i32;
         }
     }
+
+    // Lattice render resolution relative to the pane's native pixels.
+    // 1.0 is exact; above it supersamples (crisper glyph edges at some GPU
+    // cost), below it renders coarse and upscales (cheaper on huge panes).
+    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale")
+        .show(ui)
+        .on_hover_text(
+            "Lattice render resolution: 1.0 = native, higher supersamples, \
+             lower renders coarse and upscales",
+        );
 }
 
 /// Cosmetic settings, apart from the structural View pane: how things
