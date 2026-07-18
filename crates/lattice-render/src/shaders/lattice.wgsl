@@ -48,6 +48,10 @@ struct Instance {
     // octave dot at the note's absolute-pitch angle, which needs the pitch
     // class within the octave; unused by the other octave styles.
     @location(5) cents: f32,
+    // Depth-cue size multiplier from the scene (1 at the camera's focus
+    // distance; larger nearer the eye, smaller farther), exaggerating
+    // perspective so depth reads at a glance.
+    @location(6) scale: f32,
 };
 
 struct VsOut {
@@ -72,11 +76,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 
     let hovered = inst.params.y;
 
-    // Node size is constant: idle nodes are the same size as active ones, so a
-    // note never grows or shrinks — it changes only in brightness and glow.
-    // (The quad is twice the disc radius to leave room for the glow; hover
-    // still nudges the size up a touch.)
-    let radius = u.misc.y * (0.90 + 0.15 * hovered) * 2.0;
+    // Node size never responds to notes: idle nodes are the same size as
+    // active ones, so a note changes only brightness and glow. Size DOES
+    // carry the depth cue (inst.scale) and a small hover nudge. (The quad
+    // is twice the disc radius to leave room for the glow.)
+    let radius = u.misc.y * (0.90 + 0.15 * hovered) * 2.0 * inst.scale;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;

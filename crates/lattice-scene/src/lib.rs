@@ -379,6 +379,10 @@ pub struct NodeInstance {
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
     pub hovered: bool,
+    /// Depth-cue size multiplier (see [`depth_scale`]): nodes nearer the
+    /// eye than the camera's focus distance grow, farther ones shrink,
+    /// exaggerating the perspective so depth reads at a glance.
+    pub scale: f32,
     /// The node's pitch class in cents under the current tuning, for the
     /// in-lattice cents readout.
     pub cents: f32,
@@ -503,6 +507,7 @@ pub fn derive_scene(
 ) -> Scene {
     let mut nodes = Vec::new();
     let center = view.center();
+    let eye = camera.eye();
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
@@ -554,9 +559,10 @@ pub fn derive_scene(
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
+        let world_pos = lattice_to_world(centered, view.spacing);
         nodes.push(NodeInstance {
             lattice_pos: pos,
-            world_pos: lattice_to_world(centered, view.spacing),
+            world_pos,
             color,
             activation,
             octaves,
@@ -564,6 +570,7 @@ pub fn derive_scene(
             seed,
             outlined,
             hovered: hovered == Some(pos),
+            scale: depth_scale(world_pos.distance(eye), camera.distance),
             cents: node_pc.to_cents(),
         });
     }
@@ -584,6 +591,26 @@ pub fn derive_scene(
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
     }
+}
+
+/// Depth-cue strength: the exponent on (focus distance / node distance)
+/// that sets a node's size multiplier. 0 would disable the cue (plain
+/// perspective); 1 roughly doubles perspective's own shrink-with-distance.
+const DEPTH_SCALE_EXPONENT: f32 = 0.8;
+/// Clamp on the multiplier so nodes stay recognizable when the camera
+/// gets very close to (or very far from) part of the lattice.
+const DEPTH_SCALE_RANGE: (f32, f32) = (0.4, 2.0);
+
+/// Depth-cue size multiplier for a node `dist` from the eye, with the
+/// camera focused (eye-to-target) at `focus`: 1 at the focus distance, so
+/// the lattice's overall look is unchanged where the user is looking;
+/// larger when nearer, smaller when farther. Perspective alone shrinks a
+/// distant node too subtly for depth to read at lattice scale — this
+/// exaggerates it.
+fn depth_scale(dist: f32, focus: f32) -> f32 {
+    (focus / dist.max(0.01))
+        .powf(DEPTH_SCALE_EXPONENT)
+        .clamp(DEPTH_SCALE_RANGE.0, DEPTH_SCALE_RANGE.1)
 }
 
 /// How far a grid segment stops short of each node center, as a factor of
@@ -1001,6 +1028,37 @@ mod tests {
         for seg in &scene.grid {
             assert!(seg.a.length() <= max_node && seg.b.length() <= max_node);
         }
+    }
+
+    #[test]
+    fn depth_scale_exaggerates_proximity() {
+        // Neutral at the focus distance, monotonic on either side, clamped
+        // at the extremes.
+        assert!((depth_scale(12.0, 12.0) - 1.0).abs() < 1e-6);
+        assert!(depth_scale(6.0, 12.0) > 1.0);
+        assert!(depth_scale(24.0, 12.0) < 1.0);
+        assert_eq!(depth_scale(0.001, 12.0), DEPTH_SCALE_RANGE.1);
+        assert_eq!(depth_scale(1e6, 12.0), DEPTH_SCALE_RANGE.0);
+
+        // And the scene wires it in: the node nearest the eye renders
+        // larger than the farthest one.
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            0.0,
+        );
+        let eye = scene.camera.eye();
+        let dist = |n: &&NodeInstance| n.world_pos.distance(eye);
+        let near = scene.nodes.iter().min_by(|a, b| dist(a).total_cmp(&dist(b))).unwrap();
+        let far = scene.nodes.iter().max_by(|a, b| dist(a).total_cmp(&dist(b))).unwrap();
+        assert!(
+            near.scale > far.scale,
+            "near {} vs far {}",
+            near.scale,
+            far.scale
+        );
     }
 
     #[test]
