@@ -109,6 +109,17 @@ fn level_floor(level: f32) -> f32 {
     return 0.35 + 0.65 * level;
 }
 
+// Coverage of `x` inside the threshold `edge`, with a screen-constant
+// soft band: `w` is ~a pixel expressed in `x`'s units (from fwidth at
+// the call site — taken at the top of the fragment fn, outside any
+// non-uniform control flow). Fixed-width smoothstep edges blur as a
+// quad grows on screen and alias as it shrinks; this keeps every shape
+// edge equally soft at all zooms. Glows and gas interiors deliberately
+// keep their proportional falloffs.
+fn aa_inside(edge: f32, x: f32, w: f32) -> f32 {
+    return 1.0 - smoothstep(edge - w, edge + w, x);
+}
+
 // Activation level (0..1) of octave slot `i`, unpacked from 8-bit fields.
 // Each octave carries its OWN envelope so indicators fade independently
 // (a released C5 decays even while C4 holds the node fully lit).
@@ -124,21 +135,22 @@ const MIDDLE_C_SLOT: f32 = 4.0;
 // Clockwise as pitch rises.
 const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
 // Dots geometry, in quad UV units: the ring the dots orbit (kept close to the
-// disc edge ~0.5), and the dot's solid-core / fade-edge radii.
+// disc edge ~0.5) and the dot radius (edge softness is screen-constant,
+// applied at the call via aa_inside).
 const DOT_ORBIT: f32 = 0.67;
-const DOT_CORE: f32 = 0.10;
-const DOT_EDGE: f32 = 0.15;
+const DOT_RADIUS: f32 = 0.125;
 
 // Coverage (0..1) of the dot for a SOUNDING octave slot `i` on a node whose
 // pitch class is `cents`: a satellite around the disc whose angle is the
 // note's absolute pitch (middle C straight up, 45deg clockwise per octave,
-// pitch class within the octave included).
-fn octave_dot(i: u32, cents: f32, uv: vec2<f32>) -> f32 {
+// pitch class within the octave included). `aa` is the caller's per-pixel
+// soft-band width.
+fn octave_dot(i: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
     // (uv.y is up, so clockwise = subtracting from the angle.)
     let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
     let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
     let center = vec2<f32>(cos(ang), sin(ang)) * DOT_ORBIT;
-    return 1.0 - smoothstep(DOT_CORE, DOT_EDGE, distance(uv, center));
+    return aa_inside(DOT_RADIUS, distance(uv, center), aa);
 }
 
 // Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch
@@ -467,7 +479,7 @@ fn seg_dist(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
 
 // Wire style: distance-field wireframe of a tumbling octahedron, projected
 // orthographically into the billboard plane. Returns line coverage.
-fn wire_octahedron(uv: vec2<f32>, age: f32, seed: f32) -> f32 {
+fn wire_octahedron(uv: vec2<f32>, age: f32, seed: f32, aa: f32) -> f32 {
     let yaw = age * 0.6 + seed * 2.3;
     let pitch = age * 0.37 + seed * 1.1;
     let cy = cos(yaw);
@@ -500,7 +512,9 @@ fn wire_octahedron(uv: vec2<f32>, age: f32, seed: f32) -> f32 {
     var wire = 0.0;
     for (var e = 0u; e < 12u; e = e + 1u) {
         let dist = seg_dist(uv, v[ea[e]], v[eb[e]]);
-        wire = max(wire, 1.0 - smoothstep(0.015, 0.05, dist));
+        // Line half-width 0.0325 (the old 0.015..0.05 band's midpoint),
+        // screen-constant softness.
+        wire = max(wire, aa_inside(0.0325, dist, aa));
     }
     return wire;
 }
@@ -515,11 +529,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let age = in.params.z;
     let seed = in.seed;
 
+    // Screen-constant soft-band width: uv units per pixel (uv.x is linear
+    // across the billboard, so fwidth is uniform over the quad and safe to
+    // take before any branching), scaled to ~0.75px on either side of an
+    // edge. Shape edges below use this instead of fixed-uv smoothsteps.
+    let aa = max(fwidth(in.uv.x), 1e-4) * 0.75;
+
     // Solid disc occupies the inner half of the quad; channel-14 voices
-    // render as an outline ring instead (v1 semantics).
+    // render as an outline ring instead (v1 semantics). Radii sit at the
+    // old soft bands' midpoints (disc 0.42..0.5, ring inner 0.30..0.38).
     let outlined = in.params.w;
-    let filled = 1.0 - smoothstep(0.42, 0.5, d);
-    let ring = (1.0 - smoothstep(0.42, 0.5, d)) * smoothstep(0.30, 0.38, d);
+    let filled = aa_inside(0.46, d, aa);
+    let ring = filled * (1.0 - aa_inside(0.34, d, aa));
     // Unplayed nodes draw no disc at all — the background grid's gap marks
     // the position instead. Activation fades the disc in (and back out on
     // release); hovering an idle node still shows a dim ghost so picking
@@ -530,7 +551,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Wire style: active nodes morph from disc into a tumbling wireframe
     // octahedron (idle nodes draw nothing in every style — see presence).
     if style == 1u && activation > 0.0 {
-        disc = mix(disc, wire_octahedron(in.uv, age, seed), activation);
+        disc = mix(disc, wire_octahedron(in.uv, age, seed, aa), activation);
     }
 
     // Soft additive-looking glow for active nodes. The exponential alone
@@ -581,7 +602,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level > 0.0 {
-                let cov = octave_dot(i, in.cents, in.uv) * level_floor(level);
+                let cov = octave_dot(i, in.cents, in.uv, aa) * level_floor(level);
                 if cov > glyph {
                     glyph = cov;
                     // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
@@ -665,10 +686,15 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
 
 @fragment
 fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
-    // Grid line: uniformly faint with soft edges, the ends easing off
+    // Screen-constant soft band across the beam (see aa_inside; computed
+    // before the branch so the derivative stays in uniform control flow).
+    let aa_y = max(fwidth(in.uv.y), 1e-4) * 0.75;
+
+    // Grid line: uniformly faint with a screen-constant soft edge (line
+    // edge at the old 0.35..1.0 band's midpoint), the ends easing off
     // toward the node gaps.
     if in.kind > 0.5 {
-        let across = 1.0 - smoothstep(0.35, 1.0, abs(in.uv.y));
+        let across = aa_inside(0.675, abs(in.uv.y), aa_y);
         let along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
         let alpha = in.strength * across * along;
         if alpha < 0.01 {
