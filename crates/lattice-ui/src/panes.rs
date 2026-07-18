@@ -74,6 +74,21 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Notes => notes_pane(ui, self.state),
         }
     }
+
+    /// The Spectral display paints its own well-colored plot surface, so
+    /// the default 8px body margin reads as a pointless border around it:
+    /// drop the margin and let the plot fill the whole tab.
+    fn tab_style_override(
+        &self,
+        tab: &Tab,
+        global_style: &egui_dock::TabStyle,
+    ) -> Option<egui_dock::TabStyle> {
+        matches!(tab, Tab::Spectral).then(|| {
+            let mut style = global_style.clone();
+            style.tab_body.inner_margin = egui::Margin::ZERO;
+            style
+        })
+    }
 }
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
