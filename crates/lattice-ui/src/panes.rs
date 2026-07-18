@@ -714,7 +714,7 @@ fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::SpectrumWindow;
+    use crate::{SpectrumLabels, SpectrumWindow};
     let cfg = &mut state.spectrum_config;
 
     ui.checkbox(&mut cfg.show_audio, "Audio spectrum").on_hover_text(
@@ -748,6 +748,20 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)
         .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
+    ValueBar::new(&mut cfg.tilt, -6.0..=6.0, "Tilt (dB/oct)")
+        .show(ui)
+        .on_hover_text(
+            "Slope the height scale around 1 kHz: 0 shows raw power, \
+             +3..4.5 flattens typical musical material's natural rolloff",
+        );
+
+    ui.horizontal(|ui| {
+        ui.label("Labels");
+        ui.selectable_value(&mut cfg.labels, SpectrumLabels::Notes, "Notes")
+            .on_hover_text("A gridline at every C, Bitwig octave numbers");
+        ui.selectable_value(&mut cfg.labels, SpectrumLabels::Frequency, "Frequency")
+            .on_hover_text("Gridlines at 20, 50, 100 ... 10k, 20k Hz");
+    });
 
     ui.checkbox(&mut cfg.fill, "Fill")
         .on_hover_text("Shade under the spectrum curve");
@@ -755,8 +769,6 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
     ui.checkbox(&mut cfg.show_voice_bars, "Voice bars")
         .on_hover_text("MIDI-derived bars at each voice's actual pitch");
-    ui.checkbox(&mut cfg.show_ticks, "Lattice ticks")
-        .on_hover_text("Per-octave marks where the visible lattice's pitch classes sit");
 
     // Octave zoom (Bitwig numbering; C-1..C9 is the full analyzer range).
     let mut low = cfg.low_octave as f32;
@@ -771,7 +783,11 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     }
 }
 
+/// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
+const TILT_PIVOT_MIDI: f32 = 83.213_1;
+
 fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+    use crate::SpectrumLabels;
     use lattice_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
@@ -791,65 +807,64 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     let span = max_midi - min_midi;
     let x_of = |midi: f32| rect.left() + rect.width() * (midi - min_midi) / span;
     // dB height mapping: 0 dB (a full-scale sine) tops out at 85% of the
-    // pane; the Spectrum tab's floor sets the bottom.
-    let h_of = |power: f32| {
-        let db = 10.0 * power.max(1e-12).log10();
+    // pane; the Spectrum tab's floor sets the bottom, and its tilt slopes
+    // the scale around the 1 kHz pivot.
+    let h_of = |power: f32, midi: f32| {
+        let db = 10.0 * power.max(1e-12).log10()
+            + cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
         ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0) * rect.height() * 0.85
     };
 
-    // Octave gridlines at every C.
-    let mut c = min_midi as i32;
-    while c <= max_midi as i32 {
-        let x = x_of(c as f32);
-        painter.line_segment(
-            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-            egui::Stroke::new(1.0, theme::panel()),
-        );
-        if c < max_midi as i32 {
-            painter.text(
-                egui::pos2(x + 3.0, rect.bottom() - 2.0),
-                egui::Align2::LEFT_BOTTOM,
-                format!("C{}", c / 12 - 2),
-                egui::FontId::monospace(10.0),
-                theme::text_dim(),
-            );
-        }
-        c += 12;
-    }
-
-    // Where the visible lattice nodes sit: ticks along the bottom. A node
-    // names a pitch CLASS, so on an absolute axis each tick repeats once
-    // per octave. Dense tunings put hundreds of classes in each octave,
-    // so ticks are thinned in screen space (min 2.5 px apart) and drawn
-    // dim — a faint ruler, not a solid band.
-    if cfg.show_ticks {
-        let mut tick_cents: Vec<i32> = state
-            .view
-            .visible_positions()
-            .map(|pos| state.tuning.pitch_class(pos).to_cents().round() as i32)
-            .collect();
-        tick_cents.sort_unstable();
-        tick_cents.dedup();
-        let tick_color = theme::text_dim().gamma_multiply(0.5);
-        let mut last_x = f32::NEG_INFINITY;
-        let mut octave = min_midi;
-        while octave < max_midi {
-            for cents in &tick_cents {
-                let midi = octave + *cents as f32 / 100.0;
-                if midi >= max_midi {
-                    break;
+    // Axis gridlines: every C (note labels) or the analyzer-standard
+    // 1-2-5 frequency series, per the Spectrum tab.
+    match cfg.labels {
+        SpectrumLabels::Notes => {
+            let mut c = min_midi as i32;
+            while c <= max_midi as i32 {
+                let x = x_of(c as f32);
+                painter.line_segment(
+                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                    egui::Stroke::new(1.0, theme::panel()),
+                );
+                if c < max_midi as i32 {
+                    painter.text(
+                        egui::pos2(x + 3.0, rect.bottom() - 2.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("C{}", c / 12 - 2),
+                        egui::FontId::monospace(10.0),
+                        theme::text_dim(),
+                    );
                 }
-                let x = x_of(midi);
-                if x - last_x < 2.5 {
+                c += 12;
+            }
+        }
+        SpectrumLabels::Frequency => {
+            let midi_of_hz = |hz: f32| 69.0 + 12.0 * (hz / 440.0).log2();
+            for hz in
+                [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0]
+            {
+                let midi = midi_of_hz(hz);
+                if !(min_midi..=max_midi).contains(&midi) {
                     continue;
                 }
-                last_x = x;
+                let x = x_of(midi);
                 painter.line_segment(
-                    [egui::pos2(x, rect.bottom() - 9.0), egui::pos2(x, rect.bottom() - 4.0)],
-                    egui::Stroke::new(1.0, tick_color),
+                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                    egui::Stroke::new(1.0, theme::panel()),
+                );
+                let label = if hz >= 1_000.0 {
+                    format!("{}k", hz / 1_000.0)
+                } else {
+                    format!("{hz}")
+                };
+                painter.text(
+                    egui::pos2(x + 3.0, rect.bottom() - 2.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    label,
+                    egui::FontId::monospace(10.0),
+                    theme::text_dim(),
                 );
             }
-            octave += 12.0;
         }
     }
 
@@ -879,12 +894,12 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     if cfg.show_audio {
         if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
             // Only the buckets inside the octave zoom.
-            let visible: Vec<(f32, f32, f32)> = (0..levels.len())
+            let visible: Vec<(f32, f32, f32, f32)> = (0..levels.len())
                 .filter_map(|i| {
                     let midi = SPECTRUM_MIN_MIDI + (i as f32 + 0.5) / BINS_PER_SEMITONE as f32;
                     (min_midi..=max_midi)
                         .contains(&midi)
-                        .then(|| (x_of(midi), levels[i], peaks[i]))
+                        .then(|| (midi, x_of(midi), levels[i], peaks[i]))
                 })
                 .collect();
 
@@ -893,8 +908,8 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
                 // meet its neighbors.
                 let slab = (rect.width() / (span * BINS_PER_SEMITONE as f32)) + 0.5;
                 let fill_color = theme::accent().gamma_multiply(0.15);
-                for &(x, level, _) in &visible {
-                    let h = h_of(level);
+                for &(midi, x, level, _) in &visible {
+                    let h = h_of(level, midi);
                     if h > 0.5 {
                         painter.line_segment(
                             [egui::pos2(x, rect.bottom()), egui::pos2(x, rect.bottom() - h)],
@@ -906,7 +921,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             if cfg.peak_hold {
                 let peak_points: Vec<egui::Pos2> = visible
                     .iter()
-                    .map(|&(x, _, peak)| egui::pos2(x, rect.bottom() - h_of(peak)))
+                    .map(|&(midi, x, _, peak)| egui::pos2(x, rect.bottom() - h_of(peak, midi)))
                     .collect();
                 painter.add(egui::Shape::line(
                     peak_points,
@@ -915,7 +930,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             }
             let points: Vec<egui::Pos2> = visible
                 .iter()
-                .map(|&(x, level, _)| egui::pos2(x, rect.bottom() - h_of(level)))
+                .map(|&(midi, x, level, _)| egui::pos2(x, rect.bottom() - h_of(level, midi)))
                 .collect();
             painter.add(egui::Shape::line(
                 points,

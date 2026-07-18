@@ -68,26 +68,44 @@ impl SpectrumWindow {
     }
 }
 
+/// What the Spectral pane's axis gridlines are labeled with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrumLabels {
+    /// A gridline at every C, labeled with Bitwig octave numbers.
+    Notes,
+    /// Gridlines on the analyzer-standard 1-2-5 series (20, 50, 100, ...
+    /// 10k, 20k Hz).
+    Frequency,
+}
+
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
     /// Analyze and overlay the shell's audio (plugin: the input bus;
     /// standalone: a synth on the held notes).
+    #[serde(default = "default_true")]
     pub show_audio: bool,
     pub window: SpectrumWindow,
     /// Bottom of the dB height scale; a full-scale sine sits at 0 dB.
     pub floor_db: f32,
     /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
     pub smoothing: f32,
+    /// Spectral tilt in dB per octave, pivoting at 1 kHz: 0 draws raw
+    /// power; positive lifts treble the way analyzers compensate the
+    /// natural rolloff of musical material (pink-ish slopes read flat
+    /// around +3..4.5).
+    #[serde(default)]
+    pub tilt: f32,
+    /// Axis gridline labeling.
+    #[serde(default = "default_labels")]
+    pub labels: SpectrumLabels,
     /// Fill under the curve instead of a bare line.
     pub fill: bool,
     /// Keep a slowly decaying outline at each bucket's recent maximum.
     pub peak_hold: bool,
     /// MIDI-derived bars at each voice's actual pitch.
     pub show_voice_bars: bool,
-    /// Per-octave ticks marking the visible lattice's pitch classes.
-    pub show_ticks: bool,
     /// Displayed octave range, in Bitwig octave numbers (C-1..C9 = full
     /// axis). The analyzer always covers the full axis; this only zooms
     /// the view.
@@ -95,17 +113,26 @@ pub struct SpectrumConfig {
     pub high_octave: i32,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_labels() -> SpectrumLabels {
+    SpectrumLabels::Notes
+}
+
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
-            show_audio: false,
+            show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             smoothing: 0.55,
+            tilt: 0.0,
+            labels: SpectrumLabels::Notes,
             fill: true,
             peak_hold: false,
             show_voice_bars: true,
-            show_ticks: true,
             low_octave: -1,
             high_octave: 9,
         }
