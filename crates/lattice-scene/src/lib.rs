@@ -351,8 +351,9 @@ pub struct Scene {
     pub edges: Vec<EdgeInstance>,
     /// The faint background grid (see [`derive_grid`]): one segment per
     /// adjacent pair of visible positions, inset so every node position
-    /// keeps a circular gap where its disc draws while sounding. Reuses
-    /// [`EdgeInstance`]; `strength` carries the line opacity.
+    /// keeps a circular gap where its disc draws while sounding. Segments
+    /// between two sounding notes light up with their blended color.
+    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity.
     pub grid: Vec<EdgeInstance>,
     /// Pitch->color lookup for the dots octave style, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
@@ -494,6 +495,7 @@ pub fn derive_scene(
     }
 
     let edges = if view.show_chord_edges { derive_edges(&nodes) } else { Vec::new() };
+    let grid = derive_grid(view, &nodes);
 
     Scene {
         nodes,
@@ -503,7 +505,7 @@ pub fn derive_scene(
         octave_style: view.octave_style,
         node_style: view.node_style,
         edges,
-        grid: derive_grid(view),
+        grid,
         dot_ramp: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
@@ -516,45 +518,40 @@ pub fn derive_scene(
 /// a sounding note draws there.
 const GRID_INSET_FACTOR: f32 = 1.3;
 
+/// Line opacity of a grid segment whose two endpoint notes both sound.
+const GRID_LIT_OPACITY: f32 = 0.85;
+
 /// The faint background grid: idle positions draw no disc, so these
 /// segments between every adjacent pair of visible positions carry the
 /// lattice's structure instead, inset at both ends so each node position
-/// keeps a clear circular gap.
-fn derive_grid(view: &ViewConfig) -> Vec<EdgeInstance> {
-    let center = view.center();
+/// keeps a clear circular gap. A segment whose two endpoint notes both
+/// sound lights up with their blended color, fading with whichever
+/// endpoint fades first (like a chord edge).
+fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * GRID_INSET_FACTOR;
-    let color = skin::active_skin().grid_line;
+    let base = skin::active_skin().grid_line;
+    let index: std::collections::HashMap<LatticePos, &NodeInstance> =
+        nodes.iter().map(|n| (n.lattice_pos, n)).collect();
     let mut grid = Vec::new();
-    for pos in view.visible_positions() {
-        // +1 steps only, so each undirected pair appears once. The window
-        // is a box, so an in-window neighbor only needs the upper bound
-        // checked on the stepped axis.
-        let steps = [
-            (
-                LatticePos::new(pos.threes + 1, pos.fives, pos.sevens),
-                pos.threes < view.center_threes + view.extent_threes,
-            ),
-            (
-                LatticePos::new(pos.threes, pos.fives + 1, pos.sevens),
-                pos.fives < view.center_fives + view.extent_fives,
-            ),
-            (
-                LatticePos::new(pos.threes, pos.fives, pos.sevens + 1),
-                pos.sevens < view.center_sevens + view.extent_sevens,
-            ),
-        ];
-        for (neighbor, in_window) in steps {
-            if !in_window {
+    for node in nodes {
+        let p = node.lattice_pos;
+        // +1 steps only, so each undirected pair appears once; positions
+        // outside the window simply miss the index.
+        for step in [
+            LatticePos::new(p.threes + 1, p.fives, p.sevens),
+            LatticePos::new(p.threes, p.fives + 1, p.sevens),
+            LatticePos::new(p.threes, p.fives, p.sevens + 1),
+        ] {
+            let Some(neighbor) = index.get(&step) else {
                 continue;
-            }
-            let a = lattice_to_world(pos - center, view.spacing);
-            let b = lattice_to_world(neighbor - center, view.spacing);
-            let dir = (b - a).normalize_or_zero();
+            };
+            let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
+            let lit = node.activation.min(neighbor.activation);
             grid.push(EdgeInstance {
-                a: a + dir * inset,
-                b: b - dir * inset,
-                color,
-                strength: color.w,
+                a: node.world_pos + dir * inset,
+                b: neighbor.world_pos - dir * inset,
+                color: base.lerp((node.color + neighbor.color) * 0.5, lit),
+                strength: base.w + (GRID_LIT_OPACITY - base.w) * lit,
             });
         }
     }
@@ -917,6 +914,53 @@ mod tests {
         for seg in &scene.grid {
             assert!(seg.a.length() <= max_node && seg.b.length() <= max_node);
         }
+    }
+
+    #[test]
+    fn grid_lights_between_played_neighbors() {
+        // C and G held (one step on the threes axis; same window/tuning
+        // rationale as chord_edges_connect_adjacent_active_nodes): the
+        // segment between them takes the lit opacity and the notes' blended
+        // color; a segment with only one sounding endpoint stays at the
+        // faint base look.
+        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 67] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let view = ViewConfig {
+            extent_threes: 3,
+            extent_fives: 3,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
+        let base = skin::active_skin().grid_line;
+        let segment_at = |mid: Vec3| {
+            scene
+                .grid
+                .iter()
+                .find(|s| ((s.a + s.b) * 0.5).distance(mid) < 1e-4)
+                .unwrap()
+        };
+
+        // C sits at the origin, G one step up the threes (world y) axis.
+        let lit = segment_at(Vec3::new(0.0, 0.5, 0.0));
+        assert!(lit.strength > base.w, "lit opacity, got {}", lit.strength);
+        assert!(
+            (lit.color - base).truncate().length() > 0.1,
+            "lit segment tinted by the notes, got {:?}",
+            lit.color
+        );
+
+        // F–C below: C sounds but F doesn't, so the segment stays faint.
+        let unlit = segment_at(Vec3::new(0.0, -0.5, 0.0));
+        assert_eq!(unlit.strength, base.w);
+        assert_eq!(unlit.color, base);
     }
 
     #[test]

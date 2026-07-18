@@ -149,37 +149,6 @@ fn dot_pitch_color(pitch: f32) -> vec3<f32> {
     return mix(u.dot_ramp[i0].rgb, u.dot_ramp[i1].rgb, f - floor(f));
 }
 
-// Faint C-octave reference frame for the dots style: short radial ticks
-// hugging the disc rim (just INSIDE the dot orbit) at the four cardinals,
-// pointing at where a C would land — up = middle C (C3 in the C3=middle-C
-// naming), left/right = -/+2 octaves (C1 / C5), down = +/-4 octaves. They sit
-// in the gap between the disc edge (~0.5) and the dots' inner reach
-// (~DOT_ORBIT - DOT_EDGE), so a lit dot never overlaps a tick; the caller
-// tints them with the node color so they read as part of the disc.
-const DOTS_REF_R: f32 = 0.51;         // tick mid-radius (disc edge ~0.5, dots at DOT_ORBIT)
-const DOTS_REF_HALF_LEN: f32 = 0.035; // radial half-length
-const DOTS_REF_HALF_W: f32 = 0.018;   // tangential half-width
-fn dots_reference(uv: vec2<f32>) -> f32 {
-    var dirs = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 1.0),  // up:    middle C
-        vec2<f32>(1.0, 0.0),  // right: +2 octaves
-        vec2<f32>(0.0, -1.0), // down:  +/-4 octaves
-        vec2<f32>(-1.0, 0.0), // left:  -2 octaves
-    );
-    var cov = 0.0;
-    for (var k = 0u; k < 4u; k = k + 1u) {
-        let n = dirs[k];
-        let radial = dot(uv, n);                        // outward along the cardinal
-        let tang = abs(dot(uv, vec2<f32>(-n.y, n.x)));  // sideways offset
-        let dr = max(abs(radial - DOTS_REF_R) - DOTS_REF_HALF_LEN, 0.0);
-        let ds = max(tang - DOTS_REF_HALF_W, 0.0);
-        cov = max(cov, 1.0 - smoothstep(0.0, 0.02, dr + ds));
-    }
-    // Dimmed relative to a lit dot; the caller further scales by the note's
-    // fade so the frame appears only while the node sounds.
-    return cov * 0.4;
-}
-
 // ---- Style helpers ---------------------------------------------------------
 
 fn hash21(p: vec2<f32>) -> f32 {
@@ -298,15 +267,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let base_alpha = clamp(disc + glow, 0.0, 1.0);
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
-    // its own envelope; the reference frame follows the brightest slot so it
-    // disappears with the last sounding octave. Whichever element covers a
-    // pixel most strongly owns its color there: dots are tinted by their own
-    // pitch, everything else uses the whitened node color.
+    // its own envelope. Whichever element covers a pixel most strongly owns
+    // its color there: dots are tinted by their own pitch, everything else
+    // uses the whitened node color.
     let mode = u32(u.misc.z + 0.5);
     let node_glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.55);
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
-    var max_level = 0.0;
 
     // Sparks: bright particles orbiting held nodes, drawn in the same
     // whitened layer as the octave glyphs.
@@ -326,13 +293,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     // Dots octave indicator (mode 1; 0 is off). Each slot fades on its own
-    // envelope. Whichever element covers a pixel most strongly owns its color
-    // there: dots are tinted by their own pitch, the reference by node color.
+    // envelope; a dot is tinted by its own pitch.
     if mode != 0u {
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level > 0.0 {
-                max_level = max(max_level, level);
                 let cov = octave_dot(i, in.cents, in.uv) * level_floor(level);
                 if cov > glyph {
                     glyph = cov;
@@ -341,17 +306,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                     glyph_rgb = mix(dot_pitch_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
                 }
-            }
-        }
-        // Faint cardinal C-octave tick frame, faded with the brightest slot so
-        // it appears only while the node sounds.
-        if max_level > 0.0 {
-            let rc = dots_reference(in.uv) * level_floor(max_level);
-            if rc > glyph {
-                glyph = rc;
-                // Node-colored, only lightly lifted, so the ticks blend into
-                // the disc rather than reading as separate marks.
-                glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.4);
             }
         }
     }
