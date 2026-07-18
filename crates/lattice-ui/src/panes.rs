@@ -660,14 +660,12 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         .on_hover_text("Soft halo around bright notes; 0 turns the post-process off");
 
     // Octave indicator glyphs, all positioned by absolute pitch: floating
-    // dots, or shapes attached to the rim (petals/flares/bumps).
+    // dots, rim-seated bumps, or annular slices.
     ui.horizontal_wrapped(|ui| {
         ui.label("Octaves");
         for (style, label) in [
             (OctaveStyle::Off, "Off"),
             (OctaveStyle::Dots, "Dots"),
-            (OctaveStyle::Petals, "Petals"),
-            (OctaveStyle::Flares, "Flares"),
             (OctaveStyle::Bumps, "Bumps"),
             (OctaveStyle::Slices, "Slices"),
         ] {

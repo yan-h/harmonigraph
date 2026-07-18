@@ -27,14 +27,11 @@ pub enum OctaveStyle {
     /// Small dots around the disc; angle tracks absolute pitch (middle C
     /// straight up, 45deg clockwise per octave, pitch class within the
     /// octave included). All other styles keep this angle convention and
-    /// change only the glyph shape.
+    /// change only the glyph shape. The aliases absorb the removed Petals
+    /// and Flares styles so old persisted view blobs keep loading.
     #[default]
+    #[serde(alias = "Petals", alias = "Flares")]
     Dots,
-    /// Teardrop petals rooted just inside the rim, growing out of the
-    /// note like a flower.
-    Petals,
-    /// Plumes erupting from the rim, flickering in length.
-    Flares,
     /// Blobs seated on the rim so the disc outline bulges at each pitch
     /// angle.
     Bumps,
@@ -109,13 +106,13 @@ impl NodeStyle {
 }
 
 impl OctaveStyle {
-    /// Index used by the shader (uniform `misc.z`).
+    /// Index used by the shader (uniform `misc.z`). Indices are preserved
+    /// from the original set so the kept glyphs' shader branches stay
+    /// unchanged; 2 and 3 were the removed Petals/Flares.
     pub fn shader_index(self) -> u32 {
         match self {
             OctaveStyle::Off => 0,
             OctaveStyle::Dots => 1,
-            OctaveStyle::Petals => 2,
-            OctaveStyle::Flares => 3,
             OctaveStyle::Bumps => 4,
             OctaveStyle::Slices => 5,
         }

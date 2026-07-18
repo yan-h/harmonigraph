@@ -571,6 +571,20 @@ mod tests {
     }
 
     #[test]
+    fn removed_octave_styles_in_old_persist_blobs_load_as_dots() {
+        // Petals/Flares no longer exist; a serde alias must absorb them so an
+        // old blob still restores rather than dropping the whole persist.
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.view.octave_style = lattice_scene::OctaveStyle::Bumps;
+        let saved = state.save_persist().replace("octave_style:Bumps", "octave_style:Petals");
+        assert_ne!(saved, state.save_persist(), "replacement must have hit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.view.octave_style, lattice_scene::OctaveStyle::Dots);
+    }
+
+    #[test]
     fn corrupt_persist_is_ignored() {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
         let default_distance = state.camera.distance;
