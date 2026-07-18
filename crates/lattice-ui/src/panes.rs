@@ -369,33 +369,25 @@ fn tuning_pane(
             // consistent either way; leave the lock as the user has it.
         }
         // Meantone mode: lock the major third to four perfect fifths.
-        let meantone = ui
-            .add(egui::Button::new("Meantone").selected(state.view.meantone))
+        // Toggle switches, not buttons: Meantone and Learn are persistent
+        // modes and must not read like the momentary presets beside them.
+        let meantone = crate::widgets::toggle_switch(ui, &mut state.view.meantone, "Meantone")
             .on_hover_text(
                 "Lock the major third to four perfect fifths (temper out \
                  the syntonic comma); note-name labels drop their comma marks",
             );
-        if meantone.clicked() {
-            if state.view.meantone {
-                // Turning off: keep the third where the lock left it so the
-                // now-editable bar doesn't jump.
-                params.set(
-                    ParamKey::Five,
-                    tuning::meantone_third(params.get(ParamKey::Three)),
-                );
-            }
-            state.view.meantone = !state.view.meantone;
+        if meantone.changed() && !state.view.meantone {
+            // Turning off: keep the third where the lock left it so the
+            // now-editable bar doesn't jump.
+            params.set(
+                ParamKey::Five,
+                tuning::meantone_third(params.get(ParamKey::Three)),
+            );
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
-        // A real Button (selectable labels draw no background when off, so
-        // toggle_value read as plain text next to Just/12-TET).
-        let learn = ui
-            .add(egui::Button::new("Learn").selected(state.learn_active))
+        let learn = crate::widgets::toggle_switch(ui, &mut state.learn_active, "Learn")
             .on_hover_text("While active, continuously set the tuning from the held notes");
-        if learn.clicked() {
-            state.learn_active = !state.learn_active;
-        }
         if state.learn_active {
             // Pulsing armed ring so the engaged mode can't be missed.
             ui.painter().rect_stroke(

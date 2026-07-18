@@ -10,6 +10,73 @@ use egui::{
 
 use crate::theme;
 
+/// Track size of a [`toggle_switch`] pill.
+const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
+
+/// A labeled sliding-knob switch for boolean *modes* (Meantone, Learn).
+/// Buttons with a `selected` fill read exactly like the momentary preset
+/// buttons they sit next to (Just, 12-TET); the pill-and-knob shape is
+/// unmistakably persistent state.
+pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        TextStyle::Button.resolve(ui.style()),
+        theme::text(),
+    );
+    let gap = 6.0;
+    let desired = Vec2::new(
+        SWITCH_SIZE.x + gap + galley.size().x,
+        SWITCH_SIZE.y.max(galley.size().y),
+    );
+    let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label)
+    });
+
+    if ui.is_rect_visible(rect) {
+        // Same animation the stock egui toggle demo uses: the knob glides,
+        // the track cross-fades.
+        let t = ui.ctx().animate_bool_responsive(response.id, *on);
+        let track = egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.center().y - SWITCH_SIZE.y / 2.0),
+            SWITCH_SIZE,
+        );
+        let radius = track.height() / 2.0;
+        let mix = |a: egui::Color32, b: egui::Color32| -> egui::Color32 {
+            egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
+        };
+        let painter = ui.painter();
+        painter.rect_filled(track, radius, mix(theme::well(), theme::accent_active()));
+        if response.hovered() || response.dragged() {
+            painter.rect_stroke(
+                track,
+                radius,
+                egui::Stroke::new(1.0, theme::accent_edge()),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let knob_x = egui::lerp(
+            (track.left() + radius)..=(track.right() - radius),
+            t,
+        );
+        painter.circle_filled(
+            egui::pos2(knob_x, track.center().y),
+            radius - 2.5,
+            theme::text(),
+        );
+        painter.galley(
+            egui::pos2(track.right() + gap, rect.center().y - galley.size().y / 2.0),
+            galley,
+            theme::text(),
+        );
+    }
+    response
+}
+
 /// Row height of a ValueBar (taller than the theme's interact_size: these
 /// are the primary controls and carry two text runs).
 const BAR_HEIGHT: f32 = 20.0;
