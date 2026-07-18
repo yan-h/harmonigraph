@@ -143,7 +143,6 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     if state.view.show_labels {
         draw_node_labels(ui, rect, &scene, state.view.show_cents, state.view.meantone);
     }
-    hover_tooltip(response, state);
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
@@ -255,32 +254,6 @@ fn outlined_text(
         }
     }
     painter.galley(pos, galley, color);
-}
-
-/// Hover tooltip: pitch class + sounding octaves.
-fn hover_tooltip(response: egui::Response, state: &SharedState) {
-    let Some(pos) = state.hovered else {
-        return;
-    };
-    let pc = state.tuning.pitch_class(pos);
-    let octaves: Vec<String> = state
-        .tracker
-        .voices()
-        .filter(|v| state.tuning.matches(v.pitch_class, pc))
-        .map(|v| v.display_octave().to_string())
-        .collect();
-    let name = pos.note_name();
-    let name = if state.view.meantone { name.without_syntonic_commas() } else { name };
-    let mut text = format!(
-        "{}  ({}, {}, {})  {}",
-        name, pos.threes, pos.fives, pos.sevens, pc
-    );
-    if !octaves.is_empty() {
-        text.push_str(&format!("  octaves: {}", octaves.join(" ")));
-    }
-    response.on_hover_ui(|ui| {
-        ui.label(text);
-    });
 }
 
 /// The dimmest-visible convention shared with the shader (level_floor in
