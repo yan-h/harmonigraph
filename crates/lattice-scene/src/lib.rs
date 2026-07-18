@@ -245,6 +245,19 @@ impl Default for FrameParams {
     }
 }
 
+/// How the camera maps depth to the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Projection {
+    /// Classic perspective: farther content converges and shrinks.
+    #[default]
+    Perspective,
+    /// Orthographic ("isometric-style"): uniform scale at every depth, so
+    /// equal intervals render at equal screen offsets everywhere and
+    /// parallel lattice lines stay parallel. Depth then reads only
+    /// through the deliberate cues (node depth-scale, occlusion).
+    Orthographic,
+}
+
 /// Simple orbit camera. Angles in radians.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
@@ -253,6 +266,9 @@ pub struct Camera {
     pub pitch: f32,
     pub distance: f32,
     pub fov_y: f32,
+    /// serde(default) keeps pre-projection persisted blobs loadable.
+    #[serde(default)]
+    pub projection: Projection,
 }
 
 impl Default for Camera {
@@ -263,6 +279,7 @@ impl Default for Camera {
             pitch: 0.3,
             distance: 12.0,
             fov_y: 45f32.to_radians(),
+            projection: Projection::default(),
         }
     }
 }
@@ -317,9 +334,23 @@ impl Camera {
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        // perspective_rh produces 0..1 clip-space depth, which is what wgpu
-        // expects.
-        Mat4::perspective_rh(self.fov_y, aspect.max(0.01), CLIP_NEAR, CLIP_FAR) * self.view()
+        // Both glam _rh constructors produce 0..1 clip-space depth, which
+        // is what wgpu expects.
+        let aspect = aspect.max(0.01);
+        let proj = match self.projection {
+            Projection::Perspective => {
+                Mat4::perspective_rh(self.fov_y, aspect, CLIP_NEAR, CLIP_FAR)
+            }
+            // The ortho window is the perspective frustum's cross-section
+            // at the target, so toggling projections keeps the framing at
+            // the focus plane, and zoom (distance) keeps scaling the view.
+            Projection::Orthographic => {
+                let half_h = self.distance * (self.fov_y * 0.5).tan();
+                let half_w = half_h * aspect;
+                Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
+            }
+        };
+        proj * self.view()
     }
 
     /// Camera-space right/up axes in world space, for billboarding.
@@ -705,7 +736,11 @@ impl Projector {
     /// `None` when behind the camera.
     pub fn project(&self, world: Vec3) -> Option<Vec2> {
         let clip = self.view_proj * world.extend(1.0);
-        if clip.w <= 0.0 {
+        // Behind the camera (or nearer than the near plane): perspective
+        // flips w negative there; orthographic keeps w at 1 and instead
+        // sends clip z below the near plane's 0. Test both so the check
+        // holds under either projection.
+        if clip.w <= 0.0 || clip.z < 0.0 {
             return None;
         }
         let ndc = clip.truncate() / clip.w;
@@ -1169,17 +1204,65 @@ mod tests {
 
     #[test]
     fn points_behind_the_camera_do_not_project() {
-        let camera = Camera::default();
-        let scene = scene_of(
+        for projection in [Projection::Perspective, Projection::Orthographic] {
+            let camera = Camera { projection, ..Camera::default() };
+            let mut scene = scene_of(
+                &NoteTracker::new(),
+                &Tuning::default(),
+                &ViewConfig::default(),
+                &FrameParams::default(),
+                0.0,
+            );
+            scene.camera = camera;
+            // Continue from the target through the eye and beyond it.
+            let behind = camera.eye() + (camera.eye() - camera.target);
+            assert_eq!(
+                scene.project(Vec2::new(800.0, 600.0), behind),
+                None,
+                "{projection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn orthographic_matches_perspective_at_the_focus_plane_and_is_uniform() {
+        let viewport = Vec2::new(800.0, 600.0);
+        let perspective = Camera::default();
+        let ortho = Camera { projection: Projection::Orthographic, ..perspective };
+        let mut s = scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
             &ViewConfig::default(),
             &FrameParams::default(),
             0.0,
         );
-        // Continue from the target through the eye and beyond it.
-        let behind = camera.eye() + (camera.eye() - camera.target);
-        assert_eq!(scene.project(Vec2::new(800.0, 600.0), behind), None);
+
+        // The target projects to the viewport center in both projections.
+        s.camera = ortho;
+        let p = s.project(viewport, ortho.target).unwrap();
+        assert!((p.x - 400.0).abs() < 0.5 && (p.y - 300.0).abs() < 0.5, "{p:?}");
+
+        // Framing matches at the focus plane: a point one unit up (in view
+        // space) from the target lands on the same pixel either way.
+        let (_, up) = perspective.right_up();
+        let in_plane = perspective.target + up;
+        let ortho_px = s.project(viewport, in_plane).unwrap();
+        s.camera = perspective;
+        let persp_px = s.project(viewport, in_plane).unwrap();
+        assert!(ortho_px.distance(persp_px) < 0.5, "{ortho_px:?} vs {persp_px:?}");
+
+        // The property the projection exists for: equal world offsets give
+        // equal pixel offsets at ANY depth. Step one unit right at the
+        // focus plane and again two units toward the eye; perspective
+        // renders the nearer step longer, orthographic identically.
+        s.camera = ortho;
+        let (right, _) = ortho.right_up();
+        let toward_eye = (ortho.eye() - ortho.target).normalize() * 2.0;
+        let d_focus = s.project(viewport, ortho.target + right).unwrap()
+            - s.project(viewport, ortho.target).unwrap();
+        let d_near = s.project(viewport, ortho.target + toward_eye + right).unwrap()
+            - s.project(viewport, ortho.target + toward_eye).unwrap();
+        assert!(d_focus.distance(d_near) < 1e-3, "{d_focus:?} vs {d_near:?}");
     }
 
     #[test]

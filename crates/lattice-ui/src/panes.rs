@@ -5,7 +5,7 @@
 use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{channel_color, derive_scene, NodeStyle, OctaveStyle};
+use lattice_scene::{channel_color, derive_scene, Camera, NodeStyle, OctaveStyle, Projection};
 
 use crate::theme;
 
@@ -84,7 +84,12 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         }
     }
     if response.double_clicked() {
-        state.camera = Default::default();
+        // Reset orbit/zoom, but keep the chosen projection: that's a view
+        // preference, not a navigation state.
+        state.camera = Camera {
+            projection: state.camera.projection,
+            ..Default::default()
+        };
     }
 
     let scene = derive_scene(
@@ -418,6 +423,39 @@ fn tuning_pane(
 
 /// What the grid shows: per-axis extents and window center.
 fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+    // Projection: perspective converges with depth; orthographic keeps
+    // equal intervals at equal screen offsets everywhere (isometric-style
+    // reading — depth shows only through the node size cue and occlusion).
+    ui.horizontal(|ui| {
+        ui.label("Projection");
+        for (proj, label) in [
+            (Projection::Perspective, "Perspective"),
+            (Projection::Orthographic, "Orthographic"),
+        ] {
+            ui.selectable_value(&mut state.camera.projection, proj, label);
+        }
+    });
+    // One-click reading angles; orbiting stays free afterwards.
+    ui.horizontal(|ui| {
+        ui.label("Angle");
+        if ui
+            .button("Flat")
+            .on_hover_text("Face the fifths/thirds sheet straight on")
+            .clicked()
+        {
+            state.camera.yaw = 0.0;
+            state.camera.pitch = 0.0;
+        }
+        if ui
+            .button("Isometric")
+            .on_hover_text("Classic isometric angle: all three axes equally foreshortened")
+            .clicked()
+        {
+            state.camera.yaw = std::f32::consts::FRAC_PI_4;
+            state.camera.pitch = (1.0 / 2f32.sqrt()).atan();
+        }
+    });
+
     for (extent, range, label) in [
         // Ranges must contain the ViewConfig defaults (10/6) or the bar
         // could never drag back to them.
