@@ -191,12 +191,11 @@ pub struct ViewConfig {
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
     #[serde(default = "default_render_scale")]
     pub render_scale: f32,
-    /// Bloom post-process: a soft halo around bright notes. Off by
-    /// default; with it off the composite is exactly the plain scene.
+    /// Bloom post-process: how much blurred brightness gets added back
+    /// as a halo around bright notes. 0 (the default) disables the chain
+    /// entirely — the composite is then exactly the plain scene, so there
+    /// is deliberately no separate on/off toggle.
     #[serde(default)]
-    pub bloom: bool,
-    /// How much of the blurred brightness gets added back.
-    #[serde(default = "default_bloom_strength")]
     pub bloom_strength: f32,
 }
 
@@ -206,10 +205,6 @@ fn default_true() -> bool {
 
 fn default_render_scale() -> f32 {
     1.0
-}
-
-fn default_bloom_strength() -> f32 {
-    0.6
 }
 
 impl ViewConfig {
@@ -249,8 +244,7 @@ impl Default for ViewConfig {
             show_chord_edges: false,
             meantone: false,
             render_scale: default_render_scale(),
-            bloom: false,
-            bloom_strength: default_bloom_strength(),
+            bloom_strength: 0.0,
         }
     }
 }
@@ -562,8 +556,7 @@ pub struct Scene {
     /// Offscreen render resolution multiplier (see [`ViewConfig`]); the
     /// renderer sizes its offscreen color+depth target by this.
     pub render_scale: f32,
-    /// Bloom intensity; 0 disables the whole post-process chain (the
-    /// toggle and knob collapse to one number here).
+    /// Bloom intensity; 0 disables the whole post-process chain.
     pub bloom_strength: f32,
 }
 
@@ -728,7 +721,7 @@ pub fn derive_scene(
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,
-        bloom_strength: if view.bloom { view.bloom_strength } else { 0.0 },
+        bloom_strength: view.bloom_strength,
     }
 }
 
