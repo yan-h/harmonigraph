@@ -17,7 +17,8 @@ struct Uniforms {
     // y: base node radius (world units),
     // z: octave display mode (0 off, 1 dots),
     // w: node style (0 steady, 1 wire, 2 corona, 3 vortex, 4 plasma,
-    //    5 aurora, 6 marble, 7 lava, 8 filament)
+    //    5 aurora, 6 marble, 7 lava, 8 filament, 9 stripes, 10 rings,
+    //    11 pinwheel, 12 spiral, 13 checker, 14 tiles)
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z, w unused. The
     // dots style maps a dot's pitch through these to index dot_ramp.
@@ -26,6 +27,8 @@ struct Uniforms {
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
     dot_ramp: array<vec4<f32>, 16>,
 };
+
+const TAU: f32 = 6.2831853;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -38,7 +41,7 @@ struct Instance {
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
     // Animation seed: a small constant, NOT a timestamp. Per-note for the
-    // age-driven styles; a stable per-NODE hash for the gas styles (the
+    // age-driven styles; a stable per-NODE hash for the field styles (the
     // scene picks — see node_seed in lattice-scene).
     @location(4) seed: f32,
     // The node's pitch class in cents (0..1200). Dots mode places each
@@ -213,20 +216,22 @@ fn rot2(a: f32) -> mat2x2<f32> {
     return mat2x2<f32>(vec2<f32>(c, s), vec2<f32>(-s, c));
 }
 
-// ---- Gas styles ------------------------------------------------------------
-// Corona, vortex, plasma, aurora, marble, lava, filament: an active disc
-// renders as a ball of gas. A noise field drives BOTH a brightness billow and
-// a position along the octave color gradient below, so every sounding
-// octave's color is present somewhere in the disc — swirled into neighboring
-// patches and interpolated where they meet, never averaged into a single hue.
+// ---- Field styles ----------------------------------------------------------
+// Everything from corona onward: an active disc is painted by a FIELD — a
+// function of position that drives BOTH a brightness profile and a position
+// along the octave color gradient below, so every sounding octave's color is
+// present somewhere in the disc — in its own patches, bands, or cells,
+// interpolated where they meet, never averaged into a single hue. The gas
+// styles (corona..filament) drive the field with noise; the pattern styles
+// (stripes..tiles) with deterministic geometry.
 //
-// All gas fields are functions of GLOBAL time and a stable per-node seed
-// (never the per-note age/seed): the gas at a node is one continuous flow
-// that a note lights up, so pressing, retriggering, or stacking octaves
-// never restarts or reshuffles the pattern.
+// All fields are functions of GLOBAL time and a stable per-node seed (never
+// the per-note age/seed): the field at a node is one continuous flow that a
+// note lights up, so pressing, retriggering, or stacking octaves never
+// restarts or reshuffles the pattern.
 
-// Mirrors NodeStyle::is_gas in lattice-scene; keep the two in sync.
-fn is_gas_style(style: u32) -> bool {
+// Mirrors NodeStyle::is_field_style in lattice-scene; keep the two in sync.
+fn is_field_style(style: u32) -> bool {
     return style >= 2u;
 }
 
@@ -279,10 +284,17 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
     return csum / wsum;
 }
 
-// A gas style's scalar fields at one pixel: x picks the color along the
+// Brightness profile across one band of a banded pattern (input: fract
+// within the band): a subtle dark seam at the edges so neighboring bands
+// stay distinct even where their colors blend.
+fn band_seam(f: f32) -> f32 {
+    return 0.72 + 0.43 * smoothstep(0.0, 0.12, f) * (1.0 - smoothstep(0.88, 1.0, f));
+}
+
+// A field style's scalar fields at one pixel: x picks the color along the
 // octave swirl gradient, y modulates brightness (billows / streaks / cells).
 // `time` is global (u.misc.x), `seed` the stable per-node hash.
-fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f32> {
+fn field_pattern(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f32> {
     if style == 2u {
         // Corona: domain-warped fbm, a slowly billowing ball of gas.
         let p = uv * 2.6 + vec2<f32>(seed * 7.3, seed * 3.1);
@@ -340,21 +352,64 @@ fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f3
         let n = fbm(p);
         let lum = 0.82 + 0.28 * fbm(p * 2.1 + vec2<f32>(3.7, 1.9));
         return vec2<f32>(smoothstep(0.36, 0.64, n), lum);
+    } else if style == 8u {
+        // Filament: ridged noise — glowing threads over dark gas. Colors
+        // ride slower low-frequency patches, so the threads pass through
+        // each octave's region as they wander.
+        let p = uv * 2.4 + vec2<f32>(seed * 7.7, seed * 3.3);
+        let n = fbm(p + vec2<f32>(time * 0.16, -time * 0.11));
+        let strand = pow(1.0 - abs(2.0 * n - 1.0), 3.0);
+        let patch_n = fbm(uv * 1.5 + vec2<f32>(seed * 2.9, time * 0.05));
+        return vec2<f32>(smoothstep(0.30, 0.70, patch_n), 0.42 + 1.15 * strand);
+    } else if style == 9u {
+        // Stripes: solid bands cycling the octave colors, marching slowly
+        // across the disc; each node stripes in its own direction (seed
+        // angle). The /4 color cycle makes neighboring bands distinct
+        // while walking the whole gradient.
+        let c = (rot2(seed) * uv).x / 0.22 + time * 0.25;
+        return vec2<f32>(fract(floor(c) / 4.0 + seed * 0.29), band_seam(fract(c)));
+    } else if style == 10u {
+        // Rings: concentric bands radiating slowly outward.
+        let c = d / 0.16 - time * 0.35 + seed;
+        return vec2<f32>(fract(floor(c) / 4.0 + seed * 0.7), band_seam(fract(c)));
+    } else if style == 11u {
+        // Pinwheel: six solid wedges, slowly rotating, colors cycling
+        // through the wedges. fract() absorbs the atan2 wrap: the wrap
+        // line is itself always a wedge edge.
+        let w = fract(atan2(uv.y, uv.x) / TAU + time * 0.03 + seed) * 6.0;
+        return vec2<f32>(fract(floor(w) / 6.0 + time * 0.02 + seed * 0.13), band_seam(fract(w)));
+    } else if style == 12u {
+        // Spiral: four-armed Archimedean spiral winding slowly outward.
+        // Four arms with a four-band color cycle: crossing the atan2 seam
+        // jumps the band index by exactly the cycle length, so the seam
+        // is invisible.
+        let ang = atan2(uv.y, uv.x);
+        let c = d * 4.0 - (ang / TAU) * 4.0 - time * 0.12 + seed;
+        return vec2<f32>(fract(floor(c) / 4.0 + seed * 0.7), band_seam(fract(c)));
+    } else if style == 13u {
+        // Checker: classic grid; the diagonal 4-phase cycle keeps every
+        // neighboring pair of cells distinct while walking the whole
+        // gradient, and the colors conveyor slowly through the cells.
+        let cell = floor(uv / 0.24 + vec2<f32>(seed * 1.7, seed * 2.9));
+        let t = fract((cell.x + 2.0 * cell.y) / 4.0 + time * 0.05 + seed * 0.31);
+        return vec2<f32>(t, 1.0);
     }
-    // Filament: ridged noise — glowing threads over dark gas. Colors ride
-    // slower low-frequency patches, so the threads pass through each
-    // octave's region as they wander.
-    let p = uv * 2.4 + vec2<f32>(seed * 7.7, seed * 3.3);
-    let n = fbm(p + vec2<f32>(time * 0.16, -time * 0.11));
-    let strand = pow(1.0 - abs(2.0 * n - 1.0), 3.0);
-    let patch_n = fbm(uv * 1.5 + vec2<f32>(seed * 2.9, time * 0.05));
-    return vec2<f32>(smoothstep(0.30, 0.70, patch_n), 0.42 + 1.15 * strand);
+    // Tiles: the checkerboard with rounded corners — bright rounded tiles
+    // (superellipse iso-lines) over dim gaps.
+    let g = uv / 0.26 + vec2<f32>(seed * 2.3, seed * 1.3);
+    let cell = floor(g);
+    let t = fract((cell.x + 2.0 * cell.y) / 4.0 + time * 0.05 + seed * 0.47);
+    let p = fract(g) - vec2<f32>(0.5, 0.5);
+    let rr = pow(pow(abs(p.x), 4.0) + pow(abs(p.y), 4.0), 0.25);
+    let tile = 1.0 - smoothstep(0.34, 0.44, rr);
+    return vec2<f32>(t, mix(0.45, 1.08, tile));
 }
 
-// Flame coverage (0..~1.5) at the rim for each gas style; drives how far the
-// corona reaches at this angle and how bright it burns. Same clock and seed
-// rules as gas_field.
-fn gas_flame(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
+// Flame coverage (0..~1.5) at the rim for each field style; drives how far
+// the corona reaches at this angle and how bright it burns. Same clock and
+// seed rules as field_pattern. Pattern styles share the default fine
+// flicker: a crisp geometric ball still burns at the rim.
+fn field_flame(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
     let dir = uv / max(d, 1e-4);
     if style == 3u {
         // Vortex: flame tips trail along with the rotation.
@@ -452,12 +507,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let window = 1.0 - smoothstep(0.5, 0.95, d);
     var glow = (0.6 * activation + 0.25 * hovered) * exp(-3.0 * d) * window;
 
-    // Gas styles: replace the smooth glow with a noise-flickered flame edge
-    // (each style shapes its own flame — flicker, trailing tips, sparse
-    // prominences, or a soft swell). Clocked on global time so a retrigger
-    // never restarts the flame.
-    if is_gas_style(style) && activation > 0.0 {
-        let flame = gas_flame(style, in.uv, d, u.misc.x, seed);
+    // Field styles: replace the smooth glow with a noise-flickered flame
+    // edge (each style shapes its own flame — flicker, trailing tips,
+    // sparse prominences, or a soft swell). Clocked on global time so a
+    // retrigger never restarts the flame.
+    if is_field_style(style) && activation > 0.0 {
+        let flame = field_flame(style, in.uv, d, u.misc.x, seed);
         glow = activation * exp(-4.5 * max(d - 0.44, 0.0) * (2.4 - 1.8 * min(flame, 1.0))) * window
             * (0.55 + 0.45 * flame)
             + 0.25 * hovered * exp(-3.0 * d) * window;
@@ -466,14 +521,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let brightness = level_floor(activation) + 0.2 * hovered;
     var rgb = in.color.rgb * brightness;
 
-    // Gas styles: the active disc becomes a ball of gas. The noise field
-    // sweeps each pixel through the sounding octaves' colors (swirled
-    // patches, interpolated at the seams — never averaged), modulates
+    // Field styles: the active disc becomes a ball of gas or patterned
+    // light. The field sweeps each pixel through the sounding octaves'
+    // colors (patches, bands, or cells — never averaged), modulates
     // brightness, and a limb-darkened profile keeps it reading as a sphere.
-    // The rim flame inherits the local gas color, so the corona burns in
-    // the hue of whichever octave's gas it erupts from.
-    if is_gas_style(style) && activation > 0.0 {
-        let field = gas_field(style, in.uv, d, u.misc.x, seed);
+    // The rim flame inherits the local field color, so the corona burns in
+    // the hue of whichever octave's color it erupts from.
+    if is_field_style(style) && activation > 0.0 {
+        let field = field_pattern(style, in.uv, d, u.misc.x, seed);
         let gas = octave_swirl_color(in.octaves, in.cents, field.x, in.color.rgb);
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d);
         rgb = mix(rgb, gas * brightness * field.y * limb, activation);

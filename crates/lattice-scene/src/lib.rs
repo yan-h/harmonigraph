@@ -64,6 +64,20 @@ pub enum NodeStyle {
     Lava,
     /// Gas ball variant: glowing ridged-noise threads over dark gas.
     Filament,
+    /// Pattern variant: solid bands cycling the octave colors, marching
+    /// slowly across the disc; each node stripes in its own direction.
+    Stripes,
+    /// Pattern variant: concentric color rings radiating slowly outward.
+    Rings,
+    /// Pattern variant: six solid wedges rotating slowly, colors cycling.
+    Pinwheel,
+    /// Pattern variant: four-armed spiral of color bands winding outward.
+    Spiral,
+    /// Pattern variant: checkerboard whose cells cycle the octave colors.
+    Checker,
+    /// Pattern variant: rounded checkerboard — bright rounded tiles over
+    /// dim gaps.
+    Tiles,
 }
 
 impl NodeStyle {
@@ -79,24 +93,23 @@ impl NodeStyle {
             NodeStyle::Marble => 6,
             NodeStyle::Lava => 7,
             NodeStyle::Filament => 8,
+            NodeStyle::Stripes => 9,
+            NodeStyle::Rings => 10,
+            NodeStyle::Pinwheel => 11,
+            NodeStyle::Spiral => 12,
+            NodeStyle::Checker => 13,
+            NodeStyle::Tiles => 14,
         }
     }
 
-    /// The gas-ball family: styles whose active discs render the swirled
-    /// octave-color gas. These animate on global time with a stable
-    /// per-node seed (see [`derive_scene`]), so note events never restart
-    /// the pattern. Mirrors `is_gas_style` in lattice.wgsl; keep in sync.
-    pub fn is_gas(self) -> bool {
-        matches!(
-            self,
-            NodeStyle::Corona
-                | NodeStyle::Vortex
-                | NodeStyle::Plasma
-                | NodeStyle::Aurora
-                | NodeStyle::Marble
-                | NodeStyle::Lava
-                | NodeStyle::Filament
-        )
+    /// The field family — everything except Steady and Wire: styles whose
+    /// active discs paint the swirled octave-color field (noise-driven gas
+    /// or deterministic patterns). These animate on global time with a
+    /// stable per-node seed (see [`derive_scene`]), so note events never
+    /// restart the pattern. Mirrors `is_field_style` in lattice.wgsl; keep
+    /// in sync.
+    pub fn is_field_style(self) -> bool {
+        !matches!(self, NodeStyle::Steady | NodeStyle::Wire)
     }
 }
 
@@ -356,8 +369,8 @@ pub struct NodeInstance {
     pub age: f32,
     /// Small constant seeding animation variety. NOT a timestamp — only
     /// ever used as a seed. Per-note (derived from the note-on time,
-    /// wrapped) for age-driven styles; a stable per-node hash for gas
-    /// styles (see [`NodeStyle::is_gas`]).
+    /// wrapped) for age-driven styles; a stable per-node hash for field
+    /// styles (see [`NodeStyle::is_field_style`]).
     pub seed: f32,
     /// Render as an outline instead of a filled disc (channel 14, v1's
     /// "channel 15" in MIDI convention).
@@ -385,7 +398,7 @@ pub struct Scene {
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
     /// Seconds for global shader animation, wrapped hourly so f32
-    /// precision holds in long sessions. The gas styles clock on this so
+    /// precision holds in long sessions. The field styles clock on this so
     /// their fields keep flowing across note events (at worst the pattern
     /// jumps once an hour at the wrap); age-driven styles use
     /// [`NodeInstance`]'s `age`/`seed` instead (unwrapped age math).
@@ -522,12 +535,12 @@ pub fn derive_scene(
             }
         }
 
-        // Gas styles animate one continuous field per node — global time
+        // Field styles animate one continuous field per node — global time
         // as the clock plus a stable per-node seed — so pressing,
         // retriggering, or stacking notes lights the flow up without ever
         // restarting or reshuffling it. Age-driven styles keep the
         // per-note seed (wire's tumble phases).
-        let seed = if view.node_style.is_gas() { node_seed(pos) } else { seed };
+        let seed = if view.node_style.is_field_style() { node_seed(pos) } else { seed };
 
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
@@ -562,7 +575,7 @@ pub fn derive_scene(
     }
 }
 
-/// Stable per-node animation seed for the gas styles: a hash of the
+/// Stable per-node animation seed for the field styles: a hash of the
 /// lattice position folded into the same small range as the per-note
 /// seed. A node's gas pattern becomes part of its identity — the same
 /// every time it lights, decorrelated from its neighbors'.
