@@ -172,7 +172,8 @@ fn pack_octaves(levels: &[f32; lattice_scene::OCTAVE_SLOTS]) -> [u32; 3] {
 struct GpuEdge {
     /// xyz: endpoint A, w: strength (grid lines: opacity).
     a_strength: [f32; 4],
-    /// xyz: endpoint B, w: kind (0 chord beam, 1 grid line).
+    /// xyz: endpoint B, w: kind (0 chord beam, 1 grid line, 2 dashed
+    /// grid line).
     b_kind: [f32; 4],
     color: [f32; 4],
 }
@@ -257,7 +258,7 @@ impl LatticeCallback {
         let edges = scene
             .grid
             .iter()
-            .map(|g| (g, 1.0))
+            .map(|g| (g, if g.dashed { 2.0 } else { 1.0 }))
             .chain(scene.edges.iter().map(|e| (e, 0.0)))
             .map(|(e, kind)| GpuEdge {
                 a_strength: [e.a.x, e.a.y, e.a.z, e.strength],

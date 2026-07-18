@@ -18,6 +18,24 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
     )
 }
 
+/// How the background grid indicates sevens (z) layers, to keep depth
+/// readable when the lattice extends along the sevenths axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum GridStyle {
+    /// One faint color everywhere (the original look).
+    #[default]
+    Uniform,
+    /// In-sheet lines take a hue per sevens layer; the links between
+    /// layers stay neutral. Layers become instantly distinguishable.
+    LayerTint,
+    /// The center sheet draws at full grid strength; each layer outward
+    /// (and the links, half a step) fades progressively.
+    LayerFade,
+    /// Links along the sevens axis render dashed, so connective tissue
+    /// between sheets reads differently from the sheets themselves.
+    DashedLinks,
+}
+
 /// How a node indicates which octaves its pitch class is sounding in.
 /// The fragment shader draws the glyphs from the per-node octave bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -163,6 +181,9 @@ pub struct ViewConfig {
     /// nodes, so a chord's interval structure renders as geometry.
     #[serde(default)]
     pub show_chord_edges: bool,
+    /// How the background grid indicates sevens layers.
+    #[serde(default)]
+    pub grid_style: GridStyle,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
     /// derived from the fifth (in `root_ui`) and note-name labels drop
@@ -210,6 +231,7 @@ impl Default for ViewConfig {
             show_cents: true,
             node_style: NodeStyle::default(),
             show_chord_edges: false,
+            grid_style: GridStyle::default(),
             meantone: false,
         }
     }
@@ -480,8 +502,11 @@ pub struct EdgeInstance {
     pub b: Vec3,
     pub color: Vec4,
     /// min of the two nodes' activations: the beam fades with whichever
-    /// endpoint fades first.
+    /// endpoint fades first. (Grid segments: line opacity.)
     pub strength: f32,
+    /// Grid segments only: render as short dashes
+    /// ([`GridStyle::DashedLinks`]). Never set on chord beams.
+    pub dashed: bool,
 }
 
 /// Everything the renderer needs for one frame.
@@ -698,10 +723,10 @@ fn depth_scale(dist: f32, focus: f32) -> f32 {
 }
 
 /// How far a grid segment stops short of each node center, as a factor of
-/// the node radius. Larger than the disc's visual radius (~0.9 × radius,
+/// the node radius. Larger than the disc's visual radius (~0.83 × radius,
 /// see the quad math in lattice.wgsl) so the gap fully contains the circle
-/// a sounding note draws there.
-const GRID_INSET_FACTOR: f32 = 1.3;
+/// a sounding note draws there, with a slim margin.
+const GRID_INSET_FACTOR: f32 = 1.05;
 
 /// Line opacity of a grid segment whose two endpoint notes both sound.
 const GRID_LIT_OPACITY: f32 = 0.85;
@@ -722,21 +747,56 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
         let p = node.lattice_pos;
         // +1 steps only, so each undirected pair appears once; positions
         // outside the window simply miss the index.
-        for step in [
+        for (axis, step) in [
             LatticePos::new(p.threes + 1, p.fives, p.sevens),
             LatticePos::new(p.threes, p.fives + 1, p.sevens),
             LatticePos::new(p.threes, p.fives, p.sevens + 1),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let Some(neighbor) = index.get(&step) else {
                 continue;
             };
+            let along_sevens = axis == 2;
+            let rel = p.sevens - view.center_sevens;
+
+            // Style pass: how this segment communicates its sevens layer.
+            let mut color = base;
+            let mut strength = base.w;
+            let mut dashed = false;
+            match view.grid_style {
+                GridStyle::Uniform => {}
+                GridStyle::LayerTint => {
+                    // Hue walks per layer; the center sheet and the
+                    // cross-layer links keep the neutral base.
+                    if !along_sevens && rel != 0 {
+                        color = lch(
+                            34.0,
+                            30.0,
+                            (210.0 + 55.0 * f64::from(rel)).rem_euclid(360.0),
+                        );
+                    }
+                }
+                GridStyle::LayerFade => {
+                    let depth = if along_sevens {
+                        rel.abs().min((rel + 1).abs()) as f32 + 0.5
+                    } else {
+                        rel.abs() as f32
+                    };
+                    strength = base.w * 0.6f32.powf(depth);
+                }
+                GridStyle::DashedLinks => dashed = along_sevens,
+            }
+
             let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
             let lit = node.activation.min(neighbor.activation);
             grid.push(EdgeInstance {
                 a: node.world_pos + dir * inset,
                 b: neighbor.world_pos - dir * inset,
-                color: base.lerp((node.color + neighbor.color) * 0.5, lit),
-                strength: base.w + (GRID_LIT_OPACITY - base.w) * lit,
+                color: color.lerp((node.color + neighbor.color) * 0.5, lit),
+                strength: strength + (GRID_LIT_OPACITY - strength) * lit,
+                dashed,
             });
         }
     }
@@ -769,6 +829,7 @@ fn derive_edges(nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
                     b: b.world_pos,
                     color: (a.color + b.color) * 0.5,
                     strength: a.activation.min(b.activation),
+                    dashed: false,
                 });
             }
         }
@@ -1115,6 +1176,56 @@ mod tests {
             .fold(0.0f32, f32::max);
         for seg in &scene.grid {
             assert!(seg.a.length() <= max_node && seg.b.length() <= max_node);
+        }
+    }
+
+    #[test]
+    fn grid_styles_differentiate_sevens_layers() {
+        // A window one sevens layer deep on each side of the center.
+        let view = ViewConfig {
+            extent_threes: 1,
+            extent_fives: 0,
+            extent_sevens: 1,
+            ..ViewConfig::default()
+        };
+        let scene_with = |style: GridStyle| {
+            scene_of(
+                &NoteTracker::new(),
+                &Tuning::default(),
+                &ViewConfig { grid_style: style, ..view.clone() },
+                &FrameParams::default(),
+                0.0,
+            )
+        };
+        let base = skin::active_skin().grid_line;
+        // Sevens steps run along world z; in-sheet steps stay within one
+        // z plane.
+        let along_sevens = |s: &&EdgeInstance| (s.b.z - s.a.z).abs() > 0.25;
+        let in_sheet_off_center = |s: &&EdgeInstance| !along_sevens(s) && s.a.z.abs() > 0.5;
+
+        // Uniform: everything identical, nothing dashed.
+        let scene = scene_with(GridStyle::Uniform);
+        assert!(scene.grid.iter().all(|s| s.color == base && !s.dashed));
+
+        // LayerTint: off-center sheets tint, links and center stay base.
+        let scene = scene_with(GridStyle::LayerTint);
+        assert!(scene.grid.iter().filter(in_sheet_off_center).all(|s| s.color != base));
+        assert!(scene.grid.iter().filter(along_sevens).all(|s| s.color == base));
+
+        // LayerFade: off-center strength drops below the center sheet's.
+        let scene = scene_with(GridStyle::LayerFade);
+        let center_max = scene
+            .grid
+            .iter()
+            .filter(|s| !along_sevens(s) && s.a.z.abs() < 0.5)
+            .map(|s| s.strength)
+            .fold(0.0f32, f32::max);
+        assert!(scene.grid.iter().filter(in_sheet_off_center).all(|s| s.strength < center_max));
+
+        // DashedLinks: exactly the sevens-axis segments flag dashed.
+        let scene = scene_with(GridStyle::DashedLinks);
+        for s in &scene.grid {
+            assert_eq!(s.dashed, (s.b.z - s.a.z).abs() > 0.25, "{:?}->{:?}", s.a, s.b);
         }
     }
 

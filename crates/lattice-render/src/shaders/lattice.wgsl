@@ -639,7 +639,7 @@ struct EdgeInstance {
     // xyz: endpoint A, w: strength (chord: min of the two node
     // activations; grid: line opacity)
     @location(0) a_strength: vec4<f32>,
-    // xyz: endpoint B, w: kind (0 chord beam, 1 grid line)
+    // xyz: endpoint B, w: kind (0 chord beam, 1 grid line, 2 dashed grid)
     @location(1) b_kind: vec4<f32>,
     @location(2) color: vec4<f32>,
 };
@@ -676,8 +676,8 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     } else {
         perp = perp / plen;
     }
-    // Grid lines are much thinner than chord beams.
-    let half_width = u.misc.y * mix(0.35, 0.09, inst.b_kind.w);
+    // Grid lines (kind >= 1) are much thinner than chord beams.
+    let half_width = u.misc.y * mix(0.35, 0.09, min(inst.b_kind.w, 1.0));
     let world = a + axis * corner.x + perp * corner.y * half_width;
 
     var out: EdgeVsOut;
@@ -700,7 +700,14 @@ fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
     // toward the node gaps.
     if in.kind > 0.5 {
         let across = aa_inside(0.675, abs(in.uv.y), aa_y);
-        let along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
+        var along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
+        // Dashed grid lines (kind 2, GridStyle::DashedLinks): chop the
+        // length into short dashes, leaving a faint floor in the gaps so
+        // the line still reads as continuous structure.
+        if in.kind > 1.5 {
+            let tri = abs(fract(in.uv.x * 5.0) - 0.5) * 2.0;
+            along = along * (0.15 + 0.85 * smoothstep(0.35, 0.65, tri));
+        }
         let alpha = in.strength * across * along;
         if alpha < 0.01 {
             discard;

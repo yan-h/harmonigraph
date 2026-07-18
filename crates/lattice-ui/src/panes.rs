@@ -5,7 +5,9 @@
 use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{channel_color, derive_scene, Camera, NodeStyle, OctaveStyle, Projection};
+use lattice_scene::{
+    channel_color, derive_scene, Camera, GridStyle, NodeStyle, OctaveStyle, Projection,
+};
 
 use crate::theme;
 
@@ -468,8 +470,8 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length").show(ui);
     }
     // Camera angles are meaningless under cabinet (fixed viewpoint), so
-    // this whole block grays out there.
-    ui.add_enabled_ui(state.camera.projection != Projection::Cabinet, |ui| {
+    // this whole block hides there (the cabinet knobs show instead).
+    if state.camera.projection != Projection::Cabinet {
         // The two numbers that fully determine an orthographic view (and
         // the orbit of the other projections) — the same state orbit
         // drags edit, exposed numerically so a view is reproducible.
@@ -566,7 +568,7 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                 state.preset_name.clear();
             }
         });
-    });
+    }
 
     for (extent, range, label) in [
         // Ranges must contain the ViewConfig defaults (10/6) or the bar
@@ -626,6 +628,32 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     });
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
+
+    // Background grid: how (whether) it differentiates sevens layers.
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Grid style");
+        for (style, label, hover) in [
+            (GridStyle::Uniform, "Uniform", "One faint color everywhere"),
+            (
+                GridStyle::LayerTint,
+                "Layer tint",
+                "Each sevenths layer's lines take their own hue; links between layers stay neutral",
+            ),
+            (
+                GridStyle::LayerFade,
+                "Layer fade",
+                "The center sheet at full strength; each layer outward fades",
+            ),
+            (
+                GridStyle::DashedLinks,
+                "Dashed links",
+                "Links along the sevenths axis draw dashed; in-sheet lines stay solid",
+            ),
+        ] {
+            ui.selectable_value(&mut state.view.grid_style, style, label)
+                .on_hover_text(hover);
+        }
+    });
 
     // Octave indicator: dots around the disc positioned by absolute pitch,
     // or off.
