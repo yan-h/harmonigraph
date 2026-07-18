@@ -63,8 +63,10 @@ struct App {
     known_ports: Vec<String>,
     /// Held open while a hardware source is selected.
     connection: Option<midir::MidiInputConnection<()>>,
-    midi_rx: mpsc::Receiver<NoteEvent>,
-    midi_tx: mpsc::Sender<NoteEvent>,
+    midi_rx: mpsc::Receiver<RawMidi>,
+    midi_tx: mpsc::Sender<RawMidi>,
+    /// Raw-message decoder for the hardware path (bend state lives here).
+    decoder: MidiDecoder,
     /// Echo every note event to the console (hardware MIDI can flood the
     /// scrollback during real playing; toggle in the source picker).
     log_events: bool,
@@ -103,8 +105,12 @@ impl App {
             &port,
             "lattice-in",
             move |_stamp, message, _| {
-                if let Some(event) = parse_midi(message, epoch.elapsed().as_secs_f64()) {
-                    let _ = tx.send(event);
+                // Channel-voice messages are 2-3 bytes; SysEx and realtime
+                // are not decoded, so don't ship them across the channel.
+                if (2..=3).contains(&message.len()) {
+                    let mut data = [0u8; 3];
+                    data[..message.len()].copy_from_slice(message);
+                    let _ = tx.send(RawMidi { time: epoch.elapsed().as_secs_f64(), data });
                 }
             },
             (),
@@ -122,22 +128,104 @@ impl App {
     }
 }
 
-/// Note on/off from a raw MIDI message (velocity-0 note-on = off, per the
-/// spec). Everything else is ignored for now.
-fn parse_midi(message: &[u8], time: f64) -> Option<NoteEvent> {
-    let (&status, rest) = message.split_first()?;
-    let (&note, rest) = rest.split_first()?;
-    let &velocity = rest.first()?;
-    let channel = status & 0x0F;
-    match status & 0xF0 {
-        0x90 if velocity > 0 => Some(NoteEvent {
-            time,
-            channel,
-            note,
-            kind: NoteEventKind::On { velocity: f32::from(velocity) / 127.0 },
-        }),
-        0x80 | 0x90 => Some(NoteEvent { time, channel, note, kind: NoteEventKind::Off }),
-        _ => None,
+/// A channel-voice message as it came off the wire, timestamped on the
+/// harness clock. Decoding happens on the GUI thread (see [`MidiDecoder`])
+/// so the bend state and the bend-range setting live in one place.
+#[derive(Clone, Copy, Debug)]
+struct RawMidi {
+    time: f64,
+    /// Status + up to two data bytes; 2-byte messages pad with zero.
+    data: [u8; 3],
+}
+
+/// Stateful decoder for the hardware-MIDI path. Beyond note on/off it
+/// gives the standalone the same per-note tuning the plugin gets from its
+/// host: channel pitch bend becomes a `Tuning` event for every note held
+/// on that channel — which is exactly per-note under MPE, where each note
+/// sits alone on a member channel — and CC 120/123 release everything.
+struct MidiDecoder {
+    /// Held (channel, note) pairs, for routing channel bend to notes.
+    held: Vec<(u8, u8)>,
+    /// Latest bend per channel, in semitones.
+    bend: [f32; 16],
+    /// Semitones at full bend deflection. Non-MPE keyboards default to
+    /// +/-2; MPE member channels conventionally use +/-48. Picked in the
+    /// MIDI input window.
+    bend_range: f32,
+}
+
+impl Default for MidiDecoder {
+    fn default() -> Self {
+        MidiDecoder { held: Vec::new(), bend: [0.0; 16], bend_range: 2.0 }
+    }
+}
+
+impl MidiDecoder {
+    /// Decode one message, appending the resulting events.
+    fn decode(&mut self, raw: RawMidi, out: &mut Vec<NoteEvent>) {
+        let RawMidi { time, data: [status, d1, d2] } = raw;
+        let channel = status & 0x0F;
+        match status & 0xF0 {
+            0x90 if d2 > 0 => {
+                let (note, velocity) = (d1, d2);
+                if !self.held.contains(&(channel, note)) {
+                    self.held.push((channel, note));
+                }
+                out.push(NoteEvent {
+                    time,
+                    channel,
+                    note,
+                    kind: NoteEventKind::On { velocity: f32::from(velocity) / 127.0 },
+                });
+                // MPE sends the bend before the note-on; a note born on a
+                // bent channel must start at the bent pitch.
+                if self.bend[channel as usize] != 0.0 {
+                    out.push(NoteEvent {
+                        time,
+                        channel,
+                        note,
+                        kind: NoteEventKind::Tuning { semitones: self.bend[channel as usize] },
+                    });
+                }
+            }
+            // Velocity-0 note-on is a note-off, per the spec.
+            0x80 | 0x90 => {
+                let note = d1;
+                self.held.retain(|&held| held != (channel, note));
+                out.push(NoteEvent { time, channel, note, kind: NoteEventKind::Off });
+            }
+            0xE0 => {
+                // 14-bit bend, center 8192.
+                let value = u16::from(d1) | (u16::from(d2) << 7);
+                let semitones =
+                    (f32::from(value) - 8192.0) / 8192.0 * self.bend_range;
+                self.bend[channel as usize] = semitones;
+                for &(ch, note) in &self.held {
+                    if ch == channel {
+                        out.push(NoteEvent {
+                            time,
+                            channel,
+                            note,
+                            kind: NoteEventKind::Tuning { semitones },
+                        });
+                    }
+                }
+            }
+            // All sound off / all notes off. The tracker's release is
+            // global rather than per-channel; close enough for a panic
+            // button on a dev harness.
+            0xB0 if d1 == 120 || d1 == 123 => {
+                self.held.clear();
+                out.push(NoteEvent { time, channel, note: 0, kind: NoteEventKind::AllOff });
+            }
+            _ => {}
+        }
+    }
+
+    /// Forget held notes and bends (source switches, reconnects).
+    fn reset(&mut self) {
+        self.held.clear();
+        self.bend = [0.0; 16];
     }
 }
 
@@ -164,6 +252,7 @@ impl App {
             connection: None,
             midi_rx,
             midi_tx,
+            decoder: MidiDecoder::default(),
             log_events: true,
         }
     }
@@ -194,6 +283,26 @@ impl App {
                     }
                     ui.checkbox(&mut self.log_events, "Log events");
                 });
+                // Pitch-bend deflection of the connected hardware. 2 is
+                // the non-MPE default; 48 is the MPE member-channel
+                // convention (what MPE controllers actually send).
+                ui.horizontal(|ui| {
+                    ui.label("Bend range").on_hover_text(
+                        "Semitones at full pitch-bend deflection; match the \
+                         controller (2 = plain keyboards, 48 = MPE)",
+                    );
+                    for range in [2.0, 12.0, 24.0, 48.0] {
+                        if ui
+                            .selectable_label(
+                                self.decoder.bend_range == range,
+                                format!("{range:.0}"),
+                            )
+                            .clicked()
+                        {
+                            self.decoder.bend_range = range;
+                        }
+                    }
+                });
                 for name in &self.known_ports {
                     let selected =
                         matches!(&self.source, MidiSource::Port(current) if current == name);
@@ -208,6 +317,7 @@ impl App {
     fn switch_source(&mut self, source: MidiSource, now: f64) {
         // Silence whatever the previous source left sounding.
         self.state.tracker.all_notes_off(now);
+        self.decoder.reset();
         match source {
             MidiSource::Mock => {
                 self.connection = None;
@@ -220,14 +330,15 @@ impl App {
     }
 
     /// Gather this frame's events from the active source: the mock
-    /// progression's poll plus anything the midir callback thread queued.
+    /// progression's poll plus anything the midir callback thread queued
+    /// (decoded here, on the thread that owns the bend state).
     fn collect_events(&mut self, now: f64) -> Vec<NoteEvent> {
         let mut events = Vec::new();
         if self.source == MidiSource::Mock {
             self.mock.poll(now, &mut events);
         }
-        while let Ok(event) = self.midi_rx.try_recv() {
-            events.push(event);
+        while let Ok(raw) = self.midi_rx.try_recv() {
+            self.decoder.decode(raw, &mut events);
         }
         events
     }
@@ -368,9 +479,21 @@ impl MockMidi {
 mod tests {
     use super::*;
 
+    /// Decode a sequence of raw messages at time 0.
+    fn decode_all(decoder: &mut MidiDecoder, messages: &[[u8; 3]]) -> Vec<NoteEvent> {
+        let mut events = Vec::new();
+        for &data in messages {
+            decoder.decode(RawMidi { time: 0.0, data }, &mut events);
+        }
+        events
+    }
+
     #[test]
-    fn parse_midi_handles_note_messages() {
-        let on = parse_midi(&[0x90, 60, 100], 1.0).unwrap();
+    fn decoder_handles_note_messages() {
+        let mut decoder = MidiDecoder::default();
+        let mut events = Vec::new();
+        decoder.decode(RawMidi { time: 1.0, data: [0x90, 60, 100] }, &mut events);
+        let on = events[0];
         assert_eq!((on.channel, on.note, on.time), (0, 60, 1.0));
         assert!(matches!(
             on.kind,
@@ -378,18 +501,82 @@ mod tests {
         ));
 
         // Velocity-0 note-on is a note-off, per the MIDI spec.
-        let implicit_off = parse_midi(&[0x91, 60, 0], 0.0).unwrap();
-        assert_eq!(implicit_off.kind, NoteEventKind::Off);
-        assert_eq!(implicit_off.channel, 1);
+        let events = decode_all(&mut decoder, &[[0x91, 60, 0]]);
+        assert_eq!((events[0].kind, events[0].channel), (NoteEventKind::Off, 1));
 
         // Real note-off, with the channel nibble split out.
-        let off = parse_midi(&[0x85, 61, 40], 0.0).unwrap();
-        assert_eq!((off.kind, off.channel, off.note), (NoteEventKind::Off, 5, 61));
+        let events = decode_all(&mut decoder, &[[0x85, 61, 40]]);
+        assert_eq!(
+            (events[0].kind, events[0].channel, events[0].note),
+            (NoteEventKind::Off, 5, 61)
+        );
 
-        // Non-note and truncated messages are ignored.
-        assert_eq!(parse_midi(&[0xB0, 1, 2], 0.0), None); // CC
-        assert_eq!(parse_midi(&[0x90, 60], 0.0), None);
-        assert_eq!(parse_midi(&[], 0.0), None);
+        // Unhandled channel messages decode to nothing.
+        assert!(decode_all(&mut decoder, &[[0xB0, 1, 2]]).is_empty()); // plain CC
+        assert!(decode_all(&mut decoder, &[[0xC0, 5, 0]]).is_empty()); // program
+    }
+
+    #[test]
+    fn bend_tunes_only_the_held_notes_on_its_channel() {
+        let mut decoder = MidiDecoder { bend_range: 2.0, ..MidiDecoder::default() };
+        // Two notes on channel 0, one on channel 1.
+        decode_all(&mut decoder, &[[0x90, 60, 100], [0x90, 64, 100], [0x91, 67, 100]]);
+
+        // Full up-bend on channel 0: 16383 -> just under +2 semitones.
+        let events = decode_all(&mut decoder, &[[0xE0, 0x7F, 0x7F]]);
+        assert_eq!(events.len(), 2, "one Tuning per held channel-0 note");
+        for event in &events {
+            assert_eq!(event.channel, 0);
+            assert!(matches!(
+                event.kind,
+                NoteEventKind::Tuning { semitones } if (semitones - 2.0).abs() < 0.01
+            ));
+        }
+
+        // Center on channel 1: exactly 0 semitones.
+        let events = decode_all(&mut decoder, &[[0xE1, 0x00, 0x40]]);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].kind,
+            NoteEventKind::Tuning { semitones } if semitones == 0.0
+        ));
+
+        // Released notes stop receiving bend.
+        decode_all(&mut decoder, &[[0x80, 60, 0]]);
+        let events = decode_all(&mut decoder, &[[0xE0, 0x00, 0x60]]);
+        assert_eq!(events.len(), 1, "only the still-held channel-0 note");
+        assert_eq!(events[0].note, 64);
+    }
+
+    #[test]
+    fn bend_range_scales_and_mpe_note_starts_bent() {
+        let mut decoder = MidiDecoder { bend_range: 48.0, ..MidiDecoder::default() };
+        // MPE order: bend arrives on the member channel BEFORE the note.
+        // Half up-bend (8192 + 4096 = 12288): +24 of 48 semitones.
+        let events =
+            decode_all(&mut decoder, &[[0xE2, 0x00, 0x60], [0x92, 60, 100]]);
+        assert!(matches!(events[0].kind, NoteEventKind::On { .. }));
+        assert!(matches!(
+            events[1].kind,
+            NoteEventKind::Tuning { semitones } if (semitones - 24.0).abs() < 0.01
+        ));
+        assert_eq!((events[1].channel, events[1].note), (2, 60));
+    }
+
+    #[test]
+    fn all_notes_off_releases_everything() {
+        let mut decoder = MidiDecoder::default();
+        decode_all(&mut decoder, &[[0x90, 60, 100], [0x91, 64, 100]]);
+        // CC 123 (all notes off).
+        let events = decode_all(&mut decoder, &[[0xB0, 123, 0]]);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, NoteEventKind::AllOff);
+        // Held state is gone: a later bend tunes nothing.
+        assert!(decode_all(&mut decoder, &[[0xE0, 0x7F, 0x7F]]).is_empty());
+        // CC 120 (all sound off) does the same.
+        decode_all(&mut decoder, &[[0x90, 60, 100]]);
+        let events = decode_all(&mut decoder, &[[0xB5, 120, 0]]);
+        assert_eq!(events[0].kind, NoteEventKind::AllOff);
     }
 
     #[test]
