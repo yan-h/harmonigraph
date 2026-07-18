@@ -40,14 +40,16 @@ const TAU: f32 = 6.2831853;
 struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
-    // x: activation 0..1, y: hovered 0/1, z: age (s since note-on),
-    // w: outlined 0/1 (channel-14 voices render as a ring, not a disc)
+    // x: activation 0..1, w: outlined 0/1 (channel-14 voices render as a
+    // ring, not a disc). y (hovered) and z (age) are still packed by the
+    // scene but no longer read here: hover no longer changes the disc, and
+    // the only age-driven style (Wire) was removed.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
-    // Animation seed: a small constant, NOT a timestamp. Per-note for the
-    // age-driven styles; a stable per-NODE hash for the field styles (the
-    // scene picks — see node_seed in lattice-scene).
+    // Animation seed: a small constant, NOT a timestamp. A stable per-NODE
+    // hash for the field styles (the scene picks — see node_seed in
+    // lattice-scene); Steady ignores it.
     @location(4) seed: f32,
     // The node's pitch class in cents (0..1200). The octave indicator
     // styles place each glyph at the note's absolute-pitch angle, which
@@ -83,13 +85,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     );
     let corner = corners[vertex_index];
 
-    let hovered = inst.params.y;
-
-    // Node size never responds to notes: idle nodes are the same size as
-    // active ones, so a note changes only brightness and glow. Size DOES
-    // carry the depth cue (inst.scale) and a small hover nudge. (The quad
-    // is twice the disc radius to leave room for the glow.)
-    let radius = u.misc.y * (0.90 + 0.15 * hovered) * 2.0 * inst.scale;
+    // Node size never responds to notes or hover: idle, active, and hovered
+    // nodes are all the same size, so a note changes only brightness and
+    // glow. Size DOES carry the depth cue (inst.scale). (The quad is twice
+    // the disc radius to leave room for the glow.)
+    let radius = u.misc.y * 0.90 * 2.0 * inst.scale;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
@@ -440,7 +440,6 @@ fn field_halo(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
     let activation = in.params.x;
-    let hovered = in.params.y;
 
     let style = u32(u.misc.w + 0.5);
     let seed = in.seed;
@@ -459,9 +458,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ring = filled * (1.0 - aa_inside(0.34, d, aa));
     // Unplayed nodes draw no disc at all — the background grid's gap marks
     // the position instead. Activation fades the disc in (and back out on
-    // release); hovering an idle node still shows a dim ghost so picking
-    // has visible feedback.
-    let presence = max(activation, 0.35 * hovered);
+    // release); hover has no effect on the disc (the node-name label is the
+    // hover feedback, drawn by the UI layer).
+    let presence = activation;
     let disc = mix(filled, ring, outlined) * presence;
 
     // Home-sheet nodes keep a blank placeholder circle while idle: a thin
@@ -476,18 +475,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // window it so it fades to exactly zero (with zero slope) inside the
     // quad edge.
     let window = 1.0 - smoothstep(0.5, 0.95, d);
-    var glow = (0.6 * activation + 0.25 * hovered) * exp(-3.0 * d) * window;
+    var glow = 0.6 * activation * exp(-3.0 * d) * window;
 
     // Field styles: replace the smooth glow with turbulent gas wafting
     // off the surface (see field_halo — venting plumes, outward-streaming
     // curl, ragged reach). Clocked on global time so a retrigger never
     // restarts the motion.
     if is_field_style(style) && activation > 0.0 {
-        glow = activation * field_halo(style, in.uv, d, u.misc.x, seed) * window
-            + 0.25 * hovered * exp(-3.0 * d) * window;
+        glow = activation * field_halo(style, in.uv, d, u.misc.x, seed) * window;
     }
 
-    let brightness = level_floor(activation) + 0.2 * hovered;
+    let brightness = level_floor(activation);
     var rgb = in.color.rgb * brightness;
 
     // Field styles: the active disc becomes a ball of gas or patterned
