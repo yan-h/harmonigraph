@@ -637,6 +637,7 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
             (OctaveStyle::Petals, "Petals"),
             (OctaveStyle::Flares, "Flares"),
             (OctaveStyle::Bumps, "Bumps"),
+            (OctaveStyle::Slices, "Slices"),
         ] {
             ui.selectable_value(&mut state.view.octave_style, style, label);
         }

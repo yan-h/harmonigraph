@@ -38,6 +38,10 @@ pub enum OctaveStyle {
     /// Blobs seated on the rim so the disc outline bulges at each pitch
     /// angle.
     Bumps,
+    /// Annular pizza-slice sectors filling the ring around the disc, with
+    /// a gap ring off the rim and constant-thickness gaps between
+    /// neighbors.
+    Slices,
 }
 
 /// How held/active notes are rendered. All styles share the same instance
@@ -134,6 +138,7 @@ impl OctaveStyle {
             OctaveStyle::Petals => 2,
             OctaveStyle::Flares => 3,
             OctaveStyle::Bumps => 4,
+            OctaveStyle::Slices => 5,
         }
     }
 }

@@ -15,7 +15,8 @@ struct Uniforms {
     //    instance age/seed, which stay small and precise however long the
     //    session runs.
     // y: base node radius (world units),
-    // z: octave display mode (0 off, 1 dots, 2 petals, 3 flares, 4 bumps),
+    // z: octave display mode (0 off, 1 dots, 2 petals, 3 flares, 4 bumps,
+    //    5 slices),
     // w: node style (0 steady, 1 wire, 2 corona, 3 vortex, 4 plasma,
     //    5 aurora, 6 marble, 7 lava, 8 filament, 9 stripes, 10 rings,
     //    11 pinwheel, 12 spiral, 13 checker, 14 tiles)
@@ -156,6 +157,16 @@ const PETAL_BASE: f32 = 0.44; // where the petal roots (inside the rim)
 const PETAL_LEN: f32 = 0.34;  // radial length, tip at BASE+LEN
 const PETAL_W: f32 = 0.105;   // tangential half-width at the widest point
 
+// Slices geometry, quad UV units: annular pizza-slice sectors filling the
+// ring around the disc. The inner radius sits off the disc edge (~0.5) so
+// a gap ring separates slice from disc. Neighboring slices (slots are
+// 0.785 rad apart) are separated by a CONSTANT-thickness gap: the slice
+// edges are radial lines offset SLICE_GAP_HALF from the sector bisectors,
+// not constant-angle edges (those read as a V that widens outward).
+const SLICE_IN: f32 = 0.56;
+const SLICE_OUT: f32 = 0.93;
+const SLICE_GAP_HALF: f32 = 0.06;
+
 // Coverage (0..1) of the indicator glyph for a SOUNDING octave slot `i` on
 // a node whose pitch class is `cents`. All styles share the dots angle
 // convention — absolute pitch, middle C straight up, 45deg clockwise per
@@ -202,10 +213,29 @@ fn octave_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, time: f32, aa: f32
         let lat = exp(-2.0 * pow(u_t / spread, 2.0));
         let rad = (1.0 - smoothstep(0.55, 1.0, h)) * smoothstep(-0.15, 0.05, h);
         return clamp(lat * rad * 1.1, 0.0, 1.0);
+    } else if mode == 4u {
+        // Bumps: a blob seated ON the rim, so the disc outline bulges at
+        // the pitch angle instead of a shape hovering beside it.
+        return aa_inside(0.115, distance(uv, e * 0.50), aa);
     }
-    // Bumps: a blob seated ON the rim, so the disc outline bulges at the
-    // pitch angle instead of a shape hovering beside it.
-    return aa_inside(0.115, distance(uv, e * 0.50), aa);
+    // Slices: annular sectors (the outer stretch of a pizza slice), crisp
+    // screen-constant edges. The sector bisector directions b1/b2 bound
+    // this slot's wedge; the cross products against them give BOTH the
+    // side-of-line tests (which wedge owns the pixel — the hard boundary
+    // is invisible, buried mid-gap where coverage is zero) and the
+    // Euclidean distance to each edge line, thresholded at SLICE_GAP_HALF
+    // for a gap of constant thickness at every radius.
+    let dd = length(uv);
+    let ring = aa_inside(SLICE_OUT, dd, aa) * (1.0 - aa_inside(SLICE_IN, dd, aa));
+    let hb = DOTS_RAD_PER_OCTAVE * 0.5;
+    let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
+    let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
+    let c1 = uv.x * b1.y - uv.y * b1.x;
+    let c2 = uv.x * b2.y - uv.y * b2.x;
+    let own = select(0.0, 1.0, c1 > 0.0 && c2 < 0.0);
+    let g = (1.0 - aa_inside(SLICE_GAP_HALF, abs(c1), aa))
+        * (1.0 - aa_inside(SLICE_GAP_HALF, abs(c2), aa));
+    return ring * own * g;
 }
 
 // Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch
