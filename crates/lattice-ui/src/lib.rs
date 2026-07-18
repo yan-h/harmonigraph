@@ -142,6 +142,10 @@ pub struct SharedState {
     pub preset_name: String,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
+    /// Set by the View pane's "Reset layout" button; consumed by root_ui
+    /// AFTER the frame's DockArea writes the dock back (panes run inside
+    /// that pass, so a direct write from one would be overwritten).
+    reset_layout: bool,
     dock: DockState<panes::Tab>,
 }
 
@@ -192,6 +196,7 @@ impl SharedState {
             camera_presets: Vec::new(),
             preset_name: String::new(),
             spectrum: AudioSpectrum::default(),
+            reset_layout: false,
             dock,
         }
     }
@@ -201,9 +206,10 @@ impl SharedState {
     }
 
     /// Discard the (persisted) dock arrangement and return to the default
-    /// layout. Camera, view settings, and presets are untouched.
+    /// layout. Camera, view settings, and presets are untouched. Takes
+    /// effect at the end of the frame (see the `reset_layout` field).
     pub fn reset_dock_layout(&mut self) {
-        self.dock = default_dock();
+        self.reset_layout = true;
     }
 
     /// Serialize the parts of the UI worth restoring across sessions
@@ -277,10 +283,23 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             .max(state.frame_params.octave_fade_time),
     );
 
+    // Frameless mode hides every tab bar (the Lattice and Spectral panes
+    // meet with no chrome between them — clean for captures) and thins
+    // the separators to a hairline. No tab bar also means no way to click
+    // the View pane back if it's hidden, so Esc always restores.
+    if state.view.frameless && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.view.frameless = false;
+    }
+    let mut dock_style = theme::dock_style(ui.style());
+    if state.view.frameless {
+        dock_style.tab_bar.height = 0.0;
+        dock_style.separator.width = 1.0;
+    }
+
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
     DockArea::new(&mut dock)
-        .style(theme::dock_style(ui.style()))
+        .style(dock_style)
         // The pane set is fixed, so closing chrome stays off — but the
         // collapse arrow earns its pixels: the Lattice and Spectral panes
         // fold down to their tab bar when screen space is tight.
@@ -289,6 +308,11 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_leaf_collapse_buttons(true)
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     state.dock = dock;
+    // Deferred from the View pane's button: replacing the dock BEFORE the
+    // write-back above would be silently undone.
+    if std::mem::take(&mut state.reset_layout) {
+        state.dock = default_dock();
+    }
 
     // Render continuously only while something is animating (sounding or
     // decaying voices); otherwise poll so newly arriving MIDI still shows

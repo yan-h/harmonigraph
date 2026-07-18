@@ -603,15 +603,21 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
              lower renders coarse and upscales",
         );
 
-    // Escape hatch for the persisted dock arrangement (it survives every
-    // reopen, so a new default layout is otherwise unreachable).
-    if ui
-        .button("Reset layout")
-        .on_hover_text("Restore the default pane arrangement")
-        .clicked()
-    {
-        state.reset_dock_layout();
-    }
+    ui.horizontal(|ui| {
+        // Escape hatch for the persisted dock arrangement (it survives
+        // every reopen, so a new default layout is otherwise unreachable).
+        if ui
+            .button("Reset layout")
+            .on_hover_text("Restore the default pane arrangement")
+            .clicked()
+        {
+            state.reset_dock_layout();
+        }
+        ui.checkbox(&mut state.view.frameless, "Frameless").on_hover_text(
+            "Hide the tab bars so adjacent panes (lattice over spectrum) \
+             record as one seamless surface. Esc restores.",
+        );
+    });
 }
 
 /// Cosmetic settings, apart from the structural View pane: how things
@@ -748,7 +754,9 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
 
     // Where the visible lattice nodes sit: ticks along the bottom. A node
     // names a pitch CLASS, so on an absolute axis each tick repeats once
-    // per octave (deduplicated — many positions share a class).
+    // per octave. Dense tunings put hundreds of classes in each octave,
+    // so ticks are thinned in screen space (min 2.5 px apart) and drawn
+    // dim — a faint ruler, not a solid band.
     let mut tick_cents: Vec<i32> = state
         .view
         .visible_positions()
@@ -756,16 +764,26 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
         .collect();
     tick_cents.sort_unstable();
     tick_cents.dedup();
-    for cents in &tick_cents {
-        let mut midi = SPECTRUM_MIN_MIDI + *cents as f32 / 100.0;
-        while midi < SPECTRUM_MAX_MIDI {
+    let tick_color = theme::text_dim().gamma_multiply(0.5);
+    let mut last_x = f32::NEG_INFINITY;
+    let mut octave = SPECTRUM_MIN_MIDI;
+    while octave < SPECTRUM_MAX_MIDI {
+        for cents in &tick_cents {
+            let midi = octave + *cents as f32 / 100.0;
+            if midi >= SPECTRUM_MAX_MIDI {
+                break;
+            }
             let x = x_of(midi);
+            if x - last_x < 2.5 {
+                continue;
+            }
+            last_x = x;
             painter.line_segment(
-                [egui::pos2(x, rect.bottom() - 10.0), egui::pos2(x, rect.bottom() - 4.0)],
-                egui::Stroke::new(1.0, theme::text_dim()),
+                [egui::pos2(x, rect.bottom() - 9.0), egui::pos2(x, rect.bottom() - 4.0)],
+                egui::Stroke::new(1.0, tick_color),
             );
-            midi += 12.0;
         }
+        octave += 12.0;
     }
 
     // Cross-pane highlight: the pitch class hovered in ANY pane shows as

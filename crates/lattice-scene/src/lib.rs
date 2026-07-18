@@ -191,6 +191,11 @@ pub struct ViewConfig {
     /// the pane's MIDI-only look is unchanged until asked.
     #[serde(default)]
     pub show_audio_spectrum: bool,
+    /// Hide all dock chrome (tab bars; separators thin to a hairline) so
+    /// adjacent panes — lattice above spectrum, in the default layout —
+    /// record as one seamless surface. Esc restores.
+    #[serde(default)]
+    pub frameless: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -249,6 +254,7 @@ impl Default for ViewConfig {
             show_chord_edges: false,
             meantone: false,
             show_audio_spectrum: false,
+            frameless: false,
             render_scale: default_render_scale(),
             bloom_strength: 0.0,
         }
