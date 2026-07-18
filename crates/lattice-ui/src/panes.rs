@@ -633,10 +633,10 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
             "Off-sheet grid lines and the links between sheets appear only \
              while played notes light them",
         );
-    ui.checkbox(&mut state.view.grid_dash_off_home, "Dashed off-home lines")
+    ui.checkbox(&mut state.view.grid_dash_links, "Dashed sevenths links")
         .on_hover_text(
-            "Grid lines off the home sheet (and links between sheets) draw \
-             dashed; the home sheet stays solid",
+            "The z-axis links between sheets draw dashed; in-sheet lines \
+             stay solid",
         );
 
     // Octave indicator: dots around the disc positioned by absolute pitch,

@@ -168,11 +168,11 @@ pub struct ViewConfig {
     /// notes light them. Independent of `grid_dash_off_home`.
     #[serde(default)]
     pub grid_home_only: bool,
-    /// Render off-home grid lines (other sheets' lines and the links
-    /// between sheets) dashed, so the home sheet reads solid and depth
-    /// structure reads secondary.
+    /// Render the sevens-axis (z) links between sheets dashed, so the
+    /// connective tissue between layers reads differently from the
+    /// sheets themselves.
     #[serde(default)]
-    pub grid_dash_off_home: bool,
+    pub grid_dash_links: bool,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
     /// derived from the fifth (in `root_ui`) and note-name labels drop
@@ -221,7 +221,7 @@ impl Default for ViewConfig {
             node_style: NodeStyle::default(),
             show_chord_edges: false,
             grid_home_only: false,
-            grid_dash_off_home: false,
+            grid_dash_links: false,
             meantone: false,
         }
     }
@@ -751,7 +751,7 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
             // Off-home = anything but the center sheet's own lines:
             // other sheets' in-sheet lines and every cross-layer link.
             let off_home = axis == 2 || p.sevens != view.center_sevens;
-            let dashed = view.grid_dash_off_home && off_home;
+            let dashed = view.grid_dash_links && axis == 2;
             let strength = if view.grid_home_only && off_home { 0.0 } else { base.w };
 
             let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
@@ -1164,16 +1164,17 @@ mod tests {
                 &Tuning::default(),
                 &ViewConfig {
                     grid_home_only: home_only,
-                    grid_dash_off_home: dash,
+                    grid_dash_links: dash,
                     ..view.clone()
                 },
                 &FrameParams::default(),
                 0.0,
             )
         };
-        // Off-home = a cross-layer link (z-delta) or a line on z != 0.
-        let off_home =
-            |s: &EdgeInstance| (s.b.z - s.a.z).abs() > 0.25 || s.a.z.abs() > 0.5;
+        // A cross-layer (sevens-axis) link spans z; in-sheet lines don't.
+        let is_link = |s: &EdgeInstance| (s.b.z - s.a.z).abs() > 0.25;
+        // Off-home = a cross-layer link or a line on z != 0.
+        let off_home = |s: &EdgeInstance| is_link(s) || s.a.z.abs() > 0.5;
 
         // Both off: the full uniform grid, nothing dashed.
         let scene = scene_with(false, false);
@@ -1186,11 +1187,12 @@ mod tests {
         assert!(!scene.grid.is_empty() && scene.grid.len() < full_count);
         assert!(scene.grid.iter().all(|s| !off_home(s) && s.strength > 0.0));
 
-        // Dashed off-home: exactly the off-home segments flag dashed.
+        // Dashed links: exactly the sevens-axis links flag dashed —
+        // off-sheet in-sheet lines stay solid.
         let scene = scene_with(false, true);
         assert_eq!(scene.grid.len(), full_count);
         for s in &scene.grid {
-            assert_eq!(s.dashed, off_home(s), "{:?}->{:?}", s.a, s.b);
+            assert_eq!(s.dashed, is_link(s), "{:?}->{:?}", s.a, s.b);
         }
 
         // Combined: only solid home-sheet lines remain while idle.
