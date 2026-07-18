@@ -200,6 +200,15 @@ impl ViewConfig {
         )
     }
 
+    /// How many positions [`visible_positions`](Self::visible_positions)
+    /// yields — the product of each axis's inclusive span — so per-frame
+    /// buffers can preallocate instead of growing through reallocations.
+    pub fn visible_count(&self) -> usize {
+        ((2 * self.extent_threes + 1).max(0) as usize)
+            * ((2 * self.extent_fives + 1).max(0) as usize)
+            * ((2 * self.extent_sevens + 1).max(0) as usize)
+    }
+
     /// The displayed window's center as a lattice position.
     pub fn center(&self) -> LatticePos {
         LatticePos::new(self.center_threes, self.center_fives, self.center_sevens)
@@ -587,7 +596,14 @@ fn pitch_ramp_lch(t: f64) -> Vec4 {
 /// dot's pitch to a `t` and indexes this). Endpoints of the disc gradient
 /// are applied shader-side, so this LUT itself is range-independent.
 pub fn pitch_ramp_lut() -> [Vec4; DOT_RAMP_N] {
-    std::array::from_fn(|k| pitch_ramp_lch(k as f64 / (DOT_RAMP_N - 1) as f64))
+    // Constant (range-independent, per the doc above) but each entry costs
+    // several transcendentals through the LCH->sRGB conversion, and it's read
+    // once per animating frame (~66/s). Compute it once and copy out the
+    // cached array — same value, none of the per-frame color math.
+    static LUT: std::sync::OnceLock<[Vec4; DOT_RAMP_N]> = std::sync::OnceLock::new();
+    *LUT.get_or_init(|| {
+        std::array::from_fn(|k| pitch_ramp_lch(k as f64 / (DOT_RAMP_N - 1) as f64))
+    })
 }
 
 /// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
@@ -627,7 +643,7 @@ pub fn derive_scene(
     hovered: Option<LatticePos>,
     now: f64,
 ) -> Scene {
-    let mut nodes = Vec::new();
+    let mut nodes = Vec::with_capacity(view.visible_count());
     let center = view.center();
     let eye = camera.eye();
 
@@ -757,8 +773,11 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * GRID_INSET_FACTOR;
     let base = skin::active_skin().grid_line;
-    let index: std::collections::HashMap<LatticePos, &NodeInstance> =
-        nodes.iter().map(|n| (n.lattice_pos, n)).collect();
+    // Presized: this rebuilds every frame, and collect() would otherwise
+    // rehash several times as it grows past its default capacity.
+    let mut index: std::collections::HashMap<LatticePos, &NodeInstance> =
+        std::collections::HashMap::with_capacity(nodes.len());
+    index.extend(nodes.iter().map(|n| (n.lattice_pos, n)));
     let mut grid = Vec::new();
     for node in nodes {
         let p = node.lattice_pos;
