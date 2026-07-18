@@ -26,9 +26,18 @@ pub enum OctaveStyle {
     Off,
     /// Small dots around the disc; angle tracks absolute pitch (middle C
     /// straight up, 45deg clockwise per octave, pitch class within the
-    /// octave included).
+    /// octave included). All other styles keep this angle convention and
+    /// change only the glyph shape.
     #[default]
     Dots,
+    /// Teardrop petals rooted just inside the rim, growing out of the
+    /// note like a flower.
+    Petals,
+    /// Plumes erupting from the rim, flickering in length.
+    Flares,
+    /// Blobs seated on the rim so the disc outline bulges at each pitch
+    /// angle.
+    Bumps,
 }
 
 /// How held/active notes are rendered. All styles share the same instance
@@ -122,6 +131,9 @@ impl OctaveStyle {
         match self {
             OctaveStyle::Off => 0,
             OctaveStyle::Dots => 1,
+            OctaveStyle::Petals => 2,
+            OctaveStyle::Flares => 3,
+            OctaveStyle::Bumps => 4,
         }
     }
 }
