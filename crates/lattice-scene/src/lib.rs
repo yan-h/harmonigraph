@@ -245,6 +245,35 @@ impl Default for FrameParams {
     }
 }
 
+/// How the camera maps depth to the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Projection {
+    /// Classic perspective: farther content converges and shrinks.
+    #[default]
+    Perspective,
+    /// Orthographic ("isometric-style"): uniform scale at every depth, so
+    /// equal intervals render at equal screen offsets everywhere and
+    /// parallel lattice lines stay parallel. Depth then reads only
+    /// through the deliberate cues (node depth-scale, occlusion).
+    Orthographic,
+    /// Cabinet (oblique): the camera faces the fifths/thirds sheet
+    /// straight on (orbit is ignored; the UI turns plain drags into
+    /// pans), which renders that primary plane with zero distortion, and
+    /// the sevens axis shears to a uniform screen offset — every
+    /// seventh-step is the same arrow anywhere on screen. Direction and
+    /// length of that arrow are [`Camera::cabinet_angle`] and
+    /// [`Camera::cabinet_scale`].
+    Cabinet,
+}
+
+fn default_cabinet_angle() -> f32 {
+    45f32.to_radians()
+}
+
+fn default_cabinet_scale() -> f32 {
+    0.5
+}
+
 /// Simple orbit camera. Angles in radians.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
@@ -253,6 +282,18 @@ pub struct Camera {
     pub pitch: f32,
     pub distance: f32,
     pub fov_y: f32,
+    /// serde(default) keeps pre-projection persisted blobs loadable.
+    #[serde(default)]
+    pub projection: Projection,
+    /// Cabinet only: on-screen direction of the sevens axis, radians
+    /// counterclockwise from screen-right (drafting convention picks 30°,
+    /// 45°, or 60°; default 45°).
+    #[serde(default = "default_cabinet_angle")]
+    pub cabinet_angle: f32,
+    /// Cabinet only: screen length of one seventh-step as a fraction of a
+    /// front-plane step (0.5 = classic cabinet, 1.0 = cavalier).
+    #[serde(default = "default_cabinet_scale")]
+    pub cabinet_scale: f32,
 }
 
 impl Default for Camera {
@@ -263,6 +304,9 @@ impl Default for Camera {
             pitch: 0.3,
             distance: 12.0,
             fov_y: 45f32.to_radians(),
+            projection: Projection::default(),
+            cabinet_angle: default_cabinet_angle(),
+            cabinet_scale: default_cabinet_scale(),
         }
     }
 }
@@ -304,11 +348,18 @@ impl Camera {
     }
 
     pub fn eye(&self) -> Vec3 {
-        let dir = Vec3::new(
-            self.pitch.cos() * self.yaw.sin(),
-            self.pitch.sin(),
-            self.pitch.cos() * self.yaw.cos(),
-        );
+        // Cabinet is a fixed-viewpoint projection: the eye always faces
+        // the fifths/thirds sheet straight on, whatever yaw/pitch say (they
+        // keep their values for when the user switches back).
+        let dir = if self.projection == Projection::Cabinet {
+            Vec3::Z
+        } else {
+            Vec3::new(
+                self.pitch.cos() * self.yaw.sin(),
+                self.pitch.sin(),
+                self.pitch.cos() * self.yaw.cos(),
+            )
+        };
         self.target + dir * self.distance
     }
 
@@ -317,9 +368,42 @@ impl Camera {
     }
 
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        // perspective_rh produces 0..1 clip-space depth, which is what wgpu
-        // expects.
-        Mat4::perspective_rh(self.fov_y, aspect.max(0.01), CLIP_NEAR, CLIP_FAR) * self.view()
+        // Both glam _rh constructors produce 0..1 clip-space depth, which
+        // is what wgpu expects.
+        let aspect = aspect.max(0.01);
+        let proj = match self.projection {
+            Projection::Perspective => {
+                Mat4::perspective_rh(self.fov_y, aspect, CLIP_NEAR, CLIP_FAR)
+            }
+            // The ortho window is the perspective frustum's cross-section
+            // at the target, so toggling projections keeps the framing at
+            // the focus plane, and zoom (distance) keeps scaling the view.
+            Projection::Orthographic => {
+                let half_h = self.distance * (self.fov_y * 0.5).tan();
+                let half_w = half_h * aspect;
+                Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
+            }
+            // Orthographic window plus a shear: view-space depth relative
+            // to the focus plane becomes a screen offset along
+            // `cabinet_angle` scaled by `cabinet_scale`. The focus plane
+            // itself is unmoved (the shear's translation term cancels
+            // there), so framing still matches the other projections.
+            Projection::Cabinet => {
+                let half_h = self.distance * (self.fov_y * 0.5).tan();
+                let half_w = half_h * aspect;
+                let ortho =
+                    Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR);
+                let (sin, cos) = self.cabinet_angle.sin_cos();
+                let (kx, ky) = (self.cabinet_scale * cos, self.cabinet_scale * sin);
+                let mut shear = Mat4::IDENTITY;
+                shear.z_axis.x = kx;
+                shear.z_axis.y = ky;
+                shear.w_axis.x = kx * self.distance;
+                shear.w_axis.y = ky * self.distance;
+                ortho * shear
+            }
+        };
+        proj * self.view()
     }
 
     /// Camera-space right/up axes in world space, for billboarding.
@@ -379,6 +463,13 @@ pub struct NodeInstance {
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
     pub hovered: bool,
+    /// Depth-cue size multiplier (see [`depth_scale`]): nodes nearer the
+    /// eye than the camera's focus distance grow, farther ones shrink,
+    /// exaggerating the perspective so depth reads at a glance.
+    pub scale: f32,
+    /// On the home (center sevens) sheet. Home nodes keep a blank
+    /// placeholder ring while idle; off-sheet nodes draw nothing.
+    pub on_home: bool,
     /// The node's pitch class in cents under the current tuning, for the
     /// in-lattice cents readout.
     pub cents: f32,
@@ -392,8 +483,11 @@ pub struct EdgeInstance {
     pub b: Vec3,
     pub color: Vec4,
     /// min of the two nodes' activations: the beam fades with whichever
-    /// endpoint fades first.
+    /// endpoint fades first. (Grid segments: line opacity.)
     pub strength: f32,
+    /// Grid segments only: render as short dashes (the sevens-axis links
+    /// between sheets). Never set on chord beams.
+    pub dashed: bool,
 }
 
 /// Everything the renderer needs for one frame.
@@ -412,6 +506,12 @@ pub struct Scene {
     pub node_style: NodeStyle,
     /// Chord edges (empty when the toggle is off).
     pub edges: Vec<EdgeInstance>,
+    /// The faint background grid (see [`derive_grid`]): one segment per
+    /// adjacent pair of visible positions, inset so every node position
+    /// keeps a circular gap where its disc draws while sounding. Segments
+    /// between two sounding notes light up with their blended color.
+    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity.
+    pub grid: Vec<EdgeInstance>,
     /// Pitch->color lookup for the dots octave style, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub dot_ramp: [Vec4; DOT_RAMP_N],
@@ -497,6 +597,7 @@ pub fn derive_scene(
 ) -> Scene {
     let mut nodes = Vec::new();
     let center = view.center();
+    let eye = camera.eye();
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
@@ -548,9 +649,10 @@ pub fn derive_scene(
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
+        let world_pos = lattice_to_world(centered, view.spacing);
         nodes.push(NodeInstance {
             lattice_pos: pos,
-            world_pos: lattice_to_world(centered, view.spacing),
+            world_pos,
             color,
             activation,
             octaves,
@@ -558,11 +660,14 @@ pub fn derive_scene(
             seed,
             outlined,
             hovered: hovered == Some(pos),
+            scale: depth_scale(world_pos.distance(eye), camera.distance),
+            on_home: pos.sevens == view.center_sevens,
             cents: node_pc.to_cents(),
         });
     }
 
     let edges = if view.show_chord_edges { derive_edges(&nodes) } else { Vec::new() };
+    let grid = derive_grid(view, &nodes);
 
     Scene {
         nodes,
@@ -572,10 +677,118 @@ pub fn derive_scene(
         octave_style: view.octave_style,
         node_style: view.node_style,
         edges,
+        grid,
         dot_ramp: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
     }
+}
+
+/// Depth-cue strength: the exponent on (focus distance / node distance)
+/// that sets a node's size multiplier. 0 would disable the cue (plain
+/// perspective); 1 roughly doubles perspective's own shrink-with-distance.
+const DEPTH_SCALE_EXPONENT: f32 = 0.8;
+/// Clamp on the multiplier so nodes stay recognizable when the camera
+/// gets very close to (or very far from) part of the lattice.
+const DEPTH_SCALE_RANGE: (f32, f32) = (0.4, 2.0);
+
+/// Depth-cue size multiplier for a node `dist` from the eye, with the
+/// camera focused (eye-to-target) at `focus`: 1 at the focus distance, so
+/// the lattice's overall look is unchanged where the user is looking;
+/// larger when nearer, smaller when farther. Perspective alone shrinks a
+/// distant node too subtly for depth to read at lattice scale — this
+/// exaggerates it.
+fn depth_scale(dist: f32, focus: f32) -> f32 {
+    (focus / dist.max(0.01))
+        .powf(DEPTH_SCALE_EXPONENT)
+        .clamp(DEPTH_SCALE_RANGE.0, DEPTH_SCALE_RANGE.1)
+}
+
+/// How far a grid segment stops short of each node center, as a factor of
+/// the node radius. Larger than the disc's visual radius (~0.83 × radius,
+/// see the quad math in lattice.wgsl) so the gap fully contains the circle
+/// a sounding note draws there, with a slim margin.
+const GRID_INSET_FACTOR: f32 = 1.05;
+
+/// Line opacity of a grid segment whose two endpoint notes both sound.
+const GRID_LIT_OPACITY: f32 = 0.85;
+
+/// The faint background grid: idle positions draw no disc, so these
+/// segments carry the lattice's structure instead, inset at both ends so
+/// each node position keeps a clear circular gap. Only the home (center)
+/// sheet draws an idle grid; other sheets' lines light when both
+/// endpoints sound, and the dashed sevens-axis links light as the chain
+/// from any sounding off-sheet note down to the home sheet. Lit segments
+/// take the sounding notes' color and fade with their envelope.
+fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
+    let inset = view.spacing * NODE_RADIUS_FACTOR * GRID_INSET_FACTOR;
+    let base = skin::active_skin().grid_line;
+    let index: std::collections::HashMap<LatticePos, &NodeInstance> =
+        nodes.iter().map(|n| (n.lattice_pos, n)).collect();
+    let mut grid = Vec::new();
+    for node in nodes {
+        let p = node.lattice_pos;
+        // +1 steps only, so each undirected pair appears once; positions
+        // outside the window simply miss the index.
+        for (axis, step) in [
+            LatticePos::new(p.threes + 1, p.fives, p.sevens),
+            LatticePos::new(p.threes, p.fives + 1, p.sevens),
+            LatticePos::new(p.threes, p.fives, p.sevens + 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Some(neighbor) = index.get(&step) else {
+                continue;
+            };
+            let along_sevens = axis == 2;
+            // Only the home (center) sheet draws an idle grid; other
+            // sheets' lines and the links between sheets stay invisible
+            // until the music lights them. Links render dashed.
+            let on_home = !along_sevens && p.sevens == view.center_sevens;
+            let idle = if on_home { base.w } else { 0.0 };
+            let dashed = along_sevens;
+
+            // Both endpoints sounding lights any segment.
+            let mut lit = node.activation.min(neighbor.activation);
+            let mut lit_color = (node.color + neighbor.color) * 0.5;
+
+            // A sevens link also lights as part of the chain from any
+            // sounding node beyond it (away from the home sheet) down to
+            // the home sheet, so an off-sheet note always hangs from a
+            // visible chain even while the notes under it are silent.
+            if along_sevens {
+                let (lo, hi) = if p.sevens >= view.center_sevens {
+                    (p.sevens + 1, view.center_sevens + view.extent_sevens)
+                } else {
+                    (view.center_sevens - view.extent_sevens, p.sevens)
+                };
+                for s in lo..=hi {
+                    if let Some(n) = index.get(&LatticePos::new(p.threes, p.fives, s)) {
+                        if n.activation > lit {
+                            lit = n.activation;
+                            lit_color = n.color;
+                        }
+                    }
+                }
+            }
+
+            // Fully invisible: skip the instance instead of shipping a
+            // discarded quad.
+            if idle <= 0.0 && lit <= 0.0 {
+                continue;
+            }
+            let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
+            grid.push(EdgeInstance {
+                a: node.world_pos + dir * inset,
+                b: neighbor.world_pos - dir * inset,
+                color: base.lerp(lit_color, lit),
+                strength: idle + (GRID_LIT_OPACITY - idle) * lit,
+                dashed,
+            });
+        }
+    }
+    grid
 }
 
 /// Stable per-node animation seed for the field styles: a hash of the
@@ -604,6 +817,7 @@ fn derive_edges(nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
                     b: b.world_pos,
                     color: (a.color + b.color) * 0.5,
                     strength: a.activation.min(b.activation),
+                    dashed: false,
                 });
             }
         }
@@ -624,7 +838,11 @@ impl Projector {
     /// `None` when behind the camera.
     pub fn project(&self, world: Vec3) -> Option<Vec2> {
         let clip = self.view_proj * world.extend(1.0);
-        if clip.w <= 0.0 {
+        // Behind the camera (or nearer than the near plane): perspective
+        // flips w negative there; orthographic keeps w at 1 and instead
+        // sends clip z below the near plane's 0. Test both so the check
+        // holds under either projection.
+        if clip.w <= 0.0 || clip.z < 0.0 {
             return None;
         }
         let ndc = clip.truncate() / clip.w;
@@ -894,6 +1112,218 @@ mod tests {
     }
 
     #[test]
+    fn grid_segments_connect_neighbors_but_leave_node_gaps() {
+        // A 3×3 window: 2·3 horizontal + 3·2 vertical inter-neighbor
+        // segments, none along the unused sevens axis.
+        let view = ViewConfig {
+            extent_threes: 1,
+            extent_fives: 1,
+            extent_sevens: 0,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert_eq!(scene.grid.len(), 12);
+        for seg in &scene.grid {
+            // Inset at both ends: shorter than the node spacing...
+            let len = seg.a.distance(seg.b);
+            assert!(len < view.spacing * 0.99, "segment not inset, len {len}");
+            // ...and clear of every disc (visual radius ~0.9 × node_radius),
+            // so the gap fully contains the circle a played note draws.
+            for node in &scene.nodes {
+                for p in [seg.a, seg.b] {
+                    assert!(
+                        p.distance(node.world_pos) > scene.node_radius * 0.9,
+                        "segment endpoint {p:?} inside the disc at {:?}",
+                        node.world_pos
+                    );
+                }
+            }
+        }
+
+        // Panning the window keeps the grid attached to the visible nodes
+        // (both are derived in centered world space).
+        let panned = ViewConfig { center_threes: 3, ..view };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &panned,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert_eq!(scene.grid.len(), 12);
+        let max_node = scene
+            .nodes
+            .iter()
+            .map(|n| n.world_pos.length())
+            .fold(0.0f32, f32::max);
+        for seg in &scene.grid {
+            assert!(seg.a.length() <= max_node && seg.b.length() <= max_node);
+        }
+    }
+
+    #[test]
+    fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
+        // Follows the panned window center, not sevens == 0.
+        let view = ViewConfig {
+            extent_threes: 0,
+            extent_fives: 0,
+            extent_sevens: 1,
+            center_sevens: 2,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        for n in &scene.nodes {
+            assert_eq!(n.on_home, n.lattice_pos.sevens == 2, "{:?}", n.lattice_pos);
+        }
+    }
+
+    #[test]
+    fn off_sheet_grid_appears_only_where_the_music_reaches() {
+        // A window two sevens layers deep above/below the center, so the
+        // chain rule has an intermediate link to prove itself on.
+        let view = ViewConfig {
+            extent_threes: 1,
+            extent_fives: 0,
+            extent_sevens: 2,
+            ..ViewConfig::default()
+        };
+        let is_link = |s: &EdgeInstance| (s.b.z - s.a.z).abs() > 0.25;
+        let off_home = |s: &EdgeInstance| is_link(s) || s.a.z.abs() > 0.5;
+
+        // Idle: only the home sheet's solid lines exist.
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert!(!scene.grid.is_empty());
+        assert!(scene.grid.iter().all(|s| !off_home(s) && !s.dashed && s.strength > 0.0));
+
+        // Hold the note two sevens steps up from C (12-TET default:
+        // 2 × 1000¢ → pitch class 800¢ = G#/Ab, MIDI 68). It lights node
+        // (0,0,2) only, yet BOTH links of the chain down to the home
+        // sheet must display, dashed, in that note's color — the nodes
+        // under it are silent.
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 68,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene =
+            scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        let column_links: Vec<&EdgeInstance> = scene
+            .grid
+            .iter()
+            .filter(|s| is_link(s) && s.a.x.abs() < 0.01 && s.a.y.abs() < 0.01)
+            .collect();
+        // The two links spanning 0->1 and 1->2; nothing below the sheet.
+        assert_eq!(column_links.len(), 2, "{column_links:?}");
+        for link in &column_links {
+            assert!(link.a.z > -0.5 && link.dashed && link.strength > 0.5, "{link:?}");
+        }
+        // No off-sheet IN-SHEET lines appeared: the played node's sheet
+        // neighbors are silent, so only the chain and home sheet render.
+        assert!(scene
+            .grid
+            .iter()
+            .all(|s| is_link(s) || s.a.z.abs() < 0.5));
+    }
+
+    #[test]
+    fn depth_scale_exaggerates_proximity() {
+        // Neutral at the focus distance, monotonic on either side, clamped
+        // at the extremes.
+        assert!((depth_scale(12.0, 12.0) - 1.0).abs() < 1e-6);
+        assert!(depth_scale(6.0, 12.0) > 1.0);
+        assert!(depth_scale(24.0, 12.0) < 1.0);
+        assert_eq!(depth_scale(0.001, 12.0), DEPTH_SCALE_RANGE.1);
+        assert_eq!(depth_scale(1e6, 12.0), DEPTH_SCALE_RANGE.0);
+
+        // And the scene wires it in: the node nearest the eye renders
+        // larger than the farthest one.
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            0.0,
+        );
+        let eye = scene.camera.eye();
+        let dist = |n: &&NodeInstance| n.world_pos.distance(eye);
+        let near = scene.nodes.iter().min_by(|a, b| dist(a).total_cmp(&dist(b))).unwrap();
+        let far = scene.nodes.iter().max_by(|a, b| dist(a).total_cmp(&dist(b))).unwrap();
+        assert!(
+            near.scale > far.scale,
+            "near {} vs far {}",
+            near.scale,
+            far.scale
+        );
+    }
+
+    #[test]
+    fn grid_lights_between_played_neighbors() {
+        // C and G held (one step on the threes axis; same window/tuning
+        // rationale as chord_edges_connect_adjacent_active_nodes): the
+        // segment between them takes the lit opacity and the notes' blended
+        // color; a segment with only one sounding endpoint stays at the
+        // faint base look.
+        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 67] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let view = ViewConfig {
+            extent_threes: 3,
+            extent_fives: 3,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
+        let base = skin::active_skin().grid_line;
+        let segment_at = |mid: Vec3| {
+            scene
+                .grid
+                .iter()
+                .find(|s| ((s.a + s.b) * 0.5).distance(mid) < 1e-4)
+                .unwrap()
+        };
+
+        // C sits at the origin, G one step up the threes (world y) axis.
+        let lit = segment_at(Vec3::new(0.0, 0.5, 0.0));
+        assert!(lit.strength > base.w, "lit opacity, got {}", lit.strength);
+        assert!(
+            (lit.color - base).truncate().length() > 0.1,
+            "lit segment tinted by the notes, got {:?}",
+            lit.color
+        );
+
+        // F–C below: C sounds but F doesn't, so the segment stays faint.
+        let unlit = segment_at(Vec3::new(0.0, -0.5, 0.0));
+        assert_eq!(unlit.strength, base.w);
+        assert_eq!(unlit.color, base);
+    }
+
+    #[test]
     fn channel_14_voices_render_outlined() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent {
@@ -954,17 +1384,117 @@ mod tests {
 
     #[test]
     fn points_behind_the_camera_do_not_project() {
-        let camera = Camera::default();
-        let scene = scene_of(
+        for projection in [
+            Projection::Perspective,
+            Projection::Orthographic,
+            Projection::Cabinet,
+        ] {
+            let camera = Camera { projection, ..Camera::default() };
+            let mut scene = scene_of(
+                &NoteTracker::new(),
+                &Tuning::default(),
+                &ViewConfig::default(),
+                &FrameParams::default(),
+                0.0,
+            );
+            scene.camera = camera;
+            // Continue from the target through the eye and beyond it.
+            let behind = camera.eye() + (camera.eye() - camera.target);
+            assert_eq!(
+                scene.project(Vec2::new(800.0, 600.0), behind),
+                None,
+                "{projection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cabinet_faces_the_sheet_and_shears_sevens_uniformly() {
+        let viewport = Vec2::new(800.0, 600.0);
+        // Orbit angles are ignored: cabinet always faces the sheet.
+        let camera = Camera {
+            projection: Projection::Cabinet,
+            yaw: 1.0,
+            pitch: -0.7,
+            ..Camera::default()
+        };
+        assert_eq!(camera.eye(), Vec3::new(0.0, 0.0, camera.distance));
+
+        let mut s = scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
             &ViewConfig::default(),
             &FrameParams::default(),
             0.0,
         );
-        // Continue from the target through the eye and beyond it.
-        let behind = camera.eye() + (camera.eye() - camera.target);
-        assert_eq!(scene.project(Vec2::new(800.0, 600.0), behind), None);
+        s.camera = camera;
+        let px = |w: Vec3| s.project(viewport, w).unwrap();
+
+        // Target centered; front-plane steps map to pure screen axes
+        // (the sheet renders undistorted).
+        let origin = px(Vec3::ZERO);
+        assert!((origin - Vec2::new(400.0, 300.0)).length() < 0.5, "{origin:?}");
+        let dx = px(Vec3::X) - origin;
+        assert!(dx.x > 1.0 && dx.y.abs() < 1e-3, "{dx:?}");
+        let dy = px(Vec3::Y) - origin;
+        assert!(dy.y < -1.0 && dy.x.abs() < 1e-3, "{dy:?}"); // screen y is down
+
+        // A +sevens step (toward the viewer) is the same up-right arrow
+        // anywhere on the sheet, at half scale split evenly over x/y.
+        let dz = px(Vec3::Z) - origin;
+        let dz_elsewhere = px(Vec3::new(3.0, -2.0, 1.0)) - px(Vec3::new(3.0, -2.0, 0.0));
+        assert!(dz.distance(dz_elsewhere) < 1e-3, "{dz:?} vs {dz_elsewhere:?}");
+        let k = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        assert!((dz.x - dx.x * k).abs() < 0.1, "{dz:?} vs {dx:?}");
+        assert!((dz.y - dy.y * k).abs() < 0.1, "{dz:?} vs {dy:?}");
+
+        // The knobs steer the arrow: angle 0 at full (cavalier) scale
+        // shears purely horizontally, one front-plane step long.
+        s.camera.cabinet_angle = 0.0;
+        s.camera.cabinet_scale = 1.0;
+        let dz = s.project(viewport, Vec3::Z).unwrap() - s.project(viewport, Vec3::ZERO).unwrap();
+        assert!((dz.x - dx.x).abs() < 0.1 && dz.y.abs() < 1e-3, "{dz:?} vs {dx:?}");
+    }
+
+    #[test]
+    fn orthographic_matches_perspective_at_the_focus_plane_and_is_uniform() {
+        let viewport = Vec2::new(800.0, 600.0);
+        let perspective = Camera::default();
+        let ortho = Camera { projection: Projection::Orthographic, ..perspective };
+        let mut s = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            0.0,
+        );
+
+        // The target projects to the viewport center in both projections.
+        s.camera = ortho;
+        let p = s.project(viewport, ortho.target).unwrap();
+        assert!((p.x - 400.0).abs() < 0.5 && (p.y - 300.0).abs() < 0.5, "{p:?}");
+
+        // Framing matches at the focus plane: a point one unit up (in view
+        // space) from the target lands on the same pixel either way.
+        let (_, up) = perspective.right_up();
+        let in_plane = perspective.target + up;
+        let ortho_px = s.project(viewport, in_plane).unwrap();
+        s.camera = perspective;
+        let persp_px = s.project(viewport, in_plane).unwrap();
+        assert!(ortho_px.distance(persp_px) < 0.5, "{ortho_px:?} vs {persp_px:?}");
+
+        // The property the projection exists for: equal world offsets give
+        // equal pixel offsets at ANY depth. Step one unit right at the
+        // focus plane and again two units toward the eye; perspective
+        // renders the nearer step longer, orthographic identically.
+        s.camera = ortho;
+        let (right, _) = ortho.right_up();
+        let toward_eye = (ortho.eye() - ortho.target).normalize() * 2.0;
+        let d_focus = s.project(viewport, ortho.target + right).unwrap()
+            - s.project(viewport, ortho.target).unwrap();
+        let d_near = s.project(viewport, ortho.target + toward_eye + right).unwrap()
+            - s.project(viewport, ortho.target + toward_eye).unwrap();
+        assert!(d_focus.distance(d_near) < 1e-3, "{d_focus:?} vs {d_near:?}");
     }
 
     #[test]

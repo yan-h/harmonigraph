@@ -71,7 +71,22 @@ pub struct SharedState {
     pub learn_active: bool,
     /// Held pitch classes the last learn ran against (change detection).
     last_learned_classes: Option<Vec<PitchClass>>,
+    /// User-saved camera angles, applied like the built-in Flat/Isometric
+    /// presets (persisted; see the View pane).
+    pub camera_presets: Vec<CameraPreset>,
+    /// Entry buffer for naming a new preset. Runtime-only.
+    pub preset_name: String,
     dock: DockState<panes::Tab>,
+}
+
+/// A saved camera angle: what the built-in Flat/Isometric buttons are,
+/// but user-defined. Only the orbit angles — projection, zoom, and pan
+/// are deliberately not captured, so a preset composes with any of them.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CameraPreset {
+    pub name: String,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
 impl SharedState {
@@ -99,6 +114,8 @@ impl SharedState {
             target_format,
             learn_active: false,
             last_learned_classes: None,
+            camera_presets: Vec::new(),
+            preset_name: String::new(),
             dock,
         }
     }
@@ -117,6 +134,7 @@ impl SharedState {
             dock: self.dock.clone(),
             camera: self.camera,
             view: self.view.clone(),
+            camera_presets: self.camera_presets.clone(),
         })
         .unwrap_or_default()
     }
@@ -128,6 +146,7 @@ impl SharedState {
             self.dock = persist.dock;
             self.camera = persist.camera;
             self.view = persist.view;
+            self.camera_presets = persist.camera_presets;
         }
     }
 }
@@ -139,6 +158,9 @@ struct UiPersist {
     dock: DockState<panes::Tab>,
     camera: Camera,
     view: ViewConfig,
+    /// serde(default) keeps pre-preset persisted blobs loadable.
+    #[serde(default)]
+    camera_presets: Vec<CameraPreset>,
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
@@ -262,6 +284,11 @@ mod tests {
         // actually round-trips rather than matching the default by luck.
         state.view.octave_style = lattice_scene::OctaveStyle::Off;
         state.view.meantone = true;
+        state.camera_presets.push(CameraPreset {
+            name: "reading".into(),
+            yaw: 0.7,
+            pitch: 0.2,
+        });
         let saved = state.save_persist();
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -271,6 +298,9 @@ mod tests {
         assert_eq!(restored.view.extent_sevens, 3);
         assert_eq!(restored.view.octave_style, lattice_scene::OctaveStyle::Off);
         assert!(restored.view.meantone);
+        assert_eq!(restored.camera_presets.len(), 1);
+        assert_eq!(restored.camera_presets[0].name, "reading");
+        assert_eq!(restored.camera_presets[0].yaw, 0.7);
     }
 
     #[test]

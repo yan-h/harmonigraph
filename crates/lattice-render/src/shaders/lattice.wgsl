@@ -48,6 +48,13 @@ struct Instance {
     // octave dot at the note's absolute-pitch angle, which needs the pitch
     // class within the octave; unused by the other octave styles.
     @location(5) cents: f32,
+    // Depth-cue size multiplier from the scene (1 at the camera's focus
+    // distance; larger nearer the eye, smaller farther), exaggerating
+    // perspective so depth reads at a glance.
+    @location(6) scale: f32,
+    // 1 on the home (center sevens) sheet: idle home nodes draw a blank
+    // placeholder ring where their disc would be.
+    @location(7) home: f32,
 };
 
 struct VsOut {
@@ -58,6 +65,7 @@ struct VsOut {
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) seed: f32,
     @location(5) @interpolate(flat) cents: f32,
+    @location(6) @interpolate(flat) home: f32,
 };
 
 @vertex
@@ -72,11 +80,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 
     let hovered = inst.params.y;
 
-    // Node size is constant: idle nodes are the same size as active ones, so a
-    // note never grows or shrinks — it changes only in brightness and glow.
-    // (The quad is twice the disc radius to leave room for the glow; hover
-    // still nudges the size up a touch.)
-    let radius = u.misc.y * (0.90 + 0.15 * hovered) * 2.0;
+    // Node size never responds to notes: idle nodes are the same size as
+    // active ones, so a note changes only brightness and glow. Size DOES
+    // carry the depth cue (inst.scale) and a small hover nudge. (The quad
+    // is twice the disc radius to leave room for the glow.)
+    let radius = u.misc.y * (0.90 + 0.15 * hovered) * 2.0 * inst.scale;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
@@ -89,6 +97,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.octaves = inst.octaves;
     out.seed = inst.seed;
     out.cents = inst.cents;
+    out.home = inst.home;
     return out;
 }
 
@@ -105,6 +114,22 @@ fn level_floor(level: f32) -> f32 {
     return 0.35 + 0.65 * level;
 }
 
+// Coverage of `x` inside the threshold `edge`, with a screen-constant
+// soft band: `w` is ~a pixel expressed in `x`'s units (from fwidth at
+// the call site — taken at the top of the fragment fn, outside any
+// non-uniform control flow). Fixed-width smoothstep edges blur as a
+// quad grows on screen and alias as it shrinks; this keeps every shape
+// edge equally soft at all zooms. Glows and gas interiors deliberately
+// keep their proportional falloffs.
+fn aa_inside(edge: f32, x: f32, w: f32) -> f32 {
+    return 1.0 - smoothstep(edge - w, edge + w, x);
+}
+
+// Half-width of the soft band, in render pixels on each side of an edge
+// (the one knob for how soft shape edges feel; softness stays
+// screen-constant at every zoom). ~4px total on a Retina surface.
+const AA_SOFTNESS_PX: f32 = 2.0;
+
 // Activation level (0..1) of octave slot `i`, unpacked from 8-bit fields.
 // Each octave carries its OWN envelope so indicators fade independently
 // (a released C5 decays even while C4 holds the node fully lit).
@@ -120,21 +145,22 @@ const MIDDLE_C_SLOT: f32 = 4.0;
 // Clockwise as pitch rises.
 const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
 // Dots geometry, in quad UV units: the ring the dots orbit (kept close to the
-// disc edge ~0.5), and the dot's solid-core / fade-edge radii.
+// disc edge ~0.5) and the dot radius (edge softness is screen-constant,
+// applied at the call via aa_inside).
 const DOT_ORBIT: f32 = 0.67;
-const DOT_CORE: f32 = 0.10;
-const DOT_EDGE: f32 = 0.15;
+const DOT_RADIUS: f32 = 0.125;
 
 // Coverage (0..1) of the dot for a SOUNDING octave slot `i` on a node whose
 // pitch class is `cents`: a satellite around the disc whose angle is the
 // note's absolute pitch (middle C straight up, 45deg clockwise per octave,
-// pitch class within the octave included).
-fn octave_dot(i: u32, cents: f32, uv: vec2<f32>) -> f32 {
+// pitch class within the octave included). `aa` is the caller's per-pixel
+// soft-band width.
+fn octave_dot(i: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
     // (uv.y is up, so clockwise = subtracting from the angle.)
     let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
     let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
     let center = vec2<f32>(cos(ang), sin(ang)) * DOT_ORBIT;
-    return 1.0 - smoothstep(DOT_CORE, DOT_EDGE, distance(uv, center));
+    return aa_inside(DOT_RADIUS, distance(uv, center), aa);
 }
 
 // Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch
@@ -145,37 +171,6 @@ fn dot_pitch_color(pitch: f32) -> vec3<f32> {
     let i0 = u32(floor(f));
     let i1 = min(i0 + 1u, DOT_RAMP_N - 1u);
     return mix(u.dot_ramp[i0].rgb, u.dot_ramp[i1].rgb, f - floor(f));
-}
-
-// Faint C-octave reference frame for the dots style: short radial ticks
-// hugging the disc rim (just INSIDE the dot orbit) at the four cardinals,
-// pointing at where a C would land — up = middle C (C3 in the C3=middle-C
-// naming), left/right = -/+2 octaves (C1 / C5), down = +/-4 octaves. They sit
-// in the gap between the disc edge (~0.5) and the dots' inner reach
-// (~DOT_ORBIT - DOT_EDGE), so a lit dot never overlaps a tick; the caller
-// tints them with the node color so they read as part of the disc.
-const DOTS_REF_R: f32 = 0.51;         // tick mid-radius (disc edge ~0.5, dots at DOT_ORBIT)
-const DOTS_REF_HALF_LEN: f32 = 0.035; // radial half-length
-const DOTS_REF_HALF_W: f32 = 0.018;   // tangential half-width
-fn dots_reference(uv: vec2<f32>) -> f32 {
-    var dirs = array<vec2<f32>, 4>(
-        vec2<f32>(0.0, 1.0),  // up:    middle C
-        vec2<f32>(1.0, 0.0),  // right: +2 octaves
-        vec2<f32>(0.0, -1.0), // down:  +/-4 octaves
-        vec2<f32>(-1.0, 0.0), // left:  -2 octaves
-    );
-    var cov = 0.0;
-    for (var k = 0u; k < 4u; k = k + 1u) {
-        let n = dirs[k];
-        let radial = dot(uv, n);                        // outward along the cardinal
-        let tang = abs(dot(uv, vec2<f32>(-n.y, n.x)));  // sideways offset
-        let dr = max(abs(radial - DOTS_REF_R) - DOTS_REF_HALF_LEN, 0.0);
-        let ds = max(tang - DOTS_REF_HALF_W, 0.0);
-        cov = max(cov, 1.0 - smoothstep(0.0, 0.02, dr + ds));
-    }
-    // Dimmed relative to a lit dot; the caller further scales by the note's
-    // fade so the frame appears only while the node sounds.
-    return cov * 0.4;
 }
 
 // ---- Style helpers ---------------------------------------------------------
@@ -494,7 +489,7 @@ fn seg_dist(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
 
 // Wire style: distance-field wireframe of a tumbling octahedron, projected
 // orthographically into the billboard plane. Returns line coverage.
-fn wire_octahedron(uv: vec2<f32>, age: f32, seed: f32) -> f32 {
+fn wire_octahedron(uv: vec2<f32>, age: f32, seed: f32, aa: f32) -> f32 {
     let yaw = age * 0.6 + seed * 2.3;
     let pitch = age * 0.37 + seed * 1.1;
     let cy = cos(yaw);
@@ -527,7 +522,9 @@ fn wire_octahedron(uv: vec2<f32>, age: f32, seed: f32) -> f32 {
     var wire = 0.0;
     for (var e = 0u; e < 12u; e = e + 1u) {
         let dist = seg_dist(uv, v[ea[e]], v[eb[e]]);
-        wire = max(wire, 1.0 - smoothstep(0.015, 0.05, dist));
+        // Line half-width 0.0325 (the old 0.015..0.05 band's midpoint),
+        // screen-constant softness.
+        wire = max(wire, aa_inside(0.0325, dist, aa));
     }
     return wire;
 }
@@ -542,17 +539,36 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let age = in.params.z;
     let seed = in.seed;
 
+    // Screen-constant soft-band width: uv units per pixel (uv.x is linear
+    // across the billboard, so fwidth is uniform over the quad and safe to
+    // take before any branching), scaled to the softness knob. Shape edges
+    // below use this instead of fixed-uv smoothsteps.
+    let aa = max(fwidth(in.uv.x), 1e-4) * AA_SOFTNESS_PX;
+
     // Solid disc occupies the inner half of the quad; channel-14 voices
-    // render as an outline ring instead (v1 semantics).
+    // render as an outline ring instead (v1 semantics). Radii sit at the
+    // old soft bands' midpoints (disc 0.42..0.5, ring inner 0.30..0.38).
     let outlined = in.params.w;
-    let filled = 1.0 - smoothstep(0.42, 0.5, d);
-    let ring = (1.0 - smoothstep(0.42, 0.5, d)) * smoothstep(0.30, 0.38, d);
-    var disc = mix(filled, ring, outlined);
+    let filled = aa_inside(0.46, d, aa);
+    let ring = filled * (1.0 - aa_inside(0.34, d, aa));
+    // Unplayed nodes draw no disc at all — the background grid's gap marks
+    // the position instead. Activation fades the disc in (and back out on
+    // release); hovering an idle node still shows a dim ghost so picking
+    // has visible feedback.
+    let presence = max(activation, 0.35 * hovered);
+    var disc = mix(filled, ring, outlined) * presence;
+
+    // Home-sheet nodes keep a blank placeholder circle while idle: a thin
+    // ring at the disc edge (its width matched to the grid lines), in the
+    // idle color at the grid's opacity, fading out as the disc fades in.
+    // Off-sheet idle nodes still draw nothing.
+    let blank_ring = filled * (1.0 - aa_inside(0.37, d, aa));
+    let blank = blank_ring * in.home * 0.55 * (1.0 - presence);
 
     // Wire style: active nodes morph from disc into a tumbling wireframe
-    // octahedron (idle nodes stay discs in every style).
+    // octahedron (idle nodes draw nothing in every style — see presence).
     if style == 1u && activation > 0.0 {
-        disc = mix(disc, wire_octahedron(in.uv, age, seed), activation);
+        disc = mix(disc, wire_octahedron(in.uv, age, seed, aa), activation);
     }
 
     // Soft additive-looking glow for active nodes. The exponential alone
@@ -586,28 +602,29 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d);
         rgb = mix(rgb, gas * brightness * field.y * limb, activation);
     }
-    let base_alpha = clamp(disc + glow, 0.0, 1.0);
+    // The blank ring composites under the disc/glow in the un-floored
+    // idle color, so it matches the grid lines' brightness rather than
+    // the 35%-floored disc shading.
+    let core_alpha = clamp(disc + glow, 0.0, 1.0);
+    let base_alpha = core_alpha + blank * (1.0 - core_alpha);
+    let base_rgb = rgb * core_alpha + in.color.rgb * blank * (1.0 - core_alpha);
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
-    // its own envelope; the reference frame follows the brightest slot so it
-    // disappears with the last sounding octave. Whichever element covers a
-    // pixel most strongly owns its color there: dots are tinted by their own
-    // pitch, everything else uses the whitened node color.
+    // its own envelope. Whichever element covers a pixel most strongly owns
+    // its color there: dots are tinted by their own pitch, everything else
+    // uses the whitened node color.
     let mode = u32(u.misc.z + 0.5);
     let node_glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.55);
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
-    var max_level = 0.0;
 
     // Dots octave indicator (mode 1; 0 is off). Each slot fades on its own
-    // envelope. Whichever element covers a pixel most strongly owns its color
-    // there: dots are tinted by their own pitch, the reference by node color.
+    // envelope; a dot is tinted by its own pitch.
     if mode != 0u {
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level > 0.0 {
-                max_level = max(max_level, level);
-                let cov = octave_dot(i, in.cents, in.uv) * level_floor(level);
+                let cov = octave_dot(i, in.cents, in.uv, aa) * level_floor(level);
                 if cov > glyph {
                     glyph = cov;
                     // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
@@ -617,17 +634,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 }
             }
         }
-        // Faint cardinal C-octave tick frame, faded with the brightest slot so
-        // it appears only while the node sounds.
-        if max_level > 0.0 {
-            let rc = dots_reference(in.uv) * level_floor(max_level);
-            if rc > glyph {
-                glyph = rc;
-                // Node-colored, only lightly lifted, so the ticks blend into
-                // the disc rather than reading as separate marks.
-                glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.4);
-            }
-        }
     }
 
     // "Over" composite: glyph over (disc + glow), premultiplied.
@@ -635,19 +641,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if alpha < 0.01 {
         discard;
     }
-    let out_rgb = glyph_rgb * glyph + rgb * base_alpha * (1.0 - glyph);
+    let out_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
     return vec4<f32>(out_rgb, alpha);
 }
 
-// ---- Chord edges -----------------------------------------------------------
-// Beams between simultaneously sounding, lattice-adjacent nodes: a held
-// chord's interval structure rendered as geometry. Drawn under the nodes.
+// ---- Chord edges & grid lines ----------------------------------------------
+// One pipeline, two kinds of instance: beams between simultaneously
+// sounding, lattice-adjacent nodes (a held chord's interval structure
+// rendered as geometry), and the faint background grid between node
+// positions (segments arrive pre-inset from the scene, leaving a gap at
+// every node position). Drawn under the nodes, grid first.
 
 struct EdgeInstance {
-    // xyz: endpoint A, w: strength (min of the two node activations)
+    // xyz: endpoint A, w: strength (chord: min of the two node
+    // activations; grid: line opacity)
     @location(0) a_strength: vec4<f32>,
-    // xyz: endpoint B, w: unused
-    @location(1) b_pad: vec4<f32>,
+    // xyz: endpoint B, w: kind (0 chord beam, 1 grid line, 2 dashed grid)
+    @location(1) b_kind: vec4<f32>,
     @location(2) color: vec4<f32>,
 };
 
@@ -657,6 +667,7 @@ struct EdgeVsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) strength: f32,
+    @location(3) @interpolate(flat) kind: f32,
 };
 
 @vertex
@@ -670,7 +681,7 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     let corner = corners[vertex_index];
 
     let a = inst.a_strength.xyz;
-    let b = inst.b_pad.xyz;
+    let b = inst.b_kind.xyz;
     let axis = b - a;
     // Billboard the beam's width: perpendicular to both the edge and the
     // view direction, falling back to camera-up for edge-on views.
@@ -682,7 +693,8 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     } else {
         perp = perp / plen;
     }
-    let half_width = u.misc.y * 0.35;
+    // Grid lines (kind >= 1) are much thinner than chord beams.
+    let half_width = u.misc.y * mix(0.35, 0.09, min(inst.b_kind.w, 1.0));
     let world = a + axis * corner.x + perp * corner.y * half_width;
 
     var out: EdgeVsOut;
@@ -690,11 +702,36 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     out.uv = corner;
     out.color = inst.color;
     out.strength = inst.a_strength.w;
+    out.kind = inst.b_kind.w;
     return out;
 }
 
 @fragment
 fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
+    // Screen-constant soft band across the beam (see aa_inside; computed
+    // before the branch so the derivative stays in uniform control flow).
+    let aa_y = max(fwidth(in.uv.y), 1e-4) * AA_SOFTNESS_PX;
+
+    // Grid line: uniformly faint with a screen-constant soft edge (line
+    // edge at the old 0.35..1.0 band's midpoint), the ends easing off
+    // toward the node gaps.
+    if in.kind > 0.5 {
+        let across = aa_inside(0.675, abs(in.uv.y), aa_y);
+        var along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
+        // Dashed grid lines (kind 2, GridStyle::DashedLinks): chop the
+        // length into short dashes, leaving a faint floor in the gaps so
+        // the line still reads as continuous structure.
+        if in.kind > 1.5 {
+            let tri = abs(fract(in.uv.x * 5.0) - 0.5) * 2.0;
+            along = along * (0.15 + 0.85 * smoothstep(0.35, 0.65, tri));
+        }
+        let alpha = in.strength * across * along;
+        if alpha < 0.01 {
+            discard;
+        }
+        return vec4<f32>(in.color.rgb * alpha, alpha);
+    }
+
     // Soft-edged beam with a brighter core; the ends taper so the node
     // discs own the joints.
     let across = 1.0 - smoothstep(0.15, 1.0, abs(in.uv.y));
