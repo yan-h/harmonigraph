@@ -9,13 +9,15 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
-    // x: global time (s, wraps hourly; unused by the built-in styles —
-    //    per-note animation uses the instance age/seed, which stay small
-    //    and precise however long the session runs),
+    // x: global time (s, wraps hourly). The gas styles clock on this so
+    //    their fields keep flowing across note events (at worst the pattern
+    //    jumps once an hour at the wrap); the other styles animate on the
+    //    instance age/seed, which stay small and precise however long the
+    //    session runs.
     // y: base node radius (world units),
     // z: octave display mode (0 off, 1 dots),
     // w: node style (0 steady, 1 breathe, 2 corona, 3 sparks, 4 wire,
-    //    5 vortex, 6 plasma)
+    //    5 vortex, 6 plasma, 7 aurora, 8 marble, 9 lava, 10 filament)
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z, w unused. The
     // dots style maps a dot's pitch through these to index dot_ramp.
@@ -37,7 +39,9 @@ struct Instance {
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
-    // Per-note animation seed: a small constant, NOT a timestamp.
+    // Animation seed: a small constant, NOT a timestamp. Per-note for the
+    // age-driven styles; a stable per-NODE hash for the gas styles (the
+    // scene picks — see node_seed in lattice-scene).
     @location(4) seed: f32,
     // The node's pitch class in cents (0..1200). Dots mode places each
     // octave dot at the note's absolute-pitch angle, which needs the pitch
@@ -219,15 +223,21 @@ fn rot2(a: f32) -> mat2x2<f32> {
     return mat2x2<f32>(vec2<f32>(c, s), vec2<f32>(-s, c));
 }
 
-// ---- Gas styles (corona / vortex / plasma) ---------------------------------
-// These render an active disc as a ball of gas: a noise field drives BOTH a
-// brightness billow and a position along the octave color gradient below, so
-// every sounding octave's color is present somewhere in the disc — swirled
-// into neighboring patches and interpolated where they meet, never averaged
-// into a single hue.
+// ---- Gas styles ------------------------------------------------------------
+// Corona, vortex, plasma, aurora, marble, lava, filament: an active disc
+// renders as a ball of gas. A noise field drives BOTH a brightness billow and
+// a position along the octave color gradient below, so every sounding
+// octave's color is present somewhere in the disc — swirled into neighboring
+// patches and interpolated where they meet, never averaged into a single hue.
+//
+// All gas fields are functions of GLOBAL time and a stable per-node seed
+// (never the per-note age/seed): the gas at a node is one continuous flow
+// that a note lights up, so pressing, retriggering, or stacking octaves
+// never restarts or reshuffles the pattern.
 
+// Mirrors NodeStyle::is_gas in lattice-scene; keep the two in sync.
 fn is_gas_style(style: u32) -> bool {
-    return style == 2u || style == 5u || style == 6u;
+    return style == 2u || style >= 5u;
 }
 
 // Color at position `t` (0..1) along the gradient of SOUNDING octaves: the
@@ -273,11 +283,12 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
 
 // A gas style's scalar fields at one pixel: x picks the color along the
 // octave swirl gradient, y modulates brightness (billows / streaks / cells).
-fn gas_field(style: u32, uv: vec2<f32>, d: f32, age: f32, seed: f32) -> vec2<f32> {
+// `time` is global (u.misc.x), `seed` the stable per-node hash.
+fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f32> {
     if style == 2u {
         // Corona: domain-warped fbm, a slowly billowing ball of gas.
         let p = uv * 2.6 + vec2<f32>(seed * 7.3, seed * 3.1);
-        let drift = vec2<f32>(age * 0.11, -age * 0.17);
+        let drift = vec2<f32>(time * 0.11, -time * 0.17);
         let warp = vec2<f32>(fbm(p + drift), fbm(p + vec2<f32>(5.2, 1.3) - drift));
         let n = fbm(p + warp * 1.6 + drift);
         let lum = 0.72 + 0.56 * fbm(p * 1.7 - warp - drift);
@@ -289,37 +300,81 @@ fn gas_field(style: u32, uv: vec2<f32>, d: f32, age: f32, seed: f32) -> vec2<f32
         // streaks, like paint stirred with a spoon. Only integer multiples
         // of the angle go through cos(), so there is no seam at +-pi.
         let ang = atan2(uv.y, uv.x);
-        let spin = 2.0 * ang + 4.0 * d - age * 1.1 + seed;
-        let wob = (fbm(uv * 3.1 + vec2<f32>(seed * 5.1, age * 0.16)) - 0.5) * 2.6;
+        let spin = 2.0 * ang + 4.0 * d - time * 1.1 + seed;
+        let wob = (fbm(uv * 3.1 + vec2<f32>(seed * 5.1, time * 0.16)) - 0.5) * 2.6;
         let t = 0.5 + 0.5 * cos(spin + wob);
         // Brightness streaks rotate rigidly with the swirl (rotated-domain
         // noise stays seam-free where angle-domain noise would not).
-        let q = rot2(age * 0.5) * uv;
+        let q = rot2(time * 0.5) * uv;
         let lum = 0.74 + 0.5 * fbm(q * 3.0 + vec2<f32>(seed * 5.0, 0.0));
         return vec2<f32>(t, lum);
+    } else if style == 6u {
+        // Plasma: fast boiling granulation cells over larger, slower color
+        // patches (cells carry brightness, patches carry the octave colors).
+        let cellp = uv * 5.5 + vec2<f32>(seed * 9.1, seed * 4.7);
+        let boil = fbm(cellp + vec2<f32>(time * 0.35, time * 0.5));
+        let patch_n = fbm(uv * 1.7 + vec2<f32>(seed * 3.7, -time * 0.13));
+        return vec2<f32>(smoothstep(0.30, 0.70, patch_n), 0.55 + 1.0 * boil * boil);
+    } else if style == 7u {
+        // Aurora: horizontal color bands warped by noise stretched along x
+        // into slowly drifting curtains.
+        let drift = vec2<f32>(time * 0.10, time * 0.04);
+        let curtain =
+            fbm(uv * vec2<f32>(2.8, 1.0) + vec2<f32>(seed * 4.1, seed * 1.7) + drift) - 0.5;
+        let t = 0.5 + 0.5 * cos(uv.y * 2.6 + curtain * 4.5 + time * 0.20);
+        let lum = 0.68 + 0.55 * fbm(uv * vec2<f32>(4.2, 1.4) + vec2<f32>(seed * 2.3, 0.0) - drift);
+        return vec2<f32>(t, lum);
+    } else if style == 8u {
+        // Marble: a sine over position plus strong turbulence — thin veins
+        // that sweep through every octave's color where the noise shears.
+        let p = uv * 2.0 + vec2<f32>(seed * 6.1, seed * 2.9);
+        let vein =
+            sin((uv.x + uv.y * 0.4) * 3.0 + fbm(p + vec2<f32>(time * 0.08, -time * 0.06)) * 7.0);
+        let lum = 0.72 + 0.42 * fbm(p * 1.3 + vec2<f32>(0.0, time * 0.07));
+        return vec2<f32>(0.5 + 0.5 * vein, lum);
+    } else if style == 9u {
+        // Lava lamp: big soft-edged blobs wandering slowly; the steep
+        // smoothstep parks most pixels on a single octave's color, with
+        // thin blended rims where blobs touch.
+        let p = uv * 1.6
+            + vec2<f32>(cos(time * 0.21 + seed), sin(time * 0.13 + seed * 2.0)) * 0.6
+            + vec2<f32>(seed * 5.3, seed * 8.7);
+        let n = fbm(p);
+        let lum = 0.82 + 0.28 * fbm(p * 2.1 + vec2<f32>(3.7, 1.9));
+        return vec2<f32>(smoothstep(0.36, 0.64, n), lum);
     }
-    // Plasma: fast boiling granulation cells over larger, slower color
-    // patches (cells carry brightness, patches carry the octave colors).
-    let cellp = uv * 5.5 + vec2<f32>(seed * 9.1, seed * 4.7);
-    let boil = fbm(cellp + vec2<f32>(age * 0.35, age * 0.5));
-    let patch_n = fbm(uv * 1.7 + vec2<f32>(seed * 3.7, -age * 0.13));
-    return vec2<f32>(smoothstep(0.30, 0.70, patch_n), 0.55 + 1.0 * boil * boil);
+    // Filament: ridged noise — glowing threads over dark gas. Colors ride
+    // slower low-frequency patches, so the threads pass through each
+    // octave's region as they wander.
+    let p = uv * 2.4 + vec2<f32>(seed * 7.7, seed * 3.3);
+    let n = fbm(p + vec2<f32>(time * 0.16, -time * 0.11));
+    let strand = pow(1.0 - abs(2.0 * n - 1.0), 3.0);
+    let patch_n = fbm(uv * 1.5 + vec2<f32>(seed * 2.9, time * 0.05));
+    return vec2<f32>(smoothstep(0.30, 0.70, patch_n), 0.42 + 1.15 * strand);
 }
 
 // Flame coverage (0..~1.5) at the rim for each gas style; drives how far the
-// corona reaches at this angle and how bright it burns.
-fn gas_flame(style: u32, uv: vec2<f32>, d: f32, age: f32, seed: f32) -> f32 {
-    if style == 2u {
-        // Fine flicker all around the edge.
-        return pow(vnoise(uv * 4.0 + vec2<f32>(age * 1.4 + seed * 9.0, age * 1.1)), 2.0);
-    } else if style == 5u {
-        // Flame tips trail along with the rotation.
-        let dir = rot2(age * 0.55) * (uv / max(d, 1e-4));
-        return pow(vnoise(dir * 2.1 + vec2<f32>(seed * 7.0, d * 2.5)), 2.0);
-    }
-    // Plasma: sparse prominences — a few tall arcs that erupt and subside.
+// corona reaches at this angle and how bright it burns. Same clock and seed
+// rules as gas_field.
+fn gas_flame(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
     let dir = uv / max(d, 1e-4);
-    return pow(vnoise(dir * 1.9 + vec2<f32>(seed * 11.0, age * 0.45)), 3.0) * 1.5;
+    if style == 5u {
+        // Vortex: flame tips trail along with the rotation.
+        let rdir = rot2(time * 0.55) * dir;
+        return pow(vnoise(rdir * 2.1 + vec2<f32>(seed * 7.0, d * 2.5)), 2.0);
+    } else if style == 6u || style == 10u {
+        // Plasma/filament: sparse prominences — a few tall arcs that erupt
+        // and subside.
+        return pow(vnoise(dir * 1.9 + vec2<f32>(seed * 11.0, time * 0.45)), 3.0) * 1.5;
+    } else if style == 7u {
+        // Aurora: slow soft shimmer.
+        return pow(vnoise(dir * 1.5 + vec2<f32>(seed * 5.0, time * 0.25)), 2.0) * 0.8;
+    } else if style == 9u {
+        // Lava: a soft halo with a slow swell, no flicker.
+        return 0.35 + 0.25 * vnoise(dir * 1.2 + vec2<f32>(seed * 3.0, time * 0.15));
+    }
+    // Corona/marble: fine flicker all around the edge.
+    return pow(vnoise(uv * 4.0 + vec2<f32>(time * 1.4 + seed * 9.0, time * 1.1)), 2.0);
 }
 
 fn seg_dist(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
@@ -404,10 +459,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         glow = glow * (1.0 + 0.35 * activation * sin(age * TAU * 0.8));
     }
     // Gas styles: replace the smooth glow with a noise-flickered flame edge
-    // whose reach flutters over time, seeded per note (each style shapes its
-    // own flame — flicker, trailing tips, or sparse prominences).
+    // (each style shapes its own flame — flicker, trailing tips, sparse
+    // prominences, or a soft swell). Clocked on global time so a retrigger
+    // never restarts the flame.
     if is_gas_style(style) && activation > 0.0 {
-        let flame = gas_flame(style, in.uv, d, age, seed);
+        let flame = gas_flame(style, in.uv, d, u.misc.x, seed);
         glow = activation * exp(-4.5 * max(d - 0.44, 0.0) * (2.4 - 1.8 * min(flame, 1.0))) * window
             * (0.55 + 0.45 * flame)
             + 0.25 * hovered * exp(-3.0 * d) * window;
@@ -423,7 +479,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // The rim flame inherits the local gas color, so the corona burns in
     // the hue of whichever octave's gas it erupts from.
     if is_gas_style(style) && activation > 0.0 {
-        let field = gas_field(style, in.uv, d, age, seed);
+        let field = gas_field(style, in.uv, d, u.misc.x, seed);
         let gas = octave_swirl_color(in.octaves, in.cents, field.x, in.color.rgb);
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d);
         rgb = mix(rgb, gas * brightness * field.y * limb, activation);

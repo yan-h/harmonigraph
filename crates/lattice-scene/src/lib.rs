@@ -55,6 +55,16 @@ pub enum NodeStyle {
     /// Gas ball variant: fast boiling granulation cells over larger octave
     /// color patches, with sparse prominences at the rim.
     Plasma,
+    /// Gas ball variant: octave colors as slowly drifting curtains.
+    Aurora,
+    /// Gas ball variant: thin turbulent veins sweeping through the octave
+    /// colors.
+    Marble,
+    /// Gas ball variant: big soft blobs of single octave colors wandering
+    /// lava-lamp style.
+    Lava,
+    /// Gas ball variant: glowing ridged-noise threads over dark gas.
+    Filament,
 }
 
 impl NodeStyle {
@@ -68,7 +78,28 @@ impl NodeStyle {
             NodeStyle::Wire => 4,
             NodeStyle::Vortex => 5,
             NodeStyle::Plasma => 6,
+            NodeStyle::Aurora => 7,
+            NodeStyle::Marble => 8,
+            NodeStyle::Lava => 9,
+            NodeStyle::Filament => 10,
         }
+    }
+
+    /// The gas-ball family: styles whose active discs render the swirled
+    /// octave-color gas. These animate on global time with a stable
+    /// per-node seed (see [`derive_scene`]), so note events never restart
+    /// the pattern. Mirrors `is_gas_style` in lattice.wgsl; keep in sync.
+    pub fn is_gas(self) -> bool {
+        matches!(
+            self,
+            NodeStyle::Corona
+                | NodeStyle::Vortex
+                | NodeStyle::Plasma
+                | NodeStyle::Aurora
+                | NodeStyle::Marble
+                | NodeStyle::Lava
+                | NodeStyle::Filament
+        )
     }
 }
 
@@ -298,6 +329,12 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// Octave indicator slots (MIDI octaves 0..=9).
 pub const OCTAVE_SLOTS: usize = 10;
 
+/// Seconds an octave indicator eases in after note-on. Keeps a fresh
+/// octave's color GROWING into the gas swirl instead of instantly
+/// repainting its share of the disc (and softens dots-mode pop-in);
+/// short enough to still feel immediate.
+const OCTAVE_ATTACK_TIME: f64 = 0.15;
+
 /// Samples in the pitch->color lookup the dots octave style uses to tint
 /// each dot by its own octave's pitch. The shader mirrors this length.
 pub const DOT_RAMP_N: usize = 16;
@@ -320,8 +357,10 @@ pub struct NodeInstance {
     /// f32 seconds lose millisecond precision within a day of DAW uptime,
     /// which would visibly quantize the animation.
     pub age: f32,
-    /// Small per-note constant seeding animation variety (derived from the
-    /// note-on time, wrapped). NOT a timestamp — only ever used as a seed.
+    /// Small constant seeding animation variety. NOT a timestamp — only
+    /// ever used as a seed. Per-note (derived from the note-on time,
+    /// wrapped) for age-driven styles; a stable per-node hash for gas
+    /// styles (see [`NodeStyle::is_gas`]).
     pub seed: f32,
     /// Render as an outline instead of a filled disc (channel 14, v1's
     /// "channel 15" in MIDI convention).
@@ -349,7 +388,9 @@ pub struct Scene {
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
     /// Seconds for global shader animation, wrapped hourly so f32
-    /// precision holds in long sessions. Per-note animation uses
+    /// precision holds in long sessions. The gas styles clock on this so
+    /// their fields keep flowing across note events (at worst the pattern
+    /// jumps once an hour at the wrap); age-driven styles use
     /// [`NodeInstance`]'s `age`/`seed` instead (unwrapped age math).
     pub time: f32,
     /// Base node radius in world units (scales with lattice spacing).
@@ -475,10 +516,21 @@ pub fn derive_scene(
                     seed = (voice.on_time % 256.0) as f32;
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
-                octaves[slot] =
-                    octaves[slot].max(voice.activation(now, frame.octave_fade_time));
+                // Smoothstep ease-in over the first OCTAVE_ATTACK_TIME;
+                // release still fades on the octave envelope.
+                let a = ((now - voice.on_time) / OCTAVE_ATTACK_TIME).clamp(0.0, 1.0) as f32;
+                let attack = a * a * (3.0 - 2.0 * a);
+                octaves[slot] = octaves[slot]
+                    .max(voice.activation(now, frame.octave_fade_time) * attack);
             }
         }
+
+        // Gas styles animate one continuous field per node — global time
+        // as the clock plus a stable per-node seed — so pressing,
+        // retriggering, or stacking notes lights the flow up without ever
+        // restarting or reshuffling it. Age-driven styles keep the
+        // per-note seed (breathe's neutral start, sparks' orbit phases).
+        let seed = if view.node_style.is_gas() { node_seed(pos) } else { seed };
 
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
@@ -511,6 +563,19 @@ pub fn derive_scene(
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
     }
+}
+
+/// Stable per-node animation seed for the gas styles: a hash of the
+/// lattice position folded into the same small range as the per-note
+/// seed. A node's gas pattern becomes part of its identity — the same
+/// every time it lights, decorrelated from its neighbors'.
+fn node_seed(pos: LatticePos) -> f32 {
+    let h = pos
+        .threes
+        .wrapping_mul(731)
+        .wrapping_add(pos.fives.wrapping_mul(2683))
+        .wrapping_add(pos.sevens.wrapping_mul(9461));
+    (h as f32 * 0.618_034).rem_euclid(256.0)
 }
 
 /// Chord edges: every pair of active, lattice-adjacent nodes gets a beam.
@@ -844,12 +909,14 @@ mod tests {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
         let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
+        // Sampled after OCTAVE_ATTACK_TIME: the octave indicator eases in,
+        // so at the note-on instant itself it is still at zero.
         let scene = scene_of(
             &tracker,
             &tuning,
             &ViewConfig::default(),
             &FrameParams::default(),
-            0.0,
+            0.5,
         );
         let origin = origin_node(&scene);
         assert_eq!(origin.activation, 1.0);
