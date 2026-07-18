@@ -35,6 +35,8 @@ pub enum Tab {
     Appearance,
     Console,
     Spectral,
+    /// Settings for the Spectral pane's display and analyzer.
+    Spectrum,
     Notes,
 }
 
@@ -55,6 +57,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Appearance => "Appearance".into(),
             Tab::Console => "Console".into(),
             Tab::Spectral => "Spectral".into(),
+            Tab::Spectrum => "Spectrum".into(),
             Tab::Notes => "Notes".into(),
         }
     }
@@ -67,6 +70,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Appearance => appearance_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now),
+            Tab::Spectrum => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
         }
     }
@@ -660,12 +664,6 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     });
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
-    ui.checkbox(&mut state.view.show_audio_spectrum, "Audio spectrum")
-        .on_hover_text(
-            "Overlay the audio's spectrum in the Spectral pane, every partial \
-             at its actual pitch (plugin: the input bus; standalone: a synth \
-             on the held notes)",
-        );
     // 0 = off (the renderer skips the whole post-process chain), so the
     // bar doubles as the toggle.
     ValueBar::new(&mut state.view.bloom_strength, 0.0..=1.5, "Bloom")
@@ -713,11 +711,70 @@ fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 /// Hover sync goes both ways: the lattice-hovered pitch class shows as a
 /// band here, and hovering a position here highlights the matching lattice
 /// node (if one is in view).
-fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
-    use lattice_core::spectrum::{
-        midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI,
-    };
+/// Settings for the Spectral pane's display and analyzer (persisted with
+/// the UI state).
+fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+    use crate::SpectrumWindow;
+    let cfg = &mut state.spectrum_config;
 
+    ui.checkbox(&mut cfg.show_audio, "Audio spectrum").on_hover_text(
+        "Analyze and overlay the audio's spectrum, every partial at its \
+         actual pitch (plugin: the input bus; standalone: a synth on the \
+         held notes)",
+    );
+
+    ui.horizontal(|ui| {
+        ui.label("Window");
+        for (window, label) in [
+            (SpectrumWindow::Fast, "Fast"),
+            (SpectrumWindow::Balanced, "Balanced"),
+            (SpectrumWindow::Precise, "Precise"),
+        ] {
+            ui.selectable_value(&mut cfg.window, window, label).on_hover_text(format!(
+                "{} samples: {}",
+                window.samples(),
+                match window {
+                    SpectrumWindow::Fast => "snappy response, coarse bass pitch",
+                    SpectrumWindow::Balanced => "the default tradeoff",
+                    SpectrumWindow::Precise => "sharp bass pitch, slower response",
+                },
+            ));
+        }
+    });
+
+    ValueBar::new(&mut cfg.floor_db, -90.0..=-30.0, "Floor (dB)")
+        .show(ui)
+        .on_hover_text("Bottom of the height scale; a full-scale sine is 0 dB");
+    ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
+        .show(ui)
+        .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
+
+    ui.checkbox(&mut cfg.fill, "Fill")
+        .on_hover_text("Shade under the spectrum curve");
+    ui.checkbox(&mut cfg.peak_hold, "Peak hold")
+        .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
+    ui.checkbox(&mut cfg.show_voice_bars, "Voice bars")
+        .on_hover_text("MIDI-derived bars at each voice's actual pitch");
+    ui.checkbox(&mut cfg.show_ticks, "Lattice ticks")
+        .on_hover_text("Per-octave marks where the visible lattice's pitch classes sit");
+
+    // Octave zoom (Bitwig numbering; C-1..C9 is the full analyzer range).
+    let mut low = cfg.low_octave as f32;
+    if ValueBar::new(&mut low, -1.0..=8.0, "Low octave").integer().show(ui).changed() {
+        cfg.low_octave = low as i32;
+        cfg.high_octave = cfg.high_octave.max(cfg.low_octave + 1);
+    }
+    let mut high = cfg.high_octave as f32;
+    if ValueBar::new(&mut high, 0.0..=9.0, "High octave").integer().show(ui).changed() {
+        cfg.high_octave = high as i32;
+        cfg.low_octave = cfg.low_octave.min(cfg.high_octave - 1);
+    }
+}
+
+fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+    use lattice_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+
+    let cfg = state.spectrum_config;
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
     if rect.width() < 10.0 || rect.height() < 10.0 {
         return;
@@ -725,22 +782,30 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::well());
 
-    // The axis: absolute pitch across the audible range (C-1..C9 in
-    // Bitwig's octave convention), linear in MIDI note = logarithmic in
+    // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal width and every note draws at
-    // its actual pitch.
-    let span = SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI;
-    let x_of = |midi: f32| rect.left() + rect.width() * (midi - SPECTRUM_MIN_MIDI) / span;
+    // its actual pitch. The displayed range is the Spectrum tab's octave
+    // zoom (Bitwig numbering: octave n starts at MIDI (n + 2) * 12).
+    let min_midi = ((cfg.low_octave + 2) * 12) as f32;
+    let max_midi = ((cfg.high_octave + 2) * 12) as f32;
+    let span = max_midi - min_midi;
+    let x_of = |midi: f32| rect.left() + rect.width() * (midi - min_midi) / span;
+    // dB height mapping: 0 dB (a full-scale sine) tops out at 85% of the
+    // pane; the Spectrum tab's floor sets the bottom.
+    let h_of = |power: f32| {
+        let db = 10.0 * power.max(1e-12).log10();
+        ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0) * rect.height() * 0.85
+    };
 
     // Octave gridlines at every C.
-    let mut c = SPECTRUM_MIN_MIDI as i32;
-    while c <= SPECTRUM_MAX_MIDI as i32 {
+    let mut c = min_midi as i32;
+    while c <= max_midi as i32 {
         let x = x_of(c as f32);
         painter.line_segment(
             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
             egui::Stroke::new(1.0, theme::panel()),
         );
-        if c < SPECTRUM_MAX_MIDI as i32 {
+        if c < max_midi as i32 {
             painter.text(
                 egui::pos2(x + 3.0, rect.bottom() - 2.0),
                 egui::Align2::LEFT_BOTTOM,
@@ -757,33 +822,35 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // per octave. Dense tunings put hundreds of classes in each octave,
     // so ticks are thinned in screen space (min 2.5 px apart) and drawn
     // dim — a faint ruler, not a solid band.
-    let mut tick_cents: Vec<i32> = state
-        .view
-        .visible_positions()
-        .map(|pos| state.tuning.pitch_class(pos).to_cents().round() as i32)
-        .collect();
-    tick_cents.sort_unstable();
-    tick_cents.dedup();
-    let tick_color = theme::text_dim().gamma_multiply(0.5);
-    let mut last_x = f32::NEG_INFINITY;
-    let mut octave = SPECTRUM_MIN_MIDI;
-    while octave < SPECTRUM_MAX_MIDI {
-        for cents in &tick_cents {
-            let midi = octave + *cents as f32 / 100.0;
-            if midi >= SPECTRUM_MAX_MIDI {
-                break;
+    if cfg.show_ticks {
+        let mut tick_cents: Vec<i32> = state
+            .view
+            .visible_positions()
+            .map(|pos| state.tuning.pitch_class(pos).to_cents().round() as i32)
+            .collect();
+        tick_cents.sort_unstable();
+        tick_cents.dedup();
+        let tick_color = theme::text_dim().gamma_multiply(0.5);
+        let mut last_x = f32::NEG_INFINITY;
+        let mut octave = min_midi;
+        while octave < max_midi {
+            for cents in &tick_cents {
+                let midi = octave + *cents as f32 / 100.0;
+                if midi >= max_midi {
+                    break;
+                }
+                let x = x_of(midi);
+                if x - last_x < 2.5 {
+                    continue;
+                }
+                last_x = x;
+                painter.line_segment(
+                    [egui::pos2(x, rect.bottom() - 9.0), egui::pos2(x, rect.bottom() - 4.0)],
+                    egui::Stroke::new(1.0, tick_color),
+                );
             }
-            let x = x_of(midi);
-            if x - last_x < 2.5 {
-                continue;
-            }
-            last_x = x;
-            painter.line_segment(
-                [egui::pos2(x, rect.bottom() - 9.0), egui::pos2(x, rect.bottom() - 4.0)],
-                egui::Stroke::new(1.0, tick_color),
-            );
+            octave += 12.0;
         }
-        octave += 12.0;
     }
 
     // Cross-pane highlight: the pitch class hovered in ANY pane shows as
@@ -791,8 +858,8 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     if let Some(pos) = state.hovered {
         let semis = state.tuning.pitch_class(pos).to_cents() / 100.0;
         let half_width = (rect.width() * (state.tuning.tolerance / 100.0) / span).max(1.5);
-        let mut midi = SPECTRUM_MIN_MIDI + semis;
-        while midi < SPECTRUM_MAX_MIDI {
+        let mut midi = min_midi + semis;
+        while midi < max_midi {
             let x = x_of(midi);
             painter.rect_filled(
                 egui::Rect::from_min_max(
@@ -809,17 +876,46 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // Audio spectrum: the FFT of the shell's audio source, every partial
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up to the right of each note.
-    if state.view.show_audio_spectrum {
-        if let Some(buckets) = state.spectrum.display(now) {
-            let points: Vec<egui::Pos2> = (0..buckets.len())
-                .map(|i| {
-                    // Power -> amplitude so peak height tracks how loud a
-                    // pitch sounds; a full-scale sine reaches 85%.
-                    let h = buckets[i].max(0.0).sqrt().min(1.0) * rect.height() * 0.85;
-                    let midi =
-                        SPECTRUM_MIN_MIDI + (i as f32 + 0.5) / BINS_PER_SEMITONE as f32;
-                    egui::pos2(x_of(midi), rect.bottom() - h)
+    if cfg.show_audio {
+        if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
+            // Only the buckets inside the octave zoom.
+            let visible: Vec<(f32, f32, f32)> = (0..levels.len())
+                .filter_map(|i| {
+                    let midi = SPECTRUM_MIN_MIDI + (i as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+                    (min_midi..=max_midi)
+                        .contains(&midi)
+                        .then(|| (x_of(midi), levels[i], peaks[i]))
                 })
+                .collect();
+
+            if cfg.fill {
+                // One translucent vertical slab per bucket, wide enough to
+                // meet its neighbors.
+                let slab = (rect.width() / (span * BINS_PER_SEMITONE as f32)) + 0.5;
+                let fill_color = theme::accent().gamma_multiply(0.15);
+                for &(x, level, _) in &visible {
+                    let h = h_of(level);
+                    if h > 0.5 {
+                        painter.line_segment(
+                            [egui::pos2(x, rect.bottom()), egui::pos2(x, rect.bottom() - h)],
+                            egui::Stroke::new(slab, fill_color),
+                        );
+                    }
+                }
+            }
+            if cfg.peak_hold {
+                let peak_points: Vec<egui::Pos2> = visible
+                    .iter()
+                    .map(|&(x, _, peak)| egui::pos2(x, rect.bottom() - h_of(peak)))
+                    .collect();
+                painter.add(egui::Shape::line(
+                    peak_points,
+                    egui::Stroke::new(1.0, theme::accent().gamma_multiply(0.35)),
+                ));
+            }
+            let points: Vec<egui::Pos2> = visible
+                .iter()
+                .map(|&(x, level, _)| egui::pos2(x, rect.bottom() - h_of(level)))
                 .collect();
             painter.add(egui::Shape::line(
                 points,
@@ -831,43 +927,44 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // Voice bars at the voice's ACTUAL pitch (per-note tuning and MPE
     // bends slide the bar): height follows the same envelope as the
     // lattice glow, weighted by velocity; color matches the node color.
-    for voice in state.tracker.voices() {
-        let activation = voice.activation(now, state.frame_params.pitch_class_fade_time);
-        if activation <= 0.0 {
-            continue;
+    if cfg.show_voice_bars {
+        for voice in state.tracker.voices() {
+            let activation = voice.activation(now, state.frame_params.pitch_class_fade_time);
+            if activation <= 0.0 || !(min_midi..=max_midi).contains(&voice.pitch) {
+                continue;
+            }
+            let x = x_of(voice.pitch);
+            let height =
+                rect.height() * 0.85 * activation * visibility_floor(voice.velocity);
+            let c = channel_color(
+                voice.channel,
+                voice.pitch,
+                state.frame_params.darkest_pitch,
+                state.frame_params.brightest_pitch,
+            );
+            let color = egui::Color32::from_rgb(
+                (c.x * 255.0) as u8,
+                (c.y * 255.0) as u8,
+                (c.z * 255.0) as u8,
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(x, rect.bottom()),
+                    egui::pos2(x, rect.bottom() - height),
+                ],
+                egui::Stroke::new(3.0, color),
+            );
         }
-        let x = x_of(voice.pitch);
-        let height =
-            rect.height() * 0.85 * activation * visibility_floor(voice.velocity);
-        let c = channel_color(
-            voice.channel,
-            voice.pitch,
-            state.frame_params.darkest_pitch,
-            state.frame_params.brightest_pitch,
-        );
-        let color = egui::Color32::from_rgb(
-            (c.x * 255.0) as u8,
-            (c.y * 255.0) as u8,
-            (c.z * 255.0) as u8,
-        );
-        painter.line_segment(
-            [
-                egui::pos2(x, rect.bottom()),
-                egui::pos2(x, rect.bottom() - height),
-            ],
-            egui::Stroke::new(3.0, color),
-        );
     }
 
     // Hovering here highlights the matching lattice node (if in view) and
     // reads out the pitch under the cursor.
     if let Some(pointer) = response.hover_pos() {
-        let midi = (SPECTRUM_MIN_MIDI
-            + (pointer.x - rect.left()) / rect.width() * span)
-            .clamp(SPECTRUM_MIN_MIDI, SPECTRUM_MAX_MIDI);
+        let midi = (min_midi + (pointer.x - rect.left()) / rect.width() * span)
+            .clamp(min_midi, max_midi);
         // The axis starts on a C, so cents-from-C is just the fractional
         // octave position.
-        let pc_cents = (midi - SPECTRUM_MIN_MIDI).rem_euclid(12.0) * 100.0;
+        let pc_cents = (midi - min_midi).rem_euclid(12.0) * 100.0;
         state.hovered = nearest_visible_node(
             &state.view,
             &state.tuning,

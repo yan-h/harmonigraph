@@ -266,7 +266,7 @@ impl eframe::App for App {
 
         // The harness has no real audio; synthesize the held notes so the
         // Spectral pane's audio overlay is demoable without a DAW.
-        if self.state.view.show_audio_spectrum {
+        if self.state.spectrum_config.show_audio {
             self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
             self.state
                 .spectrum

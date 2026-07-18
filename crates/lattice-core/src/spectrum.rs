@@ -27,44 +27,70 @@ pub fn midi_to_hz(midi: f32) -> f32 {
     440.0 * ((midi - 69.0) / 12.0).exp2()
 }
 
-/// Analysis window length in samples (~0.17 s at 48 kHz — steady enough
-/// for a meter, short enough to follow chord changes). At the axis floor
-/// (~16 Hz) one FFT bin spans several semitones, so the lowest octave
-/// reads coarse; that is inherent to the window length, not a bug.
-const FFT_SIZE: usize = 8192;
+/// Default analysis window length in samples (~0.17 s at 48 kHz — steady
+/// enough for a meter, short enough to follow chord changes). At the axis
+/// floor (~16 Hz) one FFT bin spans several semitones, so the lowest
+/// octave reads coarse; that is inherent to the window length, not a bug.
+/// [`SpectrumAnalyzer::set_fft_size`] trades response time against bass
+/// precision at runtime.
+pub const DEFAULT_FFT_SIZE: usize = 8192;
 
 /// Rolling analyzer: push mono samples as they arrive, ask for the
 /// spectrum whenever the display wants a fresh frame.
 pub struct SpectrumAnalyzer {
     sample_rate: f32,
-    /// The most recent FFT_SIZE samples, as a circular buffer.
+    fft_size: usize,
+    /// The most recent `fft_size` samples, as a circular buffer.
     ring: Vec<f32>,
     write: usize,
-    /// Samples pushed since (re)configuration, saturating at FFT_SIZE.
+    /// Samples pushed since (re)configuration, saturating at `fft_size`.
     filled: usize,
     /// Hann window, precomputed.
     window: Vec<f32>,
-    /// FFT scratch (allocated once).
+    /// FFT scratch (allocated per configuration).
     re: Vec<f32>,
     im: Vec<f32>,
 }
 
 impl SpectrumAnalyzer {
     pub fn new(sample_rate: f32) -> Self {
-        let window = (0..FFT_SIZE)
+        let mut analyzer = SpectrumAnalyzer {
+            sample_rate: sample_rate.max(1.0),
+            fft_size: 0,
+            ring: Vec::new(),
+            write: 0,
+            filled: 0,
+            window: Vec::new(),
+            re: Vec::new(),
+            im: Vec::new(),
+        };
+        analyzer.configure(DEFAULT_FFT_SIZE);
+        analyzer
+    }
+
+    /// (Re)allocate every buffer for `fft_size` and clear the window.
+    fn configure(&mut self, fft_size: usize) {
+        assert!(fft_size.is_power_of_two(), "radix-2 FFT needs a power of two");
+        self.fft_size = fft_size;
+        self.ring = vec![0.0; fft_size];
+        self.write = 0;
+        self.filled = 0;
+        self.window = (0..fft_size)
             .map(|i| {
-                let phase = std::f32::consts::TAU * i as f32 / FFT_SIZE as f32;
+                let phase = std::f32::consts::TAU * i as f32 / fft_size as f32;
                 0.5 * (1.0 - phase.cos())
             })
             .collect();
-        SpectrumAnalyzer {
-            sample_rate: sample_rate.max(1.0),
-            ring: vec![0.0; FFT_SIZE],
-            write: 0,
-            filled: 0,
-            window,
-            re: vec![0.0; FFT_SIZE],
-            im: vec![0.0; FFT_SIZE],
+        self.re = vec![0.0; fft_size];
+        self.im = vec![0.0; fft_size];
+    }
+
+    /// Change the analysis window length (a power of two): longer =
+    /// sharper bass, slower response. A change empties the buffer.
+    /// No-op at the current size, so calling every frame is fine.
+    pub fn set_fft_size(&mut self, fft_size: usize) {
+        if fft_size != self.fft_size {
+            self.configure(fft_size);
         }
     }
 
@@ -81,13 +107,13 @@ impl SpectrumAnalyzer {
     }
 
     /// Append mono samples (most recent last). Any chunk size works; only
-    /// the trailing FFT_SIZE samples are kept.
+    /// the trailing `fft_size` samples are kept.
     pub fn push_samples(&mut self, samples: &[f32]) {
         for &s in samples {
             self.ring[self.write] = s;
-            self.write = (self.write + 1) % FFT_SIZE;
+            self.write = (self.write + 1) % self.fft_size;
         }
-        self.filled = (self.filled + samples.len()).min(FFT_SIZE);
+        self.filled = (self.filled + samples.len()).min(self.fft_size);
     }
 
     /// The current power spectrum over the MIDI-pitch axis, or None until
@@ -102,13 +128,13 @@ impl SpectrumAnalyzer {
     /// every bin instead would smear each note across the width its
     /// skirt bins span: at C4 one FFT bin is ~38 cents wide.)
     pub fn pitch_spectrum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
-        if self.filled < FFT_SIZE {
+        if self.filled < self.fft_size {
             return None;
         }
 
         // Unroll the ring into time order, windowed.
-        for i in 0..FFT_SIZE {
-            let src = (self.write + i) % FFT_SIZE;
+        for i in 0..self.fft_size {
+            let src = (self.write + i) % self.fft_size;
             self.re[i] = self.ring[src] * self.window[i];
             self.im[i] = 0.0;
         }
@@ -119,11 +145,11 @@ impl SpectrumAnalyzer {
         let window_sum: f32 = self.window.iter().sum();
         let norm = 2.0 / window_sum;
 
-        let bin_hz = self.sample_rate / FFT_SIZE as f32;
+        let bin_hz = self.sample_rate / self.fft_size as f32;
         // Analyze the overlap of the pitch axis and what the FFT resolves
         // (skip DC and the first bin; stay clear of Nyquist).
         let lo = (midi_to_hz(SPECTRUM_MIN_MIDI) / bin_hz).ceil().max(2.0) as usize;
-        let hi = ((midi_to_hz(SPECTRUM_MAX_MIDI) / bin_hz) as usize).min(FFT_SIZE / 2 - 2);
+        let hi = ((midi_to_hz(SPECTRUM_MAX_MIDI) / bin_hz) as usize).min(self.fft_size / 2 - 2);
 
         let mag = |k: usize| (self.re[k] * self.re[k] + self.im[k] * self.im[k]).sqrt();
 
@@ -214,7 +240,7 @@ mod tests {
     fn analyze(freqs_amps: &[(f32, f32)], sample_rate: f32) -> [f32; SPECTRUM_BINS] {
         let mut analyzer = SpectrumAnalyzer::new(sample_rate);
         // Push in awkward chunk sizes to exercise the ring seam.
-        let samples: Vec<f32> = (0..FFT_SIZE + 1234)
+        let samples: Vec<f32> = (0..DEFAULT_FFT_SIZE + 1234)
             .map(|i| {
                 let t = i as f32 / sample_rate;
                 freqs_amps
@@ -245,7 +271,7 @@ mod tests {
     fn empty_analyzer_reports_nothing() {
         let mut analyzer = SpectrumAnalyzer::new(48_000.0);
         assert!(analyzer.pitch_spectrum().is_none());
-        analyzer.push_samples(&vec![0.1; FFT_SIZE - 1]);
+        analyzer.push_samples(&vec![0.1; DEFAULT_FFT_SIZE - 1]);
         assert!(analyzer.pitch_spectrum().is_none(), "one short of a window");
         analyzer.push_samples(&[0.1]);
         assert!(analyzer.pitch_spectrum().is_some());
@@ -320,7 +346,7 @@ mod tests {
     #[test]
     fn sample_rate_change_resets_the_window() {
         let mut analyzer = SpectrumAnalyzer::new(48_000.0);
-        analyzer.push_samples(&vec![0.2; FFT_SIZE]);
+        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
         assert!(analyzer.pitch_spectrum().is_some());
         analyzer.set_sample_rate(44_100.0);
         assert!(

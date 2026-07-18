@@ -165,7 +165,7 @@ impl EditorShared {
         while let Ok(sample) = self.audio_consumer.pop() {
             self.audio_buf.push(sample);
         }
-        if self.ui.view.show_audio_spectrum && !self.audio_buf.is_empty() {
+        if self.ui.spectrum_config.show_audio && !self.audio_buf.is_empty() {
             let sample_rate = f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed));
             self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now);
         }
