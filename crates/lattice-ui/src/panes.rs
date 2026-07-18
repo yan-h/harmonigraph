@@ -627,12 +627,17 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
 
-
-    // Octave indicator: dots around the disc positioned by absolute pitch,
-    // or off.
-    ui.horizontal(|ui| {
+    // Octave indicator glyphs, all positioned by absolute pitch: floating
+    // dots, or shapes attached to the rim (petals/flares/bumps).
+    ui.horizontal_wrapped(|ui| {
         ui.label("Octaves");
-        for (style, label) in [(OctaveStyle::Off, "Off"), (OctaveStyle::Dots, "Dots")] {
+        for (style, label) in [
+            (OctaveStyle::Off, "Off"),
+            (OctaveStyle::Dots, "Dots"),
+            (OctaveStyle::Petals, "Petals"),
+            (OctaveStyle::Flares, "Flares"),
+            (OctaveStyle::Bumps, "Bumps"),
+        ] {
             ui.selectable_value(&mut state.view.octave_style, style, label);
         }
     });

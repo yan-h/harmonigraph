@@ -15,7 +15,7 @@ struct Uniforms {
     //    instance age/seed, which stay small and precise however long the
     //    session runs.
     // y: base node radius (world units),
-    // z: octave display mode (0 off, 1 dots),
+    // z: octave display mode (0 off, 1 dots, 2 petals, 3 flares, 4 bumps),
     // w: node style (0 steady, 1 wire, 2 corona, 3 vortex, 4 plasma,
     //    5 aurora, 6 marble, 7 lava, 8 filament, 9 stripes, 10 rings,
     //    11 pinwheel, 12 spiral, 13 checker, 14 tiles)
@@ -44,9 +44,9 @@ struct Instance {
     // age-driven styles; a stable per-NODE hash for the field styles (the
     // scene picks — see node_seed in lattice-scene).
     @location(4) seed: f32,
-    // The node's pitch class in cents (0..1200). Dots mode places each
-    // octave dot at the note's absolute-pitch angle, which needs the pitch
-    // class within the octave; unused by the other octave styles.
+    // The node's pitch class in cents (0..1200). The octave indicator
+    // styles place each glyph at the note's absolute-pitch angle, which
+    // needs the pitch class within the octave.
     @location(5) cents: f32,
     // Depth-cue size multiplier from the scene (1 at the camera's focus
     // distance; larger nearer the eye, smaller farther), exaggerating
@@ -150,17 +150,62 @@ const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
 const DOT_ORBIT: f32 = 0.67;
 const DOT_RADIUS: f32 = 0.125;
 
-// Coverage (0..1) of the dot for a SOUNDING octave slot `i` on a node whose
-// pitch class is `cents`: a satellite around the disc whose angle is the
-// note's absolute pitch (middle C straight up, 45deg clockwise per octave,
-// pitch class within the octave included). `aa` is the caller's per-pixel
-// soft-band width.
-fn octave_dot(i: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
+// Petal geometry, quad UV units: teardrops rooted INSIDE the disc edge
+// (~0.5) so they read as growing out of the note, not floating beside it.
+const PETAL_BASE: f32 = 0.44; // where the petal roots (inside the rim)
+const PETAL_LEN: f32 = 0.34;  // radial length, tip at BASE+LEN
+const PETAL_W: f32 = 0.105;   // tangential half-width at the widest point
+
+// Coverage (0..1) of the indicator glyph for a SOUNDING octave slot `i` on
+// a node whose pitch class is `cents`. All styles share the dots angle
+// convention — absolute pitch, middle C straight up, 45deg clockwise per
+// octave, pitch class within the octave included — and differ only in the
+// shape drawn there. `time` is the global clock (used by the flare
+// flicker; continuous across note events like everything else). `aa` is
+// the caller's per-pixel soft-band width; the crisp shapes (dots, bumps)
+// take screen-constant edges from it, while petals and flares keep their
+// proportional feathered falloffs like the glows do.
+fn octave_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, time: f32, aa: f32) -> f32 {
     // (uv.y is up, so clockwise = subtracting from the angle.)
     let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
     let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
-    let center = vec2<f32>(cos(ang), sin(ang)) * DOT_ORBIT;
-    return aa_inside(DOT_RADIUS, distance(uv, center), aa);
+    let e = vec2<f32>(cos(ang), sin(ang));
+
+    if mode == 1u {
+        // Dots: a floating satellite on the orbit ring (v1 look).
+        return aa_inside(DOT_RADIUS, distance(uv, e * DOT_ORBIT), aa);
+    }
+
+    // Glyph-local frame: radial distance out along the pitch angle, and
+    // tangential offset beside it.
+    let u_r = dot(uv, e);
+    let u_t = dot(uv, vec2<f32>(-e.y, e.x));
+
+    if mode == 2u {
+        // Petals: a radially elongated teardrop rooted inside the rim —
+        // widest near the base, tapering toward a rounded tip.
+        let s = clamp((u_r - PETAL_BASE) / PETAL_LEN, 0.0, 1.0);
+        let taper = 1.0 - 0.55 * smoothstep(0.35, 1.0, s);
+        let mid = PETAL_BASE + PETAL_LEN * 0.5;
+        let er = sqrt(
+            pow((u_r - mid) / (PETAL_LEN * 0.5), 2.0)
+                + pow(u_t / (PETAL_W * taper), 2.0),
+        );
+        return 1.0 - smoothstep(0.82, 1.08, er);
+    } else if mode == 3u {
+        // Flares: a plume erupting from the rim, widening as it rises and
+        // flickering in length (seeded per slot so plumes flicker
+        // independently).
+        let flick = 0.75 + 0.45 * vnoise(vec2<f32>(time * 0.9, f32(i) * 7.3 + cents * 0.01));
+        let h = (u_r - 0.42) / (0.38 * flick);
+        let spread = 0.055 + 0.10 * clamp(h, 0.0, 1.5);
+        let lat = exp(-2.0 * pow(u_t / spread, 2.0));
+        let rad = (1.0 - smoothstep(0.55, 1.0, h)) * smoothstep(-0.15, 0.05, h);
+        return clamp(lat * rad * 1.1, 0.0, 1.0);
+    }
+    // Bumps: a blob seated ON the rim, so the disc outline bulges at the
+    // pitch angle instead of a shape hovering beside it.
+    return aa_inside(0.115, distance(uv, e * 0.50), aa);
 }
 
 // Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch
@@ -618,13 +663,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
 
-    // Dots octave indicator (mode 1; 0 is off). Each slot fades on its own
-    // envelope; a dot is tinted by its own pitch.
+    // Octave indicator glyphs (mode 0 = off; dots, petals, flares, or
+    // bumps otherwise). Each slot fades on its own envelope; a glyph is
+    // tinted by its own pitch.
     if mode != 0u {
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level > 0.0 {
-                let cov = octave_dot(i, in.cents, in.uv, aa) * level_floor(level);
+                let cov = octave_glyph(mode, i, in.cents, in.uv, u.misc.x, aa) * level_floor(level);
                 if cov > glyph {
                     glyph = cov;
                     // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
