@@ -48,84 +48,63 @@ pub enum OctaveStyle {
 /// data (activation + per-note phase); the fragment/vertex shader switches
 /// on a uniform. Kept as switchable candidates for live comparison — idle
 /// nodes look identical in every style.
+///
+/// The aliases on Steady absorb node styles that used to exist (Breathe,
+/// Sparks, and the Wire/Corona/Plasma/Aurora/Marble/Lava/Filament/Stripes/
+/// Rings/Tiles set trimmed later) so persisted view blobs that still name
+/// them keep loading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NodeStyle {
-    /// The original look: steady disc + glow. The aliases absorb styles
-    /// that used to exist (Breathe, Sparks) so persisted view blobs that
-    /// still name them keep loading.
+    /// The original look: steady disc + glow.
     #[default]
-    #[serde(alias = "Breathe", alias = "Sparks")]
+    #[serde(
+        alias = "Breathe",
+        alias = "Sparks",
+        alias = "Wire",
+        alias = "Corona",
+        alias = "Plasma",
+        alias = "Aurora",
+        alias = "Marble",
+        alias = "Lava",
+        alias = "Filament",
+        alias = "Stripes",
+        alias = "Rings",
+        alias = "Tiles"
+    )]
     Steady,
-    /// Held nodes become slowly tumbling wireframe octahedra.
-    Wire,
-    /// Held discs become billowing balls of gas ringed by a flame edge,
-    /// with every sounding octave's color swirled through the interior.
-    Corona,
-    /// Gas ball variant: octave colors sheared into rotating spiral
-    /// streaks, like stirred paint.
+    /// Gas ball: octave colors sheared into rotating spiral streaks, like
+    /// stirred paint.
     Vortex,
-    /// Gas ball variant: fast boiling granulation cells over larger octave
-    /// color patches, with sparse prominences at the rim.
-    Plasma,
-    /// Gas ball variant: octave colors as slowly drifting curtains.
-    Aurora,
-    /// Gas ball variant: thin turbulent veins sweeping through the octave
-    /// colors.
-    Marble,
-    /// Gas ball variant: big soft blobs of single octave colors wandering
-    /// lava-lamp style.
-    Lava,
-    /// Gas ball variant: glowing ridged-noise threads over dark gas.
-    Filament,
-    /// Pattern variant: soft color waves wrapping the sphere around a
-    /// per-node axis, slowly revolving.
-    Stripes,
-    /// Pattern variant: soft color rings radiating from the face center,
-    /// bunching toward the limb.
-    Rings,
-    /// Pattern variant: beach-ball sectors around a tilted pole, slowly
-    /// turning.
-    Pinwheel,
-    /// Pattern variant: two-armed spiral of color waves hugging the
-    /// sphere.
-    Spiral,
-    /// Pattern variant: soft checkerboard on the globe graticule.
+    /// Pattern: soft checkerboard on the globe graticule.
     Checker,
-    /// Pattern variant: rounded glowing tiles on a slowly revolving
-    /// globe, over dim gaps.
-    Tiles,
+    /// Pattern: two-armed spiral of color waves hugging the sphere.
+    Spiral,
+    /// Pattern: beach-ball sectors around a tilted pole, slowly turning.
+    Pinwheel,
 }
 
 impl NodeStyle {
-    /// Index used by the shader (uniform `misc.w`).
+    /// Index used by the shader (uniform `misc.w`). Indices are preserved
+    /// from the original 15-style set so each kept style's shader branch in
+    /// lattice.wgsl stays byte-for-byte unchanged; the gaps are the removed
+    /// styles.
     pub fn shader_index(self) -> u32 {
         match self {
             NodeStyle::Steady => 0,
-            NodeStyle::Wire => 1,
-            NodeStyle::Corona => 2,
             NodeStyle::Vortex => 3,
-            NodeStyle::Plasma => 4,
-            NodeStyle::Aurora => 5,
-            NodeStyle::Marble => 6,
-            NodeStyle::Lava => 7,
-            NodeStyle::Filament => 8,
-            NodeStyle::Stripes => 9,
-            NodeStyle::Rings => 10,
             NodeStyle::Pinwheel => 11,
             NodeStyle::Spiral => 12,
             NodeStyle::Checker => 13,
-            NodeStyle::Tiles => 14,
         }
     }
 
-    /// The field family — everything except Steady and Wire: styles whose
-    /// active discs paint the swirled octave-color field (noise-driven gas
-    /// or deterministic patterns). These animate on global time with a
-    /// stable per-node seed (see [`derive_scene`]), so note events never
-    /// restart the pattern. Mirrors `is_field_style` in lattice.wgsl; keep
-    /// in sync.
+    /// The field family — everything except Steady: styles whose active
+    /// discs paint the swirled octave-color field (noise-driven gas or
+    /// deterministic patterns). These animate on global time with a stable
+    /// per-node seed (see [`derive_scene`]), so note events never restart
+    /// the pattern. Mirrors `is_field_style` in lattice.wgsl; keep in sync.
     pub fn is_field_style(self) -> bool {
-        !matches!(self, NodeStyle::Steady | NodeStyle::Wire)
+        !matches!(self, NodeStyle::Steady)
     }
 }
 

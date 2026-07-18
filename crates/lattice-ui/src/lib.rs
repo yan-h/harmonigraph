@@ -554,13 +554,14 @@ mod tests {
 
     #[test]
     fn removed_node_styles_in_old_persist_blobs_load_as_steady() {
-        // Breathe/Sparks no longer exist; serde aliases must absorb them so
-        // an old blob still restores (a failed parse would silently drop the
-        // WHOLE persist — layout, camera, everything).
+        // Breathe/Sparks and the later-trimmed Wire/Corona/… set no longer
+        // exist; serde aliases must absorb them so an old blob still restores
+        // (a failed parse would silently drop the WHOLE persist — layout,
+        // camera, everything). "Wire" is one of the removed names.
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
         state.camera.yaw = 1.23;
-        state.view.node_style = lattice_scene::NodeStyle::Wire;
-        let saved = state.save_persist().replace("node_style:Wire", "node_style:Breathe");
+        state.view.node_style = lattice_scene::NodeStyle::Vortex;
+        let saved = state.save_persist().replace("node_style:Vortex", "node_style:Wire");
         assert_ne!(saved, state.save_persist(), "replacement must have hit");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);

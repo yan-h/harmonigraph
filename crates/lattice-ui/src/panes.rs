@@ -635,29 +635,18 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         egui::Checkbox::new(&mut state.view.show_cents, "Cent values"),
     );
 
-    // Held-note render style: switchable experiments (idle nodes look the
-    // same in all of them). Compare live while notes play. Wrapped layout:
-    // there are enough styles now that one row runs off the pane.
-    // Corona onward is the field family (swirled octave colors): gas looks
-    // through Filament, deterministic patterns from Stripes on.
+    // Held-note render style: switchable looks (idle nodes look the same in
+    // all of them). Compare live while notes play. Everything except Steady
+    // is a field style (swirled octave colors): Vortex is the gas look,
+    // Checker/Spiral/Pinwheel are deterministic patterns on the sphere.
     ui.horizontal_wrapped(|ui| {
         ui.label("Node style");
         for (style, label) in [
             (NodeStyle::Steady, "Steady"),
-            (NodeStyle::Wire, "Wire"),
-            (NodeStyle::Corona, "Corona"),
             (NodeStyle::Vortex, "Vortex"),
-            (NodeStyle::Plasma, "Plasma"),
-            (NodeStyle::Aurora, "Aurora"),
-            (NodeStyle::Marble, "Marble"),
-            (NodeStyle::Lava, "Lava"),
-            (NodeStyle::Filament, "Filament"),
-            (NodeStyle::Stripes, "Stripes"),
-            (NodeStyle::Rings, "Rings"),
-            (NodeStyle::Pinwheel, "Pinwheel"),
-            (NodeStyle::Spiral, "Spiral"),
             (NodeStyle::Checker, "Checker"),
-            (NodeStyle::Tiles, "Tiles"),
+            (NodeStyle::Spiral, "Spiral"),
+            (NodeStyle::Pinwheel, "Pinwheel"),
         ] {
             ui.selectable_value(&mut state.view.node_style, style, label);
         }
