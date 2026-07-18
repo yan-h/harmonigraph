@@ -118,8 +118,10 @@ struct Uniforms {
     cam_right: [f32; 4],
     cam_up: [f32; 4],
     misc: [f32; 4],
-    /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z, w unused. The
-    /// dots style maps a dot's pitch through these to index `dot_ramp`.
+    /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
+    /// (the shader converts its screen-pixel AA softness to render
+    /// pixels with it); w unused. The dots style maps a dot's pitch
+    /// through x/y to index `dot_ramp`.
     misc2: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
@@ -229,7 +231,7 @@ struct LatticeCallback {
     /// screen's pixels-per-point and `render_scale` to size the offscreen
     /// target.
     size_points: [f32; 2],
-    /// Copied from the scene (a view setting); see [`RENDER_SCALE_RANGE`].
+    /// From the scene (a view setting), clamped to [`RENDER_SCALE_RANGE`].
     render_scale: f32,
 }
 
@@ -241,6 +243,9 @@ impl LatticeCallback {
         pane_id: u64,
     ) -> Self {
         let aspect = size_points.x / size_points.y.max(1.0);
+        let render_scale = scene
+            .render_scale
+            .clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
         let camera = scene.camera;
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
@@ -302,13 +307,13 @@ impl LatticeCallback {
                     scene.octave_style.shader_index() as f32,
                     scene.node_style.shader_index() as f32,
                 ],
-                misc2: [scene.darkest_pitch, scene.brightest_pitch, 0.0, 0.0],
+                misc2: [scene.darkest_pitch, scene.brightest_pitch, render_scale, 0.0],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
             },
             target_format,
             pane_id,
             size_points: [size_points.x, size_points.y],
-            render_scale: scene.render_scale,
+            render_scale,
         }
     }
 }
@@ -731,11 +736,8 @@ impl CallbackTrait for LatticeCallback {
         }
 
         // Offscreen pixel size: the callback rect at native resolution,
-        // scaled by the render-scale view setting.
-        let scale = self
-            .render_scale
-            .clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
-        let px = screen_descriptor.pixels_per_point * scale;
+        // scaled by the render-scale view setting (clamped in from_scene).
+        let px = screen_descriptor.pixels_per_point * self.render_scale;
         let max_dim = device.limits().max_texture_dimension_2d;
         let size = [
             ((self.size_points[0] * px).round() as u32).clamp(1, max_dim),

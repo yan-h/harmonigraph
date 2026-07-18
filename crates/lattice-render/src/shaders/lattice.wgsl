@@ -21,8 +21,10 @@ struct Uniforms {
     //    5 aurora, 6 marble, 7 lava, 8 filament, 9 stripes, 10 rings,
     //    11 pinwheel, 12 spiral, 13 checker, 14 tiles)
     misc: vec4<f32>,
-    // x: darkest_pitch, y: brightest_pitch (MIDI notes); z, w unused. The
-    // dots style maps a dot's pitch through these to index dot_ramp.
+    // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
+    // (offscreen pixels per screen pixel — converts the screen-pixel
+    // softness knob to render pixels); w unused. The dots style maps a
+    // dot's pitch through x/y to index dot_ramp.
     misc2: vec4<f32>,
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
@@ -126,10 +128,20 @@ fn aa_inside(edge: f32, x: f32, w: f32) -> f32 {
     return 1.0 - smoothstep(edge - w, edge + w, x);
 }
 
-// Half-width of the soft band, in render pixels on each side of an edge
+// Half-width of the soft band, in SCREEN pixels on each side of an edge
 // (the one knob for how soft shape edges feel; softness stays
 // screen-constant at every zoom). ~4px total on a Retina surface.
+// aa_width() converts to render pixels via the render scale, so the
+// super/sub-sampling view setting changes resolved detail without
+// changing how soft edges look.
 const AA_SOFTNESS_PX: f32 = 2.0;
+
+// Soft-band width in the units of a coordinate whose per-render-pixel
+// derivative is `coord_fwidth`: the softness knob, converted from screen
+// pixels to render pixels.
+fn aa_width(coord_fwidth: f32) -> f32 {
+    return max(coord_fwidth, 1e-4) * AA_SOFTNESS_PX * max(u.misc2.z, 0.01);
+}
 
 // Activation level (0..1) of octave slot `i`, unpacked from 8-bit fields.
 // Each octave carries its OWN envelope so indicators fade independently
@@ -618,7 +630,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // across the billboard, so fwidth is uniform over the quad and safe to
     // take before any branching), scaled to the softness knob. Shape edges
     // below use this instead of fixed-uv smoothsteps.
-    let aa = max(fwidth(in.uv.x), 1e-4) * AA_SOFTNESS_PX;
+    let aa = aa_width(fwidth(in.uv.x));
 
     // Solid disc occupies the inner half of the quad; channel-14 voices
     // render as an outline ring instead (v1 semantics). Radii sit at the
@@ -786,7 +798,7 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
 fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
     // Screen-constant soft band across the beam (see aa_inside; computed
     // before the branch so the derivative stays in uniform control flow).
-    let aa_y = max(fwidth(in.uv.y), 1e-4) * AA_SOFTNESS_PX;
+    let aa_y = aa_width(fwidth(in.uv.y));
 
     // Grid line: uniformly faint with a screen-constant soft edge (line
     // edge at the old 0.35..1.0 band's midpoint), the ends easing off
