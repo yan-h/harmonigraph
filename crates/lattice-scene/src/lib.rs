@@ -259,15 +259,20 @@ pub enum Projection {
     /// Cabinet (oblique): the camera faces the fifths/thirds sheet
     /// straight on (orbit is ignored; the UI turns plain drags into
     /// pans), which renders that primary plane with zero distortion, and
-    /// the sevens axis shears to a uniform up-right screen offset at half
-    /// scale — every seventh-step is the same arrow anywhere on screen.
+    /// the sevens axis shears to a uniform screen offset — every
+    /// seventh-step is the same arrow anywhere on screen. Direction and
+    /// length of that arrow are [`Camera::cabinet_angle`] and
+    /// [`Camera::cabinet_scale`].
     Cabinet,
 }
 
-/// Cabinet projection's depth treatment: one unit toward the viewer
-/// offsets up-right at 45° by this fraction of a unit (the classic
-/// drafting convention; 1.0 would be cavalier).
-const CABINET_DEPTH_SCALE: f32 = 0.5;
+fn default_cabinet_angle() -> f32 {
+    45f32.to_radians()
+}
+
+fn default_cabinet_scale() -> f32 {
+    0.5
+}
 
 /// Simple orbit camera. Angles in radians.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -280,6 +285,15 @@ pub struct Camera {
     /// serde(default) keeps pre-projection persisted blobs loadable.
     #[serde(default)]
     pub projection: Projection,
+    /// Cabinet only: on-screen direction of the sevens axis, radians
+    /// counterclockwise from screen-right (drafting convention picks 30°,
+    /// 45°, or 60°; default 45°).
+    #[serde(default = "default_cabinet_angle")]
+    pub cabinet_angle: f32,
+    /// Cabinet only: screen length of one seventh-step as a fraction of a
+    /// front-plane step (0.5 = classic cabinet, 1.0 = cavalier).
+    #[serde(default = "default_cabinet_scale")]
+    pub cabinet_scale: f32,
 }
 
 impl Default for Camera {
@@ -291,6 +305,8 @@ impl Default for Camera {
             distance: 12.0,
             fov_y: 45f32.to_radians(),
             projection: Projection::default(),
+            cabinet_angle: default_cabinet_angle(),
+            cabinet_scale: default_cabinet_scale(),
         }
     }
 }
@@ -368,21 +384,22 @@ impl Camera {
                 Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
             }
             // Orthographic window plus a shear: view-space depth relative
-            // to the focus plane becomes a 45° up-right offset at
-            // CABINET_DEPTH_SCALE. The focus plane itself is unmoved (the
-            // shear's translation term cancels there), so framing still
-            // matches the other projections.
+            // to the focus plane becomes a screen offset along
+            // `cabinet_angle` scaled by `cabinet_scale`. The focus plane
+            // itself is unmoved (the shear's translation term cancels
+            // there), so framing still matches the other projections.
             Projection::Cabinet => {
                 let half_h = self.distance * (self.fov_y * 0.5).tan();
                 let half_w = half_h * aspect;
                 let ortho =
                     Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR);
-                let k = CABINET_DEPTH_SCALE * std::f32::consts::FRAC_1_SQRT_2;
+                let (sin, cos) = self.cabinet_angle.sin_cos();
+                let (kx, ky) = (self.cabinet_scale * cos, self.cabinet_scale * sin);
                 let mut shear = Mat4::IDENTITY;
-                shear.z_axis.x = k;
-                shear.z_axis.y = k;
-                shear.w_axis.x = k * self.distance;
-                shear.w_axis.y = k * self.distance;
+                shear.z_axis.x = kx;
+                shear.z_axis.y = ky;
+                shear.w_axis.x = kx * self.distance;
+                shear.w_axis.y = ky * self.distance;
                 ortho * shear
             }
         };
@@ -1303,6 +1320,13 @@ mod tests {
         let k = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
         assert!((dz.x - dx.x * k).abs() < 0.1, "{dz:?} vs {dx:?}");
         assert!((dz.y - dy.y * k).abs() < 0.1, "{dz:?} vs {dy:?}");
+
+        // The knobs steer the arrow: angle 0 at full (cavalier) scale
+        // shears purely horizontally, one front-plane step long.
+        s.camera.cabinet_angle = 0.0;
+        s.camera.cabinet_scale = 1.0;
+        let dz = s.project(viewport, Vec3::Z).unwrap() - s.project(viewport, Vec3::ZERO).unwrap();
+        assert!((dz.x - dx.x).abs() < 0.1 && dz.y.abs() < 1e-3, "{dz:?} vs {dx:?}");
     }
 
     #[test]

@@ -443,11 +443,24 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                     }
                     Projection::Cabinet => {
                         "Face-on fifths/thirds sheet, undistorted; sevenths shear \
-                         up-right at half scale (drag pans; orbit is disabled)"
+                         to a fixed screen arrow (drag pans; orbit is disabled)"
                     }
                 });
         }
     });
+    if state.camera.projection == Projection::Cabinet {
+        // Cabinet's two drafting knobs: where the sevens axis points on
+        // screen, and how long a seventh-step draws relative to a
+        // front-plane step (0.5 = classic cabinet, 1.0 = cavalier).
+        let mut degrees = state.camera.cabinet_angle.to_degrees();
+        if ValueBar::new(&mut degrees, 0.0..=90.0, "Sevenths angle")
+            .show(ui)
+            .changed()
+        {
+            state.camera.cabinet_angle = degrees.to_radians();
+        }
+        ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length").show(ui);
+    }
     // One-click reading angles; orbiting stays free afterwards. Cabinet
     // ignores orbit angles entirely, so the presets gray out there.
     ui.add_enabled_ui(state.camera.projection != Projection::Cabinet, |ui| {
