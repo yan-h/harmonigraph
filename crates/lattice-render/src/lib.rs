@@ -162,14 +162,15 @@ fn pack_octaves(levels: &[f32; lattice_scene::OCTAVE_SLOTS]) -> [u32; 3] {
     octaves
 }
 
-/// One chord edge (a beam between two active adjacent nodes).
+/// One edge-pipeline instance: a chord beam between two active adjacent
+/// nodes, or a faint background grid line.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuEdge {
-    /// xyz: endpoint A, w: strength.
+    /// xyz: endpoint A, w: strength (grid lines: opacity).
     a_strength: [f32; 4],
-    /// xyz: endpoint B, w: unused.
-    b_pad: [f32; 4],
+    /// xyz: endpoint B, w: kind (0 chord beam, 1 grid line).
+    b_kind: [f32; 4],
     color: [f32; 4],
 }
 
@@ -247,12 +248,16 @@ impl LatticeCallback {
             })
             .collect();
 
+        // Grid first, so it draws under the chord beams (and both draw
+        // under the nodes).
         let edges = scene
-            .edges
+            .grid
             .iter()
-            .map(|e| GpuEdge {
+            .map(|g| (g, 1.0))
+            .chain(scene.edges.iter().map(|e| (e, 0.0)))
+            .map(|(e, kind)| GpuEdge {
                 a_strength: [e.a.x, e.a.y, e.a.z, e.strength],
-                b_pad: [e.b.x, e.b.y, e.b.z, 0.0],
+                b_kind: [e.b.x, e.b.y, e.b.z, kind],
                 color: e.color.to_array(),
             })
             .collect();

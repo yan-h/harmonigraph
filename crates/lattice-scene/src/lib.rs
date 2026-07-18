@@ -349,6 +349,11 @@ pub struct Scene {
     pub node_style: NodeStyle,
     /// Chord edges (empty when the toggle is off).
     pub edges: Vec<EdgeInstance>,
+    /// The faint background grid (see [`derive_grid`]): one segment per
+    /// adjacent pair of visible positions, inset so every node position
+    /// keeps a circular gap where its disc draws while sounding. Reuses
+    /// [`EdgeInstance`]; `strength` carries the line opacity.
+    pub grid: Vec<EdgeInstance>,
     /// Pitch->color lookup for the dots octave style, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub dot_ramp: [Vec4; DOT_RAMP_N],
@@ -498,10 +503,62 @@ pub fn derive_scene(
         octave_style: view.octave_style,
         node_style: view.node_style,
         edges,
+        grid: derive_grid(view),
         dot_ramp: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
     }
+}
+
+/// How far a grid segment stops short of each node center, as a factor of
+/// the node radius. Larger than the disc's visual radius (~0.9 × radius,
+/// see the quad math in lattice.wgsl) so the gap fully contains the circle
+/// a sounding note draws there.
+const GRID_INSET_FACTOR: f32 = 1.3;
+
+/// The faint background grid: idle positions draw no disc, so these
+/// segments between every adjacent pair of visible positions carry the
+/// lattice's structure instead, inset at both ends so each node position
+/// keeps a clear circular gap.
+fn derive_grid(view: &ViewConfig) -> Vec<EdgeInstance> {
+    let center = view.center();
+    let inset = view.spacing * NODE_RADIUS_FACTOR * GRID_INSET_FACTOR;
+    let color = skin::active_skin().grid_line;
+    let mut grid = Vec::new();
+    for pos in view.visible_positions() {
+        // +1 steps only, so each undirected pair appears once. The window
+        // is a box, so an in-window neighbor only needs the upper bound
+        // checked on the stepped axis.
+        let steps = [
+            (
+                LatticePos::new(pos.threes + 1, pos.fives, pos.sevens),
+                pos.threes < view.center_threes + view.extent_threes,
+            ),
+            (
+                LatticePos::new(pos.threes, pos.fives + 1, pos.sevens),
+                pos.fives < view.center_fives + view.extent_fives,
+            ),
+            (
+                LatticePos::new(pos.threes, pos.fives, pos.sevens + 1),
+                pos.sevens < view.center_sevens + view.extent_sevens,
+            ),
+        ];
+        for (neighbor, in_window) in steps {
+            if !in_window {
+                continue;
+            }
+            let a = lattice_to_world(pos - center, view.spacing);
+            let b = lattice_to_world(neighbor - center, view.spacing);
+            let dir = (b - a).normalize_or_zero();
+            grid.push(EdgeInstance {
+                a: a + dir * inset,
+                b: b - dir * inset,
+                color,
+                strength: color.w,
+            });
+        }
+    }
+    grid
 }
 
 /// Chord edges: every pair of active, lattice-adjacent nodes gets a beam.
@@ -804,6 +861,62 @@ mod tests {
         }
         let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
         assert_eq!(scene.edges.len(), 0);
+    }
+
+    #[test]
+    fn grid_segments_connect_neighbors_but_leave_node_gaps() {
+        // A 3×3 window: 2·3 horizontal + 3·2 vertical inter-neighbor
+        // segments, none along the unused sevens axis.
+        let view = ViewConfig {
+            extent_threes: 1,
+            extent_fives: 1,
+            extent_sevens: 0,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert_eq!(scene.grid.len(), 12);
+        for seg in &scene.grid {
+            // Inset at both ends: shorter than the node spacing...
+            let len = seg.a.distance(seg.b);
+            assert!(len < view.spacing * 0.99, "segment not inset, len {len}");
+            // ...and clear of every disc (visual radius ~0.9 × node_radius),
+            // so the gap fully contains the circle a played note draws.
+            for node in &scene.nodes {
+                for p in [seg.a, seg.b] {
+                    assert!(
+                        p.distance(node.world_pos) > scene.node_radius * 0.9,
+                        "segment endpoint {p:?} inside the disc at {:?}",
+                        node.world_pos
+                    );
+                }
+            }
+        }
+
+        // Panning the window keeps the grid attached to the visible nodes
+        // (both are derived in centered world space).
+        let panned = ViewConfig { center_threes: 3, ..view };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &panned,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert_eq!(scene.grid.len(), 12);
+        let max_node = scene
+            .nodes
+            .iter()
+            .map(|n| n.world_pos.length())
+            .fold(0.0f32, f32::max);
+        for seg in &scene.grid {
+            assert!(seg.a.length() <= max_node && seg.b.length() <= max_node);
+        }
     }
 
     #[test]

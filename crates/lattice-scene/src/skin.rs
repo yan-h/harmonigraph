@@ -17,7 +17,11 @@ use glam::Vec4;
 pub struct Skin {
     // ---- 3D scene ----
     /// Fill color of idle (non-sounding) lattice nodes, linear-ish RGBA.
+    /// Idle nodes draw no disc; this colors their hover ghost.
     pub node_idle: Vec4,
+    /// The faint background grid between node positions; alpha is the
+    /// line opacity.
+    pub grid_line: Vec4,
 
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
     /// Window/panel background.
@@ -62,6 +66,7 @@ impl Default for Skin {
     fn default() -> Self {
         Skin {
             node_idle: Vec4::new(0.16, 0.17, 0.20, 1.0),
+            grid_line: Vec4::new(0.16, 0.17, 0.20, 0.55),
             panel: [24, 25, 29],
             well: [15, 16, 19],
             surface_faint: [30, 31, 36],

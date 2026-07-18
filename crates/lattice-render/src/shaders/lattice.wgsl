@@ -260,7 +260,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let outlined = in.params.w;
     let filled = 1.0 - smoothstep(0.42, 0.5, d);
     let ring = (1.0 - smoothstep(0.42, 0.5, d)) * smoothstep(0.30, 0.38, d);
-    var disc = mix(filled, ring, outlined);
+    // Unplayed nodes draw no disc at all — the background grid's gap marks
+    // the position instead. Activation fades the disc in (and back out on
+    // release); hovering an idle node still shows a dim ghost so picking
+    // has visible feedback.
+    let presence = max(activation, 0.35 * hovered);
+    var disc = mix(filled, ring, outlined) * presence;
 
     // Wire style: active nodes morph from disc into a tumbling wireframe
     // octahedron (idle nodes stay discs in every style).
@@ -360,15 +365,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(out_rgb, alpha);
 }
 
-// ---- Chord edges -----------------------------------------------------------
-// Beams between simultaneously sounding, lattice-adjacent nodes: a held
-// chord's interval structure rendered as geometry. Drawn under the nodes.
+// ---- Chord edges & grid lines ----------------------------------------------
+// One pipeline, two kinds of instance: beams between simultaneously
+// sounding, lattice-adjacent nodes (a held chord's interval structure
+// rendered as geometry), and the faint background grid between node
+// positions (segments arrive pre-inset from the scene, leaving a gap at
+// every node position). Drawn under the nodes, grid first.
 
 struct EdgeInstance {
-    // xyz: endpoint A, w: strength (min of the two node activations)
+    // xyz: endpoint A, w: strength (chord: min of the two node
+    // activations; grid: line opacity)
     @location(0) a_strength: vec4<f32>,
-    // xyz: endpoint B, w: unused
-    @location(1) b_pad: vec4<f32>,
+    // xyz: endpoint B, w: kind (0 chord beam, 1 grid line)
+    @location(1) b_kind: vec4<f32>,
     @location(2) color: vec4<f32>,
 };
 
@@ -378,6 +387,7 @@ struct EdgeVsOut {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) strength: f32,
+    @location(3) @interpolate(flat) kind: f32,
 };
 
 @vertex
@@ -391,7 +401,7 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     let corner = corners[vertex_index];
 
     let a = inst.a_strength.xyz;
-    let b = inst.b_pad.xyz;
+    let b = inst.b_kind.xyz;
     let axis = b - a;
     // Billboard the beam's width: perpendicular to both the edge and the
     // view direction, falling back to camera-up for edge-on views.
@@ -403,7 +413,8 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     } else {
         perp = perp / plen;
     }
-    let half_width = u.misc.y * 0.35;
+    // Grid lines are much thinner than chord beams.
+    let half_width = u.misc.y * mix(0.35, 0.09, inst.b_kind.w);
     let world = a + axis * corner.x + perp * corner.y * half_width;
 
     var out: EdgeVsOut;
@@ -411,11 +422,24 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     out.uv = corner;
     out.color = inst.color;
     out.strength = inst.a_strength.w;
+    out.kind = inst.b_kind.w;
     return out;
 }
 
 @fragment
 fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
+    // Grid line: uniformly faint with soft edges, the ends easing off
+    // toward the node gaps.
+    if in.kind > 0.5 {
+        let across = 1.0 - smoothstep(0.35, 1.0, abs(in.uv.y));
+        let along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
+        let alpha = in.strength * across * along;
+        if alpha < 0.01 {
+            discard;
+        }
+        return vec4<f32>(in.color.rgb * alpha, alpha);
+    }
+
     // Soft-edged beam with a brighter core; the ends taper so the node
     // discs own the joints.
     let across = 1.0 - smoothstep(0.15, 1.0, abs(in.uv.y));
