@@ -929,8 +929,12 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 
     // Voice bars at the voice's ACTUAL pitch (per-note tuning and MPE
-    // bends slide the bar): height follows the same envelope as the
+    // bends slide the bar): length follows the same envelope as the
     // lattice glow, weighted by velocity; color matches the node color.
+    // They hang from the TOP: the audio spectrum's fundamental rises from
+    // the bottom at the same x, so a bottom-up bar sat exactly on the peak
+    // it should be compared against. Hanging bars point down at the peak
+    // instead of hiding it.
     if cfg.show_voice_bars {
         for voice in state.tracker.voices() {
             let activation = voice.activation(now, state.frame_params.pitch_class_fade_time);
@@ -953,8 +957,8 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             );
             painter.line_segment(
                 [
-                    egui::pos2(x, rect.bottom()),
-                    egui::pos2(x, rect.bottom() - height),
+                    egui::pos2(x, rect.top()),
+                    egui::pos2(x, rect.top() + height),
                 ],
                 egui::Stroke::new(3.0, color),
             );
