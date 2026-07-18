@@ -280,9 +280,23 @@ impl Plugin for MidiLattice3d {
         let channels = buffer.channels();
         if channels > 0 {
             let gain = 1.0 / channels as f32;
-            for mut frame in buffer.iter_samples() {
-                let mono: f32 = frame.iter_mut().map(|s| *s).sum::<f32>() * gain;
-                let _ = self.audio_producer.push(mono);
+            // Reserve the block's slots once and fill them, rather than a
+            // per-sample push(): one ring-atomic touch per block instead of
+            // ~48k/s on the audio thread. Bound the reservation by free space
+            // so a near-full ring (GUI stalled/closed) drops the block's tail
+            // — the same "drop rather than stall" failure mode as before, just
+            // at block granularity. `slots()` only grows as the consumer
+            // drains, so the reservation of `want` never fails; the `if let`
+            // is defensive.
+            let want = buffer.samples().min(self.audio_producer.slots());
+            if want > 0 {
+                if let Ok(chunk) = self.audio_producer.write_chunk_uninit(want) {
+                    chunk.fill_from_iter(
+                        buffer
+                            .iter_samples()
+                            .map(|mut frame| frame.iter_mut().map(|s| *s).sum::<f32>() * gain),
+                    );
+                }
             }
         }
 
