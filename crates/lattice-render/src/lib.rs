@@ -138,6 +138,11 @@ struct GpuInstance {
     /// The node's pitch class in cents (0..1200); dots mode uses it to place
     /// each octave dot at the note's absolute-pitch angle.
     cents: f32,
+    /// Depth-cue size multiplier (see lattice_scene's `depth_scale`).
+    scale: f32,
+    /// 1 when the node is on the home (center sevens) sheet: idle home
+    /// nodes draw a blank placeholder ring.
+    home: f32,
 }
 
 impl GpuInstance {
@@ -145,7 +150,8 @@ impl GpuInstance {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32, 5 => Float32
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
+            5 => Float32, 6 => Float32, 7 => Float32
         ],
     };
 }
@@ -162,14 +168,16 @@ fn pack_octaves(levels: &[f32; lattice_scene::OCTAVE_SLOTS]) -> [u32; 3] {
     octaves
 }
 
-/// One chord edge (a beam between two active adjacent nodes).
+/// One edge-pipeline instance: a chord beam between two active adjacent
+/// nodes, or a faint background grid line.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuEdge {
-    /// xyz: endpoint A, w: strength.
+    /// xyz: endpoint A, w: strength (grid lines: opacity).
     a_strength: [f32; 4],
-    /// xyz: endpoint B, w: unused.
-    b_pad: [f32; 4],
+    /// xyz: endpoint B, w: kind (0 chord beam, 1 grid line, 2 dashed
+    /// grid line).
+    b_kind: [f32; 4],
     color: [f32; 4],
 }
 
@@ -244,15 +252,21 @@ impl LatticeCallback {
                 octaves: pack_octaves(&n.octaves),
                 seed: n.seed,
                 cents: n.cents,
+                scale: n.scale,
+                home: if n.on_home { 1.0 } else { 0.0 },
             })
             .collect();
 
+        // Grid first, so it draws under the chord beams (and both draw
+        // under the nodes).
         let edges = scene
-            .edges
+            .grid
             .iter()
-            .map(|e| GpuEdge {
+            .map(|g| (g, if g.dashed { 2.0 } else { 1.0 }))
+            .chain(scene.edges.iter().map(|e| (e, 0.0)))
+            .map(|(e, kind)| GpuEdge {
                 a_strength: [e.a.x, e.a.y, e.a.z, e.strength],
-                b_pad: [e.b.x, e.b.y, e.b.z, 0.0],
+                b_kind: [e.b.x, e.b.y, e.b.z, kind],
                 color: e.color.to_array(),
             })
             .collect();
