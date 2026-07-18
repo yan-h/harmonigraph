@@ -442,29 +442,47 @@ fn field_pattern(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec
     return vec2<f32>(t, mix(0.50, 1.10, tile));
 }
 
-// Flame coverage (0..~1.5) at the rim for each field style; drives how far
-// the corona reaches at this angle and how bright it burns. Same clock and
-// seed rules as field_pattern. Pattern styles share the default fine
-// flicker: a crisp geometric ball still burns at the rim.
-fn field_flame(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
-    let dir = uv / max(d, 1e-4);
+// Halo density (0..~1.5) at this pixel: turbulent gas wafting off the
+// star, replacing the old smooth exponential fringe (which read as a
+// halo pasted behind the disc). Three ingredients sell the motion:
+// - plume: a slowly evolving per-direction strength choosing WHERE the
+//   surface vents, so the fringe is plumes and gaps, not an even rim;
+// - waft: turbulence whose noise domain slides along the radial axis
+//   over time, so the detail visibly streams OUTWARD, and whose sample
+//   direction rotates with height so wisps curl sideways as they rise
+//   (curl direction/strength is per-node);
+// - reach: the decay length itself follows plume and waft, giving an
+//   irregular, filamentous outer edge instead of a level exp() falloff.
+// Everything is sampled on the direction circle (never atan2), so there
+// is no angular seam. Same clock and seed rules as field_pattern.
+fn field_halo(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
+    // The direction clamp keeps samples smooth near the disc center,
+    // where the halo shows through outlined (ring) nodes.
+    let dir = uv / max(d, 0.30);
+    let h = max(d - 0.42, 0.0);
+
+    // Style character: where and how strongly the surface vents.
+    var plume_dir = dir;
     if style == 3u {
-        // Vortex: flame tips trail along with the rotation.
-        let rdir = rot2(time * 0.55) * dir;
-        return pow(vnoise(rdir * 2.1 + vec2<f32>(seed * 7.0, d * 2.5)), 2.0);
-    } else if style == 4u || style == 8u {
-        // Plasma/filament: sparse prominences — a few tall arcs that erupt
-        // and subside.
-        return pow(vnoise(dir * 1.9 + vec2<f32>(seed * 11.0, time * 0.45)), 3.0) * 1.5;
-    } else if style == 5u {
-        // Aurora: slow soft shimmer.
-        return pow(vnoise(dir * 1.5 + vec2<f32>(seed * 5.0, time * 0.25)), 2.0) * 0.8;
-    } else if style == 7u {
-        // Lava: a soft halo with a slow swell, no flicker.
-        return 0.35 + 0.25 * vnoise(dir * 1.2 + vec2<f32>(seed * 3.0, time * 0.15));
+        // Vortex: plumes trail around with the rotation.
+        plume_dir = rot2(time * 0.55) * dir;
     }
-    // Corona/marble: fine flicker all around the edge.
-    return pow(vnoise(uv * 4.0 + vec2<f32>(time * 1.4 + seed * 9.0, time * 1.1)), 2.0);
+    var plume = fbm(plume_dir * 2.3 + vec2<f32>(seed * 3.1, time * 0.16));
+    if style == 4u || style == 8u {
+        // Plasma/filament: a few tall prominences instead of an even
+        // fringe.
+        plume = pow(plume, 3.0) * 1.8;
+    } else if style == 7u {
+        // Lava: soft, even swell.
+        plume = 0.45 + 0.35 * plume;
+    }
+
+    // Outward-streaming turbulence, curling as it rises.
+    let curl = (fract(seed * 0.618034) - 0.5) * 3.0;
+    let waft = fbm(rot2(h * curl) * dir * 1.6 + vec2<f32>(seed * 7.7, d * 3.5 - time * 0.35));
+
+    let reach = 0.5 + 1.4 * plume * plume + 0.6 * (waft - 0.5);
+    return exp(-h * 9.0 / max(reach, 0.15)) * (0.30 + 0.70 * waft) * (0.35 + 0.65 * plume);
 }
 
 fn seg_dist(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
@@ -544,14 +562,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let window = 1.0 - smoothstep(0.5, 0.95, d);
     var glow = (0.6 * activation + 0.25 * hovered) * exp(-3.0 * d) * window;
 
-    // Field styles: replace the smooth glow with a noise-flickered flame
-    // edge (each style shapes its own flame — flicker, trailing tips,
-    // sparse prominences, or a soft swell). Clocked on global time so a
-    // retrigger never restarts the flame.
+    // Field styles: replace the smooth glow with turbulent gas wafting
+    // off the surface (see field_halo — venting plumes, outward-streaming
+    // curl, ragged reach). Clocked on global time so a retrigger never
+    // restarts the motion.
     if is_field_style(style) && activation > 0.0 {
-        let flame = field_flame(style, in.uv, d, u.misc.x, seed);
-        glow = activation * exp(-4.5 * max(d - 0.44, 0.0) * (2.4 - 1.8 * min(flame, 1.0))) * window
-            * (0.55 + 0.45 * flame)
+        glow = activation * field_halo(style, in.uv, d, u.misc.x, seed) * window
             + 0.25 * hovered * exp(-3.0 * d) * window;
     }
 
