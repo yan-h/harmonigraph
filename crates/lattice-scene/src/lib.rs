@@ -64,19 +64,22 @@ pub enum NodeStyle {
     Lava,
     /// Gas ball variant: glowing ridged-noise threads over dark gas.
     Filament,
-    /// Pattern variant: solid bands cycling the octave colors, marching
-    /// slowly across the disc; each node stripes in its own direction.
+    /// Pattern variant: soft color waves wrapping the sphere around a
+    /// per-node axis, slowly revolving.
     Stripes,
-    /// Pattern variant: concentric color rings radiating slowly outward.
+    /// Pattern variant: soft color rings radiating from the face center,
+    /// bunching toward the limb.
     Rings,
-    /// Pattern variant: six solid wedges rotating slowly, colors cycling.
+    /// Pattern variant: beach-ball sectors around a tilted pole, slowly
+    /// turning.
     Pinwheel,
-    /// Pattern variant: four-armed spiral of color bands winding outward.
+    /// Pattern variant: two-armed spiral of color waves hugging the
+    /// sphere.
     Spiral,
-    /// Pattern variant: checkerboard whose cells cycle the octave colors.
+    /// Pattern variant: soft checkerboard on the globe graticule.
     Checker,
-    /// Pattern variant: rounded checkerboard — bright rounded tiles over
-    /// dim gaps.
+    /// Pattern variant: rounded glowing tiles on a slowly revolving
+    /// globe, over dim gaps.
     Tiles,
 }
 

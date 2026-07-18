@@ -223,7 +223,9 @@ fn rot2(a: f32) -> mat2x2<f32> {
 // present somewhere in the disc — in its own patches, bands, or cells,
 // interpolated where they meet, never averaged into a single hue. The gas
 // styles (corona..filament) drive the field with noise; the pattern styles
-// (stripes..tiles) with deterministic geometry.
+// (stripes..tiles) with deterministic geometry mapped onto a sphere and
+// softened by the same noise wobble, so they share the gassy look while
+// staying recognizably structured.
 //
 // All fields are functions of GLOBAL time and a stable per-node seed (never
 // the per-note age/seed): the field at a node is one continuous flow that a
@@ -284,11 +286,16 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
     return csum / wsum;
 }
 
-// Brightness profile across one band of a banded pattern (input: fract
-// within the band): a subtle dark seam at the edges so neighboring bands
-// stay distinct even where their colors blend.
-fn band_seam(f: f32) -> f32 {
-    return 0.72 + 0.43 * smoothstep(0.0, 0.12, f) * (1.0 - smoothstep(0.88, 1.0, f));
+// Orthographic sphere mapping for the pattern styles: the unit-sphere
+// point under this pixel. uv is clamped just inside the disc rim, so the
+// glow region beyond the disc keeps sampling the limb color instead of
+// hitting the degenerate z=0 edge. Feeding patterns angles from here
+// (longitude/latitude/polar) instead of raw uv is what makes them read
+// as painted ON a ball: equal angular steps compress toward the limb.
+fn sphere_point(uv: vec2<f32>) -> vec3<f32> {
+    let r = length(uv);
+    let p = uv * (min(r, 0.495) / max(r, 1e-5));
+    return vec3<f32>(p * 2.0, 2.0 * sqrt(max(0.25 - dot(p, p), 0.0)));
 }
 
 // A field style's scalar fields at one pixel: x picks the color along the
@@ -362,47 +369,77 @@ fn field_pattern(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec
         let patch_n = fbm(uv * 1.5 + vec2<f32>(seed * 2.9, time * 0.05));
         return vec2<f32>(smoothstep(0.30, 0.70, patch_n), 0.42 + 1.15 * strand);
     } else if style == 9u {
-        // Stripes: solid bands cycling the octave colors, marching slowly
-        // across the disc; each node stripes in its own direction (seed
-        // angle). The /4 color cycle makes neighboring bands distinct
-        // while walking the whole gradient.
-        let c = (rot2(seed) * uv).x / 0.22 + time * 0.25;
-        return vec2<f32>(fract(floor(c) / 4.0 + seed * 0.29), band_seam(fract(c)));
+        // Stripes: color waves wrapping the sphere around a per-node axis
+        // (seed angle), slowly revolving. The cos-plus-fbm-wobble template
+        // is the same one vortex/aurora use — that IS the gassy look, just
+        // over deterministic geometry — and the longitude mapping squeezes
+        // the bands at the limb so they sit on the ball, not over it.
+        let q = sphere_point(rot2(seed) * uv);
+        let lon = atan2(q.x, q.z);
+        let wob = (fbm(uv * 2.6 + vec2<f32>(seed * 5.7, time * 0.13)) - 0.5) * 2.2;
+        let lum = 0.78 + 0.4 * fbm(uv * 3.2 + vec2<f32>(seed * 3.1, -time * 0.11));
+        return vec2<f32>(0.5 + 0.5 * cos(lon * 5.0 + time * 0.4 + wob), lum);
     } else if style == 10u {
-        // Rings: concentric bands radiating slowly outward.
-        let c = d / 0.16 - time * 0.35 + seed;
-        return vec2<f32>(fract(floor(c) / 4.0 + seed * 0.7), band_seam(fract(c)));
+        // Rings: color waves radiating from the face center; the polar
+        // angle (not screen radius) bunches the rings toward the limb.
+        let q = sphere_point(uv);
+        let rho = acos(clamp(q.z, -1.0, 1.0));
+        let wob = (fbm(uv * 2.8 + vec2<f32>(seed * 4.3, time * 0.14)) - 0.5) * 2.4;
+        let lum = 0.78 + 0.4 * fbm(uv * 3.0 + vec2<f32>(seed * 2.1, time * 0.10));
+        return vec2<f32>(0.5 + 0.5 * cos(rho * 8.0 - time * 0.5 + seed + wob), lum);
     } else if style == 11u {
-        // Pinwheel: six solid wedges, slowly rotating, colors cycling
-        // through the wedges. fract() absorbs the atan2 wrap: the wrap
-        // line is itself always a wedge edge.
-        let w = fract(atan2(uv.y, uv.x) / TAU + time * 0.03 + seed) * 6.0;
-        return vec2<f32>(fract(floor(w) / 6.0 + time * 0.02 + seed * 0.13), band_seam(fract(w)));
+        // Pinwheel: beach-ball sectors — azimuthal color waves around a
+        // pole tilted toward the viewer, so the wedges curve over the
+        // sphere like a globe seen at an angle. The integer harmonic keeps
+        // the atan2 wrap invisible.
+        let q0 = sphere_point(rot2(seed) * uv);
+        let q = vec3<f32>(q0.x, 0.62 * q0.y - 0.78 * q0.z, 0.78 * q0.y + 0.62 * q0.z);
+        let phi = atan2(q.x, q.z);
+        let wob = (fbm(uv * 2.4 + vec2<f32>(seed * 6.3, time * 0.12)) - 0.5) * 2.6;
+        let lum = 0.78 + 0.4 * fbm(uv * 3.1 + vec2<f32>(seed * 2.7, time * 0.09));
+        return vec2<f32>(0.5 + 0.5 * cos(3.0 * phi + time * 0.25 + wob), lum);
     } else if style == 12u {
-        // Spiral: four-armed Archimedean spiral winding slowly outward.
-        // Four arms with a four-band color cycle: crossing the atan2 seam
-        // jumps the band index by exactly the cycle length, so the seam
-        // is invisible.
+        // Spiral: two-armed spiral of color waves winding out from the
+        // face center; the polar-angle radial term keeps the arms hugging
+        // the sphere. Integer angular harmonic, so no atan2 seam.
+        let q = sphere_point(uv);
+        let rho = acos(clamp(q.z, -1.0, 1.0));
         let ang = atan2(uv.y, uv.x);
-        let c = d * 4.0 - (ang / TAU) * 4.0 - time * 0.12 + seed;
-        return vec2<f32>(fract(floor(c) / 4.0 + seed * 0.7), band_seam(fract(c)));
+        let wob = (fbm(uv * 2.5 + vec2<f32>(seed * 5.9, time * 0.12)) - 0.5) * 2.4;
+        let lum = 0.78 + 0.4 * fbm(uv * 3.0 + vec2<f32>(seed * 3.3, -time * 0.10));
+        return vec2<f32>(0.5 + 0.5 * cos(rho * 7.0 - 2.0 * ang - time * 0.5 + seed + wob), lum);
     } else if style == 13u {
-        // Checker: classic grid; the diagonal 4-phase cycle keeps every
-        // neighboring pair of cells distinct while walking the whole
-        // gradient, and the colors conveyor slowly through the cells.
-        let cell = floor(uv / 0.24 + vec2<f32>(seed * 1.7, seed * 2.9));
-        let t = fract((cell.x + 2.0 * cell.y) / 4.0 + time * 0.05 + seed * 0.31);
-        return vec2<f32>(t, 1.0);
+        // Checker: soft cells on the globe graticule (longitude x
+        // latitude), tilted per node and slowly revolving, so the cells
+        // foreshorten toward the limb like a painted ball. cos*cos keeps
+        // the borders soft; middle octave colors seep through them.
+        let q = sphere_point(rot2(seed * 0.7) * uv);
+        let lon = atan2(q.x, q.z);
+        let lat = asin(clamp(q.y, -1.0, 1.0));
+        let wob = (fbm(uv * 2.7 + vec2<f32>(seed * 4.9, time * 0.12)) - 0.5) * 1.2;
+        let v = cos(lon * 4.0 + time * 0.22 + seed + wob) * cos(lat * 4.0 - wob);
+        let lum = 0.78 + 0.35 * fbm(uv * 3.1 + vec2<f32>(seed * 2.7, time * 0.10));
+        return vec2<f32>(0.5 + 0.5 * v, lum);
     }
-    // Tiles: the checkerboard with rounded corners — bright rounded tiles
-    // (superellipse iso-lines) over dim gaps.
-    let g = uv / 0.26 + vec2<f32>(seed * 2.3, seed * 1.3);
+    // Tiles: soft glowing blobs on the globe grid, wobbling as the ball
+    // slowly revolves; foreshortening with the grid toward the limb. Each
+    // cell holds one color that breathes through the gradient over time
+    // (integer cell phases keep neighbors distinct, cos keeps the drift
+    // jump-free); color steps between cells hide in the dim gaps.
+    let q = sphere_point(rot2(seed * 1.3) * uv);
+    let lon = atan2(q.x, q.z);
+    let lat = asin(clamp(q.y, -1.0, 1.0));
+    let wobv = vec2<f32>(
+        fbm(uv * 2.2 + vec2<f32>(seed * 7.1, time * 0.10)) - 0.5,
+        fbm(uv * 2.2 + vec2<f32>(seed * 3.9, -time * 0.12)) - 0.5,
+    ) * 0.4;
+    let g = vec2<f32>(lon, lat) * 2.2 + vec2<f32>(time * 0.06 + seed * 2.3, seed * 1.3) + wobv;
     let cell = floor(g);
-    let t = fract((cell.x + 2.0 * cell.y) / 4.0 + time * 0.05 + seed * 0.47);
+    let t = 0.5 + 0.5 * cos((cell.x + 2.0 * cell.y) * (TAU / 4.0) + time * 0.15 + seed);
     let p = fract(g) - vec2<f32>(0.5, 0.5);
     let rr = pow(pow(abs(p.x), 4.0) + pow(abs(p.y), 4.0), 0.25);
-    let tile = 1.0 - smoothstep(0.34, 0.44, rr);
-    return vec2<f32>(t, mix(0.45, 1.08, tile));
+    let tile = 1.0 - smoothstep(0.22, 0.50, rr);
+    return vec2<f32>(t, mix(0.50, 1.10, tile));
 }
 
 // Flame coverage (0..~1.5) at the rim for each field style; drives how far
