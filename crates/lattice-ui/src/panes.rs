@@ -11,7 +11,13 @@ use crate::theme;
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::ValueBar;
-use crate::SharedState;
+use crate::{CameraPreset, SharedState};
+
+/// Wrap degrees into -180..=180 for display (orbit accumulates yaw
+/// without bound).
+fn normalize_deg(deg: f32) -> f32 {
+    (deg + 180.0).rem_euclid(360.0) - 180.0
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
@@ -461,10 +467,42 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         }
         ValueBar::new(&mut state.camera.cabinet_scale, 0.1..=1.0, "Sevenths length").show(ui);
     }
-    // One-click reading angles; orbiting stays free afterwards. Cabinet
-    // ignores orbit angles entirely, so the presets gray out there.
+    // Camera angles are meaningless under cabinet (fixed viewpoint), so
+    // this whole block grays out there.
     ui.add_enabled_ui(state.camera.projection != Projection::Cabinet, |ui| {
-        ui.horizontal(|ui| {
+        // The two numbers that fully determine an orthographic view (and
+        // the orbit of the other projections) — the same state orbit
+        // drags edit, exposed numerically so a view is reproducible.
+        let mut yaw_deg = normalize_deg(state.camera.yaw.to_degrees());
+        if ValueBar::new(&mut yaw_deg, -180.0..=180.0, "Camera yaw")
+            .show(ui)
+            .changed()
+        {
+            state.camera.yaw = yaw_deg.to_radians();
+        }
+        let pitch_limit_deg = Camera::PITCH_LIMIT.to_degrees();
+        let mut pitch_deg = state.camera.pitch.to_degrees();
+        if ValueBar::new(&mut pitch_deg, -pitch_limit_deg..=pitch_limit_deg, "Camera pitch")
+            .show(ui)
+            .changed()
+        {
+            state.camera.pitch = pitch_deg.to_radians();
+        }
+        // Under orthographic, the readable meaning of an angle pair: how
+        // long a unit step along each lattice axis draws on screen.
+        if state.camera.projection == Projection::Orthographic {
+            let d = (state.camera.target - state.camera.eye()).normalize_or_zero();
+            let f = |c: f32| (1.0 - c * c).max(0.0).sqrt();
+            ui.weak(format!(
+                "Axis lengths — thirds {:.2} · fifths {:.2} · sevenths {:.2}",
+                f(d.x),
+                f(d.y),
+                f(d.z),
+            ));
+        }
+
+        // One-click reading angles: built-ins plus user-saved presets.
+        ui.horizontal_wrapped(|ui| {
             ui.label("Angle");
             if ui
                 .button("Flat")
@@ -481,6 +519,51 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             {
                 state.camera.yaw = std::f32::consts::FRAC_PI_4;
                 state.camera.pitch = (1.0 / 2f32.sqrt()).atan();
+            }
+            let mut delete = None;
+            for (i, preset) in state.camera_presets.iter().enumerate() {
+                let response = ui
+                    .button(&preset.name)
+                    .on_hover_text("Apply this saved angle (right-click to delete)");
+                if response.clicked() {
+                    state.camera.yaw = preset.yaw;
+                    state.camera.pitch = preset.pitch;
+                }
+                response.context_menu(|ui| {
+                    if ui.button("Delete").clicked() {
+                        delete = Some(i);
+                        ui.close();
+                    }
+                });
+            }
+            if let Some(i) = delete {
+                state.camera_presets.remove(i);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.preset_name)
+                    .hint_text("preset name")
+                    .desired_width(110.0),
+            );
+            if ui.button("Save angle").clicked() {
+                let trimmed = state.preset_name.trim();
+                let name = if trimmed.is_empty() {
+                    // Nameless saves still get a self-describing label.
+                    format!(
+                        "y{:.0} p{:.0}",
+                        normalize_deg(state.camera.yaw.to_degrees()),
+                        state.camera.pitch.to_degrees()
+                    )
+                } else {
+                    trimmed.to_string()
+                };
+                state.camera_presets.push(CameraPreset {
+                    name,
+                    yaw: state.camera.yaw,
+                    pitch: state.camera.pitch,
+                });
+                state.preset_name.clear();
             }
         });
     });
