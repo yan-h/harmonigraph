@@ -256,7 +256,18 @@ pub enum Projection {
     /// parallel lattice lines stay parallel. Depth then reads only
     /// through the deliberate cues (node depth-scale, occlusion).
     Orthographic,
+    /// Cabinet (oblique): the camera faces the fifths/thirds sheet
+    /// straight on (orbit is ignored; the UI turns plain drags into
+    /// pans), which renders that primary plane with zero distortion, and
+    /// the sevens axis shears to a uniform up-right screen offset at half
+    /// scale — every seventh-step is the same arrow anywhere on screen.
+    Cabinet,
 }
+
+/// Cabinet projection's depth treatment: one unit toward the viewer
+/// offsets up-right at 45° by this fraction of a unit (the classic
+/// drafting convention; 1.0 would be cavalier).
+const CABINET_DEPTH_SCALE: f32 = 0.5;
 
 /// Simple orbit camera. Angles in radians.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -321,11 +332,18 @@ impl Camera {
     }
 
     pub fn eye(&self) -> Vec3 {
-        let dir = Vec3::new(
-            self.pitch.cos() * self.yaw.sin(),
-            self.pitch.sin(),
-            self.pitch.cos() * self.yaw.cos(),
-        );
+        // Cabinet is a fixed-viewpoint projection: the eye always faces
+        // the fifths/thirds sheet straight on, whatever yaw/pitch say (they
+        // keep their values for when the user switches back).
+        let dir = if self.projection == Projection::Cabinet {
+            Vec3::Z
+        } else {
+            Vec3::new(
+                self.pitch.cos() * self.yaw.sin(),
+                self.pitch.sin(),
+                self.pitch.cos() * self.yaw.cos(),
+            )
+        };
         self.target + dir * self.distance
     }
 
@@ -348,6 +366,24 @@ impl Camera {
                 let half_h = self.distance * (self.fov_y * 0.5).tan();
                 let half_w = half_h * aspect;
                 Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
+            }
+            // Orthographic window plus a shear: view-space depth relative
+            // to the focus plane becomes a 45° up-right offset at
+            // CABINET_DEPTH_SCALE. The focus plane itself is unmoved (the
+            // shear's translation term cancels there), so framing still
+            // matches the other projections.
+            Projection::Cabinet => {
+                let half_h = self.distance * (self.fov_y * 0.5).tan();
+                let half_w = half_h * aspect;
+                let ortho =
+                    Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR);
+                let k = CABINET_DEPTH_SCALE * std::f32::consts::FRAC_1_SQRT_2;
+                let mut shear = Mat4::IDENTITY;
+                shear.z_axis.x = k;
+                shear.z_axis.y = k;
+                shear.w_axis.x = k * self.distance;
+                shear.w_axis.y = k * self.distance;
+                ortho * shear
             }
         };
         proj * self.view()
@@ -1204,7 +1240,11 @@ mod tests {
 
     #[test]
     fn points_behind_the_camera_do_not_project() {
-        for projection in [Projection::Perspective, Projection::Orthographic] {
+        for projection in [
+            Projection::Perspective,
+            Projection::Orthographic,
+            Projection::Cabinet,
+        ] {
             let camera = Camera { projection, ..Camera::default() };
             let mut scene = scene_of(
                 &NoteTracker::new(),
@@ -1222,6 +1262,47 @@ mod tests {
                 "{projection:?}"
             );
         }
+    }
+
+    #[test]
+    fn cabinet_faces_the_sheet_and_shears_sevens_uniformly() {
+        let viewport = Vec2::new(800.0, 600.0);
+        // Orbit angles are ignored: cabinet always faces the sheet.
+        let camera = Camera {
+            projection: Projection::Cabinet,
+            yaw: 1.0,
+            pitch: -0.7,
+            ..Camera::default()
+        };
+        assert_eq!(camera.eye(), Vec3::new(0.0, 0.0, camera.distance));
+
+        let mut s = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &ViewConfig::default(),
+            &FrameParams::default(),
+            0.0,
+        );
+        s.camera = camera;
+        let px = |w: Vec3| s.project(viewport, w).unwrap();
+
+        // Target centered; front-plane steps map to pure screen axes
+        // (the sheet renders undistorted).
+        let origin = px(Vec3::ZERO);
+        assert!((origin - Vec2::new(400.0, 300.0)).length() < 0.5, "{origin:?}");
+        let dx = px(Vec3::X) - origin;
+        assert!(dx.x > 1.0 && dx.y.abs() < 1e-3, "{dx:?}");
+        let dy = px(Vec3::Y) - origin;
+        assert!(dy.y < -1.0 && dy.x.abs() < 1e-3, "{dy:?}"); // screen y is down
+
+        // A +sevens step (toward the viewer) is the same up-right arrow
+        // anywhere on the sheet, at half scale split evenly over x/y.
+        let dz = px(Vec3::Z) - origin;
+        let dz_elsewhere = px(Vec3::new(3.0, -2.0, 1.0)) - px(Vec3::new(3.0, -2.0, 0.0));
+        assert!(dz.distance(dz_elsewhere) < 1e-3, "{dz:?} vs {dz_elsewhere:?}");
+        let k = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+        assert!((dz.x - dx.x * k).abs() < 0.1, "{dz:?} vs {dx:?}");
+        assert!((dz.y - dy.y * k).abs() < 0.1, "{dz:?} vs {dy:?}");
     }
 
     #[test]

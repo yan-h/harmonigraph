@@ -66,10 +66,12 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     }
 
     // Camera input: plain drag orbits; shift-drag or middle-drag pans
-    // (speeds and clamps live on Camera itself).
+    // (speeds and clamps live on Camera itself). Cabinet is fixed-viewpoint
+    // — orbiting is meaningless there, so plain drags pan too.
     let shift = ui.input(|i| i.modifiers.shift);
     let panning = response.dragged_by(egui::PointerButton::Middle)
-        || (response.dragged_by(egui::PointerButton::Primary) && shift);
+        || (response.dragged_by(egui::PointerButton::Primary)
+            && (shift || state.camera.projection == Projection::Cabinet));
     if panning {
         let delta = response.drag_delta();
         state.camera.pan(glam::Vec2::new(delta.x, delta.y));
@@ -431,29 +433,43 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         for (proj, label) in [
             (Projection::Perspective, "Perspective"),
             (Projection::Orthographic, "Orthographic"),
+            (Projection::Cabinet, "Cabinet"),
         ] {
-            ui.selectable_value(&mut state.camera.projection, proj, label);
+            ui.selectable_value(&mut state.camera.projection, proj, label)
+                .on_hover_text(match proj {
+                    Projection::Perspective => "Depth converges and shrinks, like a real camera",
+                    Projection::Orthographic => {
+                        "Uniform scale at every depth; parallel lines stay parallel"
+                    }
+                    Projection::Cabinet => {
+                        "Face-on fifths/thirds sheet, undistorted; sevenths shear \
+                         up-right at half scale (drag pans; orbit is disabled)"
+                    }
+                });
         }
     });
-    // One-click reading angles; orbiting stays free afterwards.
-    ui.horizontal(|ui| {
-        ui.label("Angle");
-        if ui
-            .button("Flat")
-            .on_hover_text("Face the fifths/thirds sheet straight on")
-            .clicked()
-        {
-            state.camera.yaw = 0.0;
-            state.camera.pitch = 0.0;
-        }
-        if ui
-            .button("Isometric")
-            .on_hover_text("Classic isometric angle: all three axes equally foreshortened")
-            .clicked()
-        {
-            state.camera.yaw = std::f32::consts::FRAC_PI_4;
-            state.camera.pitch = (1.0 / 2f32.sqrt()).atan();
-        }
+    // One-click reading angles; orbiting stays free afterwards. Cabinet
+    // ignores orbit angles entirely, so the presets gray out there.
+    ui.add_enabled_ui(state.camera.projection != Projection::Cabinet, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Angle");
+            if ui
+                .button("Flat")
+                .on_hover_text("Face the fifths/thirds sheet straight on")
+                .clicked()
+            {
+                state.camera.yaw = 0.0;
+                state.camera.pitch = 0.0;
+            }
+            if ui
+                .button("Isometric")
+                .on_hover_text("Classic isometric angle: all three axes equally foreshortened")
+                .clicked()
+            {
+                state.camera.yaw = std::f32::consts::FRAC_PI_4;
+                state.camera.pitch = (1.0 / 2f32.sqrt()).atan();
+            }
+        });
     });
 
     for (extent, range, label) in [
