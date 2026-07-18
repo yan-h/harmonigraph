@@ -184,10 +184,16 @@ pub fn apply_theme(ctx: &egui::Context) {
     visuals.extreme_bg_color = well();
     visuals.faint_bg_color = surface_faint();
 
-    // Text selection keeps alpha (it overlays glyphs); widget states below
-    // are opaque.
-    visuals.selection.bg_fill = accent().gamma_multiply(0.35);
-    visuals.selection.stroke = Stroke::new(1.0, accent());
+    // Selection keeps alpha (it overlays glyphs). egui reuses this pair for
+    // the *selected* button look (Meantone/Learn, every selectable_value):
+    // fill = selection.bg_fill, text = selection.stroke color. The old
+    // accent-blue-on-translucent-accent read as blue-on-blue (~3:1) and, now
+    // that resting buttons are brighter, the 0.35 fill no longer separated
+    // from an unselected one. A denser fill plus bright text makes the
+    // selected state unmistakable while still reading fine as a text
+    // highlight over glyphs.
+    visuals.selection.bg_fill = accent().gamma_multiply(0.5);
+    visuals.selection.stroke = Stroke::new(1.0, text());
     visuals.slider_trailing_fill = true;
     visuals.window_corner_radius = CornerRadius::same(8);
     visuals.menu_corner_radius = CornerRadius::same(6);
