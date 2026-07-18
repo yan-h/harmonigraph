@@ -757,13 +757,12 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .unwrap_or(0.0);
     }
     ui.horizontal(|ui| {
-        ui.label("Tilt").on_hover_text(
+        ui.label("Tilt (dB)").on_hover_text(
             "Reference slope (dB/oct) that displays flat: 0 = raw power, \
              -3 flattens pink noise, -4.5 flattens typical material",
         );
         for step in crate::TILT_STEPS {
-            let label = if step == 0.0 { "0".to_string() } else { format!("{step}") };
-            ui.selectable_value(&mut cfg.tilt, step, label);
+            ui.selectable_value(&mut cfg.tilt, step, format!("{step:.1}"));
         }
     });
 
