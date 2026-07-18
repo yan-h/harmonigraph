@@ -366,7 +366,9 @@ fn tuning_pane(
         }
     }
 
-    ui.horizontal(|ui| {
+    // button_row: the toggle switches are shorter than the padded preset
+    // buttons, so a plain horizontal row would seat them a few pixels high.
+    button_row(ui, |ui| {
         if ui.button("Just").clicked() {
             params.set(ParamKey::Three, tuning::THREE_JUST);
             params.set(ParamKey::Five, tuning::FIVE_JUST);
