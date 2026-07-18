@@ -297,6 +297,38 @@ impl<'a> ValueBar<'a> {
     }
 }
 
+/// A horizontal row sized up front to framed-button height.
+///
+/// Plain `ui.horizontal*` starts its row at `interact_size.y`, which is
+/// shorter than a padded button: egui centers early widgets in that short
+/// row, then grows the row downward under the first button it meets, so a
+/// bare label (or checkbox) next to buttons sits a few pixels above their
+/// text. Starting the row at button height centers everything on one line.
+pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    button_row_impl(ui, false, add)
+}
+
+/// [`button_row`], wrapping onto new rows like `horizontal_wrapped`.
+pub fn button_row_wrapped<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    button_row_impl(ui, true, add)
+}
+
+fn button_row_impl<R>(ui: &mut Ui, wrap: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let height =
+        ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
+    ui.scope(|ui| {
+        // The row ui reads this as its initial height; buttons already
+        // size to at least it, so only the shorter widgets move.
+        ui.style_mut().spacing.interact_size.y = height;
+        if wrap {
+            ui.horizontal_wrapped(add).inner
+        } else {
+            ui.horizontal(add).inner
+        }
+    })
+    .inner
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,5 +365,46 @@ mod tests {
         let bar = ValueBar::new(&mut value, 1.0..=8.0, "test").integer();
         let v = bar.value_at(0.37);
         assert_eq!(v, v.round());
+    }
+
+    /// Label center minus button center in a row built by `row`, under the
+    /// theme's geometry (short interact_size, padded buttons). Not
+    /// `__run_test_ui`: that empties the fonts, text measures zero-height,
+    /// and the too-short row this guards against never happens.
+    fn row_offset(row: fn(&mut Ui, &mut dyn FnMut(&mut Ui))) -> f32 {
+        let mut offset = 0.0;
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            ui.style_mut().spacing.interact_size.y = 17.0;
+            ui.style_mut().spacing.button_padding = Vec2::new(9.0, 4.0);
+            row(ui, &mut |ui| {
+                let label = ui.label("Node style").rect.center().y;
+                let button = ui.button("Steady").rect.center().y;
+                offset = label - button;
+            });
+        });
+        offset
+    }
+
+    /// A bare label centers on the button text in both row variants. The
+    /// companion assert shows plain `horizontal` still misaligns them —
+    /// when an egui upgrade fixes row sizing upstream, that assert fails
+    /// and this whole workaround becomes deletable.
+    #[test]
+    fn button_row_centers_label_with_button_text() {
+        let plain = row_offset(|ui, add| {
+            ui.horizontal(|ui| add(ui));
+        });
+        assert!(plain < -1.0, "egui centers rows itself now ({plain}); drop button_row?");
+
+        let fixed = row_offset(|ui, add| {
+            button_row(ui, |ui| add(ui));
+        });
+        assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
+
+        let wrapped = row_offset(|ui, add| {
+            button_row_wrapped(ui, |ui| add(ui));
+        });
+        assert!(wrapped.abs() < 0.5, "button_row_wrapped label off by {wrapped}px");
     }
 }

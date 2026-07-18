@@ -10,7 +10,7 @@ use lattice_scene::{channel_color, derive_scene, Camera, NodeStyle, OctaveStyle,
 use crate::theme;
 
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::ValueBar;
+use crate::widgets::{button_row, button_row_wrapped, ValueBar};
 use crate::{CameraPreset, SharedState};
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
@@ -436,7 +436,7 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         ui.label("Projection");
         for (proj, label) in [
             (Projection::Perspective, "Perspective"),
@@ -504,7 +504,7 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         }
 
         // One-click reading angles: built-ins plus user-saved presets.
-        ui.horizontal_wrapped(|ui| {
+        button_row_wrapped(ui, |ui| {
             ui.label("Angle");
             if ui
                 .button("Flat")
@@ -542,7 +542,7 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
                 state.camera_presets.remove(i);
             }
         });
-        ui.horizontal(|ui| {
+        button_row(ui, |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut state.preset_name)
                     .hint_text("preset name")
@@ -597,7 +597,7 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
              lower renders coarse and upscales",
         );
 
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         // Escape hatch for the persisted dock arrangement (it survives
         // every reopen, so a new default layout is otherwise unreachable).
         if ui
@@ -629,7 +629,7 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     // all of them). Compare live while notes play. Everything except Steady
     // is a field style (swirled octave colors): Vortex is the gas look,
     // Checker/Spiral/Pinwheel are deterministic patterns on the sphere.
-    ui.horizontal_wrapped(|ui| {
+    button_row_wrapped(ui, |ui| {
         ui.label("Node style");
         for (style, label) in [
             (NodeStyle::Steady, "Steady"),
@@ -651,7 +651,7 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
 
     // Octave indicator glyphs, all positioned by absolute pitch: floating
     // dots, rim-seated bumps, or annular slices.
-    ui.horizontal_wrapped(|ui| {
+    button_row_wrapped(ui, |ui| {
         ui.label("Octaves");
         for (style, label) in [
             (OctaveStyle::Off, "Off"),
@@ -665,7 +665,7 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
 }
 
 fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         ui.label(format!("{} held", state.tracker.held_count()));
         if ui.button("Clear").clicked() {
             state.console.clear();
@@ -700,7 +700,7 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
          held notes)",
     );
 
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         ui.label("Window");
         for (window, label) in [
             (SpectrumWindow::Fast, "Fast"),
@@ -733,7 +733,7 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             .min_by(|a, b| (a - cfg.tilt).abs().total_cmp(&(b - cfg.tilt).abs()))
             .unwrap_or(0.0);
     }
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         ui.label("Tilt (dB/oct)").on_hover_text(
             "Reference slope (dB/oct) that displays flat: 0 = raw power, \
              -3 flattens pink noise, -4.5 flattens typical material",
@@ -743,7 +743,7 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         }
     });
 
-    ui.horizontal(|ui| {
+    button_row(ui, |ui| {
         ui.label("Labels");
         ui.selectable_value(&mut cfg.labels, SpectrumLabels::Notes, "Notes")
             .on_hover_text("A gridline at every C, Bitwig octave numbers");
