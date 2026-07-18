@@ -143,7 +143,6 @@ fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     if state.view.show_labels {
         draw_node_labels(ui, rect, &scene, state.view.show_cents, state.view.meantone);
     }
-    hover_tooltip(response, state);
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
@@ -186,9 +185,19 @@ fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        // Fade with the activation envelope; hovered idle nodes get a dim
-        // but readable label.
-        let strength = if node.hovered { 1.0 } else { visibility_floor(node.activation) };
+        // Fade with the activation envelope. visibility_floor keeps the
+        // label readable through most of the release, but on its own it
+        // bottoms out at 35% and then pops to nothing when the voice is
+        // pruned at activation 0. Ease that last stretch out with a
+        // smoothstep tail so the label fades gradually to zero instead.
+        // Hovered nodes get a full, steady label.
+        const LABEL_FADE_TAIL: f32 = 0.25;
+        let strength = if node.hovered {
+            1.0
+        } else {
+            let t = (node.activation / LABEL_FADE_TAIL).clamp(0.0, 1.0);
+            visibility_floor(node.activation) * t * t * (3.0 - 2.0 * t)
+        };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);
         // Meantone tempers out the syntonic comma, so drop the comma marks
@@ -255,32 +264,6 @@ fn outlined_text(
         }
     }
     painter.galley(pos, galley, color);
-}
-
-/// Hover tooltip: pitch class + sounding octaves.
-fn hover_tooltip(response: egui::Response, state: &SharedState) {
-    let Some(pos) = state.hovered else {
-        return;
-    };
-    let pc = state.tuning.pitch_class(pos);
-    let octaves: Vec<String> = state
-        .tracker
-        .voices()
-        .filter(|v| state.tuning.matches(v.pitch_class, pc))
-        .map(|v| v.display_octave().to_string())
-        .collect();
-    let name = pos.note_name();
-    let name = if state.view.meantone { name.without_syntonic_commas() } else { name };
-    let mut text = format!(
-        "{}  ({}, {}, {})  {}",
-        name, pos.threes, pos.fives, pos.sevens, pc
-    );
-    if !octaves.is_empty() {
-        text.push_str(&format!("  octaves: {}", octaves.join(" ")));
-    }
-    response.on_hover_ui(|ui| {
-        ui.label(text);
-    });
 }
 
 /// The dimmest-visible convention shared with the shader (level_floor in
@@ -635,29 +618,18 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         egui::Checkbox::new(&mut state.view.show_cents, "Cent values"),
     );
 
-    // Held-note render style: switchable experiments (idle nodes look the
-    // same in all of them). Compare live while notes play. Wrapped layout:
-    // there are enough styles now that one row runs off the pane.
-    // Corona onward is the field family (swirled octave colors): gas looks
-    // through Filament, deterministic patterns from Stripes on.
+    // Held-note render style: switchable looks (idle nodes look the same in
+    // all of them). Compare live while notes play. Everything except Steady
+    // is a field style (swirled octave colors): Vortex is the gas look,
+    // Checker/Spiral/Pinwheel are deterministic patterns on the sphere.
     ui.horizontal_wrapped(|ui| {
         ui.label("Node style");
         for (style, label) in [
             (NodeStyle::Steady, "Steady"),
-            (NodeStyle::Wire, "Wire"),
-            (NodeStyle::Corona, "Corona"),
             (NodeStyle::Vortex, "Vortex"),
-            (NodeStyle::Plasma, "Plasma"),
-            (NodeStyle::Aurora, "Aurora"),
-            (NodeStyle::Marble, "Marble"),
-            (NodeStyle::Lava, "Lava"),
-            (NodeStyle::Filament, "Filament"),
-            (NodeStyle::Stripes, "Stripes"),
-            (NodeStyle::Rings, "Rings"),
-            (NodeStyle::Pinwheel, "Pinwheel"),
-            (NodeStyle::Spiral, "Spiral"),
             (NodeStyle::Checker, "Checker"),
-            (NodeStyle::Tiles, "Tiles"),
+            (NodeStyle::Spiral, "Spiral"),
+            (NodeStyle::Pinwheel, "Pinwheel"),
         ] {
             ui.selectable_value(&mut state.view.node_style, style, label);
         }
@@ -671,14 +643,12 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         .on_hover_text("Soft halo around bright notes; 0 turns the post-process off");
 
     // Octave indicator glyphs, all positioned by absolute pitch: floating
-    // dots, or shapes attached to the rim (petals/flares/bumps).
+    // dots, rim-seated bumps, or annular slices.
     ui.horizontal_wrapped(|ui| {
         ui.label("Octaves");
         for (style, label) in [
             (OctaveStyle::Off, "Off"),
             (OctaveStyle::Dots, "Dots"),
-            (OctaveStyle::Petals, "Petals"),
-            (OctaveStyle::Flares, "Flares"),
             (OctaveStyle::Bumps, "Bumps"),
             (OctaveStyle::Slices, "Slices"),
         ] {

@@ -554,19 +554,34 @@ mod tests {
 
     #[test]
     fn removed_node_styles_in_old_persist_blobs_load_as_steady() {
-        // Breathe/Sparks no longer exist; serde aliases must absorb them so
-        // an old blob still restores (a failed parse would silently drop the
-        // WHOLE persist — layout, camera, everything).
+        // Breathe/Sparks and the later-trimmed Wire/Corona/… set no longer
+        // exist; serde aliases must absorb them so an old blob still restores
+        // (a failed parse would silently drop the WHOLE persist — layout,
+        // camera, everything). "Wire" is one of the removed names.
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
         state.camera.yaw = 1.23;
-        state.view.node_style = lattice_scene::NodeStyle::Wire;
-        let saved = state.save_persist().replace("node_style:Wire", "node_style:Breathe");
+        state.view.node_style = lattice_scene::NodeStyle::Vortex;
+        let saved = state.save_persist().replace("node_style:Vortex", "node_style:Wire");
         assert_ne!(saved, state.save_persist(), "replacement must have hit");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
         assert_eq!(restored.view.node_style, lattice_scene::NodeStyle::Steady);
         assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
+    }
+
+    #[test]
+    fn removed_octave_styles_in_old_persist_blobs_load_as_dots() {
+        // Petals/Flares no longer exist; a serde alias must absorb them so an
+        // old blob still restores rather than dropping the whole persist.
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.view.octave_style = lattice_scene::OctaveStyle::Bumps;
+        let saved = state.save_persist().replace("octave_style:Bumps", "octave_style:Petals");
+        assert_ne!(saved, state.save_persist(), "replacement must have hit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.view.octave_style, lattice_scene::OctaveStyle::Dots);
     }
 
     #[test]
