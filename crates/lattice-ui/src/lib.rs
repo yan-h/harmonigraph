@@ -91,10 +91,12 @@ pub struct SpectrumConfig {
     pub floor_db: f32,
     /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
     pub smoothing: f32,
-    /// Spectral tilt in dB per octave, pivoting at 1 kHz: 0 draws raw
-    /// power; positive lifts treble the way analyzers compensate the
-    /// natural rolloff of musical material (pink-ish slopes read flat
-    /// around +3..4.5).
+    /// Spectral tilt, in the convention analyzers use: the reference
+    /// slope in dB/octave that displays as FLAT, one of [`TILT_STEPS`]
+    /// (0, -1.5 .. -6). 0 draws raw power; -3 makes pink noise read
+    /// flat; -4.5 flattens typical musical material. The display lifts
+    /// treble by the magnitude, pivoting at 1 kHz — there is no
+    /// bass-emphasizing direction, matching convention.
     #[serde(default)]
     pub tilt: f32,
     /// Axis gridline labeling.
@@ -120,6 +122,10 @@ fn default_true() -> bool {
 fn default_labels() -> SpectrumLabels {
     SpectrumLabels::Notes
 }
+
+/// The tilt settings offered, per analyzer convention (-1.5 dB/oct
+/// increments; see [`SpectrumConfig::tilt`]).
+pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 
 impl Default for SpectrumConfig {
     fn default() -> Self {

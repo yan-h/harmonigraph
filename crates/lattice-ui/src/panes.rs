@@ -748,12 +748,24 @@ fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)
         .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
-    ValueBar::new(&mut cfg.tilt, -6.0..=6.0, "Tilt (dB/oct)")
-        .show(ui)
-        .on_hover_text(
-            "Slope the height scale around 1 kHz: 0 shows raw power, \
-             +3..4.5 flattens typical musical material's natural rolloff",
+    // Tilt: conventional stepped reference slopes. Snap stray persisted
+    // values (e.g. from the short-lived continuous bar) onto a step.
+    if !crate::TILT_STEPS.contains(&cfg.tilt) {
+        cfg.tilt = crate::TILT_STEPS
+            .into_iter()
+            .min_by(|a, b| (a - cfg.tilt).abs().total_cmp(&(b - cfg.tilt).abs()))
+            .unwrap_or(0.0);
+    }
+    ui.horizontal(|ui| {
+        ui.label("Tilt").on_hover_text(
+            "Reference slope (dB/oct) that displays flat: 0 = raw power, \
+             -3 flattens pink noise, -4.5 flattens typical material",
         );
+        for step in crate::TILT_STEPS {
+            let label = if step == 0.0 { "0".to_string() } else { format!("{step}") };
+            ui.selectable_value(&mut cfg.tilt, step, label);
+        }
+    });
 
     ui.horizontal(|ui| {
         ui.label("Labels");
@@ -807,11 +819,12 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     let span = max_midi - min_midi;
     let x_of = |midi: f32| rect.left() + rect.width() * (midi - min_midi) / span;
     // dB height mapping: 0 dB (a full-scale sine) tops out at 85% of the
-    // pane; the Spectrum tab's floor sets the bottom, and its tilt slopes
-    // the scale around the 1 kHz pivot.
+    // pane; the Spectrum tab's floor sets the bottom. Tilt is the
+    // conventional reference slope (negative), so the display SUBTRACTS
+    // it per octave above the 1 kHz pivot: -4.5 lifts treble 4.5 dB/oct.
     let h_of = |power: f32, midi: f32| {
         let db = 10.0 * power.max(1e-12).log10()
-            + cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+            - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
         ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0) * rect.height() * 0.85
     };
 
