@@ -3,6 +3,7 @@
 //! crate only adapts them to the plugin world.
 
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use lattice_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
@@ -16,9 +17,19 @@ mod editor;
 /// (silently) if the GUI stalls long enough to fill it.
 const EVENT_RING_CAPACITY: usize = 4096;
 
+/// Capacity of the audio→GUI sample ring feeding the Spectral pane's
+/// analyzer: >1 s at 48 kHz. Overflow just drops samples — a spectrum
+/// meter would rather skip than stall the audio thread.
+const AUDIO_RING_CAPACITY: usize = 65_536;
+
 pub struct MidiLattice3d {
     params: Arc<MidiLattice3dParams>,
     note_producer: rtrb::Producer<CoreNoteEvent>,
+    /// Mono mixdown of the input bus, for the GUI's spectrum analyzer.
+    audio_producer: rtrb::Producer<f32>,
+    /// Current sample rate as f32 bits, so the GUI folds FFT bins under
+    /// the clock the samples were actually taken at.
+    sample_rate_bits: Arc<AtomicU32>,
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
     editor_shared: Arc<Mutex<editor::EditorShared>>,
@@ -158,10 +169,18 @@ impl ParamBackend for PluginParamBackend<'_> {
 impl Default for MidiLattice3d {
     fn default() -> Self {
         let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
+        let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
+        let sample_rate_bits = Arc::new(AtomicU32::new(44_100.0f32.to_bits()));
         MidiLattice3d {
             params: Arc::new(MidiLattice3dParams::default()),
             note_producer: producer,
-            editor_shared: Arc::new(Mutex::new(editor::EditorShared::new(consumer))),
+            audio_producer,
+            sample_rate_bits: sample_rate_bits.clone(),
+            editor_shared: Arc::new(Mutex::new(editor::EditorShared::new(
+                consumer,
+                audio_consumer,
+                sample_rate_bits,
+            ))),
             sample_rate: 44_100.0,
             samples_processed: 0,
         }
@@ -203,6 +222,7 @@ impl Plugin for MidiLattice3d {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = f64::from(buffer_config.sample_rate);
+        self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
         true
     }
 
@@ -252,6 +272,18 @@ impl Plugin for MidiLattice3d {
             }
             // Behave as a transparent MIDI effect.
             context.send_event(event);
+        }
+
+        // Mono mixdown of the (pass-through) input for the GUI's spectrum
+        // analyzer. A full ring — editor closed, or its thread stalled —
+        // silently drops samples, the same failure mode as the note ring.
+        let channels = buffer.channels();
+        if channels > 0 {
+            let gain = 1.0 / channels as f32;
+            for mut frame in buffer.iter_samples() {
+                let mono: f32 = frame.iter_mut().map(|s| *s).sum::<f32>() * gain;
+                let _ = self.audio_producer.push(mono);
+            }
         }
 
         self.samples_processed += buffer.samples() as u64;

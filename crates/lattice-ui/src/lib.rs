@@ -45,6 +45,198 @@ impl Console {
     }
 }
 
+/// The Spectral pane's analysis window length, picked in the Spectrum
+/// settings tab: longer windows resolve bass pitch more sharply but
+/// respond more slowly (the tradeoff is physics, not implementation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrumWindow {
+    /// 4096 samples (~85 ms at 48 kHz).
+    Fast,
+    /// 8192 samples (~171 ms): the default balance.
+    Balanced,
+    /// 16384 samples (~341 ms).
+    Precise,
+}
+
+impl SpectrumWindow {
+    pub fn samples(self) -> usize {
+        match self {
+            SpectrumWindow::Fast => 4096,
+            SpectrumWindow::Balanced => 8192,
+            SpectrumWindow::Precise => 16384,
+        }
+    }
+}
+
+/// What the Spectral pane's axis gridlines are labeled with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrumLabels {
+    /// A gridline at every C, labeled with Bitwig octave numbers.
+    Notes,
+    /// Gridlines on the analyzer-standard 1-2-5 series (20, 50, 100, ...
+    /// 10k, 20k Hz).
+    Frequency,
+}
+
+/// Everything the Spectral pane's display is configured by, edited in the
+/// Spectrum settings tab and persisted with the UI state.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SpectrumConfig {
+    /// Analyze and overlay the shell's audio (plugin: the input bus;
+    /// standalone: a synth on the held notes).
+    #[serde(default = "default_true")]
+    pub show_audio: bool,
+    pub window: SpectrumWindow,
+    /// Bottom of the dB height scale; a full-scale sine sits at 0 dB.
+    pub floor_db: f32,
+    /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
+    pub smoothing: f32,
+    /// Spectral tilt, in the convention analyzers use: the reference
+    /// slope in dB/octave that displays as FLAT, one of [`TILT_STEPS`]
+    /// (0, -1.5 .. -6). 0 draws raw power; -3 makes pink noise read
+    /// flat; -4.5 flattens typical musical material. The display lifts
+    /// treble by the magnitude, pivoting at 1 kHz — there is no
+    /// bass-emphasizing direction, matching convention.
+    #[serde(default)]
+    pub tilt: f32,
+    /// Axis gridline labeling.
+    #[serde(default = "default_labels")]
+    pub labels: SpectrumLabels,
+    /// Fill under the curve instead of a bare line.
+    pub fill: bool,
+    /// Keep a slowly decaying outline at each bucket's recent maximum.
+    pub peak_hold: bool,
+    /// MIDI-derived bars at each voice's actual pitch.
+    pub show_voice_bars: bool,
+    /// Displayed octave range, in Bitwig octave numbers (C-1..C9 = full
+    /// axis). The analyzer always covers the full axis; this only zooms
+    /// the view.
+    pub low_octave: i32,
+    pub high_octave: i32,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_labels() -> SpectrumLabels {
+    SpectrumLabels::Notes
+}
+
+/// The tilt settings offered, per analyzer convention (-1.5 dB/oct
+/// increments; see [`SpectrumConfig::tilt`]).
+pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
+
+impl Default for SpectrumConfig {
+    fn default() -> Self {
+        SpectrumConfig {
+            show_audio: true,
+            window: SpectrumWindow::Balanced,
+            floor_db: -60.0,
+            smoothing: 0.55,
+            tilt: 0.0,
+            labels: SpectrumLabels::Notes,
+            fill: true,
+            peak_hold: false,
+            show_voice_bars: true,
+            low_octave: -1,
+            high_octave: 9,
+        }
+    }
+}
+
+/// Audio-derived pitch spectrum shown in the Spectral pane. The shell
+/// feeds mono samples every frame from wherever its audio comes from
+/// (plugin: input bus via a ring buffer; standalone: the mock synth); the
+/// pane asks for a display refresh when it draws. Runtime-only.
+pub struct AudioSpectrum {
+    analyzer: lattice_core::spectrum::SpectrumAnalyzer,
+    /// Smoothed display buckets (power; the pane maps to height).
+    display: [f32; lattice_core::spectrum::SPECTRUM_BINS],
+    /// Decaying per-bucket maxima for the peak-hold outline.
+    peaks: [f32; lattice_core::spectrum::SPECTRUM_BINS],
+    /// When the FFT last ran, on the shell clock. The FFT is throttled
+    /// well below frame rate — it feeds a meter, not an oscilloscope.
+    last_fft: Option<f64>,
+    /// When samples last arrived; the curve hides once the source stops
+    /// (closed input bus, switched-off synth) rather than freezing.
+    last_samples: Option<f64>,
+}
+
+impl Default for AudioSpectrum {
+    fn default() -> Self {
+        AudioSpectrum {
+            analyzer: lattice_core::spectrum::SpectrumAnalyzer::new(48_000.0),
+            display: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
+            peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
+            last_fft: None,
+            last_samples: None,
+        }
+    }
+}
+
+impl AudioSpectrum {
+    /// Seconds between FFTs (20 Hz refresh).
+    const FFT_INTERVAL: f64 = 0.05;
+    /// How long after the last samples the curve keeps drawing.
+    const HOLD_SECONDS: f64 = 0.5;
+    /// Peak-hold half-life in seconds.
+    const PEAK_HALF_LIFE: f64 = 1.2;
+
+    /// Feed mono samples from the shell. `now` is the shell clock also
+    /// passed to [`root_ui`].
+    pub fn push_samples(&mut self, samples: &[f32], sample_rate: f32, now: f64) {
+        if samples.is_empty() {
+            return;
+        }
+        self.analyzer.set_sample_rate(sample_rate);
+        self.analyzer.push_samples(samples);
+        self.last_samples = Some(now);
+    }
+
+    /// Advance the display (runs the FFT at most every FFT_INTERVAL under
+    /// the config's window/smoothing) and return (levels, peak-holds) to
+    /// draw, or None while no audio is flowing.
+    #[allow(clippy::type_complexity)]
+    pub fn display(
+        &mut self,
+        now: f64,
+        config: &SpectrumConfig,
+    ) -> Option<(
+        &[f32; lattice_core::spectrum::SPECTRUM_BINS],
+        &[f32; lattice_core::spectrum::SPECTRUM_BINS],
+    )> {
+        // A window change mid-stream just refills the ring; the display
+        // holds its last values until the new window fills.
+        self.analyzer.set_fft_size(config.window.samples());
+
+        if !self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS) {
+            return None;
+        }
+        if self.last_fft.is_none_or(|t| now - t >= Self::FFT_INTERVAL) {
+            if let Some(fresh) = self.analyzer.pitch_spectrum() {
+                let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
+                let dt = self.last_fft.map_or(Self::FFT_INTERVAL, |t| now - t);
+                let decay = 0.5f32.powf((dt / Self::PEAK_HALF_LIFE) as f32);
+                for ((shown, peak), new) in
+                    self.display.iter_mut().zip(&mut self.peaks).zip(fresh)
+                {
+                    *shown += (new - *shown) * alpha;
+                    *peak = if config.peak_hold {
+                        (*peak * decay).max(*shown)
+                    } else {
+                        // Track the live level while off, so switching the
+                        // outline on starts from now, not stale maxima.
+                        *shown
+                    };
+                }
+                self.last_fft = Some(now);
+            }
+        }
+        Some((&self.display, &self.peaks))
+    }
+}
+
 /// Everything the UI reads and mutates each frame. One instance lives in the
 /// shell (inside the editor state in the plugin, inside the app in the
 /// standalone harness).
@@ -76,6 +268,14 @@ pub struct SharedState {
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
+    /// Audio-derived spectrum for the Spectral pane. Runtime-only.
+    pub spectrum: AudioSpectrum,
+    /// The Spectral pane's settings (Spectrum tab; persisted).
+    pub spectrum_config: SpectrumConfig,
+    /// Set by the View pane's "Reset layout" button; consumed by root_ui
+    /// AFTER the frame's DockArea writes the dock back (panes run inside
+    /// that pass, so a direct write from one would be overwritten).
+    reset_layout: bool,
     dock: DockState<panes::Tab>,
 }
 
@@ -89,19 +289,33 @@ pub struct CameraPreset {
     pub pitch: f32,
 }
 
+/// The default pane arrangement: big lattice with the Spectral pane in
+/// its own strip directly below it (sharing the pitch intuition: what
+/// sounds is what lights up), tuning column on the right, console and
+/// notes tucked below that. Users can re-dock at runtime; the result
+/// persists via UiPersist, and the View pane's "Reset layout" button
+/// returns here.
+fn default_dock() -> DockState<panes::Tab> {
+    let mut dock = DockState::new(vec![panes::Tab::Lattice]);
+    let surface = dock.main_surface_mut();
+    let [lattice, right] = surface.split_right(
+        NodeIndex::root(),
+        0.72,
+        vec![
+            panes::Tab::Tuning,
+            panes::Tab::View,
+            panes::Tab::Appearance,
+            panes::Tab::Spectrum,
+        ],
+    );
+    surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Notes]);
+    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+    dock
+}
+
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        // Default layout: big lattice view, tuning on the right, console and
-        // spectral stub tucked below it. Users can re-dock at runtime; the
-        // result persists via UiPersist.
-        let mut dock = DockState::new(vec![panes::Tab::Lattice]);
-        let surface = dock.main_surface_mut();
-        let [_, right] = surface.split_right(
-            NodeIndex::root(),
-            0.72,
-            vec![panes::Tab::Tuning, panes::Tab::View, panes::Tab::Appearance],
-        );
-        surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Spectral, panes::Tab::Notes]);
+        let dock = default_dock();
 
         SharedState {
             tracker: NoteTracker::new(),
@@ -116,12 +330,22 @@ impl SharedState {
             last_learned_classes: None,
             camera_presets: Vec::new(),
             preset_name: String::new(),
+            spectrum: AudioSpectrum::default(),
+            spectrum_config: SpectrumConfig::default(),
+            reset_layout: false,
             dock,
         }
     }
 
     pub fn log(&mut self, line: impl Into<String>) {
         self.console.log(line);
+    }
+
+    /// Discard the (persisted) dock arrangement and return to the default
+    /// layout. Camera, view settings, and presets are untouched. Takes
+    /// effect at the end of the frame (see the `reset_layout` field).
+    pub fn reset_dock_layout(&mut self) {
+        self.reset_layout = true;
     }
 
     /// Serialize the parts of the UI worth restoring across sessions
@@ -135,6 +359,7 @@ impl SharedState {
             camera: self.camera,
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
+            spectrum: self.spectrum_config,
         })
         .unwrap_or_default()
     }
@@ -147,6 +372,7 @@ impl SharedState {
             self.camera = persist.camera;
             self.view = persist.view;
             self.camera_presets = persist.camera_presets;
+            self.spectrum_config = persist.spectrum;
         }
     }
 }
@@ -161,6 +387,9 @@ struct UiPersist {
     /// serde(default) keeps pre-preset persisted blobs loadable.
     #[serde(default)]
     camera_presets: Vec<CameraPreset>,
+    /// serde(default) keeps pre-Spectrum-tab blobs loadable.
+    #[serde(default)]
+    spectrum: SpectrumConfig,
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
@@ -195,16 +424,36 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             .max(state.frame_params.octave_fade_time),
     );
 
+    // Frameless mode hides every tab bar (the Lattice and Spectral panes
+    // meet with no chrome between them — clean for captures) and thins
+    // the separators to a hairline. No tab bar also means no way to click
+    // the View pane back if it's hidden, so Esc always restores.
+    if state.view.frameless && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        state.view.frameless = false;
+    }
+    let mut dock_style = theme::dock_style(ui.style());
+    if state.view.frameless {
+        dock_style.tab_bar.height = 0.0;
+        dock_style.separator.width = 1.0;
+    }
+
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
     DockArea::new(&mut dock)
-        .style(theme::dock_style(ui.style()))
-        // The pane set is fixed; closing/collapsing chrome is just noise.
+        .style(dock_style)
+        // The pane set is fixed, so closing chrome stays off — but the
+        // collapse arrow earns its pixels: the Lattice and Spectral panes
+        // fold down to their tab bar when screen space is tight.
         .show_close_buttons(false)
         .show_leaf_close_all_buttons(false)
-        .show_leaf_collapse_buttons(false)
+        .show_leaf_collapse_buttons(true)
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     state.dock = dock;
+    // Deferred from the View pane's button: replacing the dock BEFORE the
+    // write-back above would be silently undone.
+    if std::mem::take(&mut state.reset_layout) {
+        state.dock = default_dock();
+    }
 
     // Render continuously only while something is animating (sounding or
     // decaying voices); otherwise poll so newly arriving MIDI still shows
@@ -433,5 +682,46 @@ mod tests {
         hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
         learn_step(&mut state, &backend);
         assert!(state.view.meantone, "a bare fifth shouldn't change the flag");
+    }
+
+    #[test]
+    fn audio_spectrum_shows_while_flowing_and_hides_after() {
+        let mut spectrum = AudioSpectrum::default();
+        let config = SpectrumConfig::default();
+        assert!(spectrum.display(0.0, &config).is_none(), "no audio yet");
+
+        // A 440 Hz sine, long enough to fill the analysis window.
+        let sine: Vec<f32> = (0..9_000)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        spectrum.push_samples(&sine, 48_000.0, 1.0);
+        let (levels, _peaks) = spectrum.display(1.0, &config).expect("audio is flowing");
+        let peak = levels
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i as i32)
+            .unwrap();
+        assert!((peak - 114).abs() <= 1, "440 Hz should peak at A4 (bucket 114), got {peak}");
+
+        // Once samples stop, the curve hides instead of freezing.
+        assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1, &config).is_none());
+    }
+
+    #[test]
+    fn spectrum_config_round_trips_through_persist() {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.show_audio = true;
+        state.spectrum_config.floor_db = -48.0;
+        state.spectrum_config.window = SpectrumWindow::Precise;
+        state.spectrum_config.low_octave = 1;
+        let saved = state.save_persist();
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert!(restored.spectrum_config.show_audio);
+        assert_eq!(restored.spectrum_config.floor_db, -48.0);
+        assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
+        assert_eq!(restored.spectrum_config.low_octave, 1);
     }
 }

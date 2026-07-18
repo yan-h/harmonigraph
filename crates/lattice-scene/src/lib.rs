@@ -186,6 +186,11 @@ pub struct ViewConfig {
     /// their comma marks; Learn mode toggles this from the held chord.
     #[serde(default)]
     pub meantone: bool,
+    /// Hide all dock chrome (tab bars; separators thin to a hairline) so
+    /// adjacent panes — lattice above spectrum, in the default layout —
+    /// record as one seamless surface. Esc restores.
+    #[serde(default)]
+    pub frameless: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -243,6 +248,7 @@ impl Default for ViewConfig {
             node_style: NodeStyle::default(),
             show_chord_edges: false,
             meantone: false,
+            frameless: false,
             render_scale: default_render_scale(),
             bloom_strength: 0.0,
         }
