@@ -15,7 +15,8 @@ struct Uniforms {
     //    instance age/seed, which stay small and precise however long the
     //    session runs.
     // y: base node radius (world units),
-    // z: octave display mode (0 off, 1 dots, 2 petals, 3 flares, 4 bumps),
+    // z: octave display mode (0 off, 1 dots, 2 petals, 3 flares, 4 bumps,
+    //    5 slices),
     // w: node style (0 steady, 1 wire, 2 corona, 3 vortex, 4 plasma,
     //    5 aurora, 6 marble, 7 lava, 8 filament, 9 stripes, 10 rings,
     //    11 pinwheel, 12 spiral, 13 checker, 14 tiles)
@@ -156,6 +157,15 @@ const PETAL_BASE: f32 = 0.44; // where the petal roots (inside the rim)
 const PETAL_LEN: f32 = 0.34;  // radial length, tip at BASE+LEN
 const PETAL_W: f32 = 0.105;   // tangential half-width at the widest point
 
+// Slices geometry, quad UV units: annular pizza-slice sectors filling the
+// ring around the disc. The inner radius sits off the disc edge (~0.5) so
+// a gap ring separates slice from disc; the constant angular width leaves
+// gaps between neighbors (slots are 0.785 rad apart) and gives the
+// natural pizza taper toward the center.
+const SLICE_IN: f32 = 0.56;
+const SLICE_OUT: f32 = 0.93;
+const SLICE_HALF_ANG: f32 = 0.30;
+
 // Coverage (0..1) of the indicator glyph for a SOUNDING octave slot `i` on
 // a node whose pitch class is `cents`. All styles share the dots angle
 // convention — absolute pitch, middle C straight up, 45deg clockwise per
@@ -202,10 +212,21 @@ fn octave_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, time: f32, aa: f32
         let lat = exp(-2.0 * pow(u_t / spread, 2.0));
         let rad = (1.0 - smoothstep(0.55, 1.0, h)) * smoothstep(-0.15, 0.05, h);
         return clamp(lat * rad * 1.1, 0.0, 1.0);
+    } else if mode == 4u {
+        // Bumps: a blob seated ON the rim, so the disc outline bulges at
+        // the pitch angle instead of a shape hovering beside it.
+        return aa_inside(0.115, distance(uv, e * 0.50), aa);
     }
-    // Bumps: a blob seated ON the rim, so the disc outline bulges at the
-    // pitch angle instead of a shape hovering beside it.
-    return aa_inside(0.115, distance(uv, e * 0.50), aa);
+    // Slices: annular sectors (the outer stretch of a pizza slice), crisp
+    // screen-constant edges. The angular soft band is aa converted to
+    // radians at this pixel's radius. The angle to the slot direction is
+    // atan2(|cross|, dot) — scale-invariant, no seam, and where it is
+    // degenerate (uv ~ 0) the ring factor is already zero.
+    let dd = length(uv);
+    let ring = aa_inside(SLICE_OUT, dd, aa) * (1.0 - aa_inside(SLICE_IN, dd, aa));
+    let delta = atan2(abs(uv.x * e.y - uv.y * e.x), dot(uv, e));
+    let sector = aa_inside(SLICE_HALF_ANG, delta, aa / max(dd, 0.25));
+    return ring * sector;
 }
 
 // Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch
