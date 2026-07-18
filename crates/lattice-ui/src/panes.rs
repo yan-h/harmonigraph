@@ -649,6 +649,12 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 "Dashed links",
                 "Links along the sevenths axis draw dashed; in-sheet lines stay solid",
             ),
+            (
+                GridStyle::HomeSheet,
+                "Home sheet",
+                "Only the center sheet keeps its idle grid; other layers show \
+                 lines only while played notes light them",
+            ),
         ] {
             ui.selectable_value(&mut state.view.grid_style, style, label)
                 .on_hover_text(hover);

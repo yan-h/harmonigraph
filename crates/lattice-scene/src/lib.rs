@@ -34,6 +34,10 @@ pub enum GridStyle {
     /// Links along the sevens axis render dashed, so connective tissue
     /// between sheets reads differently from the sheets themselves.
     DashedLinks,
+    /// Only the home (center) sheet draws its idle grid. Off-sheet lines
+    /// and cross-layer links appear only while lit by played notes, so
+    /// depth structure materializes exactly where the music goes.
+    HomeSheet,
 }
 
 /// How a node indicates which octaves its pitch class is sounding in.
@@ -787,10 +791,20 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
                     strength = base.w * 0.6f32.powf(depth);
                 }
                 GridStyle::DashedLinks => dashed = along_sevens,
+                GridStyle::HomeSheet => {
+                    if along_sevens || rel != 0 {
+                        strength = 0.0;
+                    }
+                }
             }
 
             let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
             let lit = node.activation.min(neighbor.activation);
+            // Fully invisible (idle off-sheet in HomeSheet): skip the
+            // instance instead of shipping a discarded quad.
+            if strength <= 0.0 && lit <= 0.0 {
+                continue;
+            }
             grid.push(EdgeInstance {
                 a: node.world_pos + dir * inset,
                 b: neighbor.world_pos - dir * inset,
@@ -1226,6 +1240,17 @@ mod tests {
         let scene = scene_with(GridStyle::DashedLinks);
         for s in &scene.grid {
             assert_eq!(s.dashed, (s.b.z - s.a.z).abs() > 0.25, "{:?}->{:?}", s.a, s.b);
+        }
+
+        // HomeSheet with nothing played: only the center sheet's in-sheet
+        // segments survive (off-sheet and cross-layer ones are dropped
+        // entirely, not just dimmed).
+        let scene = scene_with(GridStyle::HomeSheet);
+        assert!(!scene.grid.is_empty());
+        for s in &scene.grid {
+            assert!((s.b.z - s.a.z).abs() < 0.25, "link survived: {:?}->{:?}", s.a, s.b);
+            assert!(s.a.z.abs() < 0.5, "off-sheet line survived: {:?}", s.a);
+            assert!(s.strength > 0.0);
         }
     }
 
