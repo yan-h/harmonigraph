@@ -363,6 +363,17 @@ impl Camera {
             .clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
     }
 
+    /// Zoom by a multiplicative factor (>1 = closer), clamped to the working
+    /// range. This is the pinch/zoom-gesture counterpart to [`Self::zoom`]:
+    /// egui reports trackpad pinches and modifier+scroll as a `zoom_delta`
+    /// factor rather than a scroll delta, and the lattice honors both.
+    pub fn zoom_by(&mut self, factor: f32) {
+        if factor > 0.0 {
+            self.distance =
+                (self.distance / factor).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
+        }
+    }
+
     pub fn eye(&self) -> Vec3 {
         // Cabinet is a fixed-viewpoint projection: the eye always faces
         // the fifths/thirds sheet straight on, whatever yaw/pitch say (they
