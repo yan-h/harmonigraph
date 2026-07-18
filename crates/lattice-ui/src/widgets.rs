@@ -17,6 +17,15 @@ const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
 /// Buttons with a `selected` fill read exactly like the momentary preset
 /// buttons they sit next to (Just, 12-TET); the pill-and-knob shape is
 /// unmistakably persistent state.
+///
+/// Toggle vs checkbox, the house rule: a switch means "this mode is
+/// ENGAGED" — an ongoing behavior with side effects (Learn keeps
+/// rewriting tuning params; Meantone locks the third), especially next
+/// to action buttons it could be confused with. A checkbox means
+/// "include this element" — a display preference among peers in a
+/// settings stack (Fill, Peak hold, Note labels, ...). When adding a
+/// boolean control, default to a checkbox unless it's a mode that keeps
+/// acting after the click.
 pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
