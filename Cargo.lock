@@ -1733,6 +1733,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "glam",
+ "lattice-core",
  "lattice-scene",
  "naga",
  "pollster",
