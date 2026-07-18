@@ -140,6 +140,9 @@ struct GpuInstance {
     cents: f32,
     /// Depth-cue size multiplier (see lattice_scene's `depth_scale`).
     scale: f32,
+    /// 1 when the node is on the home (center sevens) sheet: idle home
+    /// nodes draw a blank placeholder ring.
+    home: f32,
 }
 
 impl GpuInstance {
@@ -148,7 +151,7 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32
+            5 => Float32, 6 => Float32, 7 => Float32
         ],
     };
 }
@@ -250,6 +253,7 @@ impl LatticeCallback {
                 seed: n.seed,
                 cents: n.cents,
                 scale: n.scale,
+                home: if n.on_home { 1.0 } else { 0.0 },
             })
             .collect();
 

@@ -52,6 +52,9 @@ struct Instance {
     // distance; larger nearer the eye, smaller farther), exaggerating
     // perspective so depth reads at a glance.
     @location(6) scale: f32,
+    // 1 on the home (center sevens) sheet: idle home nodes draw a blank
+    // placeholder ring where their disc would be.
+    @location(7) home: f32,
 };
 
 struct VsOut {
@@ -62,6 +65,7 @@ struct VsOut {
     @location(3) @interpolate(flat) octaves: vec3<u32>,
     @location(4) seed: f32,
     @location(5) @interpolate(flat) cents: f32,
+    @location(6) @interpolate(flat) home: f32,
 };
 
 @vertex
@@ -93,6 +97,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.octaves = inst.octaves;
     out.seed = inst.seed;
     out.cents = inst.cents;
+    out.home = inst.home;
     return out;
 }
 
@@ -553,6 +558,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let presence = max(activation, 0.35 * hovered);
     var disc = mix(filled, ring, outlined) * presence;
 
+    // Home-sheet nodes keep a blank placeholder circle while idle: a thin
+    // ring at the disc edge (its width matched to the grid lines), in the
+    // idle color at the grid's opacity, fading out as the disc fades in.
+    // Off-sheet idle nodes still draw nothing.
+    let blank_ring = filled * (1.0 - aa_inside(0.37, d, aa));
+    let blank = blank_ring * in.home * 0.55 * (1.0 - presence);
+
     // Wire style: active nodes morph from disc into a tumbling wireframe
     // octahedron (idle nodes draw nothing in every style — see presence).
     if style == 1u && activation > 0.0 {
@@ -590,7 +602,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d);
         rgb = mix(rgb, gas * brightness * field.y * limb, activation);
     }
-    let base_alpha = clamp(disc + glow, 0.0, 1.0);
+    // The blank ring composites under the disc/glow in the un-floored
+    // idle color, so it matches the grid lines' brightness rather than
+    // the 35%-floored disc shading.
+    let core_alpha = clamp(disc + glow, 0.0, 1.0);
+    let base_alpha = core_alpha + blank * (1.0 - core_alpha);
+    let base_rgb = rgb * core_alpha + in.color.rgb * blank * (1.0 - core_alpha);
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
@@ -624,7 +641,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if alpha < 0.01 {
         discard;
     }
-    let out_rgb = glyph_rgb * glyph + rgb * base_alpha * (1.0 - glyph);
+    let out_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
     return vec4<f32>(out_rgb, alpha);
 }
 

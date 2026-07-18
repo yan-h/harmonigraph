@@ -467,6 +467,9 @@ pub struct NodeInstance {
     /// eye than the camera's focus distance grow, farther ones shrink,
     /// exaggerating the perspective so depth reads at a glance.
     pub scale: f32,
+    /// On the home (center sevens) sheet. Home nodes keep a blank
+    /// placeholder ring while idle; off-sheet nodes draw nothing.
+    pub on_home: bool,
     /// The node's pitch class in cents under the current tuning, for the
     /// in-lattice cents readout.
     pub cents: f32,
@@ -658,6 +661,7 @@ pub fn derive_scene(
             outlined,
             hovered: hovered == Some(pos),
             scale: depth_scale(world_pos.distance(eye), camera.distance),
+            on_home: pos.sevens == view.center_sevens,
             cents: node_pc.to_cents(),
         });
     }
@@ -1160,6 +1164,28 @@ mod tests {
             .fold(0.0f32, f32::max);
         for seg in &scene.grid {
             assert!(seg.a.length() <= max_node && seg.b.length() <= max_node);
+        }
+    }
+
+    #[test]
+    fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
+        // Follows the panned window center, not sevens == 0.
+        let view = ViewConfig {
+            extent_threes: 0,
+            extent_fives: 0,
+            extent_sevens: 1,
+            center_sevens: 2,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        for n in &scene.nodes {
+            assert_eq!(n.on_home, n.lattice_pos.sevens == 2, "{:?}", n.lattice_pos);
         }
     }
 
