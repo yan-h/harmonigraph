@@ -57,6 +57,9 @@ struct App {
     state: SharedState,
     params: StandaloneParams,
     mock: MockMidi,
+    /// Fake audio for the Spectral pane's analyzer (see MockSynth).
+    synth: MockSynth,
+    synth_buf: Vec<f32>,
     start: Instant,
     source: MidiSource,
     /// Names of the known input ports (refreshed on demand).
@@ -158,6 +161,8 @@ impl App {
             state,
             params: StandaloneParams::default(),
             mock: MockMidi::default(),
+            synth: MockSynth::default(),
+            synth_buf: Vec::new(),
             start: Instant::now(),
             source: MidiSource::Mock,
             known_ports,
@@ -257,6 +262,17 @@ impl eframe::App for App {
                 ));
             }
             self.state.tracker.handle_event(event);
+        }
+
+        // The harness has no real audio; synthesize the held notes so the
+        // Spectral pane's audio overlay is demoable without a DAW.
+        if self.state.view.show_audio_spectrum {
+            self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
+            self.state
+                .spectrum
+                .push_samples(&self.synth_buf, SYNTH_RATE as f32, now);
+        } else {
+            self.synth.reset();
         }
 
         lattice_ui::root_ui(ui, &mut self.state, &self.params, now);
@@ -361,6 +377,63 @@ impl MockMidi {
             }
         }
         self.last = Some(current);
+    }
+}
+
+/// Sample rate of the mock synth's imaginary audio.
+const SYNTH_RATE: f64 = 48_000.0;
+
+/// Additive synth over the held notes — fundamental plus two harmonics,
+/// analyzed by the Spectral pane but never heard. The harmonics are the
+/// demo: a held C also deposits pitch-class energy at the fifth (3rd
+/// harmonic) and major third (5th... within the first two, at 702c),
+/// showing the fold doing something MIDI bars can't.
+#[derive(Default)]
+struct MockSynth {
+    /// Wall time up to which samples have been rendered.
+    rendered_to: Option<f64>,
+}
+
+impl MockSynth {
+    /// Per-frame cap: a stalled frame must not synthesize seconds.
+    const MAX_CHUNK: usize = 9_600; // 200 ms
+
+    /// Fill `out` with the samples from the previous call's time up to
+    /// `now`. Phase comes from absolute time, so held notes stay
+    /// continuous across frames without per-voice state.
+    fn render(&mut self, tracker: &lattice_core::NoteTracker, now: f64, out: &mut Vec<f32>) {
+        out.clear();
+        let Some(from) = self.rendered_to.replace(now) else {
+            return; // first frame after enabling: only set the epoch
+        };
+        let n = (((now - from) * SYNTH_RATE) as usize).min(Self::MAX_CHUNK);
+
+        let voices: Vec<(f64, f64)> = tracker
+            .voices()
+            .filter(|v| v.state == lattice_core::VoiceState::Held)
+            .map(|v| {
+                let freq = 440.0 * f64::from((v.pitch - 69.0) / 12.0).exp2();
+                (freq, f64::from(v.velocity) * 0.1)
+            })
+            .collect();
+
+        out.reserve(n);
+        for i in 0..n {
+            let t = from + (i + 1) as f64 / SYNTH_RATE;
+            let mut sample = 0.0f64;
+            for &(freq, amp) in &voices {
+                let phase = std::f64::consts::TAU * freq * t;
+                sample += amp
+                    * (phase.sin() + 0.35 * (2.0 * phase).sin() + 0.2 * (3.0 * phase).sin());
+            }
+            out.push(sample as f32);
+        }
+    }
+
+    /// Forget the clock while the overlay is off, so re-enabling starts
+    /// fresh instead of rendering the whole gap.
+    fn reset(&mut self) {
+        self.rendered_to = None;
     }
 }
 

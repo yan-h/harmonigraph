@@ -45,6 +45,70 @@ impl Console {
     }
 }
 
+/// Audio-derived pitch-class spectrum shown in the Spectral pane. The
+/// shell feeds mono samples every frame from wherever its audio comes from
+/// (plugin: input bus via a ring buffer; standalone: the mock synth); the
+/// pane asks for a display refresh when it draws. Runtime-only.
+pub struct AudioSpectrum {
+    analyzer: lattice_core::spectrum::SpectrumAnalyzer,
+    /// Smoothed display buckets (power; the pane maps to height).
+    display: [f32; lattice_core::spectrum::PC_BINS],
+    /// When the FFT last ran, on the shell clock. The FFT is throttled
+    /// well below frame rate — it feeds a meter, not an oscilloscope.
+    last_fft: Option<f64>,
+    /// When samples last arrived; the curve hides once the source stops
+    /// (closed input bus, switched-off synth) rather than freezing.
+    last_samples: Option<f64>,
+}
+
+impl Default for AudioSpectrum {
+    fn default() -> Self {
+        AudioSpectrum {
+            analyzer: lattice_core::spectrum::SpectrumAnalyzer::new(48_000.0),
+            display: [0.0; lattice_core::spectrum::PC_BINS],
+            last_fft: None,
+            last_samples: None,
+        }
+    }
+}
+
+impl AudioSpectrum {
+    /// Seconds between FFTs (20 Hz refresh).
+    const FFT_INTERVAL: f64 = 0.05;
+    /// Per-refresh exponential smoothing toward the new spectrum.
+    const SMOOTHING: f32 = 0.45;
+    /// How long after the last samples the curve keeps drawing.
+    const HOLD_SECONDS: f64 = 0.5;
+
+    /// Feed mono samples from the shell. `now` is the shell clock also
+    /// passed to [`root_ui`].
+    pub fn push_samples(&mut self, samples: &[f32], sample_rate: f32, now: f64) {
+        if samples.is_empty() {
+            return;
+        }
+        self.analyzer.set_sample_rate(sample_rate);
+        self.analyzer.push_samples(samples);
+        self.last_samples = Some(now);
+    }
+
+    /// Advance the display (runs the FFT at most every FFT_INTERVAL) and
+    /// return the buckets to draw, or None while no audio is flowing.
+    pub fn display(&mut self, now: f64) -> Option<&[f32; lattice_core::spectrum::PC_BINS]> {
+        if !self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS) {
+            return None;
+        }
+        if self.last_fft.is_none_or(|t| now - t >= Self::FFT_INTERVAL) {
+            if let Some(fresh) = self.analyzer.pitch_class_spectrum() {
+                for (shown, new) in self.display.iter_mut().zip(fresh) {
+                    *shown += (new - *shown) * Self::SMOOTHING;
+                }
+                self.last_fft = Some(now);
+            }
+        }
+        Some(&self.display)
+    }
+}
+
 /// Everything the UI reads and mutates each frame. One instance lives in the
 /// shell (inside the editor state in the plugin, inside the app in the
 /// standalone harness).
@@ -76,6 +140,8 @@ pub struct SharedState {
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
+    /// Audio-derived spectrum for the Spectral pane. Runtime-only.
+    pub spectrum: AudioSpectrum,
     dock: DockState<panes::Tab>,
 }
 
@@ -116,6 +182,7 @@ impl SharedState {
             last_learned_classes: None,
             camera_presets: Vec::new(),
             preset_name: String::new(),
+            spectrum: AudioSpectrum::default(),
             dock,
         }
     }
@@ -433,5 +500,29 @@ mod tests {
         hold_chord(&mut state, &[(60, 0.0), (67, 0.0)]);
         learn_step(&mut state, &backend);
         assert!(state.view.meantone, "a bare fifth shouldn't change the flag");
+    }
+
+    #[test]
+    fn audio_spectrum_shows_while_flowing_and_hides_after() {
+        let mut spectrum = AudioSpectrum::default();
+        assert!(spectrum.display(0.0).is_none(), "no audio yet");
+
+        // A 440 Hz sine (900 cents above C), long enough to fill the
+        // analysis window.
+        let sine: Vec<f32> = (0..9_000)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        spectrum.push_samples(&sine, 48_000.0, 1.0);
+        let buckets = spectrum.display(1.0).expect("audio is flowing");
+        let peak = buckets
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i as i32)
+            .unwrap();
+        assert!((peak - 180).abs() <= 1, "440 Hz should peak at ~900c, got bucket {peak}");
+
+        // Once samples stop, the curve hides instead of freezing.
+        assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());
     }
 }

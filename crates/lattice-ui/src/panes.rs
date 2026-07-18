@@ -626,6 +626,11 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     });
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
+    ui.checkbox(&mut state.view.show_audio_spectrum, "Audio spectrum")
+        .on_hover_text(
+            "Overlay a pitch-class-folded spectrum of the audio in the Spectral \
+             pane (plugin: the input bus; standalone: a synth on the held notes)",
+        );
 
     // Octave indicator glyphs, all positioned by absolute pitch: floating
     // dots, or shapes attached to the rim (petals/flares/bumps).
@@ -721,6 +726,27 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
             0.0,
             theme::accent_fill(),
         );
+    }
+
+    // Audio spectrum: the pitch-class-folded FFT of the shell's audio
+    // source, drawn as a curve under the voice bars. Where its peaks land
+    // relative to the ticks is the point: real intonation vs the lattice.
+    if state.view.show_audio_spectrum {
+        if let Some(buckets) = state.spectrum.display(now) {
+            let n = buckets.len();
+            let points: Vec<egui::Pos2> = (0..=n)
+                .map(|i| {
+                    // Power -> amplitude so peak height tracks how loud a
+                    // pitch class sounds; a full-scale sine reaches 85%.
+                    let h = buckets[i % n].max(0.0).sqrt().min(1.0) * rect.height() * 0.85;
+                    egui::pos2(x_of(i as f32 * 5.0), rect.bottom() - h)
+                })
+                .collect();
+            painter.add(egui::Shape::line(
+                points,
+                egui::Stroke::new(1.5, theme::accent().gamma_multiply(0.65)),
+            ));
+        }
     }
 
     // Voice bars: height follows the same envelope as the lattice glow,

@@ -4,7 +4,7 @@
 //! to host->plugin resizing). Adapted from nice-plug-egui's editor glue
 //! (ISC licensed).
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -80,6 +80,10 @@ impl ClockMapper {
 /// window may open and close many times around it.
 pub struct EditorShared {
     consumer: rtrb::Consumer<CoreNoteEvent>,
+    /// Mono input samples from the audio thread (Spectral pane analyzer).
+    audio_consumer: rtrb::Consumer<f32>,
+    /// Sample rate of those samples, as f32 bits (see the plugin struct).
+    sample_rate_bits: Arc<AtomicU32>,
     ui: SharedState,
     /// GUI clock epoch; audio event times are mapped onto this clock.
     start: Instant,
@@ -88,6 +92,8 @@ pub struct EditorShared {
     /// Reused per-frame drain scratch (events are batched so the clock
     /// observation can use the newest timestamp before mapping).
     drain_buf: Vec<CoreNoteEvent>,
+    /// Reused per-frame audio drain scratch.
+    audio_buf: Vec<f32>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
     /// Param key currently inside a begin_set/end_set automation gesture.
@@ -95,13 +101,20 @@ pub struct EditorShared {
 }
 
 impl EditorShared {
-    pub fn new(consumer: rtrb::Consumer<CoreNoteEvent>) -> Self {
+    pub fn new(
+        consumer: rtrb::Consumer<CoreNoteEvent>,
+        audio_consumer: rtrb::Consumer<f32>,
+        sample_rate_bits: Arc<AtomicU32>,
+    ) -> Self {
         EditorShared {
             consumer,
+            audio_consumer,
+            sample_rate_bits,
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             start: Instant::now(),
             clock: ClockMapper::new(),
             drain_buf: Vec::new(),
+            audio_buf: Vec::new(),
             last_frame: None,
             gesture: std::cell::Cell::new(None),
         }
@@ -142,6 +155,20 @@ impl EditorShared {
             self.ui.tracker.handle_event(event);
         }
         true
+    }
+
+    /// Drain the audio sample ring into the spectrum analyzer. Always
+    /// drains — the ring must not hold stale audio for a burst when the
+    /// overlay is toggled on — but skips the analyzer while it's off.
+    fn drain_audio(&mut self, now: f64) {
+        self.audio_buf.clear();
+        while let Ok(sample) = self.audio_consumer.pop() {
+            self.audio_buf.push(sample);
+        }
+        if self.ui.view.show_audio_spectrum && !self.audio_buf.is_empty() {
+            let sample_rate = f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed));
+            self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now);
+        }
     }
 }
 
@@ -370,6 +397,7 @@ impl Editor for LatticeEditor {
                     // New MIDI must render this tick, not at the idle poll.
                     ui.ctx().request_repaint();
                 }
+                shared.drain_audio(now);
 
                 let backend = PluginParamBackend {
                     params: &state.params,
@@ -472,7 +500,12 @@ mod tests {
         // spacing intact. (This is the integration the ClockMapper unit
         // tests below can't cover: observe-newest-THEN-map ordering.)
         let (mut producer, consumer) = rtrb::RingBuffer::new(64);
-        let mut shared = EditorShared::new(consumer);
+        let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
+        let mut shared = EditorShared::new(
+            consumer,
+            audio_consumer,
+            std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+        );
         for (note, time) in [(60u8, 99.950), (64u8, 99.995)] {
             producer
                 .push(NoteEvent {

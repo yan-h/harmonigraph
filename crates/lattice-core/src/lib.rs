@@ -4,6 +4,7 @@
 
 pub mod coords;
 pub mod notes;
+pub mod spectrum;
 pub mod tuning;
 
 pub use coords::{positions_within, LatticePos, NoteName};
