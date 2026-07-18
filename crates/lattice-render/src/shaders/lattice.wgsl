@@ -120,6 +120,11 @@ fn aa_inside(edge: f32, x: f32, w: f32) -> f32 {
     return 1.0 - smoothstep(edge - w, edge + w, x);
 }
 
+// Half-width of the soft band, in render pixels on each side of an edge
+// (the one knob for how soft shape edges feel; softness stays
+// screen-constant at every zoom). ~4px total on a Retina surface.
+const AA_SOFTNESS_PX: f32 = 2.0;
+
 // Activation level (0..1) of octave slot `i`, unpacked from 8-bit fields.
 // Each octave carries its OWN envelope so indicators fade independently
 // (a released C5 decays even while C4 holds the node fully lit).
@@ -531,9 +536,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Screen-constant soft-band width: uv units per pixel (uv.x is linear
     // across the billboard, so fwidth is uniform over the quad and safe to
-    // take before any branching), scaled to ~0.75px on either side of an
-    // edge. Shape edges below use this instead of fixed-uv smoothsteps.
-    let aa = max(fwidth(in.uv.x), 1e-4) * 0.75;
+    // take before any branching), scaled to the softness knob. Shape edges
+    // below use this instead of fixed-uv smoothsteps.
+    let aa = max(fwidth(in.uv.x), 1e-4) * AA_SOFTNESS_PX;
 
     // Solid disc occupies the inner half of the quad; channel-14 voices
     // render as an outline ring instead (v1 semantics). Radii sit at the
@@ -688,7 +693,7 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
 fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
     // Screen-constant soft band across the beam (see aa_inside; computed
     // before the branch so the derivative stays in uniform control flow).
-    let aa_y = max(fwidth(in.uv.y), 1e-4) * 0.75;
+    let aa_y = max(fwidth(in.uv.y), 1e-4) * AA_SOFTNESS_PX;
 
     // Grid line: uniformly faint with a screen-constant soft edge (line
     // edge at the old 0.35..1.0 band's midpoint), the ends easing off
