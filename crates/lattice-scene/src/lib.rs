@@ -37,18 +37,17 @@ pub enum OctaveStyle {
 /// nodes look identical in every style.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NodeStyle {
-    /// The original look: steady disc + glow.
+    /// The original look: steady disc + glow. The aliases absorb styles
+    /// that used to exist (Breathe, Sparks) so persisted view blobs that
+    /// still name them keep loading.
     #[default]
+    #[serde(alias = "Breathe", alias = "Sparks")]
     Steady,
-    /// Held nodes pulse size/glow on per-note phases.
-    Breathe,
+    /// Held nodes become slowly tumbling wireframe octahedra.
+    Wire,
     /// Held discs become billowing balls of gas ringed by a flame edge,
     /// with every sounding octave's color swirled through the interior.
     Corona,
-    /// Bright particles orbiting held nodes.
-    Sparks,
-    /// Held nodes become slowly tumbling wireframe octahedra.
-    Wire,
     /// Gas ball variant: octave colors sheared into rotating spiral
     /// streaks, like stirred paint.
     Vortex,
@@ -72,16 +71,14 @@ impl NodeStyle {
     pub fn shader_index(self) -> u32 {
         match self {
             NodeStyle::Steady => 0,
-            NodeStyle::Breathe => 1,
+            NodeStyle::Wire => 1,
             NodeStyle::Corona => 2,
-            NodeStyle::Sparks => 3,
-            NodeStyle::Wire => 4,
-            NodeStyle::Vortex => 5,
-            NodeStyle::Plasma => 6,
-            NodeStyle::Aurora => 7,
-            NodeStyle::Marble => 8,
-            NodeStyle::Lava => 9,
-            NodeStyle::Filament => 10,
+            NodeStyle::Vortex => 3,
+            NodeStyle::Plasma => 4,
+            NodeStyle::Aurora => 5,
+            NodeStyle::Marble => 6,
+            NodeStyle::Lava => 7,
+            NodeStyle::Filament => 8,
         }
     }
 
@@ -529,7 +526,7 @@ pub fn derive_scene(
         // as the clock plus a stable per-node seed — so pressing,
         // retriggering, or stacking notes lights the flow up without ever
         // restarting or reshuffling it. Age-driven styles keep the
-        // per-note seed (breathe's neutral start, sparks' orbit phases).
+        // per-note seed (wire's tumble phases).
         let seed = if view.node_style.is_gas() { node_seed(pos) } else { seed };
 
         // World positions are relative to the window center, keeping the

@@ -455,8 +455,6 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         ui.label("Node style");
         for (style, label) in [
             (NodeStyle::Steady, "Steady"),
-            (NodeStyle::Breathe, "Breathe"),
-            (NodeStyle::Sparks, "Sparks"),
             (NodeStyle::Wire, "Wire"),
             (NodeStyle::Corona, "Corona"),
             (NodeStyle::Vortex, "Vortex"),

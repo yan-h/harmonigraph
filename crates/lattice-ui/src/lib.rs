@@ -274,6 +274,23 @@ mod tests {
     }
 
     #[test]
+    fn removed_node_styles_in_old_persist_blobs_load_as_steady() {
+        // Breathe/Sparks no longer exist; serde aliases must absorb them so
+        // an old blob still restores (a failed parse would silently drop the
+        // WHOLE persist — layout, camera, everything).
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        state.view.node_style = lattice_scene::NodeStyle::Wire;
+        let saved = state.save_persist().replace("node_style:Wire", "node_style:Breathe");
+        assert_ne!(saved, state.save_persist(), "replacement must have hit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.view.node_style, lattice_scene::NodeStyle::Steady);
+        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
+    }
+
+    #[test]
     fn corrupt_persist_is_ignored() {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
         let default_distance = state.camera.distance;

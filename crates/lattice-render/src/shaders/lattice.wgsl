@@ -16,8 +16,8 @@ struct Uniforms {
     //    session runs.
     // y: base node radius (world units),
     // z: octave display mode (0 off, 1 dots),
-    // w: node style (0 steady, 1 breathe, 2 corona, 3 sparks, 4 wire,
-    //    5 vortex, 6 plasma, 7 aurora, 8 marble, 9 lava, 10 filament)
+    // w: node style (0 steady, 1 wire, 2 corona, 3 vortex, 4 plasma,
+    //    5 aurora, 6 marble, 7 lava, 8 filament)
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z, w unused. The
     // dots style maps a dot's pitch through these to index dot_ramp.
@@ -26,8 +26,6 @@ struct Uniforms {
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
     dot_ramp: array<vec4<f32>, 16>,
 };
-
-const TAU: f32 = 6.2831853;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -69,21 +67,13 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     );
     let corner = corners[vertex_index];
 
-    let activation = inst.params.x;
     let hovered = inst.params.y;
 
     // Node size is constant: idle nodes are the same size as active ones, so a
     // note never grows or shrinks — it changes only in brightness and glow.
     // (The quad is twice the disc radius to leave room for the glow; hover
     // still nudges the size up a touch.)
-    var radius = u.misc.y * (0.90 + 0.15 * hovered) * 2.0;
-
-    // Breathe style: held nodes pulse in size on their own age
-    // (oscillation starts neutral at note-on).
-    if u32(u.misc.w + 0.5) == 1u {
-        let beat = inst.params.z * TAU * 0.8;
-        radius = radius * (1.0 + 0.10 * activation * sin(beat));
-    }
+    let radius = u.misc.y * (0.90 + 0.15 * hovered) * 2.0;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
@@ -237,7 +227,7 @@ fn rot2(a: f32) -> mat2x2<f32> {
 
 // Mirrors NodeStyle::is_gas in lattice-scene; keep the two in sync.
 fn is_gas_style(style: u32) -> bool {
-    return style == 2u || style >= 5u;
+    return style >= 2u;
 }
 
 // Color at position `t` (0..1) along the gradient of SOUNDING octaves: the
@@ -255,30 +245,38 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
         return fallback;
     }
     let pick = clamp(t, 0.0, 1.0) * total;
+    // Kernel-weighted blend: each octave contributes its color weighted by
+    // its level times a bump centered on its span, so pixels inside a span
+    // show ~pure color and seams crossfade narrowly. The level factor is
+    // the point: a releasing octave's color influence fades out WITH its
+    // envelope. (The previous span-center interpolation handed the
+    // outermost octaves full-color ownership of the gradient ends no
+    // matter how faded they were, so their color vanished with a snap the
+    // instant the level reached zero.)
     var acc = 0.0;
-    var prev_center = -1.0;
-    var prev_rgb = fallback;
+    var wsum = 0.0;
+    var csum = vec3<f32>(0.0);
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let level = octave_level(octaves, i);
         if level <= 0.0 {
             continue;
         }
         let center = acc + level * 0.5;
+        acc = acc + level;
+        // Bump width tracks the span (+ a small floor so it never hits
+        // zero); at full level a neighbor's kernel is ~exp(-4) inside this
+        // span, keeping patches pure rather than averaged.
+        let x = (pick - center) / (level * 0.5 + 0.02);
+        let w = level * exp(-x * x);
         // Slot i is MIDI octave i (its C is MIDI (i+1)*12), same mapping as
         // the dots style.
-        let rgb = dot_pitch_color((f32(i) + 1.0) * 12.0 + cents / 100.0);
-        if pick <= center {
-            if prev_center < 0.0 {
-                return rgb;
-            }
-            return mix(prev_rgb, rgb, (pick - prev_center) / max(center - prev_center, 1e-4));
-        }
-        prev_center = center;
-        prev_rgb = rgb;
-        acc = acc + level;
+        wsum = wsum + w;
+        csum = csum + dot_pitch_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
     }
-    // Past the last span center: the highest sounding octave's color.
-    return prev_rgb;
+    if wsum < 1e-5 {
+        return fallback;
+    }
+    return csum / wsum;
 }
 
 // A gas style's scalar fields at one pixel: x picks the color along the
@@ -295,7 +293,7 @@ fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f3
         // fbm concentrates around 0.5; stretch it so the gradient's ends
         // (lowest/highest octave) get real coverage.
         return vec2<f32>(smoothstep(0.28, 0.72, n), lum);
-    } else if style == 5u {
+    } else if style == 3u {
         // Vortex: differential rotation shears the colors into spiral
         // streaks, like paint stirred with a spoon. Only integer multiples
         // of the angle go through cos(), so there is no seam at +-pi.
@@ -308,14 +306,14 @@ fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f3
         let q = rot2(time * 0.5) * uv;
         let lum = 0.74 + 0.5 * fbm(q * 3.0 + vec2<f32>(seed * 5.0, 0.0));
         return vec2<f32>(t, lum);
-    } else if style == 6u {
+    } else if style == 4u {
         // Plasma: fast boiling granulation cells over larger, slower color
         // patches (cells carry brightness, patches carry the octave colors).
         let cellp = uv * 5.5 + vec2<f32>(seed * 9.1, seed * 4.7);
         let boil = fbm(cellp + vec2<f32>(time * 0.35, time * 0.5));
         let patch_n = fbm(uv * 1.7 + vec2<f32>(seed * 3.7, -time * 0.13));
         return vec2<f32>(smoothstep(0.30, 0.70, patch_n), 0.55 + 1.0 * boil * boil);
-    } else if style == 7u {
+    } else if style == 5u {
         // Aurora: horizontal color bands warped by noise stretched along x
         // into slowly drifting curtains.
         let drift = vec2<f32>(time * 0.10, time * 0.04);
@@ -324,7 +322,7 @@ fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f3
         let t = 0.5 + 0.5 * cos(uv.y * 2.6 + curtain * 4.5 + time * 0.20);
         let lum = 0.68 + 0.55 * fbm(uv * vec2<f32>(4.2, 1.4) + vec2<f32>(seed * 2.3, 0.0) - drift);
         return vec2<f32>(t, lum);
-    } else if style == 8u {
+    } else if style == 6u {
         // Marble: a sine over position plus strong turbulence — thin veins
         // that sweep through every octave's color where the noise shears.
         let p = uv * 2.0 + vec2<f32>(seed * 6.1, seed * 2.9);
@@ -332,7 +330,7 @@ fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f3
             sin((uv.x + uv.y * 0.4) * 3.0 + fbm(p + vec2<f32>(time * 0.08, -time * 0.06)) * 7.0);
         let lum = 0.72 + 0.42 * fbm(p * 1.3 + vec2<f32>(0.0, time * 0.07));
         return vec2<f32>(0.5 + 0.5 * vein, lum);
-    } else if style == 9u {
+    } else if style == 7u {
         // Lava lamp: big soft-edged blobs wandering slowly; the steep
         // smoothstep parks most pixels on a single octave's color, with
         // thin blended rims where blobs touch.
@@ -358,18 +356,18 @@ fn gas_field(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f3
 // rules as gas_field.
 fn gas_flame(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
     let dir = uv / max(d, 1e-4);
-    if style == 5u {
+    if style == 3u {
         // Vortex: flame tips trail along with the rotation.
         let rdir = rot2(time * 0.55) * dir;
         return pow(vnoise(rdir * 2.1 + vec2<f32>(seed * 7.0, d * 2.5)), 2.0);
-    } else if style == 6u || style == 10u {
+    } else if style == 4u || style == 8u {
         // Plasma/filament: sparse prominences — a few tall arcs that erupt
         // and subside.
         return pow(vnoise(dir * 1.9 + vec2<f32>(seed * 11.0, time * 0.45)), 3.0) * 1.5;
-    } else if style == 7u {
+    } else if style == 5u {
         // Aurora: slow soft shimmer.
         return pow(vnoise(dir * 1.5 + vec2<f32>(seed * 5.0, time * 0.25)), 2.0) * 0.8;
-    } else if style == 9u {
+    } else if style == 7u {
         // Lava: a soft halo with a slow swell, no flicker.
         return 0.35 + 0.25 * vnoise(dir * 1.2 + vec2<f32>(seed * 3.0, time * 0.15));
     }
@@ -443,7 +441,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Wire style: active nodes morph from disc into a tumbling wireframe
     // octahedron (idle nodes stay discs in every style).
-    if style == 4u && activation > 0.0 {
+    if style == 1u && activation > 0.0 {
         disc = mix(disc, wire_octahedron(in.uv, age, seed), activation);
     }
 
@@ -454,10 +452,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let window = 1.0 - smoothstep(0.5, 0.95, d);
     var glow = (0.6 * activation + 0.25 * hovered) * exp(-3.0 * d) * window;
 
-    // Breathe: glow strength pulses in sync with the vertex-side size pulse.
-    if style == 1u {
-        glow = glow * (1.0 + 0.35 * activation * sin(age * TAU * 0.8));
-    }
     // Gas styles: replace the smooth glow with a noise-flickered flame edge
     // (each style shapes its own flame — flicker, trailing tips, sparse
     // prominences, or a soft swell). Clocked on global time so a retrigger
@@ -496,23 +490,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
     var max_level = 0.0;
-
-    // Sparks: bright particles orbiting held nodes, drawn in the same
-    // whitened layer as the octave glyphs.
-    if style == 3u && activation > 0.0 {
-        for (var k = 0u; k < 3u; k = k + 1u) {
-            let fk = f32(k);
-            let dir = select(1.0, -1.0, k == 1u);
-            let ang = dir * age * (1.6 + 0.5 * fk) + fk * 2.094 + seed * 5.0;
-            let orbit = 0.60 + 0.10 * sin(age * (0.7 + 0.3 * fk) + fk * 1.7);
-            let pos = vec2<f32>(cos(ang), sin(ang)) * orbit;
-            let spark = (1.0 - smoothstep(0.02, 0.075, distance(in.uv, pos))) * activation;
-            if spark > glyph {
-                glyph = spark;
-                glyph_rgb = node_glyph_rgb;
-            }
-        }
-    }
 
     // Dots octave indicator (mode 1; 0 is off). Each slot fades on its own
     // envelope. Whichever element covers a pixel most strongly owns its color
