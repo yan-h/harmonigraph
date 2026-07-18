@@ -457,6 +457,8 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
             (NodeStyle::Corona, "Corona"),
             (NodeStyle::Sparks, "Sparks"),
             (NodeStyle::Wire, "Wire"),
+            (NodeStyle::Vortex, "Vortex"),
+            (NodeStyle::Plasma, "Plasma"),
         ] {
             ui.selectable_value(&mut state.view.node_style, style, label);
         }

@@ -42,12 +42,19 @@ pub enum NodeStyle {
     Steady,
     /// Held nodes pulse size/glow on per-note phases.
     Breathe,
-    /// Noise-driven flame edge around held discs.
+    /// Held discs become billowing balls of gas ringed by a flame edge,
+    /// with every sounding octave's color swirled through the interior.
     Corona,
     /// Bright particles orbiting held nodes.
     Sparks,
     /// Held nodes become slowly tumbling wireframe octahedra.
     Wire,
+    /// Gas ball variant: octave colors sheared into rotating spiral
+    /// streaks, like stirred paint.
+    Vortex,
+    /// Gas ball variant: fast boiling granulation cells over larger octave
+    /// color patches, with sparse prominences at the rim.
+    Plasma,
 }
 
 impl NodeStyle {
@@ -59,6 +66,8 @@ impl NodeStyle {
             NodeStyle::Corona => 2,
             NodeStyle::Sparks => 3,
             NodeStyle::Wire => 4,
+            NodeStyle::Vortex => 5,
+            NodeStyle::Plasma => 6,
         }
     }
 }
