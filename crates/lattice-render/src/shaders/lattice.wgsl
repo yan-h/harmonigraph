@@ -31,6 +31,10 @@ struct Uniforms {
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
     dot_ramp: array<vec4<f32>, 16>,
+    // Idle node color (skin node_idle): the home-sheet placeholder ring is
+    // drawn in this constant grey, so a releasing note's ring stays grey
+    // (not the note hue) and never snaps color when the voice is pruned.
+    node_idle: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -463,16 +467,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let presence = activation;
     let disc = mix(filled, ring, outlined) * presence;
 
-    // Home-sheet nodes keep a blank placeholder circle while idle: a thin
+    // Home-sheet nodes keep a blank placeholder ring at ALL times: a thin
     // ring at the disc edge (its width matched to the grid lines), in the
-    // idle color at the grid's opacity. On note-on it's gone by the time the
-    // disc is a quarter lit; on release it only returns over the last
-    // stretch of the envelope (the smoothstep tail). Fading it straight in
-    // with the disc's fall (1 - presence) composited a grey rim over the
-    // still-visible colored disc, which read as the disc hollowing into a
-    // ring and then snapping grey. Off-sheet idle nodes still draw nothing.
+    // constant idle grey. A sounding note's disc simply composites over it
+    // (below) — occluding it while lit and revealing it as the disc fades,
+    // so there is no ring crossfade to go wrong. Drawing it in u.node_idle
+    // rather than the node's own color is the fix for the old "colored ring
+    // for a split second, then snaps grey": a releasing voice keeps its
+    // color until it is pruned, so the ring used to inherit the note hue and
+    // then jump to grey. Off-sheet nodes draw nothing.
     let blank_ring = filled * (1.0 - aa_inside(0.37, d, aa));
-    let blank = blank_ring * in.home * 0.55 * smoothstep(0.75, 1.0, 1.0 - presence);
+    let blank = blank_ring * in.home * 0.55;
 
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
@@ -504,12 +509,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d);
         rgb = mix(rgb, gas * brightness * field.y * limb, activation);
     }
-    // The blank ring composites under the disc/glow in the un-floored
-    // idle color, so it matches the grid lines' brightness rather than
-    // the 35%-floored disc shading.
+    // The blank ring composites UNDER the disc/glow (disc over ring) in the
+    // constant idle grey, so it matches the grid lines' brightness and a
+    // releasing note's disc fades away over a steady grey ring — never a
+    // colored one.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
     let base_alpha = core_alpha + blank * (1.0 - core_alpha);
-    let base_rgb = rgb * core_alpha + in.color.rgb * blank * (1.0 - core_alpha);
+    let base_rgb = rgb * core_alpha + u.node_idle.rgb * blank * (1.0 - core_alpha);
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns

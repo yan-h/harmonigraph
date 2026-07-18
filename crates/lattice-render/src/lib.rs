@@ -126,6 +126,10 @@ struct Uniforms {
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
     dot_ramp: [[f32; 4]; lattice_scene::DOT_RAMP_N],
+    /// Idle node color (skin `node_idle`): the home-sheet placeholder ring
+    /// is drawn in this constant grey, so a releasing note's ring never
+    /// shows the note's own color or snaps color when the voice is pruned.
+    node_idle: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -314,6 +318,7 @@ impl LatticeCallback {
                     scene.bloom_strength.clamp(0.0, 4.0),
                 ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
+                node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
             },
             target_format,
             pane_id,
