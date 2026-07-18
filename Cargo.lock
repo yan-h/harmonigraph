@@ -1755,6 +1755,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "image",
  "lattice-core",
  "lattice-render",
  "lattice-ui",
