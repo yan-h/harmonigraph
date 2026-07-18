@@ -584,6 +584,16 @@ fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             *extent = value as i32;
         }
     }
+
+    // Lattice render resolution relative to the pane's native pixels.
+    // 1.0 is exact; above it supersamples (crisper glyph edges at some GPU
+    // cost), below it renders coarse and upscales (cheaper on huge panes).
+    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale")
+        .show(ui)
+        .on_hover_text(
+            "Lattice render resolution: 1.0 = native, higher supersamples, \
+             lower renders coarse and upscales",
+        );
 }
 
 /// Cosmetic settings, apart from the structural View pane: how things
@@ -626,6 +636,11 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     });
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
+    // 0 = off (the renderer skips the whole post-process chain), so the
+    // bar doubles as the toggle.
+    ValueBar::new(&mut state.view.bloom_strength, 0.0..=1.5, "Bloom")
+        .show(ui)
+        .on_hover_text("Soft halo around bright notes; 0 turns the post-process off");
 
     // Octave indicator glyphs, all positioned by absolute pitch: floating
     // dots, or shapes attached to the rim (petals/flares/bumps).

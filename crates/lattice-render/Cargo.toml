@@ -24,3 +24,6 @@ naga = { workspace = true, optional = true }
 naga = { workspace = true }
 # Blocks on wgpu's async adapter/device setup in the pipeline-build test.
 pollster = "0.4"
+# The offscreen-vs-direct parity test builds a Scene literal, whose
+# NodeInstance carries a LatticePos.
+lattice-core = { path = "../lattice-core" }
