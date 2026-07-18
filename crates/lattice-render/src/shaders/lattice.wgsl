@@ -465,10 +465,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Home-sheet nodes keep a blank placeholder circle while idle: a thin
     // ring at the disc edge (its width matched to the grid lines), in the
-    // idle color at the grid's opacity, fading out as the disc fades in.
-    // Off-sheet idle nodes still draw nothing.
+    // idle color at the grid's opacity. On note-on it's gone by the time the
+    // disc is a quarter lit; on release it only returns over the last
+    // stretch of the envelope (the smoothstep tail). Fading it straight in
+    // with the disc's fall (1 - presence) composited a grey rim over the
+    // still-visible colored disc, which read as the disc hollowing into a
+    // ring and then snapping grey. Off-sheet idle nodes still draw nothing.
     let blank_ring = filled * (1.0 - aa_inside(0.37, d, aa));
-    let blank = blank_ring * in.home * 0.55 * (1.0 - presence);
+    let blank = blank_ring * in.home * 0.55 * smoothstep(0.75, 1.0, 1.0 - presence);
 
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
