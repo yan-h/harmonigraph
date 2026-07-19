@@ -38,7 +38,7 @@ struct Uniforms {
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
     dot_ramp: array<vec4<f32>, 16>,
-    // Idle node color (skin node_idle): the home-sheet placeholder ring is
+    // Idle node color (the view's grid color): the home-sheet placeholder ring is
     // drawn in this constant grey, so a releasing note's ring stays grey
     // (not the note hue) and never snaps color when the voice is pruned.
     node_idle: vec4<f32>,
@@ -614,11 +614,20 @@ fn mark_color(marks: vec2<u32>, slots: u32) -> vec4<f32> {
 }
 
 const ALL_SLOTS: u32 = 0xFFFFFFFFu;
-// The core's melody/bass ring: half-thickness in quad UV units, and how far
-// outside the core radius it sits (clear of the disc edge, inside the octave
-// band's usual inner radius).
-const MARK_RING_HALF: f32 = 0.035;
-const MARK_RING_GAP: f32 = 0.06;
+// The core's melody/bass ring, in quad UV units. Centered ON the disc edge
+// (so it reads as the node's own rim rather than a detached hoop) and thick
+// enough to survive at the size a node actually occupies on screen -- an
+// earlier, thinner ring drew correctly but was a sub-pixel hairline nobody
+// could see. HALO_OUT is how far a softer skirt spreads outside it, which is
+// most of what makes the mark findable at a glance.
+const MARK_RING_HALF: f32 = 0.075;
+const MARK_HALO_OUT: f32 = 0.30;
+const MARK_HALO_LEVEL: f32 = 0.55;
+// How far a marked octave glyph's band is widened, as a fraction of the band
+// width, on each side. Recoloring one slot alone is only a few percent of the
+// node -- one slice out of ten -- so the marked glyph also grows past its
+// neighbours, and that protrusion is what actually catches the eye.
+const MARK_GLYPH_GROW: f32 = 0.45;
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
@@ -738,13 +747,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // carries the mark instead.
     let core_mark = mark_color(in.marks, ALL_SLOTS);
     if u.misc5.y > 0.5 && core_mark.a > 0.0 && on && presence > 0.0 {
-        let mr = radius + MARK_RING_GAP;
-        let ring_cov = aa_inside(mr + MARK_RING_HALF, d, aa)
-            * (1.0 - aa_inside(mr - MARK_RING_HALF, d, aa))
-            * presence
-            * core_on;
-        base_rgb = core_mark.rgb * ring_cov + base_rgb * (1.0 - ring_cov);
-        base_alpha = ring_cov + base_alpha * (1.0 - ring_cov);
+        // A solid rim straddling the disc edge, plus a soft skirt fading
+        // outward from it. The skirt carries most of the visibility: the
+        // rim alone is only a couple of pixels at typical node sizes.
+        let rim = aa_inside(radius + MARK_RING_HALF, d, aa)
+            * (1.0 - aa_inside(radius - MARK_RING_HALF, d, aa));
+        let halo = (1.0 - smoothstep(radius + MARK_RING_HALF, radius + MARK_HALO_OUT, d))
+            * step(radius - MARK_RING_HALF, d)
+            * MARK_HALO_LEVEL;
+        let mark_cov = clamp(max(rim, halo), 0.0, 1.0) * presence * core_on;
+        base_rgb = core_mark.rgb * mark_cov + base_rgb * (1.0 - mark_cov);
+        base_alpha = mark_cov + base_alpha * (1.0 - mark_cov);
     }
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
@@ -813,8 +826,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // octave of it shares a node, differing only by slot.
                 let slot_mark = mark_color(in.marks, 1u << i);
                 if u.misc5.z > 0.5 && slot_mark.a > 0.0 {
+                    // Redraw this one glyph on a widened band so it reaches
+                    // past its neighbours, at the mark's color and full
+                    // coverage. The overflow past the billboard is eased off
+                    // by the QUAD_MARGIN fade below, as for any glyph.
+                    let grow = (u.misc3.z - u.misc3.y) * MARK_GLYPH_GROW;
+                    let big = outer_glyph(
+                        mode,
+                        i,
+                        in.cents,
+                        in.uv,
+                        max(u.misc3.y - grow, 0.0),
+                        u.misc3.z + grow,
+                        outer_aa,
+                    );
                     slot_rgb = slot_mark.rgb;
-                    cov = max(cov, shape * tail);
+                    cov = max(cov, big * tail);
                 }
             }
             if cov > glyph {

@@ -133,9 +133,11 @@ struct Uniforms {
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
     dot_ramp: [[f32; 4]; lattice_scene::DOT_RAMP_N],
-    /// Idle node color (skin `node_idle`): the home-sheet placeholder ring
-    /// is drawn in this constant grey, so a releasing note's ring never
-    /// shows the note's own color or snaps color when the voice is pruned.
+    /// Idle node color (the view's grid color at full alpha, so the grid
+    /// lines and idle markers read as one layer): the home-sheet
+    /// placeholder ring is drawn in this ONE constant color, so a
+    /// releasing note's ring never shows the note's own color or snaps
+    /// color when the voice is pruned.
     node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
     /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
@@ -352,7 +354,7 @@ impl LatticeCallback {
                     scene.outer_backdrop,
                 ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
-                node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
+                node_idle: scene.node_idle.to_array(),
                 misc4: [
                     scene.core_solidity,
                     scene.outer_solidity,
@@ -1234,6 +1236,7 @@ mod tests {
             edges,
             grid,
             grid_thickness: 1.0,
+            node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
             highlight_core: true,
             highlight_octave: true,
             dot_ramp: std::array::from_fn(|k| {
@@ -1439,6 +1442,140 @@ mod tests {
 
     /// Bloom must add light (halo energy over the bloom-off output) —
     /// and only when asked: strength 0 keeps the parity test above valid.
+    /// One big centered node, sounding, with one octave slot lit: a clean
+    /// backdrop for measuring how much of the picture a mark actually
+    /// covers. parity_scene deliberately overlaps its nodes, which hides
+    /// most of a mark behind whatever draws in front of it.
+    fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
+        use glam::{Vec3, Vec4};
+        use lattice_core::LatticePos;
+
+        let mut octaves = [0.0f32; lattice_scene::OCTAVE_SLOTS];
+        octaves[0] = 1.0;
+        let mut scene = parity_scene();
+        scene.nodes = vec![lattice_scene::NodeInstance {
+            lattice_pos: LatticePos::ORIGIN,
+            world_pos: Vec3::ZERO,
+            color: Vec4::new(0.35, 0.55, 0.85, 1.0),
+            activation: 1.0,
+            octaves,
+            age: 0.0,
+            seed: 0.0,
+            outlined: false,
+            hovered: false,
+            scale: 1.0,
+            on_home: true,
+            cents: 0.0,
+            melody_slots,
+            bass_slots,
+        }];
+        scene.edges.clear();
+        scene.grid.clear();
+        // Fill a good share of the frame, so the measurements below are
+        // about the mark's design rather than about pixel quantization.
+        scene.node_radius = 1.1;
+        scene
+    }
+
+    #[test]
+    fn melody_bass_marks_are_visible_on_each_layer() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        const SIZE: [u32; 2] = [256, 256];
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor {
+            size_in_pixels: SIZE,
+            pixels_per_point: 1.0,
+        };
+        let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+            let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+            let tex = render_to_texture(
+                &device,
+                &queue,
+                SIZE,
+                format,
+                wgpu::Color::BLACK,
+                |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: 1.0,
+                            screen_size_px: SIZE,
+                        },
+                        pass,
+                        &resources,
+                    );
+                },
+            );
+            readback(&device, &queue, &tex, SIZE)
+        };
+
+        let unmarked = shot(&single_marked_node(0, 0), 40);
+        let changed_px = |other: &[u8]| -> usize {
+            unmarked
+                .chunks(4)
+                .zip(other.chunks(4))
+                .filter(|(a, b)| a != b)
+                .count()
+        };
+
+        // Each layer has to be findable ON ITS OWN, since they're separate
+        // options. A mark the eye can actually catch has to move a
+        // substantial patch of one node, not a hairline -- the first
+        // version drew a correct but sub-pixel ring that read as nothing
+        // at all in the DAW, which is the regression this guards.
+        let core_only = {
+            let mut s = single_marked_node(1, 0);
+            s.highlight_octave = false;
+            shot(&s, 41)
+        };
+        let octave_only = {
+            let mut s = single_marked_node(1, 0);
+            s.highlight_core = false;
+            shot(&s, 42)
+        };
+        let both = shot(&single_marked_node(1, 0), 43);
+
+        // Measure against the node's OWN footprint, not an absolute pixel
+        // count: what matters is that the mark claims a real share of the
+        // thing it is marking, at whatever size it happens to be drawn.
+        let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
+        let (core_px, octave_px, both_px) =
+            (changed_px(&core_only), changed_px(&octave_only), changed_px(&both));
+        eprintln!(
+            "node {node_px} px; core mark {core_px}, octave mark {octave_px}, both {both_px}"
+        );
+        assert!(
+            core_px * 4 > node_px,
+            "the pitch class mark covers too little of the node to find: \
+             {core_px} px of {node_px}"
+        );
+        assert!(
+            octave_px * 10 > node_px,
+            "the octave mark covers too little of the node to find: \
+             {octave_px} px of {node_px}"
+        );
+        assert!(both_px >= core_px.max(octave_px), "both layers should cover at least either");
+
+        // Turning the marks off entirely puts the picture back exactly.
+        let off = {
+            let mut s = single_marked_node(1, 0);
+            s.highlight_core = false;
+            s.highlight_octave = false;
+            shot(&s, 44)
+        };
+        assert_eq!(changed_px(&off), 0, "no layer selected must draw no mark");
+    }
+
     #[test]
     fn bloom_adds_light_over_the_plain_composite() {
         let Some((device, queue)) = headless_device() else {

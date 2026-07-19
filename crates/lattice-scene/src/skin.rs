@@ -16,9 +16,6 @@ use glam::Vec4;
 #[derive(Clone, Debug)]
 pub struct Skin {
     // ---- 3D scene ----
-    /// Fill color of idle (non-sounding) lattice nodes, linear-ish RGBA.
-    /// Idle nodes draw no disc; this colors their hover ghost.
-    pub node_idle: Vec4,
     /// The faint background grid between node positions; alpha is the
     /// line opacity. Only the DEFAULT for `ViewConfig::grid_color`, which
     /// is what the scene actually reads.
@@ -81,7 +78,6 @@ impl Default for Skin {
     /// grid brighten to match. See git history for the pre-pass values.
     fn default() -> Self {
         Skin {
-            node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
             grid_line: Vec4::new(0.27, 0.29, 0.34, 0.62),
             note_melody: Vec4::new(1.0, 0.84, 0.36, 1.0),
             note_bass: Vec4::new(0.42, 0.82, 1.0, 1.0),

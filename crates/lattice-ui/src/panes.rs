@@ -755,31 +755,6 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 param_bar(ui, params, ParamKey::OctaveFade);
             });
 
-            // Idle nodes: a minimal grey marker at each unlit home-sheet
-            // node, shown ALWAYS — independent of the active appearance and
-            // of whether a note plays there (a sounding note just draws over
-            // it). Other sheets are marked by the grid.
-            section(ui, "Idle nodes");
-            button_row_wrapped(ui, |ui| {
-                ui.label("Marker");
-                for (marker, label, hint) in [
-                    (IdleMarker::None, "None", "No idle marker"),
-                    (IdleMarker::Dot, "Dot", "A filled grey dot at the radius below"),
-                    (IdleMarker::Circle, "Circle", "A thin grey outline circle at the radius below"),
-                ] {
-                    ui.selectable_value(&mut state.view.idle_marker, marker, label)
-                        .on_hover_text(hint);
-                }
-            });
-            ui.add_enabled_ui(state.view.idle_marker != IdleMarker::None, |ui| {
-                ValueBar::new(&mut state.view.idle_radius, 0.0..=0.9, "Radius")
-                    .show(ui)
-                    .on_hover_text(
-                        "Size of the idle marker; independent of the active \
-                         Core (0.46 is the classic placeholder ring)",
-                    );
-            });
-
             // Melody / bass: mark the outer held notes so a chord's top and
             // bottom line read at a glance.
             section(ui, "Melody / bass");
@@ -813,16 +788,20 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 );
             });
 
-            // Home grid: the faint structural lines between node positions.
-            // Idle positions draw no disc, so this is what carries the
-            // lattice's shape; every knob here is about how loudly.
+            // Home grid: the always-drawn structural layer -- the faint
+            // lines between node positions AND the idle marker sitting at
+            // each unlit home-sheet node. Idle positions draw no disc, so
+            // together these are what carry the lattice's shape when
+            // nothing is playing. They share one color for that reason.
             section(ui, "Home grid");
             button_row(ui, |ui| {
                 ui.label("Color");
                 ui.color_edit_button_rgba_unmultiplied(&mut state.view.grid_color)
                     .on_hover_text(
-                        "Grid line color; its alpha is how faint an unlit line \
-                         draws. Lit segments still take their notes' color",
+                        "Color of the whole idle structure -- grid lines and \
+                         idle node markers alike. The alpha is how faint an \
+                         unlit LINE draws; markers keep their own presence. \
+                         Lit segments still take their notes' color",
                     );
             });
             ValueBar::new(&mut state.view.grid_thickness, 0.0..=4.0, "Thickness")
@@ -832,18 +811,40 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 .show(ui)
                 .on_hover_text(
                     "How far each line stops short of the node it runs to, as \
-                     a multiple of the node radius; 0 runs it to the center. \
-                     With Half offset on, this is the gap at the cell corners \
-                     instead (0 closes the cells into a continuous mesh)",
+                     a multiple of the node radius; 0 runs it to the center",
                 );
             ui.checkbox(&mut state.view.grid_dashed, "Dashed").on_hover_text(
                 "Dash the in-plane lines. The sevens-axis links are always \
                  dashed -- that's what marks them as depth links",
             );
-            ui.checkbox(&mut state.view.grid_half_offset, "Half offset").on_hover_text(
-                "Shift the grid half a cell so notes sit in the middle of the \
-                 squares instead of at their intersections",
-            );
+
+            // The idle marker: shown ALWAYS at each unlit home-sheet node,
+            // independent of the active appearance and of whether a note
+            // plays there (a sounding note just draws over it). Off-sheet
+            // positions are marked by the lines alone.
+            button_row_wrapped(ui, |ui| {
+                ui.label("Marker");
+                for (marker, label, hint) in [
+                    (IdleMarker::None, "None", "No idle marker"),
+                    (IdleMarker::Dot, "Dot", "A filled dot at the radius below"),
+                    (
+                        IdleMarker::Circle,
+                        "Circle",
+                        "A thin outline circle at the radius below",
+                    ),
+                ] {
+                    ui.selectable_value(&mut state.view.idle_marker, marker, label)
+                        .on_hover_text(hint);
+                }
+            });
+            ui.add_enabled_ui(state.view.idle_marker != IdleMarker::None, |ui| {
+                ValueBar::new(&mut state.view.idle_radius, 0.0..=0.9, "Marker radius")
+                    .show(ui)
+                    .on_hover_text(
+                        "Size of the idle marker; independent of the active \
+                         Core (0.46 is the classic placeholder ring)",
+                    );
+            });
 
             // Color: the pitch->color gradient endpoints (MIDI notes) the
             // pitch-colored channels map through.
