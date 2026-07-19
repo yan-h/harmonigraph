@@ -184,6 +184,37 @@ impl IdleMarker {
     }
 }
 
+/// Which extreme held notes get marked, so a chord's melody and/or bass
+/// line is identifiable at a glance. "Extreme" is by sounding pitch
+/// (`Voice::pitch`, which includes MPE/tuning bends), over HELD voices
+/// only: a released note is on its way out and shouldn't keep the mark
+/// from the note that replaced it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum HighlightExtremes {
+    Off,
+    /// The highest held note — the melody.
+    Melody,
+    /// The lowest held note — the bass.
+    Bass,
+    /// Both, in their own colors. The default: the marks are subtle
+    /// enough to live with always-on, and a chord's outer voices are
+    /// worth seeing without having to go turn something on first. Blobs
+    /// saved before this setting existed pick it up too, which is
+    /// deliberate.
+    #[default]
+    Both,
+}
+
+impl HighlightExtremes {
+    pub fn marks_melody(self) -> bool {
+        matches!(self, HighlightExtremes::Melody | HighlightExtremes::Both)
+    }
+
+    pub fn marks_bass(self) -> bool {
+        matches!(self, HighlightExtremes::Bass | HighlightExtremes::Both)
+    }
+}
+
 /// The short-lived NodeBody experiment's variants (one working-tree
 /// build, 2026-07-18, octave-only note bodies): parsed load-only via
 /// `ViewConfig::node_body` and folded into the core/outer split by
@@ -267,9 +298,31 @@ pub struct ViewConfig {
     /// still reads as a whole note — Slices ghosts its empty slots in the
     /// note color to complete the annulus, Dots strings its glyphs on a
     /// faint hoop. No effect on Rings (already closed circles) or Off. Was
-    /// implicitly tied to "core off"; now its own toggle.
-    #[serde(default)]
-    pub outer_backdrop: bool,
+    /// implicitly tied to "core off", then its own on/off toggle.
+    ///
+    /// Now an opacity, 0..1: 0 is off (exactly the old `false`) and 1 is
+    /// the old `true`'s strength, with everything between available so the
+    /// backdrop can sit as far under the sounding glyphs as you like. It
+    /// scales the shader's built-in hoop/ghost levels rather than
+    /// replacing them, so 1 reproduces the previous look byte for byte.
+    /// Serialized under a new key, leaving the old one to the load-only
+    /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop) bool.
+    #[serde(default, rename = "outer_backdrop_alpha")]
+    pub outer_backdrop: f32,
+    /// Load-only shim: blobs from before the backdrop became an opacity
+    /// stored it as a bool under `outer_backdrop`. Folded into
+    /// `outer_backdrop` by [`migrate_legacy`](Self::migrate_legacy) and
+    /// never written back. Without this the bool would fail to
+    /// deserialize into the f32 above and take the WHOLE persist with it
+    /// (the loader drops the blob on any parse error), losing the user's
+    /// layout and camera too.
+    #[serde(
+        default,
+        skip_serializing,
+        rename = "outer_backdrop",
+        deserialize_with = "bare_bool_as_some"
+    )]
+    pub legacy_outer_backdrop: Option<bool>,
     /// The outer glyphs' solidity, 0..1 (mirrors [`core_solidity`] for the
     /// octave layer): 1 draws crisp shapes (the classic look), and toward 0
     /// their soft edges spread until they melt into soft glowy marks. Only
@@ -294,6 +347,57 @@ pub struct ViewConfig {
     /// saved.
     #[serde(default, skip_serializing)]
     pub node_body: LegacyNodeBody,
+    // ---- Melody / bass highlight -----------------------------------------
+    /// Which of the outer held notes to mark, so the melody and/or bass
+    /// line reads at a glance out of a chord.
+    #[serde(default)]
+    pub highlight_extremes: HighlightExtremes,
+    /// Mark the pitch class indicator (the node's core) of the outer notes.
+    #[serde(default = "default_true")]
+    pub highlight_core: bool,
+    /// Mark the octave indicator (the outer glyph) of the outer notes.
+    /// This is the one that survives a chord voiced within a single pitch
+    /// class — octaves of one note all land on the same node, so only the
+    /// octave layer can tell the top from the bottom there.
+    #[serde(default = "default_true")]
+    pub highlight_octave: bool,
+
+    // ---- Home grid -------------------------------------------------------
+    // The faint structural grid between node positions (see `derive_grid`).
+    // Its look used to be fixed: the skin's color, a hardcoded inset, a
+    // hardcoded thickness, dashes reserved for the sevens links.
+    /// Color of the whole idle structure, linear RGBA: the grid lines AND
+    /// the idle node markers, which are one visual layer — what carries
+    /// the lattice's shape when nothing is playing — and so share a color.
+    ///
+    /// Alpha is the idle LINE opacity: the strength an unlit home-sheet
+    /// segment draws at. The idle markers take only the RGB and keep their
+    /// own presence, so dialing the lines faint doesn't quietly dissolve
+    /// the markers with them.
+    ///
+    /// Defaults to the skin's `grid_line`, which is where the lines'
+    /// color always came from; the skin has no runtime setter, so a
+    /// user-chosen color has to live here. Lit segments still take their
+    /// sounding notes' color.
+    #[serde(default = "default_grid_color")]
+    pub grid_color: [f32; 4],
+    /// Grid line thickness as a multiple of the built-in width. 1 is the
+    /// classic hairline; the shader scales its grid half-width by this.
+    #[serde(default = "default_grid_thickness")]
+    pub grid_thickness: f32,
+    /// How far a grid segment stops short of each node center, as a factor
+    /// of the node radius — the padding between a line end and the
+    /// dot/circle drawn there. The old fixed 1.05 is the default: slightly
+    /// wider than the disc's visual radius, so the gap fully contains a
+    /// sounding note's circle. 0 runs the lines right into the centers.
+    ///
+    #[serde(default = "default_grid_inset")]
+    pub grid_inset: f32,
+    /// Draw the in-plane grid lines dashed. The sevens-axis links are
+    /// always dashed regardless — that dash is what distinguishes a depth
+    /// link from an in-sheet line, and isn't a style choice.
+    #[serde(default)]
+    pub grid_dashed: bool,
     /// Light up lattice edges between simultaneously sounding adjacent
     /// nodes, so a chord's interval structure renders as geometry.
     #[serde(default)]
@@ -324,6 +428,18 @@ pub struct ViewConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// Read a legacy bare `true`/`false` into an `Option<bool>` that means
+/// "the key was there". A plain `Option<bool>` field can't do this: RON
+/// writes options as `Some(true)`/`None`, so it rejects the bare bool the
+/// old blobs actually contain. `serde(default)` still supplies `None` when
+/// the key is absent — this only runs when it is present.
+fn bare_bool_as_some<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(d).map(Some)
 }
 
 /// The classic disc edge radius, from before the core was sizable.
@@ -366,6 +482,24 @@ fn default_render_scale() -> f32 {
     1.0
 }
 
+/// The grid's color comes from the skin by default, which is the only
+/// place it came from before the grid became customizable.
+fn default_grid_color() -> [f32; 4] {
+    skin::active_skin().grid_line.to_array()
+}
+
+fn default_grid_thickness() -> f32 {
+    1.0
+}
+
+/// The fixed inset from before the grid became customizable: a factor of
+/// the node radius, slightly larger than the disc's visual radius (~0.83 ×
+/// radius, see the quad math in lattice.wgsl) so the gap fully contains
+/// the circle a sounding note draws there, with a slim margin.
+fn default_grid_inset() -> f32 {
+    1.05
+}
+
 impl ViewConfig {
     /// Every lattice position the view currently displays. ALL consumers
     /// (scene derivation, spectral ticks, notes-pane mapping) must iterate
@@ -405,6 +539,12 @@ impl ViewConfig {
     /// the backdrop draws; its band radii rode the slice_inner/slice_outer
     /// fields, absorbed by the outer_inner/outer_outer aliases).
     pub fn migrate_legacy(&mut self) {
+        // The backdrop's pre-opacity bool: on means full strength, which
+        // is what that build drew.
+        if let Some(on) = self.legacy_outer_backdrop.take() {
+            self.outer_backdrop = if on { 1.0 } else { 0.0 };
+        }
+
         match std::mem::replace(&mut self.core_style, CoreStyle::On) {
             CoreStyle::None => self.core_radius = 0.0,
             CoreStyle::Orb => self.core_solidity = 1.0,
@@ -420,7 +560,7 @@ impl ViewConfig {
         };
         self.core_solidity = 0.0;
         self.outer_style = outer;
-        self.outer_backdrop = true;
+        self.outer_backdrop = 1.0;
     }
 }
 
@@ -445,11 +585,19 @@ impl Default for ViewConfig {
             core_radius: default_core_radius(),
             outer_inner: default_outer_inner(),
             outer_outer: default_outer_outer(),
-            outer_backdrop: false,
+            outer_backdrop: 0.0,
+            legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
             idle_marker: IdleMarker::default(),
             idle_radius: default_idle_radius(),
             node_body: LegacyNodeBody::Disc,
+            highlight_extremes: HighlightExtremes::default(),
+            highlight_core: true,
+            highlight_octave: true,
+            grid_color: default_grid_color(),
+            grid_thickness: default_grid_thickness(),
+            grid_inset: default_grid_inset(),
+            grid_dashed: false,
             show_chord_edges: false,
             meantone: false,
             frameless: false,
@@ -728,6 +876,35 @@ pub struct NodeInstance {
     /// The node's pitch class in cents under the current tuning, for the
     /// in-lattice cents readout.
     pub cents: f32,
+    /// Octave slots (bit i = slot i) where this node carries the melody —
+    /// the highest held note. 0 when it doesn't, or when the melody isn't
+    /// being marked. One voice lights every node its pitch class matches
+    /// under the tuning tolerance, and the mark follows the same rule.
+    ///
+    /// A mask rather than a single slot because one node can hold both
+    /// outer notes at once, in different octaves (a chord voiced inside a
+    /// single pitch class), and the two must stay tellable apart.
+    pub melody_slots: u32,
+    /// The same for the bass — the lowest held note. A slot set in BOTH
+    /// masks is a note that is simultaneously the melody and the bass, so
+    /// there is nothing to distinguish and it draws unmarked; see
+    /// [`HighlightExtremes`].
+    pub bass_slots: u32,
+}
+
+impl NodeInstance {
+    /// Whether this node puts anything on screen, and so can carry pitch
+    /// info (hover label, tuning readout). Sounding nodes always draw;
+    /// idle ones only on the home sheet, where they keep a placeholder
+    /// marker. Off-sheet idle nodes draw literally nothing, so revealing
+    /// their pitch on mouse-over would be information from nowhere.
+    ///
+    /// Deliberately ignores [`Scene::idle_marker`] being `None`: that
+    /// setting hides the idle markers but shouldn't make the home sheet
+    /// unhoverable, which would leave an empty lattice uninspectable.
+    pub fn is_visible(&self) -> bool {
+        self.activation > 0.0 || self.on_home
+    }
 }
 
 /// A glowing beam between two simultaneously sounding, lattice-adjacent
@@ -772,8 +949,8 @@ pub struct Scene {
     pub outer_outer: f32,
     /// Outer-layer cohesion device (see [`ViewConfig::outer_backdrop`]):
     /// ghost the silent octaves faintly to complete the ring. Independent
-    /// of the core.
-    pub outer_backdrop: bool,
+    /// of the core. Already clamped to 0..1; 0 draws no backdrop at all.
+    pub outer_backdrop: f32,
     /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
     /// 1 crisp, toward 0 the glyph edges spread into soft glows.
     pub outer_solidity: f32,
@@ -790,6 +967,18 @@ pub struct Scene {
     /// between two sounding notes light up with their blended color.
     /// Reuses [`EdgeInstance`]; `strength` carries the line opacity.
     pub grid: Vec<EdgeInstance>,
+    /// Grid line thickness as a multiple of the shader's built-in grid
+    /// width (see [`ViewConfig::grid_thickness`]), already clamped.
+    pub grid_thickness: f32,
+    /// Color of the idle node markers (see [`ViewConfig::grid_color`]):
+    /// the grid color's RGB at full alpha, so the idle structure reads as
+    /// one layer. The renderer hands this to the shader.
+    pub node_idle: Vec4,
+    /// Which layers the melody/bass mark draws on (see
+    /// [`ViewConfig::highlight_core`] / `highlight_octave`). Which NOTES
+    /// are marked is baked into each node's `melody_slots`/`bass_slots`.
+    pub highlight_core: bool,
+    pub highlight_octave: bool,
     /// Pitch->color lookup for the dots octave style, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub dot_ramp: [Vec4; DOT_RAMP_N],
@@ -874,6 +1063,50 @@ pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitc
     }
 }
 
+/// The idle layer's color: the grid color's RGB at full alpha. The grid's
+/// alpha is the LINE opacity and doesn't belong to the markers, which have
+/// their own presence — so it's dropped here rather than dimming them
+/// along with the lines.
+fn idle_color(view: &ViewConfig) -> Vec4 {
+    let c = view.grid_color;
+    Vec4::new(c[0], c[1], c[2], 1.0)
+}
+
+/// Identifies one voice, matching `NoteTracker`'s own held-voice key.
+type VoiceKey = (u8, u8);
+
+/// The highest and lowest HELD voices, as the caller asked for them —
+/// either is `None` when that end isn't being marked or nothing is held.
+///
+/// Held only: a released voice is fading out, and letting it keep the mark
+/// would steal it from the note that actually replaced it. Compared on
+/// `pitch` rather than the raw key, because MPE and per-note tuning can
+/// bend a voice past its neighbor — the same reason the notes pane sorts
+/// on pitch.
+fn held_extremes(
+    tracker: &NoteTracker,
+    which: HighlightExtremes,
+) -> (Option<VoiceKey>, Option<VoiceKey>) {
+    if which == HighlightExtremes::Off {
+        return (None, None);
+    }
+    let held = || {
+        tracker
+            .voices()
+            .filter(|v| v.state == lattice_core::VoiceState::Held)
+    };
+    let key = |v: &lattice_core::Voice| (v.channel, v.note);
+    let melody = which
+        .marks_melody()
+        .then(|| held().max_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
+        .flatten();
+    let bass = which
+        .marks_bass()
+        .then(|| held().min_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
+        .flatten();
+    (melody, bass)
+}
+
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 pub fn derive_scene(
@@ -888,16 +1121,19 @@ pub fn derive_scene(
     let mut nodes = Vec::with_capacity(view.visible_count());
     let center = view.center();
     let eye = camera.eye();
+    let (melody, bass) = held_extremes(tracker, view.highlight_extremes);
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
 
         let mut activation = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
-        let mut color = skin::active_skin().node_idle;
+        let mut color = idle_color(view);
         let mut outlined = false;
         let mut age = 0.0f32;
         let mut seed = 0.0f32;
+        let mut melody_slots = 0u32;
+        let mut bass_slots = 0u32;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -926,6 +1162,17 @@ pub fn derive_scene(
                 let attack = a * a * (3.0 - 2.0 * a);
                 octaves[slot] = octaves[slot]
                     .max(voice.activation(now, frame.octave_fade_time) * attack);
+
+                // Mark the outer notes in the slot they sound in. Set on
+                // every node the voice matches, exactly as its activation
+                // is, so the mark can't disagree with the lighting.
+                let key = (voice.channel, voice.note);
+                if melody == Some(key) {
+                    melody_slots |= 1 << slot;
+                }
+                if bass == Some(key) {
+                    bass_slots |= 1 << slot;
+                }
             }
         }
 
@@ -953,6 +1200,8 @@ pub fn derive_scene(
             scale: depth_scale(world_pos.distance(eye), camera.distance),
             on_home: pos.sevens == view.center_sevens,
             cents: node_pc.to_cents(),
+            melody_slots,
+            bass_slots,
         });
     }
 
@@ -968,6 +1217,7 @@ pub fn derive_scene(
     let outer_inner = view.outer_inner.clamp(0.0, 0.9);
     let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
     let outer_solidity = view.outer_solidity.clamp(0.0, 1.0);
+    let outer_backdrop = view.outer_backdrop.clamp(0.0, 1.0);
 
     Scene {
         nodes,
@@ -980,12 +1230,16 @@ pub fn derive_scene(
         core_solidity,
         outer_inner,
         outer_outer,
-        outer_backdrop: view.outer_backdrop,
+        outer_backdrop,
         outer_solidity,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         edges,
         grid,
+        grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
+        node_idle: idle_color(view),
+        highlight_core: view.highlight_core,
+        highlight_octave: view.highlight_octave,
         dot_ramp: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
@@ -1014,12 +1268,6 @@ fn depth_scale(dist: f32, focus: f32) -> f32 {
         .clamp(DEPTH_SCALE_RANGE.0, DEPTH_SCALE_RANGE.1)
 }
 
-/// How far a grid segment stops short of each node center, as a factor of
-/// the node radius. Larger than the disc's visual radius (~0.83 × radius,
-/// see the quad math in lattice.wgsl) so the gap fully contains the circle
-/// a sounding note draws there, with a slim margin.
-const GRID_INSET_FACTOR: f32 = 1.05;
-
 /// Line opacity of a grid segment whose two endpoint notes both sound.
 const GRID_LIT_OPACITY: f32 = 0.85;
 
@@ -1031,8 +1279,8 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 /// from any sounding off-sheet note down to the home sheet. Lit segments
 /// take the sounding notes' color and fade with their envelope.
 fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
-    let inset = view.spacing * NODE_RADIUS_FACTOR * GRID_INSET_FACTOR;
-    let base = skin::active_skin().grid_line;
+    let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
+    let base = Vec4::from_array(view.grid_color);
     // Presized: this rebuilds every frame, and collect() would otherwise
     // rehash several times as it grows past its default capacity.
     let mut index: std::collections::HashMap<LatticePos, &NodeInstance> =
@@ -1060,7 +1308,9 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
             // until the music lights them. Links render dashed.
             let on_home = !along_sevens && p.sevens == view.center_sevens;
             let idle = if on_home { base.w } else { 0.0 };
-            let dashed = along_sevens;
+            // The sevens links are always dashed: that dash is what tells a
+            // depth link from an in-sheet line, not a style choice.
+            let dashed = along_sevens || view.grid_dashed;
 
             // Both endpoints sounding lights any segment.
             let mut lit = node.activation.min(neighbor.activation);
@@ -1183,10 +1433,17 @@ impl Scene {
     /// CPU picking: the node whose screen projection is nearest the pointer,
     /// within `max_px`. Every pane that wants "hover a pitch class" uses
     /// this and writes the result to the shared UI state.
+    ///
+    /// Only [visible](NodeInstance::is_visible) nodes are pickable, so the
+    /// pointer can't pull a pitch readout out of an off-sheet node that
+    /// draws nothing.
     pub fn pick(&self, viewport_px: Vec2, pointer_px: Vec2, max_px: f32) -> Option<LatticePos> {
         let projector = self.projector(viewport_px);
         let mut best: Option<(f32, LatticePos)> = None;
         for node in &self.nodes {
+            if !node.is_visible() {
+                continue;
+            }
             let Some(px) = projector.project(node.world_pos) else {
                 continue;
             };
@@ -1202,7 +1459,7 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lattice_core::{NoteEvent, NoteEventKind};
+    use lattice_core::{NoteEvent, NoteEventKind, PitchClass};
 
     fn scene_of(
         tracker: &NoteTracker,
@@ -1483,6 +1740,253 @@ mod tests {
         }
     }
 
+    /// A 7x7 window one sevens step deep, so sevens links are in play too.
+    /// Wide enough that a held C also lands on an off-sheet node — under
+    /// 12-TET that first happens at (2, -3, 1) — which is what lights the
+    /// links; a ±1 window has no such node and would show none at all.
+    fn grid_view() -> ViewConfig {
+        ViewConfig {
+            extent_threes: 3,
+            extent_fives: 3,
+            extent_sevens: 1,
+            ..ViewConfig::default()
+        }
+    }
+
+    fn grid_of(view: &ViewConfig) -> Vec<EdgeInstance> {
+        grid_of_with(view, &NoteTracker::new())
+    }
+
+    fn grid_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<EdgeInstance> {
+        scene_of(tracker, &Tuning::default(), view, &FrameParams::default(), 0.0).grid
+    }
+
+    /// A held note, so the off-sheet sevens links light up and appear in
+    /// the grid at all (idle ones are skipped as fully invisible).
+    fn sounding() -> NoteTracker {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        tracker
+    }
+
+    #[test]
+    fn grid_inset_sets_how_far_lines_stop_short_of_a_node() {
+        // The inset is the "line length" knob: at 0 a segment spans the
+        // full node spacing, and raising it eats the line from both ends.
+        let flush = grid_of(&ViewConfig { grid_inset: 0.0, ..grid_view() });
+        let spacing = grid_view().spacing;
+        for seg in &flush {
+            assert!(
+                (seg.a.distance(seg.b) - spacing).abs() < 1e-5,
+                "inset 0 should span the whole spacing, got {}",
+                seg.a.distance(seg.b)
+            );
+        }
+
+        let mut lengths = vec![];
+        for inset in [0.0f32, 0.5, 1.05, 2.0] {
+            let grid = grid_of(&ViewConfig { grid_inset: inset, ..grid_view() });
+            lengths.push(grid[0].a.distance(grid[0].b));
+        }
+        for pair in lengths.windows(2) {
+            assert!(pair[1] < pair[0], "more inset must mean shorter lines: {lengths:?}");
+        }
+    }
+
+    #[test]
+    fn the_grid_color_drives_the_idle_nodes_too() {
+        // Grid lines and idle markers are one visual layer -- the idle
+        // structure -- so they share a color. The markers take only the
+        // RGB: the grid's alpha is the LINE opacity, and letting it dim
+        // the markers would dissolve them whenever the lines are faint.
+        let tinted = [0.9f32, 0.1, 0.4, 0.25];
+        let view = ViewConfig { grid_color: tinted, ..grid_view() };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert_eq!(scene.node_idle, Vec4::new(0.9, 0.1, 0.4, 1.0));
+        let idle = scene
+            .nodes
+            .iter()
+            .find(|n| n.activation == 0.0)
+            .expect("nothing is playing");
+        assert_eq!(idle.color, Vec4::new(0.9, 0.1, 0.4, 1.0));
+    }
+
+    #[test]
+    fn grid_color_and_dashes_come_from_the_view() {
+        // The color (and its alpha, the idle line opacity) is a view
+        // setting now; it used to be readable only from the skin.
+        let tinted = [0.9f32, 0.1, 0.4, 0.25];
+        let grid = grid_of(&ViewConfig { grid_color: tinted, ..grid_view() });
+        let unlit = grid
+            .iter()
+            .find(|s| s.strength > 0.0)
+            .expect("the home sheet draws an idle grid");
+        assert_eq!(unlit.color, Vec4::from_array(tinted));
+        assert_eq!(unlit.strength, tinted[3], "alpha is the idle line opacity");
+
+        // Dashes: off by default for in-plane lines, on for sevens links
+        // either way (that dash marks a depth link, it isn't a style).
+        let tracker = sounding();
+        let plain = grid_of_with(&grid_view(), &tracker);
+        let dashed =
+            grid_of_with(&ViewConfig { grid_dashed: true, ..grid_view() }, &tracker);
+        assert!(
+            plain.iter().any(|s| (s.b.z - s.a.z).abs() > 1e-5),
+            "want some sevens links in the mix"
+        );
+        for (before, after) in plain.iter().zip(&dashed) {
+            let along_sevens = (before.b.z - before.a.z).abs() > 1e-5;
+            assert_eq!(before.dashed, along_sevens, "only links dash by default");
+            assert!(after.dashed, "every line dashes when the style is on");
+        }
+    }
+
+    /// Play `notes` on channel 0 and derive a scene marking both extremes.
+    fn marked_scene(notes: &[u8], which: HighlightExtremes) -> Scene {
+        let mut tracker = NoteTracker::new();
+        for &note in notes {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let view = ViewConfig { highlight_extremes: which, ..ViewConfig::default() };
+        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0)
+    }
+
+    /// Union of a mask across every node, and the nodes carrying it.
+    fn marked_slots(scene: &Scene, melody: bool) -> (u32, usize) {
+        let mut bits = 0u32;
+        let mut nodes = 0usize;
+        for n in &scene.nodes {
+            let m = if melody { n.melody_slots } else { n.bass_slots };
+            if m != 0 {
+                bits |= m;
+                nodes += 1;
+            }
+        }
+        (bits, nodes)
+    }
+
+    #[test]
+    fn melody_and_bass_mark_the_outer_held_notes() {
+        // C4/E4/G4: the melody is G4 (octave slot 4), the bass C4 (slot 4
+        // too -- same MIDI octave, but different nodes/pitch classes).
+        let scene = marked_scene(&[60, 64, 67], HighlightExtremes::Both);
+        let (melody_bits, melody_nodes) = marked_slots(&scene, true);
+        let (bass_bits, bass_nodes) = marked_slots(&scene, false);
+        assert_eq!(melody_bits, 1 << 4, "G4 sounds in MIDI octave 4");
+        assert_eq!(bass_bits, 1 << 4, "C4 too");
+        assert!(melody_nodes > 0 && bass_nodes > 0);
+
+        // The marks land on the nodes those notes actually light, and the
+        // middle note (E4) is marked as neither.
+        let tuning = Tuning::default();
+        for n in &scene.nodes {
+            let pc = tuning.pitch_class(n.lattice_pos);
+            if n.melody_slots != 0 {
+                assert!(tuning.matches(PitchClass::from_midi_note(67), pc), "melody is G");
+            }
+            if n.bass_slots != 0 {
+                assert!(tuning.matches(PitchClass::from_midi_note(60), pc), "bass is C");
+            }
+        }
+
+        // Asking for one end leaves the other unmarked.
+        let melody_only = marked_scene(&[60, 64, 67], HighlightExtremes::Melody);
+        assert_eq!(marked_slots(&melody_only, true).0, 1 << 4);
+        assert_eq!(marked_slots(&melody_only, false).0, 0, "bass not asked for");
+        let off = marked_scene(&[60, 64, 67], HighlightExtremes::Off);
+        assert_eq!(marked_slots(&off, true).0, 0);
+        assert_eq!(marked_slots(&off, false).0, 0);
+    }
+
+    #[test]
+    fn a_lone_held_note_is_marked_as_both_ends_so_it_draws_unmarked() {
+        // One note is at once the highest and the lowest held. The scene
+        // marks it as both; the shader's "claimed by both ends" rule is
+        // what then leaves it unmarked, with no special case of its own.
+        let scene = marked_scene(&[60], HighlightExtremes::Both);
+        let mut seen = false;
+        for n in &scene.nodes {
+            assert_eq!(
+                n.melody_slots, n.bass_slots,
+                "a lone note must claim identical slots at both ends"
+            );
+            seen |= n.melody_slots != 0;
+        }
+        assert!(seen, "the note should have been marked somewhere");
+    }
+
+    #[test]
+    fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
+        // C2 and C4: one pitch class, so both land on the SAME node and the
+        // core can't say which is which -- but they sound in different
+        // octave slots, which is what keeps them tellable apart.
+        let scene = marked_scene(&[48, 72], HighlightExtremes::Both);
+        let marked: Vec<_> = scene
+            .nodes
+            .iter()
+            .filter(|n| n.melody_slots != 0 || n.bass_slots != 0)
+            .collect();
+        assert!(!marked.is_empty(), "C should be marked");
+        for n in &marked {
+            // MIDI octave = note/12 - 1, so C4 (72) is slot 5, C2 (48) slot 3.
+            assert_eq!(n.melody_slots, 1 << 5, "the high C is the melody");
+            assert_eq!(n.bass_slots, 1 << 3, "the low C is the bass");
+            // No slot claimed by both, so the octave layer marks each end
+            // rather than suppressing them the way the core has to.
+            assert_eq!(n.melody_slots & n.bass_slots, 0);
+        }
+    }
+
+    #[test]
+    fn released_notes_do_not_keep_the_mark() {
+        // A released voice is fading out; letting it hold the mark would
+        // steal it from the note that actually replaced it.
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 67] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        // Release the top note; C is now both the highest and lowest held.
+        tracker.handle_event(NoteEvent {
+            time: 0.1,
+            channel: 0,
+            note: 67,
+            kind: NoteEventKind::Off,
+        });
+        let (melody, bass) = held_extremes(&tracker, HighlightExtremes::Both);
+        assert_eq!(melody, Some((0, 60)), "the released G must not stay the melody");
+        assert_eq!(bass, Some((0, 60)));
+
+        // Nothing held at all: nothing to mark.
+        tracker.handle_event(NoteEvent {
+            time: 0.2,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Off,
+        });
+        assert_eq!(held_extremes(&tracker, HighlightExtremes::Both), (None, None));
+    }
+
     #[test]
     fn home_sheet_nodes_are_flagged_for_the_blank_ring() {
         // Follows the panned window center, not sevens == 0.
@@ -1654,7 +2158,7 @@ mod tests {
             assert_eq!(view.core_solidity, 0.0, "{body:?}");
             assert!(view.core_radius > 0.0, "{body:?} still on");
             assert_eq!(view.outer_style, outer, "{body:?}");
-            assert!(view.outer_backdrop, "{body:?}");
+            assert_eq!(view.outer_backdrop, 1.0, "{body:?}");
             assert_eq!(view.node_body, LegacyNodeBody::Disc, "shim consumed");
         }
 
@@ -1934,6 +2438,63 @@ mod tests {
         let origin_px = scene.project(viewport, Vec3::ZERO).unwrap();
         assert_eq!(scene.pick(viewport, origin_px, 24.0), Some(LatticePos::ORIGIN));
         assert_eq!(scene.pick(viewport, Vec2::new(-500.0, -500.0), 24.0), None);
+    }
+
+    #[test]
+    fn idle_off_sheet_nodes_are_not_pickable() {
+        // An idle node off the home sheet draws nothing, so hovering where
+        // it would be must not hand back its pitch. Sounding makes it
+        // visible, and pickable again.
+        let view = ViewConfig::default();
+        let tuning = Tuning::default();
+        let viewport = Vec2::new(800.0, 600.0);
+
+        let idle = scene_of(
+            &NoteTracker::new(),
+            &tuning,
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        let off = *idle
+            .nodes
+            .iter()
+            .find(|n| !n.on_home)
+            .expect("default view spans more than the home sheet");
+        assert_eq!(off.activation, 0.0);
+        assert!(!off.is_visible());
+        let off_px = idle.project(viewport, off.world_pos).unwrap();
+        assert_ne!(
+            idle.pick(viewport, off_px, 24.0),
+            Some(off.lattice_pos),
+            "idle off-sheet node should not be pickable"
+        );
+
+        // Same position, now sounding: play a note carrying its pitch class.
+        let pc = tuning.pitch_class(off.lattice_pos);
+        let note = (60u8..72)
+            .find(|&n| tuning.matches(pc, PitchClass::from_midi_note(n)))
+            .expect("some MIDI note lands on this node under 12-TET");
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let lit = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
+        let lit_off = lit
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == off.lattice_pos)
+            .unwrap();
+        assert!(lit_off.activation > 0.0, "the note should light this node");
+        assert!(lit_off.is_visible());
+        assert_eq!(
+            lit.pick(viewport, off_px, 24.0),
+            Some(off.lattice_pos),
+            "sounding off-sheet node should be pickable again"
+        );
     }
 
     #[test]

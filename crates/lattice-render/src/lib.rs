@@ -120,20 +120,24 @@ struct Uniforms {
     misc: [f32; 4],
     /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     /// (the shader converts its screen-pixel AA softness to render
-    /// pixels with it); w unused. The dots style maps a dot's pitch
-    /// through x/y to index `dot_ramp`.
+    /// pixels with it); w: bloom strength, which blit.wgsl reads (this
+    /// slot is NOT free). The dots style maps a dot's pitch through x/y
+    /// to index `dot_ramp`.
     misc2: [f32; 4],
     /// x: core radius in quad UV units (0 turns the core off); y/z: the
     /// outer octave layer's inner/outer band radii (same units, pre-
-    /// sanitized by the scene so z > y); w: outer backdrop flag (1 = ghost
-    /// the silent octaves to complete the ring, independent of the core).
+    /// sanitized by the scene so z > y); w: outer backdrop opacity 0..1
+    /// (ghost the silent octaves to complete the ring, independent of the
+    /// core; 0 = no backdrop, 1 = the full built-in hoop/ghost levels).
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
     dot_ramp: [[f32; 4]; lattice_scene::DOT_RAMP_N],
-    /// Idle node color (skin `node_idle`): the home-sheet placeholder ring
-    /// is drawn in this constant grey, so a releasing note's ring never
-    /// shows the note's own color or snaps color when the voice is pruned.
+    /// Idle node color (the view's grid color at full alpha, so the grid
+    /// lines and idle markers read as one layer): the home-sheet
+    /// placeholder ring is drawn in this ONE constant color, so a
+    /// releasing note's ring never shows the note's own color or snaps
+    /// color when the voice is pruned.
     node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
     /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
@@ -141,6 +145,15 @@ struct Uniforms {
     /// (0 none, 1 dot, 2 circle). (The blit pipeline binds only the head of
     /// this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
+    /// x: grid line thickness as a multiple of the shader's built-in grid
+    /// width; y: draw the melody/bass mark on the core (pitch class
+    /// indicator); z: draw it on the octave glyphs; w unused. Every
+    /// earlier misc slot is spoken for, so the grid's knob starts a new
+    /// one — safe per the note on `misc4`.
+    misc5: [f32; 4],
+    /// Melody / bass mark colors (skin `note_melody` / `note_bass`).
+    note_melody: [f32; 4],
+    note_bass: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -172,6 +185,11 @@ struct GpuInstance {
     /// 1 when the node is on the home (center sevens) sheet: idle home
     /// nodes draw a blank placeholder ring.
     home: f32,
+    /// Melody/bass marks: `[melody_slots, bass_slots]`, one bit per octave
+    /// slot (see `NodeInstance::melody_slots`). Kept as integers rather
+    /// than folded into the dead `params.y`/`params.z` floats because the
+    /// shader masks them bitwise, which needs a flat-interpolated `u32`.
+    marks: [u32; 2],
 }
 
 impl GpuInstance {
@@ -180,7 +198,7 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32, 7 => Float32
+            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2
         ],
     };
 }
@@ -292,6 +310,7 @@ impl LatticeCallback {
                 cents: n.cents,
                 scale: n.scale,
                 home: if n.on_home { 1.0 } else { 0.0 },
+                marks: [n.melody_slots, n.bass_slots],
             })
             .collect();
 
@@ -332,16 +351,24 @@ impl LatticeCallback {
                     scene.core_radius,
                     scene.outer_inner,
                     scene.outer_outer,
-                    if scene.outer_backdrop { 1.0 } else { 0.0 },
+                    scene.outer_backdrop,
                 ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
-                node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
+                node_idle: scene.node_idle.to_array(),
                 misc4: [
                     scene.core_solidity,
                     scene.outer_solidity,
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],
+                misc5: [
+                    scene.grid_thickness,
+                    if scene.highlight_core { 1.0 } else { 0.0 },
+                    if scene.highlight_octave { 1.0 } else { 0.0 },
+                    0.0,
+                ],
+                note_melody: lattice_scene::skin::active_skin().note_melody.to_array(),
+                note_bass: lattice_scene::skin::active_skin().note_bass.to_array(),
             },
             target_format,
             pane_id,
@@ -1162,6 +1189,10 @@ mod tests {
                 scale: 0.9 + f * 0.06,
                 on_home: i % 2 == 0,
                 cents: f * 190.0,
+                // Exercise the mark paths: one node marked melody, one
+                // bass, and one claiming both slots (which draws unmarked).
+                melody_slots: if i == 0 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
+                bass_slots: if i == 2 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
             });
         }
         let edges = vec![lattice_scene::EdgeInstance {
@@ -1198,12 +1229,16 @@ mod tests {
             core_solidity: 1.0,
             outer_inner: 0.545,
             outer_outer: 0.795,
-            outer_backdrop: false,
+            outer_backdrop: 0.0,
             outer_solidity: 1.0,
             idle_marker: lattice_scene::IdleMarker::None,
             idle_radius: 0.0,
             edges,
             grid,
+            grid_thickness: 1.0,
+            node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
+            highlight_core: true,
+            highlight_octave: true,
             dot_ramp: std::array::from_fn(|k| {
                 Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
             }),
@@ -1407,6 +1442,250 @@ mod tests {
 
     /// Bloom must add light (halo energy over the bloom-off output) —
     /// and only when asked: strength 0 keeps the parity test above valid.
+    /// One big centered node, sounding, with one octave slot lit: a clean
+    /// backdrop for measuring how much of the picture a mark actually
+    /// covers. parity_scene deliberately overlaps its nodes, which hides
+    /// most of a mark behind whatever draws in front of it.
+    fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
+        use glam::{Vec3, Vec4};
+        use lattice_core::LatticePos;
+
+        let mut octaves = [0.0f32; lattice_scene::OCTAVE_SLOTS];
+        octaves[0] = 1.0;
+        let mut scene = parity_scene();
+        scene.nodes = vec![lattice_scene::NodeInstance {
+            lattice_pos: LatticePos::ORIGIN,
+            world_pos: Vec3::ZERO,
+            color: Vec4::new(0.35, 0.55, 0.85, 1.0),
+            activation: 1.0,
+            octaves,
+            age: 0.0,
+            seed: 0.0,
+            outlined: false,
+            hovered: false,
+            scale: 1.0,
+            on_home: true,
+            cents: 0.0,
+            melody_slots,
+            bass_slots,
+        }];
+        scene.edges.clear();
+        scene.grid.clear();
+        // Fill a good share of the frame, so the measurements below are
+        // about the mark's design rather than about pixel quantization.
+        scene.node_radius = 1.1;
+        scene
+    }
+
+    #[test]
+    fn melody_bass_marks_are_visible_on_each_layer() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        const SIZE: [u32; 2] = [256, 256];
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor {
+            size_in_pixels: SIZE,
+            pixels_per_point: 1.0,
+        };
+        let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+            let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+            let tex = render_to_texture(
+                &device,
+                &queue,
+                SIZE,
+                format,
+                wgpu::Color::BLACK,
+                |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: 1.0,
+                            screen_size_px: SIZE,
+                        },
+                        pass,
+                        &resources,
+                    );
+                },
+            );
+            readback(&device, &queue, &tex, SIZE)
+        };
+
+        let unmarked = shot(&single_marked_node(0, 0), 40);
+        let changed_px = |other: &[u8]| -> usize {
+            unmarked
+                .chunks(4)
+                .zip(other.chunks(4))
+                .filter(|(a, b)| a != b)
+                .count()
+        };
+
+        // Each layer has to be findable ON ITS OWN, since they're separate
+        // options. A mark the eye can actually catch has to move a
+        // substantial patch of one node, not a hairline -- the first
+        // version drew a correct but sub-pixel ring that read as nothing
+        // at all in the DAW, which is the regression this guards.
+        let core_only = {
+            let mut s = single_marked_node(1, 0);
+            s.highlight_octave = false;
+            shot(&s, 41)
+        };
+        let octave_only = {
+            let mut s = single_marked_node(1, 0);
+            s.highlight_core = false;
+            shot(&s, 42)
+        };
+        let both = shot(&single_marked_node(1, 0), 43);
+
+        // Measure against the node's OWN footprint, not an absolute pixel
+        // count: what matters is that the mark claims a real share of the
+        // thing it is marking, at whatever size it happens to be drawn.
+        let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
+        let (core_px, octave_px, both_px) =
+            (changed_px(&core_only), changed_px(&octave_only), changed_px(&both));
+        eprintln!(
+            "node {node_px} px; core mark {core_px}, octave mark {octave_px}, both {both_px}"
+        );
+        // Floors, not targets. The mark is deliberately restrained (it is
+        // on by default and must not shout over the note colors), so these
+        // sit between "subtle" and the two regressions they exist to catch:
+        // a sub-pixel core ring, which changed well under 1% of the node,
+        // and an octave mark that only recolored its slot without growing
+        // it, which measured ~3.8%. Current: ~37% and ~6.7%.
+        assert!(
+            core_px * 6 > node_px,
+            "the pitch class mark covers too little of the node to find: \
+             {core_px} px of {node_px}"
+        );
+        assert!(
+            octave_px * 20 > node_px,
+            "the octave mark covers too little of the node to find \
+             (a bare recolor, without the glyph growing, lands here): \
+             {octave_px} px of {node_px}"
+        );
+        assert!(both_px >= core_px.max(octave_px), "both layers should cover at least either");
+
+        // Turning the marks off entirely puts the picture back exactly.
+        let off = {
+            let mut s = single_marked_node(1, 0);
+            s.highlight_core = false;
+            s.highlight_octave = false;
+            shot(&s, 44)
+        };
+        assert_eq!(changed_px(&off), 0, "no layer selected must draw no mark");
+    }
+
+    #[test]
+    fn a_real_held_chord_shows_its_melody_and_bass_marks() {
+        // End to end, exactly how the app runs it: a held chord through
+        // derive_scene, NOT a Scene assembled by hand. The by-hand test
+        // above pins the shader down but would happily pass while the
+        // tracker -> view -> node-mask path was broken, which is the half
+        // that actually reaches a user.
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        use lattice_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
+        use lattice_scene::{derive_scene, Camera, FrameParams, HighlightExtremes, ViewConfig};
+
+        const SIZE: [u32; 2] = [256, 256];
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 64, 67] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        // A small window so the nodes draw big enough to measure.
+        let base = ViewConfig {
+            extent_threes: 2,
+            extent_fives: 2,
+            extent_sevens: 0,
+            ..ViewConfig::default()
+        };
+        let scene_for = |which: HighlightExtremes| {
+            derive_scene(
+                &tracker,
+                &Tuning::default(),
+                &ViewConfig { highlight_extremes: which, ..base.clone() },
+                &FrameParams::default(),
+                Camera::default(),
+                None,
+                0.0,
+            )
+        };
+
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor {
+            size_in_pixels: SIZE,
+            pixels_per_point: 1.0,
+        };
+        let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+            let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+            let tex = render_to_texture(
+                &device,
+                &queue,
+                SIZE,
+                format,
+                wgpu::Color::BLACK,
+                |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: 1.0,
+                            screen_size_px: SIZE,
+                        },
+                        pass,
+                        &resources,
+                    );
+                },
+            );
+            readback(&device, &queue, &tex, SIZE)
+        };
+
+        // The masks must survive derive_scene in the first place.
+        let marked = scene_for(HighlightExtremes::Both);
+        let melody_nodes = marked.nodes.iter().filter(|n| n.melody_slots != 0).count();
+        let bass_nodes = marked.nodes.iter().filter(|n| n.bass_slots != 0).count();
+        assert!(
+            melody_nodes > 0 && bass_nodes > 0,
+            "derive_scene marked nothing: {melody_nodes} melody, {bass_nodes} bass nodes"
+        );
+
+        let off = shot(&scene_for(HighlightExtremes::Off), 50);
+        let on = shot(&marked, 51);
+        let lit = off.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
+        let changed = off
+            .chunks(4)
+            .zip(on.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        eprintln!("chord: {lit} lit px, {changed} changed by the marks");
+        assert!(
+            changed * 20 > lit,
+            "turning the marks on barely changed a real chord: \
+             {changed} px of {lit} lit"
+        );
+    }
+
     #[test]
     fn bloom_adds_light_over_the_plain_composite() {
         let Some((device, queue)) = headless_device() else {

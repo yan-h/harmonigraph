@@ -16,12 +16,17 @@ use glam::Vec4;
 #[derive(Clone, Debug)]
 pub struct Skin {
     // ---- 3D scene ----
-    /// Fill color of idle (non-sounding) lattice nodes, linear-ish RGBA.
-    /// Idle nodes draw no disc; this colors their hover ghost.
-    pub node_idle: Vec4,
     /// The faint background grid between node positions; alpha is the
-    /// line opacity.
+    /// line opacity. Only the DEFAULT for `ViewConfig::grid_color`, which
+    /// is what the scene actually reads.
     pub grid_line: Vec4,
+    /// Melody mark: the highest held note (see
+    /// `ViewConfig::highlight_extremes`). Warm, and deliberately far from
+    /// `note_bass` in hue so the two ends never read as the same mark.
+    pub note_melody: Vec4,
+    /// Bass mark: the lowest held note. Cool, the counterpart to
+    /// `note_melody`.
+    pub note_bass: Vec4,
 
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
     /// Window/panel background.
@@ -73,8 +78,9 @@ impl Default for Skin {
     /// grid brighten to match. See git history for the pre-pass values.
     fn default() -> Self {
         Skin {
-            node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
             grid_line: Vec4::new(0.27, 0.29, 0.34, 0.62),
+            note_melody: Vec4::new(1.0, 0.84, 0.36, 1.0),
+            note_bass: Vec4::new(0.42, 0.82, 1.0, 1.0),
             panel: [24, 25, 29],
             well: [15, 16, 19],
             surface_faint: [46, 48, 57],

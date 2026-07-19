@@ -31,13 +31,14 @@ struct Uniforms {
     misc2: vec4<f32>,
     // x: core radius in quad UV units (0 turns the core off). y/z: the
     // outer layer's inner/outer band radii (same units; the scene
-    // guarantees z > y). w: outer backdrop flag (1 = ghost the silent
-    // octaves to complete the ring; independent of the core).
+    // guarantees z > y). w: outer backdrop opacity 0..1 (ghost the silent
+    // octaves to complete the ring; independent of the core). 0 draws no
+    // backdrop; 1 is the full built-in hoop/ghost strength.
     misc3: vec4<f32>,
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
     dot_ramp: array<vec4<f32>, 16>,
-    // Idle node color (skin node_idle): the home-sheet placeholder ring is
+    // Idle node color (the view's grid color): the home-sheet placeholder ring is
     // drawn in this constant grey, so a releasing note's ring stays grey
     // (not the note hue) and never snaps color when the voice is pruned.
     node_idle: vec4<f32>,
@@ -46,6 +47,13 @@ struct Uniforms {
     // crisp octave shapes). z: idle marker radius. w: idle marker style
     // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
+    // x: grid line thickness, a multiple of the built-in grid width.
+    // y: draw the melody/bass mark on the core; z: on the octave glyphs.
+    // w unused.
+    misc5: vec4<f32>,
+    // Melody / bass mark colors.
+    note_melody: vec4<f32>,
+    note_bass: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -85,6 +93,11 @@ struct Instance {
     // 1 on the home (center sevens) sheet: idle home nodes draw a blank
     // placeholder ring where their disc would be.
     @location(7) home: f32,
+    // Melody/bass marks: x = melody slots, y = bass slots, one bit per
+    // octave slot. A slot set in BOTH is a note that is at once the
+    // highest and the lowest held, so there's nothing to tell apart and
+    // it draws unmarked (see mark_color).
+    @location(8) marks: vec2<u32>,
 };
 
 struct VsOut {
@@ -96,6 +109,7 @@ struct VsOut {
     @location(4) seed: f32,
     @location(5) @interpolate(flat) cents: f32,
     @location(6) @interpolate(flat) home: f32,
+    @location(7) @interpolate(flat) marks: vec2<u32>,
 };
 
 @vertex
@@ -128,6 +142,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.seed = inst.seed;
     out.cents = inst.cents;
     out.home = inst.home;
+    out.marks = inst.marks;
     return out;
 }
 
@@ -573,6 +588,51 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
     return vec4<f32>(u.node_idle.rgb * cov, cov);
 }
 
+// Which melody/bass mark applies to a set of octave slots, or alpha 0 for
+// none. Pass a single slot's bit to ask about one octave glyph, or ALL_SLOTS
+// to ask about the node as a whole.
+//
+// Slots claimed by BOTH ends go unmarked: such a note is at once the highest
+// and the lowest held, so there is nothing to tell apart. That one rule
+// covers both special cases without a test of its own -- a lone held note
+// (it is its own melody and bass), and, when asked about the whole node, a
+// chord voiced inside a single pitch class, where the melody and bass share
+// a node and only the octave layer can separate them.
+fn mark_color(marks: vec2<u32>, slots: u32) -> vec4<f32> {
+    let melody = marks.x & slots;
+    let bass = marks.y & slots;
+    if melody != 0u && bass != 0u {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    if melody != 0u {
+        return u.note_melody;
+    }
+    if bass != 0u {
+        return u.note_bass;
+    }
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+
+const ALL_SLOTS: u32 = 0xFFFFFFFFu;
+// The core's melody/bass ring, in quad UV units. Centered ON the disc edge,
+// so it reads as the node's own rim rather than a detached hoop. HALO_OUT is
+// how far a softer skirt spreads outside it.
+//
+// These are tuned for an always-on mark (see HighlightExtremes' default): it
+// has to be findable at a glance without shouting over the note colors, which
+// are what the lattice is actually for. An earlier pass drew a sub-pixel
+// hairline that read as nothing at all; the correction to that overshot into
+// a halo that dominated the node, and this sits between the two.
+const MARK_RING_HALF: f32 = 0.05;
+const MARK_HALO_OUT: f32 = 0.17;
+const MARK_HALO_LEVEL: f32 = 0.26;
+// How far a marked octave glyph's band is widened, as a fraction of the band
+// width, on each side. Recoloring one slot alone is only a few percent of the
+// node -- one slice out of ten -- so the marked glyph also grows a little
+// past its neighbours; that slight protrusion is what makes it findable
+// without having to brighten it into a glare.
+const MARK_GLYPH_GROW: f32 = 0.20;
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
@@ -681,8 +741,28 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // (below) is composited UNDER this, so a sounding note draws over its
     // own idle marker and reveals it again as it fades.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
-    let base_alpha = core_alpha;
-    let base_rgb = rgb_core * core_alpha;
+    var base_alpha = core_alpha;
+    var base_rgb = rgb_core * core_alpha;
+
+    // Melody/bass mark on the core -- the pitch class indicator -- as a
+    // bright ring hugging the disc, in the mark's own color so the two ends
+    // never read alike. Needs a sounding note AND the core on: with the core
+    // off there is no pitch class indicator to mark, and the octave layer
+    // carries the mark instead.
+    let core_mark = mark_color(in.marks, ALL_SLOTS);
+    if u.misc5.y > 0.5 && core_mark.a > 0.0 && on && presence > 0.0 {
+        // A solid rim straddling the disc edge, plus a soft skirt fading
+        // outward from it. The skirt carries most of the visibility: the
+        // rim alone is only a couple of pixels at typical node sizes.
+        let rim = aa_inside(radius + MARK_RING_HALF, d, aa)
+            * (1.0 - aa_inside(radius - MARK_RING_HALF, d, aa));
+        let halo = (1.0 - smoothstep(radius + MARK_RING_HALF, radius + MARK_HALO_OUT, d))
+            * step(radius - MARK_RING_HALF, d)
+            * MARK_HALO_LEVEL;
+        let mark_cov = clamp(max(rim, halo), 0.0, 1.0) * presence * core_on;
+        base_rgb = core_mark.rgb * mark_cov + base_rgb * (1.0 - mark_cov);
+        base_alpha = mark_cov + base_alpha * (1.0 - mark_cov);
+    }
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
@@ -693,7 +773,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
 
-    let backdrop = u.misc3.w > 0.5;
+    // Backdrop opacity 0..1, scaling the built-in hoop/ghost levels: 0
+    // draws no backdrop at all, 1 is the full strength this always had.
+    let backdrop = u.misc3.w;
+    let has_backdrop = backdrop > 0.0;
     // Outer solidity (u.misc4.y, 0..1) is the octave layer's own
     // crisp/soft knob: it widens every glyph's soft edge (proportional to
     // the band width so narrow bands soften proportionally), so at 1 the
@@ -703,17 +786,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let outer_aa = aa + (1.0 - u.misc4.y) * OUTER_GLOW_SOFT * (u.misc3.z - u.misc3.y);
     if mode != 0u {
         // Sounding slots draw bright, tinted by their own pitch, each
-        // fading on its own envelope. The backdrop flag (its own
-        // outer-layer setting, independent of the core) turns on each
+        // fading on its own envelope. The backdrop opacity (its own
+        // outer-layer setting, independent of the core) fades in each
         // style's cohesion device: Dots gets a faint tie hoop (complete
         // whenever the note sounds; glyphs composite over it) and Slices
         // draws silent slots as ghosts in the loop below.
-        if backdrop && mode == 1u {
+        if has_backdrop && mode == 1u {
             let hoop_r = (u.misc3.y + u.misc3.z) * 0.5;
             let hoop = aa_inside(HOOP_HALF, abs(d - hoop_r), outer_aa);
-            glyph = hoop * HOOP_LEVEL * presence;
+            glyph = hoop * HOOP_LEVEL * backdrop * presence;
         }
-        let ghosted = backdrop && mode == 5u;
+        let ghosted = has_backdrop && mode == 5u;
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level <= 0.0 && !(ghosted && presence > 0.0) {
@@ -723,7 +806,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
-            var cov = shape * GHOST_LEVEL * presence * f32(ghosted);
+            var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
             var slot_rgb = node_glyph_rgb;
             if level > 0.0 {
                 // The 35% dimmest-visible floor is right while the octave
@@ -738,6 +821,32 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(dot_pitch_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
+
+                // Melody/bass mark on the octave indicator: this one glyph
+                // takes the mark's color at full coverage, so it stands out
+                // from its neighbors in the ring whatever the outer style
+                // draws. This is the layer that still separates the two ends
+                // when a chord is voiced inside one pitch class -- every
+                // octave of it shares a node, differing only by slot.
+                let slot_mark = mark_color(in.marks, 1u << i);
+                if u.misc5.z > 0.5 && slot_mark.a > 0.0 {
+                    // Redraw this one glyph on a widened band so it reaches
+                    // past its neighbours, at the mark's color and full
+                    // coverage. The overflow past the billboard is eased off
+                    // by the QUAD_MARGIN fade below, as for any glyph.
+                    let grow = (u.misc3.z - u.misc3.y) * MARK_GLYPH_GROW;
+                    let big = outer_glyph(
+                        mode,
+                        i,
+                        in.cents,
+                        in.uv,
+                        max(u.misc3.y - grow, 0.0),
+                        u.misc3.z + grow,
+                        outer_aa,
+                    );
+                    slot_rgb = slot_mark.rgb;
+                    cov = max(cov, big * tail);
+                }
             }
             if cov > glyph {
                 glyph = cov;
@@ -821,8 +930,11 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     } else {
         perp = perp / plen;
     }
-    // Grid lines (kind >= 1) are much thinner than chord beams.
-    let half_width = u.misc.y * mix(0.35, 0.09, min(inst.b_kind.w, 1.0));
+    // Grid lines (kind >= 1) are much thinner than chord beams, and carry
+    // the user's thickness multiplier; chord beams keep their fixed width.
+    let is_grid = min(inst.b_kind.w, 1.0);
+    let grid_width = 0.09 * u.misc5.x;
+    let half_width = u.misc.y * mix(0.35, grid_width, is_grid);
     let world = a + axis * corner.x + perp * corner.y * half_width;
 
     var out: EdgeVsOut;
@@ -846,9 +958,10 @@ fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
     if in.kind > 0.5 {
         let across = aa_inside(0.675, abs(in.uv.y), aa_y);
         var along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
-        // Dashed grid lines (kind 2, GridStyle::DashedLinks): chop the
-        // length into short dashes, leaving a faint floor in the gaps so
-        // the line still reads as continuous structure.
+        // Dashed grid lines (kind 2): the sevens links, plus every in-plane
+        // line when the grid's dashed style is on. Chop the length into
+        // short dashes, leaving a faint floor in the gaps so the line still
+        // reads as continuous structure.
         if in.kind > 1.5 {
             let tri = abs(fract(in.uv.x * 5.0) - 0.5) * 2.0;
             along = along * (0.15 + 0.85 * smoothstep(0.35, 0.65, tri));

@@ -543,10 +543,19 @@ mod tests {
         state.view.core_solidity = 0.4;
         state.view.outer_inner = 0.1;
         state.view.outer_outer = 0.7;
-        state.view.outer_backdrop = true;
+        state.view.outer_backdrop = 0.62;
         state.view.outer_solidity = 0.3;
         state.view.idle_marker = lattice_scene::IdleMarker::Dot;
         state.view.idle_radius = 0.31;
+        // Melody, not Both: Both is the default, and this test's whole
+        // point is that the fields prove they round-trip rather than
+        // matching the defaults by luck.
+        state.view.highlight_extremes = lattice_scene::HighlightExtremes::Melody;
+        state.view.highlight_core = false;
+        state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
+        state.view.grid_thickness = 2.5;
+        state.view.grid_inset = 0.0;
+        state.view.grid_dashed = true;
         state.view.meantone = true;
         state.camera_presets.push(CameraPreset {
             name: "reading".into(),
@@ -565,10 +574,20 @@ mod tests {
         assert_eq!(restored.view.core_solidity, 0.4);
         assert_eq!(restored.view.outer_inner, 0.1);
         assert_eq!(restored.view.outer_outer, 0.7);
-        assert!(restored.view.outer_backdrop);
+        assert_eq!(restored.view.outer_backdrop, 0.62);
         assert_eq!(restored.view.outer_solidity, 0.3);
         assert_eq!(restored.view.idle_marker, lattice_scene::IdleMarker::Dot);
         assert_eq!(restored.view.idle_radius, 0.31);
+        assert_eq!(
+            restored.view.highlight_extremes,
+            lattice_scene::HighlightExtremes::Melody
+        );
+        assert!(!restored.view.highlight_core, "false round-trips over a true default");
+        assert!(restored.view.highlight_octave);
+        assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
+        assert_eq!(restored.view.grid_thickness, 2.5);
+        assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
+        assert!(restored.view.grid_dashed);
         assert!(restored.view.meantone);
         assert_eq!(restored.camera_presets.len(), 1);
         assert_eq!(restored.camera_presets[0].name, "reading");
@@ -684,12 +703,43 @@ mod tests {
         assert_eq!(restored.view.core_solidity, 0.0, "octave-only body is the glow end");
         assert!(restored.view.core_radius > 0.0, "still on");
         assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Dots);
-        assert!(restored.view.outer_backdrop, "Beads' hoop rides the backdrop");
+        assert_eq!(
+            restored.view.outer_backdrop, 1.0,
+            "Beads' hoop rides the backdrop, at full strength"
+        );
         assert_eq!(
             restored.view.node_body,
             lattice_scene::LegacyNodeBody::Disc,
             "shim consumed on load"
         );
+    }
+
+    #[test]
+    fn legacy_bool_backdrop_blobs_load_as_an_opacity() {
+        // The backdrop was a bool before it became an opacity. A stale bool
+        // must not just fail to parse: load_persist drops the WHOLE blob on
+        // any error, so the user would silently lose their layout, camera
+        // and every other view setting along with it.
+        for (token, want) in [("true", 1.0f32), ("false", 0.0)] {
+            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            // A value the legacy bool must overrule either way, so both
+            // tokens prove the shim ran rather than matching a default.
+            state.view.outer_backdrop = 0.5;
+            let saved = state
+                .save_persist()
+                .replace("core_solidity:", &format!("outer_backdrop:{token},core_solidity:"));
+            assert_ne!(saved, state.save_persist(), "injection must have hit");
+
+            let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+            restored.load_persist(&saved);
+            assert_eq!(restored.view.outer_backdrop, want, "bool {token}");
+            assert_eq!(
+                restored.view.legacy_outer_backdrop, None,
+                "shim consumed on load"
+            );
+            // The rest of the blob survived rather than being dropped.
+            assert_eq!(restored.view.extent_threes, state.view.extent_threes);
+        }
     }
 
     #[test]

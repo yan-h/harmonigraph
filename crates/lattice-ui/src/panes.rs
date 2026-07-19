@@ -6,7 +6,8 @@ use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
 use lattice_scene::{
-    channel_color, derive_scene, Camera, IdleMarker, NodeStyle, OuterStyle, Projection,
+    channel_color, derive_scene, Camera, HighlightExtremes, IdleMarker, NodeStyle, OuterStyle,
+    Projection,
 };
 
 use crate::theme;
@@ -206,7 +207,11 @@ fn draw_node_labels(
 ) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     for node in &scene.nodes {
-        if !(node.hovered || node.activation > 0.0) {
+        // `is_visible` re-checks what `Scene::pick` already enforces,
+        // because hover also arrives from the Spectral pane
+        // (`nearest_visible_node`), which can land on an off-sheet node.
+        // Either way a label only belongs on a node you can actually see.
+        if !(node.hovered || node.activation > 0.0) || !node.is_visible() {
             continue;
         }
         let Some(p) = projector.project(node.world_pos) else {
@@ -736,36 +741,104 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 let has_backdrop =
                     matches!(state.view.outer_style, OuterStyle::Dots | OuterStyle::Slices);
                 ui.add_enabled_ui(has_backdrop, |ui| {
-                    ui.checkbox(&mut state.view.outer_backdrop, "Backdrop").on_hover_text(
-                        "Complete the octave ring: draw the silent octaves \
-                         faintly behind the sounding glyphs (Slices ghosts \
-                         its empty slots; Dots strings them on a hoop) so a \
-                         lone octave still reads as a whole note",
-                    );
+                    ValueBar::new(&mut state.view.outer_backdrop, 0.0..=1.0, "Backdrop")
+                        .show(ui)
+                        .on_hover_text(
+                            "Complete the octave ring: draw the silent octaves \
+                             faintly behind the sounding glyphs (Slices ghosts \
+                             its empty slots; Dots strings them on a hoop) so a \
+                             lone octave still reads as a whole note. 0 = off",
+                        );
                 });
                 // How long the octave glyphs keep fading after release
                 // (independent of the core's fade above).
                 param_bar(ui, params, ParamKey::OctaveFade);
             });
 
-            // Idle nodes: a minimal grey marker at each unlit home-sheet
-            // node, shown ALWAYS — independent of the active appearance and
-            // of whether a note plays there (a sounding note just draws over
-            // it). Other sheets are marked by the grid.
-            section(ui, "Idle nodes");
+            // Melody / bass: mark the outer held notes so a chord's top and
+            // bottom line read at a glance.
+            section(ui, "Melody / bass");
+            button_row_wrapped(ui, |ui| {
+                ui.label("Mark");
+                for (which, label, hint) in [
+                    (HighlightExtremes::Off, "Off", "No melody or bass mark"),
+                    (HighlightExtremes::Melody, "Melody", "Mark the highest held note"),
+                    (HighlightExtremes::Bass, "Bass", "Mark the lowest held note"),
+                    (
+                        HighlightExtremes::Both,
+                        "Both",
+                        "Mark both, each in its own color. A note that is at \
+                         once the highest and the lowest -- a lone note -- is \
+                         left unmarked: there's nothing to tell apart",
+                    ),
+                ] {
+                    ui.selectable_value(&mut state.view.highlight_extremes, which, label)
+                        .on_hover_text(hint);
+                }
+            });
+            ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
+                ui.checkbox(&mut state.view.highlight_core, "Pitch class").on_hover_text(
+                    "Ring the marked note's node. Needs the Core on -- with \
+                     it off there's no pitch class indicator to mark",
+                );
+                ui.checkbox(&mut state.view.highlight_octave, "Octave").on_hover_text(
+                    "Recolor the marked note's octave glyph. This is the one \
+                     that still works for a chord voiced inside a single \
+                     pitch class, where every octave shares one node",
+                );
+            });
+
+            // Home grid: the always-drawn structural layer -- the faint
+            // lines between node positions AND the idle marker sitting at
+            // each unlit home-sheet node. Idle positions draw no disc, so
+            // together these are what carry the lattice's shape when
+            // nothing is playing. They share one color for that reason.
+            section(ui, "Home grid");
+            button_row(ui, |ui| {
+                ui.label("Color");
+                ui.color_edit_button_rgba_unmultiplied(&mut state.view.grid_color)
+                    .on_hover_text(
+                        "Color of the whole idle structure -- grid lines and \
+                         idle node markers alike. The alpha is how faint an \
+                         unlit LINE draws; markers keep their own presence. \
+                         Lit segments still take their notes' color",
+                    );
+            });
+            ValueBar::new(&mut state.view.grid_thickness, 0.0..=4.0, "Thickness")
+                .show(ui)
+                .on_hover_text("Line width, as a multiple of the classic hairline");
+            ValueBar::new(&mut state.view.grid_inset, 0.0..=3.0, "Line gap")
+                .show(ui)
+                .on_hover_text(
+                    "How far each line stops short of the node it runs to, as \
+                     a multiple of the node radius; 0 runs it to the center",
+                );
+            ui.checkbox(&mut state.view.grid_dashed, "Dashed").on_hover_text(
+                "Dash the in-plane lines. The sevens-axis links are always \
+                 dashed -- that's what marks them as depth links",
+            );
+
+            // The idle marker: shown ALWAYS at each unlit home-sheet node,
+            // independent of the active appearance and of whether a note
+            // plays there (a sounding note just draws over it). Off-sheet
+            // positions are marked by the lines alone.
             button_row_wrapped(ui, |ui| {
                 ui.label("Marker");
                 for (marker, label, hint) in [
                     (IdleMarker::None, "None", "No idle marker"),
-                    (IdleMarker::Dot, "Dot", "A filled grey dot at the radius below"),
-                    (IdleMarker::Circle, "Circle", "A thin grey outline circle at the radius below"),
+                    (IdleMarker::Dot, "Dot", "A filled dot at the radius below"),
+                    (
+                        IdleMarker::Circle,
+                        "Circle",
+                        "A thin outline circle at the radius below",
+                    ),
                 ] {
                     ui.selectable_value(&mut state.view.idle_marker, marker, label)
                         .on_hover_text(hint);
                 }
             });
             ui.add_enabled_ui(state.view.idle_marker != IdleMarker::None, |ui| {
-                ValueBar::new(&mut state.view.idle_radius, 0.0..=0.9, "Radius")
+                ValueBar::new(&mut state.view.idle_radius, 0.0..=0.9, "Marker radius")
                     .show(ui)
                     .on_hover_text(
                         "Size of the idle marker; independent of the active \
