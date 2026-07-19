@@ -122,18 +122,13 @@ pub struct ViewConfig {
     pub node_body: LegacyNodeBody,
     // ---- Melody / bass highlight -----------------------------------------
     /// Which of the outer held notes to mark, so the melody and/or bass
-    /// line reads at a glance out of a chord.
+    /// line reads at a glance out of a chord. The mark rides the OUTER EDGE
+    /// of that note's octave indicator and nothing else — it never touches
+    /// the core, whose color is the note's own. That also makes it the layer
+    /// that survives a chord voiced within a single pitch class: every
+    /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
-    /// Mark the pitch class indicator (the node's core) of the outer notes.
-    #[serde(default = "default_true")]
-    pub highlight_core: bool,
-    /// Mark the octave indicator (the outer glyph) of the outer notes.
-    /// This is the one that survives a chord voiced within a single pitch
-    /// class — octaves of one note all land on the same node, so only the
-    /// octave layer can tell the top from the bottom there.
-    #[serde(default = "default_true")]
-    pub highlight_octave: bool,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -365,8 +360,6 @@ impl Default for ViewConfig {
             idle_radius: default_idle_radius(),
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            highlight_core: true,
-            highlight_octave: true,
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: default_grid_inset(),

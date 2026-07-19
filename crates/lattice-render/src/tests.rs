@@ -108,8 +108,6 @@ fn parity_scene() -> Scene {
             // and one claiming both slots at once (the split mark).
             melody_slots: if i == 0 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
             bass_slots: if i == 2 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
-            melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
-            bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
         });
     }
     let edges = vec![lattice_scene::EdgeInstance {
@@ -154,8 +152,6 @@ fn parity_scene() -> Scene {
         grid,
         grid_thickness: 1.0,
         node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
-        highlight_core: true,
-        highlight_octave: true,
         dot_ramp: std::array::from_fn(|k| {
             Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
         }),
@@ -384,10 +380,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         cents: 0.0,
         melody_slots,
         bass_slots,
-        // A mark only draws at the level its own note is at; these stand in
-        // for a freshly-held note.
-        melody_level: f32::from(melody_slots != 0),
-        bass_level: f32::from(bass_slots != 0),
     }];
     scene.edges.clear();
     scene.grid.clear();
@@ -398,7 +390,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
 }
 
 #[test]
-fn melody_bass_marks_are_visible_on_each_layer() {
+fn melody_bass_marks_are_visible_on_the_octave_edge() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
@@ -448,59 +440,30 @@ fn melody_bass_marks_are_visible_on_each_layer() {
             .count()
     };
 
-    // Each layer has to be findable ON ITS OWN, since they're separate
-    // options. A mark the eye can actually catch has to move a
-    // substantial patch of one node, not a hairline -- the first
-    // version drew a correct but sub-pixel ring that read as nothing
-    // at all in the DAW, which is the regression this guards.
-    let core_only = {
-        let mut s = single_marked_node(1, 0);
-        s.highlight_octave = false;
-        shot(&s, 41)
-    };
-    let octave_only = {
-        let mut s = single_marked_node(1, 0);
-        s.highlight_core = false;
-        shot(&s, 42)
-    };
-    let both = shot(&single_marked_node(1, 0), 43);
-
     // Measure against the node's OWN footprint, not an absolute pixel
     // count: what matters is that the mark claims a real share of the
     // thing it is marking, at whatever size it happens to be drawn.
     let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
-    let (core_px, octave_px, both_px) =
-        (changed_px(&core_only), changed_px(&octave_only), changed_px(&both));
-    eprintln!(
-        "node {node_px} px; core mark {core_px}, octave mark {octave_px}, both {both_px}"
-    );
-    // Floors, not targets. The mark is deliberately restrained (it is
-    // on by default and must not shout over the note colors), so these
-    // sit between "subtle" and the two regressions they exist to catch:
-    // a sub-pixel core ring, which changed well under 1% of the node,
-    // and an octave mark that only recolored its slot without growing
-    // it, which measured ~3.8%. Current: ~37% and ~6.7%.
+    let melody = shot(&single_marked_node(1, 0), 41);
+    let both_px = changed_px(&melody);
+    eprintln!("node {node_px} px; mark {both_px}");
+    // A floor, not a target, and measured against the node's whole lit
+    // footprint (glow included), so a few percent is a clearly visible arc
+    // rather than a smudge -- these were checked by eye at the numbers they
+    // now guard. The mark is deliberately restrained: it rides the OUTER
+    // EDGE of one octave glyph and must not shout over the note colors,
+    // which are what the lattice is for. But it does have to be findable --
+    // an early version drew a sub-pixel ring that read as nothing at all in
+    // the DAW (well under 1%), which is what this catches. Current: ~3.1%.
     assert!(
-        core_px * 6 > node_px,
-        "the pitch class mark covers too little of the node to find: \
-         {core_px} px of {node_px}"
+        both_px * 40 > node_px,
+        "the octave-edge mark covers too little of the node to find: \
+         {both_px} px of {node_px}"
     );
-    assert!(
-        octave_px * 20 > node_px,
-        "the octave mark covers too little of the node to find \
-         (a bare recolor, without the glyph growing, lands here): \
-         {octave_px} px of {node_px}"
-    );
-    assert!(both_px >= core_px.max(octave_px), "both layers should cover at least either");
 
-    // Turning the marks off entirely puts the picture back exactly.
-    let off = {
-        let mut s = single_marked_node(1, 0);
-        s.highlight_core = false;
-        s.highlight_octave = false;
-        shot(&s, 44)
-    };
-    assert_eq!(changed_px(&off), 0, "no layer selected must draw no mark");
+    // Nothing marked draws no mark at all.
+    let off = shot(&single_marked_node(0, 0), 44);
+    assert_eq!(changed_px(&off), 0, "an unmarked node must draw no mark");
 
     // An indicator claimed by BOTH ends -- a lone held note, or a chord
     // whose top and bottom share a pitch class -- used to be blanked, so
@@ -523,7 +486,7 @@ fn melody_bass_marks_are_visible_on_each_layer() {
         a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
     };
     assert!(
-        differs(&split, &both) > 0 && differs(&split, &bass_only) > 0,
+        differs(&split, &melody) > 0 && differs(&split, &bass_only) > 0,
         "the split mark is indistinguishable from a single-ended one"
     );
 }
@@ -570,7 +533,10 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             &FrameParams::default(),
             Camera::default(),
             None,
-            0.0,
+            // Past OCTAVE_ATTACK_TIME: the octave glyphs ease in over the
+            // first 0.15s, and the mark rides one of them, so at t=0 there
+            // is deliberately nothing on that layer yet.
+            0.5,
         )
     };
 
@@ -624,8 +590,11 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         .filter(|(a, b)| a != b)
         .count();
     eprintln!("chord: {lit} lit px, {changed} changed by the marks");
+    // Same floor and reasoning as the by-hand test above; at this node
+    // density the rim's screen-space minimum (MARK_RIM_MIN_AA) is what
+    // keeps it from going sub-pixel. Current: ~3.0%.
     assert!(
-        changed * 20 > lit,
+        changed * 40 > lit,
         "turning the marks on barely changed a real chord: \
          {changed} px of {lit} lit"
     );
@@ -682,4 +651,5 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 

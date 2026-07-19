@@ -135,19 +135,6 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     ),
                 ],
             );
-            ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
-                ui.checkbox(&mut state.view.highlight_core, "Pitch class").on_hover_text(
-                    "Collar the marked note's node, just outside the disc so \
-                     the note's own color still reads. Needs the Core on -- \
-                     with it off there's no pitch class indicator to mark",
-                );
-                ui.checkbox(&mut state.view.highlight_octave, "Octave").on_hover_text(
-                    "Outline the marked note's octave glyph, leaving its pitch \
-                     color intact. This is the one that still works for a chord \
-                     voiced inside a single pitch class, where every octave \
-                     shares one node",
-                );
-            });
 
             // Home grid: the always-drawn structural layer -- the faint
             // lines between node positions AND the idle marker sitting at

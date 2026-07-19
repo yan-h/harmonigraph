@@ -119,15 +119,18 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     // C4 is the bass and sits on the origin node.
     let origin = origin_node(&scene);
     half("the core", origin.activation);
+    // The mark rides its octave slot's envelope, so a half-faded glyph is a
+    // half-faded mark; what matters here is that the slot is still MARKED
+    // rather than having snapped off at release.
     half("the octave glyph", origin.octaves[4]);
-    half("the bass mark", origin.bass_level);
+    assert_eq!(origin.bass_slots, 1 << 4, "the released bass keeps its mark");
     // G4 is the melody, one fifth up the lattice.
     let melody = scene
         .nodes
         .iter()
         .find(|n| n.melody_slots != 0)
         .expect("the released melody keeps its mark while it fades");
-    half("the melody mark", melody.melody_level);
+    half("the melody's octave glyph", melody.octaves[4]);
 }
 
 #[test]
@@ -478,11 +481,7 @@ fn a_lone_held_note_is_marked_as_both_ends() {
             n.melody_slots, n.bass_slots,
             "a lone note must claim identical slots at both ends"
         );
-        if n.melody_slots != 0 {
-            seen = true;
-            assert_eq!(n.melody_level, 1.0, "held, so the mark is at full");
-            assert_eq!(n.bass_level, 1.0);
-        }
+        seen |= n.melody_slots != 0;
     }
     assert!(seen, "the note should have been marked somewhere");
 }
@@ -547,11 +546,6 @@ fn a_released_mark_fades_out_while_a_held_note_keeps_its_node_lit() {
         origin.octaves[5]
     );
     assert_eq!(origin.octaves[4], 1.0, "the held C4's octave is at full");
-    // The node-level mark levels feed the CORE collar, which speaks for the
-    // pitch class as a whole: C is the melody and the bass right now, both
-    // at full, because a held voice claims each end.
-    assert_eq!(origin.melody_level, 1.0);
-    assert_eq!(origin.bass_level, 1.0);
 }
 
 #[test]

@@ -24,7 +24,6 @@ fn persist_round_trips_camera_and_view() {
     // point is that the fields prove they round-trip rather than
     // matching the defaults by luck.
     state.view.highlight_extremes = lattice_scene::HighlightExtremes::Melody;
-    state.view.highlight_core = false;
     state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
@@ -55,8 +54,6 @@ fn persist_round_trips_camera_and_view() {
         restored.view.highlight_extremes,
         lattice_scene::HighlightExtremes::Melody
     );
-    assert!(!restored.view.highlight_core, "false round-trips over a true default");
-    assert!(restored.view.highlight_octave);
     assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
