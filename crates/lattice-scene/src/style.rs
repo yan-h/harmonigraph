@@ -181,57 +181,6 @@ pub enum HighlightExtremes {
     Both,
 }
 
-/// How a melody/bass ring points back at the octave sector it came from.
-///
-/// The marks are full rings — the bass just inside the octave band, the
-/// melody just outside — which is what lets both draw at full weight even
-/// when one note is both ends of the chord. The cost of a full ring is that
-/// it says the NODE carries the melody without saying which of its octaves
-/// does, and on a chord voiced inside one pitch class that is the whole
-/// question. These are the candidates for putting that back; they are
-/// switchable so they can be compared live, the same way the octave glyph
-/// shapes were before one of them won.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum MarkLink {
-    /// Nothing: a plain unbroken ring. The quietest, and honest about
-    /// marking the node rather than one octave of it.
-    Off,
-    /// The ring is dim all the way round and comes up to full only over the
-    /// responsible sector, so the eye lands there first. The alias absorbs
-    /// the removed Bulge (which swelled the ring instead) so blobs naming
-    /// it keep loading.
-    #[default]
-    #[serde(alias = "Bulge")]
-    Glow,
-    /// An unbroken ring like [`Off`](MarkLink::Off), but slit at the
-    /// responsible sector's two angular boundaries, so that stretch of ring
-    /// reads as a separate piece. A slit IS the gap between two octaves,
-    /// continued outward: same construction, so the same width and the same
-    /// edge, and a Gap of 0 leaves no slit at all.
-    Cut,
-    /// The responsible sector itself grows across the gap to touch its ring
-    /// — outward to the melody ring, inward to the bass one. The link is
-    /// drawn in the octave's own pitch color rather than the mark's, since
-    /// it IS the octave. Absorbs the removed Spur, which drew a stub from
-    /// the ring's side instead.
-    #[serde(alias = "Spur")]
-    Reach,
-}
-
-impl MarkLink {
-    /// Index used by the shader (uniform `misc5.y`). 1 and 3 are the
-    /// removed Bulge and Spur; the rest keep their indices so their
-    /// branches are untouched.
-    pub fn shader_index(self) -> u32 {
-        match self {
-            MarkLink::Off => 0,
-            MarkLink::Glow => 2,
-            MarkLink::Cut => 4,
-            MarkLink::Reach => 5,
-        }
-    }
-}
-
 impl HighlightExtremes {
     pub fn marks_melody(self) -> bool {
         matches!(self, HighlightExtremes::Melody | HighlightExtremes::Both)

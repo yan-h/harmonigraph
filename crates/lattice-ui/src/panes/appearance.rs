@@ -5,7 +5,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, MarkLink, NodeStyle, OuterStyle};
+use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -138,38 +138,21 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                 ],
             );
             // The marks are full rings bracketing the octave band (bass
-            // inside, melody outside), which says the NODE carries the
-            // melody without saying which of its octaves does. These are
-            // candidates for putting that back, switchable to compare.
+            // inside, melody outside), each slit either side of the octave
+            // responsible so that stretch reads as its own piece. This
+            // fades everything BUT that stretch, from a whole ring down to
+            // just the arc over the marked octave.
             ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
-                choice_row(
-                    ui,
-                    "Link",
-                    &mut state.view.mark_link,
-                    &[
-                        (MarkLink::Off, "None", "A plain unbroken ring"),
-                        (
-                            MarkLink::Glow,
-                            "Glow",
-                            "The ring is dim all round and comes up to full over \
-                             its octave's sector",
-                        ),
-                        (
-                            MarkLink::Cut,
-                            "Cut",
-                            "The ring is slit either side of its octave, so that \
-                             stretch reads as a separate piece. The slits are \
-                             the gap between octaves exactly -- same width, \
-                             same edge -- so Gap 0 leaves no slit",
-                        ),
-                        (
-                            MarkLink::Reach,
-                            "Reach",
-                            "The octave's own sector grows across the gap to \
-                             touch the ring",
-                        ),
-                    ],
-                );
+                ValueBar::new(&mut state.view.mark_unlinked, 0.0..=1.0, "Unlinked")
+                    .show(ui)
+                    .on_hover_text(
+                        "Opacity of the rest of the ring -- the part cut off \
+                         from the marked octave's sector. The stretch beside \
+                         that sector always draws full. 1 keeps the whole \
+                         circle, 0 leaves only the arc over the marked octave. \
+                         The slits come from Gap, so Gap 0 leaves nothing to \
+                         separate and this does nothing",
+                    );
             });
 
             // Home grid: the always-drawn structural layer -- the faint

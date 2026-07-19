@@ -371,7 +371,7 @@ impl LatticeCallback {
                 ],
                 misc5: [
                     scene.grid_thickness,
-                    scene.mark_link.shader_index() as f32,
+                    scene.mark_unlinked,
                     scene.outer_gap,
                     0.0,
                 ],

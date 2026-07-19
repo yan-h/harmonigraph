@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkLink, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -213,10 +213,10 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// How the melody/bass rings point back at the sector they came from
-    /// (see [`MarkLink`]). Which NOTES are marked is baked into each node's
-    /// `melody_slots`/`bass_slots`.
-    pub mark_link: MarkLink,
+    /// Opacity of the part of each mark ring cut off from the octave that
+    /// owns it (see [`ViewConfig::mark_unlinked`]). Already clamped. Which
+    /// NOTES are marked is baked into each node's `melody_slots`/`bass_slots`.
+    pub mark_unlinked: f32,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],

@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkLink, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -141,10 +141,21 @@ pub struct ViewConfig {
     /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
-    /// How each mark ring points back at the octave sector responsible for
-    /// it (see [`MarkLink`]).
-    #[serde(default)]
-    pub mark_link: MarkLink,
+    /// Opacity of the part of a mark ring that is cut off from the octave
+    /// responsible for it, 0..1.
+    ///
+    /// Each ring is slit at that octave's two sector boundaries — the slit
+    /// IS the gap between two octaves, continued outward — which leaves the
+    /// stretch of ring belonging to the marked octave separated from the
+    /// remainder of the circle. That stretch always draws at full strength;
+    /// this fades everything else. 1 keeps the whole circle (the ring reads
+    /// as a ring, merely broken); 0 leaves only the arc over the marked
+    /// octave, which says WHICH octave loudly at the cost of the shape.
+    ///
+    /// A Gap of 0 leaves no slit, so there is nothing to separate and this
+    /// has no effect.
+    #[serde(default = "default_mark_unlinked")]
+    pub mark_unlinked: f32,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -240,6 +251,12 @@ fn default_core_solidity() -> f32 {
 /// Crisp octave glyphs by default (the classic look, identity end of the
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
+    1.0
+}
+
+/// The whole circle at full strength: the ring reads as a ring, and the
+/// slits alone say which octave owns it.
+fn default_mark_unlinked() -> f32 {
     1.0
 }
 
@@ -392,7 +409,7 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            mark_link: MarkLink::default(),
+            mark_unlinked: default_mark_unlinked(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,
