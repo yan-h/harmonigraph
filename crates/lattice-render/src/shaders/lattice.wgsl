@@ -42,7 +42,8 @@ struct Uniforms {
     // (not the note hue) and never snaps color when the voice is pruned.
     node_idle: vec4<f32>,
     // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
-    // core layer runs on. y/z/w unused.
+    // core layer runs on. y: outer solidity (0 = soft glowy glyphs, 1 =
+    // crisp octave shapes). z/w unused.
     misc4: vec4<f32>,
 };
 
@@ -204,6 +205,11 @@ const HOOP_LEVEL: f32 = 0.30;
 // Ghost coverage of a silent Slices slot when the backdrop is on, scaled
 // by the note's activation so ghosts fade out with the pitch class.
 const GHOST_LEVEL: f32 = 0.16;
+// How far the outer glyphs' soft edge spreads at outer solidity 0, as a
+// fraction of the band width (added to the screen-constant aa). ~1 band
+// width makes the default dots melt into diffuse glows; smaller keeps them
+// tighter. Tunes the soft end of the octave solidity slider.
+const OUTER_GLOW_SOFT: f32 = 1.0;
 // The classic disc-edge radius: normalizes the field paint to the sized
 // orb, and stands in for the core radius where a coreless node still needs
 // one (channel 14's outline ring).
@@ -665,6 +671,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph_rgb = node_glyph_rgb;
 
     let backdrop = u.misc3.w > 0.5;
+    // Outer solidity (u.misc4.y, 0..1) is the octave layer's own
+    // crisp/soft knob: it widens every glyph's soft edge (proportional to
+    // the band width so narrow bands soften proportionally), so at 1 the
+    // shapes are crisp (the classic look) and toward 0 they melt into soft
+    // glowy marks. It only feeds the edge width, so shapes and angles stay
+    // put. Mirrors the core's solidity.
+    let outer_aa = aa + (1.0 - u.misc4.y) * OUTER_GLOW_SOFT * (u.misc3.z - u.misc3.y);
     if mode != 0u {
         // Sounding slots draw bright, tinted by their own pitch, each
         // fading on its own envelope. The backdrop flag (its own
@@ -674,7 +687,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // draws silent slots as ghosts in the loop below.
         if backdrop && mode == 1u {
             let hoop_r = (u.misc3.y + u.misc3.z) * 0.5;
-            let hoop = aa_inside(HOOP_HALF, abs(d - hoop_r), aa);
+            let hoop = aa_inside(HOOP_HALF, abs(d - hoop_r), outer_aa);
             glyph = hoop * HOOP_LEVEL * presence;
         }
         let ghosted = backdrop && mode == 5u;
@@ -683,7 +696,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             if level <= 0.0 && !(ghosted && presence > 0.0) {
                 continue;
             }
-            let shape = outer_glyph(mode, i, in.cents, in.uv, aa);
+            let shape = outer_glyph(mode, i, in.cents, in.uv, outer_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.

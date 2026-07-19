@@ -136,7 +136,8 @@ struct Uniforms {
     /// shows the note's own color or snaps color when the voice is pruned.
     node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
-    /// core layer runs on; y/z/w unused. (The blit pipeline binds only the
+    /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
+    /// crisp octave shapes); z/w unused. (The blit pipeline binds only the
     /// head of this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
 }
@@ -334,7 +335,7 @@ impl LatticeCallback {
                 ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
                 node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
-                misc4: [scene.core_solidity, 0.0, 0.0, 0.0],
+                misc4: [scene.core_solidity, scene.outer_solidity, 0.0, 0.0],
             },
             target_format,
             pane_id,
@@ -1192,6 +1193,7 @@ mod tests {
             outer_inner: 0.545,
             outer_outer: 0.795,
             outer_backdrop: false,
+            outer_solidity: 1.0,
             edges,
             grid,
             dot_ramp: std::array::from_fn(|k| {

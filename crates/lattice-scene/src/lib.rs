@@ -245,6 +245,12 @@ pub struct ViewConfig {
     /// implicitly tied to "core off"; now its own toggle.
     #[serde(default)]
     pub outer_backdrop: bool,
+    /// The outer glyphs' solidity, 0..1 (mirrors [`core_solidity`] for the
+    /// octave layer): 1 draws crisp shapes (the classic look), and toward 0
+    /// their soft edges spread until they melt into soft glowy marks. Only
+    /// widens the glyph edges — shapes and angles are unchanged.
+    #[serde(default = "default_outer_solidity")]
+    pub outer_solidity: f32,
     /// Load-only shim: the short-lived NodeBody build's blobs set this,
     /// and [`ViewConfig::migrate_legacy`] folds it into core/outer. Never
     /// saved.
@@ -290,6 +296,12 @@ fn default_core_radius() -> f32 {
 /// Solid orb by default — the classic look, and the identity end of the
 /// solidity axis.
 fn default_core_solidity() -> f32 {
+    1.0
+}
+
+/// Crisp octave glyphs by default (the classic look, identity end of the
+/// outer solidity axis).
+fn default_outer_solidity() -> f32 {
     1.0
 }
 
@@ -389,6 +401,7 @@ impl Default for ViewConfig {
             outer_inner: default_outer_inner(),
             outer_outer: default_outer_outer(),
             outer_backdrop: false,
+            outer_solidity: default_outer_solidity(),
             node_body: LegacyNodeBody::Disc,
             show_chord_edges: false,
             meantone: false,
@@ -714,6 +727,9 @@ pub struct Scene {
     /// ghost the silent octaves faintly to complete the ring. Independent
     /// of the core.
     pub outer_backdrop: bool,
+    /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
+    /// 1 crisp, toward 0 the glyph edges spread into soft glows.
+    pub outer_solidity: f32,
     /// Chord edges (empty when the toggle is off).
     pub edges: Vec<EdgeInstance>,
     /// The faint background grid (see [`derive_grid`]): one segment per
@@ -899,6 +915,7 @@ pub fn derive_scene(
     let core_solidity = view.core_solidity.clamp(0.0, 1.0);
     let outer_inner = view.outer_inner.clamp(0.0, 0.9);
     let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
+    let outer_solidity = view.outer_solidity.clamp(0.0, 1.0);
 
     Scene {
         nodes,
@@ -912,6 +929,7 @@ pub fn derive_scene(
         outer_inner,
         outer_outer,
         outer_backdrop: view.outer_backdrop,
+        outer_solidity,
         edges,
         grid,
         dot_ramp: pitch_ramp_lut(),
@@ -1533,8 +1551,8 @@ mod tests {
         assert_eq!(scene.core_solidity, 0.25);
         assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.5));
 
-        // Solidity is clamped into 0..1 before it reaches the shader.
-        let view = ViewConfig { core_solidity: 4.0, ..view };
+        // Both solidities are clamped into 0..1 before they reach the shader.
+        let view = ViewConfig { core_solidity: 4.0, outer_solidity: -1.0, ..view };
         let scene = scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
@@ -1543,6 +1561,7 @@ mod tests {
             0.0,
         );
         assert_eq!(scene.core_solidity, 1.0);
+        assert_eq!(scene.outer_solidity, 0.0);
     }
 
     #[test]

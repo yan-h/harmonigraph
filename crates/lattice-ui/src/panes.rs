@@ -713,6 +713,13 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         ValueBar::new(&mut state.view.outer_outer, 0.2..=1.0, "Outer outer")
             .show(ui)
             .on_hover_text("Octave band's outer radius");
+        // The octave layer's own crisp/soft knob, mirroring the core's.
+        ValueBar::new(&mut state.view.outer_solidity, 0.0..=1.0, "Octave solidity")
+            .show(ui)
+            .on_hover_text(
+                "0 = soft glowy octave marks, 1 = the crisp classic shapes; \
+                 only softens the glyph edges, shapes and angles stay put",
+            );
     });
     // Backdrop: the outer layer's own cohesion device (independent of the
     // core). Only Dots (hoop) and Slices (ghost slots) draw one; Rings is
