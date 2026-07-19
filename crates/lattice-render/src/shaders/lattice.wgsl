@@ -49,6 +49,14 @@ struct Uniforms {
 
 const TAU: f32 = 6.2831853;
 
+// Billboard headroom past the octave band's outer edge (uv 1.0): the quad
+// and its uv are both scaled by this, so the uv->world mapping is
+// unchanged (disc, band, glyphs, glow all render identically) but there is
+// margin out to this radius for a low-solidity glyph's soft edge to spread
+// into instead of being clipped flat by the old quad boundary. Costs a bit
+// of fill (bigger quads); kept modest so quads barely reach axis neighbors.
+const QUAD_MARGIN: f32 = 1.3;
+
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 struct Instance {
@@ -102,15 +110,17 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // Node size never responds to notes or hover: idle, active, and hovered
     // nodes are all the same size, so a note changes only brightness and
     // glow. Size DOES carry the depth cue (inst.scale). (The quad is twice
-    // the disc radius to leave room for the glow.)
-    let radius = u.misc.y * 0.90 * 2.0 * inst.scale;
+    // the disc radius to leave room for the glow, plus QUAD_MARGIN for the
+    // outer glyphs' soft edge; uv is scaled to match so content is
+    // unchanged — see QUAD_MARGIN.)
+    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN * inst.scale;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
 
     var out: VsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner;
+    out.uv = corner * QUAD_MARGIN;
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
@@ -722,6 +732,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
     }
+    // Fade a soft (low-solidity) glyph out across the billboard's margin
+    // instead of letting the quad boundary clip it flat. The fade starts at
+    // uv 1.0 — the outer band's own limit — so a crisp glyph (which never
+    // reaches past its band, all within uv 1.0) is untouched; only the soft
+    // overflow into the QUAD_MARGIN headroom is eased to zero at the edge.
+    glyph = glyph * (1.0 - smoothstep(1.0, QUAD_MARGIN, d));
 
     // "Over" composite: glyph over (disc + glow), premultiplied.
     let alpha = glyph + base_alpha * (1.0 - glyph);
