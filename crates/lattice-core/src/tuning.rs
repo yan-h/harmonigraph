@@ -18,6 +18,15 @@ pub const SEVEN_12TET: f32 = 1000.0;
 pub const CENTS_TO_MICROCENTS: u32 = 1_000_000;
 pub const OCTAVE_MICROCENTS: u32 = 1_200 * CENTS_TO_MICROCENTS;
 
+/// Quantize a value in cents to integer microcents. This is the single
+/// f32→integer boundary for tuning: the host params and MIDI arrive as f32
+/// cents and are rounded here, once, after which all lattice pitch math is
+/// exact integer arithmetic. Done in f64 so the multiply itself doesn't
+/// lose bits for large cent values.
+pub fn microcents(cents: f32) -> i32 {
+    (f64::from(cents) * f64::from(CENTS_TO_MICROCENTS)).round() as i32
+}
+
 /// The syntonic comma (81/80, ~21.506¢): the gap between four just fifths
 /// and a just major third. Meantone temperaments temper it out.
 pub const SYNTONIC_COMMA: f32 = 4.0 * THREE_JUST - 2.0 * 1200.0 - FIVE_JUST;
@@ -117,62 +126,96 @@ impl PitchClassDistance {
     }
 }
 
-/// Adjustable tuning of the lattice: the size in cents of each prime
-/// harmonic step, plus a global offset for the origin (C) and the tolerance
-/// used when matching played pitches to lattice nodes.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Adjustable tuning of the lattice, stored in integer microcents so lattice
+/// pitch arithmetic is exact. The f32 cent values from the host params (and
+/// MIDI) are quantized once, in [`Tuning::from_cents`]; everything downstream
+/// — [`Tuning::pitch_class`], [`Tuning::matches`], the meantone lock — is
+/// integer math, and only display converts back to cents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tuning {
-    /// Offset of the lattice origin from concert C, in cents.
-    pub c_offset: f32,
-    /// Size of the prime-3 step (a perfect fifth), in cents.
-    pub three: f32,
-    /// Size of the prime-5 step (a major third), in cents.
-    pub five: f32,
-    /// Size of the prime-7 step (a harmonic seventh), in cents.
-    pub seven: f32,
-    /// How far (in cents) a played pitch may be from a node's pitch class
-    /// and still light that node up.
-    pub tolerance: f32,
+    /// Offset of the lattice origin from concert C, in microcents.
+    pub c_offset: i32,
+    /// Size of the prime-3 step (a perfect fifth), in microcents.
+    pub three: i32,
+    /// Size of the prime-5 step (a major third), in microcents.
+    pub five: i32,
+    /// Size of the prime-7 step (a harmonic seventh), in microcents.
+    pub seven: i32,
+    /// How far a played pitch may sit from a node's pitch class and still
+    /// light that node up, in microcents.
+    pub tolerance: i32,
 }
 
 impl Default for Tuning {
     /// 12-TET defaults, matching midi_lattice v1.
     fn default() -> Self {
-        Tuning {
-            c_offset: 0.0,
-            three: THREE_12TET,
-            five: FIVE_12TET,
-            seven: SEVEN_12TET,
-            tolerance: 0.5,
-        }
+        Tuning::from_cents(0.0, THREE_12TET, FIVE_12TET, SEVEN_12TET, 0.5)
     }
 }
 
 impl Tuning {
-    /// The 12-TET default with the three prime steps retuned to just.
-    pub fn just() -> Self {
+    /// Build a tuning from cent values, quantizing each to microcents. This
+    /// is the only place cents become microcents; keeping it at the
+    /// param/MIDI boundary is what lets all lattice math stay exact.
+    pub fn from_cents(c_offset: f32, three: f32, five: f32, seven: f32, tolerance: f32) -> Self {
         Tuning {
-            three: THREE_JUST,
-            five: FIVE_JUST,
-            seven: SEVEN_JUST,
-            ..Tuning::default()
+            c_offset: microcents(c_offset),
+            three: microcents(three),
+            five: microcents(five),
+            seven: microcents(seven),
+            tolerance: microcents(tolerance),
         }
     }
 
-    /// The pitch class of a lattice position under this tuning.
+    /// The 12-TET default with the three prime steps retuned to just.
+    pub fn just() -> Self {
+        Tuning::from_cents(0.0, THREE_JUST, FIVE_JUST, SEVEN_JUST, 0.5)
+    }
+
+    /// The pitch class of a lattice position under this tuning. Pure integer
+    /// microcent arithmetic — `count * step` is exact, so algebraically equal
+    /// pitches (e.g. meantone comma-equivalents) come out bit-identical
+    /// instead of drifting by an f32 ulp. i64 accumulation: a single term can
+    /// reach ~28 · 1e9, past i32.
     pub fn pitch_class(&self, pos: crate::coords::LatticePos) -> PitchClass {
-        PitchClass::from_cents(
-            self.c_offset
-                + pos.threes as f32 * self.three
-                + pos.fives as f32 * self.five
-                + pos.sevens as f32 * self.seven,
-        )
+        let total = i64::from(self.c_offset)
+            + i64::from(pos.threes) * i64::from(self.three)
+            + i64::from(pos.fives) * i64::from(self.five)
+            + i64::from(pos.sevens) * i64::from(self.seven);
+        PitchClass(total.rem_euclid(i64::from(OCTAVE_MICROCENTS)) as u32)
     }
 
     /// Whether a played pitch class matches a node's pitch class within the
     /// configured tolerance.
     pub fn matches(&self, played: PitchClass, node: PitchClass) -> bool {
-        played.distance_to(node) <= PitchClassDistance::from_cents(self.tolerance)
+        played.distance_to(node) <= PitchClassDistance(self.tolerance.max(0) as u32)
+    }
+
+    /// Lock the major third to four perfect fifths minus two octaves — the
+    /// defining meantone identity — exactly, in integer microcents. Because
+    /// `4 * three` is exact, every syntonic-comma-equivalent pair (four
+    /// fifths vs. one third) then collapses to a single pitch class.
+    pub fn lock_meantone(&mut self) {
+        let five = 4 * i64::from(self.three) - 2 * i64::from(OCTAVE_MICROCENTS);
+        self.five = five as i32;
+    }
+
+    /// Step sizes back in cents, for the display / host-param boundary.
+    pub fn c_offset_cents(&self) -> f32 {
+        self.c_offset as f32 / CENTS_TO_MICROCENTS as f32
+    }
+    pub fn three_cents(&self) -> f32 {
+        self.three as f32 / CENTS_TO_MICROCENTS as f32
+    }
+    pub fn five_cents(&self) -> f32 {
+        self.five as f32 / CENTS_TO_MICROCENTS as f32
+    }
+    pub fn seven_cents(&self) -> f32 {
+        self.seven as f32 / CENTS_TO_MICROCENTS as f32
+    }
+    /// The matching tolerance in cents, for the display / host-param layer.
+    pub fn tolerance_cents(&self) -> f32 {
+        self.tolerance as f32 / CENTS_TO_MICROCENTS as f32
     }
 }
 
@@ -333,10 +376,42 @@ mod tests {
 
     #[test]
     fn matching_respects_tolerance() {
-        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
+        let tuning = Tuning { tolerance: microcents(5.0), ..Tuning::just() };
         let node = tuning.pitch_class(LatticePos::new(1, 0, 0)); // 701.955
         assert!(tuning.matches(PitchClass::from_cents(700.0), node));
         assert!(!tuning.matches(PitchClass::from_cents(690.0), node));
+    }
+
+    #[test]
+    fn meantone_comma_equivalents_are_bit_identical() {
+        // Four fifths equal one major third plus two octaves in any meantone
+        // temperament, so (t, f) and (t+4, f-1) are the same pitch. Integer
+        // microcents make this hold *exactly* for every fifth and every
+        // coordinate — the f32 pipeline drifted by up to ~0.004¢ for
+        // non-power-of-two coordinates, which is what motivated this.
+        for &three in &[700.0f32, 701.955, 696.5784, 700.0371, 703.4] {
+            let mut tuning = Tuning::from_cents(0.0, three, 0.0, SEVEN_12TET, 0.5);
+            tuning.lock_meantone();
+            for t in -12..=12 {
+                for f in -6..=6 {
+                    let a = tuning.pitch_class(LatticePos::new(t, f, 0));
+                    let b = tuning.pitch_class(LatticePos::new(t + 4, f - 1, 0));
+                    assert_eq!(a, b, "three={three} ({t},{f}) vs ({},{})", t + 4, f - 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lock_meantone_sets_the_exact_derived_third() {
+        // The locked third is 4·fifth − 2 octaves, computed in integers.
+        let mut tuning = Tuning::from_cents(0.0, 700.0, 386.0 /*ignored*/, SEVEN_12TET, 0.5);
+        tuning.lock_meantone();
+        // 12-TET: 4·700 − 2400 = 400¢.
+        assert_eq!(tuning.five, microcents(400.0));
+        // The general identity, evaluated in i64 (4·three overflows i32).
+        let expected = 4 * i64::from(tuning.three) - 2 * i64::from(OCTAVE_MICROCENTS);
+        assert_eq!(i64::from(tuning.five), expected);
     }
 
     #[test]
