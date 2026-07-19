@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkLink, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -105,10 +105,19 @@ pub struct NodeInstance {
     pub melody_slots: u32,
     /// The same for the bass — the lowest held note. A slot set in BOTH
     /// masks is a note that is at once the melody and the bass (a lone held
-    /// note, or the two ends of a chord voiced inside one octave); the
-    /// shader then draws the mark split between the two colors rather than
-    /// dropping it. See [`HighlightExtremes`].
+    /// note, or the two ends of a chord voiced inside one octave). The two
+    /// marks are drawn as rings at different radii, so that costs nothing:
+    /// they simply both draw. See [`HighlightExtremes`].
     pub bass_slots: u32,
+    /// Envelope of each mark, 0..1, so a mark fades out with its note
+    /// instead of snapping off at release. Separate from `activation`
+    /// because the marked voice can be fading while a different, still-held
+    /// voice keeps the NODE at full — the mark has to follow its own note.
+    ///
+    /// Per node rather than per slot because the mark is a ring around the
+    /// whole node; the slots above only say which sector it links back to.
+    pub melody_level: f32,
+    pub bass_level: f32,
 }
 
 impl NodeInstance {
@@ -192,6 +201,10 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
+    /// How the melody/bass rings point back at the sector they came from
+    /// (see [`MarkLink`]). Which NOTES are marked is baked into each node's
+    /// `melody_slots`/`bass_slots`.
+    pub mark_link: MarkLink,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],

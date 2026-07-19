@@ -5,7 +5,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle};
+use lattice_scene::{HighlightExtremes, IdleMarker, MarkLink, NodeStyle, OuterStyle};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -117,13 +117,43 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     (
                         HighlightExtremes::Both,
                         "Both",
-                        "Mark both, each in its own color. An indicator claimed \
-                         by both ends at once -- a lone held note, or a chord \
-                         whose top and bottom share a pitch class -- splits \
-                         between the two colors rather than going unmarked",
+                        "Mark both, each in its own color. The two rings sit at \
+                         different radii, so a note that is at once the highest \
+                         and the lowest -- a lone held note, or a chord whose \
+                         top and bottom share a pitch class -- simply gets both",
                     ),
                 ],
             );
+            // The marks are full rings bracketing the octave band (bass
+            // inside, melody outside), which says the NODE carries the
+            // melody without saying which of its octaves does. These are
+            // candidates for putting that back, switchable to compare.
+            ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
+                choice_row(
+                    ui,
+                    "Link",
+                    &mut state.view.mark_link,
+                    &[
+                        (MarkLink::Off, "None", "A plain unbroken ring"),
+                        (
+                            MarkLink::Bulge,
+                            "Bulge",
+                            "The ring swells where its octave's sector is behind it",
+                        ),
+                        (
+                            MarkLink::Glow,
+                            "Glow",
+                            "The ring is dim all round and comes up to full over \
+                             its octave's sector",
+                        ),
+                        (
+                            MarkLink::Spur,
+                            "Spur",
+                            "A radial stub bridges the ring and its octave's sector",
+                        ),
+                    ],
+                );
+            });
 
             // Home grid: the always-drawn structural layer -- the faint
             // lines between node positions AND the idle marker sitting at

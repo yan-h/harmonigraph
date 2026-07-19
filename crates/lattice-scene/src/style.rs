@@ -179,6 +179,45 @@ pub enum HighlightExtremes {
     Both,
 }
 
+/// How a melody/bass ring points back at the octave sector it came from.
+///
+/// The marks are full rings — the bass just inside the octave band, the
+/// melody just outside — which is what lets both draw at full weight even
+/// when one note is both ends of the chord. The cost of a full ring is that
+/// it says the NODE carries the melody without saying which of its octaves
+/// does, and on a chord voiced inside one pitch class that is the whole
+/// question. These are the candidates for putting that back; they are
+/// switchable so they can be compared live, the same way the octave glyph
+/// shapes were before one of them won.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MarkLink {
+    /// Nothing: a plain unbroken ring. The quietest, and honest about
+    /// marking the node rather than one octave of it.
+    Off,
+    /// The ring swells where the responsible sector is behind it. Keeps an
+    /// unbroken circle — the shape reads first, the swell second.
+    #[default]
+    Bulge,
+    /// The ring is dim all the way round and comes up to full only over the
+    /// responsible sector, so the eye lands there first.
+    Glow,
+    /// A radial stub bridges the gap between the ring and its sector,
+    /// physically joining the two. The most literal, and the loudest.
+    Spur,
+}
+
+impl MarkLink {
+    /// Index used by the shader (uniform `misc5.y`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            MarkLink::Off => 0,
+            MarkLink::Bulge => 1,
+            MarkLink::Glow => 2,
+            MarkLink::Spur => 3,
+        }
+    }
+}
+
 impl HighlightExtremes {
     pub fn marks_melody(self) -> bool {
         matches!(self, HighlightExtremes::Melody | HighlightExtremes::Both)

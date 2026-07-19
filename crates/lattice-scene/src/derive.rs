@@ -98,6 +98,8 @@ pub fn derive_scene(
         let mut seed = 0.0f32;
         let mut melody_slots = 0u32;
         let mut bass_slots = 0u32;
+        let mut melody_level = 0.0f32;
+        let mut bass_level = 0.0f32;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -124,17 +126,19 @@ pub fn derive_scene(
 
                 // Mark the outer notes in the slot they sound in. Set on
                 // every node the voice matches, exactly as its activation
-                // is, so the mark can't disagree with the lighting. The mark
-                // needs no envelope of its own: it rides its slot's, which
-                // is the marked voice's own, and is finer-grained than the
-                // node's — one node can carry a fading octave and a held one
-                // at once.
+                // is, so the mark can't disagree with the lighting.
+                //
+                // The level is the strongest marked voice ON THIS NODE, not
+                // the node's own activation: a released melody fades while a
+                // still-held voice can keep the node at full.
                 let (is_melody, is_bass) = marks(voice, view.highlight_extremes, live_extremes);
                 if is_melody {
                     melody_slots |= 1 << slot;
+                    melody_level = melody_level.max(envelope);
                 }
                 if is_bass {
                     bass_slots |= 1 << slot;
+                    bass_level = bass_level.max(envelope);
                 }
             }
         }
@@ -164,6 +168,8 @@ pub fn derive_scene(
             cents: node_pc.to_cents(),
             melody_slots,
             bass_slots,
+            melody_level,
+            bass_level,
         });
     }
 
@@ -200,6 +206,7 @@ pub fn derive_scene(
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
+        mark_link: view.mark_link,
         pitch_lut: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,

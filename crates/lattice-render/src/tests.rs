@@ -108,6 +108,8 @@ fn parity_scene() -> Scene {
             // and one claiming both slots at once (the split mark).
             melody_slots: if i == 0 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
             bass_slots: if i == 2 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
+            melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
+            bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
         });
     }
     let edges = vec![lattice_scene::EdgeInstance {
@@ -139,6 +141,7 @@ fn parity_scene() -> Scene {
         time: 1.25,
         node_radius: 0.34,
         outer_style: Default::default(),
+        mark_link: Default::default(),
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -380,6 +383,10 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         cents: 0.0,
         melody_slots,
         bass_slots,
+        // A mark draws at the level its own note is at; these stand in for
+        // a freshly-held note.
+        melody_level: f32::from(melody_slots != 0),
+        bass_level: f32::from(bass_slots != 0),
     }];
     scene.edges.clear();
     scene.grid.clear();
@@ -390,7 +397,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
 }
 
 #[test]
-fn melody_bass_marks_are_visible_on_the_octave_edge() {
+fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
@@ -447,17 +454,14 @@ fn melody_bass_marks_are_visible_on_the_octave_edge() {
     let melody = shot(&single_marked_node(1, 0), 41);
     let both_px = changed_px(&melody);
     eprintln!("node {node_px} px; mark {both_px}");
-    // A floor, not a target, and measured against the node's whole lit
-    // footprint (glow included), so a few percent is a clearly visible arc
-    // rather than a smudge -- these were checked by eye at the numbers they
-    // now guard. The mark is deliberately restrained: it rides the OUTER
-    // EDGE of one octave glyph and must not shout over the note colors,
-    // which are what the lattice is for. But it does have to be findable --
-    // an early version drew a sub-pixel ring that read as nothing at all in
-    // the DAW (well under 1%), which is what this catches. Current: ~3.1%.
+    // A floor, not a target, measured against the node's whole lit
+    // footprint (glow included). The mark is a full ring bracketing the
+    // octave band, so it claims a real share; the floor exists because an
+    // early version drew a sub-pixel arc that read as nothing at all in the
+    // DAW (well under 1%), which is what this catches. Current: ~36%.
     assert!(
-        both_px * 40 > node_px,
-        "the octave-edge mark covers too little of the node to find: \
+        both_px * 8 > node_px,
+        "the mark ring covers too little of the node to find: \
          {both_px} px of {node_px}"
     );
 
@@ -465,29 +469,29 @@ fn melody_bass_marks_are_visible_on_the_octave_edge() {
     let off = shot(&single_marked_node(0, 0), 44);
     assert_eq!(changed_px(&off), 0, "an unmarked node must draw no mark");
 
-    // An indicator claimed by BOTH ends -- a lone held note, or a chord
-    // whose top and bottom share a pitch class -- used to be blanked, so
-    // the outline vanished exactly when two things were true at once. It
-    // now splits between the two colors, and must draw as much as either
-    // end alone does. This is the regression that guards that.
+    // A note claimed by BOTH ends -- a lone held note, or a chord whose top
+    // and bottom share a pitch class -- used to be blanked, so the mark
+    // vanished exactly when two things were true at once. The two ends are
+    // now rings at DIFFERENT radii, so both simply draw: the result must
+    // cover at least as much as one end alone. This guards that.
     let split = shot(&single_marked_node(1, 1), 45);
     let split_px = changed_px(&split);
     eprintln!("split mark {split_px} px of {node_px}");
     assert!(
-        split_px * 2 >= both_px,
+        split_px >= both_px,
         "a mark claimed by both ends all but disappeared: \
          {split_px} px against {both_px} for one end alone"
     );
 
-    // ...and it really is BOTH colors, not one end quietly winning: the
-    // melody-only and bass-only pictures must each differ from the split.
+    // ...and it really is BOTH rings, not one end quietly winning: the
+    // melody-only and bass-only pictures must each differ from it.
     let bass_only = shot(&single_marked_node(0, 1), 46);
     let differs = |a: &[u8], b: &[u8]| {
         a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
     };
     assert!(
         differs(&split, &melody) > 0 && differs(&split, &bass_only) > 0,
-        "the split mark is indistinguishable from a single-ended one"
+        "a both-ends mark is indistinguishable from a single-ended one"
     );
 }
 
@@ -590,11 +594,11 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         .filter(|(a, b)| a != b)
         .count();
     eprintln!("chord: {lit} lit px, {changed} changed by the marks");
-    // Same floor and reasoning as the by-hand test above; at this node
-    // density the rim's screen-space minimum (MARK_RIM_MIN_AA) is what
-    // keeps it from going sub-pixel. Current: ~3.0%.
+    // Same reasoning as the by-hand test above; at this node density the
+    // ring's screen-space minimum (MARK_RING_MIN_AA) is what keeps it from
+    // going sub-pixel.
     assert!(
-        changed * 40 > lit,
+        changed * 20 > lit,
         "turning the marks on barely changed a real chord: \
          {changed} px of {lit} lit"
     );
@@ -651,6 +655,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 

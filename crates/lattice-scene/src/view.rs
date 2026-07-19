@@ -3,7 +3,9 @@
 //! [`FrameParams`] mirror of the host-automatable appearance parameters.
 
 use crate::skin;
-use crate::style::{CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle};
+use crate::style::{
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkLink, NodeStyle, OuterStyle,
+};
 use lattice_core::{coords, LatticePos};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
@@ -128,6 +130,10 @@ pub struct ViewConfig {
     /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
+    /// How each mark ring points back at the octave sector responsible for
+    /// it (see [`MarkLink`]).
+    #[serde(default)]
+    pub mark_link: MarkLink,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -372,6 +378,7 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
+            mark_link: MarkLink::default(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,

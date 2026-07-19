@@ -170,9 +170,10 @@ const _: () = assert!(lattice_scene::PITCH_LUT_N == 16);
 struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
-    /// x: activation, w: outlined. y and z are padding: the shader reads
-    /// only x and w (see lattice.wgsl), and the vec4 is kept whole so the
-    /// vertex layout and the WGSL struct stay unchanged.
+    /// x: activation, y: melody mark level, z: bass mark level, w: outlined
+    /// (see lattice.wgsl). The mark levels ride here rather than in a vertex
+    /// attribute of their own because y and z were dead padding — the vec4
+    /// was always shipped whole.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
@@ -303,7 +304,12 @@ impl LatticeCallback {
             .map(|(_, n)| GpuInstance {
                 world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
-                params: [n.activation, 0.0, 0.0, if n.outlined { 1.0 } else { 0.0 }],
+                params: [
+                    n.activation,
+                    n.melody_level,
+                    n.bass_level,
+                    if n.outlined { 1.0 } else { 0.0 },
+                ],
                 octaves: pack_octaves(&n.octaves),
                 seed: n.seed,
                 cents: n.cents,
@@ -360,7 +366,12 @@ impl LatticeCallback {
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],
-                misc5: [scene.grid_thickness, 0.0, 0.0, 0.0],
+                misc5: [
+                    scene.grid_thickness,
+                    scene.mark_link.shader_index() as f32,
+                    0.0,
+                    0.0,
+                ],
                 note_melody: lattice_scene::skin::active_skin().note_melody.to_array(),
                 note_bass: lattice_scene::skin::active_skin().note_bass.to_array(),
             },
