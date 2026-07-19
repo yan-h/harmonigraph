@@ -302,10 +302,11 @@ impl ViewConfig {
     /// (off), the old solid `Orb` becomes solidity 1, and the old glow-only
     /// mode (`Glow`, also the bare `"None"` token) becomes solidity 0. The
     /// one-build NodeBody experiment's octave-only bodies map onto that glow
-    /// (solidity 0) plus the matching outer style with the backdrop on
-    /// (Beads was dots-on-a-hoop, which is exactly what a Dots outer with
-    /// the backdrop draws; its band radii rode the slice_inner/slice_outer
-    /// fields, absorbed by the outer_inner/outer_outer aliases).
+    /// (solidity 0) plus the outer layer with its backdrop on. Each of those
+    /// bodies once had its own matching glyph shape; only slices survives,
+    /// so all three now land there. (Their band radii rode the
+    /// slice_inner/slice_outer fields, absorbed by the
+    /// outer_inner/outer_outer aliases.)
     pub fn migrate_legacy(&mut self) {
         // The backdrop's pre-opacity bool: on means full strength, which
         // is what that build drew.
@@ -320,14 +321,12 @@ impl ViewConfig {
             CoreStyle::On => {}
         }
 
-        let outer = match std::mem::take(&mut self.node_body) {
+        match std::mem::take(&mut self.node_body) {
             LegacyNodeBody::Disc => return,
-            LegacyNodeBody::Slices => OuterStyle::Slices,
-            LegacyNodeBody::Rings => OuterStyle::Rings,
-            LegacyNodeBody::Beads => OuterStyle::Dots,
-        };
+            LegacyNodeBody::Slices | LegacyNodeBody::Rings | LegacyNodeBody::Beads => {}
+        }
         self.core_solidity = 0.0;
-        self.outer_style = outer;
+        self.outer_style = OuterStyle::Slices;
         self.outer_backdrop = 1.0;
     }
 }

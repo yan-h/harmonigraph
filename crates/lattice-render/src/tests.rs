@@ -152,7 +152,7 @@ fn parity_scene() -> Scene {
         grid,
         grid_thickness: 1.0,
         node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
-        dot_ramp: std::array::from_fn(|k| {
+        pitch_lut: std::array::from_fn(|k| {
             Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
         }),
         darkest_pitch: 24.0,
@@ -651,5 +651,6 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 

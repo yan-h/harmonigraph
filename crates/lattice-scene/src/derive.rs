@@ -200,7 +200,7 @@ pub fn derive_scene(
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
-        dot_ramp: pitch_ramp_lut(),
+        pitch_lut: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,

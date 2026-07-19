@@ -3,7 +3,7 @@
 
 use crate::view::ViewConfig;
 use lattice_core::ChannelRole;
-use crate::DOT_RAMP_N;
+use crate::PITCH_LUT_N;
 use glam::Vec4;
 
 fn lch(l: f64, c: f64, h: f64) -> Vec4 {
@@ -29,24 +29,24 @@ fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
 }
 
 /// The pitch-gradient LCH ramp as a function of normalized height `t`
-/// (0..1). Shared by the node disc color and the dots octave style's
+/// (0..1). Shared by the node disc color and the octave glyphs' 
 /// per-dot tint, so a dot is the same color as the disc that pitch lights.
 fn pitch_ramp_lch(t: f64) -> Vec4 {
     lch(t * 80.0, 85.0 - t * 60.0, (-100.0 + t * 190.0).rem_euclid(360.0))
 }
 
-/// The pitch ramp sampled into [`DOT_RAMP_N`] colors evenly spaced over the
+/// The pitch ramp sampled into [`PITCH_LUT_N`] colors evenly spaced over the
 /// full `t` range, for the shader's per-dot color lookup (the shader maps a
 /// dot's pitch to a `t` and indexes this). Endpoints of the disc gradient
 /// are applied shader-side, so this LUT itself is range-independent.
-pub fn pitch_ramp_lut() -> [Vec4; DOT_RAMP_N] {
+pub fn pitch_ramp_lut() -> [Vec4; PITCH_LUT_N] {
     // Constant (range-independent, per the doc above) but each entry costs
     // several transcendentals through the LCH->sRGB conversion, and it's read
     // once per animating frame (~66/s). Compute it once and copy out the
     // cached array — same value, none of the per-frame color math.
-    static LUT: std::sync::OnceLock<[Vec4; DOT_RAMP_N]> = std::sync::OnceLock::new();
+    static LUT: std::sync::OnceLock<[Vec4; PITCH_LUT_N]> = std::sync::OnceLock::new();
     *LUT.get_or_init(|| {
-        std::array::from_fn(|k| pitch_ramp_lch(k as f64 / (DOT_RAMP_N - 1) as f64))
+        std::array::from_fn(|k| pitch_ramp_lch(k as f64 / (PITCH_LUT_N - 1) as f64))
     })
 }
 

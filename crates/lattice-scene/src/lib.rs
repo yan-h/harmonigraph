@@ -55,13 +55,13 @@ pub const OCTAVE_SLOTS: usize = 10;
 
 /// Seconds an octave indicator eases in after note-on. Keeps a fresh
 /// octave's color GROWING into the gas swirl instead of instantly
-/// repainting its share of the disc (and softens dots-mode pop-in);
+/// repainting its share of the disc (and softens glyph pop-in);
 /// short enough to still feel immediate.
 const OCTAVE_ATTACK_TIME: f64 = 0.15;
 
-/// Samples in the pitch->color lookup the dots octave style uses to tint
-/// each dot by its own octave's pitch. The shader mirrors this length.
-pub const DOT_RAMP_N: usize = 16;
+/// Samples in the pitch->color lookup the octave glyphs use to tint each
+/// slot by its own octave's pitch. The shader mirrors this length.
+pub const PITCH_LUT_N: usize = 16;
 
 /// One lattice node, ready for instanced rendering.
 #[derive(Clone, Copy, Debug)]
@@ -192,11 +192,11 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// Pitch->color lookup for the dots octave style, matching the disc
+    /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
-    pub dot_ramp: [Vec4; DOT_RAMP_N],
+    pub pitch_lut: [Vec4; PITCH_LUT_N],
     /// Gradient endpoints (MIDI notes) the shader maps a dot's pitch through
-    /// to index `dot_ramp`; mirror the disc coloring's `FrameParams`.
+    /// to index `pitch_lut`; mirrors the disc coloring's `FrameParams`.
     pub darkest_pitch: f32,
     pub brightest_pitch: f32,
     /// Offscreen render resolution multiplier (see [`ViewConfig`]); the

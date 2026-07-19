@@ -61,29 +61,24 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
             // as glyphs at each note's absolute-pitch angle within a radial
             // band. Independent of the Core.
             section(ui, "Octaves");
-            choice_row(
-                ui,
-                "Style",
-                &mut state.view.outer_style,
-                &[
-                    (OuterStyle::Off, "Off", "No octave indication"),
-                    (OuterStyle::Dots, "Dots", "A dot per sounding octave, filling the band"),
-                    (
-                        OuterStyle::Slices,
-                        "Slices",
-                        "Ring sectors spanning the band; band inner 0 = pie wedges",
-                    ),
-                    (
-                        OuterStyle::Rings,
-                        "Rings",
-                        "One concentric ring per sounding octave across the band, \
-                         lowest innermost",
-                    ),
-                ],
-            );
+            // One glyph shape (ring sectors) — the alternatives were
+            // switchable for live comparison and have been settled — so this
+            // is just whether the layer draws. The bool goes through the
+            // OuterStyle enum the persist and the shader still speak.
+            let mut show = state.view.outer_style != OuterStyle::Off;
+            if ui
+                .checkbox(&mut show, "Show octaves")
+                .on_hover_text(
+                    "Ring sectors spanning the band, one per sounding octave, \
+                     each at its own pitch's angle; band inner 0 = pie wedges",
+                )
+                .changed()
+            {
+                state.view.outer_style = if show { OuterStyle::Slices } else { OuterStyle::Off };
+            }
             // If the band bars cross, the scene keeps outer ahead of inner
             // rather than collapsing.
-            ui.add_enabled_ui(state.view.outer_style != OuterStyle::Off, |ui| {
+            ui.add_enabled_ui(show, |ui| {
                 ValueBar::new(&mut state.view.outer_inner, 0.0..=0.9, "Band inner")
                     .show(ui)
                     .on_hover_text("Octave band's inner radius; 0 reaches the center");
@@ -98,20 +93,14 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                          angles stay put",
                     );
                 // Backdrop: draw the silent octaves faintly so a lone octave
-                // still reads as a whole note. Only Dots (hoop) and Slices
-                // (ghost slots) have one; Rings is already a closed circle.
-                let has_backdrop =
-                    matches!(state.view.outer_style, OuterStyle::Dots | OuterStyle::Slices);
-                ui.add_enabled_ui(has_backdrop, |ui| {
-                    ValueBar::new(&mut state.view.outer_backdrop, 0.0..=1.0, "Backdrop")
-                        .show(ui)
-                        .on_hover_text(
-                            "Complete the octave ring: draw the silent octaves \
-                             faintly behind the sounding glyphs (Slices ghosts \
-                             its empty slots; Dots strings them on a hoop) so a \
-                             lone octave still reads as a whole note. 0 = off",
-                        );
-                });
+                // still reads as a whole note.
+                ValueBar::new(&mut state.view.outer_backdrop, 0.0..=1.0, "Backdrop")
+                    .show(ui)
+                    .on_hover_text(
+                        "Complete the octave ring: draw the silent octaves \
+                         faintly behind the sounding sectors, so a lone octave \
+                         still reads as a whole note. 0 = off",
+                    );
             });
 
             // Melody / bass: mark the outer held notes so a chord's top and

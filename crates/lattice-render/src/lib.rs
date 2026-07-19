@@ -122,7 +122,7 @@ struct Uniforms {
     /// (the shader converts its screen-pixel AA softness to render
     /// pixels with it); w: bloom strength, which blit.wgsl reads (this
     /// slot is NOT free). The dots style maps a dot's pitch through x/y
-    /// to index `dot_ramp`.
+    /// to index `pitch_lut`.
     misc2: [f32; 4],
     /// x: core radius in quad UV units (0 turns the core off); y/z: the
     /// outer octave layer's inner/outer band radii (same units, pre-
@@ -132,7 +132,7 @@ struct Uniforms {
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
-    dot_ramp: [[f32; 4]; lattice_scene::DOT_RAMP_N],
+    pitch_lut: [[f32; 4]; lattice_scene::PITCH_LUT_N],
     /// Idle node color (the view's grid color at full alpha, so the grid
     /// lines and idle markers read as one layer): the home-sheet
     /// placeholder ring is drawn in this ONE constant color, so a
@@ -161,9 +161,9 @@ struct Uniforms {
 // at runtime here, so fail the build instead.
 const _: () = assert!(lattice_scene::OCTAVE_SLOTS <= 12);
 
-// The shader declares `dot_ramp` with a literal length; keep the two in
+// The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
-const _: () = assert!(lattice_scene::DOT_RAMP_N == 16);
+const _: () = assert!(lattice_scene::PITCH_LUT_N == 16);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -352,7 +352,7 @@ impl LatticeCallback {
                     scene.outer_outer,
                     scene.outer_backdrop,
                 ],
-                dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
+                pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 node_idle: scene.node_idle.to_array(),
                 misc4: [
                     scene.core_solidity,

@@ -33,18 +33,18 @@ fn pitch_colored_channels_vary_with_pitch() {
 }
 
 #[test]
-fn dot_ramp_lut_reproduces_the_pitch_gradient() {
-    // The dots octave style tints each dot by sampling `pitch_ramp_lut`
-    // the way the shader does (linear interp across DOT_RAMP_N entries).
+fn pitch_lut_lut_reproduces_the_pitch_gradient() {
+    // The octave glyphs tint each slot by sampling `pitch_ramp_lut`
+    // the way the shader does (linear interp across PITCH_LUT_N entries).
     // Reconstructing that here must land on the disc's gradient color for
     // the same pitch, so a dot is the color of the disc its pitch lights.
     let lut = pitch_ramp_lut();
     let (dark, bright) = (24.0f32, 108.0f32);
     for pitch in [24.0f32, 36.0, 54.0, 60.0, 72.0, 96.0, 108.0] {
         let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
-        let f = t * (DOT_RAMP_N - 1) as f32;
+        let f = t * (PITCH_LUT_N - 1) as f32;
         let i0 = f.floor() as usize;
-        let i1 = (i0 + 1).min(DOT_RAMP_N - 1);
+        let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
         let lut_color = lut[i0].lerp(lut[i1], f - f.floor());
         // Same pitch through the disc path (channel 9 is pitch-gradient).
         let disc = channel_color(9, pitch, dark, bright);
@@ -742,12 +742,15 @@ fn legacy_core_modes_fold_onto_radius_and_solidity() {
 fn legacy_node_body_folds_into_core_and_outer() {
     // Blobs from the one-build NodeBody experiment: an octave-only body
     // becomes the core glow (solidity 0, the old core-off under-glow) +
-    // the matching outer style with the backdrop on; Beads maps to Dots
+    // the outer layer with the backdrop on. Each body once had its own
+    // matching glyph shape, but only slices survives, so all three land
+    // there; what still has to hold is that the blob PARSES and the core
+    // drops to the glow end. (Beads was dots-on-a-hoop
     // (whose backdrop hoop IS the beads look). Disc leaves defaults alone.
     for (body, outer) in [
         (LegacyNodeBody::Slices, OuterStyle::Slices),
-        (LegacyNodeBody::Rings, OuterStyle::Rings),
-        (LegacyNodeBody::Beads, OuterStyle::Dots),
+        (LegacyNodeBody::Rings, OuterStyle::Slices),
+        (LegacyNodeBody::Beads, OuterStyle::Slices),
     ] {
         let mut view = ViewConfig { node_body: body, ..ViewConfig::default() };
         view.migrate_legacy();
