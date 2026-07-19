@@ -18,6 +18,10 @@ cargo run -p lattice-standalone
 # Unit tests (core + scene logic).
 cargo test
 
+# Run the exact checks CI runs (clippy -D warnings + full test suite),
+# locally. A green run here means a green run in GitHub Actions.
+./ci.sh
+
 # Build the CLAP/VST3 bundles (output in <target-dir>/bundled/).
 cargo xtask bundle midi_lattice_3d --release
 
@@ -27,6 +31,10 @@ cargo xtask bundle midi_lattice_3d --release
 ```
 
 Bundles land in `target/bundled/`.
+
+To gate every `git push` on `./ci.sh` automatically, enable the tracked hook
+once per clone: `git config core.hooksPath .githooks` (skip a one-off push
+with `git push --no-verify`). This stands in for GitHub Actions when it's off.
 
 > **Testing a branch in the DAW:** the DAW scans the **main checkout's**
 > `target/bundled/`. `cargo xtask bundle` run from a worktree bundles the
