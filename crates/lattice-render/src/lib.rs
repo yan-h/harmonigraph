@@ -375,6 +375,53 @@ impl LatticeCallback {
             render_scale,
         }
     }
+
+    /// The bloom post-process, as four full-screen passes in a fixed order:
+    /// bright-pass into half res, downsample to quarter, then a separable
+    /// blur ping-ponging quarter A -> B (horizontal) -> A (vertical). The
+    /// composite in [`CallbackTrait::paint`] samples quarter A, so the
+    /// vertical blur MUST be the step that lands there.
+    ///
+    /// This is the only place that ordering is written down; the pipelines
+    /// themselves are created independently in [`LatticeResources::new`].
+    fn run_bloom_chain(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        resources: &LatticeResources,
+        offscreen: &Offscreen,
+    ) {
+        let steps: [(&wgpu::RenderPipeline, &wgpu::BindGroup, &wgpu::TextureView); 4] = [
+            (&resources.bright_pipeline, &offscreen.bright_bind_group, &offscreen.half_view),
+            (
+                &resources.downsample_pipeline,
+                &offscreen.downsample_bind_group,
+                &offscreen.quarter_a_view,
+            ),
+            (&resources.blur_h_pipeline, &offscreen.blur_h_bind_group, &offscreen.quarter_b_view),
+            (&resources.blur_v_pipeline, &offscreen.blur_v_bind_group, &offscreen.quarter_a_view),
+        ];
+        for (pipeline, bind_group, target) in steps {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("lattice_bloom_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
+    }
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -1007,43 +1054,11 @@ impl CallbackTrait for LatticeCallback {
             pass.draw(0..4, 0..pane.instance_count);
             drop(pass);
 
-            // Bloom chain (skipped entirely at strength 0; the composite
-            // multiplies the never-written quarter texture by 0, and fresh
-            // wgpu textures read as zero anyway): bright-pass into half
-            // res, downsample to quarter, separable blur ping-pong. The
-            // composite in paint() samples quarter A.
+            // Skipped entirely at strength 0: the composite multiplies the
+            // never-written quarter texture by 0, and fresh wgpu textures
+            // read as zero anyway.
             if self.uniforms.misc2[3] > 0.0 {
-                let steps: [(&wgpu::RenderPipeline, &wgpu::BindGroup, &wgpu::TextureView); 4] = [
-                    (&resources.bright_pipeline, &offscreen.bright_bind_group, &offscreen.half_view),
-                    (
-                        &resources.downsample_pipeline,
-                        &offscreen.downsample_bind_group,
-                        &offscreen.quarter_a_view,
-                    ),
-                    (&resources.blur_h_pipeline, &offscreen.blur_h_bind_group, &offscreen.quarter_b_view),
-                    (&resources.blur_v_pipeline, &offscreen.blur_v_bind_group, &offscreen.quarter_a_view),
-                ];
-                for (pipeline, bind_group, target) in steps {
-                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("lattice_bloom_pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: target,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                    pass.set_pipeline(pipeline);
-                    pass.set_bind_group(0, bind_group, &[]);
-                    pass.draw(0..4, 0..1);
-                }
+                self.run_bloom_chain(egui_encoder, resources, offscreen);
             }
         }
 

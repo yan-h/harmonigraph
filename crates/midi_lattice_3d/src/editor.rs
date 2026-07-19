@@ -232,6 +232,46 @@ fn apply_pending_resizes(
     }
 }
 
+/// The plugin's per-frame GUI work, in order: take the frame's lock, close
+/// out the note frame, apply any pending host/self resize, drain the MIDI
+/// and audio rings, then hand the shared UI state to `lattice_ui::root_ui`.
+///
+/// The standalone harness's counterpart is `App::ui` in lattice-standalone.
+/// Both must feed the tracker and the spectrum BEFORE calling `root_ui`,
+/// and pass the same clock that stamped the events — see `root_ui`'s doc.
+fn frame(
+    ui: &mut egui::Ui,
+    queue: &mut Queue,
+    state: &mut WindowState,
+    egui_state: &EguiState,
+    context: &dyn GuiContext,
+) {
+    let setter = ParamSetter::new(context);
+
+    // One lock for the whole frame. Uncontended by design: the audio
+    // thread only ever touches the rtrb producer, and the editor-drop
+    // path runs on this same GUI thread.
+    let mut shared = state.shared.lock();
+    let shared = &mut *shared;
+
+    shared.note_frame();
+    apply_pending_resizes(egui_state, ui.ctx(), queue, context, &mut shared.ui.console);
+
+    let now = shared.start.elapsed().as_secs_f64();
+    if shared.drain_into_tracker(now) {
+        // New MIDI must render this tick, not at the idle poll.
+        ui.ctx().request_repaint();
+    }
+    shared.drain_audio(now);
+
+    let backend = PluginParamBackend {
+        params: &state.params,
+        setter: &setter,
+        gesture: &shared.gesture,
+    };
+    lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
+}
+
 pub fn create(
     params: Arc<MidiLattice3dParams>,
     shared: Arc<Mutex<EditorShared>>,
@@ -374,37 +414,11 @@ impl Editor for LatticeEditor {
                     state.shared.lock().ui.load_persist(&serialized);
                 }
             },
+            // Thin shim: the real per-frame work is `frame`, above. The
+            // closure exists only to own `egui_state`/`context` for the
+            // window's lifetime.
             move |ui: &mut egui::Ui, queue, state: &mut WindowState| {
-                let setter = ParamSetter::new(context.as_ref());
-
-                // One lock for the whole frame. Uncontended by design: the
-                // audio thread only ever touches the rtrb producer, and the
-                // editor-drop path runs on this same GUI thread.
-                let mut shared = state.shared.lock();
-                let shared = &mut *shared;
-
-                shared.note_frame();
-                apply_pending_resizes(
-                    &egui_state,
-                    ui.ctx(),
-                    queue,
-                    context.as_ref(),
-                    &mut shared.ui.console,
-                );
-
-                let now = shared.start.elapsed().as_secs_f64();
-                if shared.drain_into_tracker(now) {
-                    // New MIDI must render this tick, not at the idle poll.
-                    ui.ctx().request_repaint();
-                }
-                shared.drain_audio(now);
-
-                let backend = PluginParamBackend {
-                    params: &state.params,
-                    setter: &setter,
-                    gesture: &shared.gesture,
-                };
-                lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
+                frame(ui, queue, state, &egui_state, context.as_ref());
             },
         );
 
