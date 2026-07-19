@@ -122,17 +122,17 @@ struct Uniforms {
     /// (the shader converts its screen-pixel AA softness to render
     /// pixels with it); w: bloom strength, which blit.wgsl reads (this
     /// slot is NOT free). The dots style maps a dot's pitch through x/y
-    /// to index `dot_ramp`.
+    /// to index `pitch_lut`.
     misc2: [f32; 4],
     /// x: core radius in quad UV units (0 turns the core off); y/z: the
     /// outer octave layer's inner/outer band radii (same units, pre-
     /// sanitized by the scene so z > y); w: outer backdrop opacity 0..1
     /// (ghost the silent octaves to complete the ring, independent of the
-    /// core; 0 = no backdrop, 1 = the full built-in hoop/ghost levels).
+    /// core; 0 = no backdrop, 1 = the full built-in ghost level).
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
-    dot_ramp: [[f32; 4]; lattice_scene::DOT_RAMP_N],
+    pitch_lut: [[f32; 4]; lattice_scene::PITCH_LUT_N],
     /// Idle node color (the view's grid color at full alpha, so the grid
     /// lines and idle markers read as one layer): the home-sheet
     /// placeholder ring is drawn in this ONE constant color, so a
@@ -151,9 +151,6 @@ struct Uniforms {
     /// earlier misc slot is spoken for, so the grid's knob starts a new
     /// one — safe per the note on `misc4`.
     misc5: [f32; 4],
-    /// Melody / bass mark colors (skin `note_melody` / `note_bass`).
-    note_melody: [f32; 4],
-    note_bass: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -161,18 +158,19 @@ struct Uniforms {
 // at runtime here, so fail the build instead.
 const _: () = assert!(lattice_scene::OCTAVE_SLOTS <= 12);
 
-// The shader declares `dot_ramp` with a literal length; keep the two in
+// The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
-const _: () = assert!(lattice_scene::DOT_RAMP_N == 16);
+const _: () = assert!(lattice_scene::PITCH_LUT_N == 16);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
-    /// x: activation, w: outlined. y and z are padding: the shader reads
-    /// only x and w (see lattice.wgsl), and the vec4 is kept whole so the
-    /// vertex layout and the WGSL struct stay unchanged.
+    /// x: activation, y: melody mark level, z: bass mark level, w: outlined
+    /// (see lattice.wgsl). The mark levels ride here rather than in a vertex
+    /// attribute of their own because y and z were dead padding — the vec4
+    /// was always shipped whole.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
@@ -192,6 +190,11 @@ struct GpuInstance {
     /// than folded into the dead `params.y`/`params.z` floats because the
     /// shader masks them bitwise, which needs a flat-interpolated `u32`.
     marks: [u32; 2],
+    /// Each mark's own color (see `NodeInstance::melody_color`): the marked
+    /// note's, not a fixed livery, so a ring reads as belonging to the note
+    /// it marks.
+    melody_color: [f32; 4],
+    bass_color: [f32; 4],
 }
 
 impl GpuInstance {
@@ -200,7 +203,8 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2
+            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2,
+            9 => Float32x4, 10 => Float32x4
         ],
     };
 }
@@ -303,23 +307,28 @@ impl LatticeCallback {
             .map(|(_, n)| GpuInstance {
                 world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
-                params: [n.activation, 0.0, 0.0, if n.outlined { 1.0 } else { 0.0 }],
+                params: [
+                    n.activation,
+                    n.melody_level,
+                    n.bass_level,
+                    if n.outlined { 1.0 } else { 0.0 },
+                ],
                 octaves: pack_octaves(&n.octaves),
                 seed: n.seed,
                 cents: n.cents,
                 scale: n.scale,
                 home: if n.on_home { 1.0 } else { 0.0 },
                 marks: [n.melody_slots, n.bass_slots],
+                melody_color: n.melody_color.to_array(),
+                bass_color: n.bass_color.to_array(),
             })
             .collect();
 
-        // Grid first, so it draws under the chord beams (and both draw
-        // under the nodes).
+        // The grid draws under the nodes.
         let edges = scene
             .grid
             .iter()
             .map(|g| (g, if g.dashed { 2.0 } else { 1.0 }))
-            .chain(scene.edges.iter().map(|e| (e, 0.0)))
             .map(|(e, kind)| GpuEdge {
                 a_strength: [e.a.x, e.a.y, e.a.z, e.strength],
                 b_kind: [e.b.x, e.b.y, e.b.z, kind],
@@ -352,7 +361,7 @@ impl LatticeCallback {
                     scene.outer_outer,
                     scene.outer_backdrop,
                 ],
-                dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
+                pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 node_idle: scene.node_idle.to_array(),
                 misc4: [
                     scene.core_solidity,
@@ -362,12 +371,10 @@ impl LatticeCallback {
                 ],
                 misc5: [
                     scene.grid_thickness,
-                    if scene.highlight_core { 1.0 } else { 0.0 },
-                    if scene.highlight_octave { 1.0 } else { 0.0 },
-                    0.0,
+                    scene.mark_unlinked,
+                    scene.outer_gap,
+                    scene.mark_thickness,
                 ],
-                note_melody: lattice_scene::skin::active_skin().note_melody.to_array(),
-                note_bass: lattice_scene::skin::active_skin().note_bass.to_array(),
             },
             target_format,
             pane_id,

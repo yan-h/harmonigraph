@@ -55,13 +55,19 @@ pub const OCTAVE_SLOTS: usize = 10;
 
 /// Seconds an octave indicator eases in after note-on. Keeps a fresh
 /// octave's color GROWING into the gas swirl instead of instantly
-/// repainting its share of the disc (and softens dots-mode pop-in);
+/// repainting its share of the disc (and softens glyph pop-in);
 /// short enough to still feel immediate.
 const OCTAVE_ATTACK_TIME: f64 = 0.15;
 
-/// Samples in the pitch->color lookup the dots octave style uses to tint
-/// each dot by its own octave's pitch. The shader mirrors this length.
-pub const DOT_RAMP_N: usize = 16;
+/// How far a melody/bass mark's color is lightened toward white from the
+/// note's own. The same 0.30 the octave glyphs use, so a ring reads as the
+/// same family of color as the sectors beside it; without it the marks on
+/// low notes would be black rings on a black background.
+pub const MARK_WHITEN: f32 = 0.30;
+
+/// Samples in the pitch->color lookup the octave glyphs use to tint each
+/// slot by its own octave's pitch. The shader mirrors this length.
+pub const PITCH_LUT_N: usize = 16;
 
 /// One lattice node, ready for instanced rendering.
 #[derive(Clone, Copy, Debug)]
@@ -104,10 +110,28 @@ pub struct NodeInstance {
     /// single pitch class), and the two must stay tellable apart.
     pub melody_slots: u32,
     /// The same for the bass — the lowest held note. A slot set in BOTH
-    /// masks is a note that is simultaneously the melody and the bass, so
-    /// there is nothing to distinguish and it draws unmarked; see
-    /// [`HighlightExtremes`].
+    /// masks is a note that is at once the melody and the bass (a lone held
+    /// note, or the two ends of a chord voiced inside one octave). The two
+    /// marks are drawn as rings at different radii, so that costs nothing:
+    /// they simply both draw. See [`HighlightExtremes`].
     pub bass_slots: u32,
+    /// Envelope of each mark, 0..1, so a mark fades out with its note
+    /// instead of snapping off at release. Separate from `activation`
+    /// because the marked voice can be fading while a different, still-held
+    /// voice keeps the NODE at full — the mark has to follow its own note.
+    ///
+    /// Per node rather than per slot because the mark is a ring around the
+    /// whole node; the slots above only say which sector it links back to.
+    pub melody_level: f32,
+    pub bass_level: f32,
+    /// Each mark's color: the marked note's OWN color, so a ring reads as
+    /// belonging to the note it marks rather than as a fixed livery. Taken
+    /// from the strongest marking voice (they can differ mid-crossfade),
+    /// and lightened toward white by [`MARK_WHITEN`] — a low note's color
+    /// is nearly black, and a ring in it would vanish against the
+    /// background.
+    pub melody_color: Vec4,
+    pub bass_color: Vec4,
 }
 
 impl NodeInstance {
@@ -125,18 +149,16 @@ impl NodeInstance {
     }
 }
 
-/// A glowing beam between two simultaneously sounding, lattice-adjacent
-/// nodes (one unit step along exactly one prime axis = one interval).
+/// One line segment of the lattice grid, between two adjacent positions
+/// (one unit step along exactly one prime axis = one interval).
 #[derive(Clone, Copy, Debug)]
 pub struct EdgeInstance {
     pub a: Vec3,
     pub b: Vec3,
     pub color: Vec4,
-    /// min of the two nodes' activations: the beam fades with whichever
-    /// endpoint fades first. (Grid segments: line opacity.)
+    /// Line opacity.
     pub strength: f32,
-    /// Grid segments only: render as short dashes (the sevens-axis links
-    /// between sheets). Never set on chord beams.
+    /// Render as short dashes (the sevens-axis links between sheets).
     pub dashed: bool,
 }
 
@@ -171,18 +193,18 @@ pub struct Scene {
     /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
     /// 1 crisp, toward 0 the glyph edges spread into soft glows.
     pub outer_solidity: f32,
+    /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
+    /// sector-to-sector and band-to-mark-ring alike. Already clamped.
+    pub outer_gap: f32,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and
     /// composited under any active note. See [`ViewConfig::idle_marker`].
     pub idle_marker: IdleMarker,
     pub idle_radius: f32,
-    /// Chord edges (empty when the toggle is off).
-    pub edges: Vec<EdgeInstance>,
     /// The faint background grid (see [`derive_grid`]): one segment per
     /// adjacent pair of visible positions, inset so every node position
-    /// keeps a circular gap where its disc draws while sounding. Segments
-    /// between two sounding notes light up with their blended color.
-    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity.
+    /// keeps a circular gap where its disc draws while sounding. Reuses
+    /// [`EdgeInstance`]; `strength` carries the line opacity.
     pub grid: Vec<EdgeInstance>,
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.
@@ -191,16 +213,18 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// Which layers the melody/bass mark draws on (see
-    /// [`ViewConfig::highlight_core`] / `highlight_octave`). Which NOTES
-    /// are marked is baked into each node's `melody_slots`/`bass_slots`.
-    pub highlight_core: bool,
-    pub highlight_octave: bool,
-    /// Pitch->color lookup for the dots octave style, matching the disc
+    /// Opacity of the part of each mark ring cut off from the octave that
+    /// owns it (see [`ViewConfig::mark_unlinked`]). Already clamped. Which
+    /// NOTES are marked is baked into each node's `melody_slots`/`bass_slots`.
+    pub mark_unlinked: f32,
+    /// Melody/bass ring thickness in quad UV units, 0 = off (see
+    /// [`ViewConfig::mark_thickness`]). Already clamped.
+    pub mark_thickness: f32,
+    /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
-    pub dot_ramp: [Vec4; DOT_RAMP_N],
+    pub pitch_lut: [Vec4; PITCH_LUT_N],
     /// Gradient endpoints (MIDI notes) the shader maps a dot's pitch through
-    /// to index `dot_ramp`; mirror the disc coloring's `FrameParams`.
+    /// to index `pitch_lut`; mirrors the disc coloring's `FrameParams`.
     pub darkest_pitch: f32,
     pub brightest_pitch: f32,
     /// Offscreen render resolution multiplier (see [`ViewConfig`]); the

@@ -15,9 +15,8 @@ struct Uniforms {
     //    instance age/seed, which stay small and precise however long the
     //    session runs.
     // y: base node radius (world units),
-    // z: outer octave style (0 off, 1 dots, 4 bumps, 5 slices, 6 rings;
-    //    2/3 were the removed petals/flares — indices kept so kept
-    //    glyphs' branches stay unchanged),
+    // z: outer octave layer (0 off, 5 on — one glyph shape is left, and
+    //    its original index is kept; see OuterStyle::shader_index),
     // w: node style — the core orb's paint (0 steady, 3 vortex,
     //    11 pinwheel, 12 spiral, 13 checker). Indices are sparse: they
     //    are preserved from the original 15-style set so the kept styles'
@@ -26,18 +25,18 @@ struct Uniforms {
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     // (offscreen pixels per screen pixel — converts the screen-pixel
-    // softness knob to render pixels); w unused. The dots style maps a
-    // dot's pitch through x/y to index dot_ramp.
+    // softness knob to render pixels); w unused. An octave glyph maps its
+    // pitch through x/y to index pitch_lut.
     misc2: vec4<f32>,
     // x: core radius in quad UV units (0 turns the core off). y/z: the
     // outer layer's inner/outer band radii (same units; the scene
     // guarantees z > y). w: outer backdrop opacity 0..1 (ghost the silent
     // octaves to complete the ring; independent of the core). 0 draws no
-    // backdrop; 1 is the full built-in hoop/ghost strength.
+    // backdrop; 1 is the full built-in ghost strength.
     misc3: vec4<f32>,
-    // Pitch->color lookup for the dots octave style, matching the node disc
-    // gradient (length mirrors lattice_scene::DOT_RAMP_N).
-    dot_ramp: array<vec4<f32>, 16>,
+    // Pitch->color lookup for the octave glyphs, matching the node disc
+    // gradient (length mirrors lattice_scene::PITCH_LUT_N).
+    pitch_lut: array<vec4<f32>, 16>,
     // Idle node color (the view's grid color): the home-sheet placeholder ring is
     // drawn in this constant grey, so a releasing note's ring stays grey
     // (not the note hue) and never snaps color when the voice is pruned.
@@ -48,12 +47,12 @@ struct Uniforms {
     // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
-    // y: draw the melody/bass mark on the core; z: on the octave glyphs.
-    // w unused.
+    // y: opacity of the part of a melody/bass ring cut off from the octave
+    // that owns it (see mark_ring_alpha).
+    // z: padding inside the octave layer, in quad UV units — the gap
+    // between neighbouring sectors AND between the band and the mark
+    // rings. w: melody/bass ring thickness, same units; 0 = no rings.
     misc5: vec4<f32>,
-    // Melody / bass mark colors.
-    note_melody: vec4<f32>,
-    note_bass: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -61,10 +60,15 @@ const TAU: f32 = 6.2831853;
 // Billboard headroom past the octave band's outer edge (uv 1.0): the quad
 // and its uv are both scaled by this, so the uv->world mapping is
 // unchanged (disc, band, glyphs, glow all render identically) but there is
-// margin out to this radius for a low-solidity glyph's soft edge to spread
-// into instead of being clipped flat by the old quad boundary. Costs a bit
-// of fill (bigger quads); kept modest so quads barely reach axis neighbors.
-const QUAD_MARGIN: f32 = 1.3;
+// margin out to this radius for things that live OUTSIDE the band -- a
+// low-solidity glyph's soft edge, and the melody ring, which at the default
+// band (outer 1.0) sits entirely out here. Costs a bit of fill (bigger
+// quads, which alpha-blend and discard where empty).
+const QUAD_MARGIN: f32 = 1.6;
+// Where a soft glyph's overflow finishes easing off. Pinned to what
+// QUAD_MARGIN was when this fade was tuned, so widening the billboard for
+// the mark rings doesn't quietly restyle every low-solidity glyph.
+const GLYPH_FADE_LIMIT: f32 = 1.3;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -72,9 +76,8 @@ struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
     // x: activation 0..1, w: outlined 0/1 (channel-14 voices render as a
-    // ring, not a disc). y (hovered) and z (age) are still packed by the
-    // scene but no longer read here: hover no longer changes the disc, and
-    // the only age-driven style (Wire) was removed.
+    // ring, not a disc). y/z: the melody and bass marks' own fade levels,
+    // which follow the marked voice rather than this node's activation.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
@@ -83,8 +86,8 @@ struct Instance {
     // lattice-scene); Steady ignores it.
     @location(4) seed: f32,
     // The node's pitch class in cents (0..1200). The octave indicator
-    // styles place each glyph at the note's absolute-pitch angle, which
-    // needs the pitch class within the octave.
+    // The octave glyphs sit at the note's absolute-pitch angle, which needs
+    // the pitch class within the octave.
     @location(5) cents: f32,
     // Depth-cue size multiplier from the scene (1 at the camera's focus
     // distance; larger nearer the eye, smaller farther), exaggerating
@@ -94,10 +97,15 @@ struct Instance {
     // placeholder ring where their disc would be.
     @location(7) home: f32,
     // Melody/bass marks: x = melody slots, y = bass slots, one bit per
-    // octave slot. A slot set in BOTH is a note that is at once the
-    // highest and the lowest held, so there's nothing to tell apart and
-    // it draws unmarked (see mark_color).
+    // octave slot. Which SECTOR each mark's ring links back to (see
+    // mark_ring); the ring itself is per node, and its fade level rides
+    // params.y/params.z.
     @location(8) marks: vec2<u32>,
+    // Each mark's own color: the marked note's, lightened a little (see
+    // NodeInstance::melody_color), so a ring reads as belonging to the note
+    // it marks rather than as a fixed livery.
+    @location(9) melody_color: vec4<f32>,
+    @location(10) bass_color: vec4<f32>,
 };
 
 struct VsOut {
@@ -110,6 +118,8 @@ struct VsOut {
     @location(5) @interpolate(flat) cents: f32,
     @location(6) @interpolate(flat) home: f32,
     @location(7) @interpolate(flat) marks: vec2<u32>,
+    @location(8) @interpolate(flat) melody_color: vec4<f32>,
+    @location(9) @interpolate(flat) bass_color: vec4<f32>,
 };
 
 @vertex
@@ -143,15 +153,17 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.cents = inst.cents;
     out.home = inst.home;
     out.marks = inst.marks;
+    out.melody_color = inst.melody_color;
+    out.bass_color = inst.bass_color;
     return out;
 }
 
 // Number of octave slots the indicators display (MIDI octaves 0..9).
 const OCTAVE_SLOTS: u32 = 10u;
 
-// Length of the dots-mode pitch->color LUT (mirrors lattice_scene::DOT_RAMP_N
-// and the `dot_ramp` array in Uniforms).
-const DOT_RAMP_N: u32 = 16u;
+// Length of the pitch->color LUT (mirrors lattice_scene::PITCH_LUT_N
+// and the `pitch_lut` array in Uniforms).
+const PITCH_LUT_N: u32 = 16u;
 
 // Dimmest-visible convention, shared with the UI panes (visibility_floor
 // in lattice-ui): quiet elements sit at 35% and scale up to full.
@@ -198,7 +210,7 @@ fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
 const MIDDLE_C_SLOT: f32 = 4.0;
 // 45deg (pi/4) of rotation per octave, so two octaves reach the horizontal.
 // Clockwise as pitch rises.
-const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
+const RAD_PER_OCTAVE: f32 = 0.7853982;
 // ---- Outer octave layer ----------------------------------------------------
 // Every outer style draws its glyphs inside the radial band
 // [u.misc3.y, u.misc3.z] (quad UV units): the band IS the glyph set's
@@ -208,32 +220,28 @@ const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
 //
 // The backdrop flag (u.misc3.w, its own outer-layer setting) adds a
 // cohesion device so a note reads as ONE whole shape even when a single
-// octave sounds: Slices draws its SILENT slots as faint ghosts in the
-// note's own color, completing the circle silhouette around the bright
-// sector; Dots strings its glyphs on a faint always-complete hoop (drawn
-// in fs_main); a Rings glyph is already a closed circle, so it is
-// unaffected.
+// octave sounds: the SILENT slots draw as faint ghosts in the note's own
+// color, completing the circle silhouette around the bright sector.
 
-// Slices: neighboring sectors (slots are 0.785 rad apart) are separated
-// by a CONSTANT-thickness gap: the slice edges are radial lines offset
-// SLICE_GAP_HALF from the sector bisectors, not constant-angle edges
-// (those read as a V that widens outward). At band inner 0 the sectors
-// become full pie wedges; near the center every wedge falls inside the
-// gap band, leaving a small clear hub instead of a ten-way mush point.
-const SLICE_GAP_HALF: f32 = 0.06;
-// Rings: half-thickness as a factor of the slot-to-slot radial step, with
-// a floor so a narrow band still shows a hairline.
-const RING_HALF_FACTOR: f32 = 0.35;
-const RING_HALF_MIN: f32 = 0.012;
-// The backdrop tie hoop (Dots): half-thickness and coverage level.
-const HOOP_HALF: f32 = 0.022;
-const HOOP_LEVEL: f32 = 0.30;
-// Ghost coverage of a silent Slices slot when the backdrop is on, scaled
+// Neighboring sectors (slots are 0.785 rad apart) are separated by a
+// CONSTANT-thickness gap: the slice edges are radial lines offset half the
+// gap from the sector bisectors, not constant-angle edges (those read as a V
+// that widens outward). At band inner 0 the sectors become full pie wedges;
+// near the center every wedge falls inside the gap band, leaving a small
+// clear hub instead of a ten-way mush point.
+//
+// The gap's full width is u.misc5.z (the view's Gap bar), in quad UV units.
+// The SAME value separates the mark rings from the band, so one number is
+// the padding everywhere in the octave layer.
+fn slice_gap_half() -> f32 {
+    return max(u.misc5.z, 0.0) * 0.5;
+}
+// Ghost coverage of a silent slot when the backdrop is on, scaled
 // by the note's activation so ghosts fade out with the pitch class.
 const GHOST_LEVEL: f32 = 0.16;
 // How far the outer glyphs' soft edge spreads at outer solidity 0, as a
 // fraction of the band width (added to the screen-constant aa). ~1 band
-// width makes the default dots melt into diffuse glows; smaller keeps them
+// width makes the sectors melt into diffuse glows; smaller keeps them
 // tighter. Tunes the soft end of the octave solidity slider.
 const OUTER_GLOW_SOFT: f32 = 1.0;
 // The classic disc-edge radius: normalizes the field paint to the sized
@@ -254,43 +262,24 @@ const CORE_FADE_IN: f32 = 0.06;
 const IDLE_RING_THICK: f32 = 0.09;
 
 // Coverage (0..1) of the outer glyph for octave slot `i` on a node whose
-// pitch class is `cents`, drawing style `mode` in the uniform band. Reads
-// nothing from the core layer — the outer glyphs are independent of it.
-// All styles share the dots angle convention — absolute pitch, middle C
-// straight up, 45deg clockwise per octave, pitch class within the octave
-// included — and differ only in the shape drawn there. `aa` is the
-// caller's per-pixel soft-band width, giving every shape screen-constant
-// edges.
-fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
+// pitch class is `cents`, drawn in the uniform band. Reads nothing from the
+// core layer — the outer glyphs are independent of it. The glyph's angle is
+// its absolute pitch: middle C straight up, 45deg clockwise per octave,
+// pitch class within the octave included. `aa` is the caller's per-pixel
+// soft-band width, giving the shape screen-constant edges.
+fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
     // (uv.y is up, so clockwise = subtracting from the angle.)
     let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
-    let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
-    let e = vec2<f32>(cos(ang), sin(ang));
+    let ang = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
     let d = length(uv);
 
-    if mode == 1u {
-        // Dots: a satellite filling the band — orbit at its center,
-        // radius half its width (v1's look at the default band). Absorbs
-        // the merged Bumps style (which seated blobs on the orb rim).
-        let orbit = (inner + outer) * 0.5;
-        return aa_inside((outer - inner) * 0.5, distance(uv, e * orbit), aa);
-    }
-
-    if mode == 6u {
-        // Rings: one concentric ring per octave, lowest innermost, spread
-        // evenly across the band.
-        let step = (outer - inner) / f32(OCTAVE_SLOTS - 1u);
-        let half = max(step * RING_HALF_FACTOR, RING_HALF_MIN);
-        return aa_inside(half, abs(d - (inner + step * f32(i))), aa);
-    }
-
-    // Slices: annular sectors, screen-constant edges. The sector bisector
+    // Annular sectors, screen-constant edges. The sector bisector
     // directions b1/b2 bound this slot's wedge; the cross products against
     // them give BOTH the side-of-line tests (which wedge owns the pixel)
     // and the Euclidean distance to each edge line, thresholded at
-    // SLICE_GAP_HALF for a gap of constant thickness at every radius.
+    // half the gap width, for a gap of constant thickness at every radius.
     let band = aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
-    let hb = DOTS_RAD_PER_OCTAVE * 0.5;
+    let hb = RAD_PER_OCTAVE * 0.5;
     let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
     let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
     let c1 = uv.x * b1.y - uv.y * b1.x;
@@ -302,19 +291,20 @@ fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: 
     // the slice's sides. Soft ownership lets adjacent slices cross-fade
     // (the loop keeps the max), so the sector edges stay soft.
     let own = smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2);
-    let g = (1.0 - aa_inside(SLICE_GAP_HALF, abs(c1), aa))
-        * (1.0 - aa_inside(SLICE_GAP_HALF, abs(c2), aa));
+    let gap_half = slice_gap_half();
+    let g = (1.0 - aa_inside(gap_half, abs(c1), aa))
+        * (1.0 - aa_inside(gap_half, abs(c2), aa));
     return band * own * g;
 }
 
-// Color of a dots-mode dot at absolute MIDI `pitch`, read from the pitch
-// gradient LUT so a dot is the same hue as the disc that pitch would light.
-fn dot_pitch_color(pitch: f32) -> vec3<f32> {
+// Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
+// octave glyph is the same hue as the disc that pitch would light.
+fn pitch_lut_color(pitch: f32) -> vec3<f32> {
     let t = clamp((pitch - u.misc2.x) / max(u.misc2.y - u.misc2.x, 0.01), 0.0, 1.0);
-    let f = t * f32(DOT_RAMP_N - 1u);
+    let f = t * f32(PITCH_LUT_N - 1u);
     let i0 = u32(floor(f));
-    let i1 = min(i0 + 1u, DOT_RAMP_N - 1u);
-    return mix(u.dot_ramp[i0].rgb, u.dot_ramp[i1].rgb, f - floor(f));
+    let i1 = min(i0 + 1u, PITCH_LUT_N - 1u);
+    return mix(u.pitch_lut[i0].rgb, u.pitch_lut[i1].rgb, f - floor(f));
 }
 
 // ---- Style helpers ---------------------------------------------------------
@@ -418,7 +408,7 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
         // Slot i is MIDI octave i (its C is MIDI (i+1)*12), same mapping as
         // the dots style.
         wsum = wsum + w;
-        csum = csum + dot_pitch_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
+        csum = csum + pitch_lut_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
     }
     if wsum < 1e-5 {
         return fallback;
@@ -453,11 +443,11 @@ fn octave_glow_color(octaves: vec3<u32>, cents: f32, angle: f32, fallback: vec3<
         // Octave i's dot angle (matches outer_glyph): middle C straight
         // up, 45deg clockwise per octave, this node's pitch class folded in.
         let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
-        let theta = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
+        let theta = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
         let w = level * exp(GLOW_LOBE_KAPPA * (cos(angle - theta) - 1.0));
         // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; fold in this
         // node's pitch class for the octave's true pitch (as the dots do).
-        csum = csum + dot_pitch_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
+        csum = csum + pitch_lut_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
         wsum = wsum + w;
     }
     // A solo note (or none) keeps its exact node color; two or more
@@ -588,50 +578,90 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
     return vec4<f32>(u.node_idle.rgb * cov, cov);
 }
 
-// Which melody/bass mark applies to a set of octave slots, or alpha 0 for
-// none. Pass a single slot's bit to ask about one octave glyph, or ALL_SLOTS
-// to ask about the node as a whole.
+// ---- Melody / bass marks ---------------------------------------------------
+// Two full rings concentric with the octave band: the bass just INSIDE it,
+// the melody just OUTSIDE. Radius is what tells them apart -- each ring is
+// drawn in its own note's color, not a fixed livery -- and because they
+// never share one, both draw at full weight even when ONE note is both ends
+// of the chord (a lone held note, or a chord whose top and bottom share a
+// pitch class). Earlier passes had to split a rim between two colors to say
+// that, and the pass before them dropped the mark on the floor entirely.
 //
-// Slots claimed by BOTH ends go unmarked: such a note is at once the highest
-// and the lowest held, so there is nothing to tell apart. That one rule
-// covers both special cases without a test of its own -- a lone held note
-// (it is its own melody and bass), and, when asked about the whole node, a
-// chord voiced inside a single pitch class, where the melody and bass share
-// a node and only the octave layer can separate them.
-fn mark_color(marks: vec2<u32>, slots: u32) -> vec4<f32> {
-    let melody = marks.x & slots;
-    let bass = marks.y & slots;
-    if melody != 0u && bass != 0u {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+// What a full ring cannot say is WHICH of the node's octaves is the melody,
+// and on a chord voiced inside one pitch class that is the whole question --
+// so a link device ties the ring back to the sector responsible. See
+// MarkLink for the candidates; the modes here mirror its shader_index.
+
+// Floor on the ring's thickness (the view sets the rest, u.misc5.w), in
+// soft-band widths — about a couple of render pixels, so a thin setting
+// can't go sub-pixel on a densely packed lattice and read as nothing. A
+// thickness of exactly 0 is the off state and skips the floor.
+const MARK_RING_MIN_AA: f32 = 1.5;
+
+// The ring's opacity at this pixel, given the slot(s) the mark came from.
+//
+// Each ring is slit at the responsible sector's two angular boundaries. A
+// slit IS the gap between two octaves continued outward: the same
+// perpendicular-distance test against the same boundary line, with the same
+// soft band, measured on the pixel ITSELF -- projecting to the band first
+// would scale both the width and the blur by the ring's radius over the
+// band's, which reads as a wider, softer cut.
+//
+// Those slits leave the stretch of ring beside the marked sector separated
+// from the remainder of the circle. That stretch always draws full; `rest`
+// fades everything else, from a whole ring (1) down to just that arc (0).
+//
+// The dot gate throws away the antipode: a boundary line runs through the
+// origin, so it passes just as close on the far side of the node and would
+// otherwise cut the ring twice. The ownership test needs no such gate --
+// its two smoothsteps disagree in sign there and it falls to zero.
+//
+// A slot mask can name more than one sector: releasing the top of a chord
+// leaves the old melody fading on its slot while the new one takes another,
+// and both are the melody for as long as that lasts.
+fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, rest: f32, aa: f32) -> f32 {
+    let half = slice_gap_half();
+    let hb = RAD_PER_OCTAVE * 0.5;
+    var own = 0.0;
+    var slit = 0.0;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        if (slots & (1u << i)) != 0u {
+            let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
+            let ang = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
+            let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
+            let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
+            let c1 = uv.x * b1.y - uv.y * b1.x;
+            let c2 = uv.x * b2.y - uv.y * b2.x;
+            own = max(own, smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2));
+            let facing = step(0.0, dot(uv, vec2<f32>(cos(ang), sin(ang))));
+            let cut = max(aa_inside(half, abs(c1), aa), aa_inside(half, abs(c2), aa));
+            slit = max(slit, cut * facing);
+        }
     }
-    if melody != 0u {
-        return u.note_melody;
-    }
-    if bass != 0u {
-        return u.note_bass;
-    }
-    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    return mix(rest, 1.0, own) * (1.0 - slit);
 }
 
-const ALL_SLOTS: u32 = 0xFFFFFFFFu;
-// The core's melody/bass ring, in quad UV units. Centered ON the disc edge,
-// so it reads as the node's own rim rather than a detached hoop. HALO_OUT is
-// how far a softer skirt spreads outside it.
-//
-// These are tuned for an always-on mark (see HighlightExtremes' default): it
-// has to be findable at a glance without shouting over the note colors, which
-// are what the lattice is actually for. An earlier pass drew a sub-pixel
-// hairline that read as nothing at all; the correction to that overshot into
-// a halo that dominated the node, and this sits between the two.
-const MARK_RING_HALF: f32 = 0.05;
-const MARK_HALO_OUT: f32 = 0.17;
-const MARK_HALO_LEVEL: f32 = 0.26;
-// How far a marked octave glyph's band is widened, as a fraction of the band
-// width, on each side. Recoloring one slot alone is only a few percent of the
-// node -- one slice out of ten -- so the marked glyph also grows a little
-// past its neighbours; that slight protrusion is what makes it findable
-// without having to brighten it into a glare.
-const MARK_GLYPH_GROW: f32 = 0.20;
+// Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
+// derived so the melody ring (outside the band) and the bass ring (inside)
+// can share this one body.
+fn mark_ring(
+    slots: u32,
+    cents: f32,
+    uv: vec2<f32>,
+    r_in: f32,
+    r_out: f32,
+    rest: f32,
+    aa: f32,
+) -> f32 {
+    // No room for this ring: the band's inner radius can be dialed to 0
+    // (pie wedges), which leaves the bass nothing to sit in.
+    if r_out <= 0.0 || r_out <= r_in {
+        return 0.0;
+    }
+    let d = length(uv);
+    let ring = aa_inside(r_out, d, aa) * (1.0 - aa_inside(max(r_in, 0.0), d, aa));
+    return ring * mark_ring_alpha(slots, cents, uv, rest, aa);
+}
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
@@ -744,36 +774,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var base_alpha = core_alpha;
     var base_rgb = rgb_core * core_alpha;
 
-    // Melody/bass mark on the core -- the pitch class indicator -- as a
-    // bright ring hugging the disc, in the mark's own color so the two ends
-    // never read alike. Needs a sounding note AND the core on: with the core
-    // off there is no pitch class indicator to mark, and the octave layer
-    // carries the mark instead.
-    let core_mark = mark_color(in.marks, ALL_SLOTS);
-    if u.misc5.y > 0.5 && core_mark.a > 0.0 && on && presence > 0.0 {
-        // A solid rim straddling the disc edge, plus a soft skirt fading
-        // outward from it. The skirt carries most of the visibility: the
-        // rim alone is only a couple of pixels at typical node sizes.
-        let rim = aa_inside(radius + MARK_RING_HALF, d, aa)
-            * (1.0 - aa_inside(radius - MARK_RING_HALF, d, aa));
-        let halo = (1.0 - smoothstep(radius + MARK_RING_HALF, radius + MARK_HALO_OUT, d))
-            * step(radius - MARK_RING_HALF, d)
-            * MARK_HALO_LEVEL;
-        let mark_cov = clamp(max(rim, halo), 0.0, 1.0) * presence * core_on;
-        base_rgb = core_mark.rgb * mark_cov + base_rgb * (1.0 - mark_cov);
-        base_alpha = mark_cov + base_alpha * (1.0 - mark_cov);
-    }
-
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
     // its color there: sounding glyphs are tinted by their own pitch;
-    // ghosts, hoop, and the rest use the whitened node color.
-    let mode = u32(u.misc.z + 0.5);
+    // ghosts and the rest use the whitened node color.
+    // The outer layer is on or off; there is one glyph shape (see
+    // OuterStyle), whose index the scene still passes through misc.z.
+    let outer_on = u.misc.z > 0.5;
     let node_glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.55);
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
 
-    // Backdrop opacity 0..1, scaling the built-in hoop/ghost levels: 0
+    // Backdrop opacity 0..1, scaling the built-in ghost level: 0
     // draws no backdrop at all, 1 is the full strength this always had.
     let backdrop = u.misc3.w;
     let has_backdrop = backdrop > 0.0;
@@ -784,25 +796,33 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // glowy marks. It only feeds the edge width, so shapes and angles stay
     // put. Mirrors the core's solidity.
     let outer_aa = aa + (1.0 - u.misc4.y) * OUTER_GLOW_SOFT * (u.misc3.z - u.misc3.y);
-    if mode != 0u {
+    // Melody/bass ring geometry.
+    let band_in = u.misc3.y;
+    let band_out = u.misc3.z;
+    let ring_thick = u.misc5.w;
+    let ring_w = select(max(ring_thick, outer_aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
+    let ring_gap = slice_gap_half() * 2.0;
+    let mark_rest = clamp(u.misc5.y, 0.0, 1.0);
+    // Headroom: the band's outer radius can be dialed to 1.0, so the melody
+    // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
+    // circle of radius QUAD_MARGIN fits the square quad) and ease it off
+    // there, rather than letting the corner clip it flat.
+    let lim = QUAD_MARGIN - 0.02;
+    let mel_in = min(band_out + ring_gap, lim);
+    let bass_out = band_in - ring_gap;
+    if outer_on {
         // Sounding slots draw bright, tinted by their own pitch, each
         // fading on its own envelope. The backdrop opacity (its own
-        // outer-layer setting, independent of the core) fades in each
-        // style's cohesion device: Dots gets a faint tie hoop (complete
-        // whenever the note sounds; glyphs composite over it) and Slices
-        // draws silent slots as ghosts in the loop below.
-        if has_backdrop && mode == 1u {
-            let hoop_r = (u.misc3.y + u.misc3.z) * 0.5;
-            let hoop = aa_inside(HOOP_HALF, abs(d - hoop_r), outer_aa);
-            glyph = hoop * HOOP_LEVEL * backdrop * presence;
-        }
-        let ghosted = has_backdrop && mode == 5u;
+        // outer-layer setting, independent of the core) fades in the
+        // layer's cohesion device: the silent slots drawn as ghosts in the
+        // loop below.
+        let ghosted = has_backdrop;
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level <= 0.0 && !(ghosted && presence > 0.0) {
                 continue;
             }
-            let shape = outer_glyph(mode, i, in.cents, in.uv, u.misc3.y, u.misc3.z, outer_aa);
+            let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -813,40 +833,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // sounds, but a released glyph must END at nothing: without
                 // this taper it holds 35% brightness all the way down the
                 // fade and then pops off. Ease the last 15% of the envelope
-                // to zero instead (the max() hands a backdrop Slices slot
-                // off to its ghost as the lit coverage sinks through it).
+                // to zero instead (the max() hands a backdrop slot off to
+                // its ghost as the lit coverage sinks through it).
                 let tail = smoothstep(0.0, 0.15, level);
                 cov = max(cov, shape * level_floor(level) * tail);
                 // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
-                slot_rgb = mix(dot_pitch_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
+                slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
 
-                // Melody/bass mark on the octave indicator: this one glyph
-                // takes the mark's color at full coverage, so it stands out
-                // from its neighbors in the ring whatever the outer style
-                // draws. This is the layer that still separates the two ends
-                // when a chord is voiced inside one pitch class -- every
-                // octave of it shares a node, differing only by slot.
-                let slot_mark = mark_color(in.marks, 1u << i);
-                if u.misc5.z > 0.5 && slot_mark.a > 0.0 {
-                    // Redraw this one glyph on a widened band so it reaches
-                    // past its neighbours, at the mark's color and full
-                    // coverage. The overflow past the billboard is eased off
-                    // by the QUAD_MARGIN fade below, as for any glyph.
-                    let grow = (u.misc3.z - u.misc3.y) * MARK_GLYPH_GROW;
-                    let big = outer_glyph(
-                        mode,
-                        i,
-                        in.cents,
-                        in.uv,
-                        max(u.misc3.y - grow, 0.0),
-                        u.misc3.z + grow,
-                        outer_aa,
-                    );
-                    slot_rgb = slot_mark.rgb;
-                    cov = max(cov, big * tail);
-                }
             }
             if cov > glyph {
                 glyph = cov;
@@ -858,8 +853,35 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // instead of letting the quad boundary clip it flat. The fade starts at
     // uv 1.0 — the outer band's own limit — so a crisp glyph (which never
     // reaches past its band, all within uv 1.0) is untouched; only the soft
-    // overflow into the QUAD_MARGIN headroom is eased to zero at the edge.
-    glyph = glyph * (1.0 - smoothstep(1.0, QUAD_MARGIN, d));
+    // overflow into the headroom is eased to zero by GLYPH_FADE_LIMIT.
+    glyph = glyph * (1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d));
+
+    // Melody/bass rings, bracketing the octave band: bass inside, melody
+    // outside. Their own layer, composited over the glyphs — a sector's
+    // color is its pitch, which is what the octave layer is FOR, so nothing
+    // here repaints one.
+    let melody_cov = mark_ring(
+        in.marks.x, in.cents, in.uv,
+        mel_in, min(mel_in + ring_w, lim),
+        mark_rest, outer_aa,
+    ) * in.params.y;
+    let bass_cov = mark_ring(
+        in.marks.y, in.cents, in.uv,
+        bass_out - ring_w, bass_out,
+        mark_rest, outer_aa,
+    ) * in.params.z;
+    // Disjoint radii, so at most one of the two covers any given pixel.
+    var mark = max(melody_cov, bass_cov);
+    let mark_rgb = select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov);
+    // Safety taper only. The radii above are already capped inside the
+    // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
+    // this just keeps a soft edge from ending on the boundary; starting it
+    // any earlier eats the ring, which at the default band (outer 1.0)
+    // lives entirely in this margin.
+    mark = mark * (1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d));
+    glyph_rgb = (mark_rgb * mark + glyph_rgb * glyph * (1.0 - mark))
+        / max(mark + glyph * (1.0 - mark), 1e-4);
+    glyph = mark + glyph * (1.0 - mark);
 
     // The active note: glyph over (disc + glow), premultiplied.
     let active_alpha = glyph + base_alpha * (1.0 - glyph);

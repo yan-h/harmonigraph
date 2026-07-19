@@ -33,18 +33,18 @@ fn pitch_colored_channels_vary_with_pitch() {
 }
 
 #[test]
-fn dot_ramp_lut_reproduces_the_pitch_gradient() {
-    // The dots octave style tints each dot by sampling `pitch_ramp_lut`
-    // the way the shader does (linear interp across DOT_RAMP_N entries).
+fn pitch_lut_lut_reproduces_the_pitch_gradient() {
+    // The octave glyphs tint each slot by sampling `pitch_ramp_lut`
+    // the way the shader does (linear interp across PITCH_LUT_N entries).
     // Reconstructing that here must land on the disc's gradient color for
     // the same pitch, so a dot is the color of the disc its pitch lights.
     let lut = pitch_ramp_lut();
     let (dark, bright) = (24.0f32, 108.0f32);
     for pitch in [24.0f32, 36.0, 54.0, 60.0, 72.0, 96.0, 108.0] {
         let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
-        let f = t * (DOT_RAMP_N - 1) as f32;
+        let f = t * (PITCH_LUT_N - 1) as f32;
         let i0 = f.floor() as usize;
-        let i1 = (i0 + 1).min(DOT_RAMP_N - 1);
+        let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
         let lut_color = lut[i0].lerp(lut[i1], f - f.floor());
         // Same pitch through the disc path (channel 9 is pitch-gradient).
         let disc = channel_color(9, pitch, dark, bright);
@@ -73,8 +73,8 @@ fn octaves_fade_independently() {
         kind: NoteEventKind::Off, // ...and released
     });
 
-    // Half a pitch_class_fade_time after the release.
-    let frame = FrameParams { pitch_class_fade_time: 1.0, ..FrameParams::default() };
+    // Half a fade_time after the release.
+    let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
     let scene =
         scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 0.6);
     let origin = origin_node(&scene);
@@ -88,38 +88,49 @@ fn octaves_fade_independently() {
 }
 
 #[test]
-fn octave_fade_time_is_independent_of_note_fade() {
-    // Note fade short, octave fade long: after the note highlight ends,
-    // the disc goes idle but the octave indicator is still fading.
+fn one_fade_time_carries_every_layer_of_the_node() {
+    // The core, the octave glyphs, and the melody/bass marks all ride the
+    // single Fade param: release a two-note chord and half a fade later
+    // every layer must be half-way down together, none of them already
+    // dark and none still at full.
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::Off,
-    });
-    let frame = FrameParams {
-        pitch_class_fade_time: 0.2,
-        octave_fade_time: 2.0,
-        ..FrameParams::default()
+    for note in [60u8, 67] {
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    for note in [60u8, 67] {
+        tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind: NoteEventKind::Off });
+    }
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    tracker.prune(1.0, frame.fade_time);
+    let view = ViewConfig {
+        highlight_extremes: HighlightExtremes::Both,
+        ..ViewConfig::default()
     };
-    // Prune with the longer of the two, as root_ui does.
-    tracker.prune(1.0, frame.pitch_class_fade_time.max(frame.octave_fade_time));
-    let scene =
-        scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 1.0);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
+
+    let half = |what: &str, v: f32| {
+        assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
+    };
+    // C4 is the bass and sits on the origin node.
     let origin = origin_node(&scene);
-    assert_eq!(origin.activation, 0.0, "pitch class fade has ended");
-    assert!(
-        origin.octaves[4] > 0.0 && origin.octaves[4] < 0.75,
-        "octave still mid-fade, got {}",
-        origin.octaves[4]
-    );
+    half("the core", origin.activation);
+    // The mark rides its octave slot's envelope, so a half-faded glyph is a
+    // half-faded mark; what matters here is that the slot is still MARKED
+    // rather than having snapped off at release.
+    half("the octave glyph", origin.octaves[4]);
+    assert_eq!(origin.bass_slots, 1 << 4, "the released bass keeps its mark");
+    // G4 is the melody, one fifth up the lattice.
+    let melody = scene
+        .nodes
+        .iter()
+        .find(|n| n.melody_slots != 0)
+        .expect("the released melody keeps its mark while it fades");
+    half("the melody's octave glyph", melody.octaves[4]);
 }
 
 #[test]
@@ -181,50 +192,6 @@ fn window_center_pans_which_nodes_display() {
         .find(|n| n.lattice_pos == LatticePos::new(5, 0, 0))
         .unwrap();
     assert_eq!(center_node.world_pos, Vec3::ZERO);
-}
-
-#[test]
-fn chord_edges_connect_adjacent_active_nodes() {
-    // A deliberately small window (±3/±3): just intonation keeps pitch
-    // classes unique at that size, so the edge count is exact. Wider
-    // windows bring in schisma near-duplicates — e.g. (8, 1, 0) sits
-    // ~2¢ from C, within this test's 5¢ tolerance — which light up and
-    // add parallel edges (correct behavior, but noisy to pin; same
-    // reason 12-TET's enharmonic duplicates are avoided here).
-    // C and G (a fifth apart, one step on the prime-3 axis) held
-    // together with a wide-enough tolerance: exactly one edge.
-    let tuning = Tuning { tolerance: lattice_core::tuning::microcents(5.0), ..Tuning::just() };
-    let mut tracker = NoteTracker::new();
-    for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-    }
-    let view = ViewConfig {
-        show_chord_edges: true,
-        extent_threes: 3,
-        extent_fives: 3,
-        ..ViewConfig::default()
-    };
-    let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
-    assert_eq!(scene.edges.len(), 1);
-    assert_eq!(scene.edges[0].strength, 1.0);
-
-    // C and F# (nothing within a step and 5 cents): no edge.
-    let mut tracker = NoteTracker::new();
-    for note in [60u8, 66] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-    }
-    let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
-    assert_eq!(scene.edges.len(), 0);
 }
 
 #[test]
@@ -464,10 +431,11 @@ fn melody_and_bass_mark_the_outer_held_notes() {
 }
 
 #[test]
-fn a_lone_held_note_is_marked_as_both_ends_so_it_draws_unmarked() {
-    // One note is at once the highest and the lowest held. The scene
-    // marks it as both; the shader's "claimed by both ends" rule is
-    // what then leaves it unmarked, with no special case of its own.
+fn a_lone_held_note_is_marked_as_both_ends() {
+    // One note is at once the highest and the lowest held, and is marked
+    // as both. The shader splits such a mark between the two colors (see
+    // mark_paint) rather than blanking it, which is what it used to do --
+    // an outline that vanished exactly when two things were true at once.
     let scene = marked_scene(&[60], HighlightExtremes::Both);
     let mut seen = false;
     for n in &scene.nodes {
@@ -503,9 +471,50 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
 }
 
 #[test]
-fn released_notes_do_not_keep_the_mark() {
-    // A released voice is fading out; letting it hold the mark would
-    // steal it from the note that actually replaced it.
+fn a_released_mark_fades_out_while_a_held_note_keeps_its_node_lit() {
+    // The motivating case for tracking mark levels apart from the node's
+    // activation. C4 and C5 share a pitch class, so they light ONE node.
+    // Release the top one: the node stays fully lit by the held C4, but
+    // the melody mark it was wearing has to fade out on its own.
+    let mut tracker = NoteTracker::new();
+    for note in [60u8, 72] {
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note: 72, kind: NoteEventKind::Off });
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let view = ViewConfig {
+        highlight_extremes: HighlightExtremes::Both,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
+    let origin = origin_node(&scene);
+    assert_eq!(origin.activation, 1.0, "the held C4 keeps the node lit");
+    // The released C5 wears a fading melody mark on ITS octave slot while
+    // C4, now the top held note, takes the live one — the two crossfade
+    // rather than the mark jumping. C4 is also the bass (it is the only
+    // note held), so it claims both ends and the shader splits its glyph.
+    assert_eq!(origin.melody_slots, (1 << 5) | (1 << 4), "the two melodies crossfade");
+    assert_eq!(origin.bass_slots, 1 << 4, "only the held C4 is the bass");
+    // The octave marks fade with their own slots, which is what separates
+    // the fading C5 from the held C4 here.
+    assert!(
+        (origin.octaves[5] - 0.5).abs() < 1e-5,
+        "the released C5's octave is half-faded, got {}",
+        origin.octaves[5]
+    );
+    assert_eq!(origin.octaves[4], 1.0, "the held C4's octave is at full");
+}
+
+#[test]
+fn held_extremes_never_names_a_released_voice() {
+    // A released voice keeps whatever mark it was wearing (above), but it
+    // is out of the running for the LIVE ends: letting it stay "the
+    // melody" would steal that from the note that actually replaced it.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {
@@ -615,6 +624,69 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
 }
 
 #[test]
+fn the_mark_ring_thickness_reaches_the_scene_and_is_clamped() {
+    // One thickness drives BOTH rings, so it lives on the scene rather
+    // than per node; 0 is the off state, as it is for the core's radius.
+    let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(scene.mark_thickness, 0.15);
+
+    let off = ViewConfig { mark_thickness: 0.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &off,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(scene.mark_thickness, 0.0, "0 passes through as the off state");
+
+    let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &wild,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert!(scene.mark_thickness <= 0.4, "got {}", scene.mark_thickness);
+}
+
+#[test]
+fn the_octave_gap_reaches_the_scene_and_is_clamped() {
+    // One padding for the whole octave layer: the shader spaces the
+    // sectors AND the melody/bass rings by this single number, so it has
+    // to survive derive_scene rather than being a shader constant.
+    let view = ViewConfig { outer_gap: 0.2, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(scene.outer_gap, 0.2);
+
+    // A gap wider than the band would erase every sector; the scene caps
+    // it rather than handing the shader something that draws nothing.
+    let wild = ViewConfig { outer_gap: 5.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &wild,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert!(scene.outer_gap <= 0.4, "got {}", scene.outer_gap);
+}
+
+#[test]
 fn core_and_outer_geometry_are_sanitized_into_the_scene() {
     // Bars dragged into a crossed/degenerate combination: the scene
     // must still hand the shader a visible band (outer ahead of inner).
@@ -695,12 +767,14 @@ fn legacy_core_modes_fold_onto_radius_and_solidity() {
 fn legacy_node_body_folds_into_core_and_outer() {
     // Blobs from the one-build NodeBody experiment: an octave-only body
     // becomes the core glow (solidity 0, the old core-off under-glow) +
-    // the matching outer style with the backdrop on; Beads maps to Dots
-    // (whose backdrop hoop IS the beads look). Disc leaves defaults alone.
+    // the outer layer with the backdrop on. Each body once had its own
+    // matching glyph shape, but only slices survives, so all three land
+    // there; what still has to hold is that the blob PARSES and the core
+    // drops to the glow end. Disc leaves defaults alone.
     for (body, outer) in [
         (LegacyNodeBody::Slices, OuterStyle::Slices),
-        (LegacyNodeBody::Rings, OuterStyle::Rings),
-        (LegacyNodeBody::Beads, OuterStyle::Dots),
+        (LegacyNodeBody::Rings, OuterStyle::Slices),
+        (LegacyNodeBody::Beads, OuterStyle::Slices),
     ] {
         let mut view = ViewConfig { node_body: body, ..ViewConfig::default() };
         view.migrate_legacy();
@@ -749,12 +823,15 @@ fn depth_scale_exaggerates_proximity() {
 }
 
 #[test]
-fn grid_lights_between_played_neighbors() {
-    // C and G held (one step on the threes axis; same window/tuning
-    // rationale as chord_edges_connect_adjacent_active_nodes): the
-    // segment between them takes the lit opacity and the notes' blended
-    // color; a segment with only one sounding endpoint stays at the
-    // faint base look.
+fn grid_lines_never_light_between_played_neighbors() {
+    // In-plane grid lines used to brighten and take the notes' color when
+    // the notes at BOTH ends sounded, drawing a chord's intervals as
+    // geometry. It read as noise rather than structure and is gone; the
+    // grid is now purely the idle structure, and the only thing that still
+    // lights is a sevens-axis chain (see the off-sheet test above), which
+    // is about one note's depth rather than a pair.
+    //
+    // Just intonation and a small window so pitch classes stay unique.
     let tuning = Tuning { tolerance: lattice_core::tuning::microcents(5.0), ..Tuning::just() };
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
@@ -765,13 +842,9 @@ fn grid_lights_between_played_neighbors() {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
     }
-    let view = ViewConfig {
-        extent_threes: 3,
-        extent_fives: 3,
-        ..ViewConfig::default()
-    };
+    let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..ViewConfig::default() };
     let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
-    let base = skin::active_skin().grid_line;
+    let base = Vec4::from_array(view.grid_color);
     let segment_at = |mid: Vec3| {
         scene
             .grid
@@ -780,19 +853,17 @@ fn grid_lights_between_played_neighbors() {
             .unwrap()
     };
 
-    // C sits at the origin, G one step up the threes (world y) axis.
-    let lit = segment_at(Vec3::new(0.0, 0.5, 0.0));
-    assert!(lit.strength > base.w, "lit opacity, got {}", lit.strength);
-    assert!(
-        (lit.color - base).truncate().length() > 0.1,
-        "lit segment tinted by the notes, got {:?}",
-        lit.color
-    );
+    // C sits at the origin, G one step up the threes (world y) axis: both
+    // sound, and the line between them stays exactly as faint as any other.
+    let between = segment_at(Vec3::new(0.0, 0.5, 0.0));
+    assert_eq!(between.strength, base.w, "two sounding ends must not light it");
+    assert_eq!(between.color, base, "nor tint it");
 
-    // F–C below: C sounds but F doesn't, so the segment stays faint.
-    let unlit = segment_at(Vec3::new(0.0, -0.5, 0.0));
-    assert_eq!(unlit.strength, base.w);
-    assert_eq!(unlit.color, base);
+    // Every in-plane segment is identical, played over or not.
+    for s in &scene.grid {
+        assert_eq!(s.strength, base.w, "{s:?}");
+        assert_eq!(s.color, base, "{s:?}");
+    }
 }
 
 #[test]

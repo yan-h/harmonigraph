@@ -133,7 +133,11 @@ pub(super) fn learn_pulse(now: f64) -> f32 {
 
 /// One editable ValueBar for a parameter, with automation-gesture
 /// bracketing so a drag records as a single host gesture.
-pub(super) fn param_bar(ui: &mut egui::Ui, params: &dyn ParamBackend, key: ParamKey) {
+pub(super) fn param_bar(
+    ui: &mut egui::Ui,
+    params: &dyn ParamBackend,
+    key: ParamKey,
+) -> egui::Response {
     let mut value = params.get(key);
     let response = ValueBar::new(&mut value, key.range(), key.label())
         .eased(key.logarithmic())
@@ -150,6 +154,7 @@ pub(super) fn param_bar(ui: &mut egui::Ui, params: &dyn ParamBackend, key: Param
     if response.drag_stopped() {
         params.end_set(key);
     }
+    response
 }
 
 /// A section header inside a settings pane: a little breathing room, a thin

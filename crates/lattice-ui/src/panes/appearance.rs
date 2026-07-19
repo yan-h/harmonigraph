@@ -55,37 +55,30 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         (NodeStyle::Pinwheel, "Pinwheel", ""),
                     ],
                 );
-                // How long the core keeps fading after a note releases.
-                param_bar(ui, params, ParamKey::PitchClassFade);
             });
 
             // Octaves: which octaves of the pitch class are sounding, shown
             // as glyphs at each note's absolute-pitch angle within a radial
             // band. Independent of the Core.
             section(ui, "Octaves");
-            choice_row(
-                ui,
-                "Style",
-                &mut state.view.outer_style,
-                &[
-                    (OuterStyle::Off, "Off", "No octave indication"),
-                    (OuterStyle::Dots, "Dots", "A dot per sounding octave, filling the band"),
-                    (
-                        OuterStyle::Slices,
-                        "Slices",
-                        "Ring sectors spanning the band; band inner 0 = pie wedges",
-                    ),
-                    (
-                        OuterStyle::Rings,
-                        "Rings",
-                        "One concentric ring per sounding octave across the band, \
-                         lowest innermost",
-                    ),
-                ],
-            );
+            // One glyph shape (ring sectors) — the alternatives were
+            // switchable for live comparison and have been settled — so this
+            // is just whether the layer draws. The bool goes through the
+            // OuterStyle enum the persist and the shader still speak.
+            let mut show = state.view.outer_style != OuterStyle::Off;
+            if ui
+                .checkbox(&mut show, "Show octaves")
+                .on_hover_text(
+                    "Ring sectors spanning the band, one per sounding octave, \
+                     each at its own pitch's angle; band inner 0 = pie wedges",
+                )
+                .changed()
+            {
+                state.view.outer_style = if show { OuterStyle::Slices } else { OuterStyle::Off };
+            }
             // If the band bars cross, the scene keeps outer ahead of inner
             // rather than collapsing.
-            ui.add_enabled_ui(state.view.outer_style != OuterStyle::Off, |ui| {
+            ui.add_enabled_ui(show, |ui| {
                 ValueBar::new(&mut state.view.outer_inner, 0.0..=0.9, "Band inner")
                     .show(ui)
                     .on_hover_text("Octave band's inner radius; 0 reaches the center");
@@ -99,24 +92,27 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                          shapes; only softens the glyph edges, shapes and \
                          angles stay put",
                     );
+                // One padding for the whole layer: between sectors, and
+                // between the band and the melody/bass rings.
+                ValueBar::new(&mut state.view.outer_gap, 0.0..=0.4, "Gap")
+                    .show(ui)
+                    .on_hover_text(
+                        "Padding inside the octave layer: between one octave \
+                         and the next, and between the band and the \
+                         melody/bass rings. 0 closes the octaves into a solid \
+                         annulus and seats the rings against it. Wide values \
+                         push the bass ring in toward the core -- raise Band \
+                         inner to make room",
+                    );
                 // Backdrop: draw the silent octaves faintly so a lone octave
-                // still reads as a whole note. Only Dots (hoop) and Slices
-                // (ghost slots) have one; Rings is already a closed circle.
-                let has_backdrop =
-                    matches!(state.view.outer_style, OuterStyle::Dots | OuterStyle::Slices);
-                ui.add_enabled_ui(has_backdrop, |ui| {
-                    ValueBar::new(&mut state.view.outer_backdrop, 0.0..=1.0, "Backdrop")
-                        .show(ui)
-                        .on_hover_text(
-                            "Complete the octave ring: draw the silent octaves \
-                             faintly behind the sounding glyphs (Slices ghosts \
-                             its empty slots; Dots strings them on a hoop) so a \
-                             lone octave still reads as a whole note. 0 = off",
-                        );
-                });
-                // How long the octave glyphs keep fading after release
-                // (independent of the core's fade above).
-                param_bar(ui, params, ParamKey::OctaveFade);
+                // still reads as a whole note.
+                ValueBar::new(&mut state.view.outer_backdrop, 0.0..=1.0, "Backdrop")
+                    .show(ui)
+                    .on_hover_text(
+                        "Complete the octave ring: draw the silent octaves \
+                         faintly behind the sounding sectors, so a lone octave \
+                         still reads as a whole note. 0 = off",
+                    );
             });
 
             // Melody / bass: mark the outer held notes so a chord's top and
@@ -133,22 +129,38 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     (
                         HighlightExtremes::Both,
                         "Both",
-                        "Mark both, each in its own color. A note that is at \
-                         once the highest and the lowest -- a lone note -- is \
-                         left unmarked: there's nothing to tell apart",
+                        "Mark both. Each ring takes its own note's color and \
+                         they are told apart by radius, so a note that is at \
+                         once the highest and the lowest -- a lone held note, \
+                         or a chord whose top and bottom share a pitch class -- \
+                         simply gets both",
                     ),
                 ],
             );
+            // The marks are full rings bracketing the octave band (bass
+            // inside, melody outside), each slit either side of the octave
+            // responsible so that stretch reads as its own piece. This
+            // fades everything BUT that stretch, from a whole ring down to
+            // just the arc over the marked octave.
             ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
-                ui.checkbox(&mut state.view.highlight_core, "Pitch class").on_hover_text(
-                    "Ring the marked note's node. Needs the Core on -- with \
-                     it off there's no pitch class indicator to mark",
-                );
-                ui.checkbox(&mut state.view.highlight_octave, "Octave").on_hover_text(
-                    "Recolor the marked note's octave glyph. This is the one \
-                     that still works for a chord voiced inside a single \
-                     pitch class, where every octave shares one node",
-                );
+                ValueBar::new(&mut state.view.mark_thickness, 0.0..=0.3, "Thickness")
+                    .show(ui)
+                    .on_hover_text(
+                        "How thick both mark rings are, in the same units as \
+                         the band radii and Gap. 0 turns the rings off; thick \
+                         values grow the bass ring in over the core, so raise \
+                         Band inner to make room",
+                    );
+                ValueBar::new(&mut state.view.mark_unlinked, 0.0..=1.0, "Unlinked")
+                    .show(ui)
+                    .on_hover_text(
+                        "Opacity of the rest of the ring -- the part cut off \
+                         from the marked octave's sector. The stretch beside \
+                         that sector always draws full. 1 keeps the whole \
+                         circle, 0 leaves only the arc over the marked octave. \
+                         The slits come from Gap, so Gap 0 leaves nothing to \
+                         separate and this does nothing",
+                    );
             });
 
             // Home grid: the always-drawn structural layer -- the faint
@@ -215,6 +227,17 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                 param_bar(ui, params, key);
             }
 
+            // Fade: how long a released note lingers. One time for the whole
+            // node — core, octave glyphs, and melody/bass marks — rather than
+            // one per layer, so a release reads as a single gesture instead
+            // of pieces of the node going dark at different moments.
+            section(ui, "Fade");
+            param_bar(ui, params, ParamKey::Fade).on_hover_text(
+                "Seconds a released note keeps fading — the pitch class core, \
+                 the octave glyphs, and the melody/bass marks together. 0 cuts \
+                 notes off the moment they're released",
+            );
+
             // Labels: the note text drawn on hovered and sounding nodes.
             section(ui, "Labels");
             ui.checkbox(&mut state.view.show_labels, "Note names");
@@ -226,8 +249,6 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
 
             // Effects: scene-wide extras layered over the notes.
             section(ui, "Effects");
-            ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
-                .on_hover_text("Light up lattice edges between simultaneously held nodes");
             // 0 = off (the renderer skips the whole post-process chain), so
             // the bar doubles as the toggle.
             ValueBar::new(&mut state.view.bloom_strength, 0.0..=1.5, "Bloom")

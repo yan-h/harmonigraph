@@ -3,7 +3,9 @@
 //! [`FrameParams`] mirror of the host-automatable appearance parameters.
 
 use crate::skin;
-use crate::style::{CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle};
+use crate::style::{
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
+};
 use lattice_core::{coords, LatticePos};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
@@ -67,16 +69,15 @@ pub struct ViewConfig {
     #[serde(default = "default_outer_outer", alias = "slice_outer")]
     pub outer_outer: f32,
     /// Outer-layer cohesion device (independent of the core): draw the
-    /// silent octaves faintly behind the sounding glyphs so a lone octave
-    /// still reads as a whole note — Slices ghosts its empty slots in the
-    /// note color to complete the annulus, Dots strings its glyphs on a
-    /// faint hoop. No effect on Rings (already closed circles) or Off. Was
-    /// implicitly tied to "core off", then its own on/off toggle.
+    /// silent octaves faintly behind the sounding sectors, in the note
+    /// color, so the annulus completes and a lone octave still reads as a
+    /// whole note. Inert while the layer is Off. Was implicitly tied to
+    /// "core off", then its own on/off toggle.
     ///
     /// Now an opacity, 0..1: 0 is off (exactly the old `false`) and 1 is
     /// the old `true`'s strength, with everything between available so the
     /// backdrop can sit as far under the sounding glyphs as you like. It
-    /// scales the shader's built-in hoop/ghost levels rather than
+    /// scales the shader's built-in ghost level rather than
     /// replacing them, so 1 reproduces the previous look byte for byte.
     /// Serialized under a new key, leaving the old one to the load-only
     /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop) bool.
@@ -102,6 +103,17 @@ pub struct ViewConfig {
     /// widens the glyph edges — shapes and angles are unchanged.
     #[serde(default = "default_outer_solidity")]
     pub outer_solidity: f32,
+    /// Padding inside the octave layer, in quad UV units: the constant
+    /// gap between one octave sector and the next, AND the gap separating
+    /// the melody/bass rings from the band. One number, because they read
+    /// as one rhythm — a ring sitting closer to the band than the sectors
+    /// sit to each other looks like a mistake.
+    ///
+    /// Was fixed at 0.12 (the sectors' gap; the rings used a narrower one
+    /// of their own). 0 closes the sectors into a solid annulus and seats
+    /// the rings right against it.
+    #[serde(default = "default_outer_gap")]
+    pub outer_gap: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -122,18 +134,39 @@ pub struct ViewConfig {
     pub node_body: LegacyNodeBody,
     // ---- Melody / bass highlight -----------------------------------------
     /// Which of the outer held notes to mark, so the melody and/or bass
-    /// line reads at a glance out of a chord.
+    /// line reads at a glance out of a chord. The mark rides the OUTER EDGE
+    /// of that note's octave indicator and nothing else — it never touches
+    /// the core, whose color is the note's own. That also makes it the layer
+    /// that survives a chord voiced within a single pitch class: every
+    /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
-    /// Mark the pitch class indicator (the node's core) of the outer notes.
-    #[serde(default = "default_true")]
-    pub highlight_core: bool,
-    /// Mark the octave indicator (the outer glyph) of the outer notes.
-    /// This is the one that survives a chord voiced within a single pitch
-    /// class — octaves of one note all land on the same node, so only the
-    /// octave layer can tell the top from the bottom there.
-    #[serde(default = "default_true")]
-    pub highlight_octave: bool,
+    /// Opacity of the part of a mark ring that is cut off from the octave
+    /// responsible for it, 0..1.
+    ///
+    /// Each ring is slit at that octave's two sector boundaries — the slit
+    /// IS the gap between two octaves, continued outward — which leaves the
+    /// stretch of ring belonging to the marked octave separated from the
+    /// remainder of the circle. That stretch always draws at full strength;
+    /// this fades everything else. 1 keeps the whole circle (the ring reads
+    /// as a ring, merely broken); 0 leaves only the arc over the marked
+    /// octave, which says WHICH octave loudly at the cost of the shape.
+    ///
+    /// A Gap of 0 leaves no slit, so there is nothing to separate and this
+    /// has no effect.
+    #[serde(default = "default_mark_unlinked")]
+    pub mark_unlinked: f32,
+    /// How thick each melody/bass ring is, in quad UV units — the same
+    /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
+    /// three read against each other directly. One thickness for both
+    /// rings: they are one mark seen at two radii, and letting them differ
+    /// would say something that isn't true.
+    ///
+    /// 0 turns the rings off, as a radius of 0 turns the core off. Was
+    /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
+    /// the band was resized; absolute holds them still.
+    #[serde(default = "default_mark_thickness")]
+    pub mark_thickness: f32,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -171,10 +204,6 @@ pub struct ViewConfig {
     /// link from an in-sheet line, and isn't a style choice.
     #[serde(default)]
     pub grid_dashed: bool,
-    /// Light up lattice edges between simultaneously sounding adjacent
-    /// nodes, so a chord's interval structure renders as geometry.
-    #[serde(default)]
-    pub show_chord_edges: bool,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
     /// derived from the fifth (in `root_ui`) and note-name labels drop
@@ -236,6 +265,24 @@ fn default_outer_solidity() -> f32 {
     1.0
 }
 
+/// The whole circle at full strength: the ring reads as a ring, and the
+/// slits alone say which octave owns it.
+fn default_mark_unlinked() -> f32 {
+    1.0
+}
+
+/// What 0.16 of the band's width came to at the default band, which is
+/// what the rings were fixed at before this was a bar.
+fn default_mark_thickness() -> f32 {
+    0.09
+}
+
+/// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
+/// the boundary), now also the rings' padding from the band.
+fn default_outer_gap() -> f32 {
+    0.12
+}
+
 /// Idle marker at the classic disc radius, so a pre-field blob (whose
 /// marker is a Circle) reproduces the old placeholder ring — now
 /// independent of the core and of the playing state.
@@ -243,10 +290,9 @@ fn default_idle_radius() -> f32 {
     0.46
 }
 
-/// The classic Slices annulus (SLICE_IN/OUT before the band was
-/// parameterized). Dots at this band renders larger than v1's (which
-/// occupied 0.545..0.795 — drag the bars there to recover that look
-/// exactly).
+/// The classic annulus (SLICE_IN/OUT, from before the band was
+/// parameterized), which is what a blob predating these keys was drawn
+/// with. A fresh view uses the wider band in `impl Default` instead.
 fn default_outer_inner() -> f32 {
     0.56
 }
@@ -311,10 +357,11 @@ impl ViewConfig {
     /// (off), the old solid `Orb` becomes solidity 1, and the old glow-only
     /// mode (`Glow`, also the bare `"None"` token) becomes solidity 0. The
     /// one-build NodeBody experiment's octave-only bodies map onto that glow
-    /// (solidity 0) plus the matching outer style with the backdrop on
-    /// (Beads was dots-on-a-hoop, which is exactly what a Dots outer with
-    /// the backdrop draws; its band radii rode the slice_inner/slice_outer
-    /// fields, absorbed by the outer_inner/outer_outer aliases).
+    /// (solidity 0) plus the outer layer with its backdrop on. Each of those
+    /// bodies once had its own matching glyph shape; only slices survives,
+    /// so all three now land there. (Their band radii rode the
+    /// slice_inner/slice_outer fields, absorbed by the
+    /// outer_inner/outer_outer aliases.)
     pub fn migrate_legacy(&mut self) {
         // The backdrop's pre-opacity bool: on means full strength, which
         // is what that build drew.
@@ -329,14 +376,12 @@ impl ViewConfig {
             CoreStyle::On => {}
         }
 
-        let outer = match std::mem::take(&mut self.node_body) {
+        match std::mem::take(&mut self.node_body) {
             LegacyNodeBody::Disc => return,
-            LegacyNodeBody::Slices => OuterStyle::Slices,
-            LegacyNodeBody::Rings => OuterStyle::Rings,
-            LegacyNodeBody::Beads => OuterStyle::Dots,
-        };
+            LegacyNodeBody::Slices | LegacyNodeBody::Rings | LegacyNodeBody::Beads => {}
+        }
         self.core_solidity = 0.0;
-        self.outer_style = outer;
+        self.outer_style = OuterStyle::Slices;
         self.outer_backdrop = 1.0;
     }
 }
@@ -374,19 +419,19 @@ impl Default for ViewConfig {
             outer_backdrop: 0.6,
             legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
+            outer_gap: default_outer_gap(),
             // Idle nodes are small dots with the grid lines running close
             // in to them, matching the compact core.
             idle_marker: IdleMarker::Dot,
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            highlight_core: true,
-            highlight_octave: true,
+            mark_unlinked: default_mark_unlinked(),
+            mark_thickness: default_mark_thickness(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,
             grid_dashed: false,
-            show_chord_edges: false,
             meantone: false,
             frameless: false,
             render_scale: default_render_scale(),
@@ -402,11 +447,11 @@ impl Default for ViewConfig {
 /// source of truth that's dead on arrival at load time.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameParams {
-    /// Seconds a released note's pitch class keeps fading.
-    pub pitch_class_fade_time: f32,
-    /// Seconds an octave indicator keeps fading after release; independent
-    /// of the note highlight.
-    pub octave_fade_time: f32,
+    /// Seconds a released note keeps fading, for EVERY layer of the node:
+    /// the pitch class core, the octave glyphs, and the melody/bass marks.
+    /// One time rather than one per layer, so a release reads as a single
+    /// gesture instead of layers going dark at different moments.
+    pub fade_time: f32,
     /// Pitch (MIDI note) mapped to the darkest gradient color on
     /// pitch-gradient channels.
     pub darkest_pitch: f32,
@@ -417,8 +462,7 @@ pub struct FrameParams {
 impl Default for FrameParams {
     fn default() -> Self {
         FrameParams {
-            pitch_class_fade_time: 1.0,
-            octave_fade_time: 1.0,
+            fade_time: 1.0,
             darkest_pitch: 24.0,
             brightest_pitch: 108.0,
         }
