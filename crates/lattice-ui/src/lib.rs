@@ -308,7 +308,9 @@ fn default_dock() -> DockState<panes::Tab> {
             panes::Tab::Spectrum,
         ],
     );
-    surface.split_below(right, 0.55, vec![panes::Tab::Console, panes::Tab::Notes]);
+    // Notes first so it sits left of Console and is the selected tab by
+    // default (egui_dock makes tab index 0 active).
+    surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
     surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
     dock
 }
