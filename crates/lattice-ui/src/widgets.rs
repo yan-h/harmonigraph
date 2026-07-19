@@ -367,11 +367,15 @@ mod tests {
         assert_eq!(v, v.round());
     }
 
+    /// A row-builder: lays out a control row, calling back to add its label
+    /// and button. Aliased so clippy doesn't flag the nested `dyn FnMut`.
+    type RowFn = fn(&mut Ui, &mut dyn FnMut(&mut Ui));
+
     /// Label center minus button center in a row built by `row`, under the
     /// theme's geometry (short interact_size, padded buttons). Not
     /// `__run_test_ui`: that empties the fonts, text measures zero-height,
     /// and the too-short row this guards against never happens.
-    fn row_offset(row: fn(&mut Ui, &mut dyn FnMut(&mut Ui))) -> f32 {
+    fn row_offset(row: RowFn) -> f32 {
         let mut offset = 0.0;
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(Default::default(), |ui| {
