@@ -160,9 +160,9 @@ pub struct ViewConfig {
     pub grid_thickness: f32,
     /// How far a grid segment stops short of each node center, as a factor
     /// of the node radius — the padding between a line end and the
-    /// dot/circle drawn there. The old fixed 1.05 is the default: slightly
-    /// wider than the disc's visual radius, so the gap fully contains a
-    /// sounding note's circle. 0 runs the lines right into the centers.
+    /// dot/circle drawn there. 0 runs the lines right into the centers;
+    /// the old fixed 1.05 sat slightly wider than the disc's visual radius,
+    /// so the gap fully contained a sounding note's circle.
     ///
     #[serde(default = "default_grid_inset")]
     pub grid_inset: f32,
@@ -192,9 +192,9 @@ pub struct ViewConfig {
     #[serde(default = "default_render_scale")]
     pub render_scale: f32,
     /// Bloom post-process: how much blurred brightness gets added back
-    /// as a halo around bright notes. 0 (the default) disables the chain
-    /// entirely — the composite is then exactly the plain scene, so there
-    /// is deliberately no separate on/off toggle.
+    /// as a halo around bright notes. 0 disables the chain entirely — the
+    /// composite is then exactly the plain scene, so there is deliberately
+    /// no separate on/off toggle.
     #[serde(default)]
     pub bloom_strength: f32,
 }
@@ -215,13 +215,17 @@ where
     serde::Deserialize::deserialize(d).map(Some)
 }
 
+// The `default_*` fns below are serde fallbacks for keys a persisted blob
+// PREDATES, not the out-of-the-box look — each returns what that blob was
+// drawn with before the field existed, so loading an old view doesn't
+// restyle it. A fresh view's values live in `impl Default` instead.
+
 /// The classic disc edge radius, from before the core was sizable.
 fn default_core_radius() -> f32 {
     0.46
 }
 
-/// Solid orb by default — the classic look, and the identity end of the
-/// solidity axis.
+/// The classic solid orb — the identity end of the solidity axis.
 fn default_core_solidity() -> f32 {
     1.0
 }
@@ -232,17 +236,17 @@ fn default_outer_solidity() -> f32 {
     1.0
 }
 
-/// Idle marker at the classic disc radius, so the default (a Circle)
-/// reproduces the old placeholder ring — now independent of the core and
-/// of the playing state.
+/// Idle marker at the classic disc radius, so a pre-field blob (whose
+/// marker is a Circle) reproduces the old placeholder ring — now
+/// independent of the core and of the playing state.
 fn default_idle_radius() -> f32 {
     0.46
 }
 
-/// Outer band defaults: the classic Slices annulus (SLICE_IN/OUT before
-/// the band was parameterized), matching the default outer style. Dots at
-/// this band renders larger than v1's (which occupied 0.545..0.795 —
-/// drag the bars there to recover that look exactly).
+/// The classic Slices annulus (SLICE_IN/OUT before the band was
+/// parameterized). Dots at this band renders larger than v1's (which
+/// occupied 0.545..0.795 — drag the bars there to recover that look
+/// exactly).
 fn default_outer_inner() -> f32 {
     0.56
 }
@@ -337,15 +341,21 @@ impl ViewConfig {
     }
 }
 
+/// The look a fresh view starts in — deliberately NOT the same thing as the
+/// `default_*` fns above, which exist to keep a blob saved before a field
+/// existed looking the way it did then. Where the two disagree the value is
+/// written literally here, so tuning the out-of-the-box look never
+/// retroactively restyles someone's saved view.
 impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            // A tall window of fifths, a wide band of thirds, and one step
-            // of sevenths out of the box.
+            // A tall window of fifths and a wide band of thirds; sevenths
+            // start collapsed to the single home sheet (extent 0), so the
+            // lattice opens flat and depth is opted into.
             extent_threes: 10,
             extent_fives: 6,
-            extent_sevens: 1,
+            extent_sevens: 0,
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
@@ -354,28 +364,33 @@ impl Default for ViewConfig {
             show_cents: true,
             node_style: NodeStyle::Checker,
             core_style: CoreStyle::default(),
-            core_solidity: default_core_solidity(),
-            core_radius: default_core_radius(),
-            outer_inner: default_outer_inner(),
-            outer_outer: default_outer_outer(),
-            outer_backdrop: 0.0,
+            // A small, soft core inside a wide octave band with its silent
+            // slots ghosted in: the pitch class reads as a compact center
+            // and the octaves carry the node's outline.
+            core_solidity: 0.4,
+            core_radius: 0.2,
+            outer_inner: 0.45,
+            outer_outer: 1.0,
+            outer_backdrop: 0.6,
             legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
-            idle_marker: IdleMarker::default(),
-            idle_radius: default_idle_radius(),
+            // Idle nodes are small dots with the grid lines running close
+            // in to them, matching the compact core.
+            idle_marker: IdleMarker::Dot,
+            idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
             highlight_core: true,
             highlight_octave: true,
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
-            grid_inset: default_grid_inset(),
+            grid_inset: 0.3,
             grid_dashed: false,
             show_chord_edges: false,
             meantone: false,
             frameless: false,
             render_scale: default_render_scale(),
-            bloom_strength: 0.0,
+            bloom_strength: 0.5,
         }
     }
 }

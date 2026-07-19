@@ -230,11 +230,17 @@ fn chord_edges_connect_adjacent_active_nodes() {
 #[test]
 fn grid_segments_connect_neighbors_but_leave_node_gaps() {
     // A 3×3 window: 2·3 horizontal + 3·2 vertical inter-neighbor
-    // segments, none along the unused sevens axis.
+    // segments, none along the unused sevens axis. The gap-clears-the-disc
+    // half of this is a claim about ONE inset (the classic 1.05, which was
+    // chosen to contain the classic 0.46 disc), so pin both here rather
+    // than ride whatever the current defaults are — a smaller default gap
+    // is a look choice, not a regression.
     let view = ViewConfig {
         extent_threes: 1,
         extent_fives: 1,
         extent_sevens: 0,
+        grid_inset: 1.05,
+        core_radius: 0.46,
         ..ViewConfig::default()
     };
     let scene = scene_of(
@@ -707,7 +713,7 @@ fn legacy_node_body_folds_into_core_and_outer() {
 
     let mut view = ViewConfig { node_body: LegacyNodeBody::Disc, ..ViewConfig::default() };
     view.migrate_legacy();
-    assert_eq!(view.core_solidity, 1.0);
+    assert_eq!(view.core_solidity, ViewConfig::default().core_solidity);
     assert_eq!(view.outer_style, ViewConfig::default().outer_style);
 }
 
@@ -987,8 +993,9 @@ fn pick_selects_the_node_nearest_the_pointer() {
 fn idle_off_sheet_nodes_are_not_pickable() {
     // An idle node off the home sheet draws nothing, so hovering where
     // it would be must not hand back its pitch. Sounding makes it
-    // visible, and pickable again.
-    let view = ViewConfig::default();
+    // visible, and pickable again. Needs a sevens extent: the default view
+    // is the home sheet alone, which has no off-sheet node to hover.
+    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
     let tuning = Tuning::default();
     let viewport = Vec2::new(800.0, 600.0);
 
