@@ -16,11 +16,15 @@ type VoiceKey = (u8, u8);
 /// The highest and lowest HELD voices, as the caller asked for them —
 /// either is `None` when that end isn't being marked or nothing is held.
 ///
-/// Held only: a released voice is fading out, and letting it keep the mark
-/// would steal it from the note that actually replaced it. Compared on
-/// `pitch` rather than the raw key, because MPE and per-note tuning can
-/// bend a voice past its neighbor — the same reason the notes pane sorts
-/// on pitch.
+/// Held only: a released voice is no longer part of the chord, so it can't
+/// take the mark from the note that replaced it. It doesn't lose the mark
+/// outright, though — it keeps whichever end it held at the moment it was
+/// let go (`Voice::was_melody`/`was_bass`, stamped by the tracker) and fades
+/// out still wearing it, which is what [`marks`] resolves per voice.
+///
+/// Compared on `pitch` rather than the raw key, because MPE and per-note
+/// tuning can bend a voice past its neighbor — the same reason the notes
+/// pane sorts on pitch.
 pub(crate) fn held_extremes(
     tracker: &NoteTracker,
     which: HighlightExtremes,
@@ -45,6 +49,29 @@ pub(crate) fn held_extremes(
     (melody, bass)
 }
 
+/// Which ends `voice` currently wears, as `(melody, bass)`. A held voice
+/// wears an end while it IS that end of the chord; a released one keeps
+/// whatever it wore when it was let go, so its mark fades out with it
+/// rather than vanishing the instant the key comes up. Both can be true at
+/// once — a lone note is its own melody and bass.
+fn marks(
+    voice: &lattice_core::Voice,
+    which: HighlightExtremes,
+    live: (Option<VoiceKey>, Option<VoiceKey>),
+) -> (bool, bool) {
+    match voice.state {
+        // `live` is already filtered by `which` (see held_extremes).
+        lattice_core::VoiceState::Held => {
+            let key = Some((voice.channel, voice.note));
+            (live.0 == key, live.1 == key)
+        }
+        lattice_core::VoiceState::Released { .. } => (
+            which.marks_melody() && voice.was_melody,
+            which.marks_bass() && voice.was_bass,
+        ),
+    }
+}
+
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 pub fn derive_scene(
@@ -59,7 +86,7 @@ pub fn derive_scene(
     let mut nodes = Vec::with_capacity(view.visible_count());
     let center = view.center();
     let eye = camera.eye();
-    let (melody, bass) = held_extremes(tracker, view.highlight_extremes);
+    let live_extremes = held_extremes(tracker, view.highlight_extremes);
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
@@ -71,14 +98,16 @@ pub fn derive_scene(
         let mut seed = 0.0f32;
         let mut melody_slots = 0u32;
         let mut bass_slots = 0u32;
+        let mut melody_level = 0.0f32;
+        let mut bass_level = 0.0f32;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
         for voice in tracker.voices() {
             if tuning.matches(voice.pitch_class, node_pc) {
-                let a = voice.activation(now, frame.pitch_class_fade_time);
-                if a > activation {
-                    activation = a;
+                let envelope = voice.activation(now, frame.fade_time);
+                if envelope > activation {
+                    activation = envelope;
                     color = channel_color(
                         voice.channel,
                         voice.pitch,
@@ -91,20 +120,27 @@ pub fn derive_scene(
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
                 // Smoothstep ease-in over the first OCTAVE_ATTACK_TIME;
                 // release still fades on the octave envelope.
-                let a = ((now - voice.on_time) / OCTAVE_ATTACK_TIME).clamp(0.0, 1.0) as f32;
-                let attack = a * a * (3.0 - 2.0 * a);
-                octaves[slot] = octaves[slot]
-                    .max(voice.activation(now, frame.octave_fade_time) * attack);
+                let t = ((now - voice.on_time) / OCTAVE_ATTACK_TIME).clamp(0.0, 1.0) as f32;
+                let attack = t * t * (3.0 - 2.0 * t);
+                octaves[slot] = octaves[slot].max(envelope * attack);
 
                 // Mark the outer notes in the slot they sound in. Set on
                 // every node the voice matches, exactly as its activation
                 // is, so the mark can't disagree with the lighting.
-                let key = (voice.channel, voice.note);
-                if melody == Some(key) {
+                //
+                // The level is the strongest marked voice ON THIS NODE, not
+                // the node's own activation: a released melody fades while a
+                // still-held voice can keep the node at full. It's the core
+                // collar that reads it — the octave marks fade with their
+                // own slot's envelope, which is finer-grained still.
+                let (is_melody, is_bass) = marks(voice, view.highlight_extremes, live_extremes);
+                if is_melody {
                     melody_slots |= 1 << slot;
+                    melody_level = melody_level.max(envelope);
                 }
-                if bass == Some(key) {
+                if is_bass {
                     bass_slots |= 1 << slot;
+                    bass_level = bass_level.max(envelope);
                 }
             }
         }
@@ -134,6 +170,8 @@ pub fn derive_scene(
             cents: node_pc.to_cents(),
             melody_slots,
             bass_slots,
+            melody_level,
+            bass_level,
         });
     }
 

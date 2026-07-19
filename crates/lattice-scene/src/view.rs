@@ -387,11 +387,11 @@ impl Default for ViewConfig {
 /// source of truth that's dead on arrival at load time.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameParams {
-    /// Seconds a released note's pitch class keeps fading.
-    pub pitch_class_fade_time: f32,
-    /// Seconds an octave indicator keeps fading after release; independent
-    /// of the note highlight.
-    pub octave_fade_time: f32,
+    /// Seconds a released note keeps fading, for EVERY layer of the node:
+    /// the pitch class core, the octave glyphs, and the melody/bass marks.
+    /// One time rather than one per layer, so a release reads as a single
+    /// gesture instead of layers going dark at different moments.
+    pub fade_time: f32,
     /// Pitch (MIDI note) mapped to the darkest gradient color on
     /// pitch-gradient channels.
     pub darkest_pitch: f32,
@@ -402,8 +402,7 @@ pub struct FrameParams {
 impl Default for FrameParams {
     fn default() -> Self {
         FrameParams {
-            pitch_class_fade_time: 1.0,
-            octave_fade_time: 1.0,
+            fade_time: 1.0,
             darkest_pitch: 24.0,
             brightest_pitch: 108.0,
         }

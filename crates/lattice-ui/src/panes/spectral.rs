@@ -279,7 +279,7 @@ pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // instead of hiding it.
     if cfg.show_voice_bars {
         for voice in state.tracker.voices() {
-            let activation = voice.activation(now, state.frame_params.pitch_class_fade_time);
+            let activation = voice.activation(now, state.frame_params.fade_time);
             if activation <= 0.0 || !(min_midi..=max_midi).contains(&voice.pitch) {
                 continue;
             }

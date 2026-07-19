@@ -73,8 +73,8 @@ fn octaves_fade_independently() {
         kind: NoteEventKind::Off, // ...and released
     });
 
-    // Half a pitch_class_fade_time after the release.
-    let frame = FrameParams { pitch_class_fade_time: 1.0, ..FrameParams::default() };
+    // Half a fade_time after the release.
+    let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
     let scene =
         scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 0.6);
     let origin = origin_node(&scene);
@@ -88,38 +88,46 @@ fn octaves_fade_independently() {
 }
 
 #[test]
-fn octave_fade_time_is_independent_of_note_fade() {
-    // Note fade short, octave fade long: after the note highlight ends,
-    // the disc goes idle but the octave indicator is still fading.
+fn one_fade_time_carries_every_layer_of_the_node() {
+    // The core, the octave glyphs, and the melody/bass marks all ride the
+    // single Fade param: release a two-note chord and half a fade later
+    // every layer must be half-way down together, none of them already
+    // dark and none still at full.
     let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::Off,
-    });
-    let frame = FrameParams {
-        pitch_class_fade_time: 0.2,
-        octave_fade_time: 2.0,
-        ..FrameParams::default()
+    for note in [60u8, 67] {
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    for note in [60u8, 67] {
+        tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note, kind: NoteEventKind::Off });
+    }
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    tracker.prune(1.0, frame.fade_time);
+    let view = ViewConfig {
+        highlight_extremes: HighlightExtremes::Both,
+        ..ViewConfig::default()
     };
-    // Prune with the longer of the two, as root_ui does.
-    tracker.prune(1.0, frame.pitch_class_fade_time.max(frame.octave_fade_time));
-    let scene =
-        scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 1.0);
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
+
+    let half = |what: &str, v: f32| {
+        assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
+    };
+    // C4 is the bass and sits on the origin node.
     let origin = origin_node(&scene);
-    assert_eq!(origin.activation, 0.0, "pitch class fade has ended");
-    assert!(
-        origin.octaves[4] > 0.0 && origin.octaves[4] < 0.75,
-        "octave still mid-fade, got {}",
-        origin.octaves[4]
-    );
+    half("the core", origin.activation);
+    half("the octave glyph", origin.octaves[4]);
+    half("the bass mark", origin.bass_level);
+    // G4 is the melody, one fifth up the lattice.
+    let melody = scene
+        .nodes
+        .iter()
+        .find(|n| n.melody_slots != 0)
+        .expect("the released melody keeps its mark while it fades");
+    half("the melody mark", melody.melody_level);
 }
 
 #[test]
@@ -458,10 +466,11 @@ fn melody_and_bass_mark_the_outer_held_notes() {
 }
 
 #[test]
-fn a_lone_held_note_is_marked_as_both_ends_so_it_draws_unmarked() {
-    // One note is at once the highest and the lowest held. The scene
-    // marks it as both; the shader's "claimed by both ends" rule is
-    // what then leaves it unmarked, with no special case of its own.
+fn a_lone_held_note_is_marked_as_both_ends() {
+    // One note is at once the highest and the lowest held, and is marked
+    // as both. The shader splits such a mark between the two colors (see
+    // mark_paint) rather than blanking it, which is what it used to do --
+    // an outline that vanished exactly when two things were true at once.
     let scene = marked_scene(&[60], HighlightExtremes::Both);
     let mut seen = false;
     for n in &scene.nodes {
@@ -469,7 +478,11 @@ fn a_lone_held_note_is_marked_as_both_ends_so_it_draws_unmarked() {
             n.melody_slots, n.bass_slots,
             "a lone note must claim identical slots at both ends"
         );
-        seen |= n.melody_slots != 0;
+        if n.melody_slots != 0 {
+            seen = true;
+            assert_eq!(n.melody_level, 1.0, "held, so the mark is at full");
+            assert_eq!(n.bass_level, 1.0);
+        }
     }
     assert!(seen, "the note should have been marked somewhere");
 }
@@ -497,9 +510,55 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
 }
 
 #[test]
-fn released_notes_do_not_keep_the_mark() {
-    // A released voice is fading out; letting it hold the mark would
-    // steal it from the note that actually replaced it.
+fn a_released_mark_fades_out_while_a_held_note_keeps_its_node_lit() {
+    // The motivating case for tracking mark levels apart from the node's
+    // activation. C4 and C5 share a pitch class, so they light ONE node.
+    // Release the top one: the node stays fully lit by the held C4, but
+    // the melody mark it was wearing has to fade out on its own.
+    let mut tracker = NoteTracker::new();
+    for note in [60u8, 72] {
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note: 72, kind: NoteEventKind::Off });
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let view = ViewConfig {
+        highlight_extremes: HighlightExtremes::Both,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
+    let origin = origin_node(&scene);
+    assert_eq!(origin.activation, 1.0, "the held C4 keeps the node lit");
+    // The released C5 wears a fading melody mark on ITS octave slot while
+    // C4, now the top held note, takes the live one — the two crossfade
+    // rather than the mark jumping. C4 is also the bass (it is the only
+    // note held), so it claims both ends and the shader splits its glyph.
+    assert_eq!(origin.melody_slots, (1 << 5) | (1 << 4), "the two melodies crossfade");
+    assert_eq!(origin.bass_slots, 1 << 4, "only the held C4 is the bass");
+    // The octave marks fade with their own slots, which is what separates
+    // the fading C5 from the held C4 here.
+    assert!(
+        (origin.octaves[5] - 0.5).abs() < 1e-5,
+        "the released C5's octave is half-faded, got {}",
+        origin.octaves[5]
+    );
+    assert_eq!(origin.octaves[4], 1.0, "the held C4's octave is at full");
+    // The node-level mark levels feed the CORE collar, which speaks for the
+    // pitch class as a whole: C is the melody and the bass right now, both
+    // at full, because a held voice claims each end.
+    assert_eq!(origin.melody_level, 1.0);
+    assert_eq!(origin.bass_level, 1.0);
+}
+
+#[test]
+fn held_extremes_never_names_a_released_voice() {
+    // A released voice keeps whatever mark it was wearing (above), but it
+    // is out of the running for the LIVE ends: letting it stay "the
+    // melody" would steal that from the note that actually replaced it.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {

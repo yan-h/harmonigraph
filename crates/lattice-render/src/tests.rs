@@ -104,10 +104,12 @@ fn parity_scene() -> Scene {
             scale: 0.9 + f * 0.06,
             on_home: i % 2 == 0,
             cents: f * 190.0,
-            // Exercise the mark paths: one node marked melody, one
-            // bass, and one claiming both slots (which draws unmarked).
-            melody_slots: if i == 0 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
-            bass_slots: if i == 2 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
+            // Exercise the mark paths: one node marked melody, one bass,
+            // and one claiming both slots at once (the split mark).
+            melody_slots: if i == 0 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
+            bass_slots: if i == 2 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
+            melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
+            bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
         });
     }
     let edges = vec![lattice_scene::EdgeInstance {
@@ -382,6 +384,10 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         cents: 0.0,
         melody_slots,
         bass_slots,
+        // A mark only draws at the level its own note is at; these stand in
+        // for a freshly-held note.
+        melody_level: f32::from(melody_slots != 0),
+        bass_level: f32::from(bass_slots != 0),
     }];
     scene.edges.clear();
     scene.grid.clear();
@@ -495,6 +501,31 @@ fn melody_bass_marks_are_visible_on_each_layer() {
         shot(&s, 44)
     };
     assert_eq!(changed_px(&off), 0, "no layer selected must draw no mark");
+
+    // An indicator claimed by BOTH ends -- a lone held note, or a chord
+    // whose top and bottom share a pitch class -- used to be blanked, so
+    // the outline vanished exactly when two things were true at once. It
+    // now splits between the two colors, and must draw as much as either
+    // end alone does. This is the regression that guards that.
+    let split = shot(&single_marked_node(1, 1), 45);
+    let split_px = changed_px(&split);
+    eprintln!("split mark {split_px} px of {node_px}");
+    assert!(
+        split_px * 2 >= both_px,
+        "a mark claimed by both ends all but disappeared: \
+         {split_px} px against {both_px} for one end alone"
+    );
+
+    // ...and it really is BOTH colors, not one end quietly winning: the
+    // melody-only and bass-only pictures must each differ from the split.
+    let bass_only = shot(&single_marked_node(0, 1), 46);
+    let differs = |a: &[u8], b: &[u8]| {
+        a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
+    };
+    assert!(
+        differs(&split, &both) > 0 && differs(&split, &bass_only) > 0,
+        "the split mark is indistinguishable from a single-ended one"
+    );
 }
 
 #[test]
@@ -651,3 +682,4 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+

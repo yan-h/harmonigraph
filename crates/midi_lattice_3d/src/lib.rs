@@ -58,10 +58,12 @@ pub struct MidiLattice3dParams {
     pub seven: FloatParam,
     #[id = "tuning-tolerance"]
     pub tolerance: FloatParam,
+    /// Keeps the pre-merge id: this used to be the pitch class's own fade,
+    /// and it now drives every layer. Reusing the id means projects
+    /// automating it keep their value instead of snapping back to the
+    /// default. (The retired "octave-fade" id is simply ignored on load.)
     #[id = "pitch-class-fade"]
-    pub pitch_class_fade: FloatParam,
-    #[id = "octave-fade"]
-    pub octave_fade: FloatParam,
+    pub fade: FloatParam,
     #[id = "darkest-pitch"]
     pub darkest_pitch: FloatParam,
     #[id = "brightest-pitch"]
@@ -95,8 +97,7 @@ impl Default for MidiLattice3dParams {
             five: param_for_key(ParamKey::Five),
             seven: param_for_key(ParamKey::Seven),
             tolerance: param_for_key(ParamKey::Tolerance),
-            pitch_class_fade: param_for_key(ParamKey::PitchClassFade),
-            octave_fade: param_for_key(ParamKey::OctaveFade),
+            fade: param_for_key(ParamKey::Fade),
             darkest_pitch: param_for_key(ParamKey::DarkestPitch),
             brightest_pitch: param_for_key(ParamKey::BrightestPitch),
         }
@@ -111,8 +112,7 @@ impl MidiLattice3dParams {
             ParamKey::Five => &self.five,
             ParamKey::Seven => &self.seven,
             ParamKey::Tolerance => &self.tolerance,
-            ParamKey::PitchClassFade => &self.pitch_class_fade,
-            ParamKey::OctaveFade => &self.octave_fade,
+            ParamKey::Fade => &self.fade,
             ParamKey::DarkestPitch => &self.darkest_pitch,
             ParamKey::BrightestPitch => &self.brightest_pitch,
         }

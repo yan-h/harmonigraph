@@ -104,10 +104,21 @@ pub struct NodeInstance {
     /// single pitch class), and the two must stay tellable apart.
     pub melody_slots: u32,
     /// The same for the bass — the lowest held note. A slot set in BOTH
-    /// masks is a note that is simultaneously the melody and the bass, so
-    /// there is nothing to distinguish and it draws unmarked; see
-    /// [`HighlightExtremes`].
+    /// masks is a note that is at once the melody and the bass (a lone held
+    /// note, or the two ends of a chord voiced inside one octave); the
+    /// shader then draws the mark split between the two colors rather than
+    /// dropping it. See [`HighlightExtremes`].
     pub bass_slots: u32,
+    /// Envelope of the mark itself, 0..1, so a melody/bass mark fades out
+    /// with its note instead of snapping off at release. Separate from
+    /// `activation` because the marked voice can be fading while a
+    /// different, still-held voice keeps the NODE at full activation — the
+    /// mark has to follow its own note, not the node's brightest one.
+    ///
+    /// The octave glyphs need no such field: each slot already carries its
+    /// own envelope in `octaves`, and a mark on a slot fades with it.
+    pub melody_level: f32,
+    pub bass_level: f32,
 }
 
 impl NodeInstance {

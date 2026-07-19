@@ -417,20 +417,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         state.tuning.lock_meantone();
     }
     state.frame_params = FrameParams {
-        pitch_class_fade_time: params.get(params::ParamKey::PitchClassFade),
-        octave_fade_time: params.get(params::ParamKey::OctaveFade),
+        fade_time: params.get(params::ParamKey::Fade),
         darkest_pitch: params.get(params::ParamKey::DarkestPitch),
         brightest_pitch: params.get(params::ParamKey::BrightestPitch),
     };
-    // Voices must outlive the LONGER of the two fades or the octave
-    // indicators get truncated when the note highlight ends first.
-    state.tracker.prune(
-        now,
-        state
-            .frame_params
-            .pitch_class_fade_time
-            .max(state.frame_params.octave_fade_time),
-    );
+    // Every layer of a node now fades on this one time, so a voice is dead
+    // to the display exactly when its envelope reaches zero.
+    state.tracker.prune(now, state.frame_params.fade_time);
 
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
     // meet with no chrome between them — clean for captures). The pane

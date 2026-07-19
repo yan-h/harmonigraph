@@ -55,8 +55,6 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         (NodeStyle::Pinwheel, "Pinwheel", ""),
                     ],
                 );
-                // How long the core keeps fading after a note releases.
-                param_bar(ui, params, ParamKey::PitchClassFade);
             });
 
             // Octaves: which octaves of the pitch class are sounding, shown
@@ -114,9 +112,6 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                              lone octave still reads as a whole note. 0 = off",
                         );
                 });
-                // How long the octave glyphs keep fading after release
-                // (independent of the core's fade above).
-                param_bar(ui, params, ParamKey::OctaveFade);
             });
 
             // Melody / bass: mark the outer held notes so a chord's top and
@@ -133,21 +128,24 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     (
                         HighlightExtremes::Both,
                         "Both",
-                        "Mark both, each in its own color. A note that is at \
-                         once the highest and the lowest -- a lone note -- is \
-                         left unmarked: there's nothing to tell apart",
+                        "Mark both, each in its own color. An indicator claimed \
+                         by both ends at once -- a lone held note, or a chord \
+                         whose top and bottom share a pitch class -- splits \
+                         between the two colors rather than going unmarked",
                     ),
                 ],
             );
             ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
                 ui.checkbox(&mut state.view.highlight_core, "Pitch class").on_hover_text(
-                    "Ring the marked note's node. Needs the Core on -- with \
-                     it off there's no pitch class indicator to mark",
+                    "Collar the marked note's node, just outside the disc so \
+                     the note's own color still reads. Needs the Core on -- \
+                     with it off there's no pitch class indicator to mark",
                 );
                 ui.checkbox(&mut state.view.highlight_octave, "Octave").on_hover_text(
-                    "Recolor the marked note's octave glyph. This is the one \
-                     that still works for a chord voiced inside a single \
-                     pitch class, where every octave shares one node",
+                    "Outline the marked note's octave glyph, leaving its pitch \
+                     color intact. This is the one that still works for a chord \
+                     voiced inside a single pitch class, where every octave \
+                     shares one node",
                 );
             });
 
@@ -214,6 +212,17 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
             for &key in &ParamKey::COLOR {
                 param_bar(ui, params, key);
             }
+
+            // Fade: how long a released note lingers. One time for the whole
+            // node — core, octave glyphs, and melody/bass marks — rather than
+            // one per layer, so a release reads as a single gesture instead
+            // of pieces of the node going dark at different moments.
+            section(ui, "Fade");
+            param_bar(ui, params, ParamKey::Fade).on_hover_text(
+                "Seconds a released note keeps fading — the pitch class core, \
+                 the octave glyphs, and the melody/bass marks together. 0 cuts \
+                 notes off the moment they're released",
+            );
 
             // Labels: the note text drawn on hovered and sounding nodes.
             section(ui, "Labels");

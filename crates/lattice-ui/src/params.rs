@@ -21,10 +21,11 @@ pub enum ParamKey {
     Seven,
     /// Node matching tolerance in cents.
     Tolerance,
-    /// Seconds a note stays highlighted after release.
-    PitchClassFade,
-    /// Seconds an octave indicator keeps fading after release.
-    OctaveFade,
+    /// Seconds a released note keeps fading. ONE time for every note
+    /// indicator — the pitch class core, the octave glyphs, and the
+    /// melody/bass marks all ride it, so a release is a single gesture
+    /// across the whole node instead of layers ending at different moments.
+    Fade,
     /// Pitch (MIDI note) shown darkest on pitch-colored channels (10-14 in
     /// MIDI convention).
     DarkestPitch,
@@ -37,14 +38,13 @@ pub enum ParamKey {
 pub const MAX_TUNING_OFFSET: f32 = 40.0;
 
 impl ParamKey {
-    pub const ALL: [ParamKey; 9] = [
+    pub const ALL: [ParamKey; 8] = [
         ParamKey::COffset,
         ParamKey::Three,
         ParamKey::Five,
         ParamKey::Seven,
         ParamKey::Tolerance,
-        ParamKey::PitchClassFade,
-        ParamKey::OctaveFade,
+        ParamKey::Fade,
         ParamKey::DarkestPitch,
         ParamKey::BrightestPitch,
     ];
@@ -68,8 +68,7 @@ impl ParamKey {
             ParamKey::Five => "Major third (¢)",
             ParamKey::Seven => "Harmonic seventh (¢)",
             ParamKey::Tolerance => "Tolerance (¢)",
-            ParamKey::PitchClassFade => "Pitch class fade (s)",
-            ParamKey::OctaveFade => "Octave fade (s)",
+            ParamKey::Fade => "Fade (s)",
             ParamKey::DarkestPitch => "Darkest pitch",
             ParamKey::BrightestPitch => "Brightest pitch",
         }
@@ -85,8 +84,7 @@ impl ParamKey {
             ParamKey::Five => "Major Third (cents)",
             ParamKey::Seven => "Harmonic Seventh (cents)",
             ParamKey::Tolerance => "Tuning Tolerance (cents)",
-            ParamKey::PitchClassFade => "Pitch Class Fade (sec)",
-            ParamKey::OctaveFade => "Octave Fade (sec)",
+            ParamKey::Fade => "Note Fade (sec)",
             ParamKey::DarkestPitch => "Darkest Pitch",
             ParamKey::BrightestPitch => "Brightest Pitch",
         }
@@ -102,8 +100,7 @@ impl ParamKey {
             ParamKey::Five => tuning::FIVE_12TET,
             ParamKey::Seven => tuning::SEVEN_12TET,
             ParamKey::Tolerance => 0.5,
-            ParamKey::PitchClassFade => 1.0,
-            ParamKey::OctaveFade => 1.0,
+            ParamKey::Fade => 1.0,
             ParamKey::DarkestPitch => 24.0,
             ParamKey::BrightestPitch => 108.0,
         }
@@ -122,8 +119,7 @@ impl ParamKey {
                 tuning::SEVEN_JUST - MAX_TUNING_OFFSET..=tuning::SEVEN_JUST + MAX_TUNING_OFFSET
             }
             ParamKey::Tolerance => 0.001..=49.999,
-            ParamKey::PitchClassFade => 0.0..=100.0,
-            ParamKey::OctaveFade => 0.0..=100.0,
+            ParamKey::Fade => 0.0..=100.0,
             // Same ranges as v1's grid params.
             ParamKey::DarkestPitch => 0.0..=60.0,
             ParamKey::BrightestPitch => 60.0..=120.0,
@@ -133,7 +129,7 @@ impl ParamKey {
     pub fn logarithmic(self) -> bool {
         matches!(
             self,
-            ParamKey::Tolerance | ParamKey::PitchClassFade | ParamKey::OctaveFade
+            ParamKey::Tolerance | ParamKey::Fade
         )
     }
 
