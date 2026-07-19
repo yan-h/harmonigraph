@@ -29,11 +29,11 @@ struct Uniforms {
     // softness knob to render pixels); w unused. The dots style maps a
     // dot's pitch through x/y to index dot_ramp.
     misc2: vec4<f32>,
-    // x: signed core radius in quad UV units — >0 is the orb (disc +
-    // glow), 0 is glow only (no disc), <0 is nothing (no disc, no glow).
-    // y/z: the outer layer's inner/outer band radii (same units; the
-    // scene guarantees z > y). w: outer backdrop flag (1 = ghost the
-    // silent octaves to complete the ring; independent of the core).
+    // x: signed core radius in quad UV units — >=0 is the radius R (the
+    // core is on); <0 is None (nothing). y/z: the outer layer's inner/outer
+    // band radii (same units; the scene guarantees z > y). w: outer
+    // backdrop flag (1 = ghost the silent octaves to complete the ring;
+    // independent of the core).
     misc3: vec4<f32>,
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
@@ -42,6 +42,9 @@ struct Uniforms {
     // drawn in this constant grey, so a releasing note's ring stays grey
     // (not the note hue) and never snaps color when the voice is pruned.
     node_idle: vec4<f32>,
+    // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
+    // core layer runs on. y/z/w unused.
+    misc4: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -203,9 +206,14 @@ const HOOP_LEVEL: f32 = 0.30;
 // by the note's activation so ghosts fade out with the pitch class.
 const GHOST_LEVEL: f32 = 0.16;
 // The classic disc-edge radius: normalizes the field paint to the sized
-// orb, and stands in for the core radius where a no-core node still needs
+// orb, and stands in for the core radius where a coreless node still needs
 // one (channel 14's outline ring).
 const CORE_R_CLASSIC: f32 = 0.46;
+// Extra half-width added to the core disc's edge as solidity drops from 1
+// to 0: at solidity 1 the edge is a crisp screen-constant band (the
+// classic orb), at 0 it has spread this far and the disc has faded out
+// into the glow skirt. Tunes how "soft" a mid-solidity core reads.
+const CORE_EDGE_SOFT: f32 = 0.30;
 
 // Coverage (0..1) of the outer glyph for octave slot `i` on a node whose
 // pitch class is `cents`, drawing style `mode` in the uniform band. Reads
@@ -534,26 +542,35 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // below use this instead of fixed-uv smoothsteps.
     let aa = aa_width(fwidth(in.uv.x));
 
-    // Core layer, three modes read from the signed core_r (u.misc3.x):
-    // >0 is the orb (disc out to core_r, plus its brighter glow); 0 is
-    // glow only (no disc); <0 is nothing at all (no disc, no glow) — the
-    // outer glyphs then carry the note alone. Channel-14 voices render as
-    // an outline ring in EVERY mode (v1 semantics; sized by the classic
-    // radius where there is no orb) so the channel stays recognizable.
-    // Unplayed nodes draw no disc at all — the background grid's gap marks
-    // the position instead. Activation fades the disc in (and back out on
-    // release); hover has no effect on the disc (the node-name label is
-    // the hover feedback, drawn by the UI layer).
+    // Core layer, unified onto ONE solidity axis. The signed core_r
+    // (u.misc3.x) carries the radius R (>=0 means the core is on; <0 is
+    // None — nothing at all). Solidity (u.misc4.x, 0..1) morphs the core
+    // between the two ends of a single shape: 0 is a soft under-glow, 1 is
+    // the classic solid orb, and in between the opaque disc fades in over
+    // its glow skirt while its edge crisps. Channel-14 voices render as an
+    // outline ring in every mode (v1 semantics) so the channel stays
+    // recognizable; unplayed nodes draw no disc (the grid gap marks the
+    // position). Activation fades the disc in and back out on release.
     let outlined = in.params.w;
     let presence = activation;
     let core_r = u.misc3.x;
-    let cored = core_r > 0.005;      // has a disc (Orb)
-    let glow_on = core_r > -0.5;     // has the under-glow (Orb or Glow)
-    let ring_r = select(CORE_R_CLASSIC, core_r, cored);
+    let on = core_r > -0.5;           // present (not None)
+    let solidity = u.misc4.x;         // 0 glow .. 1 orb
+    let radius = max(core_r, 0.0);    // R (0 when None; gated by `on`)
+
+    // The outline ring tracks the radius when the core is on, else the
+    // classic radius so a None node's channel-14 ring still has a size.
+    let ring_r = select(CORE_R_CLASSIC, radius, on);
     let ring = aa_inside(ring_r, d, aa) * (1.0 - aa_inside(ring_r - 0.12, d, aa));
-    // filled is zero with the core off, which collapses the mix below to
-    // exactly the outline-voices-only ring.
-    let filled = select(0.0, aa_inside(core_r, d, aa), cored);
+    // The opaque disc: a core of radius R whose edge softens (CORE_EDGE_SOFT)
+    // and whose opacity fades as solidity drops, so a full orb (solidity 1:
+    // crisp screen-constant edge, fully opaque) dissolves smoothly into
+    // nothing (solidity 0: the glow skirt below then carries the note
+    // alone). Zero when None. At solidity 1 this is exactly the classic
+    // aa_inside(R) disc.
+    let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
+    let core_cov = 1.0 - smoothstep(radius - edge, radius + edge, d);
+    let filled = select(0.0, core_cov * solidity, on);
     let disc = mix(filled, ring, outlined) * presence;
 
     // Home-sheet nodes keep a blank placeholder ring at ALL times: a thin
@@ -573,24 +590,23 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // window it so it fades to exactly zero (with zero slope) inside the
     // quad edge.
     let window = 1.0 - smoothstep(0.5, 0.95, d);
-    // Field/glow domain scale: the paint and falloff were authored for
-    // the classic 0.46 orb, so scale their coordinates to the sized core
-    // and they stretch or shrink with it. In Glow mode (no disc) the
-    // classic falloff stays but dims to an under-glow — enough to tie the
-    // outer glyphs to one sounding note (and keep a lone small glyph
-    // findable) without reading as a disc; in None mode glow_on is false,
-    // so the glow term drops to zero entirely.
-    let fs = select(1.0, CORE_R_CLASSIC / max(core_r, 0.1), cored);
-    var glow = f32(glow_on) * select(0.35, 0.6, cored)
-        * activation * exp(-3.0 * d * fs) * window;
+    // Field/glow domain scale: the paint and falloff were authored for the
+    // classic 0.46 orb, so scale their coordinates to the sized core (a
+    // bigger radius spreads the glow with it; at the default radius this is
+    // 1). The glow dims toward the soft end of the solidity axis (an
+    // under-glow) and brightens toward the orb; it drops to zero when None.
+    let fs = CORE_R_CLASSIC / max(radius, 0.1);
+    let glow_base = mix(0.35, 0.6, solidity);
+    var glow = f32(on) * glow_base * activation * exp(-3.0 * d * fs) * window;
 
-    // Field styles: replace the smooth glow with turbulent gas wafting
-    // off the surface (see field_halo — venting plumes, outward-streaming
-    // curl, ragged reach). Clocked on global time so a retrigger never
-    // restarts the motion. Core only: the field paints the orb, and
-    // without one there is nothing to vent from.
-    if cored && is_field_style(style) && activation > 0.0 {
-        glow = activation * field_halo(style, in.uv * fs, d * fs, u.misc.x, seed) * window;
+    // Field styles waft turbulent gas off the surface instead of a smooth
+    // halo (see field_halo — venting plumes, outward-streaming curl, ragged
+    // reach). Crossfade it in with solidity, so a solid gas orb gets its
+    // wisps while the glow end stays a clean under-glow; clocked on global
+    // time so a retrigger never restarts the motion.
+    if on && is_field_style(style) && activation > 0.0 {
+        let gassy = activation * field_halo(style, in.uv * fs, d * fs, u.misc.x, seed) * window;
+        glow = mix(glow, gassy, solidity);
     }
 
     let brightness = level_floor(activation);
@@ -600,7 +616,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // light. The field sweeps each pixel through the sounding octaves'
     // colors (patches, bands, or cells — never averaged), modulates
     // brightness, and a limb-darkened profile keeps it reading as a sphere.
-    if cored && is_field_style(style) && activation > 0.0 {
+    // Only the solid part shows it (the disc coverage weights it into the
+    // composite below), so it dissolves with the disc toward the glow end.
+    if on && is_field_style(style) && activation > 0.0 {
         let field = field_pattern(style, in.uv * fs, d * fs, u.misc.x, seed);
         let gas = octave_swirl_color(in.octaves, in.cents, field.x, in.color.rgb);
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d * fs);

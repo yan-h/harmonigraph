@@ -639,41 +639,39 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         egui::Checkbox::new(&mut state.view.show_cents, "Cent values"),
     );
 
-    // Note rendering is two fully independent layers. CORE: what sits at
-    // a sounding node's center, peeling back one element at a time — the
-    // classic orb (disc, sized by its radius bar and painted per the core
-    // style row, over its glow), just the glow (no disc), or nothing at
-    // all. The outer octave layer draws the same whatever the core does.
-    button_row_wrapped(ui, |ui| {
-        ui.label("Core");
-        for (core, label, hint) in [
-            (
-                CoreStyle::Orb,
-                "Orb",
-                "The classic disc, sized by the core radius bar, over its glow",
-            ),
-            (CoreStyle::Glow, "Glow", "Just the soft glow a note casts — no disc"),
-            (
-                CoreStyle::None,
-                "None",
-                "Nothing at the center — no disc and no glow; the outer \
-                 octave glyphs carry the note alone",
-            ),
-        ] {
-            ui.selectable_value(&mut state.view.core_style, core, label)
-                .on_hover_text(hint);
-        }
-    });
-    ui.add_enabled_ui(state.view.core_style == CoreStyle::Orb, |ui| {
+    // Note rendering is two fully independent layers. CORE: what sits at a
+    // sounding node's center. It is one continuous shape on the Solidity
+    // slider — a soft glow at 0, morphing to the classic solid orb at 1 —
+    // sized by the radius bar and painted per the core style row; or turn
+    // it off entirely (None), leaving the outer octave glyphs to carry the
+    // note alone. The outer layer draws the same whatever the core does.
+    let mut core_on = state.view.core_style != CoreStyle::None;
+    if ui
+        .checkbox(&mut core_on, "Core")
+        .on_hover_text(
+            "The center shape a sounding note draws. Off leaves the outer \
+             octave glyphs to carry the note alone.",
+        )
+        .changed()
+    {
+        state.view.core_style = if core_on { CoreStyle::On } else { CoreStyle::None };
+    }
+    ui.add_enabled_ui(core_on, |ui| {
+        ValueBar::new(&mut state.view.core_solidity, 0.0..=1.0, "Solidity")
+            .show(ui)
+            .on_hover_text(
+                "0 = a soft glow, 1 = the classic solid orb; in between the \
+                 disc fades in over its glow and its edge crisps",
+            );
         // Quad UV units: 0.46 is the classic disc edge.
         ValueBar::new(&mut state.view.core_radius, 0.1..=0.9, "Core radius")
             .show(ui)
-            .on_hover_text("Orb size; 0.46 is the classic disc");
-        // The orb's paint: switchable looks (idle nodes look the same in
+            .on_hover_text("Core size (disc and glow together); 0.46 is the classic disc");
+        // The core's paint: switchable looks (idle nodes look the same in
         // all of them). Compare live while notes play. Everything except
         // Steady is a field style (swirled octave colors): Vortex is the
         // gas look, Checker/Spiral/Pinwheel are deterministic patterns on
-        // the sphere.
+        // the sphere. The paint dissolves with the disc toward the glow end.
         button_row_wrapped(ui, |ui| {
             ui.label("Core style");
             for (style, label) in [

@@ -538,6 +538,7 @@ mod tests {
         // None serializes as "Empty" (the bare "None" token aliases to
         // Glow); this proves it round-trips back to None regardless.
         state.view.core_style = lattice_scene::CoreStyle::None;
+        state.view.core_solidity = 0.4;
         state.view.core_radius = 0.33;
         state.view.outer_inner = 0.1;
         state.view.outer_outer = 0.7;
@@ -557,6 +558,7 @@ mod tests {
         assert_eq!(restored.view.extent_sevens, 3);
         assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Rings);
         assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::None);
+        assert_eq!(restored.view.core_solidity, 0.4);
         assert_eq!(restored.view.core_radius, 0.33);
         assert_eq!(restored.view.outer_inner, 0.1);
         assert_eq!(restored.view.outer_outer, 0.7);
@@ -633,36 +635,42 @@ mod tests {
     }
 
     #[test]
-    fn pre_split_core_none_loads_as_glow() {
-        // Before the None/Glow split, core "None" drew the under-glow (no
-        // disc). That look is now CoreStyle::Glow, and the bare "None"
-        // token aliases to it so those blobs keep their glow instead of
-        // silently going dark. (New true-none saves write "Empty".)
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.view.core_style = lattice_scene::CoreStyle::Glow;
-        let saved = state.save_persist().replace("core_style:Glow", "core_style:None");
-        assert_ne!(saved, state.save_persist(), "replacement must have hit");
+    fn pre_solidity_core_modes_fold_onto_the_slider() {
+        // Pre-solidity blobs wrote core_style as Orb (solid) or the
+        // glow-only "None"/"Glow". Each must load as On with the matching
+        // solidity — 1 for the orb, 0 for the glow — so the look is
+        // preserved instead of snapping to a default or going dark.
+        for (token, solidity) in [("Orb", 1.0), ("Glow", 0.0), ("None", 0.0)] {
+            let state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let saved = state
+                .save_persist()
+                .replace("core_style:On", &format!("core_style:{token}"));
+            assert_ne!(saved, state.save_persist(), "replacement must have hit for {token}");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::Glow);
+            let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+            restored.load_persist(&saved);
+            assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::On, "{token}");
+            assert_eq!(restored.view.core_solidity, solidity, "{token}");
+        }
     }
 
     #[test]
     fn node_body_experiment_blobs_fold_into_core_and_outer() {
         // Blobs saved by the one-build NodeBody experiment carry a
-        // node_body field the current layout no longer writes; loading
-        // one must both parse and fold the body into the core/outer split
-        // (Beads = core Glow + dots-on-a-hoop, i.e. Dots with the backdrop).
+        // node_body field the current layout no longer writes; loading one
+        // must both parse and fold the body into the core/outer split
+        // (Beads = the core glow, On + solidity 0, plus dots-on-a-hoop, i.e.
+        // Dots with the backdrop). They wrote the legacy core_style:Orb.
         let state = SharedState::new(TextureFormat::Bgra8Unorm);
         let saved = state
             .save_persist()
-            .replace("core_style:Orb", "core_style:Orb,node_body:Beads");
+            .replace("core_style:On", "core_style:Orb,node_body:Beads");
         assert_ne!(saved, state.save_persist(), "replacement must have hit");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
-        assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::Glow);
+        assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::On);
+        assert_eq!(restored.view.core_solidity, 0.0, "octave-only body is the glow end");
         assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Dots);
         assert!(restored.view.outer_backdrop, "Beads' hoop rides the backdrop");
         assert_eq!(
