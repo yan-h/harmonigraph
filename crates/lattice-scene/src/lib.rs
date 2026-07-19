@@ -76,15 +76,9 @@ pub struct NodeInstance {
     /// octave's indicator fades on its own voice's envelope, independent of
     /// the node's overall activation.
     pub octaves: [f32; OCTAVE_SLOTS],
-    /// Seconds since the strongest voice lighting this node started; 0
-    /// when idle. Computed in f64 and handed to the shader small: absolute
-    /// f32 seconds lose millisecond precision within a day of DAW uptime,
-    /// which would visibly quantize the animation.
-    pub age: f32,
     /// Small constant seeding animation variety. NOT a timestamp — only
-    /// ever used as a seed. Per-note (derived from the note-on time,
-    /// wrapped) for age-driven styles; a stable per-node hash for field
-    /// styles (see [`NodeStyle::is_field_style`]).
+    /// ever used as a seed. A stable per-node hash for the field styles
+    /// (see [`NodeStyle::is_field_style`]); Steady ignores it.
     pub seed: f32,
     /// Render as an outline instead of a filled disc (channel 14, v1's
     /// "channel 15" in MIDI convention).
@@ -153,8 +147,7 @@ pub struct Scene {
     /// Seconds for global shader animation, wrapped hourly so f32
     /// precision holds in long sessions. The field styles clock on this so
     /// their fields keep flowing across note events (at worst the pattern
-    /// jumps once an hour at the wrap); age-driven styles use
-    /// [`NodeInstance`]'s `age`/`seed` instead (unwrapped age math).
+    /// jumps once an hour at the wrap).
     pub time: f32,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,

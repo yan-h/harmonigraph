@@ -68,7 +68,6 @@ pub fn derive_scene(
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = idle_color(view);
         let mut outlined = false;
-        let mut age = 0.0f32;
         let mut seed = 0.0f32;
         let mut melody_slots = 0u32;
         let mut bass_slots = 0u32;
@@ -87,10 +86,6 @@ pub fn derive_scene(
                         frame.brightest_pitch,
                     );
                     outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
-                    // Subtract in f64, then narrow: both endpoints are
-                    // large after long sessions; only the difference is
-                    // safe as f32.
-                    age = (now - voice.on_time).max(0.0) as f32;
                     seed = (voice.on_time % 256.0) as f32;
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
@@ -131,7 +126,6 @@ pub fn derive_scene(
             color,
             activation,
             octaves,
-            age,
             seed,
             outlined,
             hovered: hovered == Some(pos),

@@ -313,6 +313,29 @@ pub fn button_row_wrapped<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     button_row_impl(ui, true, add)
 }
 
+/// A labelled row of mutually-exclusive choices for `value`: the standard
+/// shape of every enum setting in the settings panes.
+///
+/// Each option is `(value, label, hover hint)`; an empty hint means no
+/// tooltip. Adding a variant to a style enum is then one line here rather
+/// than another copy of the label/loop/`selectable_value` scaffolding.
+pub fn choice_row<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut T,
+    options: &[(T, &str, &str)],
+) {
+    button_row_wrapped(ui, |ui| {
+        ui.label(name);
+        for (option, label, hint) in options {
+            let response = ui.selectable_value(value, *option, *label);
+            if !hint.is_empty() {
+                response.on_hover_text(*hint);
+            }
+        }
+    });
+}
+
 fn button_row_impl<R>(ui: &mut Ui, wrap: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
     let height =
         ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;

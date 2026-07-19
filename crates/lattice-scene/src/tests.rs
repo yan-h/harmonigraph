@@ -123,7 +123,7 @@ fn octave_fade_time_is_independent_of_note_fade() {
 }
 
 #[test]
-fn age_and_seed_derive_from_the_note_on_time() {
+fn seed_derives_from_the_note_on_time() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent {
         time: 10.0,
@@ -142,7 +142,6 @@ fn age_and_seed_derive_from_the_note_on_time() {
         12.5,
     );
     let origin = origin_node(&scene);
-    assert!((origin.age - 2.5).abs() < 1e-6);
     assert!((origin.seed - 10.0).abs() < 1e-6);
     // Idle nodes carry neutral animation inputs.
     let idle = scene
@@ -150,7 +149,7 @@ fn age_and_seed_derive_from_the_note_on_time() {
         .iter()
         .find(|n| n.lattice_pos == LatticePos::new(1, 1, 0))
         .unwrap();
-    assert_eq!((idle.age, idle.seed), (0.0, 0.0));
+    assert_eq!(idle.seed, 0.0);
 }
 
 #[test]

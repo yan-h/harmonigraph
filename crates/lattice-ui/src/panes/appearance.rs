@@ -3,7 +3,7 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, button_row_wrapped, ValueBar};
+use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
 use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle};
 
@@ -43,18 +43,18 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                 // colors; the rest are field styles — Vortex the gas look,
                 // Checker/Spiral/Pinwheel patterns on the sphere. The paint
                 // dissolves with the disc toward the glow end.
-                button_row_wrapped(ui, |ui| {
-                    ui.label("Style");
-                    for (style, label) in [
-                        (NodeStyle::Steady, "Steady"),
-                        (NodeStyle::Vortex, "Vortex"),
-                        (NodeStyle::Checker, "Checker"),
-                        (NodeStyle::Spiral, "Spiral"),
-                        (NodeStyle::Pinwheel, "Pinwheel"),
-                    ] {
-                        ui.selectable_value(&mut state.view.node_style, style, label);
-                    }
-                });
+                choice_row(
+                    ui,
+                    "Style",
+                    &mut state.view.node_style,
+                    &[
+                        (NodeStyle::Steady, "Steady", ""),
+                        (NodeStyle::Vortex, "Vortex", ""),
+                        (NodeStyle::Checker, "Checker", ""),
+                        (NodeStyle::Spiral, "Spiral", ""),
+                        (NodeStyle::Pinwheel, "Pinwheel", ""),
+                    ],
+                );
                 // How long the core keeps fading after a note releases.
                 param_bar(ui, params, ParamKey::PitchClassFade);
             });
@@ -63,9 +63,11 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
             // as glyphs at each note's absolute-pitch angle within a radial
             // band. Independent of the Core.
             section(ui, "Octaves");
-            button_row_wrapped(ui, |ui| {
-                ui.label("Style");
-                for (style, label, hint) in [
+            choice_row(
+                ui,
+                "Style",
+                &mut state.view.outer_style,
+                &[
                     (OuterStyle::Off, "Off", "No octave indication"),
                     (OuterStyle::Dots, "Dots", "A dot per sounding octave, filling the band"),
                     (
@@ -79,11 +81,8 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         "One concentric ring per sounding octave across the band, \
                          lowest innermost",
                     ),
-                ] {
-                    ui.selectable_value(&mut state.view.outer_style, style, label)
-                        .on_hover_text(hint);
-                }
-            });
+                ],
+            );
             // If the band bars cross, the scene keeps outer ahead of inner
             // rather than collapsing.
             ui.add_enabled_ui(state.view.outer_style != OuterStyle::Off, |ui| {
@@ -123,9 +122,11 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
             // Melody / bass: mark the outer held notes so a chord's top and
             // bottom line read at a glance.
             section(ui, "Melody / bass");
-            button_row_wrapped(ui, |ui| {
-                ui.label("Mark");
-                for (which, label, hint) in [
+            choice_row(
+                ui,
+                "Mark",
+                &mut state.view.highlight_extremes,
+                &[
                     (HighlightExtremes::Off, "Off", "No melody or bass mark"),
                     (HighlightExtremes::Melody, "Melody", "Mark the highest held note"),
                     (HighlightExtremes::Bass, "Bass", "Mark the lowest held note"),
@@ -136,11 +137,8 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                          once the highest and the lowest -- a lone note -- is \
                          left unmarked: there's nothing to tell apart",
                     ),
-                ] {
-                    ui.selectable_value(&mut state.view.highlight_extremes, which, label)
-                        .on_hover_text(hint);
-                }
-            });
+                ],
+            );
             ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
                 ui.checkbox(&mut state.view.highlight_core, "Pitch class").on_hover_text(
                     "Ring the marked note's node. Needs the Core on -- with \
@@ -187,9 +185,11 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
             // independent of the active appearance and of whether a note
             // plays there (a sounding note just draws over it). Off-sheet
             // positions are marked by the lines alone.
-            button_row_wrapped(ui, |ui| {
-                ui.label("Marker");
-                for (marker, label, hint) in [
+            choice_row(
+                ui,
+                "Marker",
+                &mut state.view.idle_marker,
+                &[
                     (IdleMarker::None, "None", "No idle marker"),
                     (IdleMarker::Dot, "Dot", "A filled dot at the radius below"),
                     (
@@ -197,11 +197,8 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         "Circle",
                         "A thin outline circle at the radius below",
                     ),
-                ] {
-                    ui.selectable_value(&mut state.view.idle_marker, marker, label)
-                        .on_hover_text(hint);
-                }
-            });
+                ],
+            );
             ui.add_enabled_ui(state.view.idle_marker != IdleMarker::None, |ui| {
                 ValueBar::new(&mut state.view.idle_radius, 0.0..=0.9, "Marker radius")
                     .show(ui)

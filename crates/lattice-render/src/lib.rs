@@ -170,7 +170,9 @@ const _: () = assert!(lattice_scene::DOT_RAMP_N == 16);
 struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
-    /// x: activation, y: hovered, z: age (s since note-on), w: outlined.
+    /// x: activation, w: outlined. y and z are padding: the shader reads
+    /// only x and w (see lattice.wgsl), and the vec4 is kept whole so the
+    /// vertex layout and the WGSL struct stay unchanged.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
@@ -301,12 +303,7 @@ impl LatticeCallback {
             .map(|(_, n)| GpuInstance {
                 world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
-                params: [
-                    n.activation,
-                    if n.hovered { 1.0 } else { 0.0 },
-                    n.age,
-                    if n.outlined { 1.0 } else { 0.0 },
-                ],
+                params: [n.activation, 0.0, 0.0, if n.outlined { 1.0 } else { 0.0 }],
                 octaves: pack_octaves(&n.octaves),
                 seed: n.seed,
                 cents: n.cents,

@@ -2,7 +2,7 @@
 //! a shared MIDI-pitch axis — and its settings pane.
 
 use super::visibility_floor;
-use crate::widgets::{button_row, ValueBar};
+use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::{theme, SharedState};
 use super::{nearest_visible_node, KEY_NAMES};
 use lattice_core::notes::{display_octave_of, octave_start_midi};
@@ -64,13 +64,19 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         }
     });
 
-    button_row(ui, |ui| {
-        ui.label("Labels");
-        ui.selectable_value(&mut cfg.labels, SpectrumLabels::Notes, "Notes")
-            .on_hover_text("A gridline at every C, Bitwig octave numbers");
-        ui.selectable_value(&mut cfg.labels, SpectrumLabels::Frequency, "Frequency")
-            .on_hover_text("Gridlines at 20, 50, 100 ... 10k, 20k Hz");
-    });
+    choice_row(
+        ui,
+        "Labels",
+        &mut cfg.labels,
+        &[
+            (SpectrumLabels::Notes, "Notes", "A gridline at every C, Bitwig octave numbers"),
+            (
+                SpectrumLabels::Frequency,
+                "Frequency",
+                "Gridlines at 20, 50, 100 ... 10k, 20k Hz",
+            ),
+        ],
+    );
 
     ui.checkbox(&mut cfg.fill, "Fill")
         .on_hover_text("Shade under the spectrum curve");
