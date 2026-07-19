@@ -49,7 +49,15 @@ pub struct PitchClass(u32);
 
 impl PitchClass {
     pub fn from_cents(cents: f32) -> Self {
-        PitchClass((cents.rem_euclid(1200.0) * CENTS_TO_MICROCENTS as f32).round() as u32)
+        // `f32::rem_euclid(1200.0)` can round *up* to exactly 1200.0 for
+        // tiny negative inputs (a negative `c_offset`, a downward tuning
+        // bend, a negative lattice sum), and `.round()` then yields
+        // OCTAVE_MICROCENTS — outside the [0, OCTAVE) invariant. Left
+        // uncorrected, such a value equals neither the origin it represents
+        // (breaking Eq/Hash for map keys) nor prints as 0 (it shows
+        // "1200.00¢"). Fold it back with the modulo.
+        let micro = (cents.rem_euclid(1200.0) * CENTS_TO_MICROCENTS as f32).round() as u32;
+        PitchClass(micro % OCTAVE_MICROCENTS)
     }
 
     pub fn from_midi_note(note: u8) -> Self {
@@ -249,6 +257,39 @@ mod tests {
     fn pitch_class_wraps_at_octave() {
         assert_eq!(PitchClass::from_cents(1250.0), PitchClass::from_cents(50.0));
         assert_eq!(PitchClass::from_cents(-100.0), PitchClass::from_cents(1100.0));
+    }
+
+    #[test]
+    fn tiny_negative_cents_fold_to_the_origin_not_a_full_octave() {
+        // `f32::rem_euclid(1200.0)` rounds up to exactly 1200.0 for inputs a
+        // hair below a multiple of an octave, so without the fold-back
+        // `from_cents` would produce OCTAVE_MICROCENTS: a value that is
+        // really the origin but compares unequal to it (breaking Eq/Hash for
+        // map keys) and prints as "1200.00¢". These inputs arise in practice
+        // from a slightly-flat `c_offset` or a downward tuning bend that
+        // lands a hair below C.
+        let origin = PitchClass::from_cents(0.0);
+        assert_eq!(origin, PitchClass(0));
+        for &cents in &[-1e-5_f32, -1e-6, -1e-7, -1200.0, -2400.0, -3600.0] {
+            assert_eq!(
+                PitchClass::from_cents(cents),
+                origin,
+                "from_cents({cents}) should fold back to the origin"
+            );
+        }
+        // The [0, octave) invariant must hold across the boundary regardless
+        // of whether a given input lands exactly on the origin: -1e-4¢ is a
+        // genuine pitch class just below the octave (≈1199.9999¢), not the
+        // origin, but it must still be strictly below one octave.
+        for &cents in &[-1e-4_f32, -1e-5, -1e-8, 0.0, 1200.0, -1200.0, 2399.9999] {
+            let pc = PitchClass::from_cents(cents);
+            assert!(
+                pc.to_cents() < 1200.0,
+                "from_cents({cents}) = {pc} violates the [0, octave) invariant"
+            );
+        }
+        // The fold must not disturb ordinary in-range values.
+        assert!((PitchClass::from_cents(700.0).to_cents() - 700.0).abs() < 1e-3);
     }
 
     #[test]
