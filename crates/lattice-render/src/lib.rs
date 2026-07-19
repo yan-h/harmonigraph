@@ -123,9 +123,10 @@ struct Uniforms {
     /// pixels with it); w unused. The dots style maps a dot's pitch
     /// through x/y to index `dot_ramp`.
     misc2: [f32; 4],
-    /// x: core orb radius in quad UV units, 0 = core off; y/z: the outer
-    /// octave layer's inner/outer band radii (same units, pre-sanitized
-    /// by the scene so z > y); w unused.
+    /// x: core radius in quad UV units (0 turns the core off); y/z: the
+    /// outer octave layer's inner/outer band radii (same units, pre-
+    /// sanitized by the scene so z > y); w: outer backdrop flag (1 = ghost
+    /// the silent octaves to complete the ring, independent of the core).
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
@@ -134,6 +135,11 @@ struct Uniforms {
     /// is drawn in this constant grey, so a releasing note's ring never
     /// shows the note's own color or snaps color when the voice is pruned.
     node_idle: [f32; 4],
+    /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
+    /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
+    /// crisp octave shapes); z/w unused. (The blit pipeline binds only the
+    /// head of this buffer, so trailing fields are safe to add here.)
+    misc4: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -321,9 +327,15 @@ impl LatticeCallback {
                     render_scale,
                     scene.bloom_strength.clamp(0.0, 4.0),
                 ],
-                misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
+                misc3: [
+                    scene.core_radius,
+                    scene.outer_inner,
+                    scene.outer_outer,
+                    if scene.outer_backdrop { 1.0 } else { 0.0 },
+                ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
                 node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
+                misc4: [scene.core_solidity, scene.outer_solidity, 0.0, 0.0],
             },
             target_format,
             pane_id,
@@ -1177,8 +1189,11 @@ mod tests {
             outer_style: Default::default(),
             node_style: Default::default(),
             core_radius: 0.46,
+            core_solidity: 1.0,
             outer_inner: 0.545,
             outer_outer: 0.795,
+            outer_backdrop: false,
+            outer_solidity: 1.0,
             edges,
             grid,
             dot_ramp: std::array::from_fn(|k| {

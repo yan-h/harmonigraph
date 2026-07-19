@@ -22,16 +22,16 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 /// sounding in. Every style draws its glyphs inside the radial band
 /// between the view's `outer_inner` and `outer_outer` radii — the band is
 /// the glyph set's radial footprint, so switching styles keeps the octave
-/// display the same size (Bumps excepted: with a core it seats on the
-/// orb's rim, since the bulging outline is its whole point). The fragment
-/// shader draws the glyphs from the per-node octave bitmask.
+/// display the same size. The fragment shader draws the glyphs from the
+/// per-node octave bitmask.
 ///
-/// Independent of the CORE layer ([`CoreStyle`]): with the core off, the
-/// outer glyphs carry the note alone, and each style gains a cohesion
-/// device so a single sounding octave still reads as one whole note
-/// (Slices ghosts its silent slots in the note color, completing the
-/// circle; Dots/Bumps string their glyphs on a faint hoop; a Rings glyph
-/// is a closed circle already).
+/// Fully independent of the CORE layer ([`CoreStyle`]): the glyphs draw
+/// the same whatever the core does. The [`ViewConfig::outer_backdrop`]
+/// toggle — its own outer-layer setting, not the core's business — adds a
+/// cohesion device so a single sounding octave still reads as one whole
+/// note (Slices ghosts its silent slots in the note color, completing the
+/// circle; Dots strings its glyphs on a faint hoop; a Rings glyph is a
+/// closed circle already, so it is unaffected).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OuterStyle {
     /// No octave indication.
@@ -40,14 +40,12 @@ pub enum OuterStyle {
     /// width); angle tracks absolute pitch (middle C straight up, 45deg
     /// clockwise per octave, pitch class within the octave included). All
     /// other styles keep this angle convention and change only the glyph
-    /// shape. The aliases absorb the removed Petals and Flares styles so
-    /// old persisted view blobs keep loading.
+    /// shape. The aliases absorb the removed Petals and Flares styles, and
+    /// the merged Bumps style (rim-seated blobs, too close to Dots to keep
+    /// as its own row), so old persisted view blobs keep loading.
     #[default]
-    #[serde(alias = "Petals", alias = "Flares")]
+    #[serde(alias = "Petals", alias = "Flares", alias = "Bumps")]
     Dots,
-    /// Blobs seated on the core's rim so the orb outline bulges at each
-    /// pitch angle (band's inner edge when the core is off).
-    Bumps,
     /// Annular pizza-slice sectors spanning the band, with
     /// constant-thickness gaps between neighbors.
     Slices,
@@ -56,8 +54,9 @@ pub enum OuterStyle {
     Rings,
 }
 
-/// How the core orb is painted while notes sound (inert when
-/// [`CoreStyle::None`]). All styles share the same instance data
+/// How the core orb is painted while notes sound (inert without an orb —
+/// [`CoreStyle::Glow`] or [`CoreStyle::None`]). All styles share the same
+/// instance data
 /// (activation + per-note phase); the fragment/vertex shader switches
 /// on a uniform. Kept as switchable candidates for live comparison — idle
 /// nodes look identical in every style.
@@ -124,32 +123,40 @@ impl NodeStyle {
 impl OuterStyle {
     /// Index used by the shader (uniform `misc.z`). Indices are preserved
     /// from the original set so the kept glyphs' shader branches stay
-    /// unchanged; 2 and 3 were the removed Petals/Flares.
+    /// unchanged; 2/3 were the removed Petals/Flares, 4 the merged Bumps.
     pub fn shader_index(self) -> u32 {
         match self {
             OuterStyle::Off => 0,
             OuterStyle::Dots => 1,
-            OuterStyle::Bumps => 4,
             OuterStyle::Slices => 5,
             OuterStyle::Rings => 6,
         }
     }
 }
 
-/// The CORE layer: what sits at a sounding node's center, independent of
-/// the outer octave layer ([`OuterStyle`]).
+/// Legacy load-only core mode, from before the core became a plain radius
+/// (`core_radius`, with 0 = off) plus a `core_solidity` slider. Persisted
+/// blobs still carry a `core_style` token; [`ViewConfig::migrate_legacy`]
+/// folds each value into today's radius/solidity and then this is ignored
+/// (the field is `skip_serializing`). Kept as a distinct type only so those
+/// tokens keep deserializing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CoreStyle {
-    /// Nothing at the center: the outer octave glyphs carry the note
-    /// alone (each outer style gains a cohesion device — see
-    /// [`OuterStyle`] — and the under-glow dims). Outline (channel 14)
-    /// voices still draw their thin ring so the channel stays
-    /// recognizable, and the idle home placeholder ring is unchanged.
+    /// The pre-radius-off "nothing" mode (serialized `"Empty"`). Folds to
+    /// `core_radius = 0` (off). The bare `"None"` token is the older
+    /// glow-only mode instead, aliased onto [`Glow`](CoreStyle::Glow).
+    #[serde(rename = "Empty")]
     None,
-    /// The classic orb: a filled disc sized by the view's `core_radius`,
-    /// painted per [`NodeStyle`].
+    /// The core is present with radius + solidity already in their own
+    /// fields; nothing to fold. The default (and what recent blobs wrote).
     #[default]
+    On,
+    /// The pre-solidity solid orb. Folds to solidity 1.
     Orb,
+    /// The pre-solidity glow-only mode (also the bare `"None"` token
+    /// pre-split blobs wrote). Folds to solidity 0.
+    #[serde(alias = "None")]
+    Glow,
 }
 
 /// The short-lived NodeBody experiment's variants (one working-tree
@@ -205,13 +212,20 @@ pub struct ViewConfig {
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
-    /// Core layer style (see CoreStyle): the classic orb, or nothing —
-    /// the outer octave glyphs then carry the note alone.
-    #[serde(default)]
+    /// Legacy load-only core mode (see [`CoreStyle`]); folded into
+    /// `core_radius`/`core_solidity` by [`migrate_legacy`](Self::migrate_legacy)
+    /// and never written back.
+    #[serde(default, skip_serializing)]
     pub core_style: CoreStyle,
-    /// The orb's radius, in quad UV units (0 = node center, 1 = quad
-    /// edge; the classic disc edge sits at 0.46). Inert while the core
-    /// is off.
+    /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
+    /// to the classic solid orb at 1 (the disc fades in over its glow
+    /// skirt and its edge crisps). Inert while the core is off.
+    #[serde(default = "default_core_solidity")]
+    pub core_solidity: f32,
+    /// The core's radius, in quad UV units (0 = node center, 1 = quad
+    /// edge; the classic disc edge sits at 0.46). Sizes the disc and its
+    /// glow together. **A radius of 0 turns the core off** — the outer
+    /// octave glyphs then carry the note alone.
     #[serde(default = "default_core_radius")]
     pub core_radius: f32,
     /// The outer octave layer's radial band (same UV units): every outer
@@ -223,6 +237,20 @@ pub struct ViewConfig {
     pub outer_inner: f32,
     #[serde(default = "default_outer_outer", alias = "slice_outer")]
     pub outer_outer: f32,
+    /// Outer-layer cohesion device (independent of the core): draw the
+    /// silent octaves faintly behind the sounding glyphs so a lone octave
+    /// still reads as a whole note — Slices ghosts its empty slots in the
+    /// note color to complete the annulus, Dots strings its glyphs on a
+    /// faint hoop. No effect on Rings (already closed circles) or Off. Was
+    /// implicitly tied to "core off"; now its own toggle.
+    #[serde(default)]
+    pub outer_backdrop: bool,
+    /// The outer glyphs' solidity, 0..1 (mirrors [`core_solidity`] for the
+    /// octave layer): 1 draws crisp shapes (the classic look), and toward 0
+    /// their soft edges spread until they melt into soft glowy marks. Only
+    /// widens the glyph edges — shapes and angles are unchanged.
+    #[serde(default = "default_outer_solidity")]
+    pub outer_solidity: f32,
     /// Load-only shim: the short-lived NodeBody build's blobs set this,
     /// and [`ViewConfig::migrate_legacy`] folds it into core/outer. Never
     /// saved.
@@ -263,6 +291,18 @@ fn default_true() -> bool {
 /// The classic disc edge radius, from before the core was sizable.
 fn default_core_radius() -> f32 {
     0.46
+}
+
+/// Solid orb by default — the classic look, and the identity end of the
+/// solidity axis.
+fn default_core_solidity() -> f32 {
+    1.0
+}
+
+/// Crisp octave glyphs by default (the classic look, identity end of the
+/// outer solidity axis).
+fn default_outer_solidity() -> f32 {
+    1.0
 }
 
 /// Outer band defaults: the classic Slices annulus (SLICE_IN/OUT before
@@ -308,21 +348,34 @@ impl ViewConfig {
     }
 
     /// Fold fields from older blob layouts into the current ones; call
-    /// after deserializing a persisted view. The one-build NodeBody
-    /// experiment's octave-only bodies map onto core None + the matching
-    /// outer style (Beads was dots-on-a-hoop, which is exactly what a
-    /// core-less Dots outer draws; its band radii rode the slice_inner/
-    /// slice_outer fields, absorbed by the outer_inner/outer_outer
-    /// aliases).
+    /// after deserializing a persisted view.
+    ///
+    /// The pre-radius-off core modes collapse onto today's `core_radius`
+    /// (0 = off) plus `core_solidity`: the old `None` becomes radius 0
+    /// (off), the old solid `Orb` becomes solidity 1, and the old glow-only
+    /// mode (`Glow`, also the bare `"None"` token) becomes solidity 0. The
+    /// one-build NodeBody experiment's octave-only bodies map onto that glow
+    /// (solidity 0) plus the matching outer style with the backdrop on
+    /// (Beads was dots-on-a-hoop, which is exactly what a Dots outer with
+    /// the backdrop draws; its band radii rode the slice_inner/slice_outer
+    /// fields, absorbed by the outer_inner/outer_outer aliases).
     pub fn migrate_legacy(&mut self) {
+        match std::mem::replace(&mut self.core_style, CoreStyle::On) {
+            CoreStyle::None => self.core_radius = 0.0,
+            CoreStyle::Orb => self.core_solidity = 1.0,
+            CoreStyle::Glow => self.core_solidity = 0.0,
+            CoreStyle::On => {}
+        }
+
         let outer = match std::mem::take(&mut self.node_body) {
             LegacyNodeBody::Disc => return,
             LegacyNodeBody::Slices => OuterStyle::Slices,
             LegacyNodeBody::Rings => OuterStyle::Rings,
             LegacyNodeBody::Beads => OuterStyle::Dots,
         };
-        self.core_style = CoreStyle::None;
+        self.core_solidity = 0.0;
         self.outer_style = outer;
+        self.outer_backdrop = true;
     }
 }
 
@@ -343,9 +396,12 @@ impl Default for ViewConfig {
             show_cents: true,
             node_style: NodeStyle::Checker,
             core_style: CoreStyle::default(),
+            core_solidity: default_core_solidity(),
             core_radius: default_core_radius(),
             outer_inner: default_outer_inner(),
             outer_outer: default_outer_outer(),
+            outer_backdrop: false,
+            outer_solidity: default_outer_solidity(),
             node_body: LegacyNodeBody::Disc,
             show_chord_edges: false,
             meantone: false,
@@ -656,13 +712,24 @@ pub struct Scene {
     pub node_radius: f32,
     pub outer_style: OuterStyle,
     pub node_style: NodeStyle,
-    /// The core orb's radius in quad UV units; 0 encodes "core off" (the
-    /// outer glyphs then carry the note alone).
+    /// The core's radius in quad UV units; `0` turns the core off (nothing
+    /// at all). Sizes both the disc and its glow; the shader reads solidity
+    /// separately (`core_solidity`).
     pub core_radius: f32,
+    /// The core's solidity 0..1 (see [`ViewConfig::core_solidity`]): 0 a
+    /// soft glow, 1 the solid orb. Ignored when the core is off.
+    pub core_solidity: f32,
     /// The outer octave layer's radial band (quad UV units), already
     /// sanitized: outer is always ahead of inner.
     pub outer_inner: f32,
     pub outer_outer: f32,
+    /// Outer-layer cohesion device (see [`ViewConfig::outer_backdrop`]):
+    /// ghost the silent octaves faintly to complete the ring. Independent
+    /// of the core.
+    pub outer_backdrop: bool,
+    /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
+    /// 1 crisp, toward 0 the glyph edges spread into soft glows.
+    pub outer_solidity: f32,
     /// Chord edges (empty when the toggle is off).
     pub edges: Vec<EdgeInstance>,
     /// The faint background grid (see [`derive_grid`]): one segment per
@@ -840,15 +907,15 @@ pub fn derive_scene(
     let edges = if view.show_chord_edges { derive_edges(&nodes) } else { Vec::new() };
     let grid = derive_grid(view, &nodes);
 
-    // Core/outer geometry policy: radius 0 encodes "core off"; the outer
-    // band is sanitized here so the shader can trust outer > inner
-    // whatever combination the two bars hold.
-    let core_radius = match view.core_style {
-        CoreStyle::None => 0.0,
-        CoreStyle::Orb => view.core_radius.clamp(0.1, 0.9),
-    };
+    // Core/outer geometry policy: the core is a plain radius the shader
+    // reads (0 = off), with solidity riding alongside; the outer band is
+    // sanitized here so the shader can trust outer > inner whatever the two
+    // bars hold.
+    let core_radius = view.core_radius.clamp(0.0, 0.9);
+    let core_solidity = view.core_solidity.clamp(0.0, 1.0);
     let outer_inner = view.outer_inner.clamp(0.0, 0.9);
     let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
+    let outer_solidity = view.outer_solidity.clamp(0.0, 1.0);
 
     Scene {
         nodes,
@@ -858,8 +925,11 @@ pub fn derive_scene(
         outer_style: view.outer_style,
         node_style: view.node_style,
         core_radius,
+        core_solidity,
         outer_inner,
         outer_outer,
+        outer_backdrop: view.outer_backdrop,
+        outer_solidity,
         edges,
         grid,
         dot_ramp: pitch_ramp_lut(),
@@ -1441,8 +1511,9 @@ mod tests {
     fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         // Bars dragged into a crossed/degenerate combination: the scene
         // must still hand the shader a visible band (outer ahead of inner).
+        // A radius of 0 turns the core off (passes through as 0).
         let view = ViewConfig {
-            core_style: CoreStyle::None,
+            core_radius: 0.0,
             outer_style: OuterStyle::Slices,
             outer_inner: 0.8,
             outer_outer: 0.3,
@@ -1456,15 +1527,15 @@ mod tests {
             0.0,
         );
         assert_eq!(scene.outer_style, OuterStyle::Slices);
-        assert_eq!(scene.core_radius, 0.0, "core off encodes as radius 0");
+        assert_eq!(scene.core_radius, 0.0, "radius 0 = core off");
         assert_eq!(scene.outer_inner, 0.8);
         assert!(scene.outer_outer > scene.outer_inner);
 
-        // In-range values pass through untouched; the orb carries its
-        // radius.
+        // Core on: the radius passes through and solidity rides alongside,
+        // both clamped to range.
         let view = ViewConfig {
-            core_style: CoreStyle::Orb,
             core_radius: 0.3,
+            core_solidity: 0.25,
             outer_inner: 0.0,
             outer_outer: 0.5,
             ..view
@@ -1477,15 +1548,48 @@ mod tests {
             0.0,
         );
         assert_eq!(scene.core_radius, 0.3);
+        assert_eq!(scene.core_solidity, 0.25);
         assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.5));
+
+        // Both solidities are clamped into 0..1 before they reach the shader.
+        let view = ViewConfig { core_solidity: 4.0, outer_solidity: -1.0, ..view };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert_eq!(scene.core_solidity, 1.0);
+        assert_eq!(scene.outer_solidity, 0.0);
+    }
+
+    #[test]
+    fn legacy_core_modes_fold_onto_radius_and_solidity() {
+        // The pre-radius-off modes collapse onto core_radius (0 = off) +
+        // solidity: None -> radius 0, the solid Orb -> solidity 1, the
+        // glow-only mode -> solidity 0.
+        let mut none = ViewConfig { core_style: CoreStyle::None, ..ViewConfig::default() };
+        none.migrate_legacy();
+        assert_eq!(none.core_radius, 0.0, "None folds to radius 0 (off)");
+
+        let mut orb = ViewConfig { core_style: CoreStyle::Orb, ..ViewConfig::default() };
+        orb.migrate_legacy();
+        assert_eq!(orb.core_solidity, 1.0);
+        assert!(orb.core_radius > 0.0, "orb stays on");
+
+        let mut glow = ViewConfig { core_style: CoreStyle::Glow, ..ViewConfig::default() };
+        glow.migrate_legacy();
+        assert_eq!(glow.core_solidity, 0.0);
+        assert!(glow.core_radius > 0.0, "glow stays on");
     }
 
     #[test]
     fn legacy_node_body_folds_into_core_and_outer() {
-        // Blobs from the one-build NodeBody experiment: an octave-only
-        // body becomes core None + the matching outer style; Beads maps
-        // to Dots (whose no-core hoop IS the beads look). Disc leaves the
-        // new defaults alone.
+        // Blobs from the one-build NodeBody experiment: an octave-only body
+        // becomes the core glow (solidity 0, the old core-off under-glow) +
+        // the matching outer style with the backdrop on; Beads maps to Dots
+        // (whose backdrop hoop IS the beads look). Disc leaves defaults alone.
         for (body, outer) in [
             (LegacyNodeBody::Slices, OuterStyle::Slices),
             (LegacyNodeBody::Rings, OuterStyle::Rings),
@@ -1493,14 +1597,16 @@ mod tests {
         ] {
             let mut view = ViewConfig { node_body: body, ..ViewConfig::default() };
             view.migrate_legacy();
-            assert_eq!(view.core_style, CoreStyle::None, "{body:?}");
+            assert_eq!(view.core_solidity, 0.0, "{body:?}");
+            assert!(view.core_radius > 0.0, "{body:?} still on");
             assert_eq!(view.outer_style, outer, "{body:?}");
+            assert!(view.outer_backdrop, "{body:?}");
             assert_eq!(view.node_body, LegacyNodeBody::Disc, "shim consumed");
         }
 
         let mut view = ViewConfig { node_body: LegacyNodeBody::Disc, ..ViewConfig::default() };
         view.migrate_legacy();
-        assert_eq!(view.core_style, CoreStyle::Orb);
+        assert_eq!(view.core_solidity, 1.0);
         assert_eq!(view.outer_style, ViewConfig::default().outer_style);
     }
 

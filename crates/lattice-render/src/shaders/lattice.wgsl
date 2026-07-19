@@ -29,10 +29,10 @@ struct Uniforms {
     // softness knob to render pixels); w unused. The dots style maps a
     // dot's pitch through x/y to index dot_ramp.
     misc2: vec4<f32>,
-    // x: core orb radius in quad UV units, 0 = core off (the outer
-    // octave glyphs then carry the note alone). y/z: the outer layer's
-    // inner/outer band radii (same units; the scene guarantees z > y).
-    // w unused.
+    // x: core radius in quad UV units (0 turns the core off). y/z: the
+    // outer layer's inner/outer band radii (same units; the scene
+    // guarantees z > y). w: outer backdrop flag (1 = ghost the silent
+    // octaves to complete the ring; independent of the core).
     misc3: vec4<f32>,
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
@@ -41,9 +41,21 @@ struct Uniforms {
     // drawn in this constant grey, so a releasing note's ring stays grey
     // (not the note hue) and never snaps color when the voice is pruned.
     node_idle: vec4<f32>,
+    // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
+    // core layer runs on. y: outer solidity (0 = soft glowy glyphs, 1 =
+    // crisp octave shapes). z/w unused.
+    misc4: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
+
+// Billboard headroom past the octave band's outer edge (uv 1.0): the quad
+// and its uv are both scaled by this, so the uv->world mapping is
+// unchanged (disc, band, glyphs, glow all render identically) but there is
+// margin out to this radius for a low-solidity glyph's soft edge to spread
+// into instead of being clipped flat by the old quad boundary. Costs a bit
+// of fill (bigger quads); kept modest so quads barely reach axis neighbors.
+const QUAD_MARGIN: f32 = 1.3;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
@@ -98,15 +110,17 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // Node size never responds to notes or hover: idle, active, and hovered
     // nodes are all the same size, so a note changes only brightness and
     // glow. Size DOES carry the depth cue (inst.scale). (The quad is twice
-    // the disc radius to leave room for the glow.)
-    let radius = u.misc.y * 0.90 * 2.0 * inst.scale;
+    // the disc radius to leave room for the glow, plus QUAD_MARGIN for the
+    // outer glyphs' soft edge; uv is scaled to match so content is
+    // unchanged — see QUAD_MARGIN.)
+    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN * inst.scale;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
 
     var out: VsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner;
+    out.uv = corner * QUAD_MARGIN;
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
@@ -173,16 +187,16 @@ const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
 // Every outer style draws its glyphs inside the radial band
 // [u.misc3.y, u.misc3.z] (quad UV units): the band IS the glyph set's
 // radial footprint, so switching styles keeps the octave display the same
-// size. Bumps is the exception — with a core it seats on the orb's rim
-// (the bulging outline is its whole point), floating at the band's inner
-// edge only when the core is off.
+// size. The glyphs are drawn identically whatever the core does — the
+// layers are independent.
 //
-// Cohesion with the core off — a note must read as ONE whole shape even
-// when a single octave sounds: Slices draws its SILENT slots as faint
-// ghosts in the note's own color, completing the circle silhouette around
-// the bright sector; Dots/Bumps string their glyphs on a faint
-// always-complete hoop (drawn in fs_main); a Rings glyph is already a
-// closed circle.
+// The backdrop flag (u.misc3.w, its own outer-layer setting) adds a
+// cohesion device so a note reads as ONE whole shape even when a single
+// octave sounds: Slices draws its SILENT slots as faint ghosts in the
+// note's own color, completing the circle silhouette around the bright
+// sector; Dots strings its glyphs on a faint always-complete hoop (drawn
+// in fs_main); a Rings glyph is already a closed circle, so it is
+// unaffected.
 
 // Slices: neighboring sectors (slots are 0.785 rad apart) are separated
 // by a CONSTANT-thickness gap: the slice edges are radial lines offset
@@ -191,34 +205,44 @@ const DOTS_RAD_PER_OCTAVE: f32 = 0.7853982;
 // become full pie wedges; near the center every wedge falls inside the
 // gap band, leaving a small clear hub instead of a ten-way mush point.
 const SLICE_GAP_HALF: f32 = 0.06;
-// Bumps: blob radius, and how far past the orb's rim its center seats.
-const BUMP_RADIUS: f32 = 0.115;
-const BUMP_SEAT_OUT: f32 = 0.04;
 // Rings: half-thickness as a factor of the slot-to-slot radial step, with
 // a floor so a narrow band still shows a hairline.
 const RING_HALF_FACTOR: f32 = 0.35;
 const RING_HALF_MIN: f32 = 0.012;
-// The no-core tie hoop (Dots/Beads look, Bumps): half-thickness and
-// coverage level.
+// The backdrop tie hoop (Dots): half-thickness and coverage level.
 const HOOP_HALF: f32 = 0.022;
 const HOOP_LEVEL: f32 = 0.30;
-// Ghost coverage of a silent no-core Slices slot, scaled by the note's
-// activation so ghosts fade out with the pitch class.
+// Ghost coverage of a silent Slices slot when the backdrop is on, scaled
+// by the note's activation so ghosts fade out with the pitch class.
 const GHOST_LEVEL: f32 = 0.16;
+// How far the outer glyphs' soft edge spreads at outer solidity 0, as a
+// fraction of the band width (added to the screen-constant aa). ~1 band
+// width makes the default dots melt into diffuse glows; smaller keeps them
+// tighter. Tunes the soft end of the octave solidity slider.
+const OUTER_GLOW_SOFT: f32 = 1.0;
 // The classic disc-edge radius: normalizes the field paint to the sized
-// orb, and stands in for the core radius where a no-core node still needs
+// orb, and stands in for the core radius where a coreless node still needs
 // one (channel 14's outline ring).
 const CORE_R_CLASSIC: f32 = 0.46;
+// Extra half-width added to the core disc's edge as solidity drops from 1
+// to 0: at solidity 1 the edge is a crisp screen-constant band (the
+// classic orb), at 0 it has spread this far and the disc has faded out
+// into the glow skirt. Tunes how "soft" a mid-solidity core reads.
+const CORE_EDGE_SOFT: f32 = 0.30;
+// Radius below which the whole core fades to nothing, so a radius of 0 is
+// the off state and the core grows in smoothly (no pop) as the bar leaves
+// the bottom.
+const CORE_FADE_IN: f32 = 0.06;
 
 // Coverage (0..1) of the outer glyph for octave slot `i` on a node whose
-// pitch class is `cents`, drawing style `mode` in the uniform band.
-// `core_r` is the core orb radius (0 = off) — only Bumps reads it (rim
-// seating). All styles share the dots angle convention — absolute pitch,
-// middle C straight up, 45deg clockwise per octave, pitch class within
-// the octave included — and differ only in the shape drawn there. `aa` is
-// the caller's per-pixel soft-band width, giving every shape
-// screen-constant edges.
-fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, core_r: f32, aa: f32) -> f32 {
+// pitch class is `cents`, drawing style `mode` in the uniform band. Reads
+// nothing from the core layer — the outer glyphs are independent of it.
+// All styles share the dots angle convention — absolute pitch, middle C
+// straight up, 45deg clockwise per octave, pitch class within the octave
+// included — and differ only in the shape drawn there. `aa` is the
+// caller's per-pixel soft-band width, giving every shape screen-constant
+// edges.
+fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
     // (uv.y is up, so clockwise = subtracting from the angle.)
     let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
     let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
@@ -229,17 +253,10 @@ fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, core_r: f32, aa: f3
 
     if mode == 1u {
         // Dots: a satellite filling the band — orbit at its center,
-        // radius half its width (v1's look at the default band).
+        // radius half its width (v1's look at the default band). Absorbs
+        // the merged Bumps style (which seated blobs on the orb rim).
         let orbit = (inner + outer) * 0.5;
         return aa_inside((outer - inner) * 0.5, distance(uv, e * orbit), aa);
-    }
-
-    if mode == 4u {
-        // Bumps: a blob seated ON the orb's rim, so the outline bulges at
-        // the pitch angle instead of a shape hovering beside it; with the
-        // core off it seats on the band's inner edge instead.
-        let seat = select(inner, core_r + BUMP_SEAT_OUT, core_r > 0.005);
-        return aa_inside(BUMP_RADIUS, distance(uv, e * seat), aa);
     }
 
     if mode == 6u {
@@ -250,20 +267,24 @@ fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, core_r: f32, aa: f3
         return aa_inside(half, abs(d - (inner + step * f32(i))), aa);
     }
 
-    // Slices: annular sectors, crisp screen-constant edges. The sector
-    // bisector directions b1/b2 bound this slot's wedge; the cross
-    // products against them give BOTH the side-of-line tests (which wedge
-    // owns the pixel — the hard boundary is invisible, buried mid-gap
-    // where coverage is zero) and the Euclidean distance to each edge
-    // line, thresholded at SLICE_GAP_HALF for a gap of constant thickness
-    // at every radius.
+    // Slices: annular sectors, screen-constant edges. The sector bisector
+    // directions b1/b2 bound this slot's wedge; the cross products against
+    // them give BOTH the side-of-line tests (which wedge owns the pixel)
+    // and the Euclidean distance to each edge line, thresholded at
+    // SLICE_GAP_HALF for a gap of constant thickness at every radius.
     let band = aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
     let hb = DOTS_RAD_PER_OCTAVE * 0.5;
     let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
     let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
-    let own = select(0.0, 1.0, c1 > 0.0 && c2 < 0.0);
+    // Ownership softened over `aa`: at crisp aa this is a ~1px step buried
+    // in the gap below (invisible, as before), but when the glyph is
+    // softened (low outer solidity) the gap no longer reaches zero at the
+    // wedge boundary, so a hard step here would show as a straight cut on
+    // the slice's sides. Soft ownership lets adjacent slices cross-fade
+    // (the loop keeps the max), so the sector edges stay soft.
+    let own = smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2);
     let g = (1.0 - aa_inside(SLICE_GAP_HALF, abs(c1), aa))
         * (1.0 - aa_inside(SLICE_GAP_HALF, abs(c2), aa));
     return band * own * g;
@@ -388,6 +409,48 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
     return csum / wsum;
 }
 
+// Concentration of each octave's angular color lobe in the glow (a von
+// Mises-like falloff): higher is tighter, more separated arcs. Tuned so
+// octaves a dot-step (45deg) apart blend softly rather than banding.
+const GLOW_LOBE_KAPPA: f32 = 4.0;
+
+// The glow's color when a chord sounds: every sounding octave's hue laid
+// around the halo in the direction of its OWN dot (the shared dots angle
+// convention), so the glow shows ALL the playing notes at once instead of
+// just the loudest voice's single color. Seam-free — each octave's weight
+// is a periodic bump in cos(angle - dot_angle), never an atan2 wrap. A
+// lone sounding octave yields its color uniformly (the single term cancels
+// the angle dependence); with a solo note or nothing sounding it falls
+// back to `fallback`, so a single voice keeps its exact color (fixed
+// channel hues included, which the pitch ramp would not reproduce).
+fn octave_glow_color(octaves: vec3<u32>, cents: f32, angle: f32, fallback: vec3<f32>) -> vec3<f32> {
+    var count = 0u;
+    var wsum = 0.0;
+    var csum = vec3<f32>(0.0);
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        let level = octave_level(octaves, i);
+        if level <= 0.0 {
+            continue;
+        }
+        count = count + 1u;
+        // Octave i's dot angle (matches outer_glyph): middle C straight
+        // up, 45deg clockwise per octave, this node's pitch class folded in.
+        let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
+        let theta = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
+        let w = level * exp(GLOW_LOBE_KAPPA * (cos(angle - theta) - 1.0));
+        // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; fold in this
+        // node's pitch class for the octave's true pitch (as the dots do).
+        csum = csum + dot_pitch_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
+        wsum = wsum + w;
+    }
+    // A solo note (or none) keeps its exact node color; two or more
+    // sounding octaves spread their hues around the glow.
+    if count < 2u || wsum < 1e-5 {
+        return fallback;
+    }
+    return csum / wsum;
+}
+
 // Orthographic sphere mapping for the pattern styles: the unit-sphere
 // point under this pixel. uv is clamped just inside the disc rim, so the
 // glow region beyond the disc keeps sampling the limb color instead of
@@ -502,25 +565,36 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // below use this instead of fixed-uv smoothsteps.
     let aa = aa_width(fwidth(in.uv.x));
 
-    // Core layer: the orb disc reaches out to core_r (u.misc3.x; radius 0
-    // = core off, the outer glyphs then carry the note alone).
-    // Channel-14 voices render as an outline ring instead (v1 semantics)
-    // — kept even with the core off, sized by the classic radius then, so
-    // the channel stays recognizable. Unplayed nodes draw no disc at all
-    // — the background grid's gap marks the position instead. Activation
-    // fades the disc in (and back out on release); hover has no effect on
-    // the disc (the node-name label is the hover feedback, drawn by the
-    // UI layer).
+    // Core layer, unified onto ONE solidity axis. The radius (u.misc3.x,
+    // quad UV units) sizes it, and a radius of 0 turns it off entirely — no
+    // enum, no separate flag. Solidity (u.misc4.x, 0..1) morphs the core
+    // between the two ends of a single shape: 0 is a soft under-glow, 1 is
+    // the classic solid orb, and in between the opaque disc fades in over
+    // its glow skirt while its edge crisps. Channel-14 voices render as an
+    // outline ring instead of a filled disc (v1 semantics) so the channel
+    // stays recognizable; unplayed nodes draw no disc (the grid gap marks
+    // the position). Activation fades the disc in and back out on release.
     let outlined = in.params.w;
     let presence = activation;
-    let core_r = u.misc3.x;
-    let cored = core_r > 0.005;
-    let ring_r = select(CORE_R_CLASSIC, core_r, cored);
-    let ring = aa_inside(ring_r, d, aa) * (1.0 - aa_inside(ring_r - 0.12, d, aa));
-    // filled is zero with the core off, which collapses the mix below to
-    // exactly the outline-voices-only ring.
-    let filled = select(0.0, aa_inside(core_r, d, aa), cored);
-    let disc = mix(filled, ring, outlined) * presence;
+    let radius = max(u.misc3.x, 0.0);  // core radius; 0 = off
+    let solidity = u.misc4.x;          // 0 glow .. 1 orb
+    // Radius 0 is off; fade the whole core in over the first sliver of the
+    // bar so it grows from nothing with no pop. `on` gates the (skippable)
+    // field work; core_on scales everything the core draws.
+    let on = radius > 0.0;
+    let core_on = smoothstep(0.0, CORE_FADE_IN, radius);
+
+    // Channel-14 outline ring, at the core radius.
+    let ring = aa_inside(radius, d, aa) * (1.0 - aa_inside(radius - 0.12, d, aa));
+    // The opaque disc: a core of radius R whose edge softens (CORE_EDGE_SOFT)
+    // and whose opacity fades as solidity drops, so a full orb (solidity 1:
+    // crisp screen-constant edge, fully opaque) dissolves smoothly into
+    // nothing (solidity 0: the glow skirt below then carries the note
+    // alone). At solidity 1 this is exactly the classic aa_inside(R) disc.
+    let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
+    let core_cov = 1.0 - smoothstep(radius - edge, radius + edge, d);
+    let filled = core_cov * solidity;
+    let disc = mix(filled, ring, outlined) * presence * core_on;
 
     // Home-sheet nodes keep a blank placeholder ring at ALL times: a thin
     // ring at the disc edge (its width matched to the grid lines), in the
@@ -532,53 +606,74 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // color until it is pruned, so the ring used to inherit the note hue and
     // then jump to grey. Off-sheet nodes draw nothing.
     let blank_ring = filled * (1.0 - aa_inside(0.37, d, aa));
-    let blank = blank_ring * in.home * 0.55;
+    let blank = blank_ring * in.home * 0.55 * core_on;
 
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
     // window it so it fades to exactly zero (with zero slope) inside the
     // quad edge.
     let window = 1.0 - smoothstep(0.5, 0.95, d);
-    // Field/glow domain scale: the paint and falloff were authored for
-    // the classic 0.46 orb, so scale their coordinates to the sized core
-    // and they stretch or shrink with it. With the core off, the classic
-    // falloff stays but dims to an under-glow — enough to tie the outer
-    // glyphs to one sounding note (and keep a lone small glyph findable)
-    // without reading as a disc.
-    let fs = select(1.0, CORE_R_CLASSIC / max(core_r, 0.1), cored);
-    var glow = select(0.35, 0.6, cored) * activation * exp(-3.0 * d * fs) * window;
+    // Field/glow domain scale: the paint and falloff were authored for the
+    // classic 0.46 orb, so scale their coordinates to the sized core (a
+    // bigger radius spreads the glow with it; at the default radius this is
+    // 1). The glow dims toward the soft end of the solidity axis (an
+    // under-glow) and brightens toward the orb; it drops to zero when None.
+    let fs = CORE_R_CLASSIC / max(radius, 0.1);
+    let glow_base = mix(0.35, 0.6, solidity);
+    var glow = glow_base * activation * exp(-3.0 * d * fs) * window;
 
-    // Field styles: replace the smooth glow with turbulent gas wafting
-    // off the surface (see field_halo — venting plumes, outward-streaming
-    // curl, ragged reach). Clocked on global time so a retrigger never
-    // restarts the motion. Core only: the field paints the orb, and
-    // without one there is nothing to vent from.
-    if cored && is_field_style(style) && activation > 0.0 {
-        glow = activation * field_halo(style, in.uv * fs, d * fs, u.misc.x, seed) * window;
+    // Field styles waft turbulent gas off the surface instead of a smooth
+    // halo (see field_halo — venting plumes, outward-streaming curl, ragged
+    // reach). Crossfade it in with solidity, so a solid gas orb gets its
+    // wisps while the glow end stays a clean under-glow; clocked on global
+    // time so a retrigger never restarts the motion.
+    if on && is_field_style(style) && activation > 0.0 {
+        let gassy = activation * field_halo(style, in.uv * fs, d * fs, u.misc.x, seed) * window;
+        glow = mix(glow, gassy, solidity);
     }
+    glow = glow * core_on;
 
     let brightness = level_floor(activation);
-    var rgb = in.color.rgb * brightness;
+    // Every sounding octave's color, blended by angle — each hue laid in
+    // its dot's direction (see octave_glow_color). This is the node's
+    // multi-color fill: Steady shows it directly on the disc (so a chord's
+    // disc mixes ALL its notes, not just the loudest), and the glow skirt
+    // carries the same blend, so disc and halo read as one colored field. A
+    // solo note falls back to its single color.
+    let octave_mix =
+        octave_glow_color(in.octaves, in.cents, atan2(in.uv.y, in.uv.x), in.color.rgb) * brightness;
+    var rgb = octave_mix;
 
-    // Field styles: the active disc becomes a ball of gas or patterned
+    // Field styles instead paint the disc as a ball of gas or patterned
     // light. The field sweeps each pixel through the sounding octaves'
     // colors (patches, bands, or cells — never averaged), modulates
     // brightness, and a limb-darkened profile keeps it reading as a sphere.
-    // The rim glow inherits the local field color, so it burns in the hue
-    // of whichever octave's color it erupts from.
-    if cored && is_field_style(style) && activation > 0.0 {
+    // Only the solid part shows it (the disc coverage weights it into the
+    // composite below), so it dissolves with the disc toward the glow end.
+    if on && is_field_style(style) && activation > 0.0 {
         let field = field_pattern(style, in.uv * fs, d * fs, u.misc.x, seed);
         let gas = octave_swirl_color(in.octaves, in.cents, field.x, in.color.rgb);
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d * fs);
-        rgb = mix(rgb, gas * brightness * field.y * limb, activation);
+        rgb = mix(in.color.rgb * brightness, gas * brightness * field.y * limb, activation);
     }
+    let disc_rgb = rgb;
+
+    // Composite disc OVER glow: the disc keeps its own color, the multi-
+    // color glow reads only where the disc doesn't reach (the halo). `f` is
+    // the share of this pixel's coverage that is glow-beyond-disc; where
+    // disc and glow are the same color it collapses to a no-op, so combined
+    // alpha and brightness are exactly the old additive glow.
+    let glow_rgb = octave_mix;
+    let f = glow * (1.0 - disc) / max(disc + glow, 1e-4);
+    let rgb_core = mix(disc_rgb, glow_rgb, f);
+
     // The blank ring composites UNDER the disc/glow (disc over ring) in the
     // constant idle grey, so it matches the grid lines' brightness and a
     // releasing note's disc fades away over a steady grey ring — never a
     // colored one.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
     let base_alpha = core_alpha + blank * (1.0 - core_alpha);
-    let base_rgb = rgb * core_alpha + u.node_idle.rgb * blank * (1.0 - core_alpha);
+    let base_rgb = rgb_core * core_alpha + u.node_idle.rgb * blank * (1.0 - core_alpha);
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
@@ -589,25 +684,33 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
 
+    let backdrop = u.misc3.w > 0.5;
+    // Outer solidity (u.misc4.y, 0..1) is the octave layer's own
+    // crisp/soft knob: it widens every glyph's soft edge (proportional to
+    // the band width so narrow bands soften proportionally), so at 1 the
+    // shapes are crisp (the classic look) and toward 0 they melt into soft
+    // glowy marks. It only feeds the edge width, so shapes and angles stay
+    // put. Mirrors the core's solidity.
+    let outer_aa = aa + (1.0 - u.misc4.y) * OUTER_GLOW_SOFT * (u.misc3.z - u.misc3.y);
     if mode != 0u {
         // Sounding slots draw bright, tinted by their own pitch, each
-        // fading on its own envelope. With the core off the outer glyphs
-        // carry the note alone, so the cohesion devices activate:
-        // Dots/Bumps get their faint tie hoop (complete whenever the note
-        // sounds; glyphs composite over it) and Slices draws silent slots
-        // as ghosts in the loop below.
-        if !cored && (mode == 1u || mode == 4u) {
-            let hoop_r = select((u.misc3.y + u.misc3.z) * 0.5, u.misc3.y, mode == 4u);
-            let hoop = aa_inside(HOOP_HALF, abs(d - hoop_r), aa);
+        // fading on its own envelope. The backdrop flag (its own
+        // outer-layer setting, independent of the core) turns on each
+        // style's cohesion device: Dots gets a faint tie hoop (complete
+        // whenever the note sounds; glyphs composite over it) and Slices
+        // draws silent slots as ghosts in the loop below.
+        if backdrop && mode == 1u {
+            let hoop_r = (u.misc3.y + u.misc3.z) * 0.5;
+            let hoop = aa_inside(HOOP_HALF, abs(d - hoop_r), outer_aa);
             glyph = hoop * HOOP_LEVEL * presence;
         }
-        let ghosted = !cored && mode == 5u;
+        let ghosted = backdrop && mode == 5u;
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level <= 0.0 && !(ghosted && presence > 0.0) {
                 continue;
             }
-            let shape = outer_glyph(mode, i, in.cents, in.uv, core_r, aa);
+            let shape = outer_glyph(mode, i, in.cents, in.uv, outer_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -618,7 +721,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // sounds, but a released glyph must END at nothing: without
                 // this taper it holds 35% brightness all the way down the
                 // fade and then pops off. Ease the last 15% of the envelope
-                // to zero instead (the max() hands a no-core Slices slot
+                // to zero instead (the max() hands a backdrop Slices slot
                 // off to its ghost as the lit coverage sinks through it).
                 let tail = smoothstep(0.0, 0.15, level);
                 cov = max(cov, shape * level_floor(level) * tail);
@@ -633,6 +736,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
     }
+    // Fade a soft (low-solidity) glyph out across the billboard's margin
+    // instead of letting the quad boundary clip it flat. The fade starts at
+    // uv 1.0 — the outer band's own limit — so a crisp glyph (which never
+    // reaches past its band, all within uv 1.0) is untouched; only the soft
+    // overflow into the QUAD_MARGIN headroom is eased to zero at the edge.
+    glyph = glyph * (1.0 - smoothstep(1.0, QUAD_MARGIN, d));
 
     // "Over" composite: glyph over (disc + glow), premultiplied.
     let alpha = glyph + base_alpha * (1.0 - glyph);

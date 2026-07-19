@@ -58,13 +58,8 @@ impl ParamKey {
         ParamKey::Tolerance,
     ];
 
-    /// The cosmetic parameters (Appearance section of the UI).
-    pub const APPEARANCE: [ParamKey; 4] = [
-        ParamKey::PitchClassFade,
-        ParamKey::OctaveFade,
-        ParamKey::DarkestPitch,
-        ParamKey::BrightestPitch,
-    ];
+    /// Pitch->color gradient endpoints (Color group of the Appearance UI).
+    pub const COLOR: [ParamKey; 2] = [ParamKey::DarkestPitch, ParamKey::BrightestPitch];
 
     pub fn label(self) -> &'static str {
         match self {

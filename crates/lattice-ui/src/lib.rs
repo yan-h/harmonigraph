@@ -535,10 +535,13 @@ mod tests {
         // Non-default values throughout, so the fields prove they
         // round-trip rather than matching the defaults by luck.
         state.view.outer_style = lattice_scene::OuterStyle::Rings;
-        state.view.core_style = lattice_scene::CoreStyle::None;
-        state.view.core_radius = 0.33;
+        // Radius 0 is the off state; this proves it (and solidity) persist.
+        state.view.core_radius = 0.0;
+        state.view.core_solidity = 0.4;
         state.view.outer_inner = 0.1;
         state.view.outer_outer = 0.7;
+        state.view.outer_backdrop = true;
+        state.view.outer_solidity = 0.3;
         state.view.meantone = true;
         state.camera_presets.push(CameraPreset {
             name: "reading".into(),
@@ -553,10 +556,12 @@ mod tests {
         assert_eq!(restored.camera.distance, 42.0);
         assert_eq!(restored.view.extent_sevens, 3);
         assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Rings);
-        assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::None);
-        assert_eq!(restored.view.core_radius, 0.33);
+        assert_eq!(restored.view.core_radius, 0.0, "off (radius 0) round-trips");
+        assert_eq!(restored.view.core_solidity, 0.4);
         assert_eq!(restored.view.outer_inner, 0.1);
         assert_eq!(restored.view.outer_outer, 0.7);
+        assert!(restored.view.outer_backdrop);
+        assert_eq!(restored.view.outer_solidity, 0.3);
         assert!(restored.view.meantone);
         assert_eq!(restored.camera_presets.len(), 1);
         assert_eq!(restored.camera_presets[0].name, "reading");
@@ -583,16 +588,26 @@ mod tests {
 
     #[test]
     fn removed_octave_styles_in_old_persist_blobs_load_as_dots() {
-        // Petals/Flares no longer exist; a serde alias must absorb them so an
-        // old blob still restores rather than dropping the whole persist.
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.view.outer_style = lattice_scene::OuterStyle::Bumps;
-        let saved = state.save_persist().replace("outer_style:Bumps", "outer_style:Petals");
-        assert_ne!(saved, state.save_persist(), "replacement must have hit");
+        // Petals/Flares and the merged Bumps no longer exist as variants;
+        // serde aliases must absorb each so an old blob still restores
+        // rather than dropping the whole persist. Inject the dead tokens
+        // as strings (the enum can't name them anymore).
+        for removed in ["Petals", "Flares", "Bumps"] {
+            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            state.view.outer_style = lattice_scene::OuterStyle::Slices;
+            let saved = state
+                .save_persist()
+                .replace("outer_style:Slices", &format!("outer_style:{removed}"));
+            assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
 
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Dots);
+            let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+            restored.load_persist(&saved);
+            assert_eq!(
+                restored.view.outer_style,
+                lattice_scene::OuterStyle::Dots,
+                "{removed} folds to Dots"
+            );
+        }
     }
 
     #[test]
@@ -619,21 +634,50 @@ mod tests {
     }
 
     #[test]
+    fn pre_radius_off_core_modes_fold_onto_radius_and_solidity() {
+        // Pre-radius-off blobs wrote a `core_style` token the current layout
+        // no longer serializes; loading one must fold it into radius (0 =
+        // off) + solidity so the look is preserved. Inject the dead token
+        // ahead of `core_solidity` (the enum still deserializes it).
+        for (token, off, solidity) in
+            [("Orb", false, 1.0), ("Glow", false, 0.0), ("None", false, 0.0), ("Empty", true, 1.0)]
+        {
+            let state = SharedState::new(TextureFormat::Bgra8Unorm);
+            let saved = state
+                .save_persist()
+                .replace("core_solidity:", &format!("core_style:{token},core_solidity:"));
+            assert_ne!(saved, state.save_persist(), "injection must have hit for {token}");
+
+            let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+            restored.load_persist(&saved);
+            if off {
+                assert_eq!(restored.view.core_radius, 0.0, "{token} folds to off");
+            } else {
+                assert!(restored.view.core_radius > 0.0, "{token} stays on");
+                assert_eq!(restored.view.core_solidity, solidity, "{token}");
+            }
+        }
+    }
+
+    #[test]
     fn node_body_experiment_blobs_fold_into_core_and_outer() {
         // Blobs saved by the one-build NodeBody experiment carry a
-        // node_body field the current layout no longer writes; loading
-        // one must both parse and fold the body into the core/outer
-        // split (Beads = core off + dots-on-a-hoop).
+        // node_body field the current layout no longer writes; loading one
+        // must both parse and fold the body into the core/outer split
+        // (Beads = the core glow, solidity 0, plus dots-on-a-hoop, i.e. Dots
+        // with the backdrop). They wrote the legacy core_style:Orb.
         let state = SharedState::new(TextureFormat::Bgra8Unorm);
         let saved = state
             .save_persist()
-            .replace("core_style:Orb", "core_style:Orb,node_body:Beads");
-        assert_ne!(saved, state.save_persist(), "replacement must have hit");
+            .replace("core_solidity:", "core_style:Orb,node_body:Beads,core_solidity:");
+        assert_ne!(saved, state.save_persist(), "injection must have hit");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
-        assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::None);
+        assert_eq!(restored.view.core_solidity, 0.0, "octave-only body is the glow end");
+        assert!(restored.view.core_radius > 0.0, "still on");
         assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Dots);
+        assert!(restored.view.outer_backdrop, "Beads' hoop rides the backdrop");
         assert_eq!(
             restored.view.node_body,
             lattice_scene::LegacyNodeBody::Disc,
