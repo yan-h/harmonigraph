@@ -730,6 +730,21 @@ pub struct NodeInstance {
     pub cents: f32,
 }
 
+impl NodeInstance {
+    /// Whether this node puts anything on screen, and so can carry pitch
+    /// info (hover label, tuning readout). Sounding nodes always draw;
+    /// idle ones only on the home sheet, where they keep a placeholder
+    /// marker. Off-sheet idle nodes draw literally nothing, so revealing
+    /// their pitch on mouse-over would be information from nowhere.
+    ///
+    /// Deliberately ignores [`Scene::idle_marker`] being `None`: that
+    /// setting hides the idle markers but shouldn't make the home sheet
+    /// unhoverable, which would leave an empty lattice uninspectable.
+    pub fn is_visible(&self) -> bool {
+        self.activation > 0.0 || self.on_home
+    }
+}
+
 /// A glowing beam between two simultaneously sounding, lattice-adjacent
 /// nodes (one unit step along exactly one prime axis = one interval).
 #[derive(Clone, Copy, Debug)]
@@ -1183,10 +1198,17 @@ impl Scene {
     /// CPU picking: the node whose screen projection is nearest the pointer,
     /// within `max_px`. Every pane that wants "hover a pitch class" uses
     /// this and writes the result to the shared UI state.
+    ///
+    /// Only [visible](NodeInstance::is_visible) nodes are pickable, so the
+    /// pointer can't pull a pitch readout out of an off-sheet node that
+    /// draws nothing.
     pub fn pick(&self, viewport_px: Vec2, pointer_px: Vec2, max_px: f32) -> Option<LatticePos> {
         let projector = self.projector(viewport_px);
         let mut best: Option<(f32, LatticePos)> = None;
         for node in &self.nodes {
+            if !node.is_visible() {
+                continue;
+            }
             let Some(px) = projector.project(node.world_pos) else {
                 continue;
             };
@@ -1202,7 +1224,7 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lattice_core::{NoteEvent, NoteEventKind};
+    use lattice_core::{NoteEvent, NoteEventKind, PitchClass};
 
     fn scene_of(
         tracker: &NoteTracker,
@@ -1934,6 +1956,63 @@ mod tests {
         let origin_px = scene.project(viewport, Vec3::ZERO).unwrap();
         assert_eq!(scene.pick(viewport, origin_px, 24.0), Some(LatticePos::ORIGIN));
         assert_eq!(scene.pick(viewport, Vec2::new(-500.0, -500.0), 24.0), None);
+    }
+
+    #[test]
+    fn idle_off_sheet_nodes_are_not_pickable() {
+        // An idle node off the home sheet draws nothing, so hovering where
+        // it would be must not hand back its pitch. Sounding makes it
+        // visible, and pickable again.
+        let view = ViewConfig::default();
+        let tuning = Tuning::default();
+        let viewport = Vec2::new(800.0, 600.0);
+
+        let idle = scene_of(
+            &NoteTracker::new(),
+            &tuning,
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        let off = *idle
+            .nodes
+            .iter()
+            .find(|n| !n.on_home)
+            .expect("default view spans more than the home sheet");
+        assert_eq!(off.activation, 0.0);
+        assert!(!off.is_visible());
+        let off_px = idle.project(viewport, off.world_pos).unwrap();
+        assert_ne!(
+            idle.pick(viewport, off_px, 24.0),
+            Some(off.lattice_pos),
+            "idle off-sheet node should not be pickable"
+        );
+
+        // Same position, now sounding: play a note carrying its pitch class.
+        let pc = tuning.pitch_class(off.lattice_pos);
+        let note = (60u8..72)
+            .find(|&n| tuning.matches(pc, PitchClass::from_midi_note(n)))
+            .expect("some MIDI note lands on this node under 12-TET");
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let lit = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
+        let lit_off = lit
+            .nodes
+            .iter()
+            .find(|n| n.lattice_pos == off.lattice_pos)
+            .unwrap();
+        assert!(lit_off.activation > 0.0, "the note should light this node");
+        assert!(lit_off.is_visible());
+        assert_eq!(
+            lit.pick(viewport, off_px, 24.0),
+            Some(off.lattice_pos),
+            "sounding off-sheet node should be pickable again"
+        );
     }
 
     #[test]
