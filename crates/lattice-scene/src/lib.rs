@@ -184,6 +184,33 @@ impl IdleMarker {
     }
 }
 
+/// Which extreme held notes get marked, so a chord's melody and/or bass
+/// line is identifiable at a glance. "Extreme" is by sounding pitch
+/// (`Voice::pitch`, which includes MPE/tuning bends), over HELD voices
+/// only: a released note is on its way out and shouldn't keep the mark
+/// from the note that replaced it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum HighlightExtremes {
+    #[default]
+    Off,
+    /// The highest held note — the melody.
+    Melody,
+    /// The lowest held note — the bass.
+    Bass,
+    /// Both, in their own colors.
+    Both,
+}
+
+impl HighlightExtremes {
+    pub fn marks_melody(self) -> bool {
+        matches!(self, HighlightExtremes::Melody | HighlightExtremes::Both)
+    }
+
+    pub fn marks_bass(self) -> bool {
+        matches!(self, HighlightExtremes::Bass | HighlightExtremes::Both)
+    }
+}
+
 /// The short-lived NodeBody experiment's variants (one working-tree
 /// build, 2026-07-18, octave-only note bodies): parsed load-only via
 /// `ViewConfig::node_body` and folded into the core/outer split by
@@ -316,6 +343,21 @@ pub struct ViewConfig {
     /// saved.
     #[serde(default, skip_serializing)]
     pub node_body: LegacyNodeBody,
+    // ---- Melody / bass highlight -----------------------------------------
+    /// Which of the outer held notes to mark, so the melody and/or bass
+    /// line reads at a glance out of a chord.
+    #[serde(default)]
+    pub highlight_extremes: HighlightExtremes,
+    /// Mark the pitch class indicator (the node's core) of the outer notes.
+    #[serde(default = "default_true")]
+    pub highlight_core: bool,
+    /// Mark the octave indicator (the outer glyph) of the outer notes.
+    /// This is the one that survives a chord voiced within a single pitch
+    /// class — octaves of one note all land on the same node, so only the
+    /// octave layer can tell the top from the bottom there.
+    #[serde(default = "default_true")]
+    pub highlight_octave: bool,
+
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
     // Its look used to be fixed: the skin's color, a hardcoded inset, a
@@ -550,6 +592,9 @@ impl Default for ViewConfig {
             idle_marker: IdleMarker::default(),
             idle_radius: default_idle_radius(),
             node_body: LegacyNodeBody::Disc,
+            highlight_extremes: HighlightExtremes::default(),
+            highlight_core: true,
+            highlight_octave: true,
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: default_grid_inset(),
@@ -833,6 +878,20 @@ pub struct NodeInstance {
     /// The node's pitch class in cents under the current tuning, for the
     /// in-lattice cents readout.
     pub cents: f32,
+    /// Octave slots (bit i = slot i) where this node carries the melody —
+    /// the highest held note. 0 when it doesn't, or when the melody isn't
+    /// being marked. One voice lights every node its pitch class matches
+    /// under the tuning tolerance, and the mark follows the same rule.
+    ///
+    /// A mask rather than a single slot because one node can hold both
+    /// outer notes at once, in different octaves (a chord voiced inside a
+    /// single pitch class), and the two must stay tellable apart.
+    pub melody_slots: u32,
+    /// The same for the bass — the lowest held note. A slot set in BOTH
+    /// masks is a note that is simultaneously the melody and the bass, so
+    /// there is nothing to distinguish and it draws unmarked; see
+    /// [`HighlightExtremes`].
+    pub bass_slots: u32,
 }
 
 impl NodeInstance {
@@ -913,6 +972,11 @@ pub struct Scene {
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.
     pub grid_thickness: f32,
+    /// Which layers the melody/bass mark draws on (see
+    /// [`ViewConfig::highlight_core`] / `highlight_octave`). Which NOTES
+    /// are marked is baked into each node's `melody_slots`/`bass_slots`.
+    pub highlight_core: bool,
+    pub highlight_octave: bool,
     /// Pitch->color lookup for the dots octave style, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub dot_ramp: [Vec4; DOT_RAMP_N],
@@ -997,6 +1061,41 @@ pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitc
     }
 }
 
+/// Identifies one voice, matching `NoteTracker`'s own held-voice key.
+type VoiceKey = (u8, u8);
+
+/// The highest and lowest HELD voices, as the caller asked for them —
+/// either is `None` when that end isn't being marked or nothing is held.
+///
+/// Held only: a released voice is fading out, and letting it keep the mark
+/// would steal it from the note that actually replaced it. Compared on
+/// `pitch` rather than the raw key, because MPE and per-note tuning can
+/// bend a voice past its neighbor — the same reason the notes pane sorts
+/// on pitch.
+fn held_extremes(
+    tracker: &NoteTracker,
+    which: HighlightExtremes,
+) -> (Option<VoiceKey>, Option<VoiceKey>) {
+    if which == HighlightExtremes::Off {
+        return (None, None);
+    }
+    let held = || {
+        tracker
+            .voices()
+            .filter(|v| v.state == lattice_core::VoiceState::Held)
+    };
+    let key = |v: &lattice_core::Voice| (v.channel, v.note);
+    let melody = which
+        .marks_melody()
+        .then(|| held().max_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
+        .flatten();
+    let bass = which
+        .marks_bass()
+        .then(|| held().min_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
+        .flatten();
+    (melody, bass)
+}
+
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 pub fn derive_scene(
@@ -1011,6 +1110,7 @@ pub fn derive_scene(
     let mut nodes = Vec::with_capacity(view.visible_count());
     let center = view.center();
     let eye = camera.eye();
+    let (melody, bass) = held_extremes(tracker, view.highlight_extremes);
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
@@ -1021,6 +1121,8 @@ pub fn derive_scene(
         let mut outlined = false;
         let mut age = 0.0f32;
         let mut seed = 0.0f32;
+        let mut melody_slots = 0u32;
+        let mut bass_slots = 0u32;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -1049,6 +1151,17 @@ pub fn derive_scene(
                 let attack = a * a * (3.0 - 2.0 * a);
                 octaves[slot] = octaves[slot]
                     .max(voice.activation(now, frame.octave_fade_time) * attack);
+
+                // Mark the outer notes in the slot they sound in. Set on
+                // every node the voice matches, exactly as its activation
+                // is, so the mark can't disagree with the lighting.
+                let key = (voice.channel, voice.note);
+                if melody == Some(key) {
+                    melody_slots |= 1 << slot;
+                }
+                if bass == Some(key) {
+                    bass_slots |= 1 << slot;
+                }
             }
         }
 
@@ -1076,6 +1189,8 @@ pub fn derive_scene(
             scale: depth_scale(world_pos.distance(eye), camera.distance),
             on_home: pos.sevens == view.center_sevens,
             cents: node_pc.to_cents(),
+            melody_slots,
+            bass_slots,
         });
     }
 
@@ -1111,6 +1226,8 @@ pub fn derive_scene(
         edges,
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
+        highlight_core: view.highlight_core,
+        highlight_octave: view.highlight_octave,
         dot_ramp: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
@@ -1740,6 +1857,141 @@ mod tests {
             assert_eq!(before.dashed, along_sevens, "only links dash by default");
             assert!(after.dashed, "every line dashes when the style is on");
         }
+    }
+
+    /// Play `notes` on channel 0 and derive a scene marking both extremes.
+    fn marked_scene(notes: &[u8], which: HighlightExtremes) -> Scene {
+        let mut tracker = NoteTracker::new();
+        for &note in notes {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let view = ViewConfig { highlight_extremes: which, ..ViewConfig::default() };
+        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0)
+    }
+
+    /// Union of a mask across every node, and the nodes carrying it.
+    fn marked_slots(scene: &Scene, melody: bool) -> (u32, usize) {
+        let mut bits = 0u32;
+        let mut nodes = 0usize;
+        for n in &scene.nodes {
+            let m = if melody { n.melody_slots } else { n.bass_slots };
+            if m != 0 {
+                bits |= m;
+                nodes += 1;
+            }
+        }
+        (bits, nodes)
+    }
+
+    #[test]
+    fn melody_and_bass_mark_the_outer_held_notes() {
+        // C4/E4/G4: the melody is G4 (octave slot 4), the bass C4 (slot 4
+        // too -- same MIDI octave, but different nodes/pitch classes).
+        let scene = marked_scene(&[60, 64, 67], HighlightExtremes::Both);
+        let (melody_bits, melody_nodes) = marked_slots(&scene, true);
+        let (bass_bits, bass_nodes) = marked_slots(&scene, false);
+        assert_eq!(melody_bits, 1 << 4, "G4 sounds in MIDI octave 4");
+        assert_eq!(bass_bits, 1 << 4, "C4 too");
+        assert!(melody_nodes > 0 && bass_nodes > 0);
+
+        // The marks land on the nodes those notes actually light, and the
+        // middle note (E4) is marked as neither.
+        let tuning = Tuning::default();
+        for n in &scene.nodes {
+            let pc = tuning.pitch_class(n.lattice_pos);
+            if n.melody_slots != 0 {
+                assert!(tuning.matches(PitchClass::from_midi_note(67), pc), "melody is G");
+            }
+            if n.bass_slots != 0 {
+                assert!(tuning.matches(PitchClass::from_midi_note(60), pc), "bass is C");
+            }
+        }
+
+        // Asking for one end leaves the other unmarked.
+        let melody_only = marked_scene(&[60, 64, 67], HighlightExtremes::Melody);
+        assert_eq!(marked_slots(&melody_only, true).0, 1 << 4);
+        assert_eq!(marked_slots(&melody_only, false).0, 0, "bass not asked for");
+        let off = marked_scene(&[60, 64, 67], HighlightExtremes::Off);
+        assert_eq!(marked_slots(&off, true).0, 0);
+        assert_eq!(marked_slots(&off, false).0, 0);
+    }
+
+    #[test]
+    fn a_lone_held_note_is_marked_as_both_ends_so_it_draws_unmarked() {
+        // One note is at once the highest and the lowest held. The scene
+        // marks it as both; the shader's "claimed by both ends" rule is
+        // what then leaves it unmarked, with no special case of its own.
+        let scene = marked_scene(&[60], HighlightExtremes::Both);
+        let mut seen = false;
+        for n in &scene.nodes {
+            assert_eq!(
+                n.melody_slots, n.bass_slots,
+                "a lone note must claim identical slots at both ends"
+            );
+            seen |= n.melody_slots != 0;
+        }
+        assert!(seen, "the note should have been marked somewhere");
+    }
+
+    #[test]
+    fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
+        // C2 and C4: one pitch class, so both land on the SAME node and the
+        // core can't say which is which -- but they sound in different
+        // octave slots, which is what keeps them tellable apart.
+        let scene = marked_scene(&[48, 72], HighlightExtremes::Both);
+        let marked: Vec<_> = scene
+            .nodes
+            .iter()
+            .filter(|n| n.melody_slots != 0 || n.bass_slots != 0)
+            .collect();
+        assert!(!marked.is_empty(), "C should be marked");
+        for n in &marked {
+            // MIDI octave = note/12 - 1, so C4 (72) is slot 5, C2 (48) slot 3.
+            assert_eq!(n.melody_slots, 1 << 5, "the high C is the melody");
+            assert_eq!(n.bass_slots, 1 << 3, "the low C is the bass");
+            // No slot claimed by both, so the octave layer marks each end
+            // rather than suppressing them the way the core has to.
+            assert_eq!(n.melody_slots & n.bass_slots, 0);
+        }
+    }
+
+    #[test]
+    fn released_notes_do_not_keep_the_mark() {
+        // A released voice is fading out; letting it hold the mark would
+        // steal it from the note that actually replaced it.
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 67] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        // Release the top note; C is now both the highest and lowest held.
+        tracker.handle_event(NoteEvent {
+            time: 0.1,
+            channel: 0,
+            note: 67,
+            kind: NoteEventKind::Off,
+        });
+        let (melody, bass) = held_extremes(&tracker, HighlightExtremes::Both);
+        assert_eq!(melody, Some((0, 60)), "the released G must not stay the melody");
+        assert_eq!(bass, Some((0, 60)));
+
+        // Nothing held at all: nothing to mark.
+        tracker.handle_event(NoteEvent {
+            time: 0.2,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Off,
+        });
+        assert_eq!(held_extremes(&tracker, HighlightExtremes::Both), (None, None));
     }
 
     #[test]

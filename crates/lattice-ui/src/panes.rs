@@ -6,7 +6,8 @@ use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
 use lattice_scene::{
-    channel_color, derive_scene, Camera, IdleMarker, NodeStyle, OuterStyle, Projection,
+    channel_color, derive_scene, Camera, HighlightExtremes, IdleMarker, NodeStyle, OuterStyle,
+    Projection,
 };
 
 use crate::theme;
@@ -777,6 +778,39 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                         "Size of the idle marker; independent of the active \
                          Core (0.46 is the classic placeholder ring)",
                     );
+            });
+
+            // Melody / bass: mark the outer held notes so a chord's top and
+            // bottom line read at a glance.
+            section(ui, "Melody / bass");
+            button_row_wrapped(ui, |ui| {
+                ui.label("Mark");
+                for (which, label, hint) in [
+                    (HighlightExtremes::Off, "Off", "No melody or bass mark"),
+                    (HighlightExtremes::Melody, "Melody", "Mark the highest held note"),
+                    (HighlightExtremes::Bass, "Bass", "Mark the lowest held note"),
+                    (
+                        HighlightExtremes::Both,
+                        "Both",
+                        "Mark both, each in its own color. A note that is at \
+                         once the highest and the lowest -- a lone note -- is \
+                         left unmarked: there's nothing to tell apart",
+                    ),
+                ] {
+                    ui.selectable_value(&mut state.view.highlight_extremes, which, label)
+                        .on_hover_text(hint);
+                }
+            });
+            ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
+                ui.checkbox(&mut state.view.highlight_core, "Pitch class").on_hover_text(
+                    "Ring the marked note's node. Needs the Core on -- with \
+                     it off there's no pitch class indicator to mark",
+                );
+                ui.checkbox(&mut state.view.highlight_octave, "Octave").on_hover_text(
+                    "Recolor the marked note's octave glyph. This is the one \
+                     that still works for a chord voiced inside a single \
+                     pitch class, where every octave shares one node",
+                );
             });
 
             // Home grid: the faint structural lines between node positions.

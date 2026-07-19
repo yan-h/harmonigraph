@@ -48,8 +48,12 @@ struct Uniforms {
     // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
-    // y/z/w unused.
+    // y: draw the melody/bass mark on the core; z: on the octave glyphs.
+    // w unused.
     misc5: vec4<f32>,
+    // Melody / bass mark colors.
+    note_melody: vec4<f32>,
+    note_bass: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -89,6 +93,11 @@ struct Instance {
     // 1 on the home (center sevens) sheet: idle home nodes draw a blank
     // placeholder ring where their disc would be.
     @location(7) home: f32,
+    // Melody/bass marks: x = melody slots, y = bass slots, one bit per
+    // octave slot. A slot set in BOTH is a note that is at once the
+    // highest and the lowest held, so there's nothing to tell apart and
+    // it draws unmarked (see mark_color).
+    @location(8) marks: vec2<u32>,
 };
 
 struct VsOut {
@@ -100,6 +109,7 @@ struct VsOut {
     @location(4) seed: f32,
     @location(5) @interpolate(flat) cents: f32,
     @location(6) @interpolate(flat) home: f32,
+    @location(7) @interpolate(flat) marks: vec2<u32>,
 };
 
 @vertex
@@ -132,6 +142,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.seed = inst.seed;
     out.cents = inst.cents;
     out.home = inst.home;
+    out.marks = inst.marks;
     return out;
 }
 
@@ -577,6 +588,38 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
     return vec4<f32>(u.node_idle.rgb * cov, cov);
 }
 
+// Which melody/bass mark applies to a set of octave slots, or alpha 0 for
+// none. Pass a single slot's bit to ask about one octave glyph, or ALL_SLOTS
+// to ask about the node as a whole.
+//
+// Slots claimed by BOTH ends go unmarked: such a note is at once the highest
+// and the lowest held, so there is nothing to tell apart. That one rule
+// covers both special cases without a test of its own -- a lone held note
+// (it is its own melody and bass), and, when asked about the whole node, a
+// chord voiced inside a single pitch class, where the melody and bass share
+// a node and only the octave layer can separate them.
+fn mark_color(marks: vec2<u32>, slots: u32) -> vec4<f32> {
+    let melody = marks.x & slots;
+    let bass = marks.y & slots;
+    if melody != 0u && bass != 0u {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    if melody != 0u {
+        return u.note_melody;
+    }
+    if bass != 0u {
+        return u.note_bass;
+    }
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}
+
+const ALL_SLOTS: u32 = 0xFFFFFFFFu;
+// The core's melody/bass ring: half-thickness in quad UV units, and how far
+// outside the core radius it sits (clear of the disc edge, inside the octave
+// band's usual inner radius).
+const MARK_RING_HALF: f32 = 0.035;
+const MARK_RING_GAP: f32 = 0.06;
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
@@ -685,8 +728,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // (below) is composited UNDER this, so a sounding note draws over its
     // own idle marker and reveals it again as it fades.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
-    let base_alpha = core_alpha;
-    let base_rgb = rgb_core * core_alpha;
+    var base_alpha = core_alpha;
+    var base_rgb = rgb_core * core_alpha;
+
+    // Melody/bass mark on the core -- the pitch class indicator -- as a
+    // bright ring hugging the disc, in the mark's own color so the two ends
+    // never read alike. Needs a sounding note AND the core on: with the core
+    // off there is no pitch class indicator to mark, and the octave layer
+    // carries the mark instead.
+    let core_mark = mark_color(in.marks, ALL_SLOTS);
+    if u.misc5.y > 0.5 && core_mark.a > 0.0 && on && presence > 0.0 {
+        let mr = radius + MARK_RING_GAP;
+        let ring_cov = aa_inside(mr + MARK_RING_HALF, d, aa)
+            * (1.0 - aa_inside(mr - MARK_RING_HALF, d, aa))
+            * presence
+            * core_on;
+        base_rgb = core_mark.rgb * ring_cov + base_rgb * (1.0 - ring_cov);
+        base_alpha = ring_cov + base_alpha * (1.0 - ring_cov);
+    }
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
@@ -745,6 +804,18 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(dot_pitch_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
+
+                // Melody/bass mark on the octave indicator: this one glyph
+                // takes the mark's color at full coverage, so it stands out
+                // from its neighbors in the ring whatever the outer style
+                // draws. This is the layer that still separates the two ends
+                // when a chord is voiced inside one pitch class -- every
+                // octave of it shares a node, differing only by slot.
+                let slot_mark = mark_color(in.marks, 1u << i);
+                if u.misc5.z > 0.5 && slot_mark.a > 0.0 {
+                    slot_rgb = slot_mark.rgb;
+                    cov = max(cov, shape * tail);
+                }
             }
             if cov > glyph {
                 glyph = cov;

@@ -144,9 +144,14 @@ struct Uniforms {
     /// this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
-    /// width; y/z/w unused. Every earlier misc slot is spoken for, so the
-    /// grid's knob starts a new one — safe per the note on `misc4`.
+    /// width; y: draw the melody/bass mark on the core (pitch class
+    /// indicator); z: draw it on the octave glyphs; w unused. Every
+    /// earlier misc slot is spoken for, so the grid's knob starts a new
+    /// one — safe per the note on `misc4`.
     misc5: [f32; 4],
+    /// Melody / bass mark colors (skin `note_melody` / `note_bass`).
+    note_melody: [f32; 4],
+    note_bass: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -178,6 +183,11 @@ struct GpuInstance {
     /// 1 when the node is on the home (center sevens) sheet: idle home
     /// nodes draw a blank placeholder ring.
     home: f32,
+    /// Melody/bass marks: `[melody_slots, bass_slots]`, one bit per octave
+    /// slot (see `NodeInstance::melody_slots`). Kept as integers rather
+    /// than folded into the dead `params.y`/`params.z` floats because the
+    /// shader masks them bitwise, which needs a flat-interpolated `u32`.
+    marks: [u32; 2],
 }
 
 impl GpuInstance {
@@ -186,7 +196,7 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32, 7 => Float32
+            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2
         ],
     };
 }
@@ -298,6 +308,7 @@ impl LatticeCallback {
                 cents: n.cents,
                 scale: n.scale,
                 home: if n.on_home { 1.0 } else { 0.0 },
+                marks: [n.melody_slots, n.bass_slots],
             })
             .collect();
 
@@ -348,7 +359,14 @@ impl LatticeCallback {
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],
-                misc5: [scene.grid_thickness, 0.0, 0.0, 0.0],
+                misc5: [
+                    scene.grid_thickness,
+                    if scene.highlight_core { 1.0 } else { 0.0 },
+                    if scene.highlight_octave { 1.0 } else { 0.0 },
+                    0.0,
+                ],
+                note_melody: lattice_scene::skin::active_skin().note_melody.to_array(),
+                note_bass: lattice_scene::skin::active_skin().note_bass.to_array(),
             },
             target_format,
             pane_id,
@@ -1169,6 +1187,10 @@ mod tests {
                 scale: 0.9 + f * 0.06,
                 on_home: i % 2 == 0,
                 cents: f * 190.0,
+                // Exercise the mark paths: one node marked melody, one
+                // bass, and one claiming both slots (which draws unmarked).
+                melody_slots: if i == 0 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
+                bass_slots: if i == 2 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
             });
         }
         let edges = vec![lattice_scene::EdgeInstance {
@@ -1212,6 +1234,8 @@ mod tests {
             edges,
             grid,
             grid_thickness: 1.0,
+            highlight_core: true,
+            highlight_octave: true,
             dot_ramp: std::array::from_fn(|k| {
                 Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
             }),
