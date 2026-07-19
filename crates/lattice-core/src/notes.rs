@@ -275,6 +275,36 @@ mod tests {
     }
 
     #[test]
+    fn display_octave_uses_bitwig_c3_convention() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60)); // middle C
+        let voice = tracker.voices().next().unwrap();
+        assert_eq!(voice.octave, 4); // internal: C4 = middle C
+        assert_eq!(voice.display_octave(), 3); // shown one lower, as C3
+    }
+
+    #[test]
+    fn activation_is_full_while_held_then_decays_linearly() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        let held = *tracker.voices().next().unwrap();
+        // Held voices read full intensity regardless of the fade time.
+        assert_eq!(held.activation(100.0, 2.0), 1.0);
+        assert_eq!(held.activation(100.0, 0.0), 1.0);
+
+        tracker.handle_event(off(10.0, 60));
+        let released = *tracker.voices().next().unwrap();
+        assert_eq!(released.activation(10.0, 2.0), 1.0); // full at release
+        assert!((released.activation(11.0, 2.0) - 0.5).abs() < 1e-6); // half-way
+        assert_eq!(released.activation(12.0, 2.0), 0.0); // fully faded
+        assert_eq!(released.activation(20.0, 2.0), 0.0); // clamps, not negative
+        assert_eq!(released.activation(9.0, 2.0), 1.0); // `now` before release
+        // A non-positive fade time releases instantly (guards div-by-zero).
+        assert_eq!(released.activation(10.0, 0.0), 0.0);
+        assert_eq!(released.activation(10.0, -1.0), 0.0);
+    }
+
+    #[test]
     fn retrigger_without_off_replaces_the_held_voice() {
         // Pins existing behavior: no release fade for the first voice.
         let mut tracker = NoteTracker::new();
