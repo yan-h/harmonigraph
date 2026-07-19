@@ -378,6 +378,48 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
     return csum / wsum;
 }
 
+// Concentration of each octave's angular color lobe in the glow (a von
+// Mises-like falloff): higher is tighter, more separated arcs. Tuned so
+// octaves a dot-step (45deg) apart blend softly rather than banding.
+const GLOW_LOBE_KAPPA: f32 = 4.0;
+
+// The glow's color when a chord sounds: every sounding octave's hue laid
+// around the halo in the direction of its OWN dot (the shared dots angle
+// convention), so the glow shows ALL the playing notes at once instead of
+// just the loudest voice's single color. Seam-free — each octave's weight
+// is a periodic bump in cos(angle - dot_angle), never an atan2 wrap. A
+// lone sounding octave yields its color uniformly (the single term cancels
+// the angle dependence); with a solo note or nothing sounding it falls
+// back to `fallback`, so a single voice keeps its exact color (fixed
+// channel hues included, which the pitch ramp would not reproduce).
+fn octave_glow_color(octaves: vec3<u32>, cents: f32, angle: f32, fallback: vec3<f32>) -> vec3<f32> {
+    var count = 0u;
+    var wsum = 0.0;
+    var csum = vec3<f32>(0.0);
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        let level = octave_level(octaves, i);
+        if level <= 0.0 {
+            continue;
+        }
+        count = count + 1u;
+        // Octave i's dot angle (matches outer_glyph): middle C straight
+        // up, 45deg clockwise per octave, this node's pitch class folded in.
+        let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
+        let theta = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
+        let w = level * exp(GLOW_LOBE_KAPPA * (cos(angle - theta) - 1.0));
+        // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; fold in this
+        // node's pitch class for the octave's true pitch (as the dots do).
+        csum = csum + dot_pitch_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
+        wsum = wsum + w;
+    }
+    // A solo note (or none) keeps its exact node color; two or more
+    // sounding octaves spread their hues around the glow.
+    if count < 2u || wsum < 1e-5 {
+        return fallback;
+    }
+    return csum / wsum;
+}
+
 // Orthographic sphere mapping for the pattern styles: the unit-sphere
 // point under this pixel. uv is clamped just inside the disc rim, so the
 // glow region beyond the disc keeps sampling the limb color instead of
@@ -558,21 +600,34 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // light. The field sweeps each pixel through the sounding octaves'
     // colors (patches, bands, or cells — never averaged), modulates
     // brightness, and a limb-darkened profile keeps it reading as a sphere.
-    // The rim glow inherits the local field color, so it burns in the hue
-    // of whichever octave's color it erupts from.
     if cored && is_field_style(style) && activation > 0.0 {
         let field = field_pattern(style, in.uv * fs, d * fs, u.misc.x, seed);
         let gas = octave_swirl_color(in.octaves, in.cents, field.x, in.color.rgb);
         let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d * fs);
         rgb = mix(rgb, gas * brightness * field.y * limb, activation);
     }
+    let disc_rgb = rgb;
+
+    // The glow carries its OWN color: every sounding octave's hue spread
+    // around the halo (see octave_glow_color), so a chord's glow shows all
+    // its notes rather than only the loudest. The disc keeps its solid
+    // color — composite disc OVER glow, so the multi-color glow reads only
+    // where the disc doesn't reach (the halo), and never tints the orb.
+    // `f` is the share of this pixel's coverage that is glow-beyond-disc;
+    // where disc and glow are the same color it collapses to a no-op, so
+    // the combined alpha and brightness are exactly the old additive glow.
+    let glow_rgb = octave_glow_color(in.octaves, in.cents, atan2(in.uv.y, in.uv.x), in.color.rgb)
+        * brightness;
+    let f = glow * (1.0 - disc) / max(disc + glow, 1e-4);
+    let rgb_core = mix(disc_rgb, glow_rgb, f);
+
     // The blank ring composites UNDER the disc/glow (disc over ring) in the
     // constant idle grey, so it matches the grid lines' brightness and a
     // releasing note's disc fades away over a steady grey ring — never a
     // colored one.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
     let base_alpha = core_alpha + blank * (1.0 - core_alpha);
-    let base_rgb = rgb * core_alpha + u.node_idle.rgb * blank * (1.0 - core_alpha);
+    let base_rgb = rgb_core * core_alpha + u.node_idle.rgb * blank * (1.0 - core_alpha);
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
