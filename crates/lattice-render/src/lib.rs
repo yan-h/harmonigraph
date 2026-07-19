@@ -123,9 +123,11 @@ struct Uniforms {
     /// pixels with it); w unused. The dots style maps a dot's pitch
     /// through x/y to index `dot_ramp`.
     misc2: [f32; 4],
-    /// x: core orb radius in quad UV units, 0 = core off; y/z: the outer
+    /// x: signed core radius in quad UV units — >0 orb (disc + glow), 0
+    /// glow only (no disc), <0 nothing (no disc, no glow); y/z: the outer
     /// octave layer's inner/outer band radii (same units, pre-sanitized
-    /// by the scene so z > y); w unused.
+    /// by the scene so z > y); w: outer backdrop flag (1 = ghost the
+    /// silent octaves to complete the ring, independent of the core).
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
@@ -321,7 +323,12 @@ impl LatticeCallback {
                     render_scale,
                     scene.bloom_strength.clamp(0.0, 4.0),
                 ],
-                misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
+                misc3: [
+                    scene.core_radius,
+                    scene.outer_inner,
+                    scene.outer_outer,
+                    if scene.outer_backdrop { 1.0 } else { 0.0 },
+                ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
                 node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
             },
@@ -1179,6 +1186,7 @@ mod tests {
             core_radius: 0.46,
             outer_inner: 0.545,
             outer_outer: 0.795,
+            outer_backdrop: false,
             edges,
             grid,
             dot_ramp: std::array::from_fn(|k| {

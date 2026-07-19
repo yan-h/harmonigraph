@@ -639,21 +639,25 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         egui::Checkbox::new(&mut state.view.show_cents, "Cent values"),
     );
 
-    // Note rendering is two independent layers. CORE: what sits at a
-    // sounding node's center — the classic orb (sized by its radius bar,
-    // painted per the core style row) or nothing, leaving the outer
-    // octave glyphs to carry the note alone (each outer style then gains
-    // a cohesion device — ghost slots or a tie hoop — so a lone octave
-    // still reads as a whole note).
+    // Note rendering is two fully independent layers. CORE: what sits at
+    // a sounding node's center, peeling back one element at a time — the
+    // classic orb (disc, sized by its radius bar and painted per the core
+    // style row, over its glow), just the glow (no disc), or nothing at
+    // all. The outer octave layer draws the same whatever the core does.
     button_row_wrapped(ui, |ui| {
         ui.label("Core");
         for (core, label, hint) in [
-            (CoreStyle::Orb, "Orb", "The classic disc, sized by the core radius bar"),
+            (
+                CoreStyle::Orb,
+                "Orb",
+                "The classic disc, sized by the core radius bar, over its glow",
+            ),
+            (CoreStyle::Glow, "Glow", "Just the soft glow a note casts — no disc"),
             (
                 CoreStyle::None,
                 "None",
-                "Nothing at the center: the outer octave glyphs carry the \
-                 note alone",
+                "Nothing at the center — no disc and no glow; the outer \
+                 octave glyphs carry the note alone",
             ),
         ] {
             ui.selectable_value(&mut state.view.core_style, core, label)
@@ -686,7 +690,7 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
 
     // OUTER: the octave indicators, all placed at the note's
     // absolute-pitch angle, fitting their radial footprint to the
-    // inner/outer band bars (Bumps excepted: it hugs the orb's rim).
+    // inner/outer band bars.
     button_row_wrapped(ui, |ui| {
         ui.label("Outer");
         for (style, label, hint) in [
@@ -694,21 +698,12 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
             (
                 OuterStyle::Dots,
                 "Dots",
-                "A dot per sounding octave, filling the band (with no \
-                 core, strung on a faint hoop)",
-            ),
-            (
-                OuterStyle::Bumps,
-                "Bumps",
-                "A blob seated on the orb's rim per sounding octave, \
-                 bulging its outline",
+                "A dot per sounding octave, filling the band",
             ),
             (
                 OuterStyle::Slices,
                 "Slices",
-                "Ring sectors spanning the band; band inner 0 = pie \
-                 wedges (with no core, silent slots ghost in to complete \
-                 the circle)",
+                "Ring sectors spanning the band; band inner 0 = pie wedges",
             ),
             (
                 OuterStyle::Rings,
@@ -730,6 +725,18 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         ValueBar::new(&mut state.view.outer_outer, 0.2..=1.0, "Outer outer")
             .show(ui)
             .on_hover_text("Octave band's outer radius");
+    });
+    // Backdrop: the outer layer's own cohesion device (independent of the
+    // core). Only Dots (hoop) and Slices (ghost slots) draw one; Rings is
+    // already a closed circle and Off has nothing to complete.
+    let has_backdrop = matches!(state.view.outer_style, OuterStyle::Dots | OuterStyle::Slices);
+    ui.add_enabled_ui(has_backdrop, |ui| {
+        ui.checkbox(&mut state.view.outer_backdrop, "Backdrop").on_hover_text(
+            "Complete the octave ring: draw the silent octaves faintly \
+             behind the sounding glyphs (Slices ghosts its empty slots; \
+             Dots strings them on a hoop) so a lone octave still reads as \
+             a whole note",
+        );
     });
 
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
