@@ -247,24 +247,34 @@ pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
     classes.sort_unstable();
     classes.dedup();
 
-    let mut learned = LearnedTuning::default();
+    let [three, five, seven] = learn_primes(&classes);
+    LearnedTuning { c_offset: learn_c_offset(&classes), three, five, seven }
+}
 
-    // C offset.
+/// The sounding pitch class closest to C, as a signed cents offset in
+/// -600..=600, or `None` if nothing sounds within [`LEARN_C_RANGE_CENTS`].
+fn learn_c_offset(classes: &[PitchClass]) -> Option<f32> {
     let c = PitchClass::from_cents(0.0);
     let mut best_c: Option<PitchClass> = None;
-    for &pc in &classes {
+    for &pc in classes {
         if pc.distance_to(c) <= PitchClassDistance::from_cents(LEARN_C_RANGE_CENTS)
             && best_c.is_none_or(|b| pc.distance_to(c) < b.distance_to(c))
         {
             best_c = Some(pc);
         }
     }
-    learned.c_offset = best_c.map(|pc| {
+    best_c.map(|pc| {
         let cents = pc.to_cents();
         if cents > 600.0 { cents - 1200.0 } else { cents }
-    });
+    })
+}
 
-    // Prime intervals.
+/// The best-fitting size for each prime axis (3, 5, 7), in cents, over
+/// every pair of the sounding classes. Both directions of each interval
+/// are candidates — a fourth implies a fifth, since octaves are assumed
+/// perfectly tuned — and the candidate closest to just wins, if within
+/// [`LEARN_RANGE_CENTS`].
+fn learn_primes(classes: &[PitchClass]) -> [Option<f32>; 3] {
     let mut best = [
         (PitchClass::from_cents(THREE_JUST), None::<PitchClass>),
         (PitchClass::from_cents(FIVE_JUST), None),
@@ -284,11 +294,7 @@ pub fn learn_tuning(pitch_classes: &[PitchClass]) -> LearnedTuning {
             }
         }
     }
-    learned.three = best[0].1.map(PitchClass::to_cents);
-    learned.five = best[1].1.map(PitchClass::to_cents);
-    learned.seven = best[2].1.map(PitchClass::to_cents);
-
-    learned
+    best.map(|(_, found)| found.map(PitchClass::to_cents))
 }
 
 #[cfg(test)]

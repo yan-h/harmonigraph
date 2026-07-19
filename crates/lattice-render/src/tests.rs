@@ -57,16 +57,9 @@ fn octave_packing_matches_the_documented_layout() {
 /// at first paint inside a host.
 #[test]
 fn pipelines_build_against_a_headless_device() {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("no GPU adapter available; skipping pipeline-build test");
+    let Some((device, _queue)) = headless_device() else {
         return;
     };
-    let (device, _queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .expect("headless device");
     let _resources =
         LatticeResources::new(&device, wgpu::TextureFormat::Bgra8Unorm);
 }

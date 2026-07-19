@@ -575,7 +575,9 @@ fn create_pipeline(
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("lattice_pipeline"),
+        // Name the pipeline after its vertex entry point, so a GPU capture
+        // can tell the node and edge passes apart.
+        label: Some(entry_points.0),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
