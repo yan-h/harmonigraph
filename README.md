@@ -90,13 +90,18 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 - **Surface format assumption**: the plugin editor assumes a `Bgra8Unorm`
   swapchain (see `ASSUMED_SURFACE_FORMAT` in `editor.rs`) because
   egui-baseview doesn't expose its wgpu `RenderState`. Correct on
-  macOS/Windows in practice; worth upstreaming a fix.
-- **Depth/bloom**: the lattice draws into egui's pass (no depth buffer;
-  CPU-sorted back-to-front). For dense scenes or post-processing, render
-  to an offscreen texture in `prepare()` instead.
+  macOS/Windows in practice; the constant is the knob if a format mismatch
+  ever panics on an exotic setup.
+- **Depth sorting**: the lattice now renders through an offscreen
+  color+depth pass, with bloom composited over it. The depth buffer is
+  written but not yet read — nodes are still CPU-sorted back-to-front, so
+  dense scenes can still show overlap artifacts. Enabling real depth
+  testing is the remaining step.
 - **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
-- **Spectral audio FFT**: the pane is MIDI-derived today.
+- **Spectral audio FFT**: done — the Spectral pane analyzes a real FFT of
+  the plugin's audio input (mono mixdown of the input bus, gated on
+  `show_audio`), no longer MIDI-only. Remaining work is analysis polish,
+  not wiring.
 - **Render styles**: Node style / Chord edges are switchable experiments;
   prune the losers after evaluation.
-- **Upstreaming**: prepared fixes in `docs/upstream/`.
