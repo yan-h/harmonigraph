@@ -6,7 +6,7 @@ use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
 use lattice_scene::{
-    channel_color, derive_scene, Camera, CoreStyle, NodeStyle, OuterStyle, Projection,
+    channel_color, derive_scene, Camera, NodeStyle, OuterStyle, Projection,
 };
 
 use crate::theme;
@@ -640,38 +640,28 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     );
 
     // Note rendering is two fully independent layers. CORE: what sits at a
-    // sounding node's center. It is one continuous shape on the Solidity
-    // slider — a soft glow at 0, morphing to the classic solid orb at 1 —
-    // sized by the radius bar and painted per the core style row; or turn
-    // it off entirely (None), leaving the outer octave glyphs to carry the
+    // sounding node's center — one continuous shape sized by the radius bar
+    // (0 turns the core off, like Bloom below) and morphed by the Solidity
+    // slider from a soft glow (0) to the classic solid orb (1), painted per
+    // the core style row. Off leaves the outer octave glyphs to carry the
     // note alone. The outer layer draws the same whatever the core does.
-    let mut core_on = state.view.core_style != CoreStyle::None;
-    if ui
-        .checkbox(&mut core_on, "Core")
-        .on_hover_text(
-            "The center shape a sounding note draws. Off leaves the outer \
-             octave glyphs to carry the note alone.",
-        )
-        .changed()
-    {
-        state.view.core_style = if core_on { CoreStyle::On } else { CoreStyle::None };
-    }
-    ui.add_enabled_ui(core_on, |ui| {
+    // Quad UV units: 0.46 is the classic disc edge; 0 = off.
+    ValueBar::new(&mut state.view.core_radius, 0.0..=0.9, "Core radius")
+        .show(ui)
+        .on_hover_text("Core size (disc and glow together); 0 turns it off, 0.46 is the classic disc");
+    ui.add_enabled_ui(state.view.core_radius > 0.0, |ui| {
         ValueBar::new(&mut state.view.core_solidity, 0.0..=1.0, "Solidity")
             .show(ui)
             .on_hover_text(
                 "0 = a soft glow, 1 = the classic solid orb; in between the \
                  disc fades in over its glow and its edge crisps",
             );
-        // Quad UV units: 0.46 is the classic disc edge.
-        ValueBar::new(&mut state.view.core_radius, 0.1..=0.9, "Core radius")
-            .show(ui)
-            .on_hover_text("Core size (disc and glow together); 0.46 is the classic disc");
         // The core's paint: switchable looks (idle nodes look the same in
-        // all of them). Compare live while notes play. Everything except
-        // Steady is a field style (swirled octave colors): Vortex is the
-        // gas look, Checker/Spiral/Pinwheel are deterministic patterns on
-        // the sphere. The paint dissolves with the disc toward the glow end.
+        // all of them). Compare live while notes play. Steady is a calm
+        // solid disc that blends all the sounding octaves' colors; the rest
+        // are field styles (swirled octave colors): Vortex is the gas look,
+        // Checker/Spiral/Pinwheel deterministic patterns on the sphere. The
+        // paint dissolves with the disc toward the glow end.
         button_row_wrapped(ui, |ui| {
             ui.label("Core style");
             for (style, label) in [

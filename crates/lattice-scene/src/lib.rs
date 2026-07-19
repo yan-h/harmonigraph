@@ -134,37 +134,27 @@ impl OuterStyle {
     }
 }
 
-/// The CORE layer: what sits at a sounding node's center, fully
-/// independent of the outer octave layer ([`OuterStyle`]). Either the core
-/// is [`On`](CoreStyle::On) — a single shape whose look runs on the
-/// [`core_solidity`](ViewConfig::core_solidity) slider, a soft glow at 0
-/// morphing to the classic solid orb at 1 — or it is [`None`], nothing at
-/// all.
-///
-/// Encoded for the shader as `core_radius` (see [`derive_scene`]): `On`
-/// passes the radius (>=0), `None` a negative sentinel. Solidity rides its
-/// own uniform. Outline (channel 14) voices still draw their thin ring in
-/// both modes so the channel stays recognizable.
+/// Legacy load-only core mode, from before the core became a plain radius
+/// (`core_radius`, with 0 = off) plus a `core_solidity` slider. Persisted
+/// blobs still carry a `core_style` token; [`ViewConfig::migrate_legacy`]
+/// folds each value into today's radius/solidity and then this is ignored
+/// (the field is `skip_serializing`). Kept as a distinct type only so those
+/// tokens keep deserializing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CoreStyle {
-    /// Truly nothing at the center — no disc, no glow. The outer octave
-    /// glyphs carry the note completely alone.
-    ///
-    /// Serialized as `"Empty"`: the bare `"None"` token is reserved for the
-    /// pre-solidity glow-only mode, which folds into `On` + solidity 0 (see
-    /// [`ViewConfig::migrate_legacy`]).
+    /// The pre-radius-off "nothing" mode (serialized `"Empty"`). Folds to
+    /// `core_radius = 0` (off). The bare `"None"` token is the older
+    /// glow-only mode instead, aliased onto [`Glow`](CoreStyle::Glow).
     #[serde(rename = "Empty")]
     None,
-    /// The core is present; its look is the [`core_solidity`] slider
-    /// (0 = soft glow, 1 = solid orb, painted per [`NodeStyle`]).
+    /// The core is present with radius + solidity already in their own
+    /// fields; nothing to fold. The default (and what recent blobs wrote).
     #[default]
     On,
-    /// Legacy load-only: the pre-solidity solid orb. `migrate_legacy` folds
-    /// it into `On` + solidity 1.
+    /// The pre-solidity solid orb. Folds to solidity 1.
     Orb,
-    /// Legacy load-only: the pre-solidity glow-only mode (also the bare
-    /// `"None"` token pre-split blobs wrote). `migrate_legacy` folds it into
-    /// `On` + solidity 0.
+    /// The pre-solidity glow-only mode (also the bare `"None"` token
+    /// pre-split blobs wrote). Folds to solidity 0.
     #[serde(alias = "None")]
     Glow,
 }
@@ -222,10 +212,10 @@ pub struct ViewConfig {
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
-    /// Core layer style (see CoreStyle): present ([`CoreStyle::On`], its
-    /// look set by `core_solidity`) or nothing — the outer octave glyphs
-    /// then carry the note alone.
-    #[serde(default)]
+    /// Legacy load-only core mode (see [`CoreStyle`]); folded into
+    /// `core_radius`/`core_solidity` by [`migrate_legacy`](Self::migrate_legacy)
+    /// and never written back.
+    #[serde(default, skip_serializing)]
     pub core_style: CoreStyle,
     /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
     /// to the classic solid orb at 1 (the disc fades in over its glow
@@ -234,7 +224,8 @@ pub struct ViewConfig {
     pub core_solidity: f32,
     /// The core's radius, in quad UV units (0 = node center, 1 = quad
     /// edge; the classic disc edge sits at 0.46). Sizes the disc and its
-    /// glow together. Inert while the core is off.
+    /// glow together. **A radius of 0 turns the core off** — the outer
+    /// octave glyphs then carry the note alone.
     #[serde(default = "default_core_radius")]
     pub core_radius: f32,
     /// The outer octave layer's radial band (same UV units): every outer
@@ -347,25 +338,21 @@ impl ViewConfig {
     /// Fold fields from older blob layouts into the current ones; call
     /// after deserializing a persisted view.
     ///
-    /// The pre-solidity core modes collapse onto the single `On` + solidity
-    /// axis: the old solid `Orb` becomes solidity 1, the old glow-only mode
-    /// (`Glow`, also the bare `"None"` token) becomes solidity 0. The
-    /// one-build NodeBody experiment's octave-only bodies map onto that
-    /// glow (solidity 0) plus the matching outer style with the backdrop on
+    /// The pre-radius-off core modes collapse onto today's `core_radius`
+    /// (0 = off) plus `core_solidity`: the old `None` becomes radius 0
+    /// (off), the old solid `Orb` becomes solidity 1, and the old glow-only
+    /// mode (`Glow`, also the bare `"None"` token) becomes solidity 0. The
+    /// one-build NodeBody experiment's octave-only bodies map onto that glow
+    /// (solidity 0) plus the matching outer style with the backdrop on
     /// (Beads was dots-on-a-hoop, which is exactly what a Dots outer with
     /// the backdrop draws; its band radii rode the slice_inner/slice_outer
     /// fields, absorbed by the outer_inner/outer_outer aliases).
     pub fn migrate_legacy(&mut self) {
-        match self.core_style {
-            CoreStyle::Orb => {
-                self.core_style = CoreStyle::On;
-                self.core_solidity = 1.0;
-            }
-            CoreStyle::Glow => {
-                self.core_style = CoreStyle::On;
-                self.core_solidity = 0.0;
-            }
-            _ => {}
+        match std::mem::replace(&mut self.core_style, CoreStyle::On) {
+            CoreStyle::None => self.core_radius = 0.0,
+            CoreStyle::Orb => self.core_solidity = 1.0,
+            CoreStyle::Glow => self.core_solidity = 0.0,
+            CoreStyle::On => {}
         }
 
         let outer = match std::mem::take(&mut self.node_body) {
@@ -374,7 +361,6 @@ impl ViewConfig {
             LegacyNodeBody::Rings => OuterStyle::Rings,
             LegacyNodeBody::Beads => OuterStyle::Dots,
         };
-        self.core_style = CoreStyle::On;
         self.core_solidity = 0.0;
         self.outer_style = outer;
         self.outer_backdrop = true;
@@ -713,9 +699,9 @@ pub struct Scene {
     pub node_radius: f32,
     pub outer_style: OuterStyle,
     pub node_style: NodeStyle,
-    /// The core's radius in quad UV units when on (`>=0`), or a negative
-    /// sentinel for None (nothing at all). Sizes both the disc and its
-    /// glow; the shader reads solidity separately (`core_solidity`).
+    /// The core's radius in quad UV units; `0` turns the core off (nothing
+    /// at all). Sizes both the disc and its glow; the shader reads solidity
+    /// separately (`core_solidity`).
     pub core_radius: f32,
     /// The core's solidity 0..1 (see [`ViewConfig::core_solidity`]): 0 a
     /// soft glow, 1 the solid orb. Ignored when the core is off.
@@ -905,16 +891,11 @@ pub fn derive_scene(
     let edges = if view.show_chord_edges { derive_edges(&nodes) } else { Vec::new() };
     let grid = derive_grid(view, &nodes);
 
-    // Core/outer geometry policy: the core mode is folded into a signed
-    // radius the shader reads (>=0 = on and carries the radius, <0 = None),
-    // with solidity riding alongside; the outer band is sanitized here so
-    // the shader can trust outer > inner whatever the two bars hold.
-    // (Legacy Orb/Glow are folded to On by migrate_legacy on load; treat
-    // any non-None as on here so an unmigrated value still renders.)
-    let core_radius = match view.core_style {
-        CoreStyle::None => -1.0,
-        _ => view.core_radius.clamp(0.1, 0.9),
-    };
+    // Core/outer geometry policy: the core is a plain radius the shader
+    // reads (0 = off), with solidity riding alongside; the outer band is
+    // sanitized here so the shader can trust outer > inner whatever the two
+    // bars hold.
+    let core_radius = view.core_radius.clamp(0.0, 0.9);
     let core_solidity = view.core_solidity.clamp(0.0, 1.0);
     let outer_inner = view.outer_inner.clamp(0.0, 0.9);
     let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
@@ -1512,8 +1493,9 @@ mod tests {
     fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         // Bars dragged into a crossed/degenerate combination: the scene
         // must still hand the shader a visible band (outer ahead of inner).
+        // A radius of 0 turns the core off (passes through as 0).
         let view = ViewConfig {
-            core_style: CoreStyle::None,
+            core_radius: 0.0,
             outer_style: OuterStyle::Slices,
             outer_inner: 0.8,
             outer_outer: 0.3,
@@ -1527,14 +1509,13 @@ mod tests {
             0.0,
         );
         assert_eq!(scene.outer_style, OuterStyle::Slices);
-        assert!(scene.core_radius < 0.0, "None encodes as a negative radius");
+        assert_eq!(scene.core_radius, 0.0, "radius 0 = core off");
         assert_eq!(scene.outer_inner, 0.8);
         assert!(scene.outer_outer > scene.outer_inner);
 
-        // Core on: the radius passes through (>=0) and solidity rides
-        // alongside, both clamped to range.
+        // Core on: the radius passes through and solidity rides alongside,
+        // both clamped to range.
         let view = ViewConfig {
-            core_style: CoreStyle::On,
             core_radius: 0.3,
             core_solidity: 0.25,
             outer_inner: 0.0,
@@ -1565,27 +1546,31 @@ mod tests {
     }
 
     #[test]
-    fn legacy_core_modes_fold_onto_the_solidity_axis() {
-        // The pre-solidity Orb/Glow modes collapse onto On + solidity: the
-        // solid orb is solidity 1, the glow-only mode solidity 0.
+    fn legacy_core_modes_fold_onto_radius_and_solidity() {
+        // The pre-radius-off modes collapse onto core_radius (0 = off) +
+        // solidity: None -> radius 0, the solid Orb -> solidity 1, the
+        // glow-only mode -> solidity 0.
+        let mut none = ViewConfig { core_style: CoreStyle::None, ..ViewConfig::default() };
+        none.migrate_legacy();
+        assert_eq!(none.core_radius, 0.0, "None folds to radius 0 (off)");
+
         let mut orb = ViewConfig { core_style: CoreStyle::Orb, ..ViewConfig::default() };
         orb.migrate_legacy();
-        assert_eq!(orb.core_style, CoreStyle::On);
         assert_eq!(orb.core_solidity, 1.0);
+        assert!(orb.core_radius > 0.0, "orb stays on");
 
         let mut glow = ViewConfig { core_style: CoreStyle::Glow, ..ViewConfig::default() };
         glow.migrate_legacy();
-        assert_eq!(glow.core_style, CoreStyle::On);
         assert_eq!(glow.core_solidity, 0.0);
+        assert!(glow.core_radius > 0.0, "glow stays on");
     }
 
     #[test]
     fn legacy_node_body_folds_into_core_and_outer() {
-        // Blobs from the one-build NodeBody experiment: an octave-only
-        // body becomes the core glow (On + solidity 0, the old core-off
-        // under-glow) + the matching outer style with the backdrop on;
-        // Beads maps to Dots (whose backdrop hoop IS the beads look). Disc
-        // leaves the new defaults alone.
+        // Blobs from the one-build NodeBody experiment: an octave-only body
+        // becomes the core glow (solidity 0, the old core-off under-glow) +
+        // the matching outer style with the backdrop on; Beads maps to Dots
+        // (whose backdrop hoop IS the beads look). Disc leaves defaults alone.
         for (body, outer) in [
             (LegacyNodeBody::Slices, OuterStyle::Slices),
             (LegacyNodeBody::Rings, OuterStyle::Rings),
@@ -1593,8 +1578,8 @@ mod tests {
         ] {
             let mut view = ViewConfig { node_body: body, ..ViewConfig::default() };
             view.migrate_legacy();
-            assert_eq!(view.core_style, CoreStyle::On, "{body:?}");
             assert_eq!(view.core_solidity, 0.0, "{body:?}");
+            assert!(view.core_radius > 0.0, "{body:?} still on");
             assert_eq!(view.outer_style, outer, "{body:?}");
             assert!(view.outer_backdrop, "{body:?}");
             assert_eq!(view.node_body, LegacyNodeBody::Disc, "shim consumed");
@@ -1602,7 +1587,6 @@ mod tests {
 
         let mut view = ViewConfig { node_body: LegacyNodeBody::Disc, ..ViewConfig::default() };
         view.migrate_legacy();
-        assert_eq!(view.core_style, CoreStyle::On);
         assert_eq!(view.core_solidity, 1.0);
         assert_eq!(view.outer_style, ViewConfig::default().outer_style);
     }

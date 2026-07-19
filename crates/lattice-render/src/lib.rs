@@ -123,11 +123,10 @@ struct Uniforms {
     /// pixels with it); w unused. The dots style maps a dot's pitch
     /// through x/y to index `dot_ramp`.
     misc2: [f32; 4],
-    /// x: signed core radius in quad UV units — >=0 is the radius R (core
-    /// on), <0 is None (nothing); y/z: the outer octave layer's inner/outer
-    /// band radii (same units, pre-sanitized by the scene so z > y); w:
-    /// outer backdrop flag (1 = ghost the silent octaves to complete the
-    /// ring, independent of the core).
+    /// x: core radius in quad UV units (0 turns the core off); y/z: the
+    /// outer octave layer's inner/outer band radii (same units, pre-
+    /// sanitized by the scene so z > y); w: outer backdrop flag (1 = ghost
+    /// the silent octaves to complete the ring, independent of the core).
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
