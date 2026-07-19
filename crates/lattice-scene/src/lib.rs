@@ -191,13 +191,17 @@ impl IdleMarker {
 /// from the note that replaced it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum HighlightExtremes {
-    #[default]
     Off,
     /// The highest held note — the melody.
     Melody,
     /// The lowest held note — the bass.
     Bass,
-    /// Both, in their own colors.
+    /// Both, in their own colors. The default: the marks are subtle
+    /// enough to live with always-on, and a chord's outer voices are
+    /// worth seeing without having to go turn something on first. Blobs
+    /// saved before this setting existed pick it up too, which is
+    /// deliberate.
+    #[default]
     Both,
 }
 

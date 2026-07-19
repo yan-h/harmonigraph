@@ -614,20 +614,24 @@ fn mark_color(marks: vec2<u32>, slots: u32) -> vec4<f32> {
 }
 
 const ALL_SLOTS: u32 = 0xFFFFFFFFu;
-// The core's melody/bass ring, in quad UV units. Centered ON the disc edge
-// (so it reads as the node's own rim rather than a detached hoop) and thick
-// enough to survive at the size a node actually occupies on screen -- an
-// earlier, thinner ring drew correctly but was a sub-pixel hairline nobody
-// could see. HALO_OUT is how far a softer skirt spreads outside it, which is
-// most of what makes the mark findable at a glance.
-const MARK_RING_HALF: f32 = 0.075;
-const MARK_HALO_OUT: f32 = 0.30;
-const MARK_HALO_LEVEL: f32 = 0.55;
+// The core's melody/bass ring, in quad UV units. Centered ON the disc edge,
+// so it reads as the node's own rim rather than a detached hoop. HALO_OUT is
+// how far a softer skirt spreads outside it.
+//
+// These are tuned for an always-on mark (see HighlightExtremes' default): it
+// has to be findable at a glance without shouting over the note colors, which
+// are what the lattice is actually for. An earlier pass drew a sub-pixel
+// hairline that read as nothing at all; the correction to that overshot into
+// a halo that dominated the node, and this sits between the two.
+const MARK_RING_HALF: f32 = 0.05;
+const MARK_HALO_OUT: f32 = 0.17;
+const MARK_HALO_LEVEL: f32 = 0.26;
 // How far a marked octave glyph's band is widened, as a fraction of the band
 // width, on each side. Recoloring one slot alone is only a few percent of the
-// node -- one slice out of ten -- so the marked glyph also grows past its
-// neighbours, and that protrusion is what actually catches the eye.
-const MARK_GLYPH_GROW: f32 = 0.45;
+// node -- one slice out of ten -- so the marked glyph also grows a little
+// past its neighbours; that slight protrusion is what makes it findable
+// without having to brighten it into a glare.
+const MARK_GLYPH_GROW: f32 = 0.20;
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {

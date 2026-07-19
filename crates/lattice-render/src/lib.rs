@@ -1554,14 +1554,21 @@ mod tests {
         eprintln!(
             "node {node_px} px; core mark {core_px}, octave mark {octave_px}, both {both_px}"
         );
+        // Floors, not targets. The mark is deliberately restrained (it is
+        // on by default and must not shout over the note colors), so these
+        // sit between "subtle" and the two regressions they exist to catch:
+        // a sub-pixel core ring, which changed well under 1% of the node,
+        // and an octave mark that only recolored its slot without growing
+        // it, which measured ~3.8%. Current: ~37% and ~6.7%.
         assert!(
-            core_px * 4 > node_px,
+            core_px * 6 > node_px,
             "the pitch class mark covers too little of the node to find: \
              {core_px} px of {node_px}"
         );
         assert!(
-            octave_px * 10 > node_px,
-            "the octave mark covers too little of the node to find: \
+            octave_px * 20 > node_px,
+            "the octave mark covers too little of the node to find \
+             (a bare recolor, without the glyph growing, lands here): \
              {octave_px} px of {node_px}"
         );
         assert!(both_px >= core_px.max(octave_px), "both layers should cover at least either");
@@ -1574,6 +1581,109 @@ mod tests {
             shot(&s, 44)
         };
         assert_eq!(changed_px(&off), 0, "no layer selected must draw no mark");
+    }
+
+    #[test]
+    fn a_real_held_chord_shows_its_melody_and_bass_marks() {
+        // End to end, exactly how the app runs it: a held chord through
+        // derive_scene, NOT a Scene assembled by hand. The by-hand test
+        // above pins the shader down but would happily pass while the
+        // tracker -> view -> node-mask path was broken, which is the half
+        // that actually reaches a user.
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        use lattice_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
+        use lattice_scene::{derive_scene, Camera, FrameParams, HighlightExtremes, ViewConfig};
+
+        const SIZE: [u32; 2] = [256, 256];
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+
+        let mut tracker = NoteTracker::new();
+        for note in [60u8, 64, 67] {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        // A small window so the nodes draw big enough to measure.
+        let base = ViewConfig {
+            extent_threes: 2,
+            extent_fives: 2,
+            extent_sevens: 0,
+            ..ViewConfig::default()
+        };
+        let scene_for = |which: HighlightExtremes| {
+            derive_scene(
+                &tracker,
+                &Tuning::default(),
+                &ViewConfig { highlight_extremes: which, ..base.clone() },
+                &FrameParams::default(),
+                Camera::default(),
+                None,
+                0.0,
+            )
+        };
+
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor {
+            size_in_pixels: SIZE,
+            pixels_per_point: 1.0,
+        };
+        let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+            let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+            let tex = render_to_texture(
+                &device,
+                &queue,
+                SIZE,
+                format,
+                wgpu::Color::BLACK,
+                |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: 1.0,
+                            screen_size_px: SIZE,
+                        },
+                        pass,
+                        &resources,
+                    );
+                },
+            );
+            readback(&device, &queue, &tex, SIZE)
+        };
+
+        // The masks must survive derive_scene in the first place.
+        let marked = scene_for(HighlightExtremes::Both);
+        let melody_nodes = marked.nodes.iter().filter(|n| n.melody_slots != 0).count();
+        let bass_nodes = marked.nodes.iter().filter(|n| n.bass_slots != 0).count();
+        assert!(
+            melody_nodes > 0 && bass_nodes > 0,
+            "derive_scene marked nothing: {melody_nodes} melody, {bass_nodes} bass nodes"
+        );
+
+        let off = shot(&scene_for(HighlightExtremes::Off), 50);
+        let on = shot(&marked, 51);
+        let lit = off.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
+        let changed = off
+            .chunks(4)
+            .zip(on.chunks(4))
+            .filter(|(a, b)| a != b)
+            .count();
+        eprintln!("chord: {lit} lit px, {changed} changed by the marks");
+        assert!(
+            changed * 20 > lit,
+            "turning the marks on barely changed a real chord: \
+             {changed} px of {lit} lit"
+        );
     }
 
     #[test]
