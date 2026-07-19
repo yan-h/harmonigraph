@@ -5,7 +5,9 @@
 use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{channel_color, derive_scene, Camera, NodeStyle, OctaveStyle, Projection};
+use lattice_scene::{
+    channel_color, derive_scene, Camera, CoreStyle, NodeStyle, OuterStyle, Projection,
+};
 
 use crate::theme;
 
@@ -637,22 +639,99 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
         egui::Checkbox::new(&mut state.view.show_cents, "Cent values"),
     );
 
-    // Held-note render style: switchable looks (idle nodes look the same in
-    // all of them). Compare live while notes play. Everything except Steady
-    // is a field style (swirled octave colors): Vortex is the gas look,
-    // Checker/Spiral/Pinwheel are deterministic patterns on the sphere.
+    // Note rendering is two independent layers. CORE: what sits at a
+    // sounding node's center — the classic orb (sized by its radius bar,
+    // painted per the core style row) or nothing, leaving the outer
+    // octave glyphs to carry the note alone (each outer style then gains
+    // a cohesion device — ghost slots or a tie hoop — so a lone octave
+    // still reads as a whole note).
     button_row_wrapped(ui, |ui| {
-        ui.label("Node style");
-        for (style, label) in [
-            (NodeStyle::Steady, "Steady"),
-            (NodeStyle::Vortex, "Vortex"),
-            (NodeStyle::Checker, "Checker"),
-            (NodeStyle::Spiral, "Spiral"),
-            (NodeStyle::Pinwheel, "Pinwheel"),
+        ui.label("Core");
+        for (core, label, hint) in [
+            (CoreStyle::Orb, "Orb", "The classic disc, sized by the core radius bar"),
+            (
+                CoreStyle::None,
+                "None",
+                "Nothing at the center: the outer octave glyphs carry the \
+                 note alone",
+            ),
         ] {
-            ui.selectable_value(&mut state.view.node_style, style, label);
+            ui.selectable_value(&mut state.view.core_style, core, label)
+                .on_hover_text(hint);
         }
     });
+    ui.add_enabled_ui(state.view.core_style == CoreStyle::Orb, |ui| {
+        // Quad UV units: 0.46 is the classic disc edge.
+        ValueBar::new(&mut state.view.core_radius, 0.1..=0.9, "Core radius")
+            .show(ui)
+            .on_hover_text("Orb size; 0.46 is the classic disc");
+        // The orb's paint: switchable looks (idle nodes look the same in
+        // all of them). Compare live while notes play. Everything except
+        // Steady is a field style (swirled octave colors): Vortex is the
+        // gas look, Checker/Spiral/Pinwheel are deterministic patterns on
+        // the sphere.
+        button_row_wrapped(ui, |ui| {
+            ui.label("Core style");
+            for (style, label) in [
+                (NodeStyle::Steady, "Steady"),
+                (NodeStyle::Vortex, "Vortex"),
+                (NodeStyle::Checker, "Checker"),
+                (NodeStyle::Spiral, "Spiral"),
+                (NodeStyle::Pinwheel, "Pinwheel"),
+            ] {
+                ui.selectable_value(&mut state.view.node_style, style, label);
+            }
+        });
+    });
+
+    // OUTER: the octave indicators, all placed at the note's
+    // absolute-pitch angle, fitting their radial footprint to the
+    // inner/outer band bars (Bumps excepted: it hugs the orb's rim).
+    button_row_wrapped(ui, |ui| {
+        ui.label("Outer");
+        for (style, label, hint) in [
+            (OuterStyle::Off, "Off", "No octave indication"),
+            (
+                OuterStyle::Dots,
+                "Dots",
+                "A dot per sounding octave, filling the band (with no \
+                 core, strung on a faint hoop)",
+            ),
+            (
+                OuterStyle::Bumps,
+                "Bumps",
+                "A blob seated on the orb's rim per sounding octave, \
+                 bulging its outline",
+            ),
+            (
+                OuterStyle::Slices,
+                "Slices",
+                "Ring sectors spanning the band; band inner 0 = pie \
+                 wedges (with no core, silent slots ghost in to complete \
+                 the circle)",
+            ),
+            (
+                OuterStyle::Rings,
+                "Rings",
+                "One concentric ring per sounding octave across the band, \
+                 lowest innermost",
+            ),
+        ] {
+            ui.selectable_value(&mut state.view.outer_style, style, label)
+                .on_hover_text(hint);
+        }
+    });
+    // If the band bars cross, the scene keeps outer ahead of inner rather
+    // than collapsing.
+    ui.add_enabled_ui(state.view.outer_style != OuterStyle::Off, |ui| {
+        ValueBar::new(&mut state.view.outer_inner, 0.0..=0.9, "Outer inner")
+            .show(ui)
+            .on_hover_text("Octave band's inner radius; 0 reaches the center");
+        ValueBar::new(&mut state.view.outer_outer, 0.2..=1.0, "Outer outer")
+            .show(ui)
+            .on_hover_text("Octave band's outer radius");
+    });
+
     ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
         .on_hover_text("Light up lattice edges between simultaneously held nodes");
     // 0 = off (the renderer skips the whole post-process chain), so the
@@ -660,20 +739,6 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
     ValueBar::new(&mut state.view.bloom_strength, 0.0..=1.5, "Bloom")
         .show(ui)
         .on_hover_text("Soft halo around bright notes; 0 turns the post-process off");
-
-    // Octave indicator glyphs, all positioned by absolute pitch: floating
-    // dots, rim-seated bumps, or annular slices.
-    button_row_wrapped(ui, |ui| {
-        ui.label("Octaves");
-        for (style, label) in [
-            (OctaveStyle::Off, "Off"),
-            (OctaveStyle::Dots, "Dots"),
-            (OctaveStyle::Bumps, "Bumps"),
-            (OctaveStyle::Slices, "Slices"),
-        ] {
-            ui.selectable_value(&mut state.view.octave_style, style, label);
-        }
-    });
 }
 
 fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {

@@ -123,6 +123,10 @@ struct Uniforms {
     /// pixels with it); w unused. The dots style maps a dot's pitch
     /// through x/y to index `dot_ramp`.
     misc2: [f32; 4],
+    /// x: core orb radius in quad UV units, 0 = core off; y/z: the outer
+    /// octave layer's inner/outer band radii (same units, pre-sanitized
+    /// by the scene so z > y); w unused.
+    misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
     dot_ramp: [[f32; 4]; lattice_scene::DOT_RAMP_N],
@@ -308,7 +312,7 @@ impl LatticeCallback {
                 misc: [
                     scene.time,
                     scene.node_radius,
-                    scene.octave_style.shader_index() as f32,
+                    scene.outer_style.shader_index() as f32,
                     scene.node_style.shader_index() as f32,
                 ],
                 misc2: [
@@ -317,6 +321,7 @@ impl LatticeCallback {
                     render_scale,
                     scene.bloom_strength.clamp(0.0, 4.0),
                 ],
+                misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
                 node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
             },
@@ -1169,8 +1174,11 @@ mod tests {
             camera: lattice_scene::Camera::default(),
             time: 1.25,
             node_radius: 0.34,
-            octave_style: Default::default(),
+            outer_style: Default::default(),
             node_style: Default::default(),
+            core_radius: 0.46,
+            outer_inner: 0.545,
+            outer_outer: 0.795,
             edges,
             grid,
             dot_ramp: std::array::from_fn(|k| {

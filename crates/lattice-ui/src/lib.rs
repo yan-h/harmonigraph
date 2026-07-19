@@ -371,6 +371,9 @@ impl SharedState {
             self.dock = persist.dock;
             self.camera = persist.camera;
             self.view = persist.view;
+            // Fold fields from older blob layouts (the NodeBody
+            // experiment) into the current core/outer split.
+            self.view.migrate_legacy();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
         }
@@ -529,9 +532,13 @@ mod tests {
         state.camera.yaw = 1.23;
         state.camera.distance = 42.0;
         state.view.extent_sevens = 3;
-        // Off differs from the default octave style, so it proves the field
-        // actually round-trips rather than matching the default by luck.
-        state.view.octave_style = lattice_scene::OctaveStyle::Off;
+        // Non-default values throughout, so the fields prove they
+        // round-trip rather than matching the defaults by luck.
+        state.view.outer_style = lattice_scene::OuterStyle::Rings;
+        state.view.core_style = lattice_scene::CoreStyle::None;
+        state.view.core_radius = 0.33;
+        state.view.outer_inner = 0.1;
+        state.view.outer_outer = 0.7;
         state.view.meantone = true;
         state.camera_presets.push(CameraPreset {
             name: "reading".into(),
@@ -545,7 +552,11 @@ mod tests {
         assert_eq!(restored.camera.yaw, 1.23);
         assert_eq!(restored.camera.distance, 42.0);
         assert_eq!(restored.view.extent_sevens, 3);
-        assert_eq!(restored.view.octave_style, lattice_scene::OctaveStyle::Off);
+        assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Rings);
+        assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::None);
+        assert_eq!(restored.view.core_radius, 0.33);
+        assert_eq!(restored.view.outer_inner, 0.1);
+        assert_eq!(restored.view.outer_outer, 0.7);
         assert!(restored.view.meantone);
         assert_eq!(restored.camera_presets.len(), 1);
         assert_eq!(restored.camera_presets[0].name, "reading");
@@ -575,13 +586,59 @@ mod tests {
         // Petals/Flares no longer exist; a serde alias must absorb them so an
         // old blob still restores rather than dropping the whole persist.
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.view.octave_style = lattice_scene::OctaveStyle::Bumps;
-        let saved = state.save_persist().replace("octave_style:Bumps", "octave_style:Petals");
+        state.view.outer_style = lattice_scene::OuterStyle::Bumps;
+        let saved = state.save_persist().replace("outer_style:Bumps", "outer_style:Petals");
         assert_ne!(saved, state.save_persist(), "replacement must have hit");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
-        assert_eq!(restored.view.octave_style, lattice_scene::OctaveStyle::Dots);
+        assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Dots);
+    }
+
+    #[test]
+    fn pre_rename_octave_style_and_slice_band_fields_still_load() {
+        // The outer layer's fields were renamed (octave_style ->
+        // outer_style, slice_inner/outer -> outer_inner/outer); aliases
+        // must keep blobs with the old names loading.
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.view.outer_style = lattice_scene::OuterStyle::Slices;
+        state.view.outer_inner = 0.25;
+        state.view.outer_outer = 0.85;
+        let saved = state
+            .save_persist()
+            .replace("outer_style:", "octave_style:")
+            .replace("outer_inner:", "slice_inner:")
+            .replace("outer_outer:", "slice_outer:");
+        assert_ne!(saved, state.save_persist(), "replacements must have hit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Slices);
+        assert_eq!(restored.view.outer_inner, 0.25);
+        assert_eq!(restored.view.outer_outer, 0.85);
+    }
+
+    #[test]
+    fn node_body_experiment_blobs_fold_into_core_and_outer() {
+        // Blobs saved by the one-build NodeBody experiment carry a
+        // node_body field the current layout no longer writes; loading
+        // one must both parse and fold the body into the core/outer
+        // split (Beads = core off + dots-on-a-hoop).
+        let state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let saved = state
+            .save_persist()
+            .replace("core_style:Orb", "core_style:Orb,node_body:Beads");
+        assert_ne!(saved, state.save_persist(), "replacement must have hit");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.view.core_style, lattice_scene::CoreStyle::None);
+        assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Dots);
+        assert_eq!(
+            restored.view.node_body,
+            lattice_scene::LegacyNodeBody::Disc,
+            "shim consumed on load"
+        );
     }
 
     #[test]
