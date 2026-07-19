@@ -267,20 +267,24 @@ fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
         return aa_inside(half, abs(d - (inner + step * f32(i))), aa);
     }
 
-    // Slices: annular sectors, crisp screen-constant edges. The sector
-    // bisector directions b1/b2 bound this slot's wedge; the cross
-    // products against them give BOTH the side-of-line tests (which wedge
-    // owns the pixel — the hard boundary is invisible, buried mid-gap
-    // where coverage is zero) and the Euclidean distance to each edge
-    // line, thresholded at SLICE_GAP_HALF for a gap of constant thickness
-    // at every radius.
+    // Slices: annular sectors, screen-constant edges. The sector bisector
+    // directions b1/b2 bound this slot's wedge; the cross products against
+    // them give BOTH the side-of-line tests (which wedge owns the pixel)
+    // and the Euclidean distance to each edge line, thresholded at
+    // SLICE_GAP_HALF for a gap of constant thickness at every radius.
     let band = aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
     let hb = DOTS_RAD_PER_OCTAVE * 0.5;
     let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
     let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
-    let own = select(0.0, 1.0, c1 > 0.0 && c2 < 0.0);
+    // Ownership softened over `aa`: at crisp aa this is a ~1px step buried
+    // in the gap below (invisible, as before), but when the glyph is
+    // softened (low outer solidity) the gap no longer reaches zero at the
+    // wedge boundary, so a hard step here would show as a straight cut on
+    // the slice's sides. Soft ownership lets adjacent slices cross-fade
+    // (the loop keeps the max), so the sector edges stay soft.
+    let own = smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2);
     let g = (1.0 - aa_inside(SLICE_GAP_HALF, abs(c1), aa))
         * (1.0 - aa_inside(SLICE_GAP_HALF, abs(c2), aa));
     return band * own * g;
