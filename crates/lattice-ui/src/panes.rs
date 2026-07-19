@@ -6,7 +6,7 @@ use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
 use lattice_scene::{
-    channel_color, derive_scene, Camera, NodeStyle, OuterStyle, Projection,
+    channel_color, derive_scene, Camera, IdleMarker, NodeStyle, OuterStyle, Projection,
 };
 
 use crate::theme;
@@ -746,6 +746,31 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 // How long the octave glyphs keep fading after release
                 // (independent of the core's fade above).
                 param_bar(ui, params, ParamKey::OctaveFade);
+            });
+
+            // Idle nodes: a minimal grey marker at each unlit home-sheet
+            // node, shown ALWAYS — independent of the active appearance and
+            // of whether a note plays there (a sounding note just draws over
+            // it). Other sheets are marked by the grid.
+            section(ui, "Idle nodes");
+            button_row_wrapped(ui, |ui| {
+                ui.label("Marker");
+                for (marker, label, hint) in [
+                    (IdleMarker::None, "None", "No idle marker"),
+                    (IdleMarker::Dot, "Dot", "A filled grey dot at the radius below"),
+                    (IdleMarker::Circle, "Circle", "A thin grey outline circle at the radius below"),
+                ] {
+                    ui.selectable_value(&mut state.view.idle_marker, marker, label)
+                        .on_hover_text(hint);
+                }
+            });
+            ui.add_enabled_ui(state.view.idle_marker != IdleMarker::None, |ui| {
+                ValueBar::new(&mut state.view.idle_radius, 0.0..=0.9, "Radius")
+                    .show(ui)
+                    .on_hover_text(
+                        "Size of the idle marker; independent of the active \
+                         Core (0.46 is the classic placeholder ring)",
+                    );
             });
 
             // Color: the pitch->color gradient endpoints (MIDI notes) the

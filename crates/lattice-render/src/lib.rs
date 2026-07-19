@@ -137,8 +137,9 @@ struct Uniforms {
     node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
     /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
-    /// crisp octave shapes); z/w unused. (The blit pipeline binds only the
-    /// head of this buffer, so trailing fields are safe to add here.)
+    /// crisp octave shapes); z: idle marker radius; w: idle marker style
+    /// (0 none, 1 dot, 2 circle). (The blit pipeline binds only the head of
+    /// this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
 }
 
@@ -335,7 +336,12 @@ impl LatticeCallback {
                 ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
                 node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
-                misc4: [scene.core_solidity, scene.outer_solidity, 0.0, 0.0],
+                misc4: [
+                    scene.core_solidity,
+                    scene.outer_solidity,
+                    scene.idle_radius,
+                    scene.idle_marker.shader_index() as f32,
+                ],
             },
             target_format,
             pane_id,
@@ -1194,6 +1200,8 @@ mod tests {
             outer_outer: 0.795,
             outer_backdrop: false,
             outer_solidity: 1.0,
+            idle_marker: lattice_scene::IdleMarker::None,
+            idle_radius: 0.0,
             edges,
             grid,
             dot_ramp: std::array::from_fn(|k| {

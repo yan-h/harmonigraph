@@ -159,6 +159,31 @@ pub enum CoreStyle {
     Glow,
 }
 
+/// The idle-node marker: a minimal grey mark shown at each home-sheet node
+/// at all times, independent of the active appearance and of whether a note
+/// is playing. Sized by [`ViewConfig::idle_radius`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum IdleMarker {
+    /// Nothing.
+    None,
+    /// A filled grey dot.
+    Dot,
+    /// A thin grey outline circle (the classic placeholder look).
+    #[default]
+    Circle,
+}
+
+impl IdleMarker {
+    /// Index the shader reads (uniform `misc4.w`): 0 none, 1 dot, 2 circle.
+    pub fn shader_index(self) -> u32 {
+        match self {
+            IdleMarker::None => 0,
+            IdleMarker::Dot => 1,
+            IdleMarker::Circle => 2,
+        }
+    }
+}
+
 /// The short-lived NodeBody experiment's variants (one working-tree
 /// build, 2026-07-18, octave-only note bodies): parsed load-only via
 /// `ViewConfig::node_body` and folded into the core/outer split by
@@ -251,6 +276,19 @@ pub struct ViewConfig {
     /// widens the glyph edges — shapes and angles are unchanged.
     #[serde(default = "default_outer_solidity")]
     pub outer_solidity: f32,
+    // ---- Idle (unlit) node marker ----------------------------------------
+    // A minimal grey marker at each home-sheet node, drawn ALWAYS —
+    // independent of both the active appearance and whether a note is
+    // playing there (an active note simply composites over it). Off-sheet
+    // nodes draw nothing (the grid marks them).
+    /// What the idle marker is (see [`IdleMarker`]): nothing, a filled dot,
+    /// or an outline circle.
+    #[serde(default)]
+    pub idle_marker: IdleMarker,
+    /// The idle marker's radius (dot fill / circle) in quad UV units.
+    /// Independent of the active `core_radius`.
+    #[serde(default = "default_idle_radius")]
+    pub idle_radius: f32,
     /// Load-only shim: the short-lived NodeBody build's blobs set this,
     /// and [`ViewConfig::migrate_legacy`] folds it into core/outer. Never
     /// saved.
@@ -303,6 +341,13 @@ fn default_core_solidity() -> f32 {
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
     1.0
+}
+
+/// Idle marker at the classic disc radius, so the default (a Circle)
+/// reproduces the old placeholder ring — now independent of the core and
+/// of the playing state.
+fn default_idle_radius() -> f32 {
+    0.46
 }
 
 /// Outer band defaults: the classic Slices annulus (SLICE_IN/OUT before
@@ -402,6 +447,8 @@ impl Default for ViewConfig {
             outer_outer: default_outer_outer(),
             outer_backdrop: false,
             outer_solidity: default_outer_solidity(),
+            idle_marker: IdleMarker::default(),
+            idle_radius: default_idle_radius(),
             node_body: LegacyNodeBody::Disc,
             show_chord_edges: false,
             meantone: false,
@@ -730,6 +777,11 @@ pub struct Scene {
     /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
     /// 1 crisp, toward 0 the glyph edges spread into soft glows.
     pub outer_solidity: f32,
+    /// The idle (unlit home-sheet node) marker, independent of the active
+    /// appearance and of the playing state; drawn in the idle grey and
+    /// composited under any active note. See [`ViewConfig::idle_marker`].
+    pub idle_marker: IdleMarker,
+    pub idle_radius: f32,
     /// Chord edges (empty when the toggle is off).
     pub edges: Vec<EdgeInstance>,
     /// The faint background grid (see [`derive_grid`]): one segment per
@@ -930,6 +982,8 @@ pub fn derive_scene(
         outer_outer,
         outer_backdrop: view.outer_backdrop,
         outer_solidity,
+        idle_marker: view.idle_marker,
+        idle_radius: view.idle_radius.clamp(0.0, 0.9),
         edges,
         grid,
         dot_ramp: pitch_ramp_lut(),

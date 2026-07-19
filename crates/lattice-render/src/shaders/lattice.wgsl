@@ -43,7 +43,8 @@ struct Uniforms {
     node_idle: vec4<f32>,
     // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
     // core layer runs on. y: outer solidity (0 = soft glowy glyphs, 1 =
-    // crisp octave shapes). z/w unused.
+    // crisp octave shapes). z: idle marker radius. w: idle marker style
+    // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
 };
 
@@ -233,6 +234,9 @@ const CORE_EDGE_SOFT: f32 = 0.30;
 // the off state and the core grows in smoothly (no pop) as the bar leaves
 // the bottom.
 const CORE_FADE_IN: f32 = 0.06;
+// Thickness of the idle position ring (see idle_marker), matched to the old
+// home placeholder ring (which spanned 0.37..0.46 at the classic radius).
+const IDLE_RING_THICK: f32 = 0.09;
 
 // Coverage (0..1) of the outer glyph for octave slot `i` on a node whose
 // pitch class is `cents`, drawing style `mode` in the uniform band. Reads
@@ -242,13 +246,11 @@ const CORE_FADE_IN: f32 = 0.06;
 // included — and differ only in the shape drawn there. `aa` is the
 // caller's per-pixel soft-band width, giving every shape screen-constant
 // edges.
-fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
+fn outer_glyph(mode: u32, i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
     // (uv.y is up, so clockwise = subtracting from the angle.)
     let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
     let ang = 1.5707963 - DOTS_RAD_PER_OCTAVE * octaves_from_mid_c;
     let e = vec2<f32>(cos(ang), sin(ang));
-    let inner = u.misc3.y;
-    let outer = u.misc3.z;
     let d = length(uv);
 
     if mode == 1u {
@@ -551,6 +553,26 @@ fn field_halo(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
     return exp(-h * 9.0 / max(reach, 0.15)) * (0.30 + 0.70 * waft) * (0.35 + 0.65 * plume);
 }
 
+// The idle (unlit) node marker: a minimal grey mark at a home-sheet
+// position, drawn from its OWN uniforms (misc4.z/.w) so it is independent
+// of the active appearance. A filled dot or an outline circle at the idle
+// radius (style in misc4.w: 0 none, 1 dot, 2 circle), in the idle grey.
+// Returns the grey premultiplied in .xyz with coverage in .w; off-sheet
+// nodes (home < 0.5) and style None draw nothing. The caller keeps it
+// showing regardless of the note state.
+fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
+    let style = u32(u.misc4.w + 0.5);
+    if home < 0.5 || style == 0u {
+        return vec4<f32>(0.0);
+    }
+    let r = u.misc4.z;
+    var cov = aa_inside(r, d, aa);                // dot: filled disc
+    if style == 2u {                              // circle: hollow it out
+        cov = cov * (1.0 - aa_inside(r - IDLE_RING_THICK, d, aa));
+    }
+    return vec4<f32>(u.node_idle.rgb * cov, cov);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
@@ -595,18 +617,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let core_cov = 1.0 - smoothstep(radius - edge, radius + edge, d);
     let filled = core_cov * solidity;
     let disc = mix(filled, ring, outlined) * presence * core_on;
-
-    // Home-sheet nodes keep a blank placeholder ring at ALL times: a thin
-    // ring at the disc edge (its width matched to the grid lines), in the
-    // constant idle grey. A sounding note's disc simply composites over it
-    // (below) — occluding it while lit and revealing it as the disc fades,
-    // so there is no ring crossfade to go wrong. Drawing it in u.node_idle
-    // rather than the node's own color is the fix for the old "colored ring
-    // for a split second, then snaps grey": a releasing voice keeps its
-    // color until it is pruned, so the ring used to inherit the note hue and
-    // then jump to grey. Off-sheet nodes draw nothing.
-    let blank_ring = filled * (1.0 - aa_inside(0.37, d, aa));
-    let blank = blank_ring * in.home * 0.55 * core_on;
 
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
@@ -667,13 +677,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let f = glow * (1.0 - disc) / max(disc + glow, 1e-4);
     let rgb_core = mix(disc_rgb, glow_rgb, f);
 
-    // The blank ring composites UNDER the disc/glow (disc over ring) in the
-    // constant idle grey, so it matches the grid lines' brightness and a
-    // releasing note's disc fades away over a steady grey ring — never a
-    // colored one.
+    // The active note's core (disc + glow), premultiplied. The idle marker
+    // (below) is composited UNDER this, so a sounding note draws over its
+    // own idle marker and reveals it again as it fades.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
-    let base_alpha = core_alpha + blank * (1.0 - core_alpha);
-    let base_rgb = rgb_core * core_alpha + u.node_idle.rgb * blank * (1.0 - core_alpha);
+    let base_alpha = core_alpha;
+    let base_rgb = rgb_core * core_alpha;
 
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
@@ -710,7 +719,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             if level <= 0.0 && !(ghosted && presence > 0.0) {
                 continue;
             }
-            let shape = outer_glyph(mode, i, in.cents, in.uv, outer_aa);
+            let shape = outer_glyph(mode, i, in.cents, in.uv, u.misc3.y, u.misc3.z, outer_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -743,13 +752,25 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // overflow into the QUAD_MARGIN headroom is eased to zero at the edge.
     glyph = glyph * (1.0 - smoothstep(1.0, QUAD_MARGIN, d));
 
-    // "Over" composite: glyph over (disc + glow), premultiplied.
-    let alpha = glyph + base_alpha * (1.0 - glyph);
-    if alpha < 0.01 {
+    // The active note: glyph over (disc + glow), premultiplied.
+    let active_alpha = glyph + base_alpha * (1.0 - glyph);
+    let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
+
+    // The idle marker (how an unlit home-sheet node reads), computed from
+    // its OWN uniforms — independent of the active appearance AND of the
+    // note state: it is drawn at full strength always. A sounding note
+    // simply composites over it below (occluding it where the note is
+    // opaque, showing it around/through the note otherwise).
+    let idle = idle_marker(d, in.home, aa);
+
+    // Active over idle, premultiplied: a sounding note draws over its own
+    // marker; the marker is unchanged whether or not a note plays.
+    let final_alpha = active_alpha + idle.a * (1.0 - active_alpha);
+    if final_alpha < 0.01 {
         discard;
     }
-    let out_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
-    return vec4<f32>(out_rgb, alpha);
+    let final_rgb = active_rgb + idle.rgb * (1.0 - active_alpha);
+    return vec4<f32>(final_rgb, final_alpha);
 }
 
 // ---- Chord edges & grid lines ----------------------------------------------
