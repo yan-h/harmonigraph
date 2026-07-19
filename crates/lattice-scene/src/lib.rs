@@ -217,6 +217,9 @@ pub struct Scene {
     /// owns it (see [`ViewConfig::mark_unlinked`]). Already clamped. Which
     /// NOTES are marked is baked into each node's `melody_slots`/`bass_slots`.
     pub mark_unlinked: f32,
+    /// Melody/bass ring thickness in quad UV units, 0 = off (see
+    /// [`ViewConfig::mark_thickness`]). Already clamped.
+    pub mark_thickness: f32,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],

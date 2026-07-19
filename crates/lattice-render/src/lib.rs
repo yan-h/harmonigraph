@@ -373,7 +373,7 @@ impl LatticeCallback {
                     scene.grid_thickness,
                     scene.mark_unlinked,
                     scene.outer_gap,
-                    0.0,
+                    scene.mark_thickness,
                 ],
             },
             target_format,

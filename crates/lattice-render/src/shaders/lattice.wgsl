@@ -51,7 +51,7 @@ struct Uniforms {
     // that owns it (see mark_ring_alpha).
     // z: padding inside the octave layer, in quad UV units — the gap
     // between neighbouring sectors AND between the band and the mark
-    // rings. w unused.
+    // rings. w: melody/bass ring thickness, same units; 0 = no rings.
     misc5: vec4<f32>,
 };
 
@@ -592,12 +592,10 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // so a link device ties the ring back to the sector responsible. See
 // MarkLink for the candidates; the modes here mirror its shader_index.
 
-// Ring thickness as a share of the band's width, floored at a couple of
-// render pixels so it can't go sub-pixel on a densely packed lattice. The
-// ring's GAP from the band is not set here: it is the same padding that
-// separates one octave sector from the next (see slice_gap_half), so the
-// whole layer is spaced by one number.
-const MARK_RING_THICK: f32 = 0.16;
+// Floor on the ring's thickness (the view sets the rest, u.misc5.w), in
+// soft-band widths — about a couple of render pixels, so a thin setting
+// can't go sub-pixel on a densely packed lattice and read as nothing. A
+// thickness of exactly 0 is the off state and skips the floor.
 const MARK_RING_MIN_AA: f32 = 1.5;
 
 // The ring's opacity at this pixel, given the slot(s) the mark came from.
@@ -801,7 +799,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Melody/bass ring geometry.
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
-    let ring_w = max((band_out - band_in) * MARK_RING_THICK, outer_aa * MARK_RING_MIN_AA);
+    let ring_thick = u.misc5.w;
+    let ring_w = select(max(ring_thick, outer_aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
     let ring_gap = slice_gap_half() * 2.0;
     let mark_rest = clamp(u.misc5.y, 0.0, 1.0);
     // Headroom: the band's outer radius can be dialed to 1.0, so the melody

@@ -137,6 +137,7 @@ fn parity_scene() -> Scene {
         node_radius: 0.34,
         outer_style: Default::default(),
         mark_unlinked: 1.0,
+        mark_thickness: 0.09,
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -653,6 +654,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 

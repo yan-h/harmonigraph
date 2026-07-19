@@ -235,6 +235,7 @@ pub fn derive_scene(
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
         mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
+        mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
         pitch_lut: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,

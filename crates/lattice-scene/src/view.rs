@@ -156,6 +156,17 @@ pub struct ViewConfig {
     /// has no effect.
     #[serde(default = "default_mark_unlinked")]
     pub mark_unlinked: f32,
+    /// How thick each melody/bass ring is, in quad UV units — the same
+    /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
+    /// three read against each other directly. One thickness for both
+    /// rings: they are one mark seen at two radii, and letting them differ
+    /// would say something that isn't true.
+    ///
+    /// 0 turns the rings off, as a radius of 0 turns the core off. Was
+    /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
+    /// the band was resized; absolute holds them still.
+    #[serde(default = "default_mark_thickness")]
+    pub mark_thickness: f32,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -258,6 +269,12 @@ fn default_outer_solidity() -> f32 {
 /// slits alone say which octave owns it.
 fn default_mark_unlinked() -> f32 {
     1.0
+}
+
+/// What 0.16 of the band's width came to at the default band, which is
+/// what the rings were fixed at before this was a bar.
+fn default_mark_thickness() -> f32 {
+    0.09
 }
 
 /// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
@@ -410,6 +427,7 @@ impl Default for ViewConfig {
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
             mark_unlinked: default_mark_unlinked(),
+            mark_thickness: default_mark_thickness(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,

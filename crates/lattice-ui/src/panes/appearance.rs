@@ -143,6 +143,14 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
             // fades everything BUT that stretch, from a whole ring down to
             // just the arc over the marked octave.
             ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
+                ValueBar::new(&mut state.view.mark_thickness, 0.0..=0.3, "Thickness")
+                    .show(ui)
+                    .on_hover_text(
+                        "How thick both mark rings are, in the same units as \
+                         the band radii and Gap. 0 turns the rings off; thick \
+                         values grow the bass ring in over the core, so raise \
+                         Band inner to make room",
+                    );
                 ValueBar::new(&mut state.view.mark_unlinked, 0.0..=1.0, "Unlinked")
                     .show(ui)
                     .on_hover_text(

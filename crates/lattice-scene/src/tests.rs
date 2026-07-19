@@ -624,6 +624,41 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
 }
 
 #[test]
+fn the_mark_ring_thickness_reaches_the_scene_and_is_clamped() {
+    // One thickness drives BOTH rings, so it lives on the scene rather
+    // than per node; 0 is the off state, as it is for the core's radius.
+    let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(scene.mark_thickness, 0.15);
+
+    let off = ViewConfig { mark_thickness: 0.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &off,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(scene.mark_thickness, 0.0, "0 passes through as the off state");
+
+    let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &wild,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert!(scene.mark_thickness <= 0.4, "got {}", scene.mark_thickness);
+}
+
+#[test]
 fn the_octave_gap_reaches_the_scene_and_is_clamped() {
     // One padding for the whole octave layer: the shader spaces the
     // sectors AND the melody/bass rings by this single number, so it has
