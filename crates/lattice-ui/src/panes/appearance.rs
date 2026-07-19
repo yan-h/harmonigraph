@@ -117,10 +117,11 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     (
                         HighlightExtremes::Both,
                         "Both",
-                        "Mark both, each in its own color. The two rings sit at \
-                         different radii, so a note that is at once the highest \
-                         and the lowest -- a lone held note, or a chord whose \
-                         top and bottom share a pitch class -- simply gets both",
+                        "Mark both. Each ring takes its own note's color and \
+                         they are told apart by radius, so a note that is at \
+                         once the highest and the lowest -- a lone held note, \
+                         or a chord whose top and bottom share a pitch class -- \
+                         simply gets both",
                     ),
                 ],
             );
@@ -135,11 +136,6 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     &mut state.view.mark_link,
                     &[
                         (MarkLink::Off, "None", "A plain unbroken ring"),
-                        (
-                            MarkLink::Bulge,
-                            "Bulge",
-                            "The ring swells where its octave's sector is behind it",
-                        ),
                         (
                             MarkLink::Glow,
                             "Glow",
@@ -241,8 +237,6 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
 
             // Effects: scene-wide extras layered over the notes.
             section(ui, "Effects");
-            ui.checkbox(&mut state.view.show_chord_edges, "Chord edges")
-                .on_hover_text("Light up lattice edges between simultaneously held nodes");
             // 0 = off (the renderer skips the whole post-process chain), so
             // the bar doubles as the toggle.
             ValueBar::new(&mut state.view.bloom_strength, 0.0..=1.5, "Bloom")

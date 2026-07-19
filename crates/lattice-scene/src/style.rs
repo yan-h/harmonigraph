@@ -170,7 +170,9 @@ pub enum HighlightExtremes {
     Melody,
     /// The lowest held note — the bass.
     Bass,
-    /// Both, in their own colors. The default: the marks are subtle
+    /// Both. Each ring takes its own note's color, and they are told apart
+    /// by radius (bass inside the octave band, melody outside) rather than
+    /// by hue. The default: the marks are subtle
     /// enough to live with always-on, and a chord's outer voices are
     /// worth seeing without having to go turn something on first. Blobs
     /// saved before this setting existed pick it up too, which is
@@ -194,12 +196,12 @@ pub enum MarkLink {
     /// Nothing: a plain unbroken ring. The quietest, and honest about
     /// marking the node rather than one octave of it.
     Off,
-    /// The ring swells where the responsible sector is behind it. Keeps an
-    /// unbroken circle — the shape reads first, the swell second.
-    #[default]
-    Bulge,
     /// The ring is dim all the way round and comes up to full only over the
-    /// responsible sector, so the eye lands there first.
+    /// responsible sector, so the eye lands there first. The alias absorbs
+    /// the removed Bulge (which swelled the ring instead) so blobs naming
+    /// it keep loading.
+    #[default]
+    #[serde(alias = "Bulge")]
     Glow,
     /// A radial stub bridges the gap between the ring and its sector,
     /// physically joining the two. The most literal, and the loudest.
@@ -207,11 +209,11 @@ pub enum MarkLink {
 }
 
 impl MarkLink {
-    /// Index used by the shader (uniform `misc5.y`).
+    /// Index used by the shader (uniform `misc5.y`). 1 was the removed
+    /// Bulge; the others keep their indices so their branches are untouched.
     pub fn shader_index(self) -> u32 {
         match self {
             MarkLink::Off => 0,
-            MarkLink::Bulge => 1,
             MarkLink::Glow => 2,
             MarkLink::Spur => 3,
         }

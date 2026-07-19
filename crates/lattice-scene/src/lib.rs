@@ -59,6 +59,12 @@ pub const OCTAVE_SLOTS: usize = 10;
 /// short enough to still feel immediate.
 const OCTAVE_ATTACK_TIME: f64 = 0.15;
 
+/// How far a melody/bass mark's color is lightened toward white from the
+/// note's own. The same 0.30 the octave glyphs use, so a ring reads as the
+/// same family of color as the sectors beside it; without it the marks on
+/// low notes would be black rings on a black background.
+pub const MARK_WHITEN: f32 = 0.30;
+
 /// Samples in the pitch->color lookup the octave glyphs use to tint each
 /// slot by its own octave's pitch. The shader mirrors this length.
 pub const PITCH_LUT_N: usize = 16;
@@ -118,6 +124,14 @@ pub struct NodeInstance {
     /// whole node; the slots above only say which sector it links back to.
     pub melody_level: f32,
     pub bass_level: f32,
+    /// Each mark's color: the marked note's OWN color, so a ring reads as
+    /// belonging to the note it marks rather than as a fixed livery. Taken
+    /// from the strongest marking voice (they can differ mid-crossfade),
+    /// and lightened toward white by [`MARK_WHITEN`] — a low note's color
+    /// is nearly black, and a ring in it would vanish against the
+    /// background.
+    pub melody_color: Vec4,
+    pub bass_color: Vec4,
 }
 
 impl NodeInstance {
@@ -135,18 +149,16 @@ impl NodeInstance {
     }
 }
 
-/// A glowing beam between two simultaneously sounding, lattice-adjacent
-/// nodes (one unit step along exactly one prime axis = one interval).
+/// One line segment of the lattice grid, between two adjacent positions
+/// (one unit step along exactly one prime axis = one interval).
 #[derive(Clone, Copy, Debug)]
 pub struct EdgeInstance {
     pub a: Vec3,
     pub b: Vec3,
     pub color: Vec4,
-    /// min of the two nodes' activations: the beam fades with whichever
-    /// endpoint fades first. (Grid segments: line opacity.)
+    /// Line opacity.
     pub strength: f32,
-    /// Grid segments only: render as short dashes (the sevens-axis links
-    /// between sheets). Never set on chord beams.
+    /// Render as short dashes (the sevens-axis links between sheets).
     pub dashed: bool,
 }
 
@@ -186,13 +198,10 @@ pub struct Scene {
     /// composited under any active note. See [`ViewConfig::idle_marker`].
     pub idle_marker: IdleMarker,
     pub idle_radius: f32,
-    /// Chord edges (empty when the toggle is off).
-    pub edges: Vec<EdgeInstance>,
     /// The faint background grid (see [`derive_grid`]): one segment per
     /// adjacent pair of visible positions, inset so every node position
-    /// keeps a circular gap where its disc draws while sounding. Segments
-    /// between two sounding notes light up with their blended color.
-    /// Reuses [`EdgeInstance`]; `strength` carries the line opacity.
+    /// keeps a circular gap where its disc draws while sounding. Reuses
+    /// [`EdgeInstance`]; `strength` carries the line opacity.
     pub grid: Vec<EdgeInstance>,
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.

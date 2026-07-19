@@ -195,50 +195,6 @@ fn window_center_pans_which_nodes_display() {
 }
 
 #[test]
-fn chord_edges_connect_adjacent_active_nodes() {
-    // A deliberately small window (±3/±3): just intonation keeps pitch
-    // classes unique at that size, so the edge count is exact. Wider
-    // windows bring in schisma near-duplicates — e.g. (8, 1, 0) sits
-    // ~2¢ from C, within this test's 5¢ tolerance — which light up and
-    // add parallel edges (correct behavior, but noisy to pin; same
-    // reason 12-TET's enharmonic duplicates are avoided here).
-    // C and G (a fifth apart, one step on the prime-3 axis) held
-    // together with a wide-enough tolerance: exactly one edge.
-    let tuning = Tuning { tolerance: lattice_core::tuning::microcents(5.0), ..Tuning::just() };
-    let mut tracker = NoteTracker::new();
-    for note in [60u8, 67] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-    }
-    let view = ViewConfig {
-        show_chord_edges: true,
-        extent_threes: 3,
-        extent_fives: 3,
-        ..ViewConfig::default()
-    };
-    let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
-    assert_eq!(scene.edges.len(), 1);
-    assert_eq!(scene.edges[0].strength, 1.0);
-
-    // C and F# (nothing within a step and 5 cents): no edge.
-    let mut tracker = NoteTracker::new();
-    for note in [60u8, 66] {
-        tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-    }
-    let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
-    assert_eq!(scene.edges.len(), 0);
-}
-
-#[test]
 fn grid_segments_connect_neighbors_but_leave_node_gaps() {
     // A 3×3 window: 2·3 horizontal + 3·2 vertical inter-neighbor
     // segments, none along the unused sevens axis. The gap-clears-the-disc
@@ -804,12 +760,15 @@ fn depth_scale_exaggerates_proximity() {
 }
 
 #[test]
-fn grid_lights_between_played_neighbors() {
-    // C and G held (one step on the threes axis; same window/tuning
-    // rationale as chord_edges_connect_adjacent_active_nodes): the
-    // segment between them takes the lit opacity and the notes' blended
-    // color; a segment with only one sounding endpoint stays at the
-    // faint base look.
+fn grid_lines_never_light_between_played_neighbors() {
+    // In-plane grid lines used to brighten and take the notes' color when
+    // the notes at BOTH ends sounded, drawing a chord's intervals as
+    // geometry. It read as noise rather than structure and is gone; the
+    // grid is now purely the idle structure, and the only thing that still
+    // lights is a sevens-axis chain (see the off-sheet test above), which
+    // is about one note's depth rather than a pair.
+    //
+    // Just intonation and a small window so pitch classes stay unique.
     let tuning = Tuning { tolerance: lattice_core::tuning::microcents(5.0), ..Tuning::just() };
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
@@ -820,13 +779,9 @@ fn grid_lights_between_played_neighbors() {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
     }
-    let view = ViewConfig {
-        extent_threes: 3,
-        extent_fives: 3,
-        ..ViewConfig::default()
-    };
+    let view = ViewConfig { extent_threes: 3, extent_fives: 3, ..ViewConfig::default() };
     let scene = scene_of(&tracker, &tuning, &view, &FrameParams::default(), 0.0);
-    let base = skin::active_skin().grid_line;
+    let base = Vec4::from_array(view.grid_color);
     let segment_at = |mid: Vec3| {
         scene
             .grid
@@ -835,19 +790,17 @@ fn grid_lights_between_played_neighbors() {
             .unwrap()
     };
 
-    // C sits at the origin, G one step up the threes (world y) axis.
-    let lit = segment_at(Vec3::new(0.0, 0.5, 0.0));
-    assert!(lit.strength > base.w, "lit opacity, got {}", lit.strength);
-    assert!(
-        (lit.color - base).truncate().length() > 0.1,
-        "lit segment tinted by the notes, got {:?}",
-        lit.color
-    );
+    // C sits at the origin, G one step up the threes (world y) axis: both
+    // sound, and the line between them stays exactly as faint as any other.
+    let between = segment_at(Vec3::new(0.0, 0.5, 0.0));
+    assert_eq!(between.strength, base.w, "two sounding ends must not light it");
+    assert_eq!(between.color, base, "nor tint it");
 
-    // F–C below: C sounds but F doesn't, so the segment stays faint.
-    let unlit = segment_at(Vec3::new(0.0, -0.5, 0.0));
-    assert_eq!(unlit.strength, base.w);
-    assert_eq!(unlit.color, base);
+    // Every in-plane segment is identical, played over or not.
+    for s in &scene.grid {
+        assert_eq!(s.strength, base.w, "{s:?}");
+        assert_eq!(s.color, base, "{s:?}");
+    }
 }
 
 #[test]

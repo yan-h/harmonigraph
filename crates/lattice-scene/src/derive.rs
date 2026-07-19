@@ -6,7 +6,10 @@ use crate::camera::Camera;
 use crate::color::{channel_color, idle_color, pitch_ramp_lut};
 use crate::style::HighlightExtremes;
 use crate::view::{FrameParams, ViewConfig};
-use crate::{lattice_to_world, EdgeInstance, NodeInstance, Scene, NODE_RADIUS_FACTOR, OCTAVE_ATTACK_TIME, OCTAVE_SLOTS};
+use crate::{
+    lattice_to_world, EdgeInstance, NodeInstance, Scene, MARK_WHITEN, NODE_RADIUS_FACTOR,
+    OCTAVE_ATTACK_TIME, OCTAVE_SLOTS,
+};
 use glam::Vec4;
 use lattice_core::{ChannelRole, LatticePos, NoteTracker, Tuning};
 
@@ -100,6 +103,8 @@ pub fn derive_scene(
         let mut bass_slots = 0u32;
         let mut melody_level = 0.0f32;
         let mut bass_level = 0.0f32;
+        let mut melody_color = Vec4::ZERO;
+        let mut bass_color = Vec4::ZERO;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -132,13 +137,32 @@ pub fn derive_scene(
                 // the node's own activation: a released melody fades while a
                 // still-held voice can keep the node at full.
                 let (is_melody, is_bass) = marks(voice, view.highlight_extremes, live_extremes);
-                if is_melody {
-                    melody_slots |= 1 << slot;
-                    melody_level = melody_level.max(envelope);
-                }
-                if is_bass {
-                    bass_slots |= 1 << slot;
-                    bass_level = bass_level.max(envelope);
+                if is_melody || is_bass {
+                    // The mark takes the marked note's OWN color, lightened
+                    // so a low note's near-black doesn't vanish. Strongest
+                    // marking voice wins the color; the slots still collect
+                    // every one of them, since a release crossfades two.
+                    let own = channel_color(
+                        voice.channel,
+                        voice.pitch,
+                        frame.darkest_pitch,
+                        frame.brightest_pitch,
+                    )
+                    .lerp(Vec4::ONE, MARK_WHITEN);
+                    if is_melody {
+                        melody_slots |= 1 << slot;
+                        if envelope >= melody_level {
+                            melody_level = envelope;
+                            melody_color = own;
+                        }
+                    }
+                    if is_bass {
+                        bass_slots |= 1 << slot;
+                        if envelope >= bass_level {
+                            bass_level = envelope;
+                            bass_color = own;
+                        }
+                    }
                 }
             }
         }
@@ -170,10 +194,11 @@ pub fn derive_scene(
             bass_slots,
             melody_level,
             bass_level,
+            melody_color,
+            bass_color,
         });
     }
 
-    let edges = if view.show_chord_edges { derive_edges(&nodes) } else { Vec::new() };
     let grid = derive_grid(view, &nodes);
 
     // Core/outer geometry policy: the core is a plain radius the shader
@@ -202,7 +227,6 @@ pub fn derive_scene(
         outer_solidity,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
-        edges,
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
@@ -235,16 +259,19 @@ pub(crate) fn depth_scale(dist: f32, focus: f32) -> f32 {
         .clamp(DEPTH_SCALE_RANGE.0, DEPTH_SCALE_RANGE.1)
 }
 
-/// Line opacity of a grid segment whose two endpoint notes both sound.
+/// Line opacity of a lit sevens-axis chain link.
 const GRID_LIT_OPACITY: f32 = 0.85;
 
 /// The faint background grid: idle positions draw no disc, so these
 /// segments carry the lattice's structure instead, inset at both ends so
 /// each node position keeps a clear circular gap. Only the home (center)
-/// sheet draws an idle grid; other sheets' lines light when both
-/// endpoints sound, and the dashed sevens-axis links light as the chain
-/// from any sounding off-sheet note down to the home sheet. Lit segments
-/// take the sounding notes' color and fade with their envelope.
+/// sheet draws an idle grid.
+///
+/// The one thing that lights is a dashed sevens-axis link, as the chain
+/// from a sounding off-sheet note down to the home sheet — so a note on
+/// another sheet hangs from something visible instead of floating. That is
+/// about ONE note's depth, not a relationship between two: in-plane lines
+/// no longer brighten because the notes at both ends happen to sound.
 pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
     let base = Vec4::from_array(view.grid_color);
@@ -279,14 +306,13 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
             // depth link from an in-sheet line, not a style choice.
             let dashed = along_sevens || view.grid_dashed;
 
-            // Both endpoints sounding lights any segment.
-            let mut lit = node.activation.min(neighbor.activation);
-            let mut lit_color = (node.color + neighbor.color) * 0.5;
-
-            // A sevens link also lights as part of the chain from any
-            // sounding node beyond it (away from the home sheet) down to
-            // the home sheet, so an off-sheet note always hangs from a
-            // visible chain even while the notes under it are silent.
+            // A sevens link lights as part of the chain from any sounding
+            // node beyond it (away from the home sheet) down to the home
+            // sheet, so an off-sheet note always hangs from a visible chain
+            // even while the notes under it are silent. Nothing else
+            // lights.
+            let mut lit = 0.0f32;
+            let mut lit_color = Vec4::ZERO;
             if along_sevens {
                 let (lo, hi) = if p.sevens >= view.center_sevens {
                     (p.sevens + 1, view.center_sevens + view.extent_sevens)
@@ -334,23 +360,3 @@ pub(crate) fn node_seed(pos: LatticePos) -> f32 {
     (h as f32 * 0.618_034).rem_euclid(256.0)
 }
 
-/// Chord edges: every pair of active, lattice-adjacent nodes gets a beam.
-/// O(active²), and active counts are tiny.
-fn derive_edges(nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
-    let active: Vec<&NodeInstance> = nodes.iter().filter(|n| n.activation > 0.0).collect();
-    let mut edges = Vec::new();
-    for (i, a) in active.iter().enumerate() {
-        for b in &active[i + 1..] {
-            if a.lattice_pos.is_adjacent(b.lattice_pos) {
-                edges.push(EdgeInstance {
-                    a: a.world_pos,
-                    b: b.world_pos,
-                    color: (a.color + b.color) * 0.5,
-                    strength: a.activation.min(b.activation),
-                    dashed: false,
-                });
-            }
-        }
-    }
-    edges
-}

@@ -171,10 +171,6 @@ pub struct ViewConfig {
     /// link from an in-sheet line, and isn't a style choice.
     #[serde(default)]
     pub grid_dashed: bool,
-    /// Light up lattice edges between simultaneously sounding adjacent
-    /// nodes, so a chord's interval structure renders as geometry.
-    #[serde(default)]
-    pub show_chord_edges: bool,
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
     /// derived from the fifth (in `root_ui`) and note-name labels drop
@@ -383,7 +379,6 @@ impl Default for ViewConfig {
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,
             grid_dashed: false,
-            show_chord_edges: false,
             meantone: false,
             frameless: false,
             render_scale: default_render_scale(),

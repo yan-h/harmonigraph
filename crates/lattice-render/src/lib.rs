@@ -151,9 +151,6 @@ struct Uniforms {
     /// earlier misc slot is spoken for, so the grid's knob starts a new
     /// one — safe per the note on `misc4`.
     misc5: [f32; 4],
-    /// Melody / bass mark colors (skin `note_melody` / `note_bass`).
-    note_melody: [f32; 4],
-    note_bass: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -193,6 +190,11 @@ struct GpuInstance {
     /// than folded into the dead `params.y`/`params.z` floats because the
     /// shader masks them bitwise, which needs a flat-interpolated `u32`.
     marks: [u32; 2],
+    /// Each mark's own color (see `NodeInstance::melody_color`): the marked
+    /// note's, not a fixed livery, so a ring reads as belonging to the note
+    /// it marks.
+    melody_color: [f32; 4],
+    bass_color: [f32; 4],
 }
 
 impl GpuInstance {
@@ -201,7 +203,8 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2
+            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2,
+            9 => Float32x4, 10 => Float32x4
         ],
     };
 }
@@ -316,16 +319,16 @@ impl LatticeCallback {
                 scale: n.scale,
                 home: if n.on_home { 1.0 } else { 0.0 },
                 marks: [n.melody_slots, n.bass_slots],
+                melody_color: n.melody_color.to_array(),
+                bass_color: n.bass_color.to_array(),
             })
             .collect();
 
-        // Grid first, so it draws under the chord beams (and both draw
-        // under the nodes).
+        // The grid draws under the nodes.
         let edges = scene
             .grid
             .iter()
             .map(|g| (g, if g.dashed { 2.0 } else { 1.0 }))
-            .chain(scene.edges.iter().map(|e| (e, 0.0)))
             .map(|(e, kind)| GpuEdge {
                 a_strength: [e.a.x, e.a.y, e.a.z, e.strength],
                 b_kind: [e.b.x, e.b.y, e.b.z, kind],
@@ -372,8 +375,6 @@ impl LatticeCallback {
                     0.0,
                     0.0,
                 ],
-                note_melody: lattice_scene::skin::active_skin().note_melody.to_array(),
-                note_bass: lattice_scene::skin::active_skin().note_bass.to_array(),
             },
             target_format,
             pane_id,

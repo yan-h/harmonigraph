@@ -48,11 +48,9 @@ struct Uniforms {
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: how a melody/bass ring links back to its sector (MarkLink's
-    // shader_index: 0 none, 1 bulge, 2 glow, 3 spur). z, w unused.
+    // shader_index: 0 none, 2 glow, 3 spur; 1 was the removed bulge).
+    // z, w unused.
     misc5: vec4<f32>,
-    // Melody / bass mark colors.
-    note_melody: vec4<f32>,
-    note_bass: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -101,6 +99,11 @@ struct Instance {
     // mark_ring); the ring itself is per node, and its fade level rides
     // params.y/params.z.
     @location(8) marks: vec2<u32>,
+    // Each mark's own color: the marked note's, lightened a little (see
+    // NodeInstance::melody_color), so a ring reads as belonging to the note
+    // it marks rather than as a fixed livery.
+    @location(9) melody_color: vec4<f32>,
+    @location(10) bass_color: vec4<f32>,
 };
 
 struct VsOut {
@@ -113,6 +116,8 @@ struct VsOut {
     @location(5) @interpolate(flat) cents: f32,
     @location(6) @interpolate(flat) home: f32,
     @location(7) @interpolate(flat) marks: vec2<u32>,
+    @location(8) @interpolate(flat) melody_color: vec4<f32>,
+    @location(9) @interpolate(flat) bass_color: vec4<f32>,
 };
 
 @vertex
@@ -146,6 +151,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.cents = inst.cents;
     out.home = inst.home;
     out.marks = inst.marks;
+    out.melody_color = inst.melody_color;
+    out.bass_color = inst.bass_color;
     return out;
 }
 
@@ -564,11 +571,12 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 
 // ---- Melody / bass marks ---------------------------------------------------
 // Two full rings concentric with the octave band: the bass just INSIDE it,
-// the melody just OUTSIDE. Because they never share a radius, both draw at
-// full weight even when ONE note is both ends of the chord (a lone held
-// note, or a chord whose top and bottom share a pitch class). Earlier passes
-// had to split a rim between two colors to say that, and the pass before
-// them dropped the mark on the floor entirely.
+// the melody just OUTSIDE. Radius is what tells them apart -- each ring is
+// drawn in its own note's color, not a fixed livery -- and because they
+// never share one, both draw at full weight even when ONE note is both ends
+// of the chord (a lone held note, or a chord whose top and bottom share a
+// pitch class). Earlier passes had to split a rim between two colors to say
+// that, and the pass before them dropped the mark on the floor entirely.
 //
 // What a full ring cannot say is WHICH of the node's octaves is the melody,
 // and on a chord voiced inside one pitch class that is the whole question --
@@ -581,8 +589,6 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 const MARK_RING_THICK: f32 = 0.16;
 const MARK_RING_GAP: f32 = 0.10;
 const MARK_RING_MIN_AA: f32 = 1.5;
-// Bulge: thickness multiplier where the ring passes its own sector.
-const MARK_SWELL: f32 = 2.6;
 // Glow: what the ring dims to away from its sector.
 const MARK_DIM: f32 = 0.28;
 // Spur: how far the stub pokes PAST the ring, as a share of ring thickness.
@@ -623,20 +629,17 @@ fn mark_link_mask(
     return m;
 }
 
-// Coverage of one mark ring. `r_in..r_out` is the ring itself and
-// `swell_in..swell_out` the same ring at Bulge thickness (grown away from
-// the octave band, so the swell never eats into it); `bridge_in..bridge_out`
-// is Spur's stub, running from the band across the ring and a little past.
-// Radii are passed rather than derived so the melody ring (growing outward)
-// and the bass ring (inward) can share this one body.
+// Coverage of one mark ring. `r_in..r_out` is the ring itself;
+// `bridge_in..bridge_out` is Spur's stub, running from the band across the
+// ring and a little past. Radii are passed rather than derived so the
+// melody ring (growing outward) and the bass ring (inward) can share this
+// one body.
 fn mark_ring(
     slots: u32,
     cents: f32,
     uv: vec2<f32>,
     r_in: f32,
     r_out: f32,
-    swell_in: f32,
-    swell_out: f32,
     bridge_in: f32,
     bridge_out: f32,
     band_in: f32,
@@ -655,10 +658,6 @@ fn mark_ring(
         return ring;
     }
     let over = mark_link_mask(slots, cents, uv, band_in, band_out, aa);
-    if link == 1u {
-        let fat = aa_inside(swell_out, d, aa) * (1.0 - aa_inside(max(swell_in, 0.0), d, aa));
-        return max(ring, fat * over);
-    }
     if link == 2u {
         return ring * mix(MARK_DIM, 1.0, over);
     }
@@ -856,7 +855,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ring_w = max((band_out - band_in) * MARK_RING_THICK, outer_aa * MARK_RING_MIN_AA);
     let ring_gap = max((band_out - band_in) * MARK_RING_GAP, outer_aa);
     let link = u32(u.misc5.y + 0.5);
-    let swell = ring_w * MARK_SWELL;
     // Headroom: the band's outer radius can be dialed to 1.0, so the melody
     // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
     // circle of radius QUAD_MARGIN fits the square quad) and ease it off
@@ -867,7 +865,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let melody_cov = mark_ring(
         in.marks.x, in.cents, in.uv,
         mel_in, min(mel_in + ring_w, lim),
-        mel_in, min(mel_in + swell, lim),
         band_out, min(mel_in + ring_w * (1.0 + MARK_SPUR_OVER), lim),
         band_in, band_out,
         link, outer_aa,
@@ -875,14 +872,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let bass_cov = mark_ring(
         in.marks.y, in.cents, in.uv,
         bass_out - ring_w, bass_out,
-        bass_out - swell, bass_out,
         bass_out - ring_w * (1.0 + MARK_SPUR_OVER), band_in,
         band_in, band_out,
         link, outer_aa,
     ) * in.params.z;
     // Disjoint radii, so at most one of the two covers any given pixel.
     var mark = max(melody_cov, bass_cov);
-    let mark_rgb = select(u.note_bass.rgb, u.note_melody.rgb, melody_cov > bass_cov);
+    let mark_rgb = select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov);
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it

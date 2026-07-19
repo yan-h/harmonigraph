@@ -110,15 +110,10 @@ fn parity_scene() -> Scene {
             bass_slots: if i == 2 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
             melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
+            melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
+            bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
         });
     }
-    let edges = vec![lattice_scene::EdgeInstance {
-        a: nodes[0].world_pos,
-        b: nodes[3].world_pos,
-        color: Vec4::new(0.9, 0.6, 0.3, 1.0),
-        strength: 0.85,
-        dashed: false,
-    }];
     let grid = vec![
         lattice_scene::EdgeInstance {
             a: Vec3::new(-1.8, -0.6, -0.3),
@@ -151,7 +146,6 @@ fn parity_scene() -> Scene {
         outer_solidity: 1.0,
         idle_marker: lattice_scene::IdleMarker::None,
         idle_radius: 0.0,
-        edges,
         grid,
         grid_thickness: 1.0,
         node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
@@ -387,8 +381,11 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // a freshly-held note.
         melody_level: f32::from(melody_slots != 0),
         bass_level: f32::from(bass_slots != 0),
+        // Distinct hues so the both-ends check below can tell the two
+        // rings apart; in the app these are the marked notes' own colors.
+        melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
+        bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
     }];
-    scene.edges.clear();
     scene.grid.clear();
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
@@ -655,6 +652,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 
