@@ -428,16 +428,16 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     );
 
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
-    // meet with no chrome between them — clean for captures) and thins
-    // the separators to a hairline. No tab bar also means no way to click
-    // the View pane back if it's hidden, so Esc always restores.
+    // meet with no chrome between them — clean for captures). The pane
+    // separators keep their regular width, so the spacing between windows
+    // matches framed mode. No tab bar also means no way to click the View
+    // pane back if it's hidden, so Esc always restores.
     if state.view.frameless && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         state.view.frameless = false;
     }
     let mut dock_style = theme::dock_style(ui.style());
     if state.view.frameless {
         dock_style.tab_bar.height = 0.0;
-        dock_style.separator.width = 1.0;
     }
 
     // DockState has to be moved out while panes borrow the rest of `state`.
