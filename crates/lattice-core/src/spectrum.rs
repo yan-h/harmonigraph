@@ -356,6 +356,30 @@ mod tests {
     }
 
     #[test]
+    fn set_fft_size_resets_the_window_and_noops_at_the_current_size() {
+        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
+        assert!(analyzer.pitch_spectrum().is_some());
+        // A genuine size change empties the buffer.
+        analyzer.set_fft_size(DEFAULT_FFT_SIZE * 2);
+        assert!(analyzer.pitch_spectrum().is_none(), "resized window starts empty");
+        // Refilling to the new length produces a spectrum again.
+        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE * 2]);
+        assert!(analyzer.pitch_spectrum().is_some());
+        // Setting the same size again is a no-op: the filled window survives.
+        analyzer.set_fft_size(DEFAULT_FFT_SIZE * 2);
+        assert!(analyzer.pitch_spectrum().is_some(), "no-op resize kept the window");
+    }
+
+    #[test]
+    fn midi_to_hz_anchors_a440_and_doubles_each_octave() {
+        assert!((midi_to_hz(69.0) - 440.0).abs() < 1e-2, "A4 = 440 Hz");
+        assert!((midi_to_hz(57.0) - 220.0).abs() < 1e-2, "A3 = 220 Hz");
+        assert!((midi_to_hz(81.0) - 880.0).abs() < 1e-2, "A5 = 880 Hz");
+        assert!((midi_to_hz(60.0) - 261.6256).abs() < 0.1, "middle C ≈ 261.63 Hz");
+    }
+
+    #[test]
     fn fft_matches_a_naive_dft_on_a_small_case() {
         let n = 16;
         let signal: Vec<f32> =

@@ -1965,4 +1965,47 @@ mod tests {
         let after = camera.eye() - camera.target;
         assert!((before - after).length() < 1e-4);
     }
+
+    #[test]
+    fn zoom_by_scales_distance_and_clamps() {
+        let mut camera = Camera::default();
+        let start = camera.distance;
+        // factor > 1 pulls the eye in (distance divides down)...
+        camera.zoom_by(2.0);
+        assert!((camera.distance - start / 2.0).abs() < 1e-4);
+        // ...and factor < 1 pushes it back out.
+        camera.zoom_by(0.5);
+        assert!((camera.distance - start).abs() < 1e-4);
+        // A huge factor clamps at the near limit; a tiny one at the far limit.
+        camera.zoom_by(1e6);
+        assert_eq!(camera.distance, Camera::MIN_DISTANCE);
+        camera.zoom_by(1e-6);
+        assert_eq!(camera.distance, Camera::MAX_DISTANCE);
+        // Non-positive factors are ignored (no divide-by-zero or sign flip).
+        let held = camera.distance;
+        camera.zoom_by(0.0);
+        camera.zoom_by(-3.0);
+        assert_eq!(camera.distance, held);
+    }
+
+    #[test]
+    fn visible_count_matches_visible_positions() {
+        // `visible_count` is a `Vec::with_capacity` hint; it must equal the
+        // number `visible_positions` actually enumerates, including the
+        // degenerate cases where a non-positive extent collapses an axis to
+        // empty.
+        for &(t, f, s) in &[(0, 0, 0), (2, 1, 0), (3, 3, 3), (1, 0, 4), (-1, 2, 0)] {
+            let view = ViewConfig {
+                extent_threes: t,
+                extent_fives: f,
+                extent_sevens: s,
+                ..ViewConfig::default()
+            };
+            assert_eq!(
+                view.visible_count(),
+                view.visible_positions().count(),
+                "extents ({t}, {f}, {s})"
+            );
+        }
+    }
 }
