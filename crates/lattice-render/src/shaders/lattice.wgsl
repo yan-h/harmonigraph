@@ -601,10 +601,6 @@ const MARK_RING_THICK: f32 = 0.16;
 const MARK_RING_MIN_AA: f32 = 1.5;
 // Glow: what the ring dims to away from its sector.
 const MARK_DIM: f32 = 0.28;
-// Cut: the slits are as wide as the gaps between octaves (the Gap bar), so
-// the break falls on the layer's own rhythm -- but never thinner than this
-// many soft-band widths, or a Gap of 0 would leave no visible break at all.
-const MARK_CUT_MIN_AA: f32 = 1.6;
 
 // How strongly this pixel lies over the sector(s) a mark came from.
 //
@@ -642,32 +638,30 @@ fn mark_link_mask(
 // away from the rest of it: one at each of that sector's two angular
 // boundaries, which are exactly where the gaps between octaves fall.
 //
-// Sampled along the pixel's ray at the band's middle, as mark_link_mask is,
-// so the slit sits at a fixed ANGLE and lands on both rings alike. The
-// bisector cross products give the perpendicular distance to each boundary
-// line; the dot gate throws away the antipode, since a line through the
-// origin passes just as close on the far side of the node.
-fn mark_cut_mask(
-    slots: u32,
-    cents: f32,
-    uv: vec2<f32>,
-    band_in: f32,
-    band_out: f32,
-    aa: f32,
-) -> f32 {
-    let probe = uv * ((band_in + band_out) * 0.5 / max(length(uv), 1e-4));
-    let half = max(slice_gap_half(), aa * MARK_CUT_MIN_AA);
+// Built the same way the gaps between sectors are (see outer_glyph): the
+// perpendicular distance from the pixel to each boundary line, thresholded
+// at half the Gap width with the same soft band. Measuring on the pixel
+// ITSELF rather than on a probe projected to the band -- which is what the
+// Glow mask needs -- is what makes the slit exactly as wide and exactly as
+// sharp as a gap between two octaves. A probe scales both by the ratio of
+// the ring's radius to the band's, which read as a wider, blurrier cut.
+//
+// The dot gate throws away the antipode: a boundary line runs through the
+// origin, so it passes just as close on the far side of the node and would
+// otherwise cut the ring twice.
+fn mark_cut_mask(slots: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
+    let half = slice_gap_half();
     let hb = RAD_PER_OCTAVE * 0.5;
     var m = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         if (slots & (1u << i)) != 0u {
             let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
             let ang = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
-            let facing = step(0.0, dot(probe, vec2<f32>(cos(ang), sin(ang))));
+            let facing = step(0.0, dot(uv, vec2<f32>(cos(ang), sin(ang))));
             let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
             let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
-            let c1 = probe.x * b1.y - probe.y * b1.x;
-            let c2 = probe.x * b2.y - probe.y * b2.x;
+            let c1 = uv.x * b1.y - uv.y * b1.x;
+            let c2 = uv.x * b2.y - uv.y * b2.x;
             let slit = max(aa_inside(half, abs(c1), aa), aa_inside(half, abs(c2), aa));
             m = max(m, slit * facing);
         }
@@ -708,7 +702,9 @@ fn mark_ring(
     }
     if link == 4u {
         // Cut: full-strength ring, slit at the sector's two boundaries.
-        return ring * (1.0 - mark_cut_mask(slots, cents, uv, band_in, band_out, aa));
+        // A Gap of 0 leaves no slit, exactly as it leaves no gap between
+        // the octaves themselves.
+        return ring * (1.0 - mark_cut_mask(slots, cents, uv, aa));
     }
     // Reach (and anything else): the ring is left plain.
     return ring;

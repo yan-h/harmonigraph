@@ -158,7 +158,9 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                             MarkLink::Cut,
                             "Cut",
                             "The ring is slit either side of its octave, so that \
-                             stretch reads as a separate piece",
+                             stretch reads as a separate piece. The slits are \
+                             the gap between octaves exactly -- same width, \
+                             same edge -- so Gap 0 leaves no slit",
                         ),
                         (
                             MarkLink::Reach,

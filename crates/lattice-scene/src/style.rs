@@ -205,9 +205,9 @@ pub enum MarkLink {
     Glow,
     /// An unbroken ring like [`Off`](MarkLink::Off), but slit at the
     /// responsible sector's two angular boundaries, so that stretch of ring
-    /// reads as a separate piece. The slits line up with the gaps between
-    /// octaves and take their width from the same Gap bar, so the break
-    /// falls on the layer's own rhythm.
+    /// reads as a separate piece. A slit IS the gap between two octaves,
+    /// continued outward: same construction, so the same width and the same
+    /// edge, and a Gap of 0 leaves no slit at all.
     Cut,
     /// The responsible sector itself grows across the gap to touch its ring
     /// — outward to the melody ring, inward to the bass one. The link is
