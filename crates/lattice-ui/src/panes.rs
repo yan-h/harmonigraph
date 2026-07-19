@@ -748,6 +748,47 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 param_bar(ui, params, ParamKey::OctaveFade);
             });
 
+            // Idle nodes: how an UNLIT node on the home (center) sheet is
+            // marked, fully independent of the active Core/Octaves above — a
+            // grey position ring plus an optional grey octave ring, drawn
+            // under any sounding note. (Other sheets are marked by the grid.)
+            section(ui, "Idle nodes");
+            ValueBar::new(&mut state.view.idle_opacity, 0.0..=1.0, "Opacity")
+                .show(ui)
+                .on_hover_text("How prominent the idle markers are; 0 hides them entirely");
+            ui.add_enabled_ui(state.view.idle_opacity > 0.0, |ui| {
+                ValueBar::new(&mut state.view.idle_ring_radius, 0.0..=0.9, "Ring")
+                    .show(ui)
+                    .on_hover_text(
+                        "Grey position ring at each unlit node; 0 = no ring. \
+                         Its own radius, independent of the active Core (so \
+                         turning the core off no longer hides it)",
+                    );
+                button_row_wrapped(ui, |ui| {
+                    ui.label("Octaves");
+                    for (style, label, hint) in [
+                        (OuterStyle::Off, "Off", "No idle octave marker"),
+                        (OuterStyle::Dots, "Dots", "A faint dot at every octave slot"),
+                        (OuterStyle::Slices, "Slices", "A faint full ring of sectors"),
+                        (OuterStyle::Rings, "Rings", "Faint concentric rings, one per octave"),
+                    ] {
+                        ui.selectable_value(&mut state.view.idle_outer_style, style, label)
+                            .on_hover_text(hint);
+                    }
+                });
+                ui.add_enabled_ui(state.view.idle_outer_style != OuterStyle::Off, |ui| {
+                    ValueBar::new(&mut state.view.idle_outer_inner, 0.0..=0.9, "Band inner")
+                        .show(ui)
+                        .on_hover_text("Idle octave band's inner radius");
+                    ValueBar::new(&mut state.view.idle_outer_outer, 0.2..=1.0, "Band outer")
+                        .show(ui)
+                        .on_hover_text("Idle octave band's outer radius");
+                    ValueBar::new(&mut state.view.idle_outer_solidity, 0.0..=1.0, "Solidity")
+                        .show(ui)
+                        .on_hover_text("Crisp (1) to soft glowy (0) idle octave marks");
+                });
+            });
+
             // Color: the pitch->color gradient endpoints (MIDI notes) the
             // pitch-colored channels map through.
             section(ui, "Color");

@@ -251,6 +251,32 @@ pub struct ViewConfig {
     /// widens the glyph edges — shapes and angles are unchanged.
     #[serde(default = "default_outer_solidity")]
     pub outer_solidity: f32,
+    // ---- Idle (unlit) node marker ----------------------------------------
+    // How an unplayed node on the home (center) sheet is marked, fully
+    // independent of the active appearance above; a sounding note composites
+    // over its own idle marker. All drawn in the idle grey. Off-sheet idle
+    // nodes draw nothing (the grid marks them).
+    /// Overall prominence of the idle marker, 0..1 (0 = no idle marker).
+    #[serde(default = "default_idle_opacity")]
+    pub idle_opacity: f32,
+    /// Radius of the idle position ring, in quad UV units; 0 draws no ring.
+    /// Independent of `core_radius`, so turning the active core off no
+    /// longer removes the idle markers.
+    #[serde(default = "default_idle_ring_radius")]
+    pub idle_ring_radius: f32,
+    /// The idle octave marker: the outer style drawn faintly at every octave
+    /// slot (a full grey ring showing the position's octave structure). Off
+    /// draws none. Independent of the active `outer_style`.
+    #[serde(default)]
+    pub idle_outer_style: OuterStyle,
+    /// The idle octave marker's radial band (own copy of the outer band).
+    #[serde(default = "default_outer_inner")]
+    pub idle_outer_inner: f32,
+    #[serde(default = "default_outer_outer")]
+    pub idle_outer_outer: f32,
+    /// The idle octave marker's solidity (mirrors [`outer_solidity`]).
+    #[serde(default = "default_outer_solidity")]
+    pub idle_outer_solidity: f32,
     /// Load-only shim: the short-lived NodeBody build's blobs set this,
     /// and [`ViewConfig::migrate_legacy`] folds it into core/outer. Never
     /// saved.
@@ -303,6 +329,17 @@ fn default_core_solidity() -> f32 {
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
     1.0
+}
+
+/// Idle marker prominence: matches the old home placeholder ring's opacity.
+fn default_idle_opacity() -> f32 {
+    0.55
+}
+
+/// Idle position ring at the classic disc radius, so the default idle
+/// marker reproduces the old placeholder ring (now independent of the core).
+fn default_idle_ring_radius() -> f32 {
+    0.46
 }
 
 /// Outer band defaults: the classic Slices annulus (SLICE_IN/OUT before
@@ -402,6 +439,12 @@ impl Default for ViewConfig {
             outer_outer: default_outer_outer(),
             outer_backdrop: false,
             outer_solidity: default_outer_solidity(),
+            idle_opacity: default_idle_opacity(),
+            idle_ring_radius: default_idle_ring_radius(),
+            idle_outer_style: OuterStyle::Off,
+            idle_outer_inner: default_outer_inner(),
+            idle_outer_outer: default_outer_outer(),
+            idle_outer_solidity: default_outer_solidity(),
             node_body: LegacyNodeBody::Disc,
             show_chord_edges: false,
             meantone: false,
@@ -730,6 +773,15 @@ pub struct Scene {
     /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
     /// 1 crisp, toward 0 the glyph edges spread into soft glows.
     pub outer_solidity: f32,
+    /// The idle (unlit home-sheet node) marker, independent of the active
+    /// appearance above; see the `idle_*` fields on [`ViewConfig`]. Drawn in
+    /// the idle grey and composited under any active note.
+    pub idle_opacity: f32,
+    pub idle_ring_radius: f32,
+    pub idle_outer_style: OuterStyle,
+    pub idle_outer_inner: f32,
+    pub idle_outer_outer: f32,
+    pub idle_outer_solidity: f32,
     /// Chord edges (empty when the toggle is off).
     pub edges: Vec<EdgeInstance>,
     /// The faint background grid (see [`derive_grid`]): one segment per
@@ -916,6 +968,10 @@ pub fn derive_scene(
     let outer_inner = view.outer_inner.clamp(0.0, 0.9);
     let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
     let outer_solidity = view.outer_solidity.clamp(0.0, 1.0);
+    // Idle marker geometry, sanitized like its active twin (own band kept
+    // outer-ahead-of-inner; ring radius/opacity clamped).
+    let idle_outer_inner = view.idle_outer_inner.clamp(0.0, 0.9);
+    let idle_outer_outer = view.idle_outer_outer.clamp(idle_outer_inner + 0.05, 1.0);
 
     Scene {
         nodes,
@@ -930,6 +986,12 @@ pub fn derive_scene(
         outer_outer,
         outer_backdrop: view.outer_backdrop,
         outer_solidity,
+        idle_opacity: view.idle_opacity.clamp(0.0, 1.0),
+        idle_ring_radius: view.idle_ring_radius.clamp(0.0, 0.9),
+        idle_outer_style: view.idle_outer_style,
+        idle_outer_inner,
+        idle_outer_outer,
+        idle_outer_solidity: view.idle_outer_solidity.clamp(0.0, 1.0),
         edges,
         grid,
         dot_ramp: pitch_ramp_lut(),

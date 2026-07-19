@@ -137,9 +137,14 @@ struct Uniforms {
     node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
     /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
-    /// crisp octave shapes); z/w unused. (The blit pipeline binds only the
-    /// head of this buffer, so trailing fields are safe to add here.)
+    /// crisp octave shapes); z: idle ring radius (0 = no idle ring); w: idle
+    /// marker opacity (0 = no idle marker). (The blit pipeline binds only
+    /// the head of this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
+    /// The idle octave marker (home-sheet unlit nodes), independent of the
+    /// active octave layer: x: outer style index; y/z: band inner/outer; w:
+    /// solidity.
+    misc5: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -335,7 +340,18 @@ impl LatticeCallback {
                 ],
                 dot_ramp: std::array::from_fn(|k| scene.dot_ramp[k].to_array()),
                 node_idle: lattice_scene::skin::active_skin().node_idle.to_array(),
-                misc4: [scene.core_solidity, scene.outer_solidity, 0.0, 0.0],
+                misc4: [
+                    scene.core_solidity,
+                    scene.outer_solidity,
+                    scene.idle_ring_radius,
+                    scene.idle_opacity,
+                ],
+                misc5: [
+                    scene.idle_outer_style.shader_index() as f32,
+                    scene.idle_outer_inner,
+                    scene.idle_outer_outer,
+                    scene.idle_outer_solidity,
+                ],
             },
             target_format,
             pane_id,
@@ -1194,6 +1210,12 @@ mod tests {
             outer_outer: 0.795,
             outer_backdrop: false,
             outer_solidity: 1.0,
+            idle_opacity: 0.0,
+            idle_ring_radius: 0.0,
+            idle_outer_style: Default::default(),
+            idle_outer_inner: 0.545,
+            idle_outer_outer: 0.795,
+            idle_outer_solidity: 1.0,
             edges,
             grid,
             dot_ramp: std::array::from_fn(|k| {
