@@ -116,8 +116,9 @@ impl Voice {
 
     /// Envelope in `[0, 1]` driving the visual intensity of this voice:
     /// 1 while held, then a linear decay over `fade_time` seconds.
-    /// Fancier envelope shapes belong in the scene layer once we experiment;
-    /// this is the single source of truth for "is this voice still visible".
+    /// The scene layer shapes this further (attack ramps, per-octave
+    /// envelopes); this stays the single source of truth for "is this voice
+    /// still visible".
     pub fn activation(&self, now: Time, fade_time: f32) -> f32 {
         match self.state {
             VoiceState::Held => 1.0,
@@ -130,6 +131,20 @@ impl Voice {
             }
         }
     }
+}
+
+/// The display octave containing MIDI note `midi`, in Bitwig's convention
+/// where middle C (MIDI 60) is C3. The inverse of [`octave_start_midi`].
+/// Matches [`Voice::display_octave`]; use these rather than rewriting the
+/// `/ 12 - 2` by hand, so the convention lives in one place.
+pub fn display_octave_of(midi: i32) -> i32 {
+    midi.div_euclid(12) - 2
+}
+
+/// The lowest MIDI note of display octave `octave` (Bitwig's convention).
+/// The inverse of [`display_octave_of`].
+pub fn octave_start_midi(octave: i32) -> i32 {
+    (octave + 2) * 12
 }
 
 /// Tracks held voices plus a tail of recently released ones (so releases can

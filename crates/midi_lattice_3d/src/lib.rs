@@ -194,7 +194,8 @@ impl Plugin for MidiLattice3d {
     const EMAIL: &'static str = "yanhan13@gmail.com";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    // Audio passes through untouched; the plugin only inspects MIDI.
+    // Audio passes through untouched, but is tapped (mono mixdown) for the
+    // GUI's spectrum analyzer; MIDI is forwarded verbatim.
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: NonZeroU32::new(2),
         main_output_channels: NonZeroU32::new(2),

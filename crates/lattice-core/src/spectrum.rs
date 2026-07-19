@@ -23,8 +23,17 @@ pub const SPECTRUM_BINS: usize =
     (SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) as usize * BINS_PER_SEMITONE;
 
 /// Frequency of a (fractional) MIDI pitch at A440.
+/// Normalized magnitude below which a spectral peak is treated as noise
+/// and skipped entirely.
+const PEAK_FLOOR: f32 = 1e-4;
+
 pub fn midi_to_hz(midi: f32) -> f32 {
     440.0 * ((midi - 69.0) / 12.0).exp2()
+}
+
+/// The inverse of [`midi_to_hz`]: the (fractional) MIDI pitch of `hz`.
+pub fn hz_to_midi(hz: f32) -> f32 {
+    69.0 + 12.0 * (hz / 440.0).log2()
 }
 
 /// Default analysis window length in samples (~0.17 s at 48 kHz — steady
@@ -159,7 +168,7 @@ impl SpectrumAnalyzer {
             let (prev, next) = (mag(k - 1), mag(k + 1));
             // Peaks only; `>=` on one side so an exactly-between-bins tone
             // (two equal center bins) still registers once.
-            if !(m > prev && m >= next) || m * norm < 1e-4 {
+            if !(m > prev && m >= next) || m * norm < PEAK_FLOOR {
                 continue;
             }
             // Parabolic refinement on log magnitude: sub-bin pitch from
@@ -173,7 +182,7 @@ impl SpectrumAnalyzer {
                 }
             }
             let freq = bin * bin_hz;
-            let midi = 69.0 + 12.0 * (freq / 440.0).log2();
+            let midi = hz_to_midi(freq);
 
             // Linear split across the two nearest buckets; partials
             // outside the axis are dropped, not wrapped.

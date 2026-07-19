@@ -1,6 +1,19 @@
-//! Pure lattice/tuning/note-tracking logic. No I/O, no GUI, no plugin
-//! dependencies — everything here is unit-testable and shared verbatim
-//! between the standalone dev harness and the plugin.
+//! Pure lattice/tuning/note-tracking/analysis logic. No I/O, no GUI, and
+//! no dependencies at all — everything here is unit-testable and shared
+//! verbatim between the standalone dev harness and the plugin.
+//!
+//! What lives where:
+//! - [`coords`] — integer lattice positions and note spelling.
+//! - [`notes`] — MIDI voice tracking: which pitches are sounding, and the
+//!   envelopes that outlive their note-offs.
+//! - [`tuning`] — pitch classes in integer microcents, the tuning of each
+//!   prime axis, and learning a tuning from what's played.
+//! - [`spectrum`] — a hand-rolled FFT and the analyzer that buckets it
+//!   onto a MIDI-pitch axis for the Spectral pane.
+//!
+//! Convention: types are re-exported at the crate root (below), while free
+//! functions and constants are reached through their module
+//! (`lattice_core::tuning::microcents`, `lattice_core::coords::positions_within`).
 
 pub mod coords;
 pub mod notes;

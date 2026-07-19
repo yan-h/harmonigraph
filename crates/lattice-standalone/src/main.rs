@@ -584,6 +584,8 @@ impl MockSynth {
             .voices()
             .filter(|v| v.state == lattice_core::VoiceState::Held)
             .map(|v| {
+                // lattice_core::spectrum::midi_to_hz, in f64 (this synth's
+                // phase accumulator is f64, and it is only ever FFT'd).
                 let freq = 440.0 * f64::from((v.pitch - 69.0) / 12.0).exp2();
                 (freq, f64::from(v.velocity) * 0.1)
             })
