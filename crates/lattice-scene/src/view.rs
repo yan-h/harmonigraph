@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkStyle, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -141,6 +141,10 @@ pub struct ViewConfig {
     /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
+    /// How the melody/bass marks are drawn: as rings of their own, or by
+    /// reshaping the sector of the note responsible (see [`MarkStyle`]).
+    #[serde(default)]
+    pub mark_style: MarkStyle,
     /// Opacity of the part of a mark ring that is cut off from the octave
     /// responsible for it, 0..1.
     ///
@@ -426,6 +430,7 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
+            mark_style: MarkStyle::default(),
             mark_unlinked: default_mark_unlinked(),
             mark_thickness: default_mark_thickness(),
             grid_color: default_grid_color(),

@@ -5,7 +5,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle};
+use lattice_scene::{HighlightExtremes, IdleMarker, MarkStyle, NodeStyle, OuterStyle};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -137,30 +137,80 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     ),
                 ],
             );
-            // The marks are full rings bracketing the octave band (bass
-            // inside, melody outside), each slit either side of the octave
-            // responsible so that stretch reads as its own piece. This
-            // fades everything BUT that stretch, from a whole ring down to
-            // just the arc over the marked octave.
+            // Two families: rings of their own bracketing the octave band,
+            // or a reshaping of the marked note's own sector. Every style
+            // acts at the sector's outer end for the melody and its inner
+            // end for the bass, so a lone note (its own melody AND bass)
+            // gets both ends rather than a collision.
             ui.add_enabled_ui(state.view.highlight_extremes != HighlightExtremes::Off, |ui| {
+                choice_row(
+                    ui,
+                    "Style",
+                    &mut state.view.mark_style,
+                    &[
+                        (
+                            MarkStyle::Rings,
+                            "Rings",
+                            "A ring outside the band for the melody, inside for \
+                             the bass, slit either side of its octave",
+                        ),
+                        (
+                            MarkStyle::Extend,
+                            "Extend",
+                            "The marked note's own sector reaches past the band \
+                             -- outward for melody, inward for bass",
+                        ),
+                        (
+                            MarkStyle::Cut,
+                            "Cut",
+                            "The sector is slit across, cutting a piece off its \
+                             marked end; the slit is the gap between octaves \
+                             turned ninety degrees",
+                        ),
+                        (
+                            MarkStyle::Point,
+                            "Point",
+                            "The sector tapers to a point at its marked end -- a \
+                             spindle when one note is both",
+                        ),
+                        (
+                            MarkStyle::Notch,
+                            "Notch",
+                            "A wedge is bitten out of the sector's marked end, \
+                             leaving two horns -- an hourglass when one note is \
+                             both",
+                        ),
+                        (
+                            MarkStyle::Cap,
+                            "Cap",
+                            "The marked end of the sector is lightened, keeping \
+                             the note's own hue",
+                        ),
+                    ],
+                );
                 ValueBar::new(&mut state.view.mark_thickness, 0.0..=0.3, "Thickness")
                     .show(ui)
                     .on_hover_text(
-                        "How thick both mark rings are, in the same units as \
-                         the band radii and Gap. 0 turns the rings off; thick \
-                         values grow the bass ring in over the core, so raise \
-                         Band inner to make room",
+                        "How big the mark is, in the same units as the band \
+                         radii and Gap: the ring's thickness, or how far into \
+                         (or past) the sector the reshaping reaches. 0 turns \
+                         the rings off; thick values grow the bass ring in over \
+                         the core, so raise Band inner to make room",
                     );
-                ValueBar::new(&mut state.view.mark_unlinked, 0.0..=1.0, "Unlinked")
-                    .show(ui)
-                    .on_hover_text(
-                        "Opacity of the rest of the ring -- the part cut off \
-                         from the marked octave's sector. The stretch beside \
-                         that sector always draws full. 1 keeps the whole \
-                         circle, 0 leaves only the arc over the marked octave. \
-                         The slits come from Gap, so Gap 0 leaves nothing to \
-                         separate and this does nothing",
-                    );
+                // Rings-only: nothing is cut off from anything in the
+                // sector styles.
+                ui.add_enabled_ui(state.view.mark_style.is_rings(), |ui| {
+                    ValueBar::new(&mut state.view.mark_unlinked, 0.0..=1.0, "Unlinked")
+                        .show(ui)
+                        .on_hover_text(
+                            "Opacity of the rest of the ring -- the part cut off \
+                             from the marked octave's sector. The stretch beside \
+                             that sector always draws full. 1 keeps the whole \
+                             circle, 0 leaves only the arc over the marked \
+                             octave. The slits come from Gap, so Gap 0 leaves \
+                             nothing to separate and this does nothing",
+                        );
+                });
             });
 
             // Home grid: the always-drawn structural layer -- the faint

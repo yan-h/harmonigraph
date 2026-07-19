@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkStyle, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -213,6 +213,8 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
+    /// How the melody/bass marks are drawn (see [`MarkStyle`]).
+    pub mark_style: MarkStyle,
     /// Opacity of the part of each mark ring cut off from the octave that
     /// owns it (see [`ViewConfig::mark_unlinked`]). Already clamped. Which
     /// NOTES are marked is baked into each node's `melody_slots`/`bass_slots`.

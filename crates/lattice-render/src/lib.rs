@@ -146,11 +146,15 @@ struct Uniforms {
     /// this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
-    /// width; y: draw the melody/bass mark on the core (pitch class
-    /// indicator); z: draw it on the octave glyphs; w unused. Every
-    /// earlier misc slot is spoken for, so the grid's knob starts a new
-    /// one — safe per the note on `misc4`.
+    /// width; y: opacity of the part of a melody/bass ring cut off from the
+    /// octave that owns it; z: the octave layer's padding (sector-to-sector
+    /// and band-to-ring alike); w: melody/bass ring thickness, 0 = off.
+    /// Every earlier misc slot is spoken for, so the grid's knob started a
+    /// new one — safe per the note on `misc4`.
     misc5: [f32; 4],
+    /// x: how the melody/bass marks are drawn (`MarkStyle::shader_index`).
+    /// y, z, w unused.
+    misc6: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -375,6 +379,7 @@ impl LatticeCallback {
                     scene.outer_gap,
                     scene.mark_thickness,
                 ],
+                misc6: [scene.mark_style.shader_index() as f32, 0.0, 0.0, 0.0],
             },
             target_format,
             pane_id,

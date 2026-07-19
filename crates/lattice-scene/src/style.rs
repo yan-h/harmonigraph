@@ -191,6 +191,63 @@ impl HighlightExtremes {
     }
 }
 
+/// How the melody and bass are marked.
+///
+/// Two families. [`Rings`](MarkStyle::Rings) draws the mark as its own
+/// geometry — a ring bracketing the octave band on each side — and leaves
+/// the octave sectors untouched. The rest modify the SECTOR of the note
+/// responsible instead, so the mark is part of the note rather than an
+/// annotation beside it.
+///
+/// Every one of them acts at the sector's OUTER end for the melody and its
+/// INNER end for the bass — higher note, further out. That is what makes a
+/// lone held note work: it is its own melody and bass, so it simply gets
+/// both ends, and the two never contend for the same pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MarkStyle {
+    /// A ring outside the band for the melody, inside it for the bass,
+    /// slit either side of the sector responsible.
+    #[default]
+    Rings,
+    /// The sector reaches past the band — outward for the melody, inward
+    /// for the bass, both ends when one note is each.
+    Extend,
+    /// The sector is slit across, cutting a piece off its outer end for the
+    /// melody and its inner end for the bass. The slit is the gap between
+    /// two octaves turned ninety degrees, and takes its width from the same
+    /// Gap bar.
+    Cut,
+    /// The sector tapers to a point at the marked end — a spindle when one
+    /// note is both.
+    Point,
+    /// A wedge is bitten out of the marked end, leaving two horns — an
+    /// hourglass when one note is both. The inverse of
+    /// [`Point`](MarkStyle::Point).
+    Notch,
+    /// The marked end of the sector is lightened, keeping the note's hue.
+    Cap,
+}
+
+impl MarkStyle {
+    /// Index used by the shader (uniform `misc2.w`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            MarkStyle::Rings => 0,
+            MarkStyle::Extend => 1,
+            MarkStyle::Cut => 2,
+            MarkStyle::Point => 3,
+            MarkStyle::Cap => 4,
+            MarkStyle::Notch => 5,
+        }
+    }
+
+    /// Whether the mark is drawn as rings of its own rather than by
+    /// reshaping the sector. The ring-only settings gray out when false.
+    pub fn is_rings(self) -> bool {
+        matches!(self, MarkStyle::Rings)
+    }
+}
+
 /// The short-lived NodeBody experiment's variants (one working-tree
 /// build, 2026-07-18, octave-only note bodies): parsed load-only via
 /// `ViewConfig::node_body` and folded into the core/outer split by

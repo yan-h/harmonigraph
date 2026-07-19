@@ -53,6 +53,9 @@ struct Uniforms {
     // between neighbouring sectors AND between the band and the mark
     // rings. w: melody/bass ring thickness, same units; 0 = no rings.
     misc5: vec4<f32>,
+    // x: how the melody/bass marks are drawn (MarkStyle's shader_index:
+    // 0 rings, 1 extend, 2 cut, 3 point, 4 cap, 5 notch). y, z, w unused.
+    misc6: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -267,10 +270,33 @@ const IDLE_RING_THICK: f32 = 0.09;
 // its absolute pitch: middle C straight up, 45deg clockwise per octave,
 // pitch class within the octave included. `aa` is the caller's per-pixel
 // soft-band width, giving the shape screen-constant edges.
-fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
-    // (uv.y is up, so clockwise = subtracting from the angle.)
-    let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
-    let ang = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
+// Sine of the sector's angular half-width: at radius d, a sector is fully
+// closed once its gap threshold reaches d * this, since that is the
+// perpendicular distance from its bisector to its own centre ray. Tapering
+// to a point means driving the threshold there (see outer_glyph).
+const SIN_HALF_SECTOR: f32 = 0.3826834;
+
+// As outer_glyph, plus a taper: past `taper_out` the sector narrows to a
+// point at `outer`, and below `taper_in` it narrows to a point at `inner`.
+// Pass taper_out >= outer / taper_in <= inner for no taper.
+// The angle slot `i`'s sector points along on a node of pitch class
+// `cents`: the note's absolute pitch, middle C straight up, 45deg clockwise
+// per octave. (uv.y is up, so clockwise means subtracting.)
+fn sector_angle(i: u32, cents: f32) -> f32 {
+    return 1.5707963 - RAD_PER_OCTAVE * ((f32(i) - MIDDLE_C_SLOT) + cents / 1200.0);
+}
+
+fn outer_glyph_tapered(
+    i: u32,
+    cents: f32,
+    uv: vec2<f32>,
+    inner: f32,
+    outer: f32,
+    taper_out: f32,
+    taper_in: f32,
+    aa: f32,
+) -> f32 {
+    let ang = sector_angle(i, cents);
     let d = length(uv);
 
     // Annular sectors, screen-constant edges. The sector bisector
@@ -291,10 +317,25 @@ fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     // the slice's sides. Soft ownership lets adjacent slices cross-fade
     // (the loop keeps the max), so the sector edges stay soft.
     let own = smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2);
-    let gap_half = slice_gap_half();
-    let g = (1.0 - aa_inside(gap_half, abs(c1), aa))
-        * (1.0 - aa_inside(gap_half, abs(c2), aa));
+    // Widening the gap threshold pinches the sector: carried all the way to
+    // d * SIN_HALF_SECTOR it closes completely, which is the point of the
+    // tip. Between the taper radius and the end it is eased there.
+    var thr = slice_gap_half();
+    if taper_out < outer {
+        let t = clamp((d - taper_out) / max(outer - taper_out, 1e-4), 0.0, 1.0);
+        thr = max(thr, mix(thr, d * SIN_HALF_SECTOR, t));
+    }
+    if taper_in > inner {
+        let t = clamp((taper_in - d) / max(taper_in - inner, 1e-4), 0.0, 1.0);
+        thr = max(thr, mix(thr, d * SIN_HALF_SECTOR, t));
+    }
+    let g = (1.0 - aa_inside(thr, abs(c1), aa)) * (1.0 - aa_inside(thr, abs(c2), aa));
     return band * own * g;
+}
+
+// The plain sector, untapered.
+fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
+    return outer_glyph_tapered(i, cents, uv, inner, outer, outer, inner, aa);
 }
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
@@ -597,6 +638,17 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // can't go sub-pixel on a densely packed lattice and read as nothing. A
 // thickness of exactly 0 is the off state and skips the floor.
 const MARK_RING_MIN_AA: f32 = 1.5;
+// Cap: how far the marked end of a sector is lightened toward white.
+const MARK_CAP_LIGHTEN: f32 = 0.6;
+// The sector styles read the Thickness bar as a RUN along the sector, and a
+// run has to be longer than a ring is thick to carry the same weight -- a
+// ring is seen against empty background, a reshaped end against the rest of
+// its own sector. Point needs the most: a taper only reads as a point once
+// it has a good stretch of sector to close over. Cut is the exception, at
+// the bar's own value: its slit sits that far in from the end, which reads
+// directly.
+const SLICE_SPAN: f32 = 2.0;
+const POINT_SPAN: f32 = 4.0;
 
 // The ring's opacity at this pixel, given the slot(s) the mark came from.
 //
@@ -803,6 +855,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ring_w = select(max(ring_thick, outer_aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
     let ring_gap = slice_gap_half() * 2.0;
     let mark_rest = clamp(u.misc5.y, 0.0, 1.0);
+    // How the marks are drawn: rings of their own (0) or by reshaping the
+    // marked note's sector (the rest). See MarkStyle.
+    let mark_style = u32(u.misc6.x + 0.5);
     // Headroom: the band's outer radius can be dialed to 1.0, so the melody
     // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
     // circle of radius QUAD_MARGIN fits the square quad) and ease it off
@@ -822,7 +877,73 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             if level <= 0.0 && !(ghosted && presence > 0.0) {
                 continue;
             }
-            let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
+            // Melody/bass on the SECTOR rather than on a ring of its own.
+            // Every style acts at the sector's outer end for the melody and
+            // its inner end for the bass, so a lone held note -- its own
+            // melody and bass -- gets both ends instead of a collision.
+            // Silent slots (ghosts) are never marked.
+            let lit = level > 0.0;
+            let is_mel = lit && (in.marks.x & (1u << i)) != 0u;
+            let is_bass = lit && (in.marks.y & (1u << i)) != 0u;
+            // Keep the reshaped sector clear of its own far end.
+            let span = (band_out - band_in) * 0.45;
+            let depth = clamp(u.misc5.w * SLICE_SPAN, 0.0, span);
+            let cut_depth = clamp(u.misc5.w, 0.0, span);
+            let point_depth = clamp(u.misc5.w * POINT_SPAN, 0.0, (band_out - band_in) * 0.9);
+
+            var g_in = band_in;
+            var g_out = band_out;
+            var taper_out = band_out;
+            var taper_in = band_in;
+            if mark_style == 1u {
+                // Extend: the sector reaches past the band.
+                if is_mel { g_out = min(band_out + depth, QUAD_MARGIN - 0.02); }
+                if is_bass { g_in = max(band_in - depth, 0.0); }
+            } else if mark_style == 3u {
+                // Point: the sector tapers to a tip at the marked end.
+                if is_mel { taper_out = band_out - point_depth; }
+                if is_bass { taper_in = band_in + point_depth; }
+            }
+            var shape =
+                outer_glyph_tapered(i, in.cents, in.uv, g_in, g_out, taper_out, taper_in, outer_aa);
+            if mark_style == 2u {
+                // Cut: slit the sector across, the same width as the gap
+                // between two octaves — that gap turned ninety degrees.
+                // Held clear of both ends so the cut piece is never a sliver.
+                let gh = slice_gap_half();
+                var slit = 0.0;
+                if is_mel {
+                    let r = clamp(band_out - cut_depth, band_in + gh, band_out - gh);
+                    slit = max(slit, aa_inside(gh, abs(d - r), outer_aa));
+                }
+                if is_bass {
+                    let r = clamp(band_in + cut_depth, band_in + gh, band_out - gh);
+                    slit = max(slit, aa_inside(gh, abs(d - r), outer_aa));
+                }
+                shape = shape * (1.0 - slit);
+            } else if mark_style == 5u {
+                // Notch: a wedge bitten out of the marked end, widening from
+                // nothing to the sector's full width right at the tip, which
+                // leaves two horns. The inverse of Point, and an hourglass
+                // when one note is both ends. No facing gate needed: the
+                // sector is already empty on the far side, so removing more
+                // there changes nothing.
+                let e = vec2<f32>(cos(sector_angle(i, in.cents)), sin(sector_angle(i, in.cents)));
+                let ce = abs(in.uv.x * e.y - in.uv.y * e.x);
+                var bite = 0.0;
+                // On the shorter run, not Point's: a bite eats the middle
+                // of the sector where a taper leaves it widest, so two of
+                // them at Point's depth would meet and swallow it whole.
+                if is_mel {
+                    let t = clamp((d - (band_out - depth)) / max(depth, 1e-4), 0.0, 1.0);
+                    bite = max(bite, aa_inside(t * d * SIN_HALF_SECTOR, ce, outer_aa));
+                }
+                if is_bass {
+                    let t = clamp(((band_in + depth) - d) / max(depth, 1e-4), 0.0, 1.0);
+                    bite = max(bite, aa_inside(t * d * SIN_HALF_SECTOR, ce, outer_aa));
+                }
+                shape = shape * (1.0 - bite);
+            }
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -841,6 +962,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
+                if mark_style == 4u {
+                    // Cap: lighten the marked end of the sector. Lightened
+                    // rather than recolored, so the note's hue -- which is
+                    // its pitch, the whole point of the octave layer --
+                    // survives underneath.
+                    var cap = 0.0;
+                    if is_mel {
+                        cap = max(cap, 1.0 - aa_inside(band_out - depth, d, outer_aa));
+                    }
+                    if is_bass {
+                        cap = max(cap, aa_inside(band_in + depth, d, outer_aa));
+                    }
+                    slot_rgb = mix(slot_rgb, vec3<f32>(1.0, 1.0, 1.0), cap * MARK_CAP_LIGHTEN);
+                }
 
             }
             if cov > glyph {
@@ -860,12 +995,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // outside. Their own layer, composited over the glyphs — a sector's
     // color is its pitch, which is what the octave layer is FOR, so nothing
     // here repaints one.
-    let melody_cov = mark_ring(
+    let rings = f32(mark_style == 0u);
+    let melody_cov = rings * mark_ring(
         in.marks.x, in.cents, in.uv,
         mel_in, min(mel_in + ring_w, lim),
         mark_rest, outer_aa,
     ) * in.params.y;
-    let bass_cov = mark_ring(
+    let bass_cov = rings * mark_ring(
         in.marks.y, in.cents, in.uv,
         bass_out - ring_w, bass_out,
         mark_rest, outer_aa,
