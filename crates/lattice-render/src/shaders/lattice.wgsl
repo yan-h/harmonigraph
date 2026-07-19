@@ -31,8 +31,9 @@ struct Uniforms {
     misc2: vec4<f32>,
     // x: core radius in quad UV units (0 turns the core off). y/z: the
     // outer layer's inner/outer band radii (same units; the scene
-    // guarantees z > y). w: outer backdrop flag (1 = ghost the silent
-    // octaves to complete the ring; independent of the core).
+    // guarantees z > y). w: outer backdrop opacity 0..1 (ghost the silent
+    // octaves to complete the ring; independent of the core). 0 draws no
+    // backdrop; 1 is the full built-in hoop/ghost strength.
     misc3: vec4<f32>,
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::DOT_RAMP_N).
@@ -693,7 +694,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
 
-    let backdrop = u.misc3.w > 0.5;
+    // Backdrop opacity 0..1, scaling the built-in hoop/ghost levels: 0
+    // draws no backdrop at all, 1 is the full strength this always had.
+    let backdrop = u.misc3.w;
+    let has_backdrop = backdrop > 0.0;
     // Outer solidity (u.misc4.y, 0..1) is the octave layer's own
     // crisp/soft knob: it widens every glyph's soft edge (proportional to
     // the band width so narrow bands soften proportionally), so at 1 the
@@ -703,17 +707,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let outer_aa = aa + (1.0 - u.misc4.y) * OUTER_GLOW_SOFT * (u.misc3.z - u.misc3.y);
     if mode != 0u {
         // Sounding slots draw bright, tinted by their own pitch, each
-        // fading on its own envelope. The backdrop flag (its own
-        // outer-layer setting, independent of the core) turns on each
+        // fading on its own envelope. The backdrop opacity (its own
+        // outer-layer setting, independent of the core) fades in each
         // style's cohesion device: Dots gets a faint tie hoop (complete
         // whenever the note sounds; glyphs composite over it) and Slices
         // draws silent slots as ghosts in the loop below.
-        if backdrop && mode == 1u {
+        if has_backdrop && mode == 1u {
             let hoop_r = (u.misc3.y + u.misc3.z) * 0.5;
             let hoop = aa_inside(HOOP_HALF, abs(d - hoop_r), outer_aa);
-            glyph = hoop * HOOP_LEVEL * presence;
+            glyph = hoop * HOOP_LEVEL * backdrop * presence;
         }
-        let ghosted = backdrop && mode == 5u;
+        let ghosted = has_backdrop && mode == 5u;
         for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
             let level = octave_level(in.octaves, i);
             if level <= 0.0 && !(ghosted && presence > 0.0) {
@@ -723,7 +727,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
-            var cov = shape * GHOST_LEVEL * presence * f32(ghosted);
+            var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
             var slot_rgb = node_glyph_rgb;
             if level > 0.0 {
                 // The 35% dimmest-visible floor is right while the octave

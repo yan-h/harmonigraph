@@ -740,12 +740,14 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 let has_backdrop =
                     matches!(state.view.outer_style, OuterStyle::Dots | OuterStyle::Slices);
                 ui.add_enabled_ui(has_backdrop, |ui| {
-                    ui.checkbox(&mut state.view.outer_backdrop, "Backdrop").on_hover_text(
-                        "Complete the octave ring: draw the silent octaves \
-                         faintly behind the sounding glyphs (Slices ghosts \
-                         its empty slots; Dots strings them on a hoop) so a \
-                         lone octave still reads as a whole note",
-                    );
+                    ValueBar::new(&mut state.view.outer_backdrop, 0.0..=1.0, "Backdrop")
+                        .show(ui)
+                        .on_hover_text(
+                            "Complete the octave ring: draw the silent octaves \
+                             faintly behind the sounding glyphs (Slices ghosts \
+                             its empty slots; Dots strings them on a hoop) so a \
+                             lone octave still reads as a whole note. 0 = off",
+                        );
                 });
                 // How long the octave glyphs keep fading after release
                 // (independent of the core's fade above).

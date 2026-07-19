@@ -267,9 +267,31 @@ pub struct ViewConfig {
     /// still reads as a whole note — Slices ghosts its empty slots in the
     /// note color to complete the annulus, Dots strings its glyphs on a
     /// faint hoop. No effect on Rings (already closed circles) or Off. Was
-    /// implicitly tied to "core off"; now its own toggle.
-    #[serde(default)]
-    pub outer_backdrop: bool,
+    /// implicitly tied to "core off", then its own on/off toggle.
+    ///
+    /// Now an opacity, 0..1: 0 is off (exactly the old `false`) and 1 is
+    /// the old `true`'s strength, with everything between available so the
+    /// backdrop can sit as far under the sounding glyphs as you like. It
+    /// scales the shader's built-in hoop/ghost levels rather than
+    /// replacing them, so 1 reproduces the previous look byte for byte.
+    /// Serialized under a new key, leaving the old one to the load-only
+    /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop) bool.
+    #[serde(default, rename = "outer_backdrop_alpha")]
+    pub outer_backdrop: f32,
+    /// Load-only shim: blobs from before the backdrop became an opacity
+    /// stored it as a bool under `outer_backdrop`. Folded into
+    /// `outer_backdrop` by [`migrate_legacy`](Self::migrate_legacy) and
+    /// never written back. Without this the bool would fail to
+    /// deserialize into the f32 above and take the WHOLE persist with it
+    /// (the loader drops the blob on any parse error), losing the user's
+    /// layout and camera too.
+    #[serde(
+        default,
+        skip_serializing,
+        rename = "outer_backdrop",
+        deserialize_with = "bare_bool_as_some"
+    )]
+    pub legacy_outer_backdrop: Option<bool>,
     /// The outer glyphs' solidity, 0..1 (mirrors [`core_solidity`] for the
     /// octave layer): 1 draws crisp shapes (the classic look), and toward 0
     /// their soft edges spread until they melt into soft glowy marks. Only
@@ -324,6 +346,18 @@ pub struct ViewConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// Read a legacy bare `true`/`false` into an `Option<bool>` that means
+/// "the key was there". A plain `Option<bool>` field can't do this: RON
+/// writes options as `Some(true)`/`None`, so it rejects the bare bool the
+/// old blobs actually contain. `serde(default)` still supplies `None` when
+/// the key is absent — this only runs when it is present.
+fn bare_bool_as_some<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde::Deserialize::deserialize(d).map(Some)
 }
 
 /// The classic disc edge radius, from before the core was sizable.
@@ -405,6 +439,12 @@ impl ViewConfig {
     /// the backdrop draws; its band radii rode the slice_inner/slice_outer
     /// fields, absorbed by the outer_inner/outer_outer aliases).
     pub fn migrate_legacy(&mut self) {
+        // The backdrop's pre-opacity bool: on means full strength, which
+        // is what that build drew.
+        if let Some(on) = self.legacy_outer_backdrop.take() {
+            self.outer_backdrop = if on { 1.0 } else { 0.0 };
+        }
+
         match std::mem::replace(&mut self.core_style, CoreStyle::On) {
             CoreStyle::None => self.core_radius = 0.0,
             CoreStyle::Orb => self.core_solidity = 1.0,
@@ -420,7 +460,7 @@ impl ViewConfig {
         };
         self.core_solidity = 0.0;
         self.outer_style = outer;
-        self.outer_backdrop = true;
+        self.outer_backdrop = 1.0;
     }
 }
 
@@ -445,7 +485,8 @@ impl Default for ViewConfig {
             core_radius: default_core_radius(),
             outer_inner: default_outer_inner(),
             outer_outer: default_outer_outer(),
-            outer_backdrop: false,
+            outer_backdrop: 0.0,
+            legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
             idle_marker: IdleMarker::default(),
             idle_radius: default_idle_radius(),
@@ -787,8 +828,8 @@ pub struct Scene {
     pub outer_outer: f32,
     /// Outer-layer cohesion device (see [`ViewConfig::outer_backdrop`]):
     /// ghost the silent octaves faintly to complete the ring. Independent
-    /// of the core.
-    pub outer_backdrop: bool,
+    /// of the core. Already clamped to 0..1; 0 draws no backdrop at all.
+    pub outer_backdrop: f32,
     /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
     /// 1 crisp, toward 0 the glyph edges spread into soft glows.
     pub outer_solidity: f32,
@@ -983,6 +1024,7 @@ pub fn derive_scene(
     let outer_inner = view.outer_inner.clamp(0.0, 0.9);
     let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
     let outer_solidity = view.outer_solidity.clamp(0.0, 1.0);
+    let outer_backdrop = view.outer_backdrop.clamp(0.0, 1.0);
 
     Scene {
         nodes,
@@ -995,7 +1037,7 @@ pub fn derive_scene(
         core_solidity,
         outer_inner,
         outer_outer,
-        outer_backdrop: view.outer_backdrop,
+        outer_backdrop,
         outer_solidity,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
@@ -1676,7 +1718,7 @@ mod tests {
             assert_eq!(view.core_solidity, 0.0, "{body:?}");
             assert!(view.core_radius > 0.0, "{body:?} still on");
             assert_eq!(view.outer_style, outer, "{body:?}");
-            assert!(view.outer_backdrop, "{body:?}");
+            assert_eq!(view.outer_backdrop, 1.0, "{body:?}");
             assert_eq!(view.node_body, LegacyNodeBody::Disc, "shim consumed");
         }
 
