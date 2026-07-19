@@ -547,6 +547,11 @@ mod tests {
         state.view.outer_solidity = 0.3;
         state.view.idle_marker = lattice_scene::IdleMarker::Dot;
         state.view.idle_radius = 0.31;
+        state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
+        state.view.grid_thickness = 2.5;
+        state.view.grid_inset = 0.0;
+        state.view.grid_dashed = true;
+        state.view.grid_half_offset = true;
         state.view.meantone = true;
         state.camera_presets.push(CameraPreset {
             name: "reading".into(),
@@ -569,6 +574,11 @@ mod tests {
         assert_eq!(restored.view.outer_solidity, 0.3);
         assert_eq!(restored.view.idle_marker, lattice_scene::IdleMarker::Dot);
         assert_eq!(restored.view.idle_radius, 0.31);
+        assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
+        assert_eq!(restored.view.grid_thickness, 2.5);
+        assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
+        assert!(restored.view.grid_dashed);
+        assert!(restored.view.grid_half_offset);
         assert!(restored.view.meantone);
         assert_eq!(restored.camera_presets.len(), 1);
         assert_eq!(restored.camera_presets[0].name, "reading");

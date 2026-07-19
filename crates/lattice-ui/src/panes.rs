@@ -779,6 +779,38 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                     );
             });
 
+            // Home grid: the faint structural lines between node positions.
+            // Idle positions draw no disc, so this is what carries the
+            // lattice's shape; every knob here is about how loudly.
+            section(ui, "Home grid");
+            button_row(ui, |ui| {
+                ui.label("Color");
+                ui.color_edit_button_rgba_unmultiplied(&mut state.view.grid_color)
+                    .on_hover_text(
+                        "Grid line color; its alpha is how faint an unlit line \
+                         draws. Lit segments still take their notes' color",
+                    );
+            });
+            ValueBar::new(&mut state.view.grid_thickness, 0.0..=4.0, "Thickness")
+                .show(ui)
+                .on_hover_text("Line width, as a multiple of the classic hairline");
+            ValueBar::new(&mut state.view.grid_inset, 0.0..=3.0, "Line gap")
+                .show(ui)
+                .on_hover_text(
+                    "How far each line stops short of the node it runs to, as \
+                     a multiple of the node radius; 0 runs it to the center. \
+                     With Half offset on, this is the gap at the cell corners \
+                     instead (0 closes the cells into a continuous mesh)",
+                );
+            ui.checkbox(&mut state.view.grid_dashed, "Dashed").on_hover_text(
+                "Dash the in-plane lines. The sevens-axis links are always \
+                 dashed -- that's what marks them as depth links",
+            );
+            ui.checkbox(&mut state.view.grid_half_offset, "Half offset").on_hover_text(
+                "Shift the grid half a cell so notes sit in the middle of the \
+                 squares instead of at their intersections",
+            );
+
             // Color: the pitch->color gradient endpoints (MIDI notes) the
             // pitch-colored channels map through.
             section(ui, "Color");

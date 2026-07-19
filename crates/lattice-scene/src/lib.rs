@@ -316,6 +316,47 @@ pub struct ViewConfig {
     /// saved.
     #[serde(default, skip_serializing)]
     pub node_body: LegacyNodeBody,
+    // ---- Home grid -------------------------------------------------------
+    // The faint structural grid between node positions (see `derive_grid`).
+    // Its look used to be fixed: the skin's color, a hardcoded inset, a
+    // hardcoded thickness, dashes reserved for the sevens links.
+    /// Grid line color, linear RGBA. Alpha is the idle line opacity — the
+    /// strength an unlit home-sheet segment draws at — so this one picker
+    /// covers both "what color" and "how faint". Defaults to the skin's
+    /// `grid_line`, which is where this always came from; the skin has no
+    /// runtime setter, so a user-chosen grid color has to live here.
+    /// Lit segments still take their sounding notes' color.
+    #[serde(default = "default_grid_color")]
+    pub grid_color: [f32; 4],
+    /// Grid line thickness as a multiple of the built-in width. 1 is the
+    /// classic hairline; the shader scales its grid half-width by this.
+    #[serde(default = "default_grid_thickness")]
+    pub grid_thickness: f32,
+    /// How far a grid segment stops short of each node center, as a factor
+    /// of the node radius — the padding between a line end and the
+    /// dot/circle drawn there. The old fixed 1.05 is the default: slightly
+    /// wider than the disc's visual radius, so the gap fully contains a
+    /// sounding note's circle. 0 runs the lines right into the centers.
+    ///
+    /// Under `grid_half_offset` the lines no longer reach any node, so
+    /// this becomes the gap at the cell corners instead: 0 closes the
+    /// cells into a continuous mesh, larger values open them into ticks.
+    #[serde(default = "default_grid_inset")]
+    pub grid_inset: f32,
+    /// Draw the in-plane grid lines dashed. The sevens-axis links are
+    /// always dashed regardless — that dash is what distinguishes a depth
+    /// link from an in-sheet line, and isn't a style choice.
+    #[serde(default)]
+    pub grid_dashed: bool,
+    /// Offset the in-plane grid by half a cell, so nodes sit in the middle
+    /// of the grid squares instead of at their intersections. The segments
+    /// (and so their lighting) are unchanged — only where they're drawn
+    /// moves — which keeps the boundary exactly as complete as it is
+    /// without the offset. The sevens links don't move: they connect
+    /// actual notes across sheets, and shifting them off their nodes would
+    /// break what they mean.
+    #[serde(default)]
+    pub grid_half_offset: bool,
     /// Light up lattice edges between simultaneously sounding adjacent
     /// nodes, so a chord's interval structure renders as geometry.
     #[serde(default)]
@@ -398,6 +439,24 @@ fn default_outer_outer() -> f32 {
 
 fn default_render_scale() -> f32 {
     1.0
+}
+
+/// The grid's color comes from the skin by default, which is the only
+/// place it came from before the grid became customizable.
+fn default_grid_color() -> [f32; 4] {
+    skin::active_skin().grid_line.to_array()
+}
+
+fn default_grid_thickness() -> f32 {
+    1.0
+}
+
+/// The fixed inset from before the grid became customizable: a factor of
+/// the node radius, slightly larger than the disc's visual radius (~0.83 ×
+/// radius, see the quad math in lattice.wgsl) so the gap fully contains
+/// the circle a sounding note draws there, with a slim margin.
+fn default_grid_inset() -> f32 {
+    1.05
 }
 
 impl ViewConfig {
@@ -491,6 +550,11 @@ impl Default for ViewConfig {
             idle_marker: IdleMarker::default(),
             idle_radius: default_idle_radius(),
             node_body: LegacyNodeBody::Disc,
+            grid_color: default_grid_color(),
+            grid_thickness: default_grid_thickness(),
+            grid_inset: default_grid_inset(),
+            grid_dashed: false,
+            grid_half_offset: false,
             show_chord_edges: false,
             meantone: false,
             frameless: false,
@@ -846,6 +910,9 @@ pub struct Scene {
     /// between two sounding notes light up with their blended color.
     /// Reuses [`EdgeInstance`]; `strength` carries the line opacity.
     pub grid: Vec<EdgeInstance>,
+    /// Grid line thickness as a multiple of the shader's built-in grid
+    /// width (see [`ViewConfig::grid_thickness`]), already clamped.
+    pub grid_thickness: f32,
     /// Pitch->color lookup for the dots octave style, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub dot_ramp: [Vec4; DOT_RAMP_N],
@@ -1043,6 +1110,7 @@ pub fn derive_scene(
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         edges,
         grid,
+        grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         dot_ramp: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
@@ -1071,12 +1139,6 @@ fn depth_scale(dist: f32, focus: f32) -> f32 {
         .clamp(DEPTH_SCALE_RANGE.0, DEPTH_SCALE_RANGE.1)
 }
 
-/// How far a grid segment stops short of each node center, as a factor of
-/// the node radius. Larger than the disc's visual radius (~0.83 × radius,
-/// see the quad math in lattice.wgsl) so the gap fully contains the circle
-/// a sounding note draws there, with a slim margin.
-const GRID_INSET_FACTOR: f32 = 1.05;
-
 /// Line opacity of a grid segment whose two endpoint notes both sound.
 const GRID_LIT_OPACITY: f32 = 0.85;
 
@@ -1088,8 +1150,17 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 /// from any sounding off-sheet note down to the home sheet. Lit segments
 /// take the sounding notes' color and fade with their envelope.
 fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
-    let inset = view.spacing * NODE_RADIUS_FACTOR * GRID_INSET_FACTOR;
-    let base = skin::active_skin().grid_line;
+    let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
+    let base = Vec4::from_array(view.grid_color);
+    // Half-cell offset: nodes sit at world (fives, threes) integers, so
+    // shifting the in-plane lines by half a cell in both puts them at the
+    // half-integers — i.e. the notes land in the middle of each square
+    // rather than on its corners. Sevens links keep their true endpoints.
+    let half_offset = if view.grid_half_offset {
+        Vec3::new(0.5, 0.5, 0.0) * view.spacing
+    } else {
+        Vec3::ZERO
+    };
     // Presized: this rebuilds every frame, and collect() would otherwise
     // rehash several times as it grows past its default capacity.
     let mut index: std::collections::HashMap<LatticePos, &NodeInstance> =
@@ -1117,7 +1188,9 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
             // until the music lights them. Links render dashed.
             let on_home = !along_sevens && p.sevens == view.center_sevens;
             let idle = if on_home { base.w } else { 0.0 };
-            let dashed = along_sevens;
+            // The sevens links are always dashed: that dash is what tells a
+            // depth link from an in-sheet line, not a style choice.
+            let dashed = along_sevens || view.grid_dashed;
 
             // Both endpoints sounding lights any segment.
             let mut lit = node.activation.min(neighbor.activation);
@@ -1149,9 +1222,10 @@ fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
                 continue;
             }
             let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
+            let shift = if along_sevens { Vec3::ZERO } else { half_offset };
             grid.push(EdgeInstance {
-                a: node.world_pos + dir * inset,
-                b: neighbor.world_pos - dir * inset,
+                a: node.world_pos + shift + dir * inset,
+                b: neighbor.world_pos + shift - dir * inset,
                 color: base.lerp(lit_color, lit),
                 strength: idle + (GRID_LIT_OPACITY - idle) * lit,
                 dashed,
@@ -1544,6 +1618,127 @@ mod tests {
             .fold(0.0f32, f32::max);
         for seg in &scene.grid {
             assert!(seg.a.length() <= max_node && seg.b.length() <= max_node);
+        }
+    }
+
+    /// A 7x7 window one sevens step deep, so sevens links are in play too.
+    /// Wide enough that a held C also lands on an off-sheet node — under
+    /// 12-TET that first happens at (2, -3, 1) — which is what lights the
+    /// links; a ±1 window has no such node and would show none at all.
+    fn grid_view() -> ViewConfig {
+        ViewConfig {
+            extent_threes: 3,
+            extent_fives: 3,
+            extent_sevens: 1,
+            ..ViewConfig::default()
+        }
+    }
+
+    fn grid_of(view: &ViewConfig) -> Vec<EdgeInstance> {
+        grid_of_with(view, &NoteTracker::new())
+    }
+
+    fn grid_of_with(view: &ViewConfig, tracker: &NoteTracker) -> Vec<EdgeInstance> {
+        scene_of(tracker, &Tuning::default(), view, &FrameParams::default(), 0.0).grid
+    }
+
+    /// A held note, so the off-sheet sevens links light up and appear in
+    /// the grid at all (idle ones are skipped as fully invisible).
+    fn sounding() -> NoteTracker {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        tracker
+    }
+
+    #[test]
+    fn grid_inset_sets_how_far_lines_stop_short_of_a_node() {
+        // The inset is the "line length" knob: at 0 a segment spans the
+        // full node spacing, and raising it eats the line from both ends.
+        let flush = grid_of(&ViewConfig { grid_inset: 0.0, ..grid_view() });
+        let spacing = grid_view().spacing;
+        for seg in &flush {
+            assert!(
+                (seg.a.distance(seg.b) - spacing).abs() < 1e-5,
+                "inset 0 should span the whole spacing, got {}",
+                seg.a.distance(seg.b)
+            );
+        }
+
+        let mut lengths = vec![];
+        for inset in [0.0f32, 0.5, 1.05, 2.0] {
+            let grid = grid_of(&ViewConfig { grid_inset: inset, ..grid_view() });
+            lengths.push(grid[0].a.distance(grid[0].b));
+        }
+        for pair in lengths.windows(2) {
+            assert!(pair[1] < pair[0], "more inset must mean shorter lines: {lengths:?}");
+        }
+    }
+
+    #[test]
+    fn grid_half_offset_moves_in_plane_lines_between_the_nodes() {
+        // Nodes sit at whole multiples of the spacing; offsetting by half a
+        // cell in both in-plane axes puts every in-plane line on the
+        // half-multiples, so the notes land in the middle of each square.
+        // The sevens links must NOT move: they connect real notes across
+        // sheets, and shifting them off their nodes would break that.
+        let view = grid_view();
+        let tracker = sounding();
+        let plain = grid_of_with(&view, &tracker);
+        let offset =
+            grid_of_with(&ViewConfig { grid_half_offset: true, ..view.clone() }, &tracker);
+        assert_eq!(plain.len(), offset.len(), "the offset only moves lines, never adds any");
+
+        let half = Vec3::new(0.5, 0.5, 0.0) * view.spacing;
+        let mut moved = 0;
+        let mut stayed = 0;
+        for (before, after) in plain.iter().zip(&offset) {
+            // Sevens links run along world z; in-plane lines don't.
+            let along_sevens = (before.b.z - before.a.z).abs() > 1e-5;
+            if along_sevens {
+                assert_eq!(after.a, before.a, "a sevens link must stay put");
+                assert_eq!(after.b, before.b);
+                stayed += 1;
+            } else {
+                assert!((after.a - (before.a + half)).length() < 1e-5, "in-plane line must shift");
+                assert!((after.b - (before.b + half)).length() < 1e-5);
+                moved += 1;
+            }
+        }
+        assert!(moved > 0 && stayed > 0, "want both kinds present: {moved} moved, {stayed} stayed");
+    }
+
+    #[test]
+    fn grid_color_and_dashes_come_from_the_view() {
+        // The color (and its alpha, the idle line opacity) is a view
+        // setting now; it used to be readable only from the skin.
+        let tinted = [0.9f32, 0.1, 0.4, 0.25];
+        let grid = grid_of(&ViewConfig { grid_color: tinted, ..grid_view() });
+        let unlit = grid
+            .iter()
+            .find(|s| s.strength > 0.0)
+            .expect("the home sheet draws an idle grid");
+        assert_eq!(unlit.color, Vec4::from_array(tinted));
+        assert_eq!(unlit.strength, tinted[3], "alpha is the idle line opacity");
+
+        // Dashes: off by default for in-plane lines, on for sevens links
+        // either way (that dash marks a depth link, it isn't a style).
+        let tracker = sounding();
+        let plain = grid_of_with(&grid_view(), &tracker);
+        let dashed =
+            grid_of_with(&ViewConfig { grid_dashed: true, ..grid_view() }, &tracker);
+        assert!(
+            plain.iter().any(|s| (s.b.z - s.a.z).abs() > 1e-5),
+            "want some sevens links in the mix"
+        );
+        for (before, after) in plain.iter().zip(&dashed) {
+            let along_sevens = (before.b.z - before.a.z).abs() > 1e-5;
+            assert_eq!(before.dashed, along_sevens, "only links dash by default");
+            assert!(after.dashed, "every line dashes when the style is on");
         }
     }
 

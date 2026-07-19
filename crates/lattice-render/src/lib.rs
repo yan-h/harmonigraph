@@ -120,8 +120,9 @@ struct Uniforms {
     misc: [f32; 4],
     /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     /// (the shader converts its screen-pixel AA softness to render
-    /// pixels with it); w unused. The dots style maps a dot's pitch
-    /// through x/y to index `dot_ramp`.
+    /// pixels with it); w: bloom strength, which blit.wgsl reads (this
+    /// slot is NOT free). The dots style maps a dot's pitch through x/y
+    /// to index `dot_ramp`.
     misc2: [f32; 4],
     /// x: core radius in quad UV units (0 turns the core off); y/z: the
     /// outer octave layer's inner/outer band radii (same units, pre-
@@ -142,6 +143,10 @@ struct Uniforms {
     /// (0 none, 1 dot, 2 circle). (The blit pipeline binds only the head of
     /// this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
+    /// x: grid line thickness as a multiple of the shader's built-in grid
+    /// width; y/z/w unused. Every earlier misc slot is spoken for, so the
+    /// grid's knob starts a new one — safe per the note on `misc4`.
+    misc5: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -343,6 +348,7 @@ impl LatticeCallback {
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],
+                misc5: [scene.grid_thickness, 0.0, 0.0, 0.0],
             },
             target_format,
             pane_id,
@@ -1205,6 +1211,7 @@ mod tests {
             idle_radius: 0.0,
             edges,
             grid,
+            grid_thickness: 1.0,
             dot_ramp: std::array::from_fn(|k| {
                 Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
             }),

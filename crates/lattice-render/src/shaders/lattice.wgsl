@@ -47,6 +47,9 @@ struct Uniforms {
     // crisp octave shapes). z: idle marker radius. w: idle marker style
     // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
+    // x: grid line thickness, a multiple of the built-in grid width.
+    // y/z/w unused.
+    misc5: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -825,8 +828,11 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     } else {
         perp = perp / plen;
     }
-    // Grid lines (kind >= 1) are much thinner than chord beams.
-    let half_width = u.misc.y * mix(0.35, 0.09, min(inst.b_kind.w, 1.0));
+    // Grid lines (kind >= 1) are much thinner than chord beams, and carry
+    // the user's thickness multiplier; chord beams keep their fixed width.
+    let is_grid = min(inst.b_kind.w, 1.0);
+    let grid_width = 0.09 * u.misc5.x;
+    let half_width = u.misc.y * mix(0.35, grid_width, is_grid);
     let world = a + axis * corner.x + perp * corner.y * half_width;
 
     var out: EdgeVsOut;
@@ -850,9 +856,10 @@ fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
     if in.kind > 0.5 {
         let across = aa_inside(0.675, abs(in.uv.y), aa_y);
         var along = smoothstep(0.0, 0.12, in.uv.x) * (1.0 - smoothstep(0.88, 1.0, in.uv.x));
-        // Dashed grid lines (kind 2, GridStyle::DashedLinks): chop the
-        // length into short dashes, leaving a faint floor in the gaps so
-        // the line still reads as continuous structure.
+        // Dashed grid lines (kind 2): the sevens links, plus every in-plane
+        // line when the grid's dashed style is on. Chop the length into
+        // short dashes, leaving a faint floor in the gaps so the line still
+        // reads as continuous structure.
         if in.kind > 1.5 {
             let tri = abs(fract(in.uv.x * 5.0) - 0.5) * 2.0;
             along = along * (0.15 + 0.85 * smoothstep(0.35, 0.65, tri));
