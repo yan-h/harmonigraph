@@ -61,9 +61,6 @@ impl ParamKey {
     /// Pitch->color gradient endpoints (Color group of the Appearance UI).
     pub const COLOR: [ParamKey; 2] = [ParamKey::DarkestPitch, ParamKey::BrightestPitch];
 
-    /// Release-fade times (Fade group of the Appearance UI).
-    pub const FADE: [ParamKey; 2] = [ParamKey::PitchClassFade, ParamKey::OctaveFade];
-
     pub fn label(self) -> &'static str {
         match self {
             ParamKey::COffset => "C offset (¢)",

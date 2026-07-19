@@ -685,6 +685,8 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                         ui.selectable_value(&mut state.view.node_style, style, label);
                     }
                 });
+                // How long the core keeps fading after a note releases.
+                param_bar(ui, params, ParamKey::PitchClassFade);
             });
 
             // Octaves: which octaves of the pitch class are sounding, shown
@@ -741,16 +743,15 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                          lone octave still reads as a whole note",
                     );
                 });
+                // How long the octave glyphs keep fading after release
+                // (independent of the core's fade above).
+                param_bar(ui, params, ParamKey::OctaveFade);
             });
 
             // Color: the pitch->color gradient endpoints (MIDI notes) the
             // pitch-colored channels map through.
             section(ui, "Color");
             param_bars(ui, params, &ParamKey::COLOR);
-
-            // Fade: how long a released note lingers before it clears.
-            section(ui, "Fade");
-            param_bars(ui, params, &ParamKey::FADE);
 
             // Labels: the note text drawn on hovered and sounding nodes.
             section(ui, "Labels");
