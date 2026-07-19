@@ -6,6 +6,8 @@
 //! - [`coords`] — integer lattice positions and note spelling.
 //! - [`notes`] — MIDI voice tracking: which pitches are sounding, and the
 //!   envelopes that outlive their note-offs.
+//! - [`history`] — what has already been played, kept once a voice's fade
+//!   completes, so the scene can leave a trail behind the music.
 //! - [`tuning`] — pitch classes in integer microcents, the tuning of each
 //!   prime axis, and learning a tuning from what's played.
 //! - [`spectrum`] — a hand-rolled FFT and the analyzer that buckets it
@@ -16,10 +18,12 @@
 //! (`lattice_core::tuning::microcents`, `lattice_core::coords::positions_within`).
 
 pub mod coords;
+pub mod history;
 pub mod notes;
 pub mod spectrum;
 pub mod tuning;
 
 pub use coords::{positions_within, LatticePos, NoteName};
+pub use history::{NoteHistory, Step, Visit};
 pub use notes::{ChannelRole, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState};
 pub use tuning::{learn_tuning, LearnedTuning, PitchClass, PitchClassDistance, Tuning};

@@ -50,7 +50,8 @@ plumbing.
 
 ```
 lattice-core    pure logic: PitchClass (integer microcents), Tuning,
-                LatticePos, NoteTracker, SpectrumAnalyzer (FFT). No deps.
+                LatticePos, NoteTracker (+ the NoteHistory behind it,
+                feeding the trail), SpectrumAnalyzer (FFT). No deps.
                 Unit-tested. One module per concern; see its crate doc.
 lattice-scene   per-frame view model: derive_scene() turns tracker+tuning
                 into NodeInstances; orbit Camera; envelopes; CPU picking.

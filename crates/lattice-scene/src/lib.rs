@@ -15,6 +15,8 @@
 //!   for label placement and picking.
 //! - [`color`] — the LCh pitch ramp and channel/idle colors.
 //! - [`skin`] — the static palette the UI and renderer share.
+//! - [`trail`] — what has already been played, laid back over the nodes
+//!   and drawn as a route between them.
 //!
 //! Every public item is re-exported at the crate root, so downstream code
 //! keeps using `lattice_scene::Camera` rather than module paths.
@@ -24,6 +26,7 @@ pub mod color;
 pub mod derive;
 pub mod skin;
 pub mod style;
+pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector};
@@ -32,6 +35,7 @@ pub use derive::derive_scene;
 pub use style::{
     CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
 };
+pub use trail::TrailMode;
 pub use view::{FrameParams, ViewConfig};
 
 use glam::{Vec3, Vec4};
@@ -132,6 +136,16 @@ pub struct NodeInstance {
     /// background.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
+    /// How strongly this node is being remembered rather than heard (see
+    /// [`trail`]): 0 when the music has never been here, up to the view's
+    /// trail strength when it has. Folded into `activation` too — a trail
+    /// IS a faintly lit node, which is why it needs no shader branch — and
+    /// kept separately only so a reader can still tell the two apart, which
+    /// the label layer needs in order to caption a memory differently from
+    /// a sounding note.
+    ///
+    /// `activation > trail` therefore means "something live is on top".
+    pub trail: f32,
 }
 
 impl NodeInstance {
@@ -209,6 +223,14 @@ pub struct Scene {
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.
     pub grid_thickness: f32,
+    /// The route through the notes already played (see
+    /// [`trail::derive_trail_path`]); empty when the path is off. Drawn
+    /// over the grid and under the nodes. Segments run between arbitrary
+    /// node pairs, not just adjacent ones — a leap is a long line.
+    pub trail_path: Vec<EdgeInstance>,
+    /// Draw the path as glowing beams rather than grid-weight lines (see
+    /// [`ViewConfig::trail_path_glow`]).
+    pub trail_path_glow: bool,
     /// Color of the idle node markers (see [`ViewConfig::grid_color`]):
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.

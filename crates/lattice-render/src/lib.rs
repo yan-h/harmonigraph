@@ -324,11 +324,18 @@ impl LatticeCallback {
             })
             .collect();
 
-        // The grid draws under the nodes.
+        // The grid draws under the nodes, and the trail's route over the
+        // grid — it is about the music, and the grid is only the furniture
+        // it moved through. A glowing route takes the beam kind, which is
+        // otherwise unused now that chords are not drawn as beams.
+        let line_kind = |dashed: bool| if dashed { 2.0 } else { 1.0 };
         let edges = scene
             .grid
             .iter()
-            .map(|g| (g, if g.dashed { 2.0 } else { 1.0 }))
+            .map(|g| (g, line_kind(g.dashed)))
+            .chain(scene.trail_path.iter().map(|p| {
+                (p, if scene.trail_path_glow { 0.0 } else { line_kind(p.dashed) })
+            }))
             .map(|(e, kind)| GpuEdge {
                 a_strength: [e.a.x, e.a.y, e.a.z, e.strength],
                 b_kind: [e.b.x, e.b.y, e.b.z, kind],

@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use crate::history::NoteHistory;
 use crate::tuning::PitchClass;
 
 /// Timestamps are seconds on a monotonic clock chosen by the shell (sample
@@ -159,11 +160,13 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 }
 
 /// Tracks held voices plus a tail of recently released ones (so releases can
-/// fade out instead of vanishing).
+/// fade out instead of vanishing), and behind those a [`NoteHistory`] of
+/// everything that has finished fading.
 #[derive(Default)]
 pub struct NoteTracker {
     held: HashMap<(u8, u8), Voice>,
     released: Vec<Voice>,
+    history: NoteHistory,
 }
 
 impl NoteTracker {
@@ -202,11 +205,33 @@ impl NoteTracker {
         }
     }
 
-    /// Drop released voices whose fade has fully completed. Call once per
-    /// frame before iterating.
+    /// Drop released voices whose fade has fully completed, folding each
+    /// into the history as it goes. Call once per frame before iterating.
+    ///
+    /// A voice becomes a memory in the same step it stops being drawn, so
+    /// the two never describe one note at once and a trail picks the note
+    /// up exactly where its fade lets go. (A retrigger without an off
+    /// replaces its voice outright — see `handle_event` — so that voice is
+    /// never recorded; the retrigger's own release covers the pitch.)
     pub fn prune(&mut self, now: Time, fade_time: f32) {
-        self.released
-            .retain(|v| v.activation(now, fade_time) > 0.0);
+        let history = &mut self.history;
+        self.released.retain(|voice| {
+            if voice.activation(now, fade_time) > 0.0 {
+                return true;
+            }
+            history.record(voice, now);
+            false
+        });
+    }
+
+    /// Everything played so far, for the trail (see [`NoteHistory`]).
+    pub fn history(&self) -> &NoteHistory {
+        &self.history
+    }
+
+    /// Forget everything played so far, leaving the live voices alone.
+    pub fn clear_history(&mut self) {
+        self.history.clear();
     }
 
     /// All voices that should currently be visualized (held first).

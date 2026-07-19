@@ -1,11 +1,11 @@
 //! The Appearance pane: how a sounding note is drawn — core, octaves,
-//! melody/bass marks, home grid, color, labels, effects.
+//! melody/bass marks, home grid, color, labels, trail, effects.
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle};
+use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle, TrailMode};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -246,6 +246,117 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                 state.view.show_labels,
                 egui::Checkbox::new(&mut state.view.show_cents, "Cents"),
             );
+
+            // Trail: the one part of this pane about the past rather than
+            // the present. Marks say WHERE the music has been; the path
+            // says in what ORDER it went there, and the two are independent
+            // on purpose -- either reading is useful without the other.
+            section(ui, "Trail");
+            choice_row(
+                ui,
+                "Marks",
+                &mut state.view.trail_mode,
+                &[
+                    (TrailMode::Off, "Off", "Show only what is sounding"),
+                    (
+                        TrailMode::Ghost,
+                        "Ghost",
+                        "Every note played stays faintly lit, forever and \
+                         evenly -- the lit nodes are the piece's harmonic \
+                         territory",
+                    ),
+                    (
+                        TrailMode::Fade,
+                        "Fade",
+                        "Brightest where the music just was, forgotten over \
+                         the Memory time below -- a comet tail rather than a \
+                         map",
+                    ),
+                    (
+                        TrailMode::Heat,
+                        "Heat",
+                        "Brightest where the music has spent the most time: \
+                         what a tonal center looks like",
+                    ),
+                ],
+            );
+            let marks_on = state.view.trail_mode != TrailMode::Off;
+            ui.add_enabled_ui(marks_on, |ui| {
+                ui.checkbox(&mut state.view.trail_octaves, "Octaves").on_hover_text(
+                    "Remember which octave a note was played in, not just \
+                     its pitch class. Also what keeps octaves of one note \
+                     apart, since they all share a node",
+                );
+                ui.checkbox(&mut state.view.trail_labels, "Labels").on_hover_text(
+                    "Keep the note name and cents on a visited node, so the \
+                     territory can be read off by name. Needs Note names on",
+                );
+            });
+
+            // The route. Deliberately NOT gated on the marks above.
+            ui.checkbox(&mut state.view.trail_path, "Path").on_hover_text(
+                "Draw a line from each played note to the next, in playing \
+                 order -- the route through the lattice rather than the \
+                 places it reached",
+            );
+            ui.add_enabled_ui(state.view.trail_path, |ui| {
+                let mut steps = state.view.trail_path_steps as f32;
+                if ValueBar::new(&mut steps, 2.0..=256.0, "Path length")
+                    .integer()
+                    .show(ui)
+                    .on_hover_text("How many recent notes the route connects")
+                    .changed()
+                {
+                    state.view.trail_path_steps = steps as u32;
+                }
+                ui.checkbox(&mut state.view.trail_path_glow, "Glowing").on_hover_text(
+                    "Draw the route as beams instead of thin lines: loud \
+                     across a leap, where thin lines suit a dense passage",
+                );
+                ui.add_enabled(
+                    !state.view.trail_path_glow,
+                    egui::Checkbox::new(&mut state.view.trail_path_dashed, "Dashed"),
+                )
+                .on_hover_text("Dash the route, to tell it from the grid's own lines");
+            });
+
+            // Shared by both devices, so they stay enabled whenever either
+            // is. Memory time is the exception: only Fade and the path
+            // measure age at all.
+            let trail_on = marks_on || state.view.trail_path;
+            ui.add_enabled_ui(trail_on, |ui| {
+                ValueBar::new(&mut state.view.trail_strength, 0.0..=1.0, "Strength")
+                    .show(ui)
+                    .on_hover_text("How loud the past draws -- marks and path alike");
+                ValueBar::new(&mut state.view.trail_tint, 0.0..=1.0, "Tint")
+                    .show(ui)
+                    .on_hover_text(
+                        "How far a memory's color is pulled toward the grid: \
+                         0 keeps the note's own hue, 1 makes it a grey ghost \
+                         of the structure",
+                    );
+                ui.add_enabled_ui(
+                    state.view.trail_mode.uses_time() || state.view.trail_path,
+                    |ui| {
+                        ValueBar::new(&mut state.view.trail_time, 1.0..=600.0, "Memory")
+                            .show(ui)
+                            .on_hover_text(
+                                "Seconds before a note is forgotten: how long \
+                                 a Fade mark lasts, and how far back the path \
+                                 reaches. Ghost and Heat never forget",
+                            );
+                    },
+                );
+            });
+            button_row(ui, |ui| {
+                if ui
+                    .button("Clear trail")
+                    .on_hover_text("Forget everything played so far; sounding notes stay")
+                    .clicked()
+                {
+                    state.tracker.clear_history();
+                }
+            });
 
             // Effects: scene-wide extras layered over the notes.
             section(ui, "Effects");
