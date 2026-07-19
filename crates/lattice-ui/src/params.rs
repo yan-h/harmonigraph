@@ -1,6 +1,6 @@
 //! The bridge between UI widgets and "wherever parameters actually live".
 //!
-//! In the plugin, automatable parameters live in nih-plug's parameter system
+//! In the plugin, automatable parameters live in nice-plug's parameter system
 //! and must be changed through a `ParamSetter` so the host sees the
 //! automation. In the standalone harness they're plain values. Panes only
 //! talk to this trait, so every pane works in both shells.
@@ -139,7 +139,7 @@ impl ParamKey {
 
     /// Skew steepness for the [`logarithmic`](Self::logarithmic) params
     /// (more negative = more resolution at the low end). The plugin feeds
-    /// this to nih-plug's skewed ranges; the UI's eased ValueBars only
+    /// this to nice-plug's skewed ranges; the UI's eased ValueBars only
     /// consult `logarithmic()`. Meaningless for linear params.
     pub fn skew_steepness(self) -> f32 {
         match self {

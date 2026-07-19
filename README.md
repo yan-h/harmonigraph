@@ -50,19 +50,24 @@ plumbing.
 
 ```
 lattice-core    pure logic: PitchClass (integer microcents), Tuning,
-                LatticePos, NoteTracker. No deps. Unit-tested.
+                LatticePos, NoteTracker, SpectrumAnalyzer (FFT). No deps.
+                Unit-tested. One module per concern; see its crate doc.
 lattice-scene   per-frame view model: derive_scene() turns tracker+tuning
                 into NodeInstances; orbit Camera; envelopes; CPU picking.
+                Split style/view/camera/color/derive; see its crate doc.
 lattice-render  wgpu renderer as an egui paint callback: instanced
                 billboard nodes, WGSL in src/shaders/lattice.wgsl.
                 *** Skins/effects/shaders iterate here. ***
-lattice-ui      egui_dock pane shell: Lattice / Tuning / Console / Spectral
-                tabs, SharedState (incl. cross-pane hover), ParamBackend
-                trait abstracting "where params live".
-lattice-standalone  eframe dev harness with a mock chord progression.
-midi_lattice_3d     nice-plug shell: params, MIDI → rtrb ring buffer,
-                    custom wgpu egui editor (editor.rs) with host-native
-                    window resizing, CLAP/VST3 exports.
+lattice-ui      egui_dock pane shell: Lattice / Tuning / View / Appearance /
+                Console / Spectral / Spectrum / Notes tabs, one file each
+                under src/panes/. SharedState (incl. cross-pane hover),
+                ParamBackend trait abstracting "where params live".
+lattice-standalone  eframe dev harness: mock chord progression OR hardware
+                    MIDI in (midir, with MPE bend decoding), plus a mock
+                    synth feeding the spectrum analyzer.
+midi_lattice_3d     nice-plug shell: params, MIDI + audio → two rtrb ring
+                    buffers, custom wgpu egui editor (editor.rs) with
+                    host-native window resizing, CLAP/VST3 exports.
 ```
 
 Data flow in the plugin: audio thread converts host MIDI to `NoteEvent`s

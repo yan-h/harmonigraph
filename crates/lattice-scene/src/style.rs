@@ -38,9 +38,9 @@ pub enum OuterStyle {
     Rings,
 }
 
-/// How the core orb is painted while notes sound (inert without an orb —
-/// [`CoreStyle::Glow`] or [`CoreStyle::None`]). All styles share the same
-/// instance data
+/// How the core orb is painted while notes sound (inert when there is no
+/// orb, i.e. [`ViewConfig::core_radius`](crate::ViewConfig::core_radius)
+/// is 0). All styles share the same instance data
 /// (activation + per-note phase); the fragment/vertex shader switches
 /// on a uniform. Kept as switchable candidates for live comparison — idle
 /// nodes look identical in every style.

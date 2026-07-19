@@ -398,9 +398,14 @@ struct UiPersist {
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
-/// window (egui-baseview hands the plugin editor exactly that; the
-/// standalone harness wraps a frameless CentralPanel). `now` is seconds on
-/// the shell's clock (the same clock used to timestamp `NoteEvent`s).
+/// window (egui-baseview hands the plugin editor exactly that; eframe hands
+/// the standalone harness the same via its `App::ui` hook).
+///
+/// The shell contract, which is otherwise only discoverable by reading both
+/// shells: before calling this, feed the frame's MIDI into `state.tracker`
+/// and its audio samples into `state.spectrum`. `now` is seconds on the
+/// shell's clock, and must be the SAME clock that timestamped those
+/// `NoteEvent`s — envelopes are derived from the difference.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     learn_step(state, params);
 

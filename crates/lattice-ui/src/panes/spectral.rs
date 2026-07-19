@@ -8,13 +8,6 @@ use super::{nearest_visible_node, KEY_NAMES};
 use egui::Sense;
 use lattice_scene::channel_color;
 
-/// Pitch-class meter: sounding voices as bars on a 0-1200 cents axis.
-/// MIDI-derived (velocity/activation weighted), not an audio FFT — that
-/// upgrade needs audio analysis plumbed from the audio thread.
-///
-/// Hover sync goes both ways: the lattice-hovered pitch class shows as a
-/// band here, and hovering a position here highlights the matching lattice
-/// node (if one is in view).
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
@@ -101,6 +94,14 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
+/// Two views of the same sound over one shared MIDI-pitch axis: the
+/// audio spectrum as a curve (FFT of the input bus, every partial at its
+/// actual pitch) and the sounding MIDI voices as bars. Both are optional;
+/// the settings live in [`spectrum_settings_pane`].
+///
+/// Hover sync goes both ways: the lattice-hovered pitch class shows as a
+/// band here, and hovering a pitch here highlights the matching lattice
+/// node (if one is in view).
 pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     use crate::SpectrumLabels;
     use lattice_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};

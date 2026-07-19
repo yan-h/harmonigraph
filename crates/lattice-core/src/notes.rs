@@ -116,8 +116,9 @@ impl Voice {
 
     /// Envelope in `[0, 1]` driving the visual intensity of this voice:
     /// 1 while held, then a linear decay over `fade_time` seconds.
-    /// Fancier envelope shapes belong in the scene layer once we experiment;
-    /// this is the single source of truth for "is this voice still visible".
+    /// The scene layer shapes this further (attack ramps, per-octave
+    /// envelopes); this stays the single source of truth for "is this voice
+    /// still visible".
     pub fn activation(&self, now: Time, fade_time: f32) -> f32 {
         match self.state {
             VoiceState::Held => 1.0,

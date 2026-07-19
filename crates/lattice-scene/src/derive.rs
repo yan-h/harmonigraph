@@ -117,8 +117,8 @@ pub fn derive_scene(
         // Field styles animate one continuous field per node — global time
         // as the clock plus a stable per-node seed — so pressing,
         // retriggering, or stacking notes lights the flow up without ever
-        // restarting or reshuffling it. Age-driven styles keep the
-        // per-note seed (wire's tumble phases).
+        // restarting or reshuffling it. Steady ignores the seed entirely,
+        // so its per-note value below is written and never read.
         let seed = if view.node_style.is_field_style() { node_seed(pos) } else { seed };
 
         // World positions are relative to the window center, keeping the

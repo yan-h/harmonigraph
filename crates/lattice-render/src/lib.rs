@@ -283,8 +283,10 @@ impl LatticeCallback {
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
-        // Sort back-to-front along the view direction: no depth buffer in
-        // the egui pass, so alpha blending relies on draw order.
+        // Sort back-to-front along the view direction. The offscreen pass
+        // does have a depth attachment, but its test is `Always` (see
+        // create_scene_pipeline), so alpha blending still relies on draw
+        // order — exactly as it did before the offscreen pass existed.
         let eye = camera.eye();
         let forward = (camera.target - eye).normalize_or_zero();
         let mut order: Vec<(f32, &lattice_scene::NodeInstance)> = scene
