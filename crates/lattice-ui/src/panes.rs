@@ -996,7 +996,7 @@ fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     // a tolerance-wide band in every octave.
     if let Some(pos) = state.hovered {
         let semis = state.tuning.pitch_class(pos).to_cents() / 100.0;
-        let half_width = (rect.width() * (state.tuning.tolerance / 100.0) / span).max(1.5);
+        let half_width = (rect.width() * (state.tuning.tolerance_cents() / 100.0) / span).max(1.5);
         let mut midi = min_midi + semis;
         while midi < max_midi {
             let x = x_of(midi);

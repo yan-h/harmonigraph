@@ -1393,7 +1393,7 @@ mod tests {
         // reason 12-TET's enharmonic duplicates are avoided here).
         // C and G (a fifth apart, one step on the prime-3 axis) held
         // together with a wide-enough tolerance: exactly one edge.
-        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
+        let tuning = Tuning { tolerance: lattice_core::tuning::microcents(5.0), ..Tuning::just() };
         let mut tracker = NoteTracker::new();
         for note in [60u8, 67] {
             tracker.handle_event(NoteEvent {
@@ -1702,7 +1702,7 @@ mod tests {
         // segment between them takes the lit opacity and the notes' blended
         // color; a segment with only one sounding endpoint stays at the
         // faint base look.
-        let tuning = Tuning { tolerance: 5.0, ..Tuning::just() };
+        let tuning = Tuning { tolerance: lattice_core::tuning::microcents(5.0), ..Tuning::just() };
         let mut tracker = NoteTracker::new();
         for note in [60u8, 67] {
             tracker.handle_event(NoteEvent {

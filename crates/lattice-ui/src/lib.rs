@@ -408,10 +408,11 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Meantone mode locks the major third to four perfect fifths: derive it
     // from the fifth here, so the whole pipeline (scene pitch classes,
     // matching, readouts) sees the locked value without any meantone
-    // awareness of its own. The Five param is left untouched (inert while
-    // the lock is on).
+    // awareness of its own. The lock is exact in integer microcents, so
+    // comma-equivalent nodes collapse to one pitch. The Five param is left
+    // untouched (inert while the lock is on).
     if state.view.meantone {
-        state.tuning.five = lattice_core::tuning::meantone_third(state.tuning.three);
+        state.tuning.lock_meantone();
     }
     state.frame_params = FrameParams {
         pitch_class_fade_time: params.get(params::ParamKey::PitchClassFade),

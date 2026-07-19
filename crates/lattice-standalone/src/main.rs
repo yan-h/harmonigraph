@@ -471,10 +471,10 @@ impl Default for StandaloneParams {
         // a justly tuned lattice, with the tolerance wide enough that the
         // 12-TET mock notes light it up out of the box.
         let just = lattice_core::Tuning::just();
-        params.set(ParamKey::COffset, just.c_offset);
-        params.set(ParamKey::Three, just.three);
-        params.set(ParamKey::Five, just.five);
-        params.set(ParamKey::Seven, just.seven);
+        params.set(ParamKey::COffset, just.c_offset_cents());
+        params.set(ParamKey::Three, just.three_cents());
+        params.set(ParamKey::Five, just.five_cents());
+        params.set(ParamKey::Seven, just.seven_cents());
         params.set(ParamKey::Tolerance, 20.0);
         params
     }

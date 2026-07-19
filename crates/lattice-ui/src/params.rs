@@ -169,12 +169,14 @@ pub trait ParamBackend {
 }
 
 /// Assemble a [`lattice_core::Tuning`] from the current parameter values.
+/// The f32 cent params are quantized to microcents here, once, at the
+/// param boundary; all lattice pitch math downstream is exact integers.
 pub fn tuning_from_params(params: &dyn ParamBackend) -> lattice_core::Tuning {
-    lattice_core::Tuning {
-        c_offset: params.get(ParamKey::COffset),
-        three: params.get(ParamKey::Three),
-        five: params.get(ParamKey::Five),
-        seven: params.get(ParamKey::Seven),
-        tolerance: params.get(ParamKey::Tolerance),
-    }
+    lattice_core::Tuning::from_cents(
+        params.get(ParamKey::COffset),
+        params.get(ParamKey::Three),
+        params.get(ParamKey::Five),
+        params.get(ParamKey::Seven),
+        params.get(ParamKey::Tolerance),
+    )
 }
