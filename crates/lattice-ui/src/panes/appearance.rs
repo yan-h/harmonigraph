@@ -155,9 +155,16 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                              its octave's sector",
                         ),
                         (
-                            MarkLink::Spur,
-                            "Spur",
-                            "A radial stub bridges the ring and its octave's sector",
+                            MarkLink::Cut,
+                            "Cut",
+                            "The ring is slit either side of its octave, so that \
+                             stretch reads as a separate piece",
+                        ),
+                        (
+                            MarkLink::Reach,
+                            "Reach",
+                            "The octave's own sector grows across the gap to \
+                             touch the ring",
                         ),
                     ],
                 );

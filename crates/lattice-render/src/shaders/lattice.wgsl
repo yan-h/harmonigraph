@@ -601,11 +601,10 @@ const MARK_RING_THICK: f32 = 0.16;
 const MARK_RING_MIN_AA: f32 = 1.5;
 // Glow: what the ring dims to away from its sector.
 const MARK_DIM: f32 = 0.28;
-// Spur: how far the stub pokes PAST the ring, as a share of ring thickness.
-// Bridging the gap alone is nearly invisible -- the gap is thin by design --
-// so the spur crosses the ring and sticks out the far side, which is the
-// part that actually reads.
-const MARK_SPUR_OVER: f32 = 0.9;
+// Cut: the slits are as wide as the gaps between octaves (the Gap bar), so
+// the break falls on the layer's own rhythm -- but never thinner than this
+// many soft-band widths, or a Gap of 0 would leave no visible break at all.
+const MARK_CUT_MIN_AA: f32 = 1.6;
 
 // How strongly this pixel lies over the sector(s) a mark came from.
 //
@@ -639,19 +638,55 @@ fn mark_link_mask(
     return m;
 }
 
-// Coverage of one mark ring. `r_in..r_out` is the ring itself;
-// `bridge_in..bridge_out` is Spur's stub, running from the band across the
-// ring and a little past. Radii are passed rather than derived so the
-// melody ring (growing outward) and the bass ring (inward) can share this
-// one body.
+// Coverage of the slits that cut the responsible sector's stretch of ring
+// away from the rest of it: one at each of that sector's two angular
+// boundaries, which are exactly where the gaps between octaves fall.
+//
+// Sampled along the pixel's ray at the band's middle, as mark_link_mask is,
+// so the slit sits at a fixed ANGLE and lands on both rings alike. The
+// bisector cross products give the perpendicular distance to each boundary
+// line; the dot gate throws away the antipode, since a line through the
+// origin passes just as close on the far side of the node.
+fn mark_cut_mask(
+    slots: u32,
+    cents: f32,
+    uv: vec2<f32>,
+    band_in: f32,
+    band_out: f32,
+    aa: f32,
+) -> f32 {
+    let probe = uv * ((band_in + band_out) * 0.5 / max(length(uv), 1e-4));
+    let half = max(slice_gap_half(), aa * MARK_CUT_MIN_AA);
+    let hb = RAD_PER_OCTAVE * 0.5;
+    var m = 0.0;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        if (slots & (1u << i)) != 0u {
+            let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
+            let ang = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
+            let facing = step(0.0, dot(probe, vec2<f32>(cos(ang), sin(ang))));
+            let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
+            let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
+            let c1 = probe.x * b1.y - probe.y * b1.x;
+            let c2 = probe.x * b2.y - probe.y * b2.x;
+            let slit = max(aa_inside(half, abs(c1), aa), aa_inside(half, abs(c2), aa));
+            m = max(m, slit * facing);
+        }
+    }
+    return m;
+}
+
+// Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
+// derived so the melody ring (outside the band) and the bass ring (inside)
+// can share this one body.
+//
+// Reach is absent here: it grows the octave SECTOR out to meet the ring, so
+// it is drawn by the glyph loop and leaves the ring itself plain.
 fn mark_ring(
     slots: u32,
     cents: f32,
     uv: vec2<f32>,
     r_in: f32,
     r_out: f32,
-    bridge_in: f32,
-    bridge_out: f32,
     band_in: f32,
     band_out: f32,
     link: u32,
@@ -667,14 +702,16 @@ fn mark_ring(
     if link == 0u {
         return ring;
     }
-    let over = mark_link_mask(slots, cents, uv, band_in, band_out, aa);
     if link == 2u {
+        let over = mark_link_mask(slots, cents, uv, band_in, band_out, aa);
         return ring * mix(MARK_DIM, 1.0, over);
     }
-    // Spur: the ring at full strength plus a stub running from the sector
-    // that owns it, across the gap and the ring, and a little way beyond.
-    let bridge = aa_inside(bridge_out, d, aa) * (1.0 - aa_inside(max(bridge_in, 0.0), d, aa));
-    return max(ring, bridge * over);
+    if link == 4u {
+        // Cut: full-strength ring, slit at the sector's two boundaries.
+        return ring * (1.0 - mark_cut_mask(slots, cents, uv, band_in, band_out, aa));
+    }
+    // Reach (and anything else): the ring is left plain.
+    return ring;
 }
 
 @fragment
@@ -810,6 +847,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // glowy marks. It only feeds the edge width, so shapes and angles stay
     // put. Mirrors the core's solidity.
     let outer_aa = aa + (1.0 - u.misc4.y) * OUTER_GLOW_SOFT * (u.misc3.z - u.misc3.y);
+    // Melody/bass ring geometry, needed before the glyph loop because the
+    // Reach link grows a marked sector out to meet its ring.
+    let band_in = u.misc3.y;
+    let band_out = u.misc3.z;
+    let ring_w = max((band_out - band_in) * MARK_RING_THICK, outer_aa * MARK_RING_MIN_AA);
+    let ring_gap = slice_gap_half() * 2.0;
+    let link = u32(u.misc5.y + 0.5);
+    // Headroom: the band's outer radius can be dialed to 1.0, so the melody
+    // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
+    // circle of radius QUAD_MARGIN fits the square quad) and ease it off
+    // there, rather than letting the corner clip it flat.
+    let lim = QUAD_MARGIN - 0.02;
+    let mel_in = min(band_out + ring_gap, lim);
+    let bass_out = band_in - ring_gap;
     if outer_on {
         // Sounding slots draw bright, tinted by their own pitch, each
         // fading on its own envelope. The backdrop opacity (its own
@@ -822,7 +873,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             if level <= 0.0 && !(ghosted && presence > 0.0) {
                 continue;
             }
-            let shape = outer_glyph(i, in.cents, in.uv, u.misc3.y, u.misc3.z, outer_aa);
+            // Reach grows a marked sector across the gap until it touches
+            // its ring — outward to the melody's, inward to the bass's, or
+            // both when one note is each end. The reach draws in the
+            // octave's own pitch color, not the mark's: it IS the octave.
+            var slot_in = band_in;
+            var slot_out = band_out;
+            if link == 5u && level > 0.0 {
+                if (in.marks.x & (1u << i)) != 0u {
+                    slot_out = max(mel_in, band_out);
+                }
+                if (in.marks.y & (1u << i)) != 0u {
+                    slot_in = min(bass_out, band_in);
+                }
+            }
+            let shape = outer_glyph(i, in.cents, in.uv, slot_in, slot_out, outer_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -860,29 +925,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // outside. Their own layer, composited over the glyphs — a sector's
     // color is its pitch, which is what the octave layer is FOR, so nothing
     // here repaints one.
-    let band_in = u.misc3.y;
-    let band_out = u.misc3.z;
-    let ring_w = max((band_out - band_in) * MARK_RING_THICK, outer_aa * MARK_RING_MIN_AA);
-    let ring_gap = slice_gap_half() * 2.0;
-    let link = u32(u.misc5.y + 0.5);
-    // Headroom: the band's outer radius can be dialed to 1.0, so the melody
-    // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
-    // circle of radius QUAD_MARGIN fits the square quad) and ease it off
-    // there, rather than letting the corner clip it flat.
-    let lim = QUAD_MARGIN - 0.02;
-    let mel_in = min(band_out + ring_gap, lim);
-    let bass_out = band_in - ring_gap;
     let melody_cov = mark_ring(
         in.marks.x, in.cents, in.uv,
         mel_in, min(mel_in + ring_w, lim),
-        band_out, min(mel_in + ring_w * (1.0 + MARK_SPUR_OVER), lim),
         band_in, band_out,
         link, outer_aa,
     ) * in.params.y;
     let bass_cov = mark_ring(
         in.marks.y, in.cents, in.uv,
         bass_out - ring_w, bass_out,
-        bass_out - ring_w * (1.0 + MARK_SPUR_OVER), band_in,
         band_in, band_out,
         link, outer_aa,
     ) * in.params.z;
@@ -892,7 +943,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Safety taper only. The radii above are already capped inside the
     // billboard (a circle of radius QUAD_MARGIN fits the square quad), so
     // this just keeps a soft edge from ending on the boundary; starting it
-    // any earlier eats the Bulge, which at the default band (outer 1.0)
+    // any earlier eats the ring, which at the default band (outer 1.0)
     // lives entirely in this margin.
     mark = mark * (1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d));
     glyph_rgb = (mark_rgb * mark + glyph_rgb * glyph * (1.0 - mark))

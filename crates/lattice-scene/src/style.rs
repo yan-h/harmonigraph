@@ -203,19 +203,31 @@ pub enum MarkLink {
     #[default]
     #[serde(alias = "Bulge")]
     Glow,
-    /// A radial stub bridges the gap between the ring and its sector,
-    /// physically joining the two. The most literal, and the loudest.
-    Spur,
+    /// An unbroken ring like [`Off`](MarkLink::Off), but slit at the
+    /// responsible sector's two angular boundaries, so that stretch of ring
+    /// reads as a separate piece. The slits line up with the gaps between
+    /// octaves and take their width from the same Gap bar, so the break
+    /// falls on the layer's own rhythm.
+    Cut,
+    /// The responsible sector itself grows across the gap to touch its ring
+    /// — outward to the melody ring, inward to the bass one. The link is
+    /// drawn in the octave's own pitch color rather than the mark's, since
+    /// it IS the octave. Absorbs the removed Spur, which drew a stub from
+    /// the ring's side instead.
+    #[serde(alias = "Spur")]
+    Reach,
 }
 
 impl MarkLink {
-    /// Index used by the shader (uniform `misc5.y`). 1 was the removed
-    /// Bulge; the others keep their indices so their branches are untouched.
+    /// Index used by the shader (uniform `misc5.y`). 1 and 3 are the
+    /// removed Bulge and Spur; the rest keep their indices so their
+    /// branches are untouched.
     pub fn shader_index(self) -> u32 {
         match self {
             MarkLink::Off => 0,
             MarkLink::Glow => 2,
-            MarkLink::Spur => 3,
+            MarkLink::Cut => 4,
+            MarkLink::Reach => 5,
         }
     }
 }
