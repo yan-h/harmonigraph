@@ -133,6 +133,20 @@ impl Voice {
     }
 }
 
+/// The display octave containing MIDI note `midi`, in Bitwig's convention
+/// where middle C (MIDI 60) is C3. The inverse of [`octave_start_midi`].
+/// Matches [`Voice::display_octave`]; use these rather than rewriting the
+/// `/ 12 - 2` by hand, so the convention lives in one place.
+pub fn display_octave_of(midi: i32) -> i32 {
+    midi.div_euclid(12) - 2
+}
+
+/// The lowest MIDI note of display octave `octave` (Bitwig's convention).
+/// The inverse of [`display_octave_of`].
+pub fn octave_start_midi(octave: i32) -> i32 {
+    (octave + 2) * 12
+}
+
 /// Tracks held voices plus a tail of recently released ones (so releases can
 /// fade out instead of vanishing).
 #[derive(Default)]

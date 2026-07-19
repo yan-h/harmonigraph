@@ -17,20 +17,17 @@ use params::ParamBackend;
 
 /// Scrollback for the debug console pane. Shells and panes log via
 /// [`SharedState::log`].
+#[derive(Default)]
 pub struct Console {
     lines: VecDeque<String>,
-    max_lines: usize,
-}
-
-impl Default for Console {
-    fn default() -> Self {
-        Console { lines: VecDeque::new(), max_lines: 500 }
-    }
 }
 
 impl Console {
+    /// Lines kept before the oldest is dropped.
+    const MAX_LINES: usize = 500;
+
     pub fn log(&mut self, line: impl Into<String>) {
-        if self.lines.len() == self.max_lines {
+        if self.lines.len() == Self::MAX_LINES {
             self.lines.pop_front();
         }
         self.lines.push_back(line.into());

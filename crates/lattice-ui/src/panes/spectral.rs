@@ -5,6 +5,7 @@ use super::visibility_floor;
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, SharedState};
 use super::{nearest_visible_node, KEY_NAMES};
+use lattice_core::notes::{display_octave_of, octave_start_midi};
 use egui::Sense;
 use lattice_scene::channel_color;
 
@@ -91,6 +92,12 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     }
 }
 
+/// Height budget for both plots, as a fraction of the pane: a full-scale
+/// (0 dB) sine and a full-velocity held voice both top out here. The two
+/// MUST agree, or the voice bars stop being comparable with the spectrum
+/// curve they are drawn over.
+const PLOT_HEIGHT_FRACTION: f32 = 0.85;
+
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
@@ -104,7 +111,7 @@ const TILT_PIVOT_MIDI: f32 = 83.213_1;
 /// node (if one is in view).
 pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     use crate::SpectrumLabels;
-    use lattice_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
@@ -117,9 +124,9 @@ pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal width and every note draws at
     // its actual pitch. The displayed range is the Spectrum tab's octave
-    // zoom (Bitwig numbering: octave n starts at MIDI (n + 2) * 12).
-    let min_midi = ((cfg.low_octave + 2) * 12) as f32;
-    let max_midi = ((cfg.high_octave + 2) * 12) as f32;
+    // zoom; the Bitwig octave<->MIDI convention lives in lattice-core.
+    let min_midi = octave_start_midi(cfg.low_octave) as f32;
+    let max_midi = octave_start_midi(cfg.high_octave) as f32;
     let span = max_midi - min_midi;
     let x_of = |midi: f32| rect.left() + rect.width() * (midi - min_midi) / span;
     // dB height mapping: 0 dB (a full-scale sine) tops out at 85% of the
@@ -129,7 +136,9 @@ pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     let h_of = |power: f32, midi: f32| {
         let db = 10.0 * power.max(1e-12).log10()
             - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-        ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0) * rect.height() * 0.85
+        ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0)
+            * rect.height()
+            * PLOT_HEIGHT_FRACTION
     };
 
     // Axis gridlines: every C (note labels) or the analyzer-standard
@@ -147,7 +156,7 @@ pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                     painter.text(
                         egui::pos2(x + 3.0, rect.bottom() - 2.0),
                         egui::Align2::LEFT_BOTTOM,
-                        format!("C{}", c / 12 - 2),
+                        format!("C{}", display_octave_of(c)),
                         egui::FontId::monospace(10.0),
                         theme::text_dim(),
                     );
@@ -156,11 +165,10 @@ pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
             }
         }
         SpectrumLabels::Frequency => {
-            let midi_of_hz = |hz: f32| 69.0 + 12.0 * (hz / 440.0).log2();
             for hz in
                 [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0]
             {
-                let midi = midi_of_hz(hz);
+                let midi = hz_to_midi(hz);
                 if !(min_midi..=max_midi).contains(&midi) {
                     continue;
                 }
@@ -271,7 +279,9 @@ pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
             }
             let x = x_of(voice.pitch);
             let height =
-                rect.height() * 0.85 * activation * visibility_floor(voice.velocity);
+                rect.height() * PLOT_HEIGHT_FRACTION
+                    * activation
+                    * visibility_floor(voice.velocity);
             let c = channel_color(
                 voice.channel,
                 voice.pitch,
@@ -313,7 +323,7 @@ pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
             format!(
                 "{}{} {:+.0}\u{a2} \u{b7} {:.1} Hz",
                 KEY_NAMES[nearest as usize % 12],
-                nearest as i32 / 12 - 2,
+                display_octave_of(nearest as i32),
                 (midi - nearest) * 100.0,
                 midi_to_hz(midi),
             ),
