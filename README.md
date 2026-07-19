@@ -96,12 +96,15 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   color+depth pass, with bloom composited over it. The depth buffer is
   written but not yet read — nodes are still CPU-sorted back-to-front, so
   dense scenes can still show overlap artifacts. Enabling real depth
-  testing is the remaining step.
+  testing is the remaining step (needs a two-pass opaque/transparent split;
+  see [`docs/deferred-work.md`](docs/deferred-work.md)).
 - **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
 - **Spectral audio FFT**: done — the Spectral pane analyzes a real FFT of
   the plugin's audio input (mono mixdown of the input bus, gated on
   `show_audio`), no longer MIDI-only. Remaining work is analysis polish,
   not wiring.
-- **Render styles**: Node style / Chord edges are switchable experiments;
-  prune the losers after evaluation.
+- **Render styles**: the experimental set has been trimmed (NodeStyle 15→5,
+  OuterStyle→4, CoreStyle folded into a solidity slider); a final aesthetic
+  trim of the 5 surviving node styles is the remaining call. See
+  [`docs/deferred-work.md`](docs/deferred-work.md).
