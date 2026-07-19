@@ -529,7 +529,7 @@ mod tests {
         state.camera.yaw = 1.23;
         state.camera.distance = 42.0;
         state.view.extent_sevens = 3;
-        // Off is the only non-default octave style, so it proves the field
+        // Off differs from the default octave style, so it proves the field
         // actually round-trips rather than matching the default by luck.
         state.view.octave_style = lattice_scene::OctaveStyle::Off;
         state.view.meantone = true;

@@ -219,18 +219,18 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            // A tall window of fifths and a wide band of thirds out of the
-            // box; sevenths stay opt-in.
+            // A tall window of fifths, a wide band of thirds, and one step
+            // of sevenths out of the box.
             extent_threes: 10,
             extent_fives: 6,
-            extent_sevens: 0,
+            extent_sevens: 1,
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
-            octave_style: OctaveStyle::default(),
+            octave_style: OctaveStyle::Slices,
             show_labels: true,
             show_cents: true,
-            node_style: NodeStyle::default(),
+            node_style: NodeStyle::Checker,
             show_chord_edges: false,
             meantone: false,
             frameless: false,
@@ -296,7 +296,7 @@ fn default_cabinet_angle() -> f32 {
 }
 
 fn default_cabinet_scale() -> f32 {
-    0.5
+    0.6
 }
 
 /// Simple orbit camera. Angles in radians.
@@ -329,7 +329,7 @@ impl Default for Camera {
             pitch: 0.3,
             distance: 12.0,
             fov_y: 45f32.to_radians(),
-            projection: Projection::default(),
+            projection: Projection::Cabinet,
             cabinet_angle: default_cabinet_angle(),
             cabinet_scale: default_cabinet_scale(),
         }
@@ -1070,10 +1070,13 @@ mod tests {
             note: 60,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
+        // Steady seeds each node from its note-on time; field styles seed
+        // from position instead, so pin the style this test is about.
+        let view = ViewConfig { node_style: NodeStyle::Steady, ..ViewConfig::default() };
         let scene = scene_of(
             &tracker,
             &Tuning::default(),
-            &ViewConfig::default(),
+            &view,
             &FrameParams::default(),
             12.5,
         );
@@ -1464,11 +1467,14 @@ mod tests {
     #[test]
     fn cabinet_faces_the_sheet_and_shears_sevens_uniformly() {
         let viewport = Vec2::new(800.0, 600.0);
-        // Orbit angles are ignored: cabinet always faces the sheet.
+        // Orbit angles are ignored: cabinet always faces the sheet. Pin the
+        // shear scale to 0.5 so the "half scale" checks below hold whatever
+        // the default is.
         let camera = Camera {
             projection: Projection::Cabinet,
             yaw: 1.0,
             pitch: -0.7,
+            cabinet_scale: 0.5,
             ..Camera::default()
         };
         assert_eq!(camera.eye(), Vec3::new(0.0, 0.0, camera.distance));
@@ -1512,7 +1518,7 @@ mod tests {
     #[test]
     fn orthographic_matches_perspective_at_the_focus_plane_and_is_uniform() {
         let viewport = Vec2::new(800.0, 600.0);
-        let perspective = Camera::default();
+        let perspective = Camera { projection: Projection::Perspective, ..Camera::default() };
         let ortho = Camera { projection: Projection::Orthographic, ..perspective };
         let mut s = scene_of(
             &NoteTracker::new(),
