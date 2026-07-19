@@ -6,7 +6,7 @@ use egui::Sense;
 use lattice_core::tuning;
 use lattice_render::lattice_paint_callback;
 use lattice_scene::{
-    channel_color, derive_scene, Camera, NodeStyle, OuterStyle, Projection,
+    channel_color, derive_scene, Camera, IdleMarker, NodeStyle, OuterStyle, Projection,
 };
 
 use crate::theme;
@@ -748,45 +748,29 @@ fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn Para
                 param_bar(ui, params, ParamKey::OctaveFade);
             });
 
-            // Idle nodes: how an UNLIT node on the home (center) sheet is
-            // marked, fully independent of the active Core/Octaves above — a
-            // grey position ring plus an optional grey octave ring, drawn
-            // under any sounding note. (Other sheets are marked by the grid.)
+            // Idle nodes: a minimal grey marker at each unlit home-sheet
+            // node, shown ALWAYS — independent of the active appearance and
+            // of whether a note plays there (a sounding note just draws over
+            // it). Other sheets are marked by the grid.
             section(ui, "Idle nodes");
-            ValueBar::new(&mut state.view.idle_opacity, 0.0..=1.0, "Opacity")
-                .show(ui)
-                .on_hover_text("How prominent the idle markers are; 0 hides them entirely");
-            ui.add_enabled_ui(state.view.idle_opacity > 0.0, |ui| {
-                ValueBar::new(&mut state.view.idle_ring_radius, 0.0..=0.9, "Ring")
+            button_row_wrapped(ui, |ui| {
+                ui.label("Marker");
+                for (marker, label, hint) in [
+                    (IdleMarker::None, "None", "No idle marker"),
+                    (IdleMarker::Dot, "Dot", "A filled grey dot at the radius below"),
+                    (IdleMarker::Circle, "Circle", "A thin grey outline circle at the radius below"),
+                ] {
+                    ui.selectable_value(&mut state.view.idle_marker, marker, label)
+                        .on_hover_text(hint);
+                }
+            });
+            ui.add_enabled_ui(state.view.idle_marker != IdleMarker::None, |ui| {
+                ValueBar::new(&mut state.view.idle_radius, 0.0..=0.9, "Radius")
                     .show(ui)
                     .on_hover_text(
-                        "Grey position ring at each unlit node; 0 = no ring. \
-                         Its own radius, independent of the active Core (so \
-                         turning the core off no longer hides it)",
+                        "Size of the idle marker; independent of the active \
+                         Core (0.46 is the classic placeholder ring)",
                     );
-                button_row_wrapped(ui, |ui| {
-                    ui.label("Octaves");
-                    for (style, label, hint) in [
-                        (OuterStyle::Off, "Off", "No idle octave marker"),
-                        (OuterStyle::Dots, "Dots", "A faint dot at every octave slot"),
-                        (OuterStyle::Slices, "Slices", "A faint full ring of sectors"),
-                        (OuterStyle::Rings, "Rings", "Faint concentric rings, one per octave"),
-                    ] {
-                        ui.selectable_value(&mut state.view.idle_outer_style, style, label)
-                            .on_hover_text(hint);
-                    }
-                });
-                ui.add_enabled_ui(state.view.idle_outer_style != OuterStyle::Off, |ui| {
-                    ValueBar::new(&mut state.view.idle_outer_inner, 0.0..=0.9, "Band inner")
-                        .show(ui)
-                        .on_hover_text("Idle octave band's inner radius");
-                    ValueBar::new(&mut state.view.idle_outer_outer, 0.2..=1.0, "Band outer")
-                        .show(ui)
-                        .on_hover_text("Idle octave band's outer radius");
-                    ValueBar::new(&mut state.view.idle_outer_solidity, 0.0..=1.0, "Solidity")
-                        .show(ui)
-                        .on_hover_text("Crisp (1) to soft glowy (0) idle octave marks");
-                });
             });
 
             // Color: the pitch->color gradient endpoints (MIDI notes) the

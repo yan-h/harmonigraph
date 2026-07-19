@@ -542,9 +542,8 @@ mod tests {
         state.view.outer_outer = 0.7;
         state.view.outer_backdrop = true;
         state.view.outer_solidity = 0.3;
-        state.view.idle_opacity = 0.42;
-        state.view.idle_ring_radius = 0.31;
-        state.view.idle_outer_style = lattice_scene::OuterStyle::Slices;
+        state.view.idle_marker = lattice_scene::IdleMarker::Dot;
+        state.view.idle_radius = 0.31;
         state.view.meantone = true;
         state.camera_presets.push(CameraPreset {
             name: "reading".into(),
@@ -565,9 +564,8 @@ mod tests {
         assert_eq!(restored.view.outer_outer, 0.7);
         assert!(restored.view.outer_backdrop);
         assert_eq!(restored.view.outer_solidity, 0.3);
-        assert_eq!(restored.view.idle_opacity, 0.42);
-        assert_eq!(restored.view.idle_ring_radius, 0.31);
-        assert_eq!(restored.view.idle_outer_style, lattice_scene::OuterStyle::Slices);
+        assert_eq!(restored.view.idle_marker, lattice_scene::IdleMarker::Dot);
+        assert_eq!(restored.view.idle_radius, 0.31);
         assert!(restored.view.meantone);
         assert_eq!(restored.camera_presets.len(), 1);
         assert_eq!(restored.camera_presets[0].name, "reading");

@@ -137,14 +137,10 @@ struct Uniforms {
     node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
     /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
-    /// crisp octave shapes); z: idle ring radius (0 = no idle ring); w: idle
-    /// marker opacity (0 = no idle marker). (The blit pipeline binds only
-    /// the head of this buffer, so trailing fields are safe to add here.)
+    /// crisp octave shapes); z: idle marker radius; w: idle marker style
+    /// (0 none, 1 dot, 2 circle). (The blit pipeline binds only the head of
+    /// this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
-    /// The idle octave marker (home-sheet unlit nodes), independent of the
-    /// active octave layer: x: outer style index; y/z: band inner/outer; w:
-    /// solidity.
-    misc5: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -343,14 +339,8 @@ impl LatticeCallback {
                 misc4: [
                     scene.core_solidity,
                     scene.outer_solidity,
-                    scene.idle_ring_radius,
-                    scene.idle_opacity,
-                ],
-                misc5: [
-                    scene.idle_outer_style.shader_index() as f32,
-                    scene.idle_outer_inner,
-                    scene.idle_outer_outer,
-                    scene.idle_outer_solidity,
+                    scene.idle_radius,
+                    scene.idle_marker.shader_index() as f32,
                 ],
             },
             target_format,
@@ -1210,12 +1200,8 @@ mod tests {
             outer_outer: 0.795,
             outer_backdrop: false,
             outer_solidity: 1.0,
-            idle_opacity: 0.0,
-            idle_ring_radius: 0.0,
-            idle_outer_style: Default::default(),
-            idle_outer_inner: 0.545,
-            idle_outer_outer: 0.795,
-            idle_outer_solidity: 1.0,
+            idle_marker: lattice_scene::IdleMarker::None,
+            idle_radius: 0.0,
             edges,
             grid,
             dot_ramp: std::array::from_fn(|k| {

@@ -43,13 +43,9 @@ struct Uniforms {
     node_idle: vec4<f32>,
     // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
     // core layer runs on. y: outer solidity (0 = soft glowy glyphs, 1 =
-    // crisp octave shapes). z: idle ring radius (0 = no idle ring). w: idle
-    // marker opacity (0 = no idle marker).
+    // crisp octave shapes). z: idle marker radius. w: idle marker style
+    // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
-    // The idle octave marker (home-sheet unlit nodes), independent of the
-    // active octave layer above. x: outer style index; y/z: band
-    // inner/outer; w: solidity.
-    misc5: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -557,37 +553,23 @@ fn field_halo(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
     return exp(-h * 9.0 / max(reach, 0.15)) * (0.30 + 0.70 * waft) * (0.35 + 0.65 * plume);
 }
 
-// The idle (unlit) node marker: how a home-sheet position reads when no
-// note sounds, drawn entirely from its OWN uniforms (misc4.z/.w, misc5) so
-// it is independent of the active core/outer appearance. Two grey pieces,
-// combined by max (same color): a position ring at misc4.z (its own radius,
-// no longer following the active core), and an optional octave marker —
-// the misc5 outer style drawn at EVERY slot, a faint full ring showing the
-// position's octave structure. Scaled by the misc4.w opacity. Returns the
-// idle grey premultiplied in .xyz with coverage in .w; off-sheet nodes
-// (home < 0.5) and zero opacity draw nothing.
-fn idle_marker(uv: vec2<f32>, d: f32, cents: f32, home: f32, aa: f32) -> vec4<f32> {
-    let opacity = u.misc4.w;
-    if home < 0.5 || opacity <= 0.0 {
+// The idle (unlit) node marker: a minimal grey mark at a home-sheet
+// position, drawn from its OWN uniforms (misc4.z/.w) so it is independent
+// of the active appearance. A filled dot or an outline circle at the idle
+// radius (style in misc4.w: 0 none, 1 dot, 2 circle), in the idle grey.
+// Returns the grey premultiplied in .xyz with coverage in .w; off-sheet
+// nodes (home < 0.5) and style None draw nothing. The caller keeps it
+// showing regardless of the note state.
+fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
+    let style = u32(u.misc4.w + 0.5);
+    if home < 0.5 || style == 0u {
         return vec4<f32>(0.0);
     }
-    var cov = 0.0;
-    let ir = u.misc4.z;
-    if ir > 0.0 {
-        cov = aa_inside(ir, d, aa) * (1.0 - aa_inside(ir - IDLE_RING_THICK, d, aa));
+    let r = u.misc4.z;
+    var cov = aa_inside(r, d, aa);                // dot: filled disc
+    if style == 2u {                              // circle: hollow it out
+        cov = cov * (1.0 - aa_inside(r - IDLE_RING_THICK, d, aa));
     }
-    let imode = u32(u.misc5.x + 0.5);
-    if imode != 0u {
-        let inner = u.misc5.y;
-        let outer = u.misc5.z;
-        let iaa = aa + (1.0 - u.misc5.w) * OUTER_GLOW_SOFT * (outer - inner);
-        for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-            cov = max(cov, outer_glyph(imode, i, cents, uv, inner, outer, iaa));
-        }
-    }
-    // Same billboard-margin fade as the active glyphs (soft edges ease out
-    // instead of clipping); then the overall opacity.
-    cov = cov * (1.0 - smoothstep(1.0, QUAD_MARGIN, d)) * opacity;
     return vec4<f32>(u.node_idle.rgb * cov, cov);
 }
 
@@ -775,14 +757,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
 
     // The idle marker (how an unlit home-sheet node reads), computed from
-    // its OWN uniforms — the active appearance above never touches its look.
-    // It hands off to the note as the node lights up: fade it out by
-    // activation, so unlit positions show the marker and lit ones show the
-    // note (and it returns as the note releases).
-    let idle = idle_marker(in.uv, d, in.cents, in.home, aa) * (1.0 - activation);
+    // its OWN uniforms — independent of the active appearance AND of the
+    // note state: it is drawn at full strength always. A sounding note
+    // simply composites over it below (occluding it where the note is
+    // opaque, showing it around/through the note otherwise).
+    let idle = idle_marker(d, in.home, aa);
 
     // Active over idle, premultiplied: a sounding note draws over its own
-    // marker and reveals it again as it fades.
+    // marker; the marker is unchanged whether or not a note plays.
     let final_alpha = active_alpha + idle.a * (1.0 - active_alpha);
     if final_alpha < 0.01 {
         discard;
