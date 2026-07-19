@@ -193,6 +193,9 @@ pub struct Scene {
     /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
     /// 1 crisp, toward 0 the glyph edges spread into soft glows.
     pub outer_solidity: f32,
+    /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
+    /// sector-to-sector and band-to-mark-ring alike. Already clamped.
+    pub outer_gap: f32,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and
     /// composited under any active note. See [`ViewConfig::idle_marker`].

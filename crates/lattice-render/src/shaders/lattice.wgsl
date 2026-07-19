@@ -49,7 +49,9 @@ struct Uniforms {
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: how a melody/bass ring links back to its sector (MarkLink's
     // shader_index: 0 none, 2 glow, 3 spur; 1 was the removed bulge).
-    // z, w unused.
+    // z: padding inside the octave layer, in quad UV units — the gap
+    // between neighbouring sectors AND between the band and the mark
+    // rings. w unused.
     misc5: vec4<f32>,
 };
 
@@ -221,13 +223,19 @@ const RAD_PER_OCTAVE: f32 = 0.7853982;
 // octave sounds: the SILENT slots draw as faint ghosts in the note's own
 // color, completing the circle silhouette around the bright sector.
 
-// Slices: neighboring sectors (slots are 0.785 rad apart) are separated
-// by a CONSTANT-thickness gap: the slice edges are radial lines offset
-// SLICE_GAP_HALF from the sector bisectors, not constant-angle edges
-// (those read as a V that widens outward). At band inner 0 the sectors
-// become full pie wedges; near the center every wedge falls inside the
-// gap band, leaving a small clear hub instead of a ten-way mush point.
-const SLICE_GAP_HALF: f32 = 0.06;
+// Neighboring sectors (slots are 0.785 rad apart) are separated by a
+// CONSTANT-thickness gap: the slice edges are radial lines offset half the
+// gap from the sector bisectors, not constant-angle edges (those read as a V
+// that widens outward). At band inner 0 the sectors become full pie wedges;
+// near the center every wedge falls inside the gap band, leaving a small
+// clear hub instead of a ten-way mush point.
+//
+// The gap's full width is u.misc5.z (the view's Gap bar), in quad UV units.
+// The SAME value separates the mark rings from the band, so one number is
+// the padding everywhere in the octave layer.
+fn slice_gap_half() -> f32 {
+    return max(u.misc5.z, 0.0) * 0.5;
+}
 // Ghost coverage of a silent slot when the backdrop is on, scaled
 // by the note's activation so ghosts fade out with the pitch class.
 const GHOST_LEVEL: f32 = 0.16;
@@ -269,7 +277,7 @@ fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     // directions b1/b2 bound this slot's wedge; the cross products against
     // them give BOTH the side-of-line tests (which wedge owns the pixel)
     // and the Euclidean distance to each edge line, thresholded at
-    // SLICE_GAP_HALF for a gap of constant thickness at every radius.
+    // half the gap width, for a gap of constant thickness at every radius.
     let band = aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
     let hb = RAD_PER_OCTAVE * 0.5;
     let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
@@ -283,8 +291,9 @@ fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     // the slice's sides. Soft ownership lets adjacent slices cross-fade
     // (the loop keeps the max), so the sector edges stay soft.
     let own = smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2);
-    let g = (1.0 - aa_inside(SLICE_GAP_HALF, abs(c1), aa))
-        * (1.0 - aa_inside(SLICE_GAP_HALF, abs(c2), aa));
+    let gap_half = slice_gap_half();
+    let g = (1.0 - aa_inside(gap_half, abs(c1), aa))
+        * (1.0 - aa_inside(gap_half, abs(c2), aa));
     return band * own * g;
 }
 
@@ -583,11 +592,12 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // so a link device ties the ring back to the sector responsible. See
 // MarkLink for the candidates; the modes here mirror its shader_index.
 
-// Ring thickness and its gap from the octave band, as shares of the band's
-// width, each floored at a couple of render pixels so neither goes
-// sub-pixel on a densely packed lattice.
+// Ring thickness as a share of the band's width, floored at a couple of
+// render pixels so it can't go sub-pixel on a densely packed lattice. The
+// ring's GAP from the band is not set here: it is the same padding that
+// separates one octave sector from the next (see slice_gap_half), so the
+// whole layer is spaced by one number.
 const MARK_RING_THICK: f32 = 0.16;
-const MARK_RING_GAP: f32 = 0.10;
 const MARK_RING_MIN_AA: f32 = 1.5;
 // Glow: what the ring dims to away from its sector.
 const MARK_DIM: f32 = 0.28;
@@ -853,7 +863,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
     let ring_w = max((band_out - band_in) * MARK_RING_THICK, outer_aa * MARK_RING_MIN_AA);
-    let ring_gap = max((band_out - band_in) * MARK_RING_GAP, outer_aa);
+    let ring_gap = slice_gap_half() * 2.0;
     let link = u32(u.misc5.y + 0.5);
     // Headroom: the band's outer radius can be dialed to 1.0, so the melody
     // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a

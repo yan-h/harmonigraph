@@ -92,6 +92,18 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                          shapes; only softens the glyph edges, shapes and \
                          angles stay put",
                     );
+                // One padding for the whole layer: between sectors, and
+                // between the band and the melody/bass rings.
+                ValueBar::new(&mut state.view.outer_gap, 0.0..=0.4, "Gap")
+                    .show(ui)
+                    .on_hover_text(
+                        "Padding inside the octave layer: between one octave \
+                         and the next, and between the band and the \
+                         melody/bass rings. 0 closes the octaves into a solid \
+                         annulus and seats the rings against it. Wide values \
+                         push the bass ring in toward the core -- raise Band \
+                         inner to make room",
+                    );
                 // Backdrop: draw the silent octaves faintly so a lone octave
                 // still reads as a whole note.
                 ValueBar::new(&mut state.view.outer_backdrop, 0.0..=1.0, "Backdrop")

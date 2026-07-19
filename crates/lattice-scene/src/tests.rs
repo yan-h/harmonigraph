@@ -624,6 +624,34 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
 }
 
 #[test]
+fn the_octave_gap_reaches_the_scene_and_is_clamped() {
+    // One padding for the whole octave layer: the shader spaces the
+    // sectors AND the melody/bass rings by this single number, so it has
+    // to survive derive_scene rather than being a shader constant.
+    let view = ViewConfig { outer_gap: 0.2, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(scene.outer_gap, 0.2);
+
+    // A gap wider than the band would erase every sector; the scene caps
+    // it rather than handing the shader something that draws nothing.
+    let wild = ViewConfig { outer_gap: 5.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &wild,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert!(scene.outer_gap <= 0.4, "got {}", scene.outer_gap);
+}
+
+#[test]
 fn core_and_outer_geometry_are_sanitized_into_the_scene() {
     // Bars dragged into a crossed/degenerate combination: the scene
     // must still hand the shader a visible band (outer ahead of inner).

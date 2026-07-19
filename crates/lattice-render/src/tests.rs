@@ -144,6 +144,7 @@ fn parity_scene() -> Scene {
         outer_outer: 0.795,
         outer_backdrop: 0.0,
         outer_solidity: 1.0,
+        outer_gap: 0.12,
         idle_marker: lattice_scene::IdleMarker::None,
         idle_radius: 0.0,
         grid,
@@ -652,6 +653,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 

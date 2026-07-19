@@ -103,6 +103,17 @@ pub struct ViewConfig {
     /// widens the glyph edges — shapes and angles are unchanged.
     #[serde(default = "default_outer_solidity")]
     pub outer_solidity: f32,
+    /// Padding inside the octave layer, in quad UV units: the constant
+    /// gap between one octave sector and the next, AND the gap separating
+    /// the melody/bass rings from the band. One number, because they read
+    /// as one rhythm — a ring sitting closer to the band than the sectors
+    /// sit to each other looks like a mistake.
+    ///
+    /// Was fixed at 0.12 (the sectors' gap; the rings used a narrower one
+    /// of their own). 0 closes the sectors into a solid annulus and seats
+    /// the rings right against it.
+    #[serde(default = "default_outer_gap")]
+    pub outer_gap: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -230,6 +241,12 @@ fn default_core_solidity() -> f32 {
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
     1.0
+}
+
+/// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
+/// the boundary), now also the rings' padding from the band.
+fn default_outer_gap() -> f32 {
+    0.12
 }
 
 /// Idle marker at the classic disc radius, so a pre-field blob (whose
@@ -368,6 +385,7 @@ impl Default for ViewConfig {
             outer_backdrop: 0.6,
             legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
+            outer_gap: default_outer_gap(),
             // Idle nodes are small dots with the grid lines running close
             // in to them, matching the compact core.
             idle_marker: IdleMarker::Dot,

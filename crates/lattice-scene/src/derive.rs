@@ -210,6 +210,9 @@ pub fn derive_scene(
     let outer_inner = view.outer_inner.clamp(0.0, 0.9);
     let outer_outer = view.outer_outer.clamp(outer_inner + 0.05, 1.0);
     let outer_solidity = view.outer_solidity.clamp(0.0, 1.0);
+    // A gap wider than the band would erase the sectors entirely; cap it
+    // well short of that.
+    let outer_gap = view.outer_gap.clamp(0.0, 0.4);
     let outer_backdrop = view.outer_backdrop.clamp(0.0, 1.0);
 
     Scene {
@@ -225,6 +228,7 @@ pub fn derive_scene(
         outer_outer,
         outer_backdrop,
         outer_solidity,
+        outer_gap,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,
