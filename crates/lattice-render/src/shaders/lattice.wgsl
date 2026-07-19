@@ -33,7 +33,7 @@ struct Uniforms {
     // outer layer's inner/outer band radii (same units; the scene
     // guarantees z > y). w: outer backdrop opacity 0..1 (ghost the silent
     // octaves to complete the ring; independent of the core). 0 draws no
-    // backdrop; 1 is the full built-in hoop/ghost strength.
+    // backdrop; 1 is the full built-in ghost strength.
     misc3: vec4<f32>,
     // Pitch->color lookup for the dots octave style, matching the node disc
     // gradient (length mirrors lattice_scene::PITCH_LUT_N).
@@ -207,11 +207,8 @@ const RAD_PER_OCTAVE: f32 = 0.7853982;
 //
 // The backdrop flag (u.misc3.w, its own outer-layer setting) adds a
 // cohesion device so a note reads as ONE whole shape even when a single
-// octave sounds: Slices draws its SILENT slots as faint ghosts in the
-// note's own color, completing the circle silhouette around the bright
-// sector; Dots strings its glyphs on a faint always-complete hoop (drawn
-// in fs_main); a Rings glyph is already a closed circle, so it is
-// unaffected.
+// octave sounds: the SILENT slots draw as faint ghosts in the note's own
+// color, completing the circle silhouette around the bright sector.
 
 // Slices: neighboring sectors (slots are 0.785 rad apart) are separated
 // by a CONSTANT-thickness gap: the slice edges are radial lines offset
@@ -724,7 +721,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Octave indicators, composited over the disc/glow. Each slot fades on
     // its own envelope. Whichever element covers a pixel most strongly owns
     // its color there: sounding glyphs are tinted by their own pitch;
-    // ghosts, hoop, and the rest use the whitened node color.
+    // ghosts and the rest use the whitened node color.
     // The outer layer is on or off; there is one glyph shape (see
     // OuterStyle), whose index the scene still passes through misc.z.
     let outer_on = u.misc.z > 0.5;
@@ -737,7 +734,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph_mark = 0.0;
     var glyph_mark_rgb = vec3<f32>(0.0, 0.0, 0.0);
 
-    // Backdrop opacity 0..1, scaling the built-in hoop/ghost levels: 0
+    // Backdrop opacity 0..1, scaling the built-in ghost level: 0
     // draws no backdrop at all, 1 is the full strength this always had.
     let backdrop = u.misc3.w;
     let has_backdrop = backdrop > 0.0;

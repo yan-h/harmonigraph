@@ -67,16 +67,15 @@ pub struct ViewConfig {
     #[serde(default = "default_outer_outer", alias = "slice_outer")]
     pub outer_outer: f32,
     /// Outer-layer cohesion device (independent of the core): draw the
-    /// silent octaves faintly behind the sounding glyphs so a lone octave
-    /// still reads as a whole note — Slices ghosts its empty slots in the
-    /// note color to complete the annulus, Dots strings its glyphs on a
-    /// faint hoop. No effect on Rings (already closed circles) or Off. Was
-    /// implicitly tied to "core off", then its own on/off toggle.
+    /// silent octaves faintly behind the sounding sectors, in the note
+    /// color, so the annulus completes and a lone octave still reads as a
+    /// whole note. Inert while the layer is Off. Was implicitly tied to
+    /// "core off", then its own on/off toggle.
     ///
     /// Now an opacity, 0..1: 0 is off (exactly the old `false`) and 1 is
     /// the old `true`'s strength, with everything between available so the
     /// backdrop can sit as far under the sounding glyphs as you like. It
-    /// scales the shader's built-in hoop/ghost levels rather than
+    /// scales the shader's built-in ghost level rather than
     /// replacing them, so 1 reproduces the previous look byte for byte.
     /// Serialized under a new key, leaving the old one to the load-only
     /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop) bool.
@@ -238,10 +237,9 @@ fn default_idle_radius() -> f32 {
     0.46
 }
 
-/// The classic Slices annulus (SLICE_IN/OUT before the band was
-/// parameterized). Dots at this band renders larger than v1's (which
-/// occupied 0.545..0.795 — drag the bars there to recover that look
-/// exactly).
+/// The classic annulus (SLICE_IN/OUT, from before the band was
+/// parameterized), which is what a blob predating these keys was drawn
+/// with. A fresh view uses the wider band in `impl Default` instead.
 fn default_outer_inner() -> f32 {
     0.56
 }

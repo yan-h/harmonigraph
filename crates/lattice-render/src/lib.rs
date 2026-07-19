@@ -128,7 +128,7 @@ struct Uniforms {
     /// outer octave layer's inner/outer band radii (same units, pre-
     /// sanitized by the scene so z > y); w: outer backdrop opacity 0..1
     /// (ghost the silent octaves to complete the ring, independent of the
-    /// core; 0 = no backdrop, 1 = the full built-in hoop/ghost levels).
+    /// core; 0 = no backdrop, 1 = the full built-in ghost level).
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see lattice_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.

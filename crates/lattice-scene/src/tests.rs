@@ -751,8 +751,7 @@ fn legacy_node_body_folds_into_core_and_outer() {
     // the outer layer with the backdrop on. Each body once had its own
     // matching glyph shape, but only slices survives, so all three land
     // there; what still has to hold is that the blob PARSES and the core
-    // drops to the glow end. (Beads was dots-on-a-hoop
-    // (whose backdrop hoop IS the beads look). Disc leaves defaults alone.
+    // drops to the glow end. Disc leaves defaults alone.
     for (body, outer) in [
         (LegacyNodeBody::Slices, OuterStyle::Slices),
         (LegacyNodeBody::Rings, OuterStyle::Slices),
