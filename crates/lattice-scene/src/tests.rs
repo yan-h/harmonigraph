@@ -627,7 +627,7 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
 fn the_mark_contrast_and_width_reach_the_scene() {
     // Both are whole-scene choices, not per-node ones: every node's
     // stripes are drawn the same way.
-    for contrast in [MarkContrast::Keyline, MarkContrast::Gradient, MarkContrast::Off] {
+    for contrast in [MarkContrast::Gap, MarkContrast::Gradient, MarkContrast::Off] {
         let view = ViewConfig { mark_contrast: contrast, ..ViewConfig::default() };
         let scene = scene_of(
             &NoteTracker::new(),
@@ -640,7 +640,7 @@ fn the_mark_contrast_and_width_reach_the_scene() {
     }
     // Each has its own shader branch, so no two may share an index.
     let mut seen = std::collections::HashSet::new();
-    for contrast in [MarkContrast::Keyline, MarkContrast::Gradient, MarkContrast::Off] {
+    for contrast in [MarkContrast::Gap, MarkContrast::Gradient, MarkContrast::Off] {
         assert!(seen.insert(contrast.shader_index()), "{contrast:?} reuses an index");
     }
 

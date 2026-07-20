@@ -609,10 +609,7 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // the note's own survives inside it and the mark still reads as belonging
 // to that note.
 const MARK_TINT_AMOUNT: f32 = 0.9;
-// Most of the stripe the keyline may take when the stripe gets narrow --
-// near the hub a constant-thickness line would otherwise swallow the white
-// it is there to set off.
-const MARK_KEYLINE_MAX: f32 = 0.5;
+
 
 // The melody/bass stripe's color at `t` — the fraction of the way in from
 // the sector's edge, 0 at the edge and 1 where the note's own color
@@ -623,26 +620,34 @@ const MARK_KEYLINE_MAX: f32 = 0.5;
 // which is exactly where the melody mark lands. A dark boundary at the
 // inner side fixes that without giving up the white — the eye reads the
 // pair, and neither end of the ramp can swallow both.
-fn stripe_color(t: f32, key_t: f32, mode: u32, soft_t: f32) -> vec3<f32> {
+fn stripe_color(t: f32, mode: u32) -> vec3<f32> {
     if mode == 1u {
         // Gradient: white at the edge ramping to dark where the note
         // resumes, ending on the same boundary with no visible seam.
         return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.0, 0.0, 0.0), clamp(t, 0.0, 1.0));
     }
-    if mode == 2u {
-        return vec3<f32>(1.0, 1.0, 1.0);
+    // Gap (0) and Off (2) are both plain white; Gap separates it from the
+    // note by CUTTING between them rather than by painting anything.
+    return vec3<f32>(1.0, 1.0, 1.0);
+}
+
+// The keyline: a gap knocked through the sector where the white stripe
+// meets the note, built exactly as the gaps between sectors are -- a
+// constant perpendicular thickness either side of the boundary, so it holds
+// its weight at every radius and at every stripe width.
+//
+// `off` is the pixel's angular distance past that boundary, so `d * off` is
+// how far past it lies. Cutting rather than painting also sidesteps the
+// trap the painted version fell into: the boundary is exactly where the
+// stripe's own coverage is fading out, so a line drawn AT the stripe's
+// opacity was faded out precisely where it needed to be strongest, and its
+// apparent width came from the antialiasing rather than from its setting.
+fn keyline_cut(off: f32, d: f32, aa: f32) -> f32 {
+    let half = u.misc6.y * 0.5;
+    if half <= 0.0 {
+        return 0.0;
     }
-    // Keyline: white, turning dark for the last `key_t` of the way. The
-    // caller sizes that from a CONSTANT thickness in uv, so the line keeps
-    // its weight at every radius and at every stripe width -- a keyline is
-    // a drawn line, and one that thickened with the wedge read as an
-    // accident rather than a mark.
-    let edge = 1.0 - clamp(key_t, 0.0, 1.0);
-    return mix(
-        vec3<f32>(1.0, 1.0, 1.0),
-        vec3<f32>(0.0, 0.0, 0.0),
-        smoothstep(edge - soft_t, edge + soft_t, t),
-    );
+    return aa_inside(half, abs(d * off), aa);
 }
 
 @fragment
@@ -798,7 +803,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let edge_phi = sector_half_span(d);
             let stripe_w = 2.0 * edge_phi * stripe_k;
             let soft = clamp(outer_aa / max(d, 1e-4), 1e-4, RAD_PER_OCTAVE * 0.5);
-            let key_t = min(u.misc6.y / max(d * stripe_w, 1e-5), MARK_KEYLINE_MAX);
             for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
                 let mel = (in.marks.x & (1u << i)) != 0u;
                 let bas = (in.marks.y & (1u << i)) != 0u;
@@ -816,14 +820,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 let cov = smoothstep(-soft, soft, out_t)
                     * (1.0 - smoothstep(stripe_w - soft, stripe_w + soft, out_t))
                     * ring;
-                if cov > beside {
-                    beside = cov;
-                    beside_rgb = stripe_color(
-                        out_t / max(stripe_w, 1e-5),
-                        key_t,
-                        stripe_contrast,
-                        soft / max(stripe_w, 1e-5),
-                    );
+                var here = cov;
+                if stripe_contrast == 0u {
+                    here = here * (1.0 - keyline_cut(out_t - stripe_w, d, outer_aa));
+                }
+                if here > beside {
+                    beside = here;
+                    beside_rgb = stripe_color(out_t / max(stripe_w, 1e-5), stripe_contrast);
                 }
             }
         }
@@ -906,6 +909,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     let soft = clamp(outer_aa / max(d, 1e-4), 1e-4, hb);
                     var stripe = 0.0;
                     var into = stripe_w;
+                    // Each marked side cuts its OWN keyline gap: a lone
+                    // held note stripes both sides of its sector, and
+                    // cutting only the nearer of the two left one stripe
+                    // running straight into the note.
+                    var cut = 0.0;
                     // Pitch runs clockwise, so the bass takes the
                     // counter-clockwise edge and the melody the clockwise
                     // one -- each the side facing its own direction.
@@ -913,27 +921,26 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                         let from_edge = edge_phi - phi;
                         let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
                         if w > stripe { stripe = w; into = from_edge; }
+                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, outer_aa));
                     }
                     if is_mel {
                         let from_edge = phi + edge_phi;
                         let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
                         if w > stripe { stripe = w; into = from_edge; }
+                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, outer_aa));
                     }
                     let across = into / max(stripe_w, 1e-5);
-                    // The keyline is a constant thickness in uv; convert it
-                    // to a share of THIS stripe, which is an angle, at this
-                    // radius. Capped so a narrow stripe keeps some white.
-                    let key_t = min(
-                        u.misc6.y / max(d * stripe_w, 1e-5),
-                        MARK_KEYLINE_MAX,
+                    slot_rgb = mix(
+                        slot_rgb,
+                        stripe_color(across, stripe_contrast),
+                        stripe * MARK_TINT_AMOUNT,
                     );
-                    let tint_rgb = stripe_color(
-                        across,
-                        key_t,
-                        stripe_contrast,
-                        soft / max(stripe_w, 1e-5),
-                    );
-                    slot_rgb = mix(slot_rgb, tint_rgb, stripe * MARK_TINT_AMOUNT);
+                    if stripe_contrast == 0u {
+                        // The gap sits on each stripe's inner boundary, the
+                        // one edge of it the note is actually against; the
+                        // outer edge already has the gap between sectors.
+                        cov = cov * (1.0 - cut);
+                    }
                 }
             }
             if cov > glyph {

@@ -196,15 +196,17 @@ impl HighlightExtremes {
 /// The stripe is white. White is the right color for it — it reads as a
 /// mark rather than as more note — but on its own it fails at the top of
 /// the pitch ramp, which runs to near-white, and that is exactly where the
-/// MELODY mark lands. So the contrast comes from a dark boundary rather
-/// than from the fill: something between the white and the note that neither
-/// end of the ramp can swallow.
+/// MELODY mark lands. So the separation comes from the boundary rather than
+/// from the fill: something between the white and the note that neither end
+/// of the ramp can swallow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MarkContrast {
-    /// A dark band along the stripe's inner edge, hard against the white.
-    /// Reads as a drawn keyline.
+    /// A gap knocked through the sector where the white meets the note —
+    /// the same device as the gaps between sectors, and thinner. Nothing is
+    /// painted, so nothing can be the wrong color against the note.
     #[default]
-    Keyline,
+    #[serde(alias = "Keyline")]
+    Gap,
     /// The white ramps to dark across the stripe instead, so it ends on the
     /// same boundary without a visible seam.
     Gradient,
@@ -238,7 +240,7 @@ impl MarkContrast {
     /// Index used by the shader (uniform `misc6.x`).
     pub fn shader_index(self) -> u32 {
         match self {
-            MarkContrast::Keyline => 0,
+            MarkContrast::Gap => 0,
             MarkContrast::Gradient => 1,
             MarkContrast::Off => 2,
         }

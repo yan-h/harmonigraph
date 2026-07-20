@@ -149,14 +149,12 @@ pub struct ViewConfig {
     /// [`MarkPlace`]).
     #[serde(default)]
     pub mark_place: MarkPlace,
-    /// Thickness of the dark keyline that ends the stripe, in quad UV
-    /// units.
+    /// Thickness of the keyline gap that ends the stripe, in quad UV units
+    /// — the full width, as [`outer_gap`](Self::outer_gap) is.
     ///
-    /// Constant, like the gap between two sectors, rather than a share of
-    /// the stripe: a keyline is a drawn line, and a line that changed
-    /// thickness with the radius or with the Width bar read as an accident.
-    /// It is held back from swallowing the white where the stripe grows
-    /// narrow near the hub.
+    /// Constant, and built the same way the gaps between sectors are, so it
+    /// holds its weight at every radius and at every stripe width. 0 leaves
+    /// the white running straight into the note.
     #[serde(default = "default_mark_keyline")]
     pub mark_keyline: f32,
     /// How wide the melody/bass stripe is, as a fraction of the marked
@@ -268,9 +266,8 @@ fn default_outer_solidity() -> f32 {
     1.0
 }
 
-/// About a third of the sector gap, which is the other constant-thickness
-/// line on the node — thin enough to read as a keyline rather than as a
-/// band of its own.
+/// A third of the sector gap: the same device, deliberately thinner, so it
+/// reads as a keyline rather than as another division of the ring.
 fn default_mark_keyline() -> f32 {
     0.04
 }

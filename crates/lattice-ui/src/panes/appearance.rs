@@ -182,10 +182,12 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     &mut state.view.mark_contrast,
                     &[
                         (
-                            MarkContrast::Keyline,
-                            "Keyline",
-                            "A dark band along the stripe's inner edge, hard \
-                             against the white",
+                            MarkContrast::Gap,
+                            "Gap",
+                            "A gap where the white meets the note -- the same \
+                             device as the gaps between octaves, thinner. \
+                             Nothing is painted, so nothing can be the wrong \
+                             color against the note",
                         ),
                         (
                             MarkContrast::Gradient,
@@ -204,10 +206,10 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     ValueBar::new(&mut state.view.mark_keyline, 0.0..=0.2, "Keyline")
                         .show(ui)
                         .on_hover_text(
-                            "Thickness of the dark line that ends the stripe, in \
-                             the same units as Gap and the band radii. Constant, \
-                             so it keeps its weight at every radius; held back \
-                             from swallowing the white where the stripe narrows",
+                            "How wide that gap is, in the same units as the \
+                             octaves' Gap and the band radii. Constant, so it \
+                             holds its weight at every radius and at every \
+                             stripe width",
                         );
                 });
             });
