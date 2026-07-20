@@ -267,6 +267,17 @@ fn sector_angle(i: u32, cents: f32) -> f32 {
     return 1.5707963 - RAD_PER_OCTAVE * ((f32(i) - MIDDLE_C_SLOT) + cents / 1200.0);
 }
 
+// Half the angle a sector actually spans at radius `d`. The gap between
+// sectors is a constant THICKNESS, so it subtends more and more of the
+// wedge the closer in you look, and the drawn sector narrows to nothing at
+// the hub. Everything angular that has to line up with a sector -- the
+// melody/bass stripe above all -- measures against this rather than the
+// nominal half-width.
+fn sector_half_span(d: f32) -> f32 {
+    let hb = RAD_PER_OCTAVE * 0.5;
+    return max(hb - asin(clamp(slice_gap_half() / max(d, 1e-4), 0.0, 1.0)), 0.0);
+}
+
 // Coverage (0..1) of the octave sector for slot `i` on a node whose pitch
 // class is `cents`, drawn in the uniform band. Reads nothing from the core
 // layer — the outer glyphs are independent of it. `aa` is the caller's
@@ -598,9 +609,10 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // the note's own survives inside it and the mark still reads as belonging
 // to that note.
 const MARK_TINT_AMOUNT: f32 = 0.9;
-// The share of the stripe given over to the dark band that ends it, for
-// the Keyline and Gradient contrasts.
-const MARK_KEYLINE: f32 = 0.35;
+// Most of the stripe the keyline may take when the stripe gets narrow --
+// near the hub a constant-thickness line would otherwise swallow the white
+// it is there to set off.
+const MARK_KEYLINE_MAX: f32 = 0.5;
 
 // The melody/bass stripe's color at `t` — the fraction of the way in from
 // the sector's edge, 0 at the edge and 1 where the note's own color
@@ -611,7 +623,7 @@ const MARK_KEYLINE: f32 = 0.35;
 // which is exactly where the melody mark lands. A dark boundary at the
 // inner side fixes that without giving up the white — the eye reads the
 // pair, and neither end of the ramp can swallow both.
-fn stripe_color(t: f32, mode: u32, soft_t: f32) -> vec3<f32> {
+fn stripe_color(t: f32, key_t: f32, mode: u32, soft_t: f32) -> vec3<f32> {
     if mode == 1u {
         // Gradient: white at the edge ramping to dark where the note
         // resumes, ending on the same boundary with no visible seam.
@@ -620,8 +632,12 @@ fn stripe_color(t: f32, mode: u32, soft_t: f32) -> vec3<f32> {
     if mode == 2u {
         return vec3<f32>(1.0, 1.0, 1.0);
     }
-    // Keyline: white, turning dark over the last MARK_KEYLINE of the way.
-    let edge = 1.0 - MARK_KEYLINE;
+    // Keyline: white, turning dark for the last `key_t` of the way. The
+    // caller sizes that from a CONSTANT thickness in uv, so the line keeps
+    // its weight at every radius and at every stripe width -- a keyline is
+    // a drawn line, and one that thickened with the wedge read as an
+    // accident rather than a mark.
+    let edge = 1.0 - clamp(key_t, 0.0, 1.0);
     return mix(
         vec3<f32>(1.0, 1.0, 1.0),
         vec3<f32>(0.0, 0.0, 0.0),
@@ -768,6 +784,50 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // width, and what separates it from its note (see MarkContrast).
     let stripe_k = clamp(u.misc5.w, 0.0, 0.45);
     let stripe_contrast = u32(u.misc6.x + 0.5);
+    let stripe_place = u32(u.misc6.z + 0.5);
+    // Outside placement: the stripe laid ALONGSIDE the marked sector, just
+    // past its edge, instead of carved out of it -- the note's own wedge
+    // stays whole. Its own layer, composited under the sectors below, so a
+    // lit neighbour keeps every pixel it wants and no octave is hidden by a
+    // mark.
+    var beside = 0.0;
+    var beside_rgb = vec3<f32>(0.0, 0.0, 0.0);
+    if outer_on && stripe_place == 1u && stripe_k > 0.0 {
+        let ring = aa_inside(band_out, d, outer_aa) * (1.0 - aa_inside(band_in, d, outer_aa));
+        if ring > 0.0 {
+            let edge_phi = sector_half_span(d);
+            let stripe_w = 2.0 * edge_phi * stripe_k;
+            let soft = clamp(outer_aa / max(d, 1e-4), 1e-4, RAD_PER_OCTAVE * 0.5);
+            let key_t = min(u.misc6.y / max(d * stripe_w, 1e-5), MARK_KEYLINE_MAX);
+            for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+                let mel = (in.marks.x & (1u << i)) != 0u;
+                let bas = (in.marks.y & (1u << i)) != 0u;
+                if octave_level(in.octaves, i) <= 0.0 || !(mel || bas) {
+                    continue;
+                }
+                let rel = atan2(in.uv.y, in.uv.x) - sector_angle(i, in.cents);
+                let phi = atan2(sin(rel), cos(rel));
+                // Same sides as inside: the bass beyond the sector's
+                // counter-clockwise edge, the melody beyond its clockwise
+                // one -- each still facing its own direction of pitch.
+                var out_t = -1.0;
+                if bas { out_t = phi - edge_phi; }
+                if mel && (-(phi + edge_phi)) > out_t { out_t = -(phi + edge_phi); }
+                let cov = smoothstep(-soft, soft, out_t)
+                    * (1.0 - smoothstep(stripe_w - soft, stripe_w + soft, out_t))
+                    * ring;
+                if cov > beside {
+                    beside = cov;
+                    beside_rgb = stripe_color(
+                        out_t / max(stripe_w, 1e-5),
+                        key_t,
+                        stripe_contrast,
+                        soft / max(stripe_w, 1e-5),
+                    );
+                }
+            }
+        }
+    }
     if outer_on {
         // Sounding slots draw bright, tinted by their own pitch, each
         // fading on its own envelope. The backdrop opacity (its own
@@ -807,7 +867,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
-                if (is_mel || is_bass) && stripe_k > 0.0 {
+                if (is_mel || is_bass) && stripe_k > 0.0 && stripe_place == 0u {
                     // The mark: a stripe down one angular SIDE of this
                     // sector. Pitch runs clockwise around the node, so each
                     // mark takes the edge facing its own direction -- the
@@ -837,8 +897,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     // Where the sector's drawn edge sits, in angle: the
                     // constant-thickness gap subtends more of it the closer
                     // in you look.
-                    let eaten = asin(clamp(slice_gap_half() / max(d, 1e-4), 0.0, 1.0));
-                    let edge_phi = max(hb - eaten, 0.0);
+                    let edge_phi = sector_half_span(d);
                     let stripe_w = 2.0 * edge_phi * stripe_k;
                     // A pixel of arc is aa/d of angle. Bounded, unlike the
                     // fraction-of-width form this replaced, whose softness
@@ -861,8 +920,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                         if w > stripe { stripe = w; into = from_edge; }
                     }
                     let across = into / max(stripe_w, 1e-5);
-                    let tint_rgb =
-                        stripe_color(across, stripe_contrast, soft / max(stripe_w, 1e-5));
+                    // The keyline is a constant thickness in uv; convert it
+                    // to a share of THIS stripe, which is an angle, at this
+                    // radius. Capped so a narrow stripe keeps some white.
+                    let key_t = min(
+                        u.misc6.y / max(d * stripe_w, 1e-5),
+                        MARK_KEYLINE_MAX,
+                    );
+                    let tint_rgb = stripe_color(
+                        across,
+                        key_t,
+                        stripe_contrast,
+                        soft / max(stripe_w, 1e-5),
+                    );
                     slot_rgb = mix(slot_rgb, tint_rgb, stripe * MARK_TINT_AMOUNT);
                 }
             }
@@ -872,6 +942,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
     }
+    // The sectors over the alongside stripe, so a lit octave always wins
+    // its own pixels and the mark fills only what is otherwise empty.
+    if beside > 0.0 {
+        let combined = glyph + beside * (1.0 - glyph);
+        glyph_rgb = (glyph_rgb * glyph + beside_rgb * beside * (1.0 - glyph)) / max(combined, 1e-4);
+        glyph = combined;
+    }
+
     // Fade a soft (low-solidity) glyph out across the billboard's margin
     // instead of letting the quad boundary clip it flat. The fade starts at
     // uv 1.0 — the outer band's own limit — so a crisp glyph (which never

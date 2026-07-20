@@ -153,8 +153,9 @@ struct Uniforms {
     /// new one — safe per the note on `misc4`.
     misc5: [f32; 4],
     /// x: what separates the melody/bass stripe from its note
-    /// (`MarkContrast::shader_index`).
-    /// y, z, w unused.
+    /// (`MarkContrast::shader_index`); y: that keyline's thickness in quad
+    /// UV units; z: which side of the sector edge the stripe sits on
+    /// (`MarkPlace::shader_index`); w unused.
     misc6: [f32; 4],
 }
 
@@ -361,7 +362,12 @@ impl LatticeCallback {
                     scene.idle_marker.shader_index() as f32,
                 ],
                 misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_width],
-                misc6: [scene.mark_contrast.shader_index() as f32, 0.0, 0.0, 0.0],
+                misc6: [
+                    scene.mark_contrast.shader_index() as f32,
+                    scene.mark_keyline,
+                    scene.mark_place.shader_index() as f32,
+                    0.0,
+                ],
             },
             target_format,
             pane_id,

@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -194,6 +194,12 @@ pub struct Scene {
     /// [`MarkContrast`]). Which NOTES are marked is baked into each node's
     /// `melody_slots`/`bass_slots`.
     pub mark_contrast: MarkContrast,
+    /// Which side of the sector's edge the stripe sits on (see
+    /// [`MarkPlace`]).
+    pub mark_place: MarkPlace,
+    /// Thickness of the dark keyline that ends the stripe, in quad UV
+    /// units — constant, like the gaps between sectors. Already clamped.
+    pub mark_keyline: f32,
     /// How wide the stripe is, as a fraction of the sector's angular width
     /// (see [`ViewConfig::mark_width`]). Already clamped; 0 = no mark.
     pub mark_width: f32,

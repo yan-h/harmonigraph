@@ -644,6 +644,34 @@ fn the_mark_contrast_and_width_reach_the_scene() {
         assert!(seen.insert(contrast.shader_index()), "{contrast:?} reuses an index");
     }
 
+    for place in [MarkPlace::Inside, MarkPlace::Outside] {
+        let view = ViewConfig { mark_place: place, ..ViewConfig::default() };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        assert_eq!(scene.mark_place, place);
+    }
+    assert_ne!(
+        MarkPlace::Inside.shader_index(),
+        MarkPlace::Outside.shader_index(),
+        "each placement has its own shader branch"
+    );
+
+    // The keyline is a thickness in uv, and is clamped like the rest.
+    let thick = ViewConfig { mark_keyline: 9.0, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &thick,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert!(scene.mark_keyline <= 0.2, "got {}", scene.mark_keyline);
+
     // Half would let the two sides of a lone note's sector meet, leaving
     // none of the note's own color between them.
     let wide = ViewConfig { mark_width: 5.0, ..ViewConfig::default() };

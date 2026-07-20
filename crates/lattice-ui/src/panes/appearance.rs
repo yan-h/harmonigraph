@@ -5,7 +5,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, MarkContrast, NodeStyle, OuterStyle};
+use lattice_scene::{HighlightExtremes, IdleMarker, MarkContrast, MarkPlace, NodeStyle, OuterStyle};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -152,6 +152,26 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                          so a note that is both melody and bass keeps some of \
                          its own color between the two sides",
                     );
+                choice_row(
+                    ui,
+                    "Place",
+                    &mut state.view.mark_place,
+                    &[
+                        (
+                            MarkPlace::Inside,
+                            "Inside",
+                            "Carved out of the marked note's own sector, along \
+                             its edge",
+                        ),
+                        (
+                            MarkPlace::Outside,
+                            "Outside",
+                            "Laid alongside the sector instead, just past its \
+                             edge, leaving the note's wedge whole. Drawn under \
+                             the octaves, so a lit neighbour still wins",
+                        ),
+                    ],
+                );
                 // White is the stripe's color; what is open is how it ENDS.
                 // White alone dies against the pale top of the pitch ramp,
                 // which is exactly where the melody mark lands, so the
@@ -180,6 +200,16 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         ),
                     ],
                 );
+                ui.add_enabled_ui(state.view.mark_contrast != MarkContrast::Off, |ui| {
+                    ValueBar::new(&mut state.view.mark_keyline, 0.0..=0.2, "Keyline")
+                        .show(ui)
+                        .on_hover_text(
+                            "Thickness of the dark line that ends the stripe, in \
+                             the same units as Gap and the band radii. Constant, \
+                             so it keeps its weight at every radius; held back \
+                             from swallowing the white where the stripe narrows",
+                        );
+                });
             });
 
             // Home grid: the always-drawn structural layer -- the faint

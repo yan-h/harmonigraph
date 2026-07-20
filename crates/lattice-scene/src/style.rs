@@ -212,6 +212,28 @@ pub enum MarkContrast {
     Off,
 }
 
+/// Which side of the marked sector's edge the white sits on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MarkPlace {
+    /// Carved out of the sector itself, along its edge.
+    #[default]
+    Inside,
+    /// Laid alongside the sector instead, just past its edge, leaving the
+    /// note's own wedge whole. Drawn UNDER the octave sectors, so a lit
+    /// neighbour still wins the pixels it wants.
+    Outside,
+}
+
+impl MarkPlace {
+    /// Index used by the shader (uniform `misc6.z`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            MarkPlace::Inside => 0,
+            MarkPlace::Outside => 1,
+        }
+    }
+}
+
 impl MarkContrast {
     /// Index used by the shader (uniform `misc6.x`).
     pub fn shader_index(self) -> u32 {

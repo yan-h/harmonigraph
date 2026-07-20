@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -145,6 +145,20 @@ pub struct ViewConfig {
     /// [`MarkContrast`]).
     #[serde(default)]
     pub mark_contrast: MarkContrast,
+    /// Which side of the marked sector's edge the stripe sits on (see
+    /// [`MarkPlace`]).
+    #[serde(default)]
+    pub mark_place: MarkPlace,
+    /// Thickness of the dark keyline that ends the stripe, in quad UV
+    /// units.
+    ///
+    /// Constant, like the gap between two sectors, rather than a share of
+    /// the stripe: a keyline is a drawn line, and a line that changed
+    /// thickness with the radius or with the Width bar read as an accident.
+    /// It is held back from swallowing the white where the stripe grows
+    /// narrow near the hub.
+    #[serde(default = "default_mark_keyline")]
+    pub mark_keyline: f32,
     /// How wide the melody/bass stripe is, as a fraction of the marked
     /// sector's angular width.
     ///
@@ -252,6 +266,13 @@ fn default_core_solidity() -> f32 {
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
     1.0
+}
+
+/// About a third of the sector gap, which is the other constant-thickness
+/// line on the node — thin enough to read as a keyline rather than as a
+/// band of its own.
+fn default_mark_keyline() -> f32 {
+    0.04
 }
 
 /// A third of the sector to each side, which leaves a third of the note's
@@ -410,6 +431,8 @@ impl Default for ViewConfig {
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
             mark_contrast: MarkContrast::default(),
+            mark_place: MarkPlace::default(),
+            mark_keyline: default_mark_keyline(),
             mark_width: default_mark_width(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
