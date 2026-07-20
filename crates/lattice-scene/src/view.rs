@@ -6,7 +6,7 @@ use crate::skin;
 use crate::style::{
     CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
 };
-use crate::trail::TrailMode;
+use crate::trail::TrailMark;
 use lattice_core::{coords, LatticePos};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
@@ -205,62 +205,32 @@ pub struct ViewConfig {
     /// link from an in-sheet line, and isn't a style choice.
     #[serde(default)]
     pub grid_dashed: bool,
-    // ---- Trail (what has already been played) ----------------------------
-    // The one part of the view that is about the past rather than the
-    // present; see the `trail` module for how the two devices below divide
-    // the work between them.
-    /// How a note is remembered once it has finished sounding (see
-    /// [`TrailMode`]). Off by default: the lattice showing only what is
-    /// audible is the behavior every existing view was saved with, and
-    /// accumulating marks is a deliberate choice, not a surprise.
+    // ---- Trail (where the music has already been) ------------------------
+    // The one part of the view about the past rather than the present. It
+    // rides the IDLE layer only -- see the `trail` module for why that is
+    // the whole design and not an implementation detail.
+    /// How a node the music has visited is marked (see [`TrailMark`]). Off
+    /// by default: showing only what is audible is what every saved view
+    /// was drawn with, and leaving marks behind is a deliberate choice.
     #[serde(default)]
-    pub trail_mode: TrailMode,
-    /// Brightest a trail ever draws, as an activation level — the ceiling
-    /// each mode's own weighting scales, and the path's opacity too, so one
-    /// knob answers "how loud is the past".
+    pub trail_mark: TrailMark,
+    /// How far the mark departs from a plain idle node, 0..1 — how much
+    /// lighter the Lift grey, how visible the Ring, how much color the
+    /// Tint. 1 is still quiet by construction; every mark is bounded well
+    /// short of reading as a sounding note.
     #[serde(default = "default_trail_strength")]
     pub trail_strength: f32,
-    /// Seconds a trail takes to forget: how long a note stays visible in
-    /// Fade, and how far back the path reaches. Inert for Ghost and Heat,
-    /// which weigh totals rather than age.
-    #[serde(default = "default_trail_time")]
-    pub trail_time: f32,
-    /// How far a trail's remembered color is pulled toward the idle grid
-    /// color: 0 keeps the note's own hue, 1 makes every memory a grey ghost
-    /// of the structure. The point of the middle is that a trail can carry
-    /// its pitch color while still reading as furniture rather than sound.
-    #[serde(default = "default_trail_tint")]
-    pub trail_tint: f32,
-    /// Trail the octave indicators too, not the core alone — so a memory
-    /// says which octave it was played in, exactly as a live note does.
-    /// This is also what keeps octaves of one pitch class distinguishable,
-    /// since they all land on the same node.
-    #[serde(default = "default_true")]
-    pub trail_octaves: bool,
-    /// Keep the note name and cents readout on a node the music has
-    /// visited, not just on sounding and hovered ones — so the harmonic
-    /// territory can be read off the screen by name, with its tuning.
+    /// Seconds before a pitch is forgotten, measured from when it last
+    /// sounded. **0 means never** -- the default, and the point of the
+    /// feature: a whole piece's territory rather than a rolling window.
+    #[serde(default)]
+    pub trail_memory: f32,
+    /// Keep the note name and cents on a visited node, not just on sounding
+    /// and hovered ones -- so the harmonic space can be read off the screen
+    /// by name, with its tuning. Independent of the mark above: the text is
+    /// its own channel and is useful with the marks off.
     #[serde(default)]
     pub trail_labels: bool,
-    /// Draw the route: a line from each played note to the next, in the
-    /// order they were played. Independent of [`trail_mode`](Self::trail_mode),
-    /// because "where it went" and "in what order" are separate readings
-    /// and either is useful without the other.
-    #[serde(default)]
-    pub trail_path: bool,
-    /// How many recent onsets the path connects.
-    #[serde(default = "default_trail_path_steps")]
-    pub trail_path_steps: u32,
-    /// Dash the path's lines, to tell a route from the lattice's own grid
-    /// lines when both are the same weight. Ignored while the path glows,
-    /// which is already unmistakable.
-    #[serde(default)]
-    pub trail_path_dashed: bool,
-    /// Draw the path as glowing beams instead of grid-weight lines. Loud
-    /// and legible across a leap; the thin lines suit a dense passage
-    /// better.
-    #[serde(default)]
-    pub trail_path_glow: bool,
 
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
@@ -363,35 +333,10 @@ fn default_render_scale() -> f32 {
     1.0
 }
 
-// The trail's own defaults. Unlike the fields above these have no "what an
-// older blob was drawn with" to reproduce — the whole feature is new, and
-// a blob predating it was drawn with the trail off, which `trail_mode`'s
-// plain `default` already gives. So these are simply the values a fresh
-// view uses, named here rather than only in `impl Default` because serde
-// needs them for blobs written before each key existed.
-
-/// Faint enough that a well-travelled lattice stays legible under the notes
-/// actually sounding, strong enough to see at a glance.
+/// Half travel on a bar whose whole range is quiet: clearly a different
+/// node, still clearly not a lit one.
 fn default_trail_strength() -> f32 {
-    0.35
-}
-
-/// Two minutes: long enough to hold a whole phrase's worth of harmony, short
-/// enough that a Fade trail keeps moving rather than saturating.
-fn default_trail_time() -> f32 {
-    120.0
-}
-
-/// Most of the note's own color kept, pulled far enough toward the grid to
-/// read as a memory.
-fn default_trail_tint() -> f32 {
-    0.35
-}
-
-/// About a phrase of melody. Long enough to show a harmonic journey, short
-/// enough that the route doesn't collapse into a scribble.
-fn default_trail_path_steps() -> u32 {
-    48
+    0.5
 }
 
 /// The grid's color comes from the skin by default, which is the only
@@ -521,16 +466,10 @@ impl Default for ViewConfig {
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,
             grid_dashed: false,
-            trail_mode: TrailMode::default(),
+            trail_mark: TrailMark::default(),
             trail_strength: default_trail_strength(),
-            trail_time: default_trail_time(),
-            trail_tint: default_trail_tint(),
-            trail_octaves: true,
+            trail_memory: 0.0,
             trail_labels: false,
-            trail_path: false,
-            trail_path_steps: default_trail_path_steps(),
-            trail_path_dashed: false,
-            trail_path_glow: false,
             meantone: false,
             frameless: false,
             render_scale: default_render_scale(),

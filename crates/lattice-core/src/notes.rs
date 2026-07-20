@@ -161,7 +161,7 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 
 /// Tracks held voices plus a tail of recently released ones (so releases can
 /// fade out instead of vanishing), and behind those a [`NoteHistory`] of
-/// everything that has finished fading.
+/// every pitch that has finished fading.
 #[derive(Default)]
 pub struct NoteTracker {
     held: HashMap<(u8, u8), Voice>,
@@ -224,7 +224,7 @@ impl NoteTracker {
         });
     }
 
-    /// Everything played so far, for the trail (see [`NoteHistory`]).
+    /// Every pitch played so far, for the trail (see [`NoteHistory`]).
     pub fn history(&self) -> &NoteHistory {
         &self.history
     }

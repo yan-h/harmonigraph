@@ -151,11 +151,11 @@ fn parity_scene() -> Scene {
         idle_radius: 0.0,
         grid,
         grid_thickness: 1.0,
-        // The parity image is about how a note is drawn; the trail is a
-        // separate channel with its own tests, and leaving it empty keeps
-        // this baseline comparable to the ones taken before it existed.
-        trail_path: Vec::new(),
-        trail_path_glow: false,
+        // The parity image is about how a NOTE is drawn; the trail marks
+        // only idle nodes and has its own tests. Off keeps this baseline
+        // comparable to the ones taken before it existed.
+        trail_mark: Default::default(),
+        trail_strength: 0.0,
         node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
         pitch_lut: std::array::from_fn(|k| {
             Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)

@@ -109,16 +109,16 @@ fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
     );
 }
 
-/// How readable a trail label is relative to a sounding one. Well below
-/// full, so the notes actually playing still read first — but flat rather
-/// than scaled by the (very faint) trail level, because the point of a
-/// trail label is to be legible: a name at 4% alpha says nothing.
-const TRAIL_LABEL_STRENGTH: f32 = 0.55;
+/// How readable a label on a visited node is next to a sounding one. Well
+/// below full so the notes actually playing still read first -- but flat,
+/// not scaled by the trail level, because the whole point of keeping the
+/// text is that it can be read: a name at 5% alpha says nothing.
+const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 
-/// Labels on hovered, sounding, and — with the trail's Labels option on —
-/// remembered nodes, drawn as egui text over the 3D view (projected with
-/// the same camera as the nodes): the note name centered on the node,
-/// optionally its pitch class in cents just below.
+/// Labels on hovered, sounding, and -- with the trail's "Keep note names"
+/// on -- already-visited nodes, drawn as egui text over the 3D view
+/// (projected with the same camera as the nodes): the note name centered on
+/// the node, optionally its pitch class in cents just below.
 fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -127,17 +127,12 @@ fn draw_node_labels(
 ) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     for node in &scene.nodes {
-        // The trail folds itself into `activation`, so "live" here has to
-        // mean strictly brighter than the memory underneath it (see
-        // `NodeInstance::trail`) — otherwise every trailed node would look
-        // like a sounding one to this loop.
-        let live = node.activation - node.trail;
         let trailed = view.trail_labels && node.trail > 0.0;
         // `is_visible` re-checks what `Scene::pick` already enforces,
         // because hover also arrives from the Spectral pane
         // (`nearest_visible_node`), which can land on an off-sheet node.
         // Either way a label only belongs on a node you can actually see.
-        if !(node.hovered || live > 0.0 || trailed) || !node.is_visible() {
+        if !(node.hovered || node.activation > 0.0 || trailed) || !node.is_visible() {
             continue;
         }
         let Some(p) = projector.project(node.world_pos) else {
@@ -153,11 +148,12 @@ fn draw_node_labels(
         let strength = if node.hovered {
             1.0
         } else {
-            let t = (live / LABEL_FADE_TAIL).clamp(0.0, 1.0);
-            let sounding = visibility_floor(live) * t * t * (3.0 - 2.0 * t);
-            // A note's own label hands over to its memory's as it dies, so
-            // the text never blinks at the moment the fade completes.
-            sounding.max(if trailed { TRAIL_LABEL_STRENGTH } else { 0.0 })
+            let t = (node.activation / LABEL_FADE_TAIL).clamp(0.0, 1.0);
+            let sounding = visibility_floor(node.activation) * t * t * (3.0 - 2.0 * t);
+            // A note's label hands over to its memory's as it dies, so the
+            // text never blinks at the moment the fade completes. The trail
+            // level rides along, so a forgetting note dims out with it.
+            sounding.max(if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 })
         };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);

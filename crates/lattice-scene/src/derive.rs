@@ -5,7 +5,7 @@
 use crate::camera::Camera;
 use crate::color::{channel_color, idle_color, pitch_ramp_lut};
 use crate::style::HighlightExtremes;
-use crate::trail::{derive_trail_path, TrailField};
+use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, EdgeInstance, NodeInstance, Scene, MARK_WHITEN, NODE_RADIUS_FACTOR,
@@ -89,7 +89,7 @@ pub fn derive_scene(
 ) -> Scene {
     let mut nodes = Vec::with_capacity(view.visible_count());
     // Kept parallel to `nodes` for the trail, which matches remembered
-    // pitches against every node after the fact and would otherwise have to
+    // pitches against every node afterwards and would otherwise have to
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(view.visible_count());
     let center = view.center();
@@ -206,15 +206,14 @@ pub fn derive_scene(
         node_pcs.push(node_pc);
     }
 
-    // The grid reads `activation` as "is sounding", so it must be derived
-    // from the live notes alone — before the trail folds its memories into
-    // the same field. A remembered note should not keep a sevens chain lit.
-    let grid = derive_grid(view, &nodes);
-    let trail_path =
-        derive_trail_path(tracker.history(), tuning, view, frame, &nodes, &node_pcs, now);
+    // Marks only the idle layer (see `trail`), so nothing downstream that
+    // reads "is sounding" — the grid's sevens chains above all — can pick a
+    // memory up by mistake, whatever order these run in.
     if let Some(field) = TrailField::build(tracker.history(), view, frame, now) {
-        field.apply(&mut nodes, &node_pcs, tuning, view.trail_octaves);
+        field.apply(&mut nodes, &node_pcs, tuning);
     }
+
+    let grid = derive_grid(view, &nodes);
 
     // Core/outer geometry policy: the core is a plain radius the shader
     // reads (0 = off), with solidity riding alongside; the outer band is
@@ -248,9 +247,9 @@ pub fn derive_scene(
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
-        trail_path,
-        trail_path_glow: view.trail_path_glow,
         node_idle: idle_color(view),
+        trail_mark: view.trail_mark,
+        trail_strength: view.trail_strength.clamp(0.0, 1.0),
         mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
         mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
         pitch_lut: pitch_ramp_lut(),
