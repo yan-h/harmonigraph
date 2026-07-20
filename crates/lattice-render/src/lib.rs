@@ -152,17 +152,12 @@ struct Uniforms {
     /// Every earlier misc slot is spoken for, so the grid's knob started a
     /// new one — safe per the note on `misc4`.
     misc5: [f32; 4],
-    /// x: what separates the melody/bass stripe from its note
-    /// (`MarkContrast::shader_index`); y: that keyline's thickness in quad
-    /// UV units; z: which side of the sector edge the stripe sits on
-    /// (`MarkPlace::shader_index`); w unused.
-    misc6: [f32; 4],
     /// x: how the melody/bass marks are drawn (`MarkStyle::shader_index`);
     /// y: 1 when any node carries a mark this frame (Emphasis dims the
     /// unmarked voices scene-wide, so it cannot be judged per node);
     /// z: how the inner voices recede under Emphasis
     /// (`MarkRecede::shader_index`); w: the animated styles' rate in Hz.
-    misc7: [f32; 4],
+    misc6: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -369,12 +364,6 @@ impl LatticeCallback {
                 ],
                 misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_width],
                 misc6: [
-                    scene.mark_contrast.shader_index() as f32,
-                    scene.mark_keyline,
-                    scene.mark_place.shader_index() as f32,
-                    0.0,
-                ],
-                misc7: [
                     scene.mark_style.shader_index() as f32,
                     f32::from(scene.marks_active),
                     scene.mark_recede.shader_index() as f32,

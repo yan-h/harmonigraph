@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -141,10 +141,6 @@ pub struct ViewConfig {
     /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
-    /// What separates the melody/bass stripe from the note under it (see
-    /// [`MarkContrast`]).
-    #[serde(default)]
-    pub mark_contrast: MarkContrast,
     /// How the melody/bass marks are drawn (see [`MarkStyle`]).
     #[serde(default)]
     pub mark_style: MarkStyle,
@@ -158,30 +154,11 @@ pub struct ViewConfig {
     /// moves together.
     #[serde(default = "default_mark_rate")]
     pub mark_rate: f32,
-    /// Which side of the marked sector's edge the stripe sits on (see
-    /// [`MarkPlace`]).
-    #[serde(default)]
-    pub mark_place: MarkPlace,
-    /// Thickness of the keyline gap that ends the stripe, in quad UV units
-    /// — the full width, as [`outer_gap`](Self::outer_gap) is.
-    ///
-    /// Constant at every radius, and CENTRED on the boundary between the
-    /// stripe and the note, as the gaps between sectors are centred on
-    /// theirs. Centred matters: the boundary is the line that converges on
-    /// the slice's apex, so laying the gap to one side of it leaves the
-    /// gap's edge converging while its middle runs past. 0 leaves the white
-    /// running straight into the note.
-    #[serde(default = "default_mark_keyline")]
-    pub mark_keyline: f32,
-    /// How wide the melody/bass stripe is, as a fraction of the marked
-    /// sector's angular width.
-    ///
-    /// A fraction rather than a distance: a sector narrows toward the hub,
-    /// so a fixed-width stripe would swell to fill it down there, and the
-    /// two sides of a lone note's sector would merge into one. 0 leaves no
-    /// stripe. The alias keeps blobs from when this was the mark rings'
-    /// thickness loading; the value means something else now, but it is in
-    /// the same ballpark and beats dropping the persist.
+    /// How much of the mark there is, 0..1. Each style reads it as its own
+    /// kind of amount — how deep Pulse breathes, how far Sweep's band
+    /// lifts, how far Emphasis carries the inner voices back. 0 leaves no
+    /// mark at all. The aliases keep blobs from when it was the rings'
+    /// thickness, and then the stripe's width, loading.
     #[serde(default = "default_mark_width", alias = "mark_thickness")]
     pub mark_width: f32,
 
@@ -288,16 +265,9 @@ fn default_mark_rate() -> f32 {
     1.2
 }
 
-/// A third of the sector gap: the same device, deliberately thinner, so it
-/// reads as a keyline rather than as another division of the ring.
-fn default_mark_keyline() -> f32 {
-    0.04
-}
-
-/// A third of the sector to each side, which leaves a third of the note's
-/// own color showing between them when one note is both melody and bass.
+/// Enough of each effect to read at a glance without dominating.
 fn default_mark_width() -> f32 {
-    0.33
+    0.5
 }
 
 /// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
@@ -449,12 +419,9 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            mark_contrast: MarkContrast::default(),
             mark_style: MarkStyle::default(),
             mark_recede: MarkRecede::default(),
             mark_rate: default_mark_rate(),
-            mark_place: MarkPlace::default(),
-            mark_keyline: default_mark_keyline(),
             mark_width: default_mark_width(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),

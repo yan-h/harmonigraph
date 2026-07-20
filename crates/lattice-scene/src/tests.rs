@@ -624,28 +624,20 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
 }
 
 #[test]
-fn the_mark_contrast_and_width_reach_the_scene() {
-    // Both are whole-scene choices, not per-node ones: every node's
-    // stripes are drawn the same way.
-    for contrast in [MarkContrast::Gap, MarkContrast::Gradient, MarkContrast::Off] {
-        let view = ViewConfig { mark_contrast: contrast, ..ViewConfig::default() };
-        let scene = scene_of(
-            &NoteTracker::new(),
-            &Tuning::default(),
-            &view,
-            &FrameParams::default(),
-            0.0,
-        );
-        assert_eq!(scene.mark_contrast, contrast);
-    }
-    // Each has its own shader branch, so no two may share an index.
+fn the_mark_style_and_amount_reach_the_scene() {
+    // Which style, and how much of it, are whole-scene choices: every
+    // node's marks are drawn the same way.
+    let styles = [
+        MarkStyle::Pulse,
+        MarkStyle::Sweep,
+        MarkStyle::Alternate,
+        MarkStyle::Hue,
+        MarkStyle::Emphasis,
+        MarkStyle::Glow,
+    ];
     let mut seen = std::collections::HashSet::new();
-    for contrast in [MarkContrast::Gap, MarkContrast::Gradient, MarkContrast::Off] {
-        assert!(seen.insert(contrast.shader_index()), "{contrast:?} reuses an index");
-    }
-
-    for place in [MarkPlace::Inside, MarkPlace::Outside] {
-        let view = ViewConfig { mark_place: place, ..ViewConfig::default() };
+    for style in styles {
+        let view = ViewConfig { mark_style: style, ..ViewConfig::default() };
         let scene = scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
@@ -653,36 +645,24 @@ fn the_mark_contrast_and_width_reach_the_scene() {
             &FrameParams::default(),
             0.0,
         );
-        assert_eq!(scene.mark_place, place);
+        assert_eq!(scene.mark_style, style);
+        // Each has its own shader branch, so no two may share an index.
+        assert!(seen.insert(style.shader_index()), "{style:?} reuses an index");
     }
-    assert_ne!(
-        MarkPlace::Inside.shader_index(),
-        MarkPlace::Outside.shader_index(),
-        "each placement has its own shader branch"
-    );
+    // Only the moving ones read the Rate bar.
+    assert!(MarkStyle::Pulse.is_animated());
+    assert!(!MarkStyle::Emphasis.is_animated());
 
-    // The keyline is a thickness in uv, and is clamped like the rest.
-    let thick = ViewConfig { mark_keyline: 9.0, ..ViewConfig::default() };
+    let wild = ViewConfig { mark_width: 9.0, mark_rate: 99.0, ..ViewConfig::default() };
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
-        &thick,
+        &wild,
         &FrameParams::default(),
         0.0,
     );
-    assert!(scene.mark_keyline <= 0.2, "got {}", scene.mark_keyline);
-
-    // Half would let the two sides of a lone note's sector meet, leaving
-    // none of the note's own color between them.
-    let wide = ViewConfig { mark_width: 5.0, ..ViewConfig::default() };
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &wide,
-        &FrameParams::default(),
-        0.0,
-    );
-    assert!(scene.mark_width <= 0.45, "got {}", scene.mark_width);
+    assert!(scene.mark_width <= 1.0, "got {}", scene.mark_width);
+    assert!(scene.mark_rate <= 6.0, "got {}", scene.mark_rate);
 }
 
 #[test]

@@ -6,8 +6,7 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
 use lattice_scene::{
-    HighlightExtremes, IdleMarker, MarkContrast, MarkPlace, MarkRecede, MarkStyle, NodeStyle,
-    OuterStyle,
+    HighlightExtremes, IdleMarker, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
 };
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
@@ -155,92 +154,72 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                          far Emphasis carries the inner voices down. 0 leaves \
                          no mark at all",
                     );
-                // The ring already encodes pitch as angle, so the mark does
-                // not have to say WHICH of the two it is -- only which two
-                // they are. Emphasis and Widen spend nothing to do that.
+                // The ring already encodes pitch as angle, so the mark
+                // need not say WHICH of the two it is -- only which two
+                // they are. None of these touch the slice's shape.
                 choice_row(
                     ui,
                     "Style",
                     &mut state.view.mark_style,
                     &[
                         (
-                            MarkStyle::Stripe,
-                            "Stripe",
-                            "A white stripe down one side of the marked sector",
-                        ),
-                        (
-                            MarkStyle::Emphasis,
-                            "Emphasis",
-                            "Nothing added: the INNER voices dim instead, leaving \
-                             the outer two at full. Cannot wash out on any note, \
-                             and costs nothing with one or two notes held -- \
-                             every note is an extreme then, so nothing dims",
-                        ),
-                        (
-                            MarkStyle::Widen,
-                            "Widen",
-                            "The marked sector spans a wider angle, growing \
-                             toward its own side -- into the gap it already \
-                             has, so nothing is reserved for it",
-                        ),
-                        (
-                            MarkStyle::Glow,
-                            "Glow",
-                            "Lift the marked sector until it crosses the bloom \
-                             threshold, so it alone halos. Emphasis by light \
-                             rather than color or shape; needs Bloom above 0 \
-                             for the halo",
-                        ),
-                        (
                             MarkStyle::Pulse,
                             "Pulse",
-                            "The marked sector breathes, slowly, on the same \
-                             clock the field styles use. Motion is the one \
-                             channel nothing else on the node is using",
+                            "The marked sectors breathe, brightening and darkening \
+                             about their own color -- symmetric, so it reads on \
+                             any note however light or dark",
                         ),
                         (
                             MarkStyle::Sweep,
                             "Sweep",
-                            "A bright band runs along the marked sector -- \
-                             outward for the melody, inward for the bass, so \
-                             the motion says which end it is. It lifts toward \
-                             white, so it reads on dark notes and barely on \
-                             pale ones",
+                            "A band travels the sector's length -- outward for the \
+                             melody, inward for the bass. It pushes away from the \
+                             note's own brightness, so it cannot wash out",
                         ),
                         (
-                            MarkStyle::Throb,
-                            "Throb",
-                            "The marked sector breathes in SIZE rather than \
-                             brightness, widening and narrowing on the beat",
+                            MarkStyle::Alternate,
+                            "Alternate",
+                            "The two ends breathe in antiphase: as one rises the \
+                             other falls, so the pair reads as a pair",
                         ),
                         (
-                            MarkStyle::Focus,
-                            "Focus",
-                            "The marked sector stays crisp while the rest \
-                             soften -- the outer voices in focus, the inner \
-                             ones behind them. No ink, no space, no color",
+                            MarkStyle::Hue,
+                            "Hue",
+                            "The marked sectors' hue drifts around the wheel. Hue \
+                             wraps, so there is no note it cannot move",
+                        ),
+                        (
+                            MarkStyle::Emphasis,
+                            "Emphasis",
+                            "Nothing added: the INNER voices recede instead. Costs \
+                             nothing with one or two notes held, when every note \
+                             is an extreme",
+                        ),
+                        (
+                            MarkStyle::Glow,
+                            "Glow",
+                            "Lift the marked sector past the bloom threshold so it \
+                             alone halos. One direction only, so it is strong on \
+                             dark notes and weak on pale ones",
                         ),
                     ],
                 );
-                // Emphasis only: how the inner voices give way. All three
-                // act on color, never on coverage -- see MarkRecede.
-                // Pulse, Sweep and Throb share one clock.
-                ui.add_enabled_ui(
-                    matches!(
-                        state.view.mark_style,
-                        MarkStyle::Pulse | MarkStyle::Sweep | MarkStyle::Throb
-                    ),
-                    |ui| {
-                        ValueBar::new(&mut state.view.mark_rate, 0.1..=4.0, "Rate")
-                            .show(ui)
-                            .on_hover_text(
-                                "Cycles per second for the animated marks. They \
-                                 run on global time, so a retrigger never \
-                                 restarts the motion and every marked note \
-                                 moves together",
-                            );
-                    },
-                );
+                ValueBar::new(&mut state.view.mark_width, 0.0..=1.0, "Amount")
+                    .show(ui)
+                    .on_hover_text(
+                        "How much of the mark there is -- how deep Pulse breathes, \
+                         how far Sweep's band pushes, how far Emphasis carries the \
+                         inner voices back. 0 leaves no mark",
+                    );
+                ui.add_enabled_ui(state.view.mark_style.is_animated(), |ui| {
+                    ValueBar::new(&mut state.view.mark_rate, 0.1..=4.0, "Rate")
+                        .show(ui)
+                        .on_hover_text(
+                            "Cycles per second. The animated marks run on global \
+                             time, so a retrigger never restarts the motion and \
+                             every marked note moves together",
+                        );
+                });
                 ui.add_enabled_ui(state.view.mark_style == MarkStyle::Emphasis, |ui| {
                     choice_row(
                         ui,
@@ -252,81 +231,12 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                                 "Grey",
                                 "Drain the color, keep the brightness: the inner \
                                  voices stay just as visible and give up only \
-                                 their hue, so the outer two are the only \
-                                 sectors still in color",
+                                 their hue",
                             ),
-                            (
-                                MarkRecede::Dim,
-                                "Dim",
-                                "Darken, keep the hue: every voice keeps its \
-                                 pitch color, the inner ones just sit back",
-                            ),
+                            (MarkRecede::Dim, "Dim", "Darken, keep the hue"),
                             (MarkRecede::Both, "Both", "Drained and darkened"),
                         ],
                     );
-                });
-                ui.add_enabled_ui(state.view.mark_style == MarkStyle::Stripe, |ui| {
-                choice_row(
-                    ui,
-                    "Place",
-                    &mut state.view.mark_place,
-                    &[
-                        (
-                            MarkPlace::Inside,
-                            "Inside",
-                            "Carved out of the marked note's own sector, along \
-                             its edge",
-                        ),
-                        (
-                            MarkPlace::Outside,
-                            "Outside",
-                            "Laid alongside the sector instead, just past its \
-                             edge, leaving the note's wedge whole. Drawn under \
-                             the octaves, so a lit neighbour still wins",
-                        ),
-                    ],
-                );
-                // White is the stripe's color; what is open is how it ENDS.
-                // White alone dies against the pale top of the pitch ramp,
-                // which is exactly where the melody mark lands, so the
-                // contrast comes from a dark boundary instead of the fill.
-                choice_row(
-                    ui,
-                    "Contrast",
-                    &mut state.view.mark_contrast,
-                    &[
-                        (
-                            MarkContrast::Gap,
-                            "Gap",
-                            "A gap where the white meets the note -- the same \
-                             device as the gaps between octaves, thinner. \
-                             Nothing is painted, so nothing can be the wrong \
-                             color against the note",
-                        ),
-                        (
-                            MarkContrast::Gradient,
-                            "Gradient",
-                            "The white ramps to dark across the stripe, ending on \
-                             the same boundary with no seam",
-                        ),
-                        (
-                            MarkContrast::Off,
-                            "None",
-                            "Plain white -- legible on every note but the palest",
-                        ),
-                    ],
-                );
-                ui.add_enabled_ui(state.view.mark_contrast != MarkContrast::Off, |ui| {
-                    ValueBar::new(&mut state.view.mark_keyline, 0.0..=0.2, "Keyline")
-                        .show(ui)
-                        .on_hover_text(
-                            "How wide that gap is, in the same units as the \
-                             octaves' Gap and the band radii. Constant at every \
-                             radius, and centred on the line where the stripe \
-                             meets the note -- the one that runs to the slice's \
-                             point",
-                        );
-                });
                 });
             });
 

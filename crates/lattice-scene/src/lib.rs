@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -190,10 +190,8 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// What separates the melody/bass stripe from the note under it (see
-    /// [`MarkContrast`]). Which NOTES are marked is baked into each node's
-    /// `melody_slots`/`bass_slots`.
-    pub mark_contrast: MarkContrast,
+    /// Which NOTES are marked is baked into each node's
+    /// `melody_slots`/`bass_slots`; this is how they are drawn.
     /// How the melody/bass marks are drawn (see [`MarkStyle`]).
     pub mark_style: MarkStyle,
     /// How the inner voices recede under Emphasis (see [`MarkRecede`]).
@@ -206,14 +204,8 @@ pub struct Scene {
     /// holding only inner voices has no marks of its own and must still
     /// recede.
     pub marks_active: bool,
-    /// Which side of the sector's edge the stripe sits on (see
-    /// [`MarkPlace`]).
-    pub mark_place: MarkPlace,
-    /// Thickness of the dark keyline that ends the stripe, in quad UV
-    /// units — constant, like the gaps between sectors. Already clamped.
-    pub mark_keyline: f32,
-    /// How wide the stripe is, as a fraction of the sector's angular width
-    /// (see [`ViewConfig::mark_width`]). Already clamped; 0 = no mark.
+    /// How much of the mark there is, 0..1 after clamping; 0 = no mark.
+    /// Each style reads it as its own kind of amount.
     pub mark_width: f32,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).

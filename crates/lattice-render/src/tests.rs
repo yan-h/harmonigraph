@@ -132,14 +132,11 @@ fn parity_scene() -> Scene {
         time: 1.25,
         node_radius: 0.34,
         outer_style: Default::default(),
-        mark_contrast: Default::default(),
         mark_style: Default::default(),
         mark_recede: Default::default(),
         mark_rate: 1.2,
         marks_active: true,
-        mark_place: Default::default(),
-        mark_keyline: 0.04,
-        mark_width: 0.33,
+        mark_width: 0.5,
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -381,9 +378,11 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         cents: 0.0,
         melody_slots,
         bass_slots,
-        // A mark draws at the level its own note is at; these stand in for
-        // a freshly-held note.
     }];
+    // Glow rather than the default Pulse: Pulse is a breath about the
+    // note's own color and passes through zero twice a cycle, so a still
+    // frame of it can legitimately show nothing at all.
+    scene.mark_style = lattice_scene::MarkStyle::Glow;
     scene.grid.clear();
     // Fill a good share of the frame, so the measurements below are
     // about the mark's design rather than about pixel quantization.
@@ -392,7 +391,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
 }
 
 #[test]
-fn melody_bass_marks_stripe_the_sides_of_their_sector() {
+fn melody_bass_marks_change_the_sectors_they_mark() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
@@ -451,12 +450,11 @@ fn melody_bass_marks_stripe_the_sides_of_their_sector() {
     let melody = shot(&single_marked_node(1, 0), 41);
     let one_end = changed_px(&melody);
     eprintln!("node {node_px} px, ~sector {sector_px}; one-end stripe {one_end}");
-    // A floor, not a target. The stripe is a tint on part of one sector,
-    // deliberately restrained -- but an early mark drew a sub-pixel arc
-    // that read as nothing at all in the DAW, which is what this catches.
+    // A floor, not a target: an early mark drew a sub-pixel arc that read
+    // as nothing at all in the DAW, which is what this catches.
     assert!(
         one_end * 4 > sector_px,
-        "the stripe covers too little of its sector to find: \
+        "the mark covers too little of its sector to find: \
          {one_end} px against a sector of about {sector_px}"
     );
 
@@ -471,32 +469,23 @@ fn melody_bass_marks_stripe_the_sides_of_their_sector() {
     // end alone.
     let both = shot(&single_marked_node(1, 1), 45);
     let both_px = changed_px(&both);
-    eprintln!("both-ends stripe {both_px} px");
+    eprintln!("both-ends mark {both_px} px");
     assert!(
-        both_px > one_end,
+        both_px >= one_end,
         "a mark claimed by both ends all but disappeared: \
          {both_px} px against {one_end} for one end alone"
     );
 
-    // ...and it really is BOTH sides, not one end quietly winning: the
-    // melody-only and bass-only pictures must each differ from it.
-    let bass_only = shot(&single_marked_node(0, 1), 46);
-    let differs = |a: &[u8], b: &[u8]| {
-        a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
-    };
-    assert!(
-        differs(&both, &melody) > 0 && differs(&both, &bass_only) > 0,
-        "a both-ends mark is indistinguishable from a single-ended one"
-    );
+    // Deliberately NOT asserted: that a both-ends sector looks different
+    // from a single-ended one. Under this family it does not, and should
+    // not -- none of these styles distinguishes the melody from the bass on
+    // a sector, because the ring's angle already says which is which. The
+    // mark only has to say that a sector is one of the two.
 
-    // NOT tested here: that the stripe is a sub-slice bounded by rays from
-    // the node's centre, converging on the hub as its sector does. Sampling
-    // its angular width along the radius is the obvious check and does not
-    // work -- near the hub the sector is a few pixels across, and
-    // rasterization noise swamps the ~10% the regression actually moved it
-    // (an attempt at this failed on the correct shader and passed on the
-    // broken one). It was checked by eye instead, on pie wedges, where the
-    // sector runs right to the hub and the shape is unmistakable.
+    // NOT tested here: how any individual style looks. Four of the six
+    // animate, so a still frame of one says little, and the choice between
+    // them is a judgement about legibility that a pixel count cannot make.
+    // They were compared by eye, as filmstrips across a cycle.
 }
 
 #[test]
@@ -659,6 +648,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 

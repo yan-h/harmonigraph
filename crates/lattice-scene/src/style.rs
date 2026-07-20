@@ -158,155 +158,97 @@ impl IdleMarker {
     }
 }
 
-/// Which extreme held notes get marked, so a chord's melody and/or bass
-/// line is identifiable at a glance. "Extreme" is by sounding pitch
-/// (`Voice::pitch`, which includes MPE/tuning bends), over HELD voices
-/// only: a released note is on its way out and shouldn't keep the mark
-/// from the note that replaced it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum HighlightExtremes {
-    Off,
-    /// The highest held note — the melody.
-    Melody,
-    /// The lowest held note — the bass.
-    Bass,
-    /// Both. Each ring takes its own note's color, and they are told apart
-    /// by radius (bass inside the octave band, melody outside) rather than
-    /// by hue. The default: the marks are subtle
-    /// enough to live with always-on, and a chord's outer voices are
-    /// worth seeing without having to go turn something on first. Blobs
-    /// saved before this setting existed pick it up too, which is
-    /// deliberate.
-    #[default]
-    Both,
-}
-
-impl HighlightExtremes {
-    pub fn marks_melody(self) -> bool {
-        matches!(self, HighlightExtremes::Melody | HighlightExtremes::Both)
-    }
-
-    pub fn marks_bass(self) -> bool {
-        matches!(self, HighlightExtremes::Bass | HighlightExtremes::Both)
-    }
-}
-
-/// What separates the melody/bass stripe from the note under it.
-///
-/// The stripe is white. White is the right color for it — it reads as a
-/// mark rather than as more note — but on its own it fails at the top of
-/// the pitch ramp, which runs to near-white, and that is exactly where the
-/// MELODY mark lands. So the separation comes from the boundary rather than
-/// from the fill: something between the white and the note that neither end
-/// of the ramp can swallow.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum MarkContrast {
-    /// A gap knocked through the sector where the white meets the note —
-    /// the same device as the gaps between sectors, and thinner: a band of
-    /// constant thickness about a ray from the node's centre. Nothing is
-    /// painted, so nothing can be the wrong color against the note.
-    #[default]
-    #[serde(alias = "Keyline")]
-    Gap,
-    /// The white ramps to dark across the stripe instead, so it ends on the
-    /// same boundary without a visible seam.
-    Gradient,
-    /// Nothing: plain white, which is legible on every note but the palest.
-    Off,
-}
-
 /// How the melody and bass are marked.
 ///
 /// The ring already encodes absolute pitch as ANGLE, so a reader can see
-/// which of two sectors is the higher one. The mark therefore does not have
-/// to distinguish melody from bass — only to say WHICH TWO they are. That
-/// is a much weaker requirement than the earlier designs assumed, and the
-/// last two options here spend nothing to meet it: no ink, no reserved
-/// space, and nothing that has to hold contrast against a note that could
-/// be any color on the ramp.
+/// which of two sectors is the higher one. The mark does not have to
+/// distinguish melody from bass — only to say WHICH TWO they are.
+///
+/// None of these touch the slice's SHAPE: they act on its color, its light
+/// or its timing, and every sector keeps the silhouette it would have had
+/// unmarked. The ones that reshaped it — a stripe carved out of it, a wider
+/// wedge, a breathing size, a softened edge — are gone.
+///
+/// The recurring trap in this family is worth stating once, because it has
+/// caught four designs: an effect that moves the color in ONE direction has
+/// a blind spot at whichever end of the pitch ramp it is already at. The
+/// ramp runs near-black at the bottom to near-white at the top, so lifting
+/// toward white dies on the melody and darkening dies on the bass. Anything
+/// here that shifts brightness therefore either swings BOTH ways or picks
+/// its direction from the note.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MarkStyle {
-    /// A white stripe down one side of the marked sector.
+    /// The marked sectors breathe, brightening and darkening about their
+    /// own color. Symmetric, so there is always a half of the swing with
+    /// somewhere to go however light or dark the note is.
     #[default]
-    Stripe,
-    /// Nothing is added: the INNER voices are dimmed instead, leaving the
-    /// outer two at full strength. Contrast is relative, so it cannot wash
-    /// out on any note; and it costs nothing when there is nothing to say,
-    /// because with one or two notes held every note IS an extreme and so
-    /// nothing dims.
-    Emphasis,
-    /// The marked sector spans a wider angle, growing toward its own side —
-    /// the melody clockwise, the bass counter-clockwise, a lone note both
-    /// ways. It grows into the gap it already has, so nothing is reserved
-    /// for it, and size reads on any color.
-    Widen,
-    /// The marked sector is lifted toward white until it crosses the bloom
-    /// pass's luminance threshold, so it — and only it — halos. The emphasis
-    /// is light rather than color or shape: nothing is added to the layer,
-    /// and the halo lands outside the node where there is nothing to crowd.
-    /// Needs Bloom above 0 to show its halo; the lift alone still reads.
-    Glow,
-    /// The marked sector breathes: a slow rise and fall in brightness, on
-    /// the same global clock the field styles use, so notes never restart
-    /// it. Motion is the one channel nothing else on the node is using, and
-    /// it survives any color the note happens to be.
     Pulse,
-    /// The marked sector stays crisp while the rest soften, as though the
-    /// outer voices were in focus and the inner ones behind them. Costs no
-    /// ink, no space and no color — only sharpness.
-    Focus,
-    /// A bright band travels along the marked sector, outward for the
-    /// melody and inward for the bass — so the motion says which end it is
-    /// as well as that it is one. A lone note, being both, sweeps both ways
-    /// at once.
-    ///
-    /// It lifts what it passes over toward white, so it reads strongly on a
-    /// dark or saturated note and hardly at all on a pale one — and the top
-    /// of the pitch ramp is nearly white, which is exactly where the MELODY
-    /// mark tends to sit. [`Pulse`](MarkStyle::Pulse) and
-    /// [`Throb`](MarkStyle::Throb) have no such blind spot.
+    /// A band travels along the marked sector — outward for the melody,
+    /// inward for the bass, so the motion says which end it is. The band
+    /// pushes AWAY from the note's own luminance, lightening a dark note
+    /// and darkening a light one, so it cannot wash out at either end of
+    /// the ramp.
     Sweep,
-    /// The marked sector breathes in SIZE rather than in brightness,
-    /// widening and narrowing on the beat. Motion with nothing taken from
-    /// the note's color or its light.
-    Throb,
+    /// The melody and bass breathe in ANTIPHASE: as one rises the other
+    /// falls. The pair reads as a pair, and the trade between them is
+    /// visible even when both notes sit at the same brightness. A note that
+    /// is both ends takes the melody's phase.
+    Alternate,
+    /// The marked sectors' hue drifts slowly around the wheel. Hue is the
+    /// one channel with no ends to fall off: it wraps, so there is no note
+    /// it cannot move. It does spend the color the pitch ramp uses — but
+    /// only on the two sectors whose pitch the ring's angle already gives.
+    Hue,
+    /// Nothing is added: the INNER voices recede instead, leaving the outer
+    /// two as they were. Contrast is relative, so it cannot wash out; and
+    /// with one or two notes held every note IS an extreme, so nothing
+    /// recedes and the mark costs nothing when it has nothing to say.
+    Emphasis,
+    /// The marked sector is lifted toward white until it crosses the bloom
+    /// pass's luminance threshold, so it — and only it — halos. Emphasis by
+    /// light, landing outside the node where there is nothing to crowd.
+    /// Lifts in one direction only, so it is strong on a dark note and weak
+    /// on a pale one; needs Bloom above 0 for the halo.
+    Glow,
 }
 
 impl MarkStyle {
     /// Index used by the shader (uniform `misc7.x`).
     pub fn shader_index(self) -> u32 {
         match self {
-            MarkStyle::Stripe => 0,
-            MarkStyle::Emphasis => 1,
-            MarkStyle::Widen => 2,
-            MarkStyle::Glow => 3,
-            MarkStyle::Pulse => 4,
-            MarkStyle::Focus => 5,
-            MarkStyle::Sweep => 6,
-            MarkStyle::Throb => 7,
+            MarkStyle::Pulse => 0,
+            MarkStyle::Sweep => 1,
+            MarkStyle::Alternate => 2,
+            MarkStyle::Hue => 3,
+            MarkStyle::Emphasis => 4,
+            MarkStyle::Glow => 5,
         }
+    }
+
+    /// Whether this style animates, and so reads the Rate bar.
+    pub fn is_animated(self) -> bool {
+        matches!(
+            self,
+            MarkStyle::Pulse | MarkStyle::Sweep | MarkStyle::Alternate | MarkStyle::Hue
+        )
     }
 }
 
 /// How the inner voices recede under [`MarkStyle::Emphasis`].
 ///
-/// All three act on the sector's COLOR, never on its coverage. Dimming
-/// coverage — what this did first — makes a sector translucent rather than
-/// dark: its edges soften, the glow behind shows through, and the crisp
-/// gaps between octaves go mushy. That is a real loss of contrast across
-/// the whole layer, and it is not what was being asked for.
+/// Both act on the sector's COLOR, never on its coverage. Dimming coverage
+/// makes a sector translucent rather than dark: its edges soften, the glow
+/// behind shows through, and the crisp gaps between octaves go mushy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MarkRecede {
     /// Drain the color, keeping the brightness. The inner voices stay
-    /// exactly as visible as they were — same luminance, same edges — and
-    /// give up only their hue, so the outer two are the only sectors still
-    /// carrying color. Costs the least contrast of the three.
+    /// exactly as visible as they were and give up only their hue, so the
+    /// outer two are the only sectors still carrying color.
     #[default]
     Grey,
-    /// Darken, keeping the hue. Every voice keeps its pitch color; the
-    /// inner ones simply sit further back.
+    /// Darken, keeping the hue.
     Dim,
-    /// Both at once, for when one alone is not separation enough.
+    /// Both at once.
     Both,
 }
 
@@ -321,36 +263,35 @@ impl MarkRecede {
     }
 }
 
-/// Which side of the marked sector's edge the white sits on.
+/// Which extreme held notes get marked, so a chord's melody and/or bass
+/// line is identifiable at a glance. "Extreme" is by sounding pitch
+/// (`Voice::pitch`, which includes MPE/tuning bends), over HELD voices
+/// only: a released note is on its way out and shouldn't keep the mark
+/// from the note that replaced it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum MarkPlace {
-    /// Carved out of the sector itself, along its edge.
+pub enum HighlightExtremes {
+    Off,
+    /// The highest held note — the melody.
+    Melody,
+    /// The lowest held note — the bass.
+    Bass,
+    /// Both. Which is which is read off the ring's angle, which already
+    /// encodes pitch, so the mark itself need not distinguish them. The
+    /// default: the marks are subtle enough to live with always-on, and a
+    /// chord's outer voices are worth seeing without having to go turn
+    /// something on first. Blobs saved before this setting existed pick it
+    /// up too, which is deliberate.
     #[default]
-    Inside,
-    /// Laid alongside the sector instead, just past its edge, leaving the
-    /// note's own wedge whole. Drawn UNDER the octave sectors, so a lit
-    /// neighbour still wins the pixels it wants.
-    Outside,
+    Both,
 }
 
-impl MarkPlace {
-    /// Index used by the shader (uniform `misc6.z`).
-    pub fn shader_index(self) -> u32 {
-        match self {
-            MarkPlace::Inside => 0,
-            MarkPlace::Outside => 1,
-        }
+impl HighlightExtremes {
+    pub fn marks_melody(self) -> bool {
+        matches!(self, HighlightExtremes::Melody | HighlightExtremes::Both)
     }
-}
 
-impl MarkContrast {
-    /// Index used by the shader (uniform `misc6.x`).
-    pub fn shader_index(self) -> u32 {
-        match self {
-            MarkContrast::Gap => 0,
-            MarkContrast::Gradient => 1,
-            MarkContrast::Off => 2,
-        }
+    pub fn marks_bass(self) -> bool {
+        matches!(self, HighlightExtremes::Bass | HighlightExtremes::Both)
     }
 }
 

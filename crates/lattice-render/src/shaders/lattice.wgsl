@@ -49,20 +49,14 @@ struct Uniforms {
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: unused.
     // z: padding between neighbouring octave sectors, in quad UV units.
-    // w: the melody/bass stripe's width as a fraction of a sector's
-    // angular width; 0 = no mark.
+    // w: how much of the melody/bass mark there is, 0..1; 0 = no mark.
     misc5: vec4<f32>,
-    // x: what ends the melody/bass stripe against its note
-    // (MarkContrast's shader_index: 0 keyline, 1 gradient, 2 none).
-    // y, z, w unused.
-    misc6: vec4<f32>,
     // x: how the melody/bass marks are drawn (MarkStyle's shader_index:
-    // 0 stripe, 1 emphasis, 2 widen, 3 glow, 4 pulse, 5 focus, 6 sweep,
-    // 7 throb). y: 1 when any node carries a mark
-    // this frame. z: how the inner voices recede under Emphasis
-    // (MarkRecede's shader_index: 0 grey, 1 dim, 2 both). w: the animated
-    // styles' rate, in cycles per second.
-    misc7: vec4<f32>,
+    // 0 pulse, 1 sweep, 2 alternate, 3 hue, 4 emphasis, 5 glow). y: 1 when
+    // any node carries a mark this frame. z: how the inner voices recede
+    // under Emphasis (MarkRecede's shader_index: 0 grey, 1 dim, 2 both).
+    // w: the animated styles' rate, in cycles per second.
+    misc6: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -290,20 +284,7 @@ fn sector_half_span(d: f32) -> f32 {
 // class is `cents`, drawn in the uniform band. Reads nothing from the core
 // layer — the outer glyphs are independent of it. `aa` is the caller's
 // per-pixel soft-band width, giving the shape screen-constant edges.
-// As outer_glyph, with the sector's two bounding rays pushed out by
-// `grow_ccw` / `grow_cw` radians. Widen uses it to spread a marked sector
-// toward its own side; the gap rides with the ray it belongs to, so the
-// sector grows into the gap it already had rather than into its neighbour.
-fn outer_glyph_grown(
-    i: u32,
-    cents: f32,
-    uv: vec2<f32>,
-    inner: f32,
-    outer: f32,
-    grow_ccw: f32,
-    grow_cw: f32,
-    aa: f32,
-) -> f32 {
+fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
     let ang = sector_angle(i, cents);
     let d = length(uv);
 
@@ -314,8 +295,8 @@ fn outer_glyph_grown(
     // half the gap width, for a gap of constant thickness at every radius.
     let band = aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
     let hb = RAD_PER_OCTAVE * 0.5;
-    let b1 = vec2<f32>(cos(ang + hb + grow_ccw), sin(ang + hb + grow_ccw));
-    let b2 = vec2<f32>(cos(ang - hb - grow_cw), sin(ang - hb - grow_cw));
+    let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
+    let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
     // Ownership softened over `aa`: at crisp aa this is a ~1px step buried
@@ -331,9 +312,6 @@ fn outer_glyph_grown(
     return band * own * g;
 }
 
-fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
-    return outer_glyph_grown(i, cents, uv, inner, outer, 0.0, 0.0, aa);
-}
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
 // octave glyph is the same hue as the disc that pitch would light.
@@ -645,74 +623,38 @@ const EMPHASIS_DIM: f32 = 0.55;
 // note has to be carried a long way before it halos at all -- which is the
 // point of lifting rather than of scaling what is already there.
 const GLOW_LIFT: f32 = 0.85;
-// How much of the sector's brightness Pulse's breath takes at the Width
-// bar's top. The rate is the view's (u.misc7.w), shared by every animated
-// style.
-const PULSE_DEPTH: f32 = 0.8;
-// Sweep: how wide the travelling band is, as a share of the octave band,
-// and how far it lifts what it passes over.
+// Sweep: how wide the travelling band is, as a share of the octave band.
 const SWEEP_WIDTH: f32 = 0.35;
 const SWEEP_LIFT: f32 = 0.9;
-// Throb: how far the sector swings in angle at the bar's top, as a share of
-// its own half-width.
-const THROB_SWING: f32 = 0.55;
-// Focus: how far an unmarked sector's edge softens, as a multiple of the
-// crisp one. Only the edge -- the shape, the color and the brightness are
-// all untouched.
-const FOCUS_SOFT: f32 = 9.0;
+// How much of the sector's brightness Pulse's breath takes at the Width
+// bar's top. The rate is the view's (u.misc6.w), shared by every animated
+// style.
+const PULSE_DEPTH: f32 = 0.8;
 
 
-// The melody/bass stripe's color at `t` — the fraction of the way in from
-// the sector's edge, 0 at the edge and 1 where the note's own color
-// resumes. `soft_t` is a pixel of arc in those same units.
-//
-// The fill is white. What varies is how it ENDS: white against a near-white
-// note is invisible, and the pitch ramp runs to near-white at the top,
-// which is exactly where the melody mark lands. A dark boundary at the
-// inner side fixes that without giving up the white — the eye reads the
-// pair, and neither end of the ramp can swallow both.
-fn stripe_color(t: f32, mode: u32) -> vec3<f32> {
-    if mode == 1u {
-        // Gradient: white at the edge ramping to dark where the note
-        // resumes, ending on the same boundary with no visible seam.
-        return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.0, 0.0, 0.0), clamp(t, 0.0, 1.0));
-    }
-    // Gap (0) and Off (2) are both plain white; Gap separates it from the
-    // note by CUTTING between them rather than by painting anything.
-    return vec3<f32>(1.0, 1.0, 1.0);
+// Rotate `c` about the grey axis by `a` radians -- a hue shift that leaves
+// the note's brightness exactly where it was. Rodrigues about (1,1,1)/sqrt3.
+fn hue_rotate(c: vec3<f32>, a: f32) -> vec3<f32> {
+    let k = vec3<f32>(0.5773503, 0.5773503, 0.5773503);
+    return c * cos(a) + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - cos(a));
 }
 
-// Where a pixel falls relative to the melody/bass stripe on one side of a
-// sector, as a distance in quad UV: positive inside the stripe, negative
-// past its inner boundary and into the note.
-//
-// The boundary is a fixed share of the sector's VISIBLE span, so the stripe
-// narrows with the sector and reaches the apex with it. `phi` is the
-// pixel's angle from the sector's bisector, signed so that positive is the
-// side being marked.
-fn stripe_offset(phi: f32, d: f32, width_k: f32) -> f32 {
-    let edge = sector_half_span(d);
-    return d * (phi - (edge - 2.0 * edge * width_k));
-}
-
-// The keyline gap: a band of constant thickness CENTRED on that boundary,
-// as the gaps between sectors are centred on theirs. Centred rather than
-// laid to one side, so that the line the gap's middle follows is the one
-// that converges on the slice's apex -- offset to one side, it is the gap's
-// edge that converges and the middle of it runs past the apex.
-fn keyline_cut(off: f32, aa: f32) -> f32 {
-    let half = u.misc6.y * 0.5;
-    if half <= 0.0 {
-        return 0.0;
-    }
-    return aa_inside(half, abs(off), aa);
+// Push `c` AWAY from its own luminance: toward white if it is dark, toward
+// black if it is light. This is what keeps a brightness effect from having
+// a blind spot -- the pitch ramp runs near-black to near-white, so a shift
+// in one fixed direction always dies at one end of it.
+fn away_from(c: vec3<f32>, amount: f32) -> vec3<f32> {
+    let lum = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    // (`target` is a reserved word in WGSL.)
+    let toward = select(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.0, 0.0, 0.0), lum > 0.5);
+    return mix(c, toward, amount);
 }
 
 // The animated marks' shared clock: one turn of the cycle in 0..1, on
 // GLOBAL time rather than on any note's age, so a retrigger never restarts
 // the motion and every marked note moves together.
 fn mark_phase() -> f32 {
-    return fract(u.misc.x * max(u.misc7.w, 0.0));
+    return fract(u.misc.x * max(u.misc6.w, 0.0));
 }
 
 @fragment
@@ -853,50 +795,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // The melody/bass stripe: how wide, as a fraction of a sector's angular
     // width, and what separates it from its note (see MarkContrast).
     let stripe_k = clamp(u.misc5.w, 0.0, 0.45);
-    let stripe_contrast = u32(u.misc6.x + 0.5);
-    let stripe_place = u32(u.misc6.z + 0.5);
-    let mark_style = u32(u.misc7.x + 0.5);
-    let marks_live = u.misc7.y > 0.5;
-    // Outside placement: the stripe laid ALONGSIDE the marked sector, just
-    // past its edge, instead of carved out of it -- the note's own wedge
-    // stays whole. Its own layer, composited under the sectors below, so a
-    // lit neighbour keeps every pixel it wants and no octave is hidden by a
-    // mark.
-    var beside = 0.0;
-    var beside_rgb = vec3<f32>(0.0, 0.0, 0.0);
-    if outer_on && stripe_place == 1u && stripe_k > 0.0 && mark_style == 0u {
-        let ring = aa_inside(band_out, d, outer_aa) * (1.0 - aa_inside(band_in, d, outer_aa));
-        if ring > 0.0 {
-            let edge = sector_half_span(d);
-            let wide = d * 2.0 * edge * stripe_k;
-            for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-                let mel = (in.marks.x & (1u << i)) != 0u;
-                let bas = (in.marks.y & (1u << i)) != 0u;
-                if octave_level(in.octaves, i) <= 0.0 || !(mel || bas) {
-                    continue;
-                }
-                let sa = sector_angle(i, in.cents);
-                let rel = atan2(in.uv.y, in.uv.x) - sa;
-                let phi = atan2(sin(rel), cos(rel));
-                // Beyond the sector's visible edge, on the same side as
-                // inside; it narrows with that edge, so it reaches the apex
-                // alongside the note's own wedge.
-                var out_d = -1.0;
-                if bas { out_d = d * (phi - edge); }
-                if mel && d * (-phi - edge) > out_d { out_d = d * (-phi - edge); }
-                var cov = smoothstep(-outer_aa, outer_aa, out_d)
-                    * (1.0 - smoothstep(wide - outer_aa, wide + outer_aa, out_d))
-                    * ring;
-                if stripe_contrast == 0u {
-                    cov = cov * (1.0 - keyline_cut(out_d - wide, outer_aa));
-                }
-                if cov > beside {
-                    beside = cov;
-                    beside_rgb = stripe_color(clamp(out_d / max(wide, 1e-5), 0.0, 1.0), stripe_contrast);
-                }
-            }
-        }
-    }
+    let mark_style = u32(u.misc6.x + 0.5);
+    let marks_live = u.misc6.y > 0.5;
     if outer_on {
         // Sounding slots draw bright, tinted by their own pitch, each
         // fading on its own envelope. The backdrop opacity (its own
@@ -917,31 +817,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let lit = level > 0.0;
             let is_mel = lit && (in.marks.x & (1u << i)) != 0u;
             let is_bass = lit && (in.marks.y & (1u << i)) != 0u;
-            // Widen: the marked sector spans a wider angle, growing toward
-            // its own side -- the melody clockwise (pitch runs that way),
-            // the bass counter-clockwise, a lone note both. It grows into
-            // the gap it already has, so nothing is reserved for it.
-            var grow_ccw = 0.0;
-            var grow_cw = 0.0;
-            if (mark_style == 2u || mark_style == 7u) && level > 0.0 {
-                var by = RAD_PER_OCTAVE * 0.5 * clamp(stripe_k, 0.0, 0.45);
-                if mark_style == 7u {
-                    // Throb: the same growth, breathing. Size rather than
-                    // brightness, so the note keeps all its light.
-                    by = by * THROB_SWING * (0.5 - 0.5 * cos(mark_phase() * TAU));
-                }
-                if (in.marks.y & (1u << i)) != 0u { grow_ccw = by; }
-                if (in.marks.x & (1u << i)) != 0u { grow_cw = by; }
-            }
-            // Focus: the outer voices stay crisp and the inner ones soften,
-            // as though the marked notes were the plane in focus. Only the
-            // edge width changes -- shape, color and brightness do not.
-            var slot_aa = outer_aa;
-            if mark_style == 5u && marks_live && ((in.marks.x | in.marks.y) & (1u << i)) == 0u {
-                slot_aa = outer_aa * (1.0 + clamp(stripe_k, 0.0, 0.45) / 0.45 * FOCUS_SOFT);
-            }
-            let shape =
-                outer_glyph_grown(i, in.cents, in.uv, band_in, band_out, grow_ccw, grow_cw, slot_aa);
+            let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -965,96 +841,66 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
                 let is_marked = ((in.marks.x | in.marks.y) & (1u << i)) != 0u;
-                let amt = clamp(stripe_k, 0.0, 0.45) / 0.45;
-                if mark_style == 3u && is_marked {
-                    // Glow: lift toward white until the bloom pass's
-                    // threshold is crossed, so this sector alone halos.
-                    slot_rgb = mix(slot_rgb, vec3<f32>(1.0, 1.0, 1.0), amt * GLOW_LIFT);
+                let amount = clamp(stripe_k, 0.0, 1.0);
+                let phase = mark_phase();
+                if mark_style == 0u && is_marked {
+                    // Pulse: breathe about the note's own color. Symmetric,
+                    // so however light or dark the note is there is always a
+                    // half of the swing with somewhere to go.
+                    slot_rgb = slot_rgb * (1.0 + amount * PULSE_DEPTH * sin(phase * TAU));
                 }
-                if mark_style == 4u && is_marked {
-                    let breath = 0.5 - 0.5 * cos(mark_phase() * TAU);
-                    slot_rgb = slot_rgb * (1.0 - amt * PULSE_DEPTH * breath);
-                }
-                if mark_style == 6u && is_marked {
-                    // Sweep: a bright band running the length of the
-                    // sector -- outward for the melody, inward for the
-                    // bass, so the motion says which end it is. A lone
-                    // note is both, and sweeps both ways at once.
+                if mark_style == 1u && is_marked {
+                    // Sweep: a band running the sector's length -- outward
+                    // for the melody, inward for the bass, so the motion
+                    // says which end it is. It pushes AWAY from the note's
+                    // own luminance, so it reads on any note; lifting only
+                    // toward white, as this first did, vanished on the pale
+                    // high notes the melody sits among.
                     let along = clamp((d - band_in) / max(band_out - band_in, 1e-4), 0.0, 1.0);
-                    let phase = mark_phase();
                     var hit = 0.0;
                     if (in.marks.x & (1u << i)) != 0u {
                         hit = max(hit, 1.0 - smoothstep(0.0, SWEEP_WIDTH, abs(along - phase)));
                     }
                     if (in.marks.y & (1u << i)) != 0u {
-                        hit = max(hit, 1.0 - smoothstep(0.0, SWEEP_WIDTH, abs(along - (1.0 - phase))));
+                        hit = max(
+                            hit,
+                            1.0 - smoothstep(0.0, SWEEP_WIDTH, abs(along - (1.0 - phase))),
+                        );
                     }
-                    slot_rgb = mix(
-                        slot_rgb,
-                        vec3<f32>(1.0, 1.0, 1.0),
-                        amt * SWEEP_LIFT * hit,
-                    );
+                    slot_rgb = away_from(slot_rgb, amount * SWEEP_LIFT * hit);
                 }
-                if mark_style == 1u && marks_live
-                    && ((in.marks.x | in.marks.y) & (1u << i)) == 0u
-                {
-                    // Emphasis: this is an inner voice, so it recedes. On
-                    // the COLOR, never on the coverage -- dimming coverage
-                    // makes a sector translucent rather than dark, softening
-                    // its edges and letting the glow through, which costs
-                    // the whole layer its crispness.
-                    let amt = clamp(stripe_k, 0.0, 0.45) / 0.45;
-                    let recede = u32(u.misc7.z + 0.5);
+                if mark_style == 2u && is_marked {
+                    // Alternate: the two ends breathe in antiphase, so the
+                    // pair reads as a pair and the trade between them shows
+                    // even when both notes sit at the same brightness. A
+                    // note that is both takes the melody's phase.
+                    var ph = phase;
+                    if (in.marks.x & (1u << i)) == 0u {
+                        ph = phase + 0.5;
+                    }
+                    slot_rgb = slot_rgb * (1.0 + amount * PULSE_DEPTH * sin(ph * TAU));
+                }
+                if mark_style == 3u && is_marked {
+                    // Hue: drift around the wheel. Hue has no ends to fall
+                    // off -- it wraps -- so there is no note it cannot move.
+                    slot_rgb = hue_rotate(slot_rgb, amount * phase * TAU);
+                }
+                if mark_style == 5u && is_marked {
+                    // Glow: lift toward white until the bloom pass's
+                    // threshold is crossed, so this sector alone halos.
+                    slot_rgb = mix(slot_rgb, vec3<f32>(1.0, 1.0, 1.0), amount * GLOW_LIFT);
+                }
+                if mark_style == 4u && marks_live && !is_marked {
+                    // Emphasis: an inner voice, so it recedes -- on the
+                    // COLOR, never on the coverage, which would make it
+                    // translucent rather than dark and soften its edges.
+                    let recede = u32(u.misc6.z + 0.5);
                     if recede != 1u {
                         let grey = dot(slot_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-                        slot_rgb = mix(slot_rgb, vec3<f32>(grey), amt * EMPHASIS_GREY);
+                        slot_rgb = mix(slot_rgb, vec3<f32>(grey), amount * EMPHASIS_GREY);
                     }
                     if recede != 0u {
-                        slot_rgb = slot_rgb * (1.0 - amt * EMPHASIS_DIM);
-                    }
-                }
-                if (is_mel || is_bass) && stripe_k > 0.0 && stripe_place == 0u && mark_style == 0u {
-                    // The mark: a stripe down one angular SIDE of this
-                    // sector. Pitch runs clockwise, so each takes the edge
-                    // facing its own direction -- the melody toward the
-                    // next octave up, the bass toward the next one down.
-                    // A note that is both takes both sides and keeps its
-                    // own colour in the middle.
-                    let sa = sector_angle(i, in.cents);
-                    let rel = atan2(in.uv.y, in.uv.x) - sa;
-                    let phi = atan2(sin(rel), cos(rel));
-                    let full = max(d * 2.0 * sector_half_span(d) * stripe_k, 1e-5);
-                    var stripe = 0.0;
-                    var across = 0.0;
-                    // Each marked side cuts its OWN keyline gap: a lone
-                    // held note stripes both sides, and cutting only one
-                    // left the other running straight into the note.
-                    var cut = 0.0;
-                    if is_bass {
-                        let off = stripe_offset(phi, d, stripe_k);
-                        let w = smoothstep(-outer_aa, outer_aa, off);
-                        if w > stripe {
-                            stripe = w;
-                            across = 1.0 - clamp(off / full, 0.0, 1.0);
-                        }
-                        cut = max(cut, keyline_cut(off, outer_aa));
-                    }
-                    if is_mel {
-                        let off = stripe_offset(-phi, d, stripe_k);
-                        let w = smoothstep(-outer_aa, outer_aa, off);
-                        if w > stripe {
-                            stripe = w;
-                            across = 1.0 - clamp(off / full, 0.0, 1.0);
-                        }
-                        cut = max(cut, keyline_cut(off, outer_aa));
-                    }
-                    slot_rgb = mix(
-                        slot_rgb,
-                        stripe_color(across, stripe_contrast),
-                        stripe * MARK_TINT_AMOUNT,
-                    );
-                    if stripe_contrast == 0u {
-                        cov = cov * (1.0 - cut);
+                        slot_rgb = slot_rgb * (1.0 - amount * EMPHASIS_DIM);
                     }
                 }
             }
@@ -1064,14 +910,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             }
         }
     }
-    // The sectors over the alongside stripe, so a lit octave always wins
-    // its own pixels and the mark fills only what is otherwise empty.
-    if beside > 0.0 {
-        let combined = glyph + beside * (1.0 - glyph);
-        glyph_rgb = (glyph_rgb * glyph + beside_rgb * beside * (1.0 - glyph)) / max(combined, 1e-4);
-        glyph = combined;
-    }
-
     // Fade a soft (low-solidity) glyph out across the billboard's margin
     // instead of letting the quad boundary clip it flat. The fade starts at
     // uv 1.0 — the outer band's own limit — so a crisp glyph (which never

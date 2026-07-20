@@ -208,7 +208,6 @@ pub fn derive_scene(
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
-        mark_contrast: view.mark_contrast,
         mark_style: view.mark_style,
         mark_recede: view.mark_recede,
         mark_rate: view.mark_rate.clamp(0.05, 6.0),
@@ -216,10 +215,7 @@ pub fn derive_scene(
         // only inner voices carries no marks of its own, and still has to
         // recede when the chord has outer ones somewhere.
         marks_active,
-        mark_place: view.mark_place,
-        mark_keyline: view.mark_keyline.clamp(0.0, 0.2),
-        // Half would let the two sides of a lone note's sector meet.
-        mark_width: view.mark_width.clamp(0.0, 0.45),
+        mark_width: view.mark_width.clamp(0.0, 1.0),
         pitch_lut: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
