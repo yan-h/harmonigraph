@@ -160,7 +160,8 @@ struct Uniforms {
     /// x: how the melody/bass marks are drawn (`MarkStyle::shader_index`);
     /// y: 1 when any node carries a mark this frame (Emphasis dims the
     /// unmarked voices scene-wide, so it cannot be judged per node);
-    /// z, w unused.
+    /// z: how the inner voices recede under Emphasis
+    /// (`MarkRecede::shader_index`); w unused.
     misc7: [f32; 4],
 }
 
@@ -376,7 +377,7 @@ impl LatticeCallback {
                 misc7: [
                     scene.mark_style.shader_index() as f32,
                     f32::from(scene.marks_active),
-                    0.0,
+                    scene.mark_recede.shader_index() as f32,
                     0.0,
                 ],
             },

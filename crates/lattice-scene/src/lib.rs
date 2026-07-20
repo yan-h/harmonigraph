@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, MarkStyle, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -196,6 +196,8 @@ pub struct Scene {
     pub mark_contrast: MarkContrast,
     /// How the melody/bass marks are drawn (see [`MarkStyle`]).
     pub mark_style: MarkStyle,
+    /// How the inner voices recede under Emphasis (see [`MarkRecede`]).
+    pub mark_recede: MarkRecede,
     /// Whether ANY node carries a mark this frame. [`MarkStyle::Emphasis`]
     /// dims the unmarked voices, which is a whole-scene judgement: a node
     /// holding only inner voices has no marks of its own and must still

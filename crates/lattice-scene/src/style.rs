@@ -253,6 +253,39 @@ impl MarkStyle {
     }
 }
 
+/// How the inner voices recede under [`MarkStyle::Emphasis`].
+///
+/// All three act on the sector's COLOR, never on its coverage. Dimming
+/// coverage — what this did first — makes a sector translucent rather than
+/// dark: its edges soften, the glow behind shows through, and the crisp
+/// gaps between octaves go mushy. That is a real loss of contrast across
+/// the whole layer, and it is not what was being asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MarkRecede {
+    /// Drain the color, keeping the brightness. The inner voices stay
+    /// exactly as visible as they were — same luminance, same edges — and
+    /// give up only their hue, so the outer two are the only sectors still
+    /// carrying color. Costs the least contrast of the three.
+    #[default]
+    Grey,
+    /// Darken, keeping the hue. Every voice keeps its pitch color; the
+    /// inner ones simply sit further back.
+    Dim,
+    /// Both at once, for when one alone is not separation enough.
+    Both,
+}
+
+impl MarkRecede {
+    /// Index used by the shader (uniform `misc7.z`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            MarkRecede::Grey => 0,
+            MarkRecede::Dim => 1,
+            MarkRecede::Both => 2,
+        }
+    }
+}
+
 /// Which side of the marked sector's edge the white sits on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MarkPlace {

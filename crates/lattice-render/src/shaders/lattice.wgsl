@@ -58,7 +58,8 @@ struct Uniforms {
     misc6: vec4<f32>,
     // x: how the melody/bass marks are drawn (MarkStyle's shader_index:
     // 0 stripe, 1 emphasis, 2 widen). y: 1 when any node carries a mark
-    // this frame. z, w unused.
+    // this frame. z: how the inner voices recede under Emphasis
+    // (MarkRecede's shader_index: 0 grey, 1 dim, 2 both). w unused.
     misc7: vec4<f32>,
 };
 
@@ -631,10 +632,12 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // the note's own survives inside it and the mark still reads as belonging
 // to that note.
 const MARK_TINT_AMOUNT: f32 = 0.9;
-// Emphasis: how far the Width bar can carry the inner voices down. At the
-// bar's top this leaves them at about a quarter strength -- still legible
-// as notes, clearly behind the outer two.
-const EMPHASIS_DIM: f32 = 1.7;
+// Emphasis, at the Width bar's top: how far the inner voices are drained of
+// color, and how far they are darkened. Greying is carried nearly all the
+// way, because it costs no visibility at all -- a grey sector is exactly as
+// present as a colored one. Darkening is held well back, because it does.
+const EMPHASIS_GREY: f32 = 0.95;
+const EMPHASIS_DIM: f32 = 0.55;
 
 
 // The melody/bass stripe's color at `t` — the fraction of the way in from
@@ -918,14 +921,26 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // instead, leaving the outer two at full. With one or two
                 // notes held every note is an extreme, so nothing dims and
                 // the mark costs nothing when it has nothing to say.
-                if mark_style == 1u && marks_live {
-                    let marked = ((in.marks.x | in.marks.y) & (1u << i)) != 0u;
-                    if !marked {
-                        cov = cov * (1.0 - clamp(stripe_k, 0.0, 0.45) * EMPHASIS_DIM);
-                    }
-                }
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
+                if mark_style == 1u && marks_live
+                    && ((in.marks.x | in.marks.y) & (1u << i)) == 0u
+                {
+                    // Emphasis: this is an inner voice, so it recedes. On
+                    // the COLOR, never on the coverage -- dimming coverage
+                    // makes a sector translucent rather than dark, softening
+                    // its edges and letting the glow through, which costs
+                    // the whole layer its crispness.
+                    let amt = clamp(stripe_k, 0.0, 0.45) / 0.45;
+                    let recede = u32(u.misc7.z + 0.5);
+                    if recede != 1u {
+                        let grey = dot(slot_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+                        slot_rgb = mix(slot_rgb, vec3<f32>(grey), amt * EMPHASIS_GREY);
+                    }
+                    if recede != 0u {
+                        slot_rgb = slot_rgb * (1.0 - amt * EMPHASIS_DIM);
+                    }
+                }
                 if (is_mel || is_bass) && stripe_k > 0.0 && stripe_place == 0u && mark_style == 0u {
                     // The mark: a stripe down one angular SIDE of this
                     // sector. Pitch runs clockwise, so each takes the edge

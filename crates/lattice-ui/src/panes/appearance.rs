@@ -6,7 +6,8 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
 use lattice_scene::{
-    HighlightExtremes, IdleMarker, MarkContrast, MarkPlace, MarkStyle, NodeStyle, OuterStyle,
+    HighlightExtremes, IdleMarker, MarkContrast, MarkPlace, MarkRecede, MarkStyle, NodeStyle,
+    OuterStyle,
 };
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
@@ -184,6 +185,32 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         ),
                     ],
                 );
+                // Emphasis only: how the inner voices give way. All three
+                // act on color, never on coverage -- see MarkRecede.
+                ui.add_enabled_ui(state.view.mark_style == MarkStyle::Emphasis, |ui| {
+                    choice_row(
+                        ui,
+                        "Recede",
+                        &mut state.view.mark_recede,
+                        &[
+                            (
+                                MarkRecede::Grey,
+                                "Grey",
+                                "Drain the color, keep the brightness: the inner \
+                                 voices stay just as visible and give up only \
+                                 their hue, so the outer two are the only \
+                                 sectors still in color",
+                            ),
+                            (
+                                MarkRecede::Dim,
+                                "Dim",
+                                "Darken, keep the hue: every voice keeps its \
+                                 pitch color, the inner ones just sit back",
+                            ),
+                            (MarkRecede::Both, "Both", "Drained and darkened"),
+                        ],
+                    );
+                });
                 ui.add_enabled_ui(state.view.mark_style == MarkStyle::Stripe, |ui| {
                 choice_row(
                     ui,
