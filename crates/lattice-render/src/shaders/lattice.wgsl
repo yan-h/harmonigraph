@@ -820,32 +820,53 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     // than in uv: a sector narrows toward the hub, where a
                     // fixed-width stripe would swell to fill it and the two
                     // sides would merge into one.
+                    // A SUB-SLICE of the sector: bounded by rays from the
+                    // node's centre, so it converges to the hub exactly as
+                    // the sector it marks does.
+                    //
+                    // Measured in ANGLE, as a fraction of the sector's
+                    // VISIBLE half-span. That span narrows toward the hub
+                    // -- the gap between sectors is a constant thickness,
+                    // so it eats a growing share of the wedge as the wedge
+                    // gets small -- and taking the fraction of what is
+                    // actually drawn is what keeps the stripe a constant
+                    // slice of it all the way in.
                     let sa = sector_angle(i, in.cents);
                     let hb = RAD_PER_OCTAVE * 0.5;
-                    let e1 = vec2<f32>(cos(sa + hb), sin(sa + hb));
-                    let e2 = vec2<f32>(cos(sa - hb), sin(sa - hb));
-                    let span = max(d * SIN_SECTOR_WIDTH, 1e-4);
-                    let soft = max(outer_aa / span, 1e-3);
-                    // Distance in from whichever marked edge is nearer, as
-                    // a fraction: 0 at the edge, 1 across the sector.
+                    let rel = atan2(in.uv.y, in.uv.x) - sa;
+                    let phi = atan2(sin(rel), cos(rel));
+                    // Where the sector's drawn edge sits, in angle: the
+                    // constant-thickness gap subtends more of it the closer
+                    // in you look.
+                    let eaten = asin(clamp(slice_gap_half() / max(d, 1e-4), 0.0, 1.0));
+                    let edge_phi = max(hb - eaten, 0.0);
+                    let stripe_w = 2.0 * edge_phi * stripe_k;
+                    // A pixel of arc is aa/d of angle. Bounded, unlike the
+                    // fraction-of-width form this replaced, whose softness
+                    // diverged as the sector narrowed and washed the stripe
+                    // across the whole wedge near the hub.
+                    let soft = clamp(outer_aa / max(d, 1e-4), 1e-4, hb);
                     var stripe = 0.0;
-                    var into = 1.0;
+                    var into = stripe_w;
+                    // Pitch runs clockwise, so the bass takes the
+                    // counter-clockwise edge and the melody the clockwise
+                    // one -- each the side facing its own direction.
                     if is_bass {
-                        let t = abs(in.uv.x * e1.y - in.uv.y * e1.x) / span;
-                        let w = 1.0 - smoothstep(stripe_k - soft, stripe_k + soft, t);
-                        if w > stripe { stripe = w; into = t; }
+                        let from_edge = edge_phi - phi;
+                        let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
+                        if w > stripe { stripe = w; into = from_edge; }
                     }
                     if is_mel {
-                        let t = abs(in.uv.x * e2.y - in.uv.y * e2.x) / span;
-                        let w = 1.0 - smoothstep(stripe_k - soft, stripe_k + soft, t);
-                        if w > stripe { stripe = w; into = t; }
+                        let from_edge = phi + edge_phi;
+                        let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
+                        if w > stripe { stripe = w; into = from_edge; }
                     }
                     var tint_rgb = stripe_tint(slot_rgb, stripe_tint_mode);
                     if stripe_tint_mode == 3u {
                         // Bevel: dark against the edge, light just inside
                         // it. Whatever the note's color, one of the two
                         // halves contrasts with it.
-                        let outer_half = into < stripe_k * 0.5;
+                        let outer_half = into < stripe_w * 0.5;
                         tint_rgb = select(
                             vec3<f32>(1.0, 1.0, 1.0),
                             vec3<f32>(0.0, 0.0, 0.0),

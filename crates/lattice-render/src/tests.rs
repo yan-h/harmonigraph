@@ -482,6 +482,15 @@ fn melody_bass_marks_stripe_the_sides_of_their_sector() {
         differs(&both, &melody) > 0 && differs(&both, &bass_only) > 0,
         "a both-ends mark is indistinguishable from a single-ended one"
     );
+
+    // NOT tested here: that the stripe is a sub-slice bounded by rays from
+    // the node's centre, converging on the hub as its sector does. Sampling
+    // its angular width along the radius is the obvious check and does not
+    // work -- near the hub the sector is a few pixels across, and
+    // rasterization noise swamps the ~10% the regression actually moved it
+    // (an attempt at this failed on the correct shader and passed on the
+    // broken one). It was checked by eye instead, on pie wedges, where the
+    // sector runs right to the hub and the shape is unmistakable.
 }
 
 #[test]
@@ -644,6 +653,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 
