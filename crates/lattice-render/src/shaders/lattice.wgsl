@@ -54,7 +54,8 @@ struct Uniforms {
     // rings. w: melody/bass ring thickness, same units; 0 = no rings.
     misc5: vec4<f32>,
     // x: how the melody/bass marks are drawn (MarkStyle's shader_index:
-    // 0 rings, 1 extend, 2 cut, 3 point, 4 cap, 5 notch). y, z, w unused.
+    // 0 rings, 1 extend, 2 cut, 3 point, 4 cap, 5 notch, 6 side).
+    // y, z, w unused.
     misc6: vec4<f32>,
 };
 
@@ -275,6 +276,11 @@ const IDLE_RING_THICK: f32 = 0.09;
 // perpendicular distance from its bisector to its own centre ray. Tapering
 // to a point means driving the threshold there (see outer_glyph).
 const SIN_HALF_SECTOR: f32 = 0.3826834;
+// Sine of the sector's FULL angular width: the perpendicular distance from
+// one bounding line to the sector's far edge, at radius 1. Normalizing by
+// it turns those distances into a 0..1 sweep across the sector, which is
+// how the Side style measures in from each edge.
+const SIN_SECTOR_WIDTH: f32 = 0.7071068;
 
 // As outer_glyph, plus a taper: past `taper_out` the sector narrows to a
 // point at `outer`, and below `taper_in` it narrows to a point at `inner`.
@@ -962,6 +968,36 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
+                if mark_style == 6u {
+                    // Side: lighten the sector's angular EDGES rather than
+                    // its radial ends. Pitch runs clockwise around the node,
+                    // so each mark lights the edge facing its own direction
+                    // -- the melody toward the next octave up, the bass
+                    // toward the next one down.
+                    //
+                    // Measured as a fraction of the sector's width rather
+                    // than in uv, so the stripe keeps an even angular width
+                    // instead of swelling toward the hub, where a
+                    // constant-width band would fill the whole wedge and the
+                    // two would merge.
+                    let sa = sector_angle(i, in.cents);
+                    let hb = RAD_PER_OCTAVE * 0.5;
+                    let e1 = vec2<f32>(cos(sa + hb), sin(sa + hb));
+                    let e2 = vec2<f32>(cos(sa - hb), sin(sa - hb));
+                    let n1 = abs(in.uv.x * e1.y - in.uv.y * e1.x);
+                    let n2 = abs(in.uv.x * e2.y - in.uv.y * e2.x);
+                    let span = max(d * SIN_SECTOR_WIDTH, 1e-4);
+                    let k = clamp(depth / max(band_out - band_in, 1e-4), 0.0, 0.45);
+                    let soft = max(outer_aa / span, 1e-3);
+                    var side = 0.0;
+                    if is_bass {
+                        side = max(side, 1.0 - smoothstep(k - soft, k + soft, n1 / span));
+                    }
+                    if is_mel {
+                        side = max(side, 1.0 - smoothstep(k - soft, k + soft, n2 / span));
+                    }
+                    slot_rgb = mix(slot_rgb, vec3<f32>(1.0, 1.0, 1.0), side * MARK_CAP_LIGHTEN);
+                }
                 if mark_style == 4u {
                     // Cap: lighten the marked end of the sector. Lightened
                     // rather than recolored, so the note's hue -- which is

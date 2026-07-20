@@ -634,6 +634,7 @@ fn the_mark_style_reaches_the_scene() {
         MarkStyle::Point,
         MarkStyle::Notch,
         MarkStyle::Cap,
+        MarkStyle::Side,
     ] {
         let view = ViewConfig { mark_style: style, ..ViewConfig::default() };
         let scene = scene_of(
@@ -654,6 +655,7 @@ fn the_mark_style_reaches_the_scene() {
         MarkStyle::Point,
         MarkStyle::Notch,
         MarkStyle::Cap,
+        MarkStyle::Side,
     ] {
         assert!(seen.insert(style.shader_index()), "{style:?} reuses an index");
     }

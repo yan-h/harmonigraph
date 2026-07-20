@@ -226,6 +226,12 @@ pub enum MarkStyle {
     Notch,
     /// The marked end of the sector is lightened, keeping the note's hue.
     Cap,
+    /// As [`Cap`](MarkStyle::Cap), but on the sector's angular SIDES rather
+    /// than its radial ends: the melody lights the edge facing the next
+    /// octave up, the bass the edge facing the next one down. A lone note
+    /// lights both sides and keeps a stripe of its own color down the
+    /// middle.
+    Side,
 }
 
 impl MarkStyle {
@@ -238,6 +244,7 @@ impl MarkStyle {
             MarkStyle::Point => 3,
             MarkStyle::Cap => 4,
             MarkStyle::Notch => 5,
+            MarkStyle::Side => 6,
         }
     }
 

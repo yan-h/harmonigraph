@@ -186,6 +186,13 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                             "The marked end of the sector is lightened, keeping \
                              the note's own hue",
                         ),
+                        (
+                            MarkStyle::Side,
+                            "Side",
+                            "As Cap, but on the sector's sides: the melody lights \
+                             the edge facing the next octave up, the bass the \
+                             edge facing the next one down",
+                        ),
                     ],
                 );
                 ValueBar::new(&mut state.view.mark_thickness, 0.0..=0.3, "Thickness")
