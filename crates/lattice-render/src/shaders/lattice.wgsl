@@ -631,6 +631,11 @@ fn stripe_color(t: f32, mode: u32) -> vec3<f32> {
     return vec3<f32>(1.0, 1.0, 1.0);
 }
 
+// The most of a stripe's width the keyline may take once the stripe grows
+// narrower than the keyline is wide (half of it, so a half-width of a
+// quarter each side of the boundary).
+const MARK_KEYLINE_MAX: f32 = 0.25;
+
 // The keyline: a gap knocked through the sector where the white stripe
 // meets the note, built exactly as the gaps between sectors are -- a
 // constant perpendicular thickness either side of the boundary, so it holds
@@ -642,8 +647,15 @@ fn stripe_color(t: f32, mode: u32) -> vec3<f32> {
 // stripe's own coverage is fading out, so a line drawn AT the stripe's
 // opacity was faded out precisely where it needed to be strongest, and its
 // apparent width came from the antialiasing rather than from its setting.
-fn keyline_cut(off: f32, d: f32, aa: f32) -> f32 {
-    let half = u.misc6.y * 0.5;
+fn keyline_cut(off: f32, d: f32, stripe_arc: f32, aa: f32) -> f32 {
+    // Constant width where there is room for it -- but never more than a
+    // share of the stripe it divides. Toward the hub the sector narrows to
+    // nothing and takes the stripe with it, and a fixed width overtakes the
+    // whole stripe well before the centre: the white would stop short while
+    // its own sector carried on in, which reads as a mark that does not
+    // start from the middle. Capped, the keyline converges with everything
+    // else.
+    let half = min(u.misc6.y * 0.5, stripe_arc * MARK_KEYLINE_MAX);
     if half <= 0.0 {
         return 0.0;
     }
@@ -822,7 +834,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     * ring;
                 var here = cov;
                 if stripe_contrast == 0u {
-                    here = here * (1.0 - keyline_cut(out_t - stripe_w, d, outer_aa));
+                    here = here * (1.0 - keyline_cut(out_t - stripe_w, d, d * stripe_w, outer_aa));
                 }
                 if here > beside {
                     beside = here;
@@ -921,13 +933,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                         let from_edge = edge_phi - phi;
                         let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
                         if w > stripe { stripe = w; into = from_edge; }
-                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, outer_aa));
+                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, d * stripe_w, outer_aa));
                     }
                     if is_mel {
                         let from_edge = phi + edge_phi;
                         let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
                         if w > stripe { stripe = w; into = from_edge; }
-                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, outer_aa));
+                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, d * stripe_w, outer_aa));
                     }
                     let across = into / max(stripe_w, 1e-5);
                     slot_rgb = mix(
