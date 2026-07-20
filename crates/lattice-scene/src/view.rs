@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkStyle, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkTint, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -141,36 +141,21 @@ pub struct ViewConfig {
     /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
-    /// How the melody/bass marks are drawn: as rings of their own, or by
-    /// reshaping the sector of the note responsible (see [`MarkStyle`]).
+    /// How the melody/bass stripe is colored against the sector it marks
+    /// (see [`MarkTint`]).
     #[serde(default)]
-    pub mark_style: MarkStyle,
-    /// Opacity of the part of a mark ring that is cut off from the octave
-    /// responsible for it, 0..1.
+    pub mark_tint: MarkTint,
+    /// How wide the melody/bass stripe is, as a fraction of the marked
+    /// sector's angular width.
     ///
-    /// Each ring is slit at that octave's two sector boundaries — the slit
-    /// IS the gap between two octaves, continued outward — which leaves the
-    /// stretch of ring belonging to the marked octave separated from the
-    /// remainder of the circle. That stretch always draws at full strength;
-    /// this fades everything else. 1 keeps the whole circle (the ring reads
-    /// as a ring, merely broken); 0 leaves only the arc over the marked
-    /// octave, which says WHICH octave loudly at the cost of the shape.
-    ///
-    /// A Gap of 0 leaves no slit, so there is nothing to separate and this
-    /// has no effect.
-    #[serde(default = "default_mark_unlinked")]
-    pub mark_unlinked: f32,
-    /// How thick each melody/bass ring is, in quad UV units — the same
-    /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
-    /// three read against each other directly. One thickness for both
-    /// rings: they are one mark seen at two radii, and letting them differ
-    /// would say something that isn't true.
-    ///
-    /// 0 turns the rings off, as a radius of 0 turns the core off. Was
-    /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
-    /// the band was resized; absolute holds them still.
-    #[serde(default = "default_mark_thickness")]
-    pub mark_thickness: f32,
+    /// A fraction rather than a distance: a sector narrows toward the hub,
+    /// so a fixed-width stripe would swell to fill it down there, and the
+    /// two sides of a lone note's sector would merge into one. 0 leaves no
+    /// stripe. The alias keeps blobs from when this was the mark rings'
+    /// thickness loading; the value means something else now, but it is in
+    /// the same ballpark and beats dropping the persist.
+    #[serde(default = "default_mark_width", alias = "mark_thickness")]
+    pub mark_width: f32,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -269,16 +254,10 @@ fn default_outer_solidity() -> f32 {
     1.0
 }
 
-/// The whole circle at full strength: the ring reads as a ring, and the
-/// slits alone say which octave owns it.
-fn default_mark_unlinked() -> f32 {
-    1.0
-}
-
-/// What 0.16 of the band's width came to at the default band, which is
-/// what the rings were fixed at before this was a bar.
-fn default_mark_thickness() -> f32 {
-    0.09
+/// A third of the sector to each side, which leaves a third of the note's
+/// own color showing between them when one note is both melody and bass.
+fn default_mark_width() -> f32 {
+    0.33
 }
 
 /// The gap the sectors always had (SLICE_GAP_HALF was 0.06 either side of
@@ -430,9 +409,8 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            mark_style: MarkStyle::default(),
-            mark_unlinked: default_mark_unlinked(),
-            mark_thickness: default_mark_thickness(),
+            mark_tint: MarkTint::default(),
+            mark_width: default_mark_width(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,

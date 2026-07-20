@@ -108,10 +108,6 @@ fn parity_scene() -> Scene {
             // and one claiming both slots at once (the split mark).
             melody_slots: if i == 0 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
             bass_slots: if i == 2 || i == 4 { 1 << (i as usize % lattice_scene::OCTAVE_SLOTS) } else { 0 },
-            melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
-            bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
-            melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
-            bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
         });
     }
     let grid = vec![
@@ -136,9 +132,8 @@ fn parity_scene() -> Scene {
         time: 1.25,
         node_radius: 0.34,
         outer_style: Default::default(),
-        mark_style: Default::default(),
-        mark_unlinked: 1.0,
-        mark_thickness: 0.09,
+        mark_tint: Default::default(),
+        mark_width: 0.33,
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -382,12 +377,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         bass_slots,
         // A mark draws at the level its own note is at; these stand in for
         // a freshly-held note.
-        melody_level: f32::from(melody_slots != 0),
-        bass_level: f32::from(bass_slots != 0),
-        // Distinct hues so the both-ends check below can tell the two
-        // rings apart; in the app these are the marked notes' own colors.
-        melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
-        bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
     }];
     scene.grid.clear();
     // Fill a good share of the frame, so the measurements below are
@@ -397,7 +386,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
 }
 
 #[test]
-fn melody_bass_marks_are_visible_as_rings_around_the_band() {
+fn melody_bass_marks_stripe_the_sides_of_their_sector() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
@@ -447,22 +436,22 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
             .count()
     };
 
-    // Measure against the node's OWN footprint, not an absolute pixel
-    // count: what matters is that the mark claims a real share of the
-    // thing it is marking, at whatever size it happens to be drawn.
+    // The sector a mark stripes is one of ten, and the stripe is a
+    // fraction of that, so measure it against the SECTOR rather than the
+    // node: a share of the whole node would be a couple of percent however
+    // bold the mark looked.
     let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
+    let sector_px = node_px / lattice_scene::OCTAVE_SLOTS;
     let melody = shot(&single_marked_node(1, 0), 41);
-    let both_px = changed_px(&melody);
-    eprintln!("node {node_px} px; mark {both_px}");
-    // A floor, not a target, measured against the node's whole lit
-    // footprint (glow included). The mark is a full ring bracketing the
-    // octave band, so it claims a real share; the floor exists because an
-    // early version drew a sub-pixel arc that read as nothing at all in the
-    // DAW (well under 1%), which is what this catches. Current: ~36%.
+    let one_end = changed_px(&melody);
+    eprintln!("node {node_px} px, ~sector {sector_px}; one-end stripe {one_end}");
+    // A floor, not a target. The stripe is a tint on part of one sector,
+    // deliberately restrained -- but an early mark drew a sub-pixel arc
+    // that read as nothing at all in the DAW, which is what this catches.
     assert!(
-        both_px * 8 > node_px,
-        "the mark ring covers too little of the node to find: \
-         {both_px} px of {node_px}"
+        one_end * 4 > sector_px,
+        "the stripe covers too little of its sector to find: \
+         {one_end} px against a sector of about {sector_px}"
     );
 
     // Nothing marked draws no mark at all.
@@ -470,27 +459,27 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     assert_eq!(changed_px(&off), 0, "an unmarked node must draw no mark");
 
     // A note claimed by BOTH ends -- a lone held note, or a chord whose top
-    // and bottom share a pitch class -- used to be blanked, so the mark
-    // vanished exactly when two things were true at once. The two ends are
-    // now rings at DIFFERENT radii, so both simply draw: the result must
-    // cover at least as much as one end alone. This guards that.
-    let split = shot(&single_marked_node(1, 1), 45);
-    let split_px = changed_px(&split);
-    eprintln!("split mark {split_px} px of {node_px}");
+    // and bottom share a pitch class -- is the case every version of this
+    // mark has had to survive. The two ends take opposite SIDES of the one
+    // sector, so both simply draw: the result must cover more than either
+    // end alone.
+    let both = shot(&single_marked_node(1, 1), 45);
+    let both_px = changed_px(&both);
+    eprintln!("both-ends stripe {both_px} px");
     assert!(
-        split_px >= both_px,
+        both_px > one_end,
         "a mark claimed by both ends all but disappeared: \
-         {split_px} px against {both_px} for one end alone"
+         {both_px} px against {one_end} for one end alone"
     );
 
-    // ...and it really is BOTH rings, not one end quietly winning: the
+    // ...and it really is BOTH sides, not one end quietly winning: the
     // melody-only and bass-only pictures must each differ from it.
     let bass_only = shot(&single_marked_node(0, 1), 46);
     let differs = |a: &[u8], b: &[u8]| {
         a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
     };
     assert!(
-        differs(&split, &melody) > 0 && differs(&split, &bass_only) > 0,
+        differs(&both, &melody) > 0 && differs(&both, &bass_only) > 0,
         "a both-ends mark is indistinguishable from a single-ended one"
     );
 }
@@ -655,6 +644,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 

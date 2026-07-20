@@ -191,67 +191,56 @@ impl HighlightExtremes {
     }
 }
 
-/// How the melody and bass are marked.
+/// How the melody/bass stripe is colored against the sector it marks.
 ///
-/// Two families. [`Rings`](MarkStyle::Rings) draws the mark as its own
-/// geometry — a ring bracketing the octave band on each side — and leaves
-/// the octave sectors untouched. The rest modify the SECTOR of the note
-/// responsible instead, so the mark is part of the note rather than an
-/// annotation beside it.
+/// The mark itself has settled: a stripe down one angular SIDE of the
+/// marked note's own sector — the melody along the edge facing the next
+/// octave up, the bass along the edge facing the next one down. That
+/// placement rhymes with the pitch mapping the lattice already has, and it
+/// is what makes a lone held note work: it is its own melody and bass, so
+/// it takes both sides and keeps a stripe of its own color between them.
 ///
-/// Every one of them acts at the sector's OUTER end for the melody and its
-/// INNER end for the bass — higher note, further out. That is what makes a
-/// lone held note work: it is its own melody and bass, so it simply gets
-/// both ends, and the two never contend for the same pixels.
+/// What is still open is the color. A stripe has to stay legible against
+/// the note under it, and the note can be any color on the pitch ramp —
+/// which runs near-black at the bottom to near-white at the top, so the
+/// melody mark lands on the palest sectors there are. These are the
+/// candidates, switchable to compare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum MarkStyle {
-    /// A ring outside the band for the melody, inside it for the bass,
-    /// slit either side of the sector responsible.
+pub enum MarkTint {
+    /// Toward white on a dark note, toward black on a light one, picked
+    /// from the sector's own luminance. The only one that cannot wash out,
+    /// and so the default.
     #[default]
-    Rings,
-    /// The sector reaches past the band — outward for the melody, inward
-    /// for the bass, both ends when one note is each.
-    Extend,
-    /// The sector is slit across, cutting a piece off its outer end for the
-    /// melody and its inner end for the bass. The slit is the gap between
-    /// two octaves turned ninety degrees, and takes its width from the same
-    /// Gap bar.
-    Cut,
-    /// The sector tapers to a point at the marked end — a spindle when one
-    /// note is both.
-    Point,
-    /// A wedge is bitten out of the marked end, leaving two horns — an
-    /// hourglass when one note is both. The inverse of
-    /// [`Point`](MarkStyle::Point).
-    Notch,
-    /// The marked end of the sector is lightened, keeping the note's hue.
-    Cap,
-    /// As [`Cap`](MarkStyle::Cap), but on the sector's angular SIDES rather
-    /// than its radial ends: the melody lights the edge facing the next
-    /// octave up, the bass the edge facing the next one down. A lone note
-    /// lights both sides and keeps a stripe of its own color down the
-    /// middle.
-    Side,
+    Auto,
+    /// Always toward white. Reads best on the low, dark notes.
+    Light,
+    /// Always toward black. Reads best on the high, pale ones.
+    Dark,
+    /// Dark against the sector's edge, light just inside it — a bevel.
+    /// Whatever the note's color, one of the two halves contrasts with it.
+    Bevel,
+    /// The color-wheel complement: the note's own lightness, hue flipped.
+    /// Contrast in hue rather than in brightness — strong on the saturated
+    /// middle of the ramp, and weak at its ends, where a washed-out color's
+    /// complement is close to itself.
+    Hue,
+    /// The same hue at full chroma — contrast in saturation. The mirror of
+    /// [`Light`](MarkTint::Light)'s failure: it bites hardest exactly on the
+    /// pale, desaturated high notes, where lightening has nowhere to go.
+    Boost,
 }
 
-impl MarkStyle {
-    /// Index used by the shader (uniform `misc2.w`).
+impl MarkTint {
+    /// Index used by the shader (uniform `misc6.x`).
     pub fn shader_index(self) -> u32 {
         match self {
-            MarkStyle::Rings => 0,
-            MarkStyle::Extend => 1,
-            MarkStyle::Cut => 2,
-            MarkStyle::Point => 3,
-            MarkStyle::Cap => 4,
-            MarkStyle::Notch => 5,
-            MarkStyle::Side => 6,
+            MarkTint::Auto => 0,
+            MarkTint::Light => 1,
+            MarkTint::Dark => 2,
+            MarkTint::Bevel => 3,
+            MarkTint::Hue => 4,
+            MarkTint::Boost => 5,
         }
-    }
-
-    /// Whether the mark is drawn as rings of its own rather than by
-    /// reshaping the sector. The ring-only settings gray out when false.
-    pub fn is_rings(self) -> bool {
-        matches!(self, MarkStyle::Rings)
     }
 }
 

@@ -624,19 +624,18 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
 }
 
 #[test]
-fn the_mark_style_reaches_the_scene() {
-    // Which family the marks are drawn in is a whole-scene choice, not a
-    // per-node one: every node's sectors are reshaped the same way.
-    for style in [
-        MarkStyle::Rings,
-        MarkStyle::Extend,
-        MarkStyle::Cut,
-        MarkStyle::Point,
-        MarkStyle::Notch,
-        MarkStyle::Cap,
-        MarkStyle::Side,
+fn the_mark_tint_and_width_reach_the_scene() {
+    // Both are whole-scene choices, not per-node ones: every node's
+    // stripes are drawn the same way.
+    for tint in [
+        MarkTint::Auto,
+        MarkTint::Light,
+        MarkTint::Dark,
+        MarkTint::Bevel,
+        MarkTint::Hue,
+        MarkTint::Boost,
     ] {
-        let view = ViewConfig { mark_style: style, ..ViewConfig::default() };
+        let view = ViewConfig { mark_tint: tint, ..ViewConfig::default() };
         let scene = scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
@@ -644,58 +643,32 @@ fn the_mark_style_reaches_the_scene() {
             &FrameParams::default(),
             0.0,
         );
-        assert_eq!(scene.mark_style, style);
+        assert_eq!(scene.mark_tint, tint);
     }
-    // Every style has its own shader branch, so no two may share an index.
+    // Each tint has its own shader branch, so no two may share an index.
     let mut seen = std::collections::HashSet::new();
-    for style in [
-        MarkStyle::Rings,
-        MarkStyle::Extend,
-        MarkStyle::Cut,
-        MarkStyle::Point,
-        MarkStyle::Notch,
-        MarkStyle::Cap,
-        MarkStyle::Side,
+    for tint in [
+        MarkTint::Auto,
+        MarkTint::Light,
+        MarkTint::Dark,
+        MarkTint::Bevel,
+        MarkTint::Hue,
+        MarkTint::Boost,
     ] {
-        assert!(seen.insert(style.shader_index()), "{style:?} reuses an index");
+        assert!(seen.insert(tint.shader_index()), "{tint:?} reuses an index");
     }
-    assert!(MarkStyle::Rings.is_rings());
-    assert!(!MarkStyle::Point.is_rings(), "the sector styles draw no rings");
-}
 
-#[test]
-fn the_mark_ring_thickness_reaches_the_scene_and_is_clamped() {
-    // One thickness drives BOTH rings, so it lives on the scene rather
-    // than per node; 0 is the off state, as it is for the core's radius.
-    let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
+    // Half would let the two sides of a lone note's sector meet, leaving
+    // none of the note's own color between them.
+    let wide = ViewConfig { mark_width: 5.0, ..ViewConfig::default() };
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
-        &view,
+        &wide,
         &FrameParams::default(),
         0.0,
     );
-    assert_eq!(scene.mark_thickness, 0.15);
-
-    let off = ViewConfig { mark_thickness: 0.0, ..ViewConfig::default() };
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &off,
-        &FrameParams::default(),
-        0.0,
-    );
-    assert_eq!(scene.mark_thickness, 0.0, "0 passes through as the off state");
-
-    let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &wild,
-        &FrameParams::default(),
-        0.0,
-    );
-    assert!(scene.mark_thickness <= 0.4, "got {}", scene.mark_thickness);
+    assert!(scene.mark_width <= 0.45, "got {}", scene.mark_width);
 }
 
 #[test]

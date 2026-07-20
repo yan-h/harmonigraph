@@ -146,13 +146,13 @@ struct Uniforms {
     /// this buffer, so trailing fields are safe to add here.)
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
-    /// width; y: opacity of the part of a melody/bass ring cut off from the
-    /// octave that owns it; z: the octave layer's padding (sector-to-sector
-    /// and band-to-ring alike); w: melody/bass ring thickness, 0 = off.
+    /// width; y unused; z: the octave layer's padding between neighbouring
+    /// sectors; w: the melody/bass stripe's width as a fraction of a
+    /// sector, 0 = no mark.
     /// Every earlier misc slot is spoken for, so the grid's knob started a
     /// new one — safe per the note on `misc4`.
     misc5: [f32; 4],
-    /// x: how the melody/bass marks are drawn (`MarkStyle::shader_index`).
+    /// x: how the melody/bass stripe is tinted (`MarkTint::shader_index`).
     /// y, z, w unused.
     misc6: [f32; 4],
 }
@@ -171,10 +171,9 @@ const _: () = assert!(lattice_scene::PITCH_LUT_N == 16);
 struct GpuInstance {
     world_pos: [f32; 3],
     color: [f32; 4],
-    /// x: activation, y: melody mark level, z: bass mark level, w: outlined
-    /// (see lattice.wgsl). The mark levels ride here rather than in a vertex
-    /// attribute of their own because y and z were dead padding — the vec4
-    /// was always shipped whole.
+    /// x: activation, w: outlined. y and z are padding: the shader reads
+    /// only x and w (see lattice.wgsl), and the vec4 is kept whole so the
+    /// vertex layout and the WGSL struct stay unchanged.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
@@ -194,11 +193,6 @@ struct GpuInstance {
     /// than folded into the dead `params.y`/`params.z` floats because the
     /// shader masks them bitwise, which needs a flat-interpolated `u32`.
     marks: [u32; 2],
-    /// Each mark's own color (see `NodeInstance::melody_color`): the marked
-    /// note's, not a fixed livery, so a ring reads as belonging to the note
-    /// it marks.
-    melody_color: [f32; 4],
-    bass_color: [f32; 4],
 }
 
 impl GpuInstance {
@@ -207,8 +201,7 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2,
-            9 => Float32x4, 10 => Float32x4
+            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2
         ],
     };
 }
@@ -311,20 +304,13 @@ impl LatticeCallback {
             .map(|(_, n)| GpuInstance {
                 world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
-                params: [
-                    n.activation,
-                    n.melody_level,
-                    n.bass_level,
-                    if n.outlined { 1.0 } else { 0.0 },
-                ],
+                params: [n.activation, 0.0, 0.0, if n.outlined { 1.0 } else { 0.0 }],
                 octaves: pack_octaves(&n.octaves),
                 seed: n.seed,
                 cents: n.cents,
                 scale: n.scale,
                 home: if n.on_home { 1.0 } else { 0.0 },
                 marks: [n.melody_slots, n.bass_slots],
-                melody_color: n.melody_color.to_array(),
-                bass_color: n.bass_color.to_array(),
             })
             .collect();
 
@@ -373,13 +359,8 @@ impl LatticeCallback {
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],
-                misc5: [
-                    scene.grid_thickness,
-                    scene.mark_unlinked,
-                    scene.outer_gap,
-                    scene.mark_thickness,
-                ],
-                misc6: [scene.mark_style.shader_index() as f32, 0.0, 0.0, 0.0],
+                misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_width],
+                misc6: [scene.mark_tint.shader_index() as f32, 0.0, 0.0, 0.0],
             },
             target_format,
             pane_id,

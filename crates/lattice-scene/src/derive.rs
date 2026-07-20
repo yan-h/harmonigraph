@@ -7,8 +7,8 @@ use crate::color::{channel_color, idle_color, pitch_ramp_lut};
 use crate::style::HighlightExtremes;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Scene, MARK_WHITEN, NODE_RADIUS_FACTOR,
-    OCTAVE_ATTACK_TIME, OCTAVE_SLOTS,
+    lattice_to_world, EdgeInstance, NodeInstance, Scene, NODE_RADIUS_FACTOR, OCTAVE_ATTACK_TIME,
+    OCTAVE_SLOTS,
 };
 use glam::Vec4;
 use lattice_core::{ChannelRole, LatticePos, NoteTracker, Tuning};
@@ -101,10 +101,6 @@ pub fn derive_scene(
         let mut seed = 0.0f32;
         let mut melody_slots = 0u32;
         let mut bass_slots = 0u32;
-        let mut melody_level = 0.0f32;
-        let mut bass_level = 0.0f32;
-        let mut melody_color = Vec4::ZERO;
-        let mut bass_color = Vec4::ZERO;
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -131,38 +127,16 @@ pub fn derive_scene(
 
                 // Mark the outer notes in the slot they sound in. Set on
                 // every node the voice matches, exactly as its activation
-                // is, so the mark can't disagree with the lighting.
-                //
-                // The level is the strongest marked voice ON THIS NODE, not
-                // the node's own activation: a released melody fades while a
-                // still-held voice can keep the node at full.
+                // is, so the mark can't disagree with the lighting. The
+                // stripe needs nothing else from here: it is drawn on the
+                // sector itself, so it takes that sector's color and fades
+                // on that slot's own envelope.
                 let (is_melody, is_bass) = marks(voice, view.highlight_extremes, live_extremes);
-                if is_melody || is_bass {
-                    // The mark takes the marked note's OWN color, lightened
-                    // so a low note's near-black doesn't vanish. Strongest
-                    // marking voice wins the color; the slots still collect
-                    // every one of them, since a release crossfades two.
-                    let own = channel_color(
-                        voice.channel,
-                        voice.pitch,
-                        frame.darkest_pitch,
-                        frame.brightest_pitch,
-                    )
-                    .lerp(Vec4::ONE, MARK_WHITEN);
-                    if is_melody {
-                        melody_slots |= 1 << slot;
-                        if envelope >= melody_level {
-                            melody_level = envelope;
-                            melody_color = own;
-                        }
-                    }
-                    if is_bass {
-                        bass_slots |= 1 << slot;
-                        if envelope >= bass_level {
-                            bass_level = envelope;
-                            bass_color = own;
-                        }
-                    }
+                if is_melody {
+                    melody_slots |= 1 << slot;
+                }
+                if is_bass {
+                    bass_slots |= 1 << slot;
                 }
             }
         }
@@ -192,10 +166,6 @@ pub fn derive_scene(
             cents: node_pc.to_cents(),
             melody_slots,
             bass_slots,
-            melody_level,
-            bass_level,
-            melody_color,
-            bass_color,
         });
     }
 
@@ -234,9 +204,9 @@ pub fn derive_scene(
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
-        mark_style: view.mark_style,
-        mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
-        mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
+        mark_tint: view.mark_tint,
+        // Half would let the two sides of a lone note's sector meet.
+        mark_width: view.mark_width.clamp(0.0, 0.45),
         pitch_lut: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,

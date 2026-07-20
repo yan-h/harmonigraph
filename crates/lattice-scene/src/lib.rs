@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkStyle, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkTint, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -58,12 +58,6 @@ pub const OCTAVE_SLOTS: usize = 10;
 /// repainting its share of the disc (and softens glyph pop-in);
 /// short enough to still feel immediate.
 const OCTAVE_ATTACK_TIME: f64 = 0.15;
-
-/// How far a melody/bass mark's color is lightened toward white from the
-/// note's own. The same 0.30 the octave glyphs use, so a ring reads as the
-/// same family of color as the sectors beside it; without it the marks on
-/// low notes would be black rings on a black background.
-pub const MARK_WHITEN: f32 = 0.30;
 
 /// Samples in the pitch->color lookup the octave glyphs use to tint each
 /// slot by its own octave's pitch. The shader mirrors this length.
@@ -115,23 +109,6 @@ pub struct NodeInstance {
     /// marks are drawn as rings at different radii, so that costs nothing:
     /// they simply both draw. See [`HighlightExtremes`].
     pub bass_slots: u32,
-    /// Envelope of each mark, 0..1, so a mark fades out with its note
-    /// instead of snapping off at release. Separate from `activation`
-    /// because the marked voice can be fading while a different, still-held
-    /// voice keeps the NODE at full — the mark has to follow its own note.
-    ///
-    /// Per node rather than per slot because the mark is a ring around the
-    /// whole node; the slots above only say which sector it links back to.
-    pub melody_level: f32,
-    pub bass_level: f32,
-    /// Each mark's color: the marked note's OWN color, so a ring reads as
-    /// belonging to the note it marks rather than as a fixed livery. Taken
-    /// from the strongest marking voice (they can differ mid-crossfade),
-    /// and lightened toward white by [`MARK_WHITEN`] — a low note's color
-    /// is nearly black, and a ring in it would vanish against the
-    /// background.
-    pub melody_color: Vec4,
-    pub bass_color: Vec4,
 }
 
 impl NodeInstance {
@@ -213,15 +190,13 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// How the melody/bass marks are drawn (see [`MarkStyle`]).
-    pub mark_style: MarkStyle,
-    /// Opacity of the part of each mark ring cut off from the octave that
-    /// owns it (see [`ViewConfig::mark_unlinked`]). Already clamped. Which
-    /// NOTES are marked is baked into each node's `melody_slots`/`bass_slots`.
-    pub mark_unlinked: f32,
-    /// Melody/bass ring thickness in quad UV units, 0 = off (see
-    /// [`ViewConfig::mark_thickness`]). Already clamped.
-    pub mark_thickness: f32,
+    /// How the melody/bass stripe is colored (see [`MarkTint`]). Which
+    /// NOTES are marked is baked into each node's
+    /// `melody_slots`/`bass_slots`.
+    pub mark_tint: MarkTint,
+    /// How wide the stripe is, as a fraction of the sector's angular width
+    /// (see [`ViewConfig::mark_width`]). Already clamped; 0 = no mark.
+    pub mark_width: f32,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],
