@@ -207,9 +207,10 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         .show(ui)
                         .on_hover_text(
                             "How wide that gap is, in the same units as the \
-                             octaves' Gap and the band radii. Constant, so it \
-                             holds its weight at every radius and at every \
-                             stripe width",
+                             octaves' Gap and the band radii. Constant at every \
+                             radius; it eats into the NOTE rather than the \
+                             mark, so a wide setting squeezes the note's colour \
+                             between the two stripes",
                         );
                 });
             });
