@@ -202,7 +202,8 @@ impl HighlightExtremes {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MarkContrast {
     /// A gap knocked through the sector where the white meets the note —
-    /// the same device as the gaps between sectors, and thinner. Nothing is
+    /// the same device as the gaps between sectors, and thinner: a band of
+    /// constant thickness about a ray from the node's centre. Nothing is
     /// painted, so nothing can be the wrong color against the note.
     #[default]
     #[serde(alias = "Keyline")]

@@ -267,17 +267,6 @@ fn sector_angle(i: u32, cents: f32) -> f32 {
     return 1.5707963 - RAD_PER_OCTAVE * ((f32(i) - MIDDLE_C_SLOT) + cents / 1200.0);
 }
 
-// Half the angle a sector actually spans at radius `d`. The gap between
-// sectors is a constant THICKNESS, so it subtends more and more of the
-// wedge the closer in you look, and the drawn sector narrows to nothing at
-// the hub. Everything angular that has to line up with a sector -- the
-// melody/bass stripe above all -- measures against this rather than the
-// nominal half-width.
-fn sector_half_span(d: f32) -> f32 {
-    let hb = RAD_PER_OCTAVE * 0.5;
-    return max(hb - asin(clamp(slice_gap_half() / max(d, 1e-4), 0.0, 1.0)), 0.0);
-}
-
 // Coverage (0..1) of the octave sector for slot `i` on a node whose pitch
 // class is `cents`, drawn in the uniform band. Reads nothing from the core
 // layer — the outer glyphs are independent of it. `aa` is the caller's
@@ -631,35 +620,29 @@ fn stripe_color(t: f32, mode: u32) -> vec3<f32> {
     return vec3<f32>(1.0, 1.0, 1.0);
 }
 
-// The most of a stripe's width the keyline may take once the stripe grows
-// narrower than the keyline is wide (half of it, so a half-width of a
-// quarter each side of the boundary).
-const MARK_KEYLINE_MAX: f32 = 0.25;
-
-// The keyline: a gap knocked through the sector where the white stripe
-// meets the note, built exactly as the gaps between sectors are -- a
-// constant perpendicular thickness either side of the boundary, so it holds
-// its weight at every radius and at every stripe width.
+// The melody/bass stripe's boundary rays, as offsets from the sector's own
+// bisector. The stripe is bounded by a ray rather than by an offset from
+// the sector's VISIBLE edge, and that is the whole trick: the visible edge
+// moves outward with radius, because the constant-thickness gap between
+// sectors subtends less and less of the wedge the further out you look. An
+// offset from it therefore curves, and so did the keyline gap centred on
+// it -- it did not point at the node's centre, so it never converged on the
+// slice's apex. A ray does, by construction.
 //
-// `off` is the pixel's angular distance past that boundary, so `d * off` is
-// how far past it lies. Cutting rather than painting also sidesteps the
-// trap the painted version fell into: the boundary is exactly where the
-// stripe's own coverage is fading out, so a line drawn AT the stripe's
-// opacity was faded out precisely where it needed to be strongest, and its
-// apparent width came from the antialiasing rather than from its setting.
-fn keyline_cut(off: f32, d: f32, stripe_arc: f32, aa: f32) -> f32 {
-    // Constant width where there is room for it -- but never more than a
-    // share of the stripe it divides. Toward the hub the sector narrows to
-    // nothing and takes the stripe with it, and a fixed width overtakes the
-    // whole stripe well before the centre: the white would stop short while
-    // its own sector carried on in, which reads as a mark that does not
-    // start from the middle. Capped, the keyline converges with everything
-    // else.
-    let half = min(u.misc6.y * 0.5, stripe_arc * MARK_KEYLINE_MAX);
-    if half <= 0.0 {
-        return 0.0;
-    }
-    return aa_inside(half, abs(d * off), aa);
+// Inside: the stripe runs from the sector's own boundary in to this ray.
+// Outside: from that boundary out to it.
+fn stripe_ray(outward: bool, width_k: f32) -> f32 {
+    let hb = RAD_PER_OCTAVE * 0.5;
+    return hb * (1.0 + select(-2.0, 2.0, outward) * width_k);
+}
+
+// Signed perpendicular distance from `uv` to the ray `phi` radians round
+// from the sector's bisector -- the same cross product the sector's own
+// edges use, and in the same units, so a gap thresholded on it is the same
+// constant-thickness band the gaps between sectors are.
+fn ray_distance(uv: vec2<f32>, sa: f32, phi: f32) -> f32 {
+    let dir = vec2<f32>(cos(sa + phi), sin(sa + phi));
+    return uv.x * dir.y - uv.y * dir.x;
 }
 
 @fragment
@@ -812,33 +795,56 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if outer_on && stripe_place == 1u && stripe_k > 0.0 {
         let ring = aa_inside(band_out, d, outer_aa) * (1.0 - aa_inside(band_in, d, outer_aa));
         if ring > 0.0 {
-            let edge_phi = sector_half_span(d);
-            let stripe_w = 2.0 * edge_phi * stripe_k;
-            let soft = clamp(outer_aa / max(d, 1e-4), 1e-4, RAD_PER_OCTAVE * 0.5);
+            let hb = RAD_PER_OCTAVE * 0.5;
+            let key = stripe_ray(true, stripe_k);
+            let half = u.misc6.y * 0.5;
+            let full = max(d * (key - hb), 1e-5);
             for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
                 let mel = (in.marks.x & (1u << i)) != 0u;
                 let bas = (in.marks.y & (1u << i)) != 0u;
                 if octave_level(in.octaves, i) <= 0.0 || !(mel || bas) {
                     continue;
                 }
-                let rel = atan2(in.uv.y, in.uv.x) - sector_angle(i, in.cents);
-                let phi = atan2(sin(rel), cos(rel));
-                // Same sides as inside: the bass beyond the sector's
-                // counter-clockwise edge, the melody beyond its clockwise
-                // one -- each still facing its own direction of pitch.
-                var out_t = -1.0;
-                if bas { out_t = phi - edge_phi; }
-                if mel && (-(phi + edge_phi)) > out_t { out_t = -(phi + edge_phi); }
-                let cov = smoothstep(-soft, soft, out_t)
-                    * (1.0 - smoothstep(stripe_w - soft, stripe_w + soft, out_t))
-                    * ring;
-                var here = cov;
-                if stripe_contrast == 0u {
-                    here = here * (1.0 - keyline_cut(out_t - stripe_w, d, d * stripe_w, outer_aa));
+                let sa = sector_angle(i, in.cents);
+                var cov = 0.0;
+                var across = 0.0;
+                // Between the sector's own boundary ray and the stripe's,
+                // on the same side as inside: the bass beyond the
+                // counter-clockwise edge, the melody beyond the clockwise
+                // one. Both bounds are rays, so this wedge converges on the
+                // node's centre with everything else.
+                if bas {
+                    let ci = ray_distance(in.uv, sa, hb);
+                    let co = ray_distance(in.uv, sa, key);
+                    let w = smoothstep(-outer_aa, outer_aa, -ci)
+                        * smoothstep(-outer_aa, outer_aa, co)
+                        * (1.0 - aa_inside(slice_gap_half(), abs(ci), outer_aa));
+                    if w > cov {
+                        cov = w;
+                        across = clamp(abs(ci) / full, 0.0, 1.0);
+                        if stripe_contrast == 0u {
+                            cov = cov * (1.0 - aa_inside(half, abs(co), outer_aa));
+                        }
+                    }
                 }
+                if mel {
+                    let ci = ray_distance(in.uv, sa, -hb);
+                    let co = ray_distance(in.uv, sa, -key);
+                    let w = smoothstep(-outer_aa, outer_aa, ci)
+                        * smoothstep(-outer_aa, outer_aa, -co)
+                        * (1.0 - aa_inside(slice_gap_half(), abs(ci), outer_aa));
+                    if w > cov {
+                        cov = w;
+                        across = clamp(abs(ci) / full, 0.0, 1.0);
+                        if stripe_contrast == 0u {
+                            cov = cov * (1.0 - aa_inside(half, abs(co), outer_aa));
+                        }
+                    }
+                }
+                let here = cov * ring;
                 if here > beside {
                     beside = here;
-                    beside_rgb = stripe_color(out_t / max(stripe_w, 1e-5), stripe_contrast);
+                    beside_rgb = stripe_color(across, stripe_contrast);
                 }
             }
         }
@@ -884,73 +890,48 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
                 if (is_mel || is_bass) && stripe_k > 0.0 && stripe_place == 0u {
                     // The mark: a stripe down one angular SIDE of this
-                    // sector. Pitch runs clockwise around the node, so each
-                    // mark takes the edge facing its own direction -- the
-                    // melody toward the next octave up, the bass toward the
-                    // next one down. A note that is both takes both sides
-                    // and keeps its own color in the middle.
-                    //
-                    // Measured as a fraction of the sector's width rather
-                    // than in uv: a sector narrows toward the hub, where a
-                    // fixed-width stripe would swell to fill it and the two
-                    // sides would merge into one.
-                    // A SUB-SLICE of the sector: bounded by rays from the
-                    // node's centre, so it converges to the hub exactly as
-                    // the sector it marks does.
-                    //
-                    // Measured in ANGLE, as a fraction of the sector's
-                    // VISIBLE half-span. That span narrows toward the hub
-                    // -- the gap between sectors is a constant thickness,
-                    // so it eats a growing share of the wedge as the wedge
-                    // gets small -- and taking the fraction of what is
-                    // actually drawn is what keeps the stripe a constant
-                    // slice of it all the way in.
+                    // sector, bounded by a ray from the node's centre, so
+                    // it converges on the slice's apex as the slice does.
+                    // Pitch runs clockwise, so each mark takes the edge
+                    // facing its own direction -- the melody toward the
+                    // next octave up, the bass toward the next one down.
+                    // A note that is both takes both sides and keeps its
+                    // own color in the middle.
                     let sa = sector_angle(i, in.cents);
-                    let hb = RAD_PER_OCTAVE * 0.5;
-                    let rel = atan2(in.uv.y, in.uv.x) - sa;
-                    let phi = atan2(sin(rel), cos(rel));
-                    // Where the sector's drawn edge sits, in angle: the
-                    // constant-thickness gap subtends more of it the closer
-                    // in you look.
-                    let edge_phi = sector_half_span(d);
-                    let stripe_w = 2.0 * edge_phi * stripe_k;
-                    // A pixel of arc is aa/d of angle. Bounded, unlike the
-                    // fraction-of-width form this replaced, whose softness
-                    // diverged as the sector narrowed and washed the stripe
-                    // across the whole wedge near the hub.
-                    let soft = clamp(outer_aa / max(d, 1e-4), 1e-4, hb);
+                    let key = stripe_ray(false, stripe_k);
+                    let half = u.misc6.y * 0.5;
+                    let full = max(d * (RAD_PER_OCTAVE * 0.5 - key), 1e-5);
                     var stripe = 0.0;
-                    var into = stripe_w;
+                    var across = 0.0;
                     // Each marked side cuts its OWN keyline gap: a lone
                     // held note stripes both sides of its sector, and
-                    // cutting only the nearer of the two left one stripe
-                    // running straight into the note.
+                    // cutting only one left the other running straight
+                    // into the note.
                     var cut = 0.0;
-                    // Pitch runs clockwise, so the bass takes the
-                    // counter-clockwise edge and the melody the clockwise
-                    // one -- each the side facing its own direction.
                     if is_bass {
-                        let from_edge = edge_phi - phi;
-                        let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
-                        if w > stripe { stripe = w; into = from_edge; }
-                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, d * stripe_w, outer_aa));
+                        let c = ray_distance(in.uv, sa, key);
+                        let w = smoothstep(-outer_aa, outer_aa, -c);
+                        if w > stripe {
+                            stripe = w;
+                            across = 1.0 - clamp(abs(c) / full, 0.0, 1.0);
+                        }
+                        cut = max(cut, aa_inside(half, abs(c), outer_aa));
                     }
                     if is_mel {
-                        let from_edge = phi + edge_phi;
-                        let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
-                        if w > stripe { stripe = w; into = from_edge; }
-                        cut = max(cut, keyline_cut(from_edge - stripe_w, d, d * stripe_w, outer_aa));
+                        let c = ray_distance(in.uv, sa, -key);
+                        let w = smoothstep(-outer_aa, outer_aa, c);
+                        if w > stripe {
+                            stripe = w;
+                            across = 1.0 - clamp(abs(c) / full, 0.0, 1.0);
+                        }
+                        cut = max(cut, aa_inside(half, abs(c), outer_aa));
                     }
-                    let across = into / max(stripe_w, 1e-5);
                     slot_rgb = mix(
                         slot_rgb,
                         stripe_color(across, stripe_contrast),
                         stripe * MARK_TINT_AMOUNT,
                     );
                     if stripe_contrast == 0u {
-                        // The gap sits on each stripe's inner boundary, the
-                        // one edge of it the note is actually against; the
-                        // outer edge already has the gap between sectors.
                         cov = cov * (1.0 - cut);
                     }
                 }
