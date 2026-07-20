@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkRecede, MarkStyle, MarkWave, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -196,6 +196,8 @@ pub struct Scene {
     pub mark_style: MarkStyle,
     /// How the inner voices recede under Emphasis (see [`MarkRecede`]).
     pub mark_recede: MarkRecede,
+    /// The shape of the animated marks' cycle (see [`MarkWave`]).
+    pub mark_wave: MarkWave,
     /// Rate of the animated mark styles, in cycles per second. Already
     /// clamped.
     pub mark_rate: f32,

@@ -189,10 +189,16 @@ pub enum MarkStyle {
     /// and darkening a light one, so it cannot wash out at either end of
     /// the ramp.
     Sweep,
-    /// The melody and bass breathe in ANTIPHASE: as one rises the other
-    /// falls. The pair reads as a pair, and the trade between them is
-    /// visible even when both notes sit at the same brightness. A note that
-    /// is both ends takes the melody's phase.
+    /// The melody and bass trade in ANTIPHASE: as one comes up the other
+    /// goes back. The pair reads as a pair, and the trade is visible even
+    /// when both notes sit at the same brightness. A note that is both ends
+    /// takes the melody's phase.
+    ///
+    /// The one that is back RECEDES rather than merely dimming — the same
+    /// [`MarkRecede`] channel Emphasis uses. A swing about the note's own
+    /// color puts its dull half only a little under the color it started
+    /// from, which is what made the trade hard to read; receding puts it
+    /// somewhere the eye can tell apart.
     Alternate,
     /// The marked sectors' hue drifts slowly around the wheel. Hue is the
     /// one channel with no ends to fall off: it wraps, so there is no note
@@ -234,22 +240,55 @@ impl MarkStyle {
     }
 }
 
-/// How the inner voices recede under [`MarkStyle::Emphasis`].
+/// How a sector gives way: the inner voices under
+/// [`MarkStyle::Emphasis`], and whichever end is currently back under
+/// [`MarkStyle::Alternate`].
 ///
-/// Both act on the sector's COLOR, never on its coverage. Dimming coverage
+/// All act on the sector's COLOR, never on its coverage. Dimming coverage
 /// makes a sector translucent rather than dark: its edges soften, the glow
 /// behind shows through, and the crisp gaps between octaves go mushy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MarkRecede {
-    /// Drain the color, keeping the brightness. The inner voices stay
-    /// exactly as visible as they were and give up only their hue, so the
-    /// outer two are the only sectors still carrying color.
+    /// Drain the color, keeping the brightness. What gives way stays
+    /// exactly as visible as it was and loses only its hue.
+    ///
+    /// It has nothing to take from a note that is already desaturated,
+    /// though, and the top of the pitch ramp is near-white — so under
+    /// [`Alternate`](MarkStyle::Alternate), where the MELODY itself has to
+    /// visibly go back and forth, Grey can barely move it and Dim or Both
+    /// is the better choice. Under Emphasis, where what recedes is the
+    /// inner voices, it is the best of the three.
     #[default]
     Grey,
     /// Darken, keeping the hue.
     Dim,
     /// Both at once.
     Both,
+}
+
+/// The shape of the animated marks' cycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MarkWave {
+    /// Smooth, spending most of the cycle in transit. Reads as breathing.
+    #[default]
+    Sine,
+    /// Linear in and out — a touch more time near the ends than a sine.
+    Triangle,
+    /// A hard swap, spending the whole cycle at one end or the other and
+    /// almost none in between. The clearest for Alternate, where what
+    /// matters is which of the two is currently up.
+    Square,
+}
+
+impl MarkWave {
+    /// Index used by the shader (uniform `misc5.y`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            MarkWave::Sine => 0,
+            MarkWave::Triangle => 1,
+            MarkWave::Square => 2,
+        }
+    }
 }
 
 impl MarkRecede {

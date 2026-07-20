@@ -362,7 +362,12 @@ impl LatticeCallback {
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],
-                misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_width],
+                misc5: [
+                    scene.grid_thickness,
+                    scene.mark_wave.shader_index() as f32,
+                    scene.outer_gap,
+                    scene.mark_width,
+                ],
                 misc6: [
                     scene.mark_style.shader_index() as f32,
                     f32::from(scene.marks_active),

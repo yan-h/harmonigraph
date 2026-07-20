@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkRecede, MarkStyle, MarkWave, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -148,6 +148,9 @@ pub struct ViewConfig {
     /// [`MarkRecede`]).
     #[serde(default)]
     pub mark_recede: MarkRecede,
+    /// The shape of the animated marks' cycle (see [`MarkWave`]).
+    #[serde(default)]
+    pub mark_wave: MarkWave,
     /// Rate of the animated mark styles (Pulse, Sweep, Throb), in cycles
     /// per second. They all clock on global time rather than on any note's
     /// age, so a retrigger never restarts the motion and every marked note
@@ -421,6 +424,7 @@ impl Default for ViewConfig {
             highlight_extremes: HighlightExtremes::default(),
             mark_style: MarkStyle::default(),
             mark_recede: MarkRecede::default(),
+            mark_wave: MarkWave::default(),
             mark_rate: default_mark_rate(),
             mark_width: default_mark_width(),
             grid_color: default_grid_color(),

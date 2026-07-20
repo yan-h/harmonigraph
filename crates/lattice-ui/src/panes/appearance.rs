@@ -6,7 +6,7 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
 use lattice_scene::{
-    HighlightExtremes, IdleMarker, MarkRecede, MarkStyle, NodeStyle, OuterStyle,
+    HighlightExtremes, IdleMarker, MarkRecede, MarkStyle, MarkWave, NodeStyle, OuterStyle,
 };
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
@@ -219,8 +219,35 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                              time, so a retrigger never restarts the motion and \
                              every marked note moves together",
                         );
+                    choice_row(
+                        ui,
+                        "Wave",
+                        &mut state.view.mark_wave,
+                        &[
+                            (MarkWave::Sine, "Sine", "Smooth; reads as breathing"),
+                            (
+                                MarkWave::Triangle,
+                                "Triangle",
+                                "Linear in and out, a little longer at the ends",
+                            ),
+                            (
+                                MarkWave::Square,
+                                "Square",
+                                "A hard swap, almost no time in transit -- the \
+                                 clearest for Alternate, where what matters is \
+                                 which of the two is currently up",
+                            ),
+                        ],
+                    );
                 });
-                ui.add_enabled_ui(state.view.mark_style == MarkStyle::Emphasis, |ui| {
+                // Emphasis's inner voices, and whichever end of Alternate is
+                // currently back, give way the same way.
+                ui.add_enabled_ui(
+                    matches!(
+                        state.view.mark_style,
+                        MarkStyle::Emphasis | MarkStyle::Alternate
+                    ),
+                    |ui| {
                     choice_row(
                         ui,
                         "Recede",
@@ -229,15 +256,17 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                             (
                                 MarkRecede::Grey,
                                 "Grey",
-                                "Drain the color, keep the brightness: the inner \
-                                 voices stay just as visible and give up only \
-                                 their hue",
+                                "Drain the color, keep the brightness: what gives \
+                                 way stays just as visible and loses only its \
+                                 hue. Little to take from an already-pale note, \
+                                 so Alternate usually wants Dim or Both",
                             ),
                             (MarkRecede::Dim, "Dim", "Darken, keep the hue"),
                             (MarkRecede::Both, "Both", "Drained and darkened"),
                         ],
                     );
-                });
+                    },
+                );
             });
 
             // Home grid: the always-drawn structural layer -- the faint

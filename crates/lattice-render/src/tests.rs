@@ -134,6 +134,7 @@ fn parity_scene() -> Scene {
         outer_style: Default::default(),
         mark_style: Default::default(),
         mark_recede: Default::default(),
+        mark_wave: Default::default(),
         mark_rate: 1.2,
         marks_active: true,
         mark_width: 0.5,
@@ -648,6 +649,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 

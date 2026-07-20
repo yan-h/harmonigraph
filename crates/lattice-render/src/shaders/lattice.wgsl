@@ -47,7 +47,8 @@ struct Uniforms {
     // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
-    // y: unused.
+    // y: the animated marks' waveform (MarkWave's shader_index: 0 sine,
+    //    1 triangle, 2 square).
     // z: padding between neighbouring octave sectors, in quad UV units.
     // w: how much of the melody/bass mark there is, 0..1; 0 = no mark.
     misc5: vec4<f32>,
@@ -650,6 +651,36 @@ fn away_from(c: vec3<f32>, amount: f32) -> vec3<f32> {
     return mix(c, toward, amount);
 }
 
+// One turn of the animated marks' cycle shaped to the chosen waveform, 0
+// at one end and 1 at the other. Square gets a soft edge a few hundredths
+// wide rather than a true step, so the swap does not alias into a flicker.
+fn mark_wave(phase: f32) -> f32 {
+    let t = fract(phase);
+    let mode = u32(u.misc5.y + 0.5);
+    if mode == 1u {
+        return 1.0 - abs(2.0 * t - 1.0);
+    }
+    if mode == 2u {
+        return smoothstep(0.0, 0.04, t) - smoothstep(0.5, 0.54, t);
+    }
+    return 0.5 - 0.5 * cos(t * TAU);
+}
+
+// How a sector gives way -- Emphasis's inner voices, and whichever end of
+// Alternate is currently back. On the COLOR, never the coverage.
+fn recede_color(c: vec3<f32>, amount: f32) -> vec3<f32> {
+    let mode = u32(u.misc6.z + 0.5);
+    var out = c;
+    if mode != 1u {
+        let grey = dot(out, vec3<f32>(0.2126, 0.7152, 0.0722));
+        out = mix(out, vec3<f32>(grey), amount * EMPHASIS_GREY);
+    }
+    if mode != 0u {
+        out = out * (1.0 - amount * EMPHASIS_DIM);
+    }
+    return out;
+}
+
 // The animated marks' shared clock: one turn of the cycle in 0..1, on
 // GLOBAL time rather than on any note's age, so a retrigger never restarts
 // the motion and every marked note moves together.
@@ -847,7 +878,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     // Pulse: breathe about the note's own color. Symmetric,
                     // so however light or dark the note is there is always a
                     // half of the swing with somewhere to go.
-                    slot_rgb = slot_rgb * (1.0 + amount * PULSE_DEPTH * sin(phase * TAU));
+                    let swing = 2.0 * mark_wave(phase) - 1.0;
+                    slot_rgb = slot_rgb * (1.0 + amount * PULSE_DEPTH * swing);
                 }
                 if mark_style == 1u && is_marked {
                     // Sweep: a band running the sector's length -- outward
@@ -870,19 +902,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     slot_rgb = away_from(slot_rgb, amount * SWEEP_LIFT * hit);
                 }
                 if mark_style == 2u && is_marked {
-                    // Alternate: the two ends breathe in antiphase, so the
-                    // pair reads as a pair and the trade between them shows
-                    // even when both notes sit at the same brightness. A
-                    // note that is both takes the melody's phase.
+                    // Alternate: the two ends trade. The one that is back
+                    // RECEDES rather than merely dimming -- a swing about
+                    // the note's own color leaves its dull half too close to
+                    // the color it started from to read, which is the whole
+                    // difficulty with this one.
                     var ph = phase;
                     if (in.marks.x & (1u << i)) == 0u {
                         ph = phase + 0.5;
                     }
-                    slot_rgb = slot_rgb * (1.0 + amount * PULSE_DEPTH * sin(ph * TAU));
+                    slot_rgb = mix(recede_color(slot_rgb, amount), slot_rgb, mark_wave(ph));
                 }
                 if mark_style == 3u && is_marked {
-                    // Hue: drift around the wheel. Hue has no ends to fall
-                    // off -- it wraps -- so there is no note it cannot move.
+                    // Hue: drift around the wheel, on raw phase rather than
+                    // the waveform -- a hue that eased in and out would read
+                    // as a wobble instead of a drift, and hue wraps, so the
+                    // drift needs no turning point.
                     slot_rgb = hue_rotate(slot_rgb, amount * phase * TAU);
                 }
                 if mark_style == 5u && is_marked {
@@ -891,17 +926,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     slot_rgb = mix(slot_rgb, vec3<f32>(1.0, 1.0, 1.0), amount * GLOW_LIFT);
                 }
                 if mark_style == 4u && marks_live && !is_marked {
-                    // Emphasis: an inner voice, so it recedes -- on the
-                    // COLOR, never on the coverage, which would make it
-                    // translucent rather than dark and soften its edges.
-                    let recede = u32(u.misc6.z + 0.5);
-                    if recede != 1u {
-                        let grey = dot(slot_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-                        slot_rgb = mix(slot_rgb, vec3<f32>(grey), amount * EMPHASIS_GREY);
-                    }
-                    if recede != 0u {
-                        slot_rgb = slot_rgb * (1.0 - amount * EMPHASIS_DIM);
-                    }
+                    // Emphasis: an inner voice, so it recedes.
+                    slot_rgb = recede_color(slot_rgb, amount);
                 }
             }
             if cov > glyph {
