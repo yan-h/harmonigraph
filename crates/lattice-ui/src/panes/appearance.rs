@@ -5,7 +5,9 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, MarkContrast, MarkPlace, NodeStyle, OuterStyle};
+use lattice_scene::{
+    HighlightExtremes, IdleMarker, MarkContrast, MarkPlace, MarkStyle, NodeStyle, OuterStyle,
+};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -147,11 +149,42 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                 ValueBar::new(&mut state.view.mark_width, 0.0..=0.45, "Width")
                     .show(ui)
                     .on_hover_text(
-                        "How wide each stripe is, as a fraction of the sector \
-                         it marks. 0 leaves no mark; the cap is short of half \
-                         so a note that is both melody and bass keeps some of \
-                         its own color between the two sides",
+                        "How much of the mark there is: the stripe's width as a \
+                         fraction of its sector, how far Widen spreads, or how \
+                         far Emphasis carries the inner voices down. 0 leaves \
+                         no mark at all",
                     );
+                // The ring already encodes pitch as angle, so the mark does
+                // not have to say WHICH of the two it is -- only which two
+                // they are. Emphasis and Widen spend nothing to do that.
+                choice_row(
+                    ui,
+                    "Style",
+                    &mut state.view.mark_style,
+                    &[
+                        (
+                            MarkStyle::Stripe,
+                            "Stripe",
+                            "A white stripe down one side of the marked sector",
+                        ),
+                        (
+                            MarkStyle::Emphasis,
+                            "Emphasis",
+                            "Nothing added: the INNER voices dim instead, leaving \
+                             the outer two at full. Cannot wash out on any note, \
+                             and costs nothing with one or two notes held -- \
+                             every note is an extreme then, so nothing dims",
+                        ),
+                        (
+                            MarkStyle::Widen,
+                            "Widen",
+                            "The marked sector spans a wider angle, growing \
+                             toward its own side -- into the gap it already \
+                             has, so nothing is reserved for it",
+                        ),
+                    ],
+                );
+                ui.add_enabled_ui(state.view.mark_style == MarkStyle::Stripe, |ui| {
                 choice_row(
                     ui,
                     "Place",
@@ -212,6 +245,7 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                              meets the note -- the one that runs to the slice's \
                              point",
                         );
+                });
                 });
             });
 

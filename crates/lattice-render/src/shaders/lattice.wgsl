@@ -56,6 +56,10 @@ struct Uniforms {
     // (MarkContrast's shader_index: 0 keyline, 1 gradient, 2 none).
     // y, z, w unused.
     misc6: vec4<f32>,
+    // x: how the melody/bass marks are drawn (MarkStyle's shader_index:
+    // 0 stripe, 1 emphasis, 2 widen). y: 1 when any node carries a mark
+    // this frame. z, w unused.
+    misc7: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -283,7 +287,20 @@ fn sector_half_span(d: f32) -> f32 {
 // class is `cents`, drawn in the uniform band. Reads nothing from the core
 // layer — the outer glyphs are independent of it. `aa` is the caller's
 // per-pixel soft-band width, giving the shape screen-constant edges.
-fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
+// As outer_glyph, with the sector's two bounding rays pushed out by
+// `grow_ccw` / `grow_cw` radians. Widen uses it to spread a marked sector
+// toward its own side; the gap rides with the ray it belongs to, so the
+// sector grows into the gap it already had rather than into its neighbour.
+fn outer_glyph_grown(
+    i: u32,
+    cents: f32,
+    uv: vec2<f32>,
+    inner: f32,
+    outer: f32,
+    grow_ccw: f32,
+    grow_cw: f32,
+    aa: f32,
+) -> f32 {
     let ang = sector_angle(i, cents);
     let d = length(uv);
 
@@ -294,8 +311,8 @@ fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     // half the gap width, for a gap of constant thickness at every radius.
     let band = aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
     let hb = RAD_PER_OCTAVE * 0.5;
-    let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
-    let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
+    let b1 = vec2<f32>(cos(ang + hb + grow_ccw), sin(ang + hb + grow_ccw));
+    let b2 = vec2<f32>(cos(ang - hb - grow_cw), sin(ang - hb - grow_cw));
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
     // Ownership softened over `aa`: at crisp aa this is a ~1px step buried
@@ -309,6 +326,10 @@ fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     let g = (1.0 - aa_inside(gap_half, abs(c1), aa))
         * (1.0 - aa_inside(gap_half, abs(c2), aa));
     return band * own * g;
+}
+
+fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
+    return outer_glyph_grown(i, cents, uv, inner, outer, 0.0, 0.0, aa);
 }
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
@@ -610,6 +631,10 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // the note's own survives inside it and the mark still reads as belonging
 // to that note.
 const MARK_TINT_AMOUNT: f32 = 0.9;
+// Emphasis: how far the Width bar can carry the inner voices down. At the
+// bar's top this leaves them at about a quarter strength -- still legible
+// as notes, clearly behind the outer two.
+const EMPHASIS_DIM: f32 = 1.7;
 
 
 // The melody/bass stripe's color at `t` — the fraction of the way in from
@@ -798,6 +823,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let stripe_k = clamp(u.misc5.w, 0.0, 0.45);
     let stripe_contrast = u32(u.misc6.x + 0.5);
     let stripe_place = u32(u.misc6.z + 0.5);
+    let mark_style = u32(u.misc7.x + 0.5);
+    let marks_live = u.misc7.y > 0.5;
     // Outside placement: the stripe laid ALONGSIDE the marked sector, just
     // past its edge, instead of carved out of it -- the note's own wedge
     // stays whole. Its own layer, composited under the sectors below, so a
@@ -805,7 +832,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // mark.
     var beside = 0.0;
     var beside_rgb = vec3<f32>(0.0, 0.0, 0.0);
-    if outer_on && stripe_place == 1u && stripe_k > 0.0 {
+    if outer_on && stripe_place == 1u && stripe_k > 0.0 && mark_style == 0u {
         let ring = aa_inside(band_out, d, outer_aa) * (1.0 - aa_inside(band_in, d, outer_aa));
         if ring > 0.0 {
             let edge = sector_half_span(d);
@@ -858,7 +885,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             let lit = level > 0.0;
             let is_mel = lit && (in.marks.x & (1u << i)) != 0u;
             let is_bass = lit && (in.marks.y & (1u << i)) != 0u;
-            let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
+            // Widen: the marked sector spans a wider angle, growing toward
+            // its own side -- the melody clockwise (pitch runs that way),
+            // the bass counter-clockwise, a lone note both. It grows into
+            // the gap it already has, so nothing is reserved for it.
+            var grow_ccw = 0.0;
+            var grow_cw = 0.0;
+            if mark_style == 2u && level > 0.0 {
+                let by = RAD_PER_OCTAVE * 0.5 * clamp(stripe_k, 0.0, 0.45);
+                if (in.marks.y & (1u << i)) != 0u { grow_ccw = by; }
+                if (in.marks.x & (1u << i)) != 0u { grow_cw = by; }
+            }
+            let shape =
+                outer_glyph_grown(i, in.cents, in.uv, band_in, band_out, grow_ccw, grow_cw, outer_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -875,9 +914,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 cov = max(cov, shape * level_floor(level) * tail);
                 // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
                 // this node's pitch class for the glyph's true pitch.
+                // Emphasis: nothing is added -- the INNER voices recede
+                // instead, leaving the outer two at full. With one or two
+                // notes held every note is an extreme, so nothing dims and
+                // the mark costs nothing when it has nothing to say.
+                if mark_style == 1u && marks_live {
+                    let marked = ((in.marks.x | in.marks.y) & (1u << i)) != 0u;
+                    if !marked {
+                        cov = cov * (1.0 - clamp(stripe_k, 0.0, 0.45) * EMPHASIS_DIM);
+                    }
+                }
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
-                if (is_mel || is_bass) && stripe_k > 0.0 && stripe_place == 0u {
+                if (is_mel || is_bass) && stripe_k > 0.0 && stripe_place == 0u && mark_style == 0u {
                     // The mark: a stripe down one angular SIDE of this
                     // sector. Pitch runs clockwise, so each takes the edge
                     // facing its own direction -- the melody toward the

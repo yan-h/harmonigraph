@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, MarkStyle, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -194,6 +194,13 @@ pub struct Scene {
     /// [`MarkContrast`]). Which NOTES are marked is baked into each node's
     /// `melody_slots`/`bass_slots`.
     pub mark_contrast: MarkContrast,
+    /// How the melody/bass marks are drawn (see [`MarkStyle`]).
+    pub mark_style: MarkStyle,
+    /// Whether ANY node carries a mark this frame. [`MarkStyle::Emphasis`]
+    /// dims the unmarked voices, which is a whole-scene judgement: a node
+    /// holding only inner voices has no marks of its own and must still
+    /// recede.
+    pub marks_active: bool,
     /// Which side of the sector's edge the stripe sits on (see
     /// [`MarkPlace`]).
     pub mark_place: MarkPlace,

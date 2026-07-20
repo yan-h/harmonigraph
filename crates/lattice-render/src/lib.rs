@@ -157,6 +157,11 @@ struct Uniforms {
     /// UV units; z: which side of the sector edge the stripe sits on
     /// (`MarkPlace::shader_index`); w unused.
     misc6: [f32; 4],
+    /// x: how the melody/bass marks are drawn (`MarkStyle::shader_index`);
+    /// y: 1 when any node carries a mark this frame (Emphasis dims the
+    /// unmarked voices scene-wide, so it cannot be judged per node);
+    /// z, w unused.
+    misc7: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -366,6 +371,12 @@ impl LatticeCallback {
                     scene.mark_contrast.shader_index() as f32,
                     scene.mark_keyline,
                     scene.mark_place.shader_index() as f32,
+                    0.0,
+                ],
+                misc7: [
+                    scene.mark_style.shader_index() as f32,
+                    f32::from(scene.marks_active),
+                    0.0,
                     0.0,
                 ],
             },

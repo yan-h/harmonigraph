@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, MarkPlace, MarkStyle, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -145,6 +145,9 @@ pub struct ViewConfig {
     /// [`MarkContrast`]).
     #[serde(default)]
     pub mark_contrast: MarkContrast,
+    /// How the melody/bass marks are drawn (see [`MarkStyle`]).
+    #[serde(default)]
+    pub mark_style: MarkStyle,
     /// Which side of the marked sector's edge the stripe sits on (see
     /// [`MarkPlace`]).
     #[serde(default)]
@@ -431,6 +434,7 @@ impl Default for ViewConfig {
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
             mark_contrast: MarkContrast::default(),
+            mark_style: MarkStyle::default(),
             mark_place: MarkPlace::default(),
             mark_keyline: default_mark_keyline(),
             mark_width: default_mark_width(),

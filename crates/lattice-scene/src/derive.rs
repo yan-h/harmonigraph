@@ -170,6 +170,10 @@ pub fn derive_scene(
     }
 
     let grid = derive_grid(view, &nodes);
+    // Whether anything is marked at all, for Emphasis: a node holding only
+    // inner voices carries no marks of its own, and still has to recede
+    // when the chord has outer ones somewhere.
+    let marks_active = nodes.iter().any(|n| (n.melody_slots | n.bass_slots) != 0);
 
     // Core/outer geometry policy: the core is a plain radius the shader
     // reads (0 = off), with solidity riding alongside; the outer band is
@@ -205,6 +209,11 @@ pub fn derive_scene(
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
         mark_contrast: view.mark_contrast,
+        mark_style: view.mark_style,
+        // Whether anything is marked at all, for Emphasis: a node holding
+        // only inner voices carries no marks of its own, and still has to
+        // recede when the chord has outer ones somewhere.
+        marks_active,
         mark_place: view.mark_place,
         mark_keyline: view.mark_keyline.clamp(0.0, 0.2),
         // Half would let the two sides of a lone note's sector meet.

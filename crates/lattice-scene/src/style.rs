@@ -215,6 +215,44 @@ pub enum MarkContrast {
     Off,
 }
 
+/// How the melody and bass are marked.
+///
+/// The ring already encodes absolute pitch as ANGLE, so a reader can see
+/// which of two sectors is the higher one. The mark therefore does not have
+/// to distinguish melody from bass — only to say WHICH TWO they are. That
+/// is a much weaker requirement than the earlier designs assumed, and the
+/// last two options here spend nothing to meet it: no ink, no reserved
+/// space, and nothing that has to hold contrast against a note that could
+/// be any color on the ramp.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum MarkStyle {
+    /// A white stripe down one side of the marked sector.
+    #[default]
+    Stripe,
+    /// Nothing is added: the INNER voices are dimmed instead, leaving the
+    /// outer two at full strength. Contrast is relative, so it cannot wash
+    /// out on any note; and it costs nothing when there is nothing to say,
+    /// because with one or two notes held every note IS an extreme and so
+    /// nothing dims.
+    Emphasis,
+    /// The marked sector spans a wider angle, growing toward its own side —
+    /// the melody clockwise, the bass counter-clockwise, a lone note both
+    /// ways. It grows into the gap it already has, so nothing is reserved
+    /// for it, and size reads on any color.
+    Widen,
+}
+
+impl MarkStyle {
+    /// Index used by the shader (uniform `misc7.x`).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            MarkStyle::Stripe => 0,
+            MarkStyle::Emphasis => 1,
+            MarkStyle::Widen => 2,
+        }
+    }
+}
+
 /// Which side of the marked sector's edge the white sits on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MarkPlace {
