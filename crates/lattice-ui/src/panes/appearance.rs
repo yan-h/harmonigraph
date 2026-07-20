@@ -208,9 +208,9 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                         .on_hover_text(
                             "How wide that gap is, in the same units as the \
                              octaves' Gap and the band radii. Constant at every \
-                             radius; it eats into the NOTE rather than the \
-                             mark, so a wide setting squeezes the note's colour \
-                             between the two stripes",
+                             radius, and centred on the line where the stripe \
+                             meets the note -- the one that runs to the slice's \
+                             point",
                         );
                 });
             });

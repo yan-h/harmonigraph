@@ -152,13 +152,12 @@ pub struct ViewConfig {
     /// Thickness of the keyline gap that ends the stripe, in quad UV units
     /// — the full width, as [`outer_gap`](Self::outer_gap) is.
     ///
-    /// Constant at every radius, and lying entirely on the NOTE's side of
-    /// the stripe rather than straddling the boundary: straddling, it ate
-    /// half its width out of the stripe, which is already the part of the
-    /// wedge the sector's own gap reaches first. Eating into the note
-    /// instead costs nothing — the note has the middle of the wedge, the
-    /// widest part there is — so a wide setting squeezes the note's colour
-    /// rather than the mark. 0 leaves the white running straight into it.
+    /// Constant at every radius, and CENTRED on the boundary between the
+    /// stripe and the note, as the gaps between sectors are centred on
+    /// theirs. Centred matters: the boundary is the line that converges on
+    /// the slice's apex, so laying the gap to one side of it leaves the
+    /// gap's edge converging while its middle runs past. 0 leaves the white
+    /// running straight into the note.
     #[serde(default = "default_mark_keyline")]
     pub mark_keyline: f32,
     /// How wide the melody/bass stripe is, as a fraction of the marked

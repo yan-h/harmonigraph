@@ -645,21 +645,17 @@ fn stripe_offset(phi: f32, d: f32, width_k: f32) -> f32 {
     return d * (phi - (edge - 2.0 * edge * width_k));
 }
 
-// The keyline gap: a band of constant thickness lying entirely on the
-// NOTE's side of that boundary.
-//
-// One-sided, not straddling as the gaps between sectors are, and that is
-// deliberate. Straddling, it ate half its width out of the stripe, and the
-// stripe is the thing that has to survive: it is already the part of the
-// wedge the sector's own gap reaches first. Eating into the note instead
-// costs nothing -- the note has the middle of the wedge, which is the
-// widest part there is.
+// The keyline gap: a band of constant thickness CENTRED on that boundary,
+// as the gaps between sectors are centred on theirs. Centred rather than
+// laid to one side, so that the line the gap's middle follows is the one
+// that converges on the slice's apex -- offset to one side, it is the gap's
+// edge that converges and the middle of it runs past the apex.
 fn keyline_cut(off: f32, aa: f32) -> f32 {
-    let width = u.misc6.y;
-    if width <= 0.0 {
+    let half = u.misc6.y * 0.5;
+    if half <= 0.0 {
         return 0.0;
     }
-    return smoothstep(-aa, aa, -off) * (1.0 - smoothstep(width - aa, width + aa, -off));
+    return aa_inside(half, abs(off), aa);
 }
 
 @fragment
@@ -833,7 +829,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     * (1.0 - smoothstep(wide - outer_aa, wide + outer_aa, out_d))
                     * ring;
                 if stripe_contrast == 0u {
-                    cov = cov * (1.0 - keyline_cut(wide - out_d, outer_aa));
+                    cov = cov * (1.0 - keyline_cut(out_d - wide, outer_aa));
                 }
                 if cov > beside {
                     beside = cov;
