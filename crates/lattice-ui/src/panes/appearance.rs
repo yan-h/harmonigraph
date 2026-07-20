@@ -183,6 +183,28 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                              toward its own side -- into the gap it already \
                              has, so nothing is reserved for it",
                         ),
+                        (
+                            MarkStyle::Glow,
+                            "Glow",
+                            "Lift the marked sector until it crosses the bloom \
+                             threshold, so it alone halos. Emphasis by light \
+                             rather than color or shape; needs Bloom above 0 \
+                             for the halo",
+                        ),
+                        (
+                            MarkStyle::Pulse,
+                            "Pulse",
+                            "The marked sector breathes, slowly, on the same \
+                             clock the field styles use. Motion is the one \
+                             channel nothing else on the node is using",
+                        ),
+                        (
+                            MarkStyle::Focus,
+                            "Focus",
+                            "The marked sector stays crisp while the rest \
+                             soften -- the outer voices in focus, the inner \
+                             ones behind them. No ink, no space, no color",
+                        ),
                     ],
                 );
                 // Emphasis only: how the inner voices give way. All three

@@ -57,7 +57,8 @@ struct Uniforms {
     // y, z, w unused.
     misc6: vec4<f32>,
     // x: how the melody/bass marks are drawn (MarkStyle's shader_index:
-    // 0 stripe, 1 emphasis, 2 widen). y: 1 when any node carries a mark
+    // 0 stripe, 1 emphasis, 2 widen, 3 glow, 4 pulse, 5 focus). y: 1 when
+    // any node carries a mark
     // this frame. z: how the inner voices recede under Emphasis
     // (MarkRecede's shader_index: 0 grey, 1 dim, 2 both). w unused.
     misc7: vec4<f32>,
@@ -638,6 +639,20 @@ const MARK_TINT_AMOUNT: f32 = 0.9;
 // present as a colored one. Darkening is held well back, because it does.
 const EMPHASIS_GREY: f32 = 0.95;
 const EMPHASIS_DIM: f32 = 0.55;
+// Glow: how far the Width bar lifts a marked sector toward white. The bloom
+// pass keeps what passes a luminance threshold (0.35, soft knee), so a low
+// note has to be carried a long way before it halos at all -- which is the
+// point of lifting rather than of scaling what is already there.
+const GLOW_LIFT: f32 = 0.85;
+// Pulse: cycles per second, and how much of the sector's brightness the
+// breath takes at the bar's top. Slow enough to read as breathing rather
+// than as flicker.
+const PULSE_HZ: f32 = 0.45;
+const PULSE_DEPTH: f32 = 0.55;
+// Focus: how far an unmarked sector's edge softens, as a multiple of the
+// crisp one. Only the edge -- the shape, the color and the brightness are
+// all untouched.
+const FOCUS_SOFT: f32 = 9.0;
 
 
 // The melody/bass stripe's color at `t` — the fraction of the way in from
@@ -899,8 +914,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 if (in.marks.y & (1u << i)) != 0u { grow_ccw = by; }
                 if (in.marks.x & (1u << i)) != 0u { grow_cw = by; }
             }
+            // Focus: the outer voices stay crisp and the inner ones soften,
+            // as though the marked notes were the plane in focus. Only the
+            // edge width changes -- shape, color and brightness do not.
+            var slot_aa = outer_aa;
+            if mark_style == 5u && marks_live && ((in.marks.x | in.marks.y) & (1u << i)) == 0u {
+                slot_aa = outer_aa * (1.0 + clamp(stripe_k, 0.0, 0.45) / 0.45 * FOCUS_SOFT);
+            }
             let shape =
-                outer_glyph_grown(i, in.cents, in.uv, band_in, band_out, grow_ccw, grow_cw, outer_aa);
+                outer_glyph_grown(i, in.cents, in.uv, band_in, band_out, grow_ccw, grow_cw, slot_aa);
             // Ghosts complete the circle silhouette in the note's own
             // color; a sounding slot never dips below its ghost, so a
             // fading octave hands off to it instead of leaving a hole.
@@ -923,6 +945,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // the mark costs nothing when it has nothing to say.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
                 slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
+                let is_marked = ((in.marks.x | in.marks.y) & (1u << i)) != 0u;
+                let amt = clamp(stripe_k, 0.0, 0.45) / 0.45;
+                if mark_style == 3u && is_marked {
+                    // Glow: lift toward white until the bloom pass's
+                    // threshold is crossed, so this sector alone halos.
+                    slot_rgb = mix(slot_rgb, vec3<f32>(1.0, 1.0, 1.0), amt * GLOW_LIFT);
+                }
+                if mark_style == 4u && is_marked {
+                    // Pulse: on the global clock, so a retrigger never
+                    // restarts the breath and every marked note breathes
+                    // together.
+                    let breath = 0.5 - 0.5 * cos(u.misc.x * PULSE_HZ * TAU);
+                    slot_rgb = slot_rgb * (1.0 - amt * PULSE_DEPTH * breath);
+                }
                 if mark_style == 1u && marks_live
                     && ((in.marks.x | in.marks.y) & (1u << i)) == 0u
                 {

@@ -240,6 +240,21 @@ pub enum MarkStyle {
     /// ways. It grows into the gap it already has, so nothing is reserved
     /// for it, and size reads on any color.
     Widen,
+    /// The marked sector is lifted toward white until it crosses the bloom
+    /// pass's luminance threshold, so it — and only it — halos. The emphasis
+    /// is light rather than color or shape: nothing is added to the layer,
+    /// and the halo lands outside the node where there is nothing to crowd.
+    /// Needs Bloom above 0 to show its halo; the lift alone still reads.
+    Glow,
+    /// The marked sector breathes: a slow rise and fall in brightness, on
+    /// the same global clock the field styles use, so notes never restart
+    /// it. Motion is the one channel nothing else on the node is using, and
+    /// it survives any color the note happens to be.
+    Pulse,
+    /// The marked sector stays crisp while the rest soften, as though the
+    /// outer voices were in focus and the inner ones behind them. Costs no
+    /// ink, no space and no color — only sharpness.
+    Focus,
 }
 
 impl MarkStyle {
@@ -249,6 +264,9 @@ impl MarkStyle {
             MarkStyle::Stripe => 0,
             MarkStyle::Emphasis => 1,
             MarkStyle::Widen => 2,
+            MarkStyle::Glow => 3,
+            MarkStyle::Pulse => 4,
+            MarkStyle::Focus => 5,
         }
     }
 }
