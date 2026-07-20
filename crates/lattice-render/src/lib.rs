@@ -161,7 +161,7 @@ struct Uniforms {
     /// y: 1 when any node carries a mark this frame (Emphasis dims the
     /// unmarked voices scene-wide, so it cannot be judged per node);
     /// z: how the inner voices recede under Emphasis
-    /// (`MarkRecede::shader_index`); w unused.
+    /// (`MarkRecede::shader_index`); w: the animated styles' rate in Hz.
     misc7: [f32; 4],
 }
 
@@ -378,7 +378,7 @@ impl LatticeCallback {
                     scene.mark_style.shader_index() as f32,
                     f32::from(scene.marks_active),
                     scene.mark_recede.shader_index() as f32,
-                    0.0,
+                    scene.mark_rate,
                 ],
             },
             target_format,

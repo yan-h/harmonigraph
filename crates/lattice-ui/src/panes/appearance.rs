@@ -199,6 +199,21 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                              channel nothing else on the node is using",
                         ),
                         (
+                            MarkStyle::Sweep,
+                            "Sweep",
+                            "A bright band runs along the marked sector -- \
+                             outward for the melody, inward for the bass, so \
+                             the motion says which end it is. It lifts toward \
+                             white, so it reads on dark notes and barely on \
+                             pale ones",
+                        ),
+                        (
+                            MarkStyle::Throb,
+                            "Throb",
+                            "The marked sector breathes in SIZE rather than \
+                             brightness, widening and narrowing on the beat",
+                        ),
+                        (
                             MarkStyle::Focus,
                             "Focus",
                             "The marked sector stays crisp while the rest \
@@ -209,6 +224,23 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                 );
                 // Emphasis only: how the inner voices give way. All three
                 // act on color, never on coverage -- see MarkRecede.
+                // Pulse, Sweep and Throb share one clock.
+                ui.add_enabled_ui(
+                    matches!(
+                        state.view.mark_style,
+                        MarkStyle::Pulse | MarkStyle::Sweep | MarkStyle::Throb
+                    ),
+                    |ui| {
+                        ValueBar::new(&mut state.view.mark_rate, 0.1..=4.0, "Rate")
+                            .show(ui)
+                            .on_hover_text(
+                                "Cycles per second for the animated marks. They \
+                                 run on global time, so a retrigger never \
+                                 restarts the motion and every marked note \
+                                 moves together",
+                            );
+                    },
+                );
                 ui.add_enabled_ui(state.view.mark_style == MarkStyle::Emphasis, |ui| {
                     choice_row(
                         ui,

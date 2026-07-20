@@ -152,6 +152,12 @@ pub struct ViewConfig {
     /// [`MarkRecede`]).
     #[serde(default)]
     pub mark_recede: MarkRecede,
+    /// Rate of the animated mark styles (Pulse, Sweep, Throb), in cycles
+    /// per second. They all clock on global time rather than on any note's
+    /// age, so a retrigger never restarts the motion and every marked note
+    /// moves together.
+    #[serde(default = "default_mark_rate")]
+    pub mark_rate: f32,
     /// Which side of the marked sector's edge the stripe sits on (see
     /// [`MarkPlace`]).
     #[serde(default)]
@@ -274,6 +280,12 @@ fn default_core_solidity() -> f32 {
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
     1.0
+}
+
+/// Brisk enough to read as deliberate motion at a glance rather than as
+/// drift, and slow enough not to flicker.
+fn default_mark_rate() -> f32 {
+    1.2
 }
 
 /// A third of the sector gap: the same device, deliberately thinner, so it
@@ -440,6 +452,7 @@ impl Default for ViewConfig {
             mark_contrast: MarkContrast::default(),
             mark_style: MarkStyle::default(),
             mark_recede: MarkRecede::default(),
+            mark_rate: default_mark_rate(),
             mark_place: MarkPlace::default(),
             mark_keyline: default_mark_keyline(),
             mark_width: default_mark_width(),

@@ -198,6 +198,9 @@ pub struct Scene {
     pub mark_style: MarkStyle,
     /// How the inner voices recede under Emphasis (see [`MarkRecede`]).
     pub mark_recede: MarkRecede,
+    /// Rate of the animated mark styles, in cycles per second. Already
+    /// clamped.
+    pub mark_rate: f32,
     /// Whether ANY node carries a mark this frame. [`MarkStyle::Emphasis`]
     /// dims the unmarked voices, which is a whole-scene judgement: a node
     /// holding only inner voices has no marks of its own and must still

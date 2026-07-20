@@ -255,6 +255,21 @@ pub enum MarkStyle {
     /// outer voices were in focus and the inner ones behind them. Costs no
     /// ink, no space and no color — only sharpness.
     Focus,
+    /// A bright band travels along the marked sector, outward for the
+    /// melody and inward for the bass — so the motion says which end it is
+    /// as well as that it is one. A lone note, being both, sweeps both ways
+    /// at once.
+    ///
+    /// It lifts what it passes over toward white, so it reads strongly on a
+    /// dark or saturated note and hardly at all on a pale one — and the top
+    /// of the pitch ramp is nearly white, which is exactly where the MELODY
+    /// mark tends to sit. [`Pulse`](MarkStyle::Pulse) and
+    /// [`Throb`](MarkStyle::Throb) have no such blind spot.
+    Sweep,
+    /// The marked sector breathes in SIZE rather than in brightness,
+    /// widening and narrowing on the beat. Motion with nothing taken from
+    /// the note's color or its light.
+    Throb,
 }
 
 impl MarkStyle {
@@ -267,6 +282,8 @@ impl MarkStyle {
             MarkStyle::Glow => 3,
             MarkStyle::Pulse => 4,
             MarkStyle::Focus => 5,
+            MarkStyle::Sweep => 6,
+            MarkStyle::Throb => 7,
         }
     }
 }

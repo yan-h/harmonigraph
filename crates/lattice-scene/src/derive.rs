@@ -211,6 +211,7 @@ pub fn derive_scene(
         mark_contrast: view.mark_contrast,
         mark_style: view.mark_style,
         mark_recede: view.mark_recede,
+        mark_rate: view.mark_rate.clamp(0.05, 6.0),
         // Whether anything is marked at all, for Emphasis: a node holding
         // only inner voices carries no marks of its own, and still has to
         // recede when the chord has outer ones somewhere.

@@ -57,10 +57,11 @@ struct Uniforms {
     // y, z, w unused.
     misc6: vec4<f32>,
     // x: how the melody/bass marks are drawn (MarkStyle's shader_index:
-    // 0 stripe, 1 emphasis, 2 widen, 3 glow, 4 pulse, 5 focus). y: 1 when
-    // any node carries a mark
+    // 0 stripe, 1 emphasis, 2 widen, 3 glow, 4 pulse, 5 focus, 6 sweep,
+    // 7 throb). y: 1 when any node carries a mark
     // this frame. z: how the inner voices recede under Emphasis
-    // (MarkRecede's shader_index: 0 grey, 1 dim, 2 both). w unused.
+    // (MarkRecede's shader_index: 0 grey, 1 dim, 2 both). w: the animated
+    // styles' rate, in cycles per second.
     misc7: vec4<f32>,
 };
 
@@ -644,11 +645,17 @@ const EMPHASIS_DIM: f32 = 0.55;
 // note has to be carried a long way before it halos at all -- which is the
 // point of lifting rather than of scaling what is already there.
 const GLOW_LIFT: f32 = 0.85;
-// Pulse: cycles per second, and how much of the sector's brightness the
-// breath takes at the bar's top. Slow enough to read as breathing rather
-// than as flicker.
-const PULSE_HZ: f32 = 0.45;
-const PULSE_DEPTH: f32 = 0.55;
+// How much of the sector's brightness Pulse's breath takes at the Width
+// bar's top. The rate is the view's (u.misc7.w), shared by every animated
+// style.
+const PULSE_DEPTH: f32 = 0.8;
+// Sweep: how wide the travelling band is, as a share of the octave band,
+// and how far it lifts what it passes over.
+const SWEEP_WIDTH: f32 = 0.35;
+const SWEEP_LIFT: f32 = 0.9;
+// Throb: how far the sector swings in angle at the bar's top, as a share of
+// its own half-width.
+const THROB_SWING: f32 = 0.55;
 // Focus: how far an unmarked sector's edge softens, as a multiple of the
 // crisp one. Only the edge -- the shape, the color and the brightness are
 // all untouched.
@@ -699,6 +706,13 @@ fn keyline_cut(off: f32, aa: f32) -> f32 {
         return 0.0;
     }
     return aa_inside(half, abs(off), aa);
+}
+
+// The animated marks' shared clock: one turn of the cycle in 0..1, on
+// GLOBAL time rather than on any note's age, so a retrigger never restarts
+// the motion and every marked note moves together.
+fn mark_phase() -> f32 {
+    return fract(u.misc.x * max(u.misc7.w, 0.0));
 }
 
 @fragment
@@ -909,8 +923,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // the gap it already has, so nothing is reserved for it.
             var grow_ccw = 0.0;
             var grow_cw = 0.0;
-            if mark_style == 2u && level > 0.0 {
-                let by = RAD_PER_OCTAVE * 0.5 * clamp(stripe_k, 0.0, 0.45);
+            if (mark_style == 2u || mark_style == 7u) && level > 0.0 {
+                var by = RAD_PER_OCTAVE * 0.5 * clamp(stripe_k, 0.0, 0.45);
+                if mark_style == 7u {
+                    // Throb: the same growth, breathing. Size rather than
+                    // brightness, so the note keeps all its light.
+                    by = by * THROB_SWING * (0.5 - 0.5 * cos(mark_phase() * TAU));
+                }
                 if (in.marks.y & (1u << i)) != 0u { grow_ccw = by; }
                 if (in.marks.x & (1u << i)) != 0u { grow_cw = by; }
             }
@@ -953,11 +972,28 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                     slot_rgb = mix(slot_rgb, vec3<f32>(1.0, 1.0, 1.0), amt * GLOW_LIFT);
                 }
                 if mark_style == 4u && is_marked {
-                    // Pulse: on the global clock, so a retrigger never
-                    // restarts the breath and every marked note breathes
-                    // together.
-                    let breath = 0.5 - 0.5 * cos(u.misc.x * PULSE_HZ * TAU);
+                    let breath = 0.5 - 0.5 * cos(mark_phase() * TAU);
                     slot_rgb = slot_rgb * (1.0 - amt * PULSE_DEPTH * breath);
+                }
+                if mark_style == 6u && is_marked {
+                    // Sweep: a bright band running the length of the
+                    // sector -- outward for the melody, inward for the
+                    // bass, so the motion says which end it is. A lone
+                    // note is both, and sweeps both ways at once.
+                    let along = clamp((d - band_in) / max(band_out - band_in, 1e-4), 0.0, 1.0);
+                    let phase = mark_phase();
+                    var hit = 0.0;
+                    if (in.marks.x & (1u << i)) != 0u {
+                        hit = max(hit, 1.0 - smoothstep(0.0, SWEEP_WIDTH, abs(along - phase)));
+                    }
+                    if (in.marks.y & (1u << i)) != 0u {
+                        hit = max(hit, 1.0 - smoothstep(0.0, SWEEP_WIDTH, abs(along - (1.0 - phase))));
+                    }
+                    slot_rgb = mix(
+                        slot_rgb,
+                        vec3<f32>(1.0, 1.0, 1.0),
+                        amt * SWEEP_LIFT * hit,
+                    );
                 }
                 if mark_style == 1u && marks_live
                     && ((in.marks.x | in.marks.y) & (1u << i)) == 0u
