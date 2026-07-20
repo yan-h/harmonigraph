@@ -30,7 +30,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkTint, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, NodeStyle, OuterStyle,
 };
 pub use view::{FrameParams, ViewConfig};
 
@@ -190,10 +190,10 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// How the melody/bass stripe is colored (see [`MarkTint`]). Which
-    /// NOTES are marked is baked into each node's
+    /// What separates the melody/bass stripe from the note under it (see
+    /// [`MarkContrast`]). Which NOTES are marked is baked into each node's
     /// `melody_slots`/`bass_slots`.
-    pub mark_tint: MarkTint,
+    pub mark_contrast: MarkContrast,
     /// How wide the stripe is, as a fraction of the sector's angular width
     /// (see [`ViewConfig::mark_width`]). Already clamped; 0 = no mark.
     pub mark_width: f32,

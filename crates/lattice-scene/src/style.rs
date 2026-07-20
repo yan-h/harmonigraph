@@ -191,55 +191,34 @@ impl HighlightExtremes {
     }
 }
 
-/// How the melody/bass stripe is colored against the sector it marks.
+/// What separates the melody/bass stripe from the note under it.
 ///
-/// The mark itself has settled: a stripe down one angular SIDE of the
-/// marked note's own sector — the melody along the edge facing the next
-/// octave up, the bass along the edge facing the next one down. That
-/// placement rhymes with the pitch mapping the lattice already has, and it
-/// is what makes a lone held note work: it is its own melody and bass, so
-/// it takes both sides and keeps a stripe of its own color between them.
-///
-/// What is still open is the color. A stripe has to stay legible against
-/// the note under it, and the note can be any color on the pitch ramp —
-/// which runs near-black at the bottom to near-white at the top, so the
-/// melody mark lands on the palest sectors there are. These are the
-/// candidates, switchable to compare.
+/// The stripe is white. White is the right color for it — it reads as a
+/// mark rather than as more note — but on its own it fails at the top of
+/// the pitch ramp, which runs to near-white, and that is exactly where the
+/// MELODY mark lands. So the contrast comes from a dark boundary rather
+/// than from the fill: something between the white and the note that neither
+/// end of the ramp can swallow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum MarkTint {
-    /// Toward white on a dark note, toward black on a light one, picked
-    /// from the sector's own luminance. The only one that cannot wash out,
-    /// and so the default.
+pub enum MarkContrast {
+    /// A dark band along the stripe's inner edge, hard against the white.
+    /// Reads as a drawn keyline.
     #[default]
-    Auto,
-    /// Always toward white. Reads best on the low, dark notes.
-    Light,
-    /// Always toward black. Reads best on the high, pale ones.
-    Dark,
-    /// Dark against the sector's edge, light just inside it — a bevel.
-    /// Whatever the note's color, one of the two halves contrasts with it.
-    Bevel,
-    /// The color-wheel complement: the note's own lightness, hue flipped.
-    /// Contrast in hue rather than in brightness — strong on the saturated
-    /// middle of the ramp, and weak at its ends, where a washed-out color's
-    /// complement is close to itself.
-    Hue,
-    /// The same hue at full chroma — contrast in saturation. The mirror of
-    /// [`Light`](MarkTint::Light)'s failure: it bites hardest exactly on the
-    /// pale, desaturated high notes, where lightening has nowhere to go.
-    Boost,
+    Keyline,
+    /// The white ramps to dark across the stripe instead, so it ends on the
+    /// same boundary without a visible seam.
+    Gradient,
+    /// Nothing: plain white, which is legible on every note but the palest.
+    Off,
 }
 
-impl MarkTint {
+impl MarkContrast {
     /// Index used by the shader (uniform `misc6.x`).
     pub fn shader_index(self) -> u32 {
         match self {
-            MarkTint::Auto => 0,
-            MarkTint::Light => 1,
-            MarkTint::Dark => 2,
-            MarkTint::Bevel => 3,
-            MarkTint::Hue => 4,
-            MarkTint::Boost => 5,
+            MarkContrast::Keyline => 0,
+            MarkContrast::Gradient => 1,
+            MarkContrast::Off => 2,
         }
     }
 }

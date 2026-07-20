@@ -5,7 +5,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, MarkTint, NodeStyle, OuterStyle};
+use lattice_scene::{HighlightExtremes, IdleMarker, MarkContrast, NodeStyle, OuterStyle};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -152,41 +152,31 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                          so a note that is both melody and bass keeps some of \
                          its own color between the two sides",
                     );
-                // The note under the stripe can be any color on the pitch
-                // ramp, which runs near-black to near-white, so no fixed
-                // tint stays legible across it.
+                // White is the stripe's color; what is open is how it ENDS.
+                // White alone dies against the pale top of the pitch ramp,
+                // which is exactly where the melody mark lands, so the
+                // contrast comes from a dark boundary instead of the fill.
                 choice_row(
                     ui,
-                    "Tint",
-                    &mut state.view.mark_tint,
+                    "Contrast",
+                    &mut state.view.mark_contrast,
                     &[
                         (
-                            MarkTint::Auto,
-                            "Auto",
-                            "Toward white on a dark note, toward black on a light \
-                             one. The only one that cannot wash out",
-                        ),
-                        (MarkTint::Light, "Light", "Always toward white"),
-                        (MarkTint::Dark, "Dark", "Always toward black"),
-                        (
-                            MarkTint::Bevel,
-                            "Bevel",
-                            "Dark against the sector's edge, light just inside \
-                             it -- one half always contrasts",
+                            MarkContrast::Keyline,
+                            "Keyline",
+                            "A dark band along the stripe's inner edge, hard \
+                             against the white",
                         ),
                         (
-                            MarkTint::Hue,
-                            "Hue",
-                            "The color-wheel complement: the note's own lightness, \
-                             hue flipped. Strong on saturated notes, weak on the \
-                             washed-out ends of the ramp",
+                            MarkContrast::Gradient,
+                            "Gradient",
+                            "The white ramps to dark across the stripe, ending on \
+                             the same boundary with no seam",
                         ),
                         (
-                            MarkTint::Boost,
-                            "Boost",
-                            "The same hue at full chroma -- contrast in saturation \
-                             rather than brightness. Bites hardest on the pale \
-                             high notes, where Light has nowhere to go",
+                            MarkContrast::Off,
+                            "None",
+                            "Plain white -- legible on every note but the palest",
                         ),
                     ],
                 );

@@ -624,18 +624,11 @@ fn off_sheet_grid_appears_only_where_the_music_reaches() {
 }
 
 #[test]
-fn the_mark_tint_and_width_reach_the_scene() {
+fn the_mark_contrast_and_width_reach_the_scene() {
     // Both are whole-scene choices, not per-node ones: every node's
     // stripes are drawn the same way.
-    for tint in [
-        MarkTint::Auto,
-        MarkTint::Light,
-        MarkTint::Dark,
-        MarkTint::Bevel,
-        MarkTint::Hue,
-        MarkTint::Boost,
-    ] {
-        let view = ViewConfig { mark_tint: tint, ..ViewConfig::default() };
+    for contrast in [MarkContrast::Keyline, MarkContrast::Gradient, MarkContrast::Off] {
+        let view = ViewConfig { mark_contrast: contrast, ..ViewConfig::default() };
         let scene = scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
@@ -643,19 +636,12 @@ fn the_mark_tint_and_width_reach_the_scene() {
             &FrameParams::default(),
             0.0,
         );
-        assert_eq!(scene.mark_tint, tint);
+        assert_eq!(scene.mark_contrast, contrast);
     }
-    // Each tint has its own shader branch, so no two may share an index.
+    // Each has its own shader branch, so no two may share an index.
     let mut seen = std::collections::HashSet::new();
-    for tint in [
-        MarkTint::Auto,
-        MarkTint::Light,
-        MarkTint::Dark,
-        MarkTint::Bevel,
-        MarkTint::Hue,
-        MarkTint::Boost,
-    ] {
-        assert!(seen.insert(tint.shader_index()), "{tint:?} reuses an index");
+    for contrast in [MarkContrast::Keyline, MarkContrast::Gradient, MarkContrast::Off] {
+        assert!(seen.insert(contrast.shader_index()), "{contrast:?} reuses an index");
     }
 
     // Half would let the two sides of a lone note's sector meet, leaving

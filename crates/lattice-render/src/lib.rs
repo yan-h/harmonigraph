@@ -152,7 +152,8 @@ struct Uniforms {
     /// Every earlier misc slot is spoken for, so the grid's knob started a
     /// new one — safe per the note on `misc4`.
     misc5: [f32; 4],
-    /// x: how the melody/bass stripe is tinted (`MarkTint::shader_index`).
+    /// x: what separates the melody/bass stripe from its note
+    /// (`MarkContrast::shader_index`).
     /// y, z, w unused.
     misc6: [f32; 4],
 }
@@ -360,7 +361,7 @@ impl LatticeCallback {
                     scene.idle_marker.shader_index() as f32,
                 ],
                 misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_width],
-                misc6: [scene.mark_tint.shader_index() as f32, 0.0, 0.0, 0.0],
+                misc6: [scene.mark_contrast.shader_index() as f32, 0.0, 0.0, 0.0],
             },
             target_format,
             pane_id,

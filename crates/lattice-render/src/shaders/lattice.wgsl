@@ -52,8 +52,9 @@ struct Uniforms {
     // w: the melody/bass stripe's width as a fraction of a sector's
     // angular width; 0 = no mark.
     misc5: vec4<f32>,
-    // x: how the melody/bass stripe is tinted (MarkTint's shader_index:
-    // 0 auto, 1 light, 2 dark, 3 bevel, 4 hue, 5 boost). y, z, w unused.
+    // x: what ends the melody/bass stripe against its note
+    // (MarkContrast's shader_index: 0 keyline, 1 gradient, 2 none).
+    // y, z, w unused.
     misc6: vec4<f32>,
 };
 
@@ -593,41 +594,39 @@ fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
 // so a link device ties the ring back to the sector responsible. See
 // MarkLink for the candidates; the modes here mirror its shader_index.
 
-// How far the stripe is carried toward its tint. Short of 1 so a trace of
-// the note's own color survives inside it and the mark still reads as
-// belonging to that note.
-const MARK_TINT_AMOUNT: f32 = 0.75;
+// How far the stripe is carried toward its color. Short of 1 so a trace of
+// the note's own survives inside it and the mark still reads as belonging
+// to that note.
+const MARK_TINT_AMOUNT: f32 = 0.9;
+// The share of the stripe given over to the dark band that ends it, for
+// the Keyline and Gradient contrasts.
+const MARK_KEYLINE: f32 = 0.35;
 
-// The melody/bass stripe's color, given the sector's own. See MarkTint.
+// The melody/bass stripe's color at `t` — the fraction of the way in from
+// the sector's edge, 0 at the edge and 1 where the note's own color
+// resumes. `soft_t` is a pixel of arc in those same units.
 //
-// The pitch ramp runs near-black at the bottom to near-white at the top, so
-// no single fixed tint stays legible: white vanishes on the pale high notes
-// the melody mark lands on, black on the dark low ones the bass mark does.
-// Auto reads the sector's luminance and goes the way that has room.
-fn stripe_tint(c: vec3<f32>, tint: u32) -> vec3<f32> {
-    if tint == 1u {
+// The fill is white. What varies is how it ENDS: white against a near-white
+// note is invisible, and the pitch ramp runs to near-white at the top,
+// which is exactly where the melody mark lands. A dark boundary at the
+// inner side fixes that without giving up the white — the eye reads the
+// pair, and neither end of the ramp can swallow both.
+fn stripe_color(t: f32, mode: u32, soft_t: f32) -> vec3<f32> {
+    if mode == 1u {
+        // Gradient: white at the edge ramping to dark where the note
+        // resumes, ending on the same boundary with no visible seam.
+        return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.0, 0.0, 0.0), clamp(t, 0.0, 1.0));
+    }
+    if mode == 2u {
         return vec3<f32>(1.0, 1.0, 1.0);
     }
-    if tint == 2u {
-        return vec3<f32>(0.0, 0.0, 0.0);
-    }
-    if tint == 4u {
-        // Hue: the colour-wheel complement -- max + min - c keeps the
-        // note's lightness and flips only its hue.
-        let hi = max(max(c.r, c.g), c.b);
-        let lo = min(min(c.r, c.g), c.b);
-        return vec3<f32>(hi + lo) - c;
-    }
-    if tint == 5u {
-        // Boost: the same hue at full chroma, so the contrast is in
-        // saturation rather than in brightness.
-        let hi = max(max(c.r, c.g), c.b);
-        let lo = min(min(c.r, c.g), c.b);
-        return (c - vec3<f32>(lo)) / max(hi - lo, 1e-3);
-    }
-    // Auto (0) and Bevel (3), which picks per half at the call site.
-    let lum = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
-    return select(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.0, 0.0, 0.0), lum > 0.5);
+    // Keyline: white, turning dark over the last MARK_KEYLINE of the way.
+    let edge = 1.0 - MARK_KEYLINE;
+    return mix(
+        vec3<f32>(1.0, 1.0, 1.0),
+        vec3<f32>(0.0, 0.0, 0.0),
+        smoothstep(edge - soft_t, edge + soft_t, t),
+    );
 }
 
 @fragment
@@ -766,9 +765,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
     // The melody/bass stripe: how wide, as a fraction of a sector's angular
-    // width, and how it is colored (see MarkTint).
+    // width, and what separates it from its note (see MarkContrast).
     let stripe_k = clamp(u.misc5.w, 0.0, 0.45);
-    let stripe_tint_mode = u32(u.misc6.x + 0.5);
+    let stripe_contrast = u32(u.misc6.x + 0.5);
     if outer_on {
         // Sounding slots draw bright, tinted by their own pitch, each
         // fading on its own envelope. The backdrop opacity (its own
@@ -861,18 +860,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                         let w = 1.0 - smoothstep(stripe_w - soft, stripe_w + soft, from_edge);
                         if w > stripe { stripe = w; into = from_edge; }
                     }
-                    var tint_rgb = stripe_tint(slot_rgb, stripe_tint_mode);
-                    if stripe_tint_mode == 3u {
-                        // Bevel: dark against the edge, light just inside
-                        // it. Whatever the note's color, one of the two
-                        // halves contrasts with it.
-                        let outer_half = into < stripe_w * 0.5;
-                        tint_rgb = select(
-                            vec3<f32>(1.0, 1.0, 1.0),
-                            vec3<f32>(0.0, 0.0, 0.0),
-                            outer_half,
-                        );
-                    }
+                    let across = into / max(stripe_w, 1e-5);
+                    let tint_rgb =
+                        stripe_color(across, stripe_contrast, soft / max(stripe_w, 1e-5));
                     slot_rgb = mix(slot_rgb, tint_rgb, stripe * MARK_TINT_AMOUNT);
                 }
             }

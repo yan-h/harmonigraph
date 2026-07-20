@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkTint, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, MarkContrast, NodeStyle, OuterStyle,
 };
 use lattice_core::{coords, LatticePos};
 
@@ -141,10 +141,10 @@ pub struct ViewConfig {
     /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
-    /// How the melody/bass stripe is colored against the sector it marks
-    /// (see [`MarkTint`]).
+    /// What separates the melody/bass stripe from the note under it (see
+    /// [`MarkContrast`]).
     #[serde(default)]
-    pub mark_tint: MarkTint,
+    pub mark_contrast: MarkContrast,
     /// How wide the melody/bass stripe is, as a fraction of the marked
     /// sector's angular width.
     ///
@@ -409,7 +409,7 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            mark_tint: MarkTint::default(),
+            mark_contrast: MarkContrast::default(),
             mark_width: default_mark_width(),
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),

@@ -204,7 +204,7 @@ pub fn derive_scene(
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
-        mark_tint: view.mark_tint,
+        mark_contrast: view.mark_contrast,
         // Half would let the two sides of a lone note's sector meet.
         mark_width: view.mark_width.clamp(0.0, 0.45),
         pitch_lut: pitch_ramp_lut(),
