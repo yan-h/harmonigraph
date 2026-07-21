@@ -1,7 +1,7 @@
 //! Unit tests for the scene layer.
 
 use super::*;
-use crate::derive::{depth_scale, held_extremes, DEPTH_SCALE_RANGE};
+use crate::derive::held_extremes;
 use glam::{Vec2, Vec3, Vec4};
 use lattice_core::{NoteEvent, NoteEventKind, NoteTracker, PitchClass, Tuning};
 
@@ -789,37 +789,6 @@ fn legacy_node_body_folds_into_core_and_outer() {
     view.migrate_legacy();
     assert_eq!(view.core_solidity, ViewConfig::default().core_solidity);
     assert_eq!(view.outer_style, ViewConfig::default().outer_style);
-}
-
-#[test]
-fn depth_scale_exaggerates_proximity() {
-    // Neutral at the focus distance, monotonic on either side, clamped
-    // at the extremes.
-    assert!((depth_scale(12.0, 12.0) - 1.0).abs() < 1e-6);
-    assert!(depth_scale(6.0, 12.0) > 1.0);
-    assert!(depth_scale(24.0, 12.0) < 1.0);
-    assert_eq!(depth_scale(0.001, 12.0), DEPTH_SCALE_RANGE.1);
-    assert_eq!(depth_scale(1e6, 12.0), DEPTH_SCALE_RANGE.0);
-
-    // And the scene wires it in: the node nearest the eye renders
-    // larger than the farthest one.
-    let scene = scene_of(
-        &NoteTracker::new(),
-        &Tuning::default(),
-        &ViewConfig::default(),
-        &FrameParams::default(),
-        0.0,
-    );
-    let eye = scene.camera.eye();
-    let dist = |n: &&NodeInstance| n.world_pos.distance(eye);
-    let near = scene.nodes.iter().min_by(|a, b| dist(a).total_cmp(&dist(b))).unwrap();
-    let far = scene.nodes.iter().max_by(|a, b| dist(a).total_cmp(&dist(b))).unwrap();
-    assert!(
-        near.scale > far.scale,
-        "near {} vs far {}",
-        near.scale,
-        far.scale
-    );
 }
 
 #[test]

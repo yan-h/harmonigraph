@@ -184,8 +184,6 @@ struct GpuInstance {
     /// The node's pitch class in cents (0..1200); dots mode uses it to place
     /// each octave dot at the note's absolute-pitch angle.
     cents: f32,
-    /// Depth-cue size multiplier (see lattice_scene's `depth_scale`).
-    scale: f32,
     /// 1 when the node is on the home (center sevens) sheet: idle home
     /// nodes draw a blank placeholder ring.
     home: f32,
@@ -211,8 +209,8 @@ impl GpuInstance {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2,
-            9 => Float32x4, 10 => Float32x4, 11 => Float32
+            5 => Float32, 6 => Float32, 7 => Uint32x2,
+            8 => Float32x4, 9 => Float32x4, 10 => Float32
         ],
     };
 }
@@ -324,7 +322,6 @@ impl LatticeCallback {
                 octaves: pack_octaves(&n.octaves),
                 seed: n.seed,
                 cents: n.cents,
-                scale: n.scale,
                 home: if n.on_home { 1.0 } else { 0.0 },
                 marks: [n.melody_slots, n.bass_slots],
                 melody_color: n.melody_color.to_array(),

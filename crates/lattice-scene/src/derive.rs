@@ -93,7 +93,6 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(view.visible_count());
     let center = view.center();
-    let eye = camera.eye();
     let live_extremes = held_extremes(tracker, view.highlight_extremes);
 
     for pos in view.visible_positions() {
@@ -192,7 +191,6 @@ pub fn derive_scene(
             seed,
             outlined,
             hovered: hovered == Some(pos),
-            scale: depth_scale(world_pos.distance(eye), camera.distance),
             on_home: pos.sevens == view.center_sevens,
             cents: node_pc.to_cents(),
             melody_slots,
@@ -258,26 +256,6 @@ pub fn derive_scene(
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
     }
-}
-
-/// Depth-cue strength: the exponent on (focus distance / node distance)
-/// that sets a node's size multiplier. 0 would disable the cue (plain
-/// perspective); 1 roughly doubles perspective's own shrink-with-distance.
-const DEPTH_SCALE_EXPONENT: f32 = 0.8;
-/// Clamp on the multiplier so nodes stay recognizable when the camera
-/// gets very close to (or very far from) part of the lattice.
-pub(crate) const DEPTH_SCALE_RANGE: (f32, f32) = (0.4, 2.0);
-
-/// Depth-cue size multiplier for a node `dist` from the eye, with the
-/// camera focused (eye-to-target) at `focus`: 1 at the focus distance, so
-/// the lattice's overall look is unchanged where the user is looking;
-/// larger when nearer, smaller when farther. Perspective alone shrinks a
-/// distant node too subtly for depth to read at lattice scale — this
-/// exaggerates it.
-pub(crate) fn depth_scale(dist: f32, focus: f32) -> f32 {
-    (focus / dist.max(0.01))
-        .powf(DEPTH_SCALE_EXPONENT)
-        .clamp(DEPTH_SCALE_RANGE.0, DEPTH_SCALE_RANGE.1)
 }
 
 /// Line opacity of a lit sevens-axis chain link.

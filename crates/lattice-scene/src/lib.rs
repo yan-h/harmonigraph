@@ -93,10 +93,6 @@ pub struct NodeInstance {
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
     pub hovered: bool,
-    /// Depth-cue size multiplier (see [`depth_scale`]): nodes nearer the
-    /// eye than the camera's focus distance grow, farther ones shrink,
-    /// exaggerating the perspective so depth reads at a glance.
-    pub scale: f32,
     /// On the home (center sevens) sheet. Home nodes keep a blank
     /// placeholder ring while idle; off-sheet nodes draw nothing.
     pub on_home: bool,
