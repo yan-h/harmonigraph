@@ -432,3 +432,108 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
     assert_eq!(restored.spectrum_config.low_octave, 1);
 }
+
+/// Every text drawn by one pass over a closure, as (rect, text). The halo
+/// stamps each string many times over, so callers fold the stamps of one
+/// piece back together into the box that piece occupies.
+fn drawn_texts(draw: impl Fn(&egui::Painter)) -> Vec<(egui::Rect, String)> {
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+    let output = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| draw(ui.painter()),
+    );
+    output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some((
+                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                text.galley.text().to_owned(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The box one piece of text occupies, halo stamps and all.
+fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
+    texts
+        .iter()
+        .filter(|(_, t)| t == want)
+        .map(|(r, _)| *r)
+        .reduce(|a, b| a.union(b))
+        .unwrap_or_else(|| panic!("no {want:?} drawn, got {texts:?}"))
+}
+
+/// The lattice's note labels stack the accidental over the comma mark in one
+/// column after the letter, so a name deep in the lattice stays narrow. The
+/// whole name still has to sit centered on its node.
+#[test]
+fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = lattice_core::NoteName { letter: 'C', sharps: 5, syntonic_commas: 4 };
+    let texts = drawn_texts(|painter| {
+        panes::lattice::draw_stacked_name(
+            painter,
+            anchor,
+            name,
+            egui::Color32::WHITE,
+            egui::Color32::BLACK,
+        );
+    });
+
+    // Counted marks, not five sharps and four pluses spelled out.
+    let letter = text_box(&texts, "C");
+    let accidental = text_box(&texts, "\u{266F}5");
+    let comma = text_box(&texts, "+4");
+
+    // One column, beginning where the letter ends. (Every box here is grown
+    // by the halo's rim, so the two edges meet to within that much.)
+    const HALO: f32 = 2.0;
+    assert!(
+        (accidental.left() - letter.right()).abs() <= 2.0 * HALO,
+        "marks should follow the letter ({accidental:?} after {letter:?})"
+    );
+    assert!((accidental.left() - comma.left()).abs() < 0.5, "marks share a column");
+    // Superscript over subscript, straddling the letter's own line.
+    assert!(accidental.center().y < letter.center().y, "the accidental rides high");
+    assert!(comma.center().y > letter.center().y, "the comma sits low");
+    // Marks are subordinate to the letter, not the same weight.
+    assert!(accidental.height() < letter.height(), "marks are the smaller size");
+
+    // The name as a whole straddles the node it labels. (The halo is
+    // symmetric, so it grows the box evenly and does not shift the center.)
+    let name_box = letter.union(accidental).union(comma);
+    assert!(
+        (name_box.center().x - anchor.x).abs() < 0.5,
+        "name should center on the node ({name_box:?} vs {anchor:?})"
+    );
+    // ...and stays about as wide as two letters, which is the whole point of
+    // counting the marks rather than repeating them.
+    assert!(
+        name_box.width() < letter.width() * 2.5,
+        "a deep name should still fit a node, got {}",
+        name_box.width()
+    );
+}
+
+/// A plain name has no marks to stack -- nothing extra is drawn, and the
+/// letter alone centers on the node.
+#[test]
+fn a_natural_note_label_is_just_the_letter() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = lattice_core::NoteName { letter: 'G', sharps: 0, syntonic_commas: 0 };
+    let texts = drawn_texts(|painter| {
+        panes::lattice::draw_stacked_name(
+            painter,
+            anchor,
+            name,
+            egui::Color32::WHITE,
+            egui::Color32::BLACK,
+        );
+    });
+    assert!(texts.iter().all(|(_, t)| t == "G"), "only the letter: {texts:?}");
+    assert!((text_box(&texts, "G").center().x - anchor.x).abs() < 0.5);
+}

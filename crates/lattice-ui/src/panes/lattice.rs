@@ -161,29 +161,99 @@ fn draw_node_labels(
         // (E- and E name the same pitch).
         let name = node.lattice_pos.note_name();
         let name = if view.meantone { name.without_syntonic_commas() } else { name };
-        // Monospace for in-lattice text: labels align across nodes and
-        // match the technical feel of the readouts.
-        outlined_text(
+        let name_height = draw_stacked_name(
             ui.painter(),
             center,
-            egui::Align2::CENTER_CENTER,
-            name.to_string(),
-            egui::FontId::monospace(12.0),
+            name,
             theme::text().gamma_multiply(strength),
             outline,
         );
         if view.show_cents {
             outlined_text(
                 ui.painter(),
-                center + egui::vec2(0.0, 9.0),
+                center + egui::vec2(0.0, name_height / 2.0 + CENTS_GAP),
                 egui::Align2::CENTER_TOP,
                 format!("{:.2}", node.cents),
-                egui::FontId::monospace(10.0),
+                egui::FontId::monospace(CENTS_SIZE),
                 theme::text_dim().gamma_multiply(strength),
                 outline,
             );
         }
     }
+}
+
+/// The note name's letter, the size the label reads at.
+const NAME_SIZE: f32 = 13.0;
+/// The cents readout under it: subordinate to the name, so smaller, and
+/// tucked right beneath it rather than floating free.
+const CENTS_SIZE: f32 = 9.0;
+/// Air between the name's box and the cents readout's. Barely any — the two
+/// read as one label, and the galleys carry their own leading besides. It is
+/// enough to clear the comma mark, which hangs below the letter.
+const CENTS_GAP: f32 = 1.0;
+/// Accidental and comma marks, relative to the letter.
+const MARK_SCALE: f32 = 0.7;
+/// How far the marks sit off the letter's center line, as a fraction of the
+/// letter's height. Enough to read as a super/subscript pair, but nowhere
+/// near a full shift -- these have to stay inside the node's disc.
+const MARK_RISE: f32 = 0.26;
+
+/// A note name centered on `anchor`, with its accidental stacked above its
+/// syntonic-comma mark in a single column after the letter (`♯` riding high
+/// like a superscript, `+` low like a subscript). Both marks are counted
+/// rather than repeated (see [`lattice_core::NoteName`]), so even a name
+/// deep in the lattice stays roughly two characters wide instead of
+/// sprawling off its node. Returns the letter's height, which is what the
+/// cents readout hangs off.
+///
+/// Monospace for in-lattice text: labels align across nodes and match the
+/// technical feel of the readouts.
+pub(crate) fn draw_stacked_name(
+    painter: &egui::Painter,
+    anchor: egui::Pos2,
+    name: lattice_core::NoteName,
+    color: egui::Color32,
+    outline: egui::Color32,
+) -> f32 {
+    let name_font = egui::FontId::monospace(NAME_SIZE);
+    let mark_font = egui::FontId::monospace(NAME_SIZE * MARK_SCALE);
+    let measure = |text: &str, font: &egui::FontId| {
+        painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size()
+    };
+
+    let accidental = name.accidental_mark();
+    let comma = name.comma_mark();
+    let letter = measure(&name.letter.to_string(), &name_font);
+    // The two marks share one column, so it is as wide as the wider of them
+    // -- and zero wide for a plain name, which then centers as before.
+    let column = measure(&accidental, &mark_font).x.max(measure(&comma, &mark_font).x);
+    let left = anchor.x - (letter.x + column) / 2.0;
+
+    outlined_text(
+        painter,
+        egui::pos2(left, anchor.y),
+        egui::Align2::LEFT_CENTER,
+        name.letter.to_string(),
+        name_font,
+        color,
+        outline,
+    );
+    let rise = letter.y * MARK_RISE;
+    for (text, dy) in [(accidental, -rise), (comma, rise)] {
+        if text.is_empty() {
+            continue;
+        }
+        outlined_text(
+            painter,
+            egui::pos2(left + letter.x, anchor.y + dy),
+            egui::Align2::LEFT_CENTER,
+            text,
+            mark_font.clone(),
+            color,
+            outline,
+        );
+    }
+    letter.y
 }
 
 /// Text drawn over the 3D view, haloed so it stays readable whatever
