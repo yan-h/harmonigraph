@@ -225,6 +225,16 @@ impl Take {
         if !have_header {
             return Err(ReadError::MissingHeader);
         }
+        // Sort by time. Records are *written* in the order the audio
+        // thread saw them, which is time order only while the transport
+        // runs forward — a loop rollover or a jump makes the file
+        // non-monotonic, and a replay that walks it in file order would
+        // then stall on the first out-of-order record and deliver
+        // everything after it late. Stable, so simultaneous events keep
+        // the order they were played in (note-off before the note-on that
+        // replaces it, and so on).
+        take.notes.sort_by(|a, b| a.t.total_cmp(&b.t));
+        take.params.sort_by(|a, b| a.t.total_cmp(&b.t));
         Ok(take)
     }
 
@@ -398,6 +408,48 @@ mod tests {
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::Parse(2, _))
         ));
+    }
+
+    /// A transport loop writes records out of order. The reader has to
+    /// put them back, or the replay stalls on the first rollover and
+    /// delivers the whole rest of the take in one frame.
+    #[test]
+    fn records_are_sorted_by_time_however_they_were_written() {
+        let header = Header::default();
+        let out_of_order = [5.0, 1.0, 7.0, 0.5, 3.0];
+        let mut text = ron::to_string(&Record::Header(header)).unwrap();
+        text.push('\n');
+        for t in out_of_order {
+            let note = NoteRecord { t, channel: 0, note: 60, kind: NoteKind::Off };
+            text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
+            text.push('\n');
+            let param = ParamRecord { t, id: "pitch-class-fade".into(), value: t as f32 };
+            text.push_str(&ron::to_string(&Record::Param(param)).unwrap());
+            text.push('\n');
+        }
+        let take = Take::parse(std::io::Cursor::new(text.as_bytes())).unwrap();
+        let note_times: Vec<f64> = take.notes.iter().map(|n| n.t).collect();
+        let param_times: Vec<f64> = take.params.iter().map(|p| p.t).collect();
+        assert_eq!(note_times, vec![0.5, 1.0, 3.0, 5.0, 7.0]);
+        assert_eq!(param_times, vec![0.5, 1.0, 3.0, 5.0, 7.0]);
+    }
+
+    /// Simultaneous events must keep the order they were played in: a
+    /// note-off and the note-on replacing it land on the same timestamp,
+    /// and swapping them would leave the voice silent.
+    #[test]
+    fn simultaneous_records_keep_their_written_order() {
+        let header = Header::default();
+        let mut text = ron::to_string(&Record::Header(header)).unwrap();
+        text.push('\n');
+        for kind in [NoteKind::Off, NoteKind::On { velocity: 0.5 }] {
+            let note = NoteRecord { t: 2.0, channel: 0, note: 60, kind };
+            text.push_str(&ron::to_string(&Record::Note(note)).unwrap());
+            text.push('\n');
+        }
+        let take = Take::parse(std::io::Cursor::new(text.as_bytes())).unwrap();
+        assert_eq!(take.notes[0].kind, NoteKind::Off);
+        assert!(matches!(take.notes[1].kind, NoteKind::On { .. }));
     }
 
     #[test]

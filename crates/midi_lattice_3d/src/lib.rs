@@ -276,6 +276,13 @@ impl Plugin for MidiLattice3d {
         } else {
             Some(block_start as f64 / self.sample_rate)
         };
+        // A loop wrapping (or the playhead being dragged) means the next
+        // events belong to a different pass through the song. Told about
+        // it, the writer thread starts a new file rather than laying two
+        // performances on top of each other at the same song positions.
+        if let Some(origin) = take_origin {
+            self.take.observe_transport(origin);
+        }
 
         while let Some(event) = context.next_event() {
             let mapped = match event {

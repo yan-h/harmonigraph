@@ -66,6 +66,11 @@ pub enum Entry {
     /// `key` is an index into [`ParamKey::ALL`] — an id string would mean
     /// allocating on the audio thread.
     Param { t: f64, key: usize, value: f32 },
+    /// The transport jumped backwards: a loop wrapped, or the playhead
+    /// was dragged. Everything after this belongs to a different pass
+    /// through the song, so the writer starts a new file rather than
+    /// interleaving two performances at the same song positions.
+    NewPass,
 }
 
 enum Command {
@@ -84,6 +89,8 @@ pub struct Recorder {
     /// replay with default tuning.
     last_params: [f32; ParamKey::ALL.len()],
     was_armed: bool,
+    /// Transport position of the previous block, for jump detection.
+    last_position: Option<f64>,
 }
 
 impl Recorder {
@@ -91,6 +98,7 @@ impl Recorder {
         let armed = self.armed.load(Ordering::Relaxed);
         if armed && !self.was_armed {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
+            self.last_position = None;
         }
         self.was_armed = armed;
         armed
@@ -104,6 +112,23 @@ impl Recorder {
 
     pub fn note(&mut self, t: f64, channel: u8, note: u8, kind: NoteEventKind) {
         self.push(Entry::Note { t, channel, note, kind });
+    }
+
+    /// Note where the transport is, and split the take if it jumped
+    /// backwards. Called once per block with the block's song position.
+    ///
+    /// The threshold keeps a host's own jitter around a loop point from
+    /// splitting a take; a real loop wrap or playhead drag is far larger.
+    pub fn observe_transport(&mut self, t: f64) {
+        const BACKWARD_JUMP: f64 = 0.05;
+        if self.last_position.is_some_and(|last| t < last - BACKWARD_JUMP) {
+            self.push(Entry::NewPass);
+            // A new file starts empty, so every parameter must be
+            // written again or the new pass replays with whatever the
+            // previous one happened to end on.
+            self.last_params = [f32::NAN; ParamKey::ALL.len()];
+        }
+        self.last_position = Some(t);
     }
 
     /// Record any parameter that moved. Called once per block: nice-plug
@@ -229,35 +254,25 @@ pub fn channel() -> (Recorder, Control) {
     let _ = std::thread::Builder::new()
         .name("lattice-take-writer".into())
         .spawn(move || {
-            let mut writer: Option<lattice_take::Writer> = None;
+            let mut open: Option<Open> = None;
             loop {
                 match orders.try_recv() {
                     Ok(Command::Start(header, path)) => {
-                        match lattice_take::Writer::create(&path, &header) {
-                            Ok(new) => {
-                                writer = Some(new);
-                                *thread_status.lock() =
-                                    format!("recording to {}", path.display());
-                            }
-                            Err(err) => {
-                                *thread_status.lock() =
-                                    format!("cannot write {}: {err}", path.display());
-                            }
-                        }
+                        open = Open::create(*header, path, 1, &thread_status);
                     }
                     Ok(Command::Stop) => {
                         // Drain what the audio thread already queued
                         // before closing, or the tail of the take is lost.
-                        drain(&mut consumer, &mut writer);
-                        writer = None;
+                        drain(&mut consumer, &mut open, &thread_status);
+                        open = None;
                     }
                     Err(mpsc::TryRecvError::Empty) => {}
                     Err(mpsc::TryRecvError::Disconnected) => {
-                        drain(&mut consumer, &mut writer);
+                        drain(&mut consumer, &mut open, &thread_status);
                         return;
                     }
                 }
-                if !drain(&mut consumer, &mut writer) {
+                if !drain(&mut consumer, &mut open, &thread_status) {
                     std::thread::sleep(DRAIN_IDLE);
                 }
             }
@@ -270,21 +285,76 @@ pub fn channel() -> (Recorder, Control) {
             dropped: dropped.clone(),
             last_params: [f32::NAN; ParamKey::ALL.len()],
             was_armed: false,
+            last_position: None,
         },
         Control { commands, armed, dropped, status, recording },
     )
+}
+
+/// The file currently being written, and what it takes to open the next
+/// one when the transport loops.
+struct Open {
+    writer: lattice_take::Writer,
+    header: lattice_take::Header,
+    /// The first pass's path; later passes append `-2`, `-3`, ...
+    base: std::path::PathBuf,
+    pass: u32,
+}
+
+impl Open {
+    fn create(
+        header: lattice_take::Header,
+        base: std::path::PathBuf,
+        pass: u32,
+        status: &Mutex<String>,
+    ) -> Option<Open> {
+        let path = if pass <= 1 {
+            base.clone()
+        } else {
+            let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
+            base.with_file_name(format!("{stem}-{pass}.{}", lattice_take::EXTENSION))
+        };
+        match lattice_take::Writer::create(&path, &header) {
+            Ok(writer) => {
+                *status.lock() = if pass <= 1 {
+                    format!("recording to {}", path.display())
+                } else {
+                    format!("pass {pass} -> {}", path.display())
+                };
+                Some(Open { writer, header, base, pass })
+            }
+            Err(err) => {
+                *status.lock() = format!("cannot write {}: {err}", path.display());
+                None
+            }
+        }
+    }
+
+    /// Close this file and open the next pass's.
+    fn next_pass(self, status: &Mutex<String>) -> Option<Open> {
+        let Open { header, base, pass, writer } = self;
+        drop(writer);
+        Open::create(header, base, pass + 1, status)
+    }
 }
 
 /// Move everything queued into the writer (discarding it if none is
 /// open). Returns whether anything was there.
 fn drain(
     consumer: &mut rtrb::Consumer<Entry>,
-    writer: &mut Option<lattice_take::Writer>,
+    open: &mut Option<Open>,
+    status: &Mutex<String>,
 ) -> bool {
     let mut any = false;
     while let Ok(entry) = consumer.pop() {
         any = true;
-        let Some(writer) = writer.as_mut() else { continue };
+        if matches!(entry, Entry::NewPass) {
+            if let Some(current) = open.take() {
+                *open = current.next_pass(status);
+            }
+            continue;
+        }
+        let Some(writer) = open.as_mut().map(|o| &mut o.writer) else { continue };
         let _ = match entry {
             Entry::Note { t, channel, note, kind } => writer.note(lattice_take::NoteRecord {
                 t,
@@ -304,6 +374,8 @@ fn drain(
                 id: ParamKey::ALL[key].id().to_string(),
                 value,
             }),
+            // Handled above; the writer never sees it.
+            Entry::NewPass => Ok(()),
         };
     }
     any
