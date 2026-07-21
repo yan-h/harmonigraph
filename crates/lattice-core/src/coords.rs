@@ -72,7 +72,7 @@ pub fn positions_within(
 
 /// A note's spelled name: letter, sharps (negative = flats), and syntonic
 /// comma adjustments. Formats with real accidentals, e.g. `G`, `F♯`,
-/// `E♭-`, `B♭♭+2` (the UI's font stack guarantees the glyphs).
+/// `E♭-`, `B♭2+2` (the UI's font stack guarantees the glyphs).
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub struct NoteName {
     pub letter: char,
@@ -89,23 +89,35 @@ impl NoteName {
     pub fn without_syntonic_commas(self) -> NoteName {
         NoteName { syntonic_commas: 0, ..self }
     }
+
+    /// The accidental mark alone: `♯`, `♯2`, `♭3`, or empty for a natural.
+    /// Empty when there is no accidental.
+    pub fn accidental_mark(&self) -> String {
+        mark(if self.sharps > 0 { '\u{266F}' } else { '\u{266D}' }, self.sharps)
+    }
+
+    /// The syntonic-comma mark alone: `+`, `-2`, ..., empty for none.
+    pub fn comma_mark(&self) -> String {
+        mark(if self.syntonic_commas > 0 { '+' } else { '-' }, self.syntonic_commas)
+    }
+}
+
+/// One accidental or comma mark, counted rather than repeated. Out on the
+/// far reaches of the lattice a name picks up marks fast, and spelling them
+/// out (`C♯♯♯♯♯++++`) makes a label far wider than the node it sits on; v1
+/// counted instead, and so do we. A single mark is common enough that the
+/// count would be noise, so it stays bare: `♯`, then `♯2`, `♯3`...
+fn mark(sign: char, count: i32) -> String {
+    match count.abs() {
+        0 => String::new(),
+        1 => sign.to_string(),
+        n => format!("{sign}{n}"),
+    }
 }
 
 impl std::fmt::Display for NoteName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.letter)?;
-        for _ in 0..self.sharps.abs() {
-            write!(f, "{}", if self.sharps > 0 { '\u{266F}' } else { '\u{266D}' })?;
-        }
-        // A single comma is common enough that the count is noise: bare
-        // `+`/`-` for one, `+2`/`-2`... beyond.
-        if self.syntonic_commas != 0 {
-            write!(f, "{}", if self.syntonic_commas > 0 { '+' } else { '-' })?;
-            if self.syntonic_commas.abs() > 1 {
-                write!(f, "{}", self.syntonic_commas.abs())?;
-            }
-        }
-        Ok(())
+        write!(f, "{}{}{}", self.letter, self.accidental_mark(), self.comma_mark())
     }
 }
 
@@ -126,16 +138,32 @@ mod tests {
     }
 
     #[test]
-    fn note_names_stack_accidentals_and_commas() {
+    fn note_names_count_accidentals_and_commas() {
+        // Both kinds of mark are counted, never repeated: a name far out on
+        // the lattice has to fit on the node it labels.
         let name = NoteName { letter: 'B', sharps: -2, syntonic_commas: 2 };
-        assert_eq!(name.to_string(), "B\u{266D}\u{266D}+2");
+        assert_eq!(name.to_string(), "B\u{266D}2+2");
         let name = NoteName { letter: 'F', sharps: 2, syntonic_commas: 0 };
-        assert_eq!(name.to_string(), "F\u{266F}\u{266F}");
-        // A single comma shows as a bare sign; the count appears past one.
+        assert_eq!(name.to_string(), "F\u{266F}2");
+        let name = NoteName { letter: 'C', sharps: 5, syntonic_commas: 4 };
+        assert_eq!(name.to_string(), "C\u{266F}5+4");
+        // A single mark shows as a bare sign; the count appears past one.
         let name = NoteName { letter: 'A', sharps: 0, syntonic_commas: 1 };
         assert_eq!(name.to_string(), "A+");
         // Two just thirds up: G♯ lowered by two commas.
         assert_eq!(LatticePos::new(0, 2, 0).note_name().to_string(), "G\u{266F}-2");
+    }
+
+    #[test]
+    fn marks_are_readable_separately_for_stacked_labels() {
+        // The lattice draws the two marks in their own column, one above
+        // the other, so it needs them apart rather than as one string.
+        let name = NoteName { letter: 'E', sharps: -3, syntonic_commas: -1 };
+        assert_eq!(name.accidental_mark(), "\u{266D}3");
+        assert_eq!(name.comma_mark(), "-");
+        let natural = NoteName { letter: 'G', sharps: 0, syntonic_commas: 0 };
+        assert_eq!(natural.accidental_mark(), "");
+        assert_eq!(natural.comma_mark(), "");
     }
 
     #[test]
@@ -157,7 +185,7 @@ mod tests {
         );
         // Sharps/flats survive; only the comma is removed.
         let name = NoteName { letter: 'B', sharps: -2, syntonic_commas: 2 };
-        assert_eq!(name.without_syntonic_commas().to_string(), "B\u{266D}\u{266D}");
+        assert_eq!(name.without_syntonic_commas().to_string(), "B\u{266D}2");
     }
 
     #[test]
