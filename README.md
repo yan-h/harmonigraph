@@ -142,8 +142,19 @@ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
 FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
 more details.
 
+### Exceptions
+
+[`crates/lattice-core`](crates/lattice-core) is **`MIT OR Apache-2.0`**, not
+GPL. It is the one general-purpose library here — dependency-free
+just-intonation math, Tonnetz coordinates, and note spelling — and much of
+that math descends from the permissively licensed
+[midi_lattice v1](https://github.com/yan-h/midi_lattice), so it stays
+permissive too. `ci.sh` enforces the property that justifies the split: the
+crate must remain dependency-free. See
+[its README](crates/lattice-core/README.md).
+
 The vendored forks under [`vendor/`](vendor) (`baseview`, `egui-baseview`)
-are **not** covered by this license — they remain under their upstream
+are likewise **not** covered by the GPL — they remain under their upstream
 `MIT OR Apache-2.0` terms, with their own license files in each directory.
 See [`PATCHES.md`](PATCHES.md) for what was changed and why.
 
