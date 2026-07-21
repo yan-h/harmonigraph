@@ -75,10 +75,80 @@ pub enum SpectrumLabels {
     Frequency,
 }
 
+/// Which way the Spectral pane's pitch axis runs.
+///
+/// The pane is written once against an abstract (pitch, depth) plane and
+/// mapped onto the screen at draw time, so every element — gridlines,
+/// spectrum curve, voice bars, piano roll — turns together.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectralOrientation {
+    /// Follow the pane's shape: a pane taller than it is wide goes
+    /// vertical, otherwise horizontal. Means the pane reads correctly
+    /// both under the lattice and beside it, with no setting to change.
+    #[default]
+    Auto,
+    /// Pitch left-to-right; the spectrum grows upward from the bottom.
+    Horizontal,
+    /// Pitch bottom-to-top; the spectrum grows rightward from the left.
+    /// The classic piano-roll orientation.
+    Vertical,
+}
+
+impl SpectralOrientation {
+    /// Resolve [`Auto`](Self::Auto) against the pane it is drawing into.
+    fn is_vertical(self, rect: egui::Rect) -> bool {
+        match self {
+            SpectralOrientation::Auto => rect.height() > rect.width(),
+            SpectralOrientation::Horizontal => false,
+            SpectralOrientation::Vertical => true,
+        }
+    }
+}
+
+/// Where the Spectral pane sits in the default pane arrangement. Changing
+/// it rebuilds the dock (the arrangement is otherwise persisted forever).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectralPlacement {
+    /// A wide strip under the lattice (the original layout): what sounds
+    /// is directly under what lights up.
+    #[default]
+    Below,
+    /// A tall strip between the lattice and the settings column. Paired
+    /// with [`SpectralOrientation::Auto`] this turns the pane vertical,
+    /// which is also the natural piano-roll orientation.
+    Right,
+}
+
+/// What colors a note in the piano roll.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RollColor {
+    /// The lattice's own channel colors, so a note is the same color here
+    /// as the node it lit up.
+    Channel,
+    /// The pitch gradient every channel-9..13 voice uses, applied to all
+    /// channels — reads as a single ramp low-to-high.
+    Pitch,
+    /// One flat accent color: the roll recedes and the lattice leads.
+    Accent,
+}
+
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
+    /// Which way the pitch axis runs; see [`SpectralOrientation`].
+    #[serde(default)]
+    pub orientation: SpectralOrientation,
+    /// Reverse the pitch axis (high notes first).
+    #[serde(default)]
+    pub flip_pitch: bool,
+    /// Put the baseline on the opposite edge: the spectrum hangs down
+    /// instead of standing up (and the roll flows the other way).
+    #[serde(default)]
+    pub flip_depth: bool,
+    /// Where the pane sits when the layout is (re)built.
+    #[serde(default)]
+    pub placement: SpectralPlacement,
     /// Analyze and overlay the shell's audio (plugin: the input bus;
     /// standalone: a synth on the held notes).
     #[serde(default = "default_true")]
@@ -110,6 +180,56 @@ pub struct SpectrumConfig {
     /// the view.
     pub low_octave: i32,
     pub high_octave: i32,
+
+    // ---- Piano roll -------------------------------------------------
+    // The played-note timeline (lattice-core's NoteRoll) drawn over the
+    // same pitch axis, occupying the far end of the depth axis. Time runs
+    // away from the spectrum: a note leaving the roll's near edge meets
+    // the spectrum peak it is making.
+    /// Draw the incoming MIDI's history at all.
+    #[serde(default = "default_true")]
+    pub show_roll: bool,
+    /// Share of the pane's depth given to the roll (the rest is the
+    /// spectrum). 0 hides it; 1 gives the whole pane to the roll.
+    #[serde(default = "default_roll_fraction")]
+    pub roll_fraction: f32,
+    /// Seconds of history the roll's depth spans.
+    #[serde(default = "default_roll_seconds")]
+    pub roll_seconds: f32,
+    /// Note ribbon width, in semitones of the pitch axis.
+    #[serde(default = "default_roll_thickness")]
+    pub roll_thickness: f32,
+    /// Corner rounding of an unbent note, as a fraction of half its width.
+    #[serde(default = "default_roll_rounding")]
+    pub roll_rounding: f32,
+    /// Overall roll opacity.
+    #[serde(default = "default_roll_opacity")]
+    pub roll_opacity: f32,
+    #[serde(default = "default_roll_color")]
+    pub roll_color: RollColor,
+    /// Scale a note's opacity by its velocity.
+    #[serde(default = "default_true")]
+    pub roll_velocity_alpha: bool,
+    /// How much a note dims as it ages toward the far edge (0 = not at
+    /// all, 1 = to nothing).
+    #[serde(default = "default_roll_age_fade")]
+    pub roll_age_fade: f32,
+    /// Outline every note in its own color, brightened.
+    #[serde(default)]
+    pub roll_outline: bool,
+    /// Mark each note's attack with a bright cap.
+    #[serde(default = "default_true")]
+    pub roll_onsets: bool,
+    /// Keep still-held notes at full brightness regardless of age fade,
+    /// so what is sounding stands out from what has been.
+    #[serde(default = "default_true")]
+    pub roll_highlight_held: bool,
+    /// Seconds between the roll's time gridlines; 0 draws none.
+    #[serde(default = "default_roll_grid_seconds")]
+    pub roll_grid_seconds: f32,
+    /// Draw the line where the roll meets the spectrum ("now").
+    #[serde(default = "default_true")]
+    pub roll_now_line: bool,
 }
 
 fn default_true() -> bool {
@@ -120,6 +240,38 @@ fn default_labels() -> SpectrumLabels {
     SpectrumLabels::Notes
 }
 
+fn default_roll_fraction() -> f32 {
+    0.55
+}
+
+fn default_roll_seconds() -> f32 {
+    12.0
+}
+
+fn default_roll_thickness() -> f32 {
+    0.8
+}
+
+fn default_roll_rounding() -> f32 {
+    0.5
+}
+
+fn default_roll_opacity() -> f32 {
+    0.9
+}
+
+fn default_roll_color() -> RollColor {
+    RollColor::Channel
+}
+
+fn default_roll_age_fade() -> f32 {
+    0.45
+}
+
+fn default_roll_grid_seconds() -> f32 {
+    1.0
+}
+
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
@@ -127,6 +279,10 @@ pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
+            orientation: SpectralOrientation::Auto,
+            flip_pitch: false,
+            flip_depth: false,
+            placement: SpectralPlacement::Below,
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
@@ -138,6 +294,20 @@ impl Default for SpectrumConfig {
             show_voice_bars: true,
             low_octave: -1,
             high_octave: 9,
+            show_roll: true,
+            roll_fraction: default_roll_fraction(),
+            roll_seconds: default_roll_seconds(),
+            roll_thickness: default_roll_thickness(),
+            roll_rounding: default_roll_rounding(),
+            roll_opacity: default_roll_opacity(),
+            roll_color: default_roll_color(),
+            roll_velocity_alpha: true,
+            roll_age_fade: default_roll_age_fade(),
+            roll_outline: false,
+            roll_onsets: true,
+            roll_highlight_held: true,
+            roll_grid_seconds: default_roll_grid_seconds(),
+            roll_now_line: true,
         }
     }
 }
@@ -287,12 +457,12 @@ pub struct CameraPreset {
 }
 
 /// The default pane arrangement: big lattice with the Spectral pane in
-/// its own strip directly below it (sharing the pitch intuition: what
-/// sounds is what lights up), tuning column on the right, console and
-/// notes tucked below that. Users can re-dock at runtime; the result
-/// persists via UiPersist, and the View pane's "Reset layout" button
-/// returns here.
-fn default_dock() -> DockState<panes::Tab> {
+/// its own strip (below it by default — sharing the pitch intuition: what
+/// sounds is what lights up — or beside it, per `placement`), tuning
+/// column on the right, console and notes tucked below that. Users can
+/// re-dock at runtime; the result persists via UiPersist, and the View
+/// pane's "Reset layout" button returns here.
+fn default_dock(placement: SpectralPlacement) -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [lattice, right] = surface.split_right(
@@ -308,13 +478,23 @@ fn default_dock() -> DockState<panes::Tab> {
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
     surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
-    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+    // The fractions differ because the strip's short side is what matters:
+    // a wide strip under the lattice needs less of the height than a tall
+    // strip beside it needs of the (already narrowed) width.
+    match placement {
+        SpectralPlacement::Below => {
+            surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+        }
+        SpectralPlacement::Right => {
+            surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
+        }
+    }
     dock
 }
 
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        let dock = default_dock();
+        let dock = default_dock(SpectralPlacement::default());
 
         SharedState {
             tracker: NoteTracker::new(),
@@ -453,7 +633,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Deferred from the View pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
-        state.dock = default_dock();
+        state.dock = default_dock(state.spectrum_config.placement);
     }
 
     // Render continuously only while something is animating (sounding or
@@ -461,7 +641,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // up promptly. egui repaints on input events by itself, so interaction
     // never waits on this. The plugin shell additionally requests a
     // repaint the moment it drains new note events.
-    if state.tracker.voices().next().is_some() || state.learn_active {
+    //
+    // The piano roll keeps animating well past the last release fade — it
+    // scrolls for as long as its window still reaches a played note — so
+    // it gets its own say here. Without this the roll would advance in
+    // 50 ms jerks once the voices died.
+    if state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now) {
         ui.ctx().request_repaint();
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
@@ -471,6 +656,20 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 /// Repaint cadence while nothing animates: newly arriving MIDI shows up
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Whether the piano roll still has something moving across it: its window
+/// reaches back to a note that was sounding. Goes quiet once the last note
+/// has scrolled off the far edge, so an idle plugin still idles.
+fn roll_scrolling(state: &SharedState, now: f64) -> bool {
+    let cfg = &state.spectrum_config;
+    cfg.show_roll
+        && cfg.roll_fraction > 0.0
+        && state
+            .tracker
+            .roll()
+            .latest_activity(now)
+            .is_some_and(|last| now - last <= cfg.roll_seconds as f64)
+}
 
 /// One tick of learn mode (v1 semantics): while armed, whenever the set of
 /// held pitch classes changes, re-infer the tuning and write it through the

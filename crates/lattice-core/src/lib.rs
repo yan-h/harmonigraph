@@ -20,10 +20,12 @@
 pub mod coords;
 pub mod history;
 pub mod notes;
+pub mod roll;
 pub mod spectrum;
 pub mod tuning;
 
 pub use coords::{positions_within, LatticePos, NoteName};
 pub use history::{NoteHistory, Visit};
 pub use notes::{ChannelRole, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState};
+pub use roll::{NoteRoll, RollNote};
 pub use tuning::{learn_tuning, LearnedTuning, PitchClass, PitchClassDistance, Tuning};
