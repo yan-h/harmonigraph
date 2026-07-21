@@ -17,26 +17,12 @@
 # `git worktree remove` keeps the branch ref, so merged commits stay reachable
 # and the branch can be checked out again later.
 #
-# Safe to run by hand:
+# Runs automatically at SessionStart, wired up in .claude/settings.json. Also
+# safe to run by hand:
 #   RECLAIM_DRY_RUN=1 .claude/reclaim-worktrees.sh   # report, remove nothing
 #
-# To run it automatically, add this to .claude/settings.json:
-#   {
-#     "hooks": {
-#       "SessionStart": [
-#         {
-#           "hooks": [
-#             {
-#               "type": "command",
-#               "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/reclaim-worktrees.sh\"; [ -x \"$S\" ] && \"$S\" || true",
-#               "timeout": 60,
-#               "statusMessage": "Reclaiming finished worktrees"
-#             }
-#           ]
-#         }
-#       ]
-#     }
-#   }
+# A no-op prints nothing, so a session that reclaims nothing stays quiet; when
+# it does remove something it reports the total freed as a systemMessage.
 #
 # Written for bash 3.2 (macOS system bash): no mapfile, no associative arrays.
 
