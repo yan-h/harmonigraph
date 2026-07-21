@@ -1216,8 +1216,9 @@ fn trail_view(mark: TrailMark) -> ViewConfig {
 fn nothing_is_remembered_while_the_trail_is_off() {
     let mut tracker = NoteTracker::new();
     play_and_forget(&mut tracker, 60, 0.0, 1.0);
-    let view = ViewConfig::default();
-    assert_eq!(view.trail_mark, TrailMark::Off, "off out of the box");
+    // Explicitly off rather than `ViewConfig::default()`: the fresh-view
+    // look is Yan's, and is free to ship the trail on.
+    let view = trail_view(TrailMark::Off);
     let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 10.0);
     assert!(scene.nodes.iter().all(|n| n.trail == 0.0));
 }
@@ -1294,10 +1295,12 @@ fn tint_puts_the_remembered_color_on_a_silent_node_only() {
     // the shader's idle branch to tint with, in place of the idle grey.
     let scene = scene_of(&tracker, &tuning, &trail_view(TrailMark::Tint), &frame, 10.0);
     let remembered = origin_node(&scene).color;
+    // Against a trail that is OFF, which is what leaves the idle grey in
+    // place -- every mark rewrites a silent visited node's color.
     let idle = origin_node(&scene_of(
         &tracker,
         &tuning,
-        &ViewConfig::default(),
+        &trail_view(TrailMark::Off),
         &frame,
         10.0,
     ))

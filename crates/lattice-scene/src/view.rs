@@ -448,28 +448,39 @@ impl Default for ViewConfig {
             // and the octaves carry the node's outline.
             core_solidity: 0.4,
             core_radius: 0.2,
-            outer_inner: 0.45,
-            outer_outer: 1.0,
+            // A narrower octave band, set well off the core and stopping
+            // short of the quad edge, with a tight gap between sectors: the
+            // octaves read as a ring of distinct marks rather than a solid
+            // annulus, and the core keeps clear space around it.
+            outer_inner: 0.602_400_54,
+            outer_outer: 0.836_332_2,
             outer_backdrop: 0.6,
             legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
-            outer_gap: default_outer_gap(),
-            // Idle nodes are small dots with the grid lines running close
-            // in to them, matching the compact core.
-            idle_marker: IdleMarker::Dot,
+            outer_gap: 0.085_986_16,
+            // No idle marker: the grid lines alone carry the lattice's
+            // shape where nothing is playing, leaving the node positions
+            // themselves empty. (`idle_radius` rides along inert, so
+            // switching a marker back on lands at the compact size that
+            // matches the core.)
+            idle_marker: IdleMarker::None,
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
             mark_unlinked: default_mark_unlinked(),
-            mark_thickness: default_mark_thickness(),
+            mark_thickness: 0.082_711_12,
             grid_color: default_grid_color(),
             grid_thickness: default_grid_thickness(),
             grid_inset: 0.3,
             grid_dashed: false,
-            trail_mark: TrailMark::default(),
+            // Trail on, with the note names kept on visited nodes. NOTE:
+            // Lift works by lightening the idle marker, and the marker is
+            // None above, so out of the box the trail shows as the labels
+            // alone. See TrailMark::needs_idle_marker.
+            trail_mark: TrailMark::Lift,
             trail_strength: default_trail_strength(),
             trail_memory: 0.0,
-            trail_labels: false,
+            trail_labels: true,
             meantone: false,
             frameless: false,
             render_scale: default_render_scale(),
