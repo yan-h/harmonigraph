@@ -39,37 +39,38 @@ cargo build --release -p lattice-offline
 
 ## Pass 1 — recording a take
 
-### From the DAW (the real path)
+### From the DAW
 
-**Exporting audio also exports a take.** There is no button. nice-plug
-tells the plugin when the host has switched to offline rendering
-(`ProcessMode::Offline`), and the host re-initializes the plugin whenever
-that changes, so the arming is exact: takes are recorded during an export
-and never during ordinary playback.
+**Turn on "Record take" in the View pane, then play the piece.** That's
+it. You do not have to export, and you do not have to do anything
+differently from how you'd play it anyway.
 
 Takes are written to `~/Music/MIDI Lattice 3D Takes/take-<unixtime>.take`
-(`LATTICE_TAKE_DIR` overrides the directory). The plugin prints the path
-to stderr when the export finishes — Bitwig's log, if you want to watch it
-happen.
+(`LATTICE_TAKE_DIR` overrides the directory). The status line under the
+toggle tells you where the file is going and how many events have landed.
 
-Two things to know:
+Three things to know:
 
-- **The look comes from the plugin's saved UI state**, which is only
-  written when the editor *window* closes. Same trap `read-plugin-state.py`
-  documents: close the MIDI Lattice 3D window, then save the project, then
-  export. Otherwise the take carries whatever the view looked like last
-  time. (You can also override it at render time with `--ui-state`.)
-- **The device has to be in the signal path** to see the notes, exactly as
-  it does live. What it no longer needs is *audio* — the spectrum is fed
-  from the bounced WAV at render time, so the device's position only has
-  to be right for MIDI.
+- **Nothing is recorded until the transport rolls.** Events are stamped
+  with *transport position*, not a plugin-local clock, so a take lines up
+  with a bounce of the same song automatically — no offset to work out.
+  While the transport is stopped the status line says so.
+- **The look is captured when you arm**, from what is on screen at that
+  moment. (Unlike the project's saved `ui-state` blob, which only updates
+  when the editor window closes — the trap `read-plugin-state.py`
+  documents. You can also override it at render time with `--ui-state`.)
+- **The device has to be in the note path**, exactly as it is live. What it
+  no longer needs is *audio* — the spectrum is fed from the bounced WAV at
+  render time, so the device's position only has to be right for MIDI.
 
-> **This is the one part of the pipeline that depends on host behavior we
-> cannot verify from this repo.** Bitwig has several render paths (Export
-> Audio, bounce, bounce-in-place, freeze), and not all of them
-> necessarily run every device with the full note stream. If a take comes
-> out empty or short, that is the first thing to check — and the standalone
-> path below is the fallback that does not depend on it at all.
+> **Why a button and not automatic.** The first version armed itself when
+> nice-plug reported `ProcessMode::Offline`, on the theory that exporting
+> audio should also export a take. Bitwig disproved it: an export produced
+> a take with parameter values, 37 `AllOff`s and *no notes*, while the
+> lattice visibly lit up the whole time. Both can only be true if the pass
+> carrying the notes wasn't the pass flagged offline — the host runs a
+> short offline probe and then renders in realtime mode. Recording is
+> explicit now, and works in any process mode.
 
 ### From the standalone harness (no DAW)
 

@@ -435,6 +435,19 @@ pub struct SharedState {
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
+    /// Take recording, for offline video rendering. The shell owns the
+    /// actual recorder; these three fields are the whole contract.
+    /// Runtime-only — a take is a deliberate act, never resumed on load.
+    ///
+    /// `take_supported` gates the control: shells that cannot record
+    /// (or a build without a writer) simply don't show it, rather than
+    /// offering a button that does nothing.
+    pub take_supported: bool,
+    /// Toggled by the View pane, acted on by the shell.
+    pub take_recording: bool,
+    /// Shell-supplied one-liner shown under the toggle: where the file is
+    /// going, how many events, or what went wrong.
+    pub take_status: String,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// The Spectral pane's settings (Spectrum tab; persisted).
@@ -509,6 +522,9 @@ impl SharedState {
             last_learned_classes: None,
             camera_presets: Vec::new(),
             preset_name: String::new(),
+            take_supported: false,
+            take_recording: false,
+            take_status: String::new(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             reset_layout: false,

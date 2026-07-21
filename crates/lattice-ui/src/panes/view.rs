@@ -1,7 +1,7 @@
 //! The View pane: per-axis lattice extents, window center, and camera
 //! framing/projection.
 
-use crate::widgets::{button_row, button_row_wrapped, ValueBar};
+use crate::widgets::{button_row, button_row_wrapped, toggle_switch, ValueBar};
 use crate::{CameraPreset, SharedState};
 use super::normalize_deg;
 use lattice_scene::Camera;
@@ -188,4 +188,22 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
              record as one seamless surface. Esc restores.",
         );
     });
+
+    // Take recording: the input half of offline video rendering. A mode
+    // with ongoing side effects (it keeps writing a file), so a switch
+    // rather than a checkbox — the house rule in widgets.rs.
+    if state.take_supported {
+        super::section(ui, "Record");
+        toggle_switch(ui, &mut state.take_recording, "Record take").on_hover_text(
+            "Record everything the visualization is a function of — notes, \
+             bends, parameter automation, and the current look — to a .take \
+             file. Render it to video afterwards with lattice-offline, at any \
+             resolution and frame rate. Events are stamped with transport \
+             position, so nothing is captured until the transport rolls and \
+             the take lines up with a bounce of the same song.",
+        );
+        if !state.take_status.is_empty() {
+            ui.weak(&state.take_status);
+        }
+    }
 }

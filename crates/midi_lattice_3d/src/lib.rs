@@ -3,7 +3,7 @@
 //! crate only adapts them to the plugin world.
 
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use lattice_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
@@ -36,11 +36,12 @@ pub struct MidiLattice3d {
     editor_shared: Arc<Mutex<editor::EditorShared>>,
     sample_rate: f64,
     samples_processed: u64,
-    /// Take recording, live only while the host is rendering offline.
-    /// The `Session` is held purely so dropping it (on the next
-    /// `initialize`, or when the plugin goes away) closes the file.
-    take: Option<take::Recorder>,
-    take_session: Option<take::Session>,
+    /// Take recording (see `take`). The recorder is always present; it
+    /// only writes while the user has armed it from the View pane.
+    take: take::Recorder,
+    /// Count of events recorded in the current take, for the UI's status
+    /// line. Reset when recording starts.
+    take_events: Arc<AtomicU64>,
 }
 
 #[derive(Params)]
@@ -177,6 +178,8 @@ impl Default for MidiLattice3d {
         let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
         let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new(44_100.0f32.to_bits()));
+        let (take, take_control) = take::channel();
+        let take_events = Arc::new(AtomicU64::new(0));
         MidiLattice3d {
             params: Arc::new(MidiLattice3dParams::default()),
             note_producer: producer,
@@ -186,11 +189,13 @@ impl Default for MidiLattice3d {
                 consumer,
                 audio_consumer,
                 sample_rate_bits,
+                take_control,
+                take_events.clone(),
             ))),
             sample_rate: 44_100.0,
             samples_processed: 0,
-            take: None,
-            take_session: None,
+            take,
+            take_events,
         }
     }
 }
@@ -232,22 +237,6 @@ impl Plugin for MidiLattice3d {
     ) -> bool {
         self.sample_rate = f64::from(buffer_config.sample_rate);
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
-
-        // Exporting audio also exports a take (see `take`). The host
-        // re-initializes whenever the process mode changes, so dropping
-        // the old session here both closes a finished export's file and
-        // guarantees we are never recording during realtime playback.
-        self.take = None;
-        self.take_session = None;
-        if buffer_config.process_mode == ProcessMode::Offline {
-            let ui_state = self.params.ui_state.read().clone();
-            if let Some((recorder, session)) =
-                take::start(buffer_config.sample_rate, ui_state)
-            {
-                self.take = Some(recorder);
-                self.take_session = Some(session);
-            }
-        }
         true
     }
 
@@ -263,9 +252,7 @@ impl Plugin for MidiLattice3d {
             note: 0,
             kind: NoteEventKind::AllOff,
         });
-        if let Some(recorder) = &mut self.take {
-            recorder.note(0.0, 0, 0, NoteEventKind::AllOff);
-        }
+
     }
 
     fn process(
@@ -275,6 +262,20 @@ impl Plugin for MidiLattice3d {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let block_start = self.samples_processed;
+        // Take timestamps come from the TRANSPORT, not the plugin's own
+        // sample counter, so a take lines up with a bounce of the same
+        // song without an offset to work out. Nothing is recorded while
+        // the transport is stopped; a host that reports no position at
+        // all falls back to the local clock so "just record what I play"
+        // still works.
+        let transport = context.transport();
+        let take_origin = if !self.take.is_armed() {
+            None
+        } else if let Some(seconds) = transport.pos_seconds() {
+            transport.playing.then_some(seconds)
+        } else {
+            Some(block_start as f64 / self.sample_rate)
+        };
 
         while let Some(event) = context.next_event() {
             let mapped = match event {
@@ -297,8 +298,14 @@ impl Plugin for MidiLattice3d {
                 // Full ring = GUI stalled; dropping visualization events is
                 // the right failure mode for the audio thread.
                 let _ = self.note_producer.push(CoreNoteEvent { time, channel, note, kind });
-                if let Some(recorder) = &mut self.take {
-                    recorder.note(time, channel, note, kind);
+                if let Some(origin) = take_origin {
+                    self.take.note(
+                        origin + f64::from(timing) / self.sample_rate,
+                        channel,
+                        note,
+                        kind,
+                    );
+                    self.take_events.fetch_add(1, Ordering::Relaxed);
                 }
             }
             // Behave as a transparent MIDI effect.
@@ -331,9 +338,9 @@ impl Plugin for MidiLattice3d {
             }
         }
 
-        if let Some(recorder) = &mut self.take {
-            let t = block_start as f64 / self.sample_rate;
-            recorder.params(t, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
+        if let Some(origin) = take_origin {
+            self.take
+                .params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
         }
 
         self.samples_processed += buffer.samples() as u64;

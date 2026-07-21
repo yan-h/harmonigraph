@@ -132,8 +132,9 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 - **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
 - **Making videos**: done, by offline replay rather than screen capture.
-  Exporting audio from the DAW also writes a *take* (every note event and
-  parameter change on the audio clock); `lattice-offline` replays it
+  Arm "Record take" in the View pane and play the piece; the plugin writes
+  a *take* (every note event and parameter change, stamped on the host
+  transport so it lines up with a bounce). `lattice-offline` replays it
   headless into an exact-CFR video at any resolution, with its own pane
   layout and the bounced audio muxed in. See
   [`docs/offline-rendering.md`](docs/offline-rendering.md). Live capture of
