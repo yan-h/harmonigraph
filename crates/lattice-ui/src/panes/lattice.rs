@@ -192,11 +192,11 @@ fn draw_node_labels(
 pub(crate) const NAME_SIZE: f32 = 15.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
-pub(crate) const CENTS_SIZE: f32 = 8.0;
+pub(crate) const CENTS_SIZE: f32 = 7.0;
 /// Air between the bottom of the name's glyphs and the top of the cents
 /// readout's. Real pixels of gap, since both ends are measured as ink: the
 /// two are one label, sitting together without crowding.
-pub(crate) const CENTS_GAP: f32 = 4.0;
+pub(crate) const CENTS_GAP: f32 = 3.0;
 /// Accidental and comma marks, relative to the letter. Small enough that the
 /// two of them stacked still fit inside the letter's own height -- the pair
 /// is an annotation on the name, and a label that grows taller than its
