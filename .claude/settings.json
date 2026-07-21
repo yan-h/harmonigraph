@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"$CLAUDE_PROJECT_DIR/.claude/reclaim-worktrees.sh\"; [ -x \"$S\" ] && \"$S\" || true",
+            "timeout": 60,
+            "statusMessage": "Reclaiming finished worktrees"
+          }
+        ]
+      }
+    ]
+  }
+}
