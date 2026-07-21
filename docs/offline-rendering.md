@@ -10,17 +10,20 @@ resolution.
 That is the whole idea:
 
 ```
-   ┌── Bitwig: Export Audio (offline, faster than realtime) ──┐
-   │                                                          │
-   ├──> piece.wav          (the bounce, as always)            │
-   └──> take-<stamp>.take  (what the plugin saw)              │
+   arm "Record take" in the View pane, play the piece once
+                    │
+                    ├──> take-<stamp>.take   what the plugin saw
+   export audio ────┴──> piece.wav           the bounce, as always
                     │
                     ▼
-        lattice-offline piece.take --audio piece.wav --out piece.mp4
+        lattice-offline take.take --audio piece.wav --out piece.mp4
                     │
                     ▼
                piece.mp4  (exact CFR, any size, audio muxed)
 ```
+
+Both are stamped on the host transport, so they line up with no offset to
+work out.
 
 Nothing is captured from a screen, so nothing is limited by your monitor,
 your refresh rate, or whether a window was in front.
@@ -28,7 +31,8 @@ your refresh rate, or whether a window was in front.
 ## The short version
 
 ```sh
-# 1. In Bitwig: export audio as usual. A .take lands next to it (see below).
+# 1. In Bitwig: arm "Record take" (View pane), play the piece, disarm.
+#    Export audio as usual for the soundtrack.
 # 2. Render:
 cargo build --release -p lattice-offline
 ./target/release/lattice-offline ~/Music/"MIDI Lattice 3D Takes"/take-1770000000.take \
