@@ -213,6 +213,27 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
              — it does not hold up the DAW.",
         );
         if render.auto_render {
+            crate::widgets::choice_row(
+                ui,
+                "When",
+                &mut render.trigger,
+                &[
+                    (
+                        crate::RenderTrigger::OnDisarm,
+                        "Switched off",
+                        "Render when you turn Record take off. The only \
+                         choice that works with a looping transport.",
+                    ),
+                    (
+                        crate::RenderTrigger::OnTransportStop,
+                        "Transport stops",
+                        "Render the moment the transport stops after \
+                         recording something — a play-through or an audio \
+                         export then needs no further clicks. Recording \
+                         switches itself off too.",
+                    ),
+                ],
+            );
             // Free-text paths rather than a file dialog: a plugin GUI has
             // no portable one, and these are set once and then left.
             labeled_path(ui, "Renderer", &mut render.renderer_path)

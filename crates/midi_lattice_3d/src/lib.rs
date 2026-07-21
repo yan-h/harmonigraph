@@ -272,17 +272,15 @@ impl Plugin for MidiLattice3d {
         let take_origin = if !self.take.is_armed() {
             None
         } else if let Some(seconds) = transport.pos_seconds() {
-            transport.playing.then_some(seconds)
+            // observe_transport decides whether the transport is rolling
+            // (and splits the take on a loop wrap). It is deliberately
+            // more permissive than the host's `playing` flag — see there.
+            self.take.observe_transport(seconds, transport.playing).then_some(seconds)
         } else {
+            // No transport at all: fall back to the plugin's own clock so
+            // "just record what I play" still works.
             Some(block_start as f64 / self.sample_rate)
         };
-        // A loop wrapping (or the playhead being dragged) means the next
-        // events belong to a different pass through the song. Told about
-        // it, the writer thread starts a new file rather than laying two
-        // performances on top of each other at the same song positions.
-        if let Some(origin) = take_origin {
-            self.take.observe_transport(origin);
-        }
 
         while let Some(event) = context.next_event() {
             let mapped = match event {

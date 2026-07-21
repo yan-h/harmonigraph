@@ -141,6 +141,8 @@ pub struct Recorder {
     was_armed: bool,
     /// Transport position of the previous block, for jump detection.
     last_position: Option<f64>,
+    /// Published for the GUI: is the transport actually moving?
+    rolling: Arc<AtomicBool>,
 }
 
 impl Recorder {
@@ -164,21 +166,42 @@ impl Recorder {
         self.push(Entry::Note { t, channel, note, kind });
     }
 
-    /// Note where the transport is, and split the take if it jumped
-    /// backwards. Called once per block with the block's song position.
+    /// Note where the transport is, and answer whether it is rolling —
+    /// i.e. whether this block's events belong in the take. Called once
+    /// per block with the block's song position and the host's own
+    /// `playing` flag.
     ///
-    /// The threshold keeps a host's own jitter around a loop point from
-    /// splitting a take; a real loop wrap or playhead drag is far larger.
-    pub fn observe_transport(&mut self, t: f64) {
+    /// **Rolling is the union of "the position advanced" and "the host
+    /// says playing", not the flag alone.** During an offline render some
+    /// hosts report `playing = false` — nothing is being played, after
+    /// all — and trusting the flag would silently record nothing for the
+    /// whole export. Conversely a host that reports `playing` before its
+    /// position starts moving still gets its first block captured. Only
+    /// when both say no does a block get skipped, which is exactly a
+    /// parked transport.
+    ///
+    /// A backward jump means a loop wrapped or the playhead was dragged,
+    /// so the take splits. The threshold ignores a host's own jitter
+    /// around a loop point; a real wrap is far larger.
+    pub fn observe_transport(&mut self, position: f64, playing: bool) -> bool {
         const BACKWARD_JUMP: f64 = 0.05;
-        if self.last_position.is_some_and(|last| t < last - BACKWARD_JUMP) {
-            self.push(Entry::NewPass);
-            // A new file starts empty, so every parameter must be
-            // written again or the new pass replays with whatever the
-            // previous one happened to end on.
-            self.last_params = [f32::NAN; ParamKey::ALL.len()];
-        }
-        self.last_position = Some(t);
+        let rolling = match self.last_position {
+            Some(last) if position < last - BACKWARD_JUMP => {
+                self.push(Entry::NewPass);
+                // A new file starts empty, so every parameter must be
+                // written again or the new pass replays with whatever the
+                // previous one happened to end on.
+                self.last_params = [f32::NAN; ParamKey::ALL.len()];
+                true
+            }
+            Some(last) => playing || position > last,
+            // Nothing to compare on the first block; the flag is all
+            // there is.
+            None => playing,
+        };
+        self.last_position = Some(position);
+        self.rolling.store(rolling, Ordering::Relaxed);
+        rolling
     }
 
     /// Record any parameter that moved. Called once per block: nice-plug
@@ -204,11 +227,19 @@ pub struct Control {
     /// One line for the UI, owned by whichever side last had news.
     status: Arc<Mutex<String>>,
     recording: Arc<AtomicBool>,
+    /// Set by the audio thread; the GUI's only honest view of whether
+    /// the transport is moving.
+    rolling: Arc<AtomicBool>,
 }
 
 impl Control {
     pub fn is_recording(&self) -> bool {
         self.recording.load(Ordering::Relaxed)
+    }
+
+    /// Whether the audio thread last saw the transport moving.
+    pub fn is_rolling(&self) -> bool {
+        self.rolling.load(Ordering::Relaxed)
     }
 
     pub fn status(&self) -> String {
@@ -244,6 +275,7 @@ impl Control {
             return;
         }
         self.recording.store(true, Ordering::Relaxed);
+        self.rolling.store(false, Ordering::Relaxed);
         self.armed.store(true, Ordering::Relaxed);
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }
@@ -302,6 +334,7 @@ pub fn channel() -> (Recorder, Control) {
     let armed = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicU64::new(0));
     let recording = Arc::new(AtomicBool::new(false));
+    let rolling = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(String::new()));
 
     let thread_status = status.clone();
@@ -343,8 +376,9 @@ pub fn channel() -> (Recorder, Control) {
             last_params: [f32::NAN; ParamKey::ALL.len()],
             was_armed: false,
             last_position: None,
+            rolling: rolling.clone(),
         },
-        Control { commands, armed, dropped, status, recording },
+        Control { commands, armed, dropped, status, recording, rolling },
     )
 }
 
@@ -515,6 +549,7 @@ mod tests {
     fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
         let config = RenderConfig {
             auto_render: true,
+            trigger: Default::default(),
             renderer_path: "  ".into(),
             audio_path: "   ".into(),
             extra_args: "   ".into(),
@@ -529,6 +564,7 @@ mod tests {
     fn options_split_on_whitespace_and_paths_stay_whole() {
         let config = RenderConfig {
             auto_render: true,
+            trigger: Default::default(),
             renderer_path: "/opt/lattice-offline".into(),
             audio_path: "/Users/yan/My Bounces/piece.wav".into(),
             extra_args: "--size 3840x2160   --layout side-by-side".into(),

@@ -132,6 +132,23 @@ pub enum RollColor {
     Accent,
 }
 
+/// What counts as "the take is done", and so when a video gets rendered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RenderTrigger {
+    /// When you switch Record take off. Predictable, and the only option
+    /// that works when the transport is looping.
+    #[default]
+    OnDisarm,
+    /// As soon as the transport stops after recording something — so a
+    /// play-through, or an audio export, produces a video with nothing
+    /// further to click. Recording disarms itself at the same moment.
+    ///
+    /// Falls back gracefully: if a host stops calling `process` the
+    /// instant a render finishes, the stop is never observed and the take
+    /// simply waits for you to disarm it, as before.
+    OnTransportStop,
+}
+
 /// How a finished take gets turned into a video, edited in the View
 /// pane's Record section and persisted with the UI state.
 ///
@@ -144,6 +161,9 @@ pub struct RenderConfig {
     /// Run the renderer as soon as a take finishes.
     #[serde(default)]
     pub auto_render: bool,
+    /// What "finishes" means; see [`RenderTrigger`].
+    #[serde(default)]
+    pub trigger: RenderTrigger,
     /// Path to the `lattice-offline` binary. Empty means the
     /// conventional install location, which `update-plugin.sh` writes to.
     #[serde(default)]
@@ -163,6 +183,7 @@ impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
             auto_render: false,
+            trigger: RenderTrigger::OnDisarm,
             renderer_path: String::new(),
             audio_path: String::new(),
             extra_args: "--size 1920x1080".into(),

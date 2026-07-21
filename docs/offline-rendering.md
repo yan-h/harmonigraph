@@ -76,6 +76,20 @@ Three things to know:
 > short offline probe and then renders in realtime mode. Recording is
 > explicit now, and works in any process mode.
 
+#### Does this work during an audio export?
+
+Yes. Recording is not gated on the host's process mode — if Record take
+is on and the transport is moving, the take is captured, offline render or
+not. Set **When** to *Transport stops* and the video renders itself when
+the export finishes.
+
+One subtlety that was worth getting right: whether the transport counts as
+rolling is the **union** of "the position advanced" and the host's
+`playing` flag, not the flag alone. Some hosts report `playing = false`
+throughout an offline render — nothing is being *played*, after all — and
+trusting the flag would have silently recorded nothing for the whole
+export.
+
 #### Rendering automatically when the take ends
 
 Tick **"Render video when done"** under the toggle and the plugin runs
@@ -86,7 +100,15 @@ the take. Three fields appear:
 |---|---|
 | Renderer | path to the `lattice-offline` binary — leave empty to use the copy `update-plugin.sh` installs |
 | Audio | bounced WAV to mux in and feed the spectrum; empty renders silent, with no spectrum curve |
+| When | what counts as "done" — see below |
 | Options | extra flags, split on spaces: `--size 3840x2160 --layout side-by-side` |
+
+**When** is either *Switched off* (render when you turn Record take off —
+predictable, and the only choice that survives a looping transport) or
+*Transport stops* (render the moment the transport stops after capturing
+something; recording switches itself off too). The second is what makes
+**exporting audio produce a video with nothing further to click**: arm
+Record take, export, and both files land together.
 
 The render runs on its own thread and never touches the audio thread or
 the GUI, so a long one does not hold up the DAW. The status line reports

@@ -108,6 +108,10 @@ pub struct EditorShared {
     /// Event count at the previous frame; a rise means the transport is
     /// rolling and the audio thread is actually capturing.
     take_last_count: u64,
+    /// Consecutive frames the transport has been stopped for, while a
+    /// take is recording. Debounces the OnTransportStop trigger: a host
+    /// reporting one still block mid-playback must not end a take.
+    take_still_frames: u32,
 }
 
 impl EditorShared {
@@ -133,8 +137,15 @@ impl EditorShared {
             take_events,
             take_rolling: false,
             take_last_count: 0,
+            take_still_frames: 0,
         }
     }
+
+    /// Frames the transport must be still before OnTransportStop ends a
+    /// take. At the editor's repaint rate this is a fraction of a second
+    /// — long enough to ride out a host reporting one stalled block,
+    /// short enough that the render feels immediate.
+    const STOP_FRAMES: u32 = 20;
 
     /// Reflect the View pane's toggle into the recorder, and the
     /// recorder's progress back into the pane. Called once per frame,
@@ -155,10 +166,33 @@ impl EditorShared {
         }
 
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
-        // Events arriving between frames is the only honest evidence that
-        // the transport is actually rolling — the GUI never sees it.
-        self.take_rolling = count > self.take_last_count;
         self.take_last_count = count;
+        // The audio thread's own view, rather than inferring it from
+        // events arriving: music has gaps, and a gap is not a stop.
+        self.take_rolling = self.take.is_rolling();
+
+        // "The take is done" as soon as the transport stops, if asked —
+        // so a play-through or an audio export yields a video with
+        // nothing further to click.
+        if self.take.is_recording()
+            && self.ui.render_config.trigger == lattice_ui::RenderTrigger::OnTransportStop
+        {
+            // Only after something was actually captured: arming ahead of
+            // the downbeat must not immediately end the take.
+            if self.take_rolling || count == 0 {
+                self.take_still_frames = 0;
+            } else {
+                self.take_still_frames += 1;
+                if self.take_still_frames >= Self::STOP_FRAMES {
+                    self.ui.take_recording = false;
+                    self.take.stop(crate::take::RenderRequest::from_config(
+                        &self.ui.render_config,
+                    ));
+                }
+            }
+        } else {
+            self.take_still_frames = 0;
+        }
         self.take.tick(self.take_rolling, count);
         self.ui.take_status = self.take.status();
         // The shell may have refused to start (unwritable directory);
