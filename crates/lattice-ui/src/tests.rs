@@ -609,9 +609,9 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         *piece = piece.shrink(HALO);
     }
 
-    // Every readout belongs to the name directly above it, and sits against
-    // it -- a couple of pixels of air, not the six that box-to-box spacing
-    // left behind.
+    // Every readout belongs to the name directly above it, and sits the
+    // intended air below it -- not the wider, font-dependent gap that
+    // box-to-box spacing left behind (6px against a 1px constant).
     for readout in &cents {
         let name = names
             .iter()
@@ -624,8 +624,8 @@ fn the_cents_readout_sits_right_under_the_note_name() {
             .unwrap_or_else(|| panic!("no name above {readout:?}, of {names:?}"));
         let gap = readout.top() - name.bottom();
         assert!(
-            (0.0..=3.0).contains(&gap),
-            "cents should sit right under the name, not adrift ({gap}px of ink-to-ink gap)"
+            (gap - panes::lattice::CENTS_GAP).abs() <= 1.0,
+            "cents should sit CENTS_GAP under the name, got {gap}px of ink-to-ink gap"
         );
     }
 }
