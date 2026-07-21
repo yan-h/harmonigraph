@@ -183,7 +183,7 @@ fn draw_node_labels(
 }
 
 /// The note name's letter, the size the label reads at.
-const NAME_SIZE: f32 = 13.0;
+const NAME_SIZE: f32 = 15.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
 const CENTS_SIZE: f32 = 9.0;
