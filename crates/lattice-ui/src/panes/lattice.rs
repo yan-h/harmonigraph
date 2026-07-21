@@ -191,12 +191,11 @@ const CENTS_SIZE: f32 = 9.0;
 /// read as one label, and the galleys carry their own leading besides. It is
 /// enough to clear the comma mark, which hangs below the letter.
 const CENTS_GAP: f32 = 1.0;
-/// Accidental and comma marks, relative to the letter.
-const MARK_SCALE: f32 = 0.7;
-/// How far the marks sit off the letter's center line, as a fraction of the
-/// letter's height. Enough to read as a super/subscript pair, but nowhere
-/// near a full shift -- these have to stay inside the node's disc.
-const MARK_RISE: f32 = 0.26;
+/// Accidental and comma marks, relative to the letter. Small enough that the
+/// two of them stacked still fit inside the letter's own height -- the pair
+/// is an annotation on the name, and a label that grows taller than its
+/// letter reads as two lines rather than one name.
+const MARK_SCALE: f32 = 0.55;
 
 /// A note name centered on `anchor`, with its accidental stacked above its
 /// syntonic-comma mark in a single column after the letter (`♯` riding high
@@ -221,12 +220,13 @@ pub(crate) fn draw_stacked_name(
         painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size()
     };
 
-    let accidental = name.accidental_mark();
-    let comma = name.comma_mark();
+    let accidental = (name.accidental_mark(), -1.0);
+    let comma = (name.comma_mark(), 1.0);
     let letter = measure(&name.letter.to_string(), &name_font);
+    let mark_size = |(text, _): &(String, f32)| measure(text, &mark_font);
     // The two marks share one column, so it is as wide as the wider of them
     // -- and zero wide for a plain name, which then centers as before.
-    let column = measure(&accidental, &mark_font).x.max(measure(&comma, &mark_font).x);
+    let column = mark_size(&accidental).x.max(mark_size(&comma).x);
     let left = anchor.x - (letter.x + column) / 2.0;
 
     outlined_text(
@@ -238,16 +238,21 @@ pub(crate) fn draw_stacked_name(
         color,
         outline,
     );
-    let rise = letter.y * MARK_RISE;
-    for (text, dy) in [(accidental, -rise), (comma, rise)] {
+    for mark in [&accidental, &comma] {
+        let (text, direction) = mark;
         if text.is_empty() {
             continue;
         }
+        // Push each mark out until its own outer edge is flush with the
+        // letter's, which is as far as it can go without standing proud of
+        // the name. That the pair then meets near the middle is what makes
+        // it read as a super/subscript stack rather than two loose glyphs.
+        let rise = (letter.y - mark_size(mark).y) / 2.0;
         outlined_text(
             painter,
-            egui::pos2(left + letter.x, anchor.y + dy),
+            egui::pos2(left + letter.x, anchor.y + direction * rise),
             egui::Align2::LEFT_CENTER,
-            text,
+            text.clone(),
             mark_font.clone(),
             color,
             outline,

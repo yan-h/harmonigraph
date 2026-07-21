@@ -500,8 +500,15 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     // Superscript over subscript, straddling the letter's own line.
     assert!(accidental.center().y < letter.center().y, "the accidental rides high");
     assert!(comma.center().y > letter.center().y, "the comma sits low");
-    // Marks are subordinate to the letter, not the same weight.
+    // Marks are subordinate to the letter, not the same weight...
     assert!(accidental.height() < letter.height(), "marks are the smaller size");
+    // ...and neither stands proud of it: the stacked pair has to stay inside
+    // the letter's own height, or the label reads as two lines, not one name.
+    assert!(
+        accidental.top() >= letter.top() - 0.01 && comma.bottom() <= letter.bottom() + 0.01,
+        "marks should not overhang the letter (acc {accidental:?}, comma {comma:?}, \
+         letter {letter:?})"
+    );
 
     // The name as a whole straddles the node it labels. (The halo is
     // symmetric, so it grows the box evenly and does not shift the center.)
