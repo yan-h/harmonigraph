@@ -11,6 +11,11 @@ better-looking result records something else.** The findings below are
 what that conclusion is built on; read §5 first if you only want the
 recommendation.
 
+> **Outcome: route 2 (offline replay) was built.** See
+> [`offline-rendering.md`](offline-rendering.md) for the workflow. This
+> document is kept for the analysis — in particular §2 and §3, which are
+> the reasons live window capture is still not worth doing.
+
 ## 1. What the window actually is
 
 On macOS the plugin editor is egui 0.35 → egui-wgpu 0.35 → wgpu 29 →

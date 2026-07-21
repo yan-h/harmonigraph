@@ -1726,6 +1726,22 @@ name = "lattice-core"
 version = "0.1.0"
 
 [[package]]
+name = "lattice-offline"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "image",
+ "lattice-core",
+ "lattice-render",
+ "lattice-take",
+ "lattice-ui",
+ "pollster",
+ "ron 0.8.1",
+ "serde",
+]
+
+[[package]]
 name = "lattice-render"
 version = "0.1.0"
 dependencies = [
@@ -1758,8 +1774,17 @@ dependencies = [
  "image",
  "lattice-core",
  "lattice-render",
+ "lattice-take",
  "lattice-ui",
  "midir",
+]
+
+[[package]]
+name = "lattice-take"
+version = "0.1.0"
+dependencies = [
+ "ron 0.8.1",
+ "serde",
 ]
 
 [[package]]
@@ -1905,6 +1930,7 @@ dependencies = [
  "egui-baseview",
  "lattice-core",
  "lattice-render",
+ "lattice-take",
  "lattice-ui",
  "nice-plug",
  "parking_lot",

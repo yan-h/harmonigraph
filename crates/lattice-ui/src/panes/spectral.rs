@@ -392,7 +392,7 @@ impl PitchScale {
 /// Hover sync goes both ways: the lattice-hovered pitch class shows as a
 /// band here, and hovering a pitch here highlights the matching lattice
 /// node (if one is in view).
-pub(super) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     use crate::SpectrumLabels;
     use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 

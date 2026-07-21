@@ -10,6 +10,7 @@ publish = false
 lattice-core = { workspace = true }
 lattice-ui = { workspace = true }
 lattice-render = { workspace = true, features = ["hot-reload"] }
+lattice-take = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 midir = { workspace = true }

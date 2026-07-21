@@ -69,6 +69,12 @@ lattice-ui      egui_dock pane shell: Lattice / Tuning / View / Appearance /
                 Console / Spectral / Spectrum / Notes tabs, one file each
                 under src/panes/. SharedState (incl. cross-pane hover),
                 ParamBackend trait abstracting "where params live".
+lattice-take    the recorded input to a visualization: note events and
+                parameter automation on the audio clock. Linked into the
+                plugin, so serde+ron only. See docs/offline-rendering.md.
+lattice-offline offline video renderer: replays a take headless at an
+                exact frame rate, any resolution, own pane layout, frames
+                piped to ffmpeg. No window, no DAW, no realtime.
 lattice-standalone  eframe dev harness: mock chord progression OR hardware
                     MIDI in (midir, with MPE bend decoding), plus a mock
                     synth feeding the spectrum analyzer.
@@ -125,10 +131,15 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   see [`docs/deferred-work.md`](docs/deferred-work.md)).
 - **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
-- **Recording the window to video**: investigated, not built. The blockers
-  and the four routes (OBS / standalone recorder / offline replay / a
-  vendored egui-baseview patch) are written up in
-  [`docs/window-recording.md`](docs/window-recording.md).
+- **Making videos**: done, by offline replay rather than screen capture.
+  Exporting audio from the DAW also writes a *take* (every note event and
+  parameter change on the audio clock); `lattice-offline` replays it
+  headless into an exact-CFR video at any resolution, with its own pane
+  layout and the bounced audio muxed in. See
+  [`docs/offline-rendering.md`](docs/offline-rendering.md). Live capture of
+  the plugin window itself was investigated and rejected as the more
+  expensive, lower-quality route —
+  [`docs/window-recording.md`](docs/window-recording.md) has the analysis.
 - **Spectral audio FFT**: done — the Spectral pane analyzes a real FFT of
   the plugin's audio input (mono mixdown of the input bus, gated on
   `show_audio`), no longer MIDI-only. Remaining work is analysis polish,

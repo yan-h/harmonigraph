@@ -12,6 +12,7 @@ use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
 mod editor;
+mod take;
 
 /// Capacity of the audio→GUI note event ring buffer. Events are dropped
 /// (silently) if the GUI stalls long enough to fill it.
@@ -35,6 +36,11 @@ pub struct MidiLattice3d {
     editor_shared: Arc<Mutex<editor::EditorShared>>,
     sample_rate: f64,
     samples_processed: u64,
+    /// Take recording, live only while the host is rendering offline.
+    /// The `Session` is held purely so dropping it (on the next
+    /// `initialize`, or when the plugin goes away) closes the file.
+    take: Option<take::Recorder>,
+    take_session: Option<take::Session>,
 }
 
 #[derive(Params)]
@@ -183,6 +189,8 @@ impl Default for MidiLattice3d {
             ))),
             sample_rate: 44_100.0,
             samples_processed: 0,
+            take: None,
+            take_session: None,
         }
     }
 }
@@ -224,6 +232,22 @@ impl Plugin for MidiLattice3d {
     ) -> bool {
         self.sample_rate = f64::from(buffer_config.sample_rate);
         self.sample_rate_bits.store(buffer_config.sample_rate.to_bits(), Ordering::Relaxed);
+
+        // Exporting audio also exports a take (see `take`). The host
+        // re-initializes whenever the process mode changes, so dropping
+        // the old session here both closes a finished export's file and
+        // guarantees we are never recording during realtime playback.
+        self.take = None;
+        self.take_session = None;
+        if buffer_config.process_mode == ProcessMode::Offline {
+            let ui_state = self.params.ui_state.read().clone();
+            if let Some((recorder, session)) =
+                take::start(buffer_config.sample_rate, ui_state)
+            {
+                self.take = Some(recorder);
+                self.take_session = Some(session);
+            }
+        }
         true
     }
 
@@ -239,6 +263,9 @@ impl Plugin for MidiLattice3d {
             note: 0,
             kind: NoteEventKind::AllOff,
         });
+        if let Some(recorder) = &mut self.take {
+            recorder.note(0.0, 0, 0, NoteEventKind::AllOff);
+        }
     }
 
     fn process(
@@ -270,6 +297,9 @@ impl Plugin for MidiLattice3d {
                 // Full ring = GUI stalled; dropping visualization events is
                 // the right failure mode for the audio thread.
                 let _ = self.note_producer.push(CoreNoteEvent { time, channel, note, kind });
+                if let Some(recorder) = &mut self.take {
+                    recorder.note(time, channel, note, kind);
+                }
             }
             // Behave as a transparent MIDI effect.
             context.send_event(event);
@@ -301,6 +331,11 @@ impl Plugin for MidiLattice3d {
             }
         }
 
+        if let Some(recorder) = &mut self.take {
+            let t = block_start as f64 / self.sample_rate;
+            recorder.params(t, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
+        }
+
         self.samples_processed += buffer.samples() as u64;
         ProcessStatus::Normal
     }
@@ -327,3 +362,35 @@ impl Vst3Plugin for MidiLattice3d {
 
 nice_export_clap!(MidiLattice3d);
 nice_export_vst3!(MidiLattice3d);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ParamKey::id` is what a recorded take names its automation by, and
+    /// what the host names its automation lanes by. They are declared in
+    /// two places — the enum's `id()` and the `#[id = "..."]` attributes
+    /// here — and if they drift, takes silently replay with default
+    /// parameters and projects silently lose their automation. Neither
+    /// failure is visible until someone watches a render and wonders why
+    /// the tuning is wrong.
+    #[test]
+    fn every_param_key_id_matches_the_host_facing_id() {
+        let params = MidiLattice3dParams::default();
+        let host_ids: Vec<String> =
+            params.param_map().into_iter().map(|(id, _, _)| id).collect();
+        for key in ParamKey::ALL {
+            assert!(
+                host_ids.iter().any(|id| id == key.id()),
+                "ParamKey::{key:?} claims id {:?}, which no #[id] attribute declares; \
+                 the host exposes {host_ids:?}",
+                key.id(),
+            );
+        }
+        assert_eq!(
+            host_ids.len(),
+            ParamKey::ALL.len(),
+            "the plugin exposes parameters ParamKey doesn't know about: {host_ids:?}"
+        );
+    }
+}

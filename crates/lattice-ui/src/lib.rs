@@ -584,26 +584,7 @@ struct UiPersist {
 /// shell's clock, and must be the SAME clock that timestamped those
 /// `NoteEvent`s — envelopes are derived from the difference.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    learn_step(state, params);
-
-    state.tuning = params::tuning_from_params(params);
-    // Meantone mode locks the major third to four perfect fifths: derive it
-    // from the fifth here, so the whole pipeline (scene pitch classes,
-    // matching, readouts) sees the locked value without any meantone
-    // awareness of its own. The lock is exact in integer microcents, so
-    // comma-equivalent nodes collapse to one pitch. The Five param is left
-    // untouched (inert while the lock is on).
-    if state.view.meantone {
-        state.tuning.lock_meantone();
-    }
-    state.frame_params = FrameParams {
-        fade_time: params.get(params::ParamKey::Fade),
-        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
-        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
-    };
-    // Every layer of a node now fades on this one time, so a voice is dead
-    // to the display exactly when its envelope reaches zero.
-    state.tracker.prune(now, state.frame_params.fade_time);
+    begin_frame(state, params, now);
 
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
     // meet with no chrome between them — clean for captures). The pane
@@ -650,6 +631,63 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         ui.ctx().request_repaint();
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
+    }
+}
+
+/// Everything that must happen once per frame before any pane draws:
+/// refresh the per-frame mirrors of the parameters and age out voices
+/// whose fade has completed.
+///
+/// [`root_ui`] calls this itself. It is public for shells that compose
+/// their own layout instead of using the dock — the offline renderer
+/// draws [`Pane`]s directly, and skipping this would leave it rendering
+/// last frame's tuning against never-pruned voices.
+pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+    learn_step(state, params);
+
+    state.tuning = params::tuning_from_params(params);
+    // Meantone mode locks the major third to four perfect fifths: derive it
+    // from the fifth here, so the whole pipeline (scene pitch classes,
+    // matching, readouts) sees the locked value without any meantone
+    // awareness of its own. The lock is exact in integer microcents, so
+    // comma-equivalent nodes collapse to one pitch. The Five param is left
+    // untouched (inert while the lock is on).
+    if state.view.meantone {
+        state.tuning.lock_meantone();
+    }
+    state.frame_params = FrameParams {
+        fade_time: params.get(params::ParamKey::Fade),
+        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
+        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
+    };
+    // Every layer of a node now fades on this one time, so a voice is dead
+    // to the display exactly when its envelope reaches zero.
+    state.tracker.prune(now, state.frame_params.fade_time);
+}
+
+/// A pane that stands on its own, outside the dock.
+///
+/// Only the two *views* are here. The settings panes edit state that a
+/// non-interactive renderer cannot change and a viewer should not see, so
+/// they are deliberately unreachable this way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Pane {
+    /// The 3D lattice.
+    Lattice,
+    /// The spectrum, voice bars and piano roll.
+    Spectral,
+}
+
+/// Draw one pane's body into `ui`, filling it, with no dock or tab bar.
+///
+/// Callers must have run [`begin_frame`] for this `now` already. Panes
+/// still read hover and pointer state from `ui`, so an offline caller
+/// feeding synthetic input simply gets no hover — which is what a
+/// recording wants.
+pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
+    match pane {
+        Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now),
     }
 }
 
