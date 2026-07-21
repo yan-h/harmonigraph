@@ -26,6 +26,11 @@ pub struct Settings {
     pub fps: f64,
     pub start: f64,
     pub end: f64,
+    /// Take time of the audio's first sample. Non-zero when recording
+    /// was armed part-way into a song: without it the spectrum would
+    /// read the wrong part of the bounce, by exactly however far in you
+    /// started.
+    pub audio_start: f64,
 }
 
 impl Settings {
@@ -90,7 +95,7 @@ pub fn render(
             // bounce actually is at `now`. The analyzer's own throttling
             // and smoothing key off the `now` we hand it, so this makes
             // the spectrum as deterministic as everything else.
-            let chunk = audio.slice_seconds(now, now + step);
+            let chunk = audio.slice_seconds(now - settings.audio_start, now + step - settings.audio_start);
             if !chunk.is_empty() {
                 state.spectrum.push_samples(chunk, audio.sample_rate, now);
             }
@@ -168,6 +173,7 @@ mod tests {
             fps: 10.0,
             start: 0.0,
             end: 1.0,
+            audio_start: 0.0,
         }
     }
 

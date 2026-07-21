@@ -196,14 +196,44 @@ fn run() -> Result<(), String> {
         );
     }
 
-    let audio = args.audio.as_deref().map(wav::read).transpose()?;
+    // Audio: an explicit --audio wins; otherwise the WAV the take
+    // recorded for itself, which sits beside it so the pair can be moved
+    // together.
+    let recorded = take.header.audio_file.as_ref().map(|name| {
+        std::path::Path::new(&take_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(name)
+    });
+    let audio_path: Option<std::path::PathBuf> = match &args.audio {
+        Some(path) => Some(std::path::PathBuf::from(path)),
+        None => match recorded {
+            // A take that names an audio file it no longer has is worth
+            // saying out loud: the render would otherwise come out silent
+            // with no spectrum and no explanation.
+            Some(path) if path.is_file() => Some(path),
+            Some(path) => {
+                eprintln!("warning: take names {} but it is not there", path.display());
+                None
+            }
+            None => None,
+        },
+    };
+    // Only the take's own audio is aligned by the header; an explicitly
+    // given file is assumed to start at the same zero the take does.
+    let audio_start = if args.audio.is_some() {
+        0.0
+    } else {
+        take.header.audio_start.unwrap_or(0.0)
+    };
+    let audio = audio_path.as_deref().map(wav::read).transpose()?;
 
     // Default end: the last event plus a tail, so releases finish fading
     // and the roll clears instead of the video cutting mid-decay. If
     // there's audio, don't stop before it does.
     let end = args.end.unwrap_or_else(|| {
         let visual = take.duration() + args.tail;
-        audio.as_ref().map_or(visual, |a| visual.max(a.seconds()))
+        audio.as_ref().map_or(visual, |a| visual.max(audio_start + a.seconds()))
     });
     let scale = args.scale.unwrap_or_else(|| default_scale(args.size));
     let settings = Settings {
@@ -213,6 +243,7 @@ fn run() -> Result<(), String> {
         fps: args.fps,
         start: args.start,
         end,
+        audio_start,
     };
     if settings.frame_count() == 0 {
         return Err(format!(
@@ -230,9 +261,10 @@ fn run() -> Result<(), String> {
         &VideoOptions {
             size: args.size,
             fps: args.fps,
-            audio: args.audio.as_ref().map(std::path::Path::new),
+            audio: audio_path.as_deref(),
             crf: args.crf,
             ffmpeg: args.ffmpeg.as_deref(),
+            audio_offset: args.start - audio_start,
         },
     )?;
 

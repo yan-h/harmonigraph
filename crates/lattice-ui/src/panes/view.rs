@@ -207,6 +207,12 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         }
 
         let render = &mut state.render_config;
+        ui.checkbox(&mut render.record_audio, "Record audio too").on_hover_text(
+            "Write the plugin's audio input beside the take, so the render \
+             gets a spectrum and a soundtrack with no separate bounce. \
+             Needs the device to be somewhere audio actually reaches it — \
+             after the instrument, or on a bus.",
+        );
         ui.checkbox(&mut render.auto_render, "Render video when done").on_hover_text(
             "Run lattice-offline as soon as a take finishes, writing the \
              video next to the take. The render happens in the background \

@@ -72,6 +72,19 @@ pub struct Header {
     /// Free-form: which shell wrote this, and out of what.
     #[serde(default)]
     pub source: String,
+    /// File name (not path) of the audio recorded with this take, if
+    /// any. A sibling of the take file, so the pair can be moved
+    /// together. The renderer uses it when no audio is given explicitly.
+    #[serde(default)]
+    pub audio_file: Option<String>,
+    /// Take time corresponding to the audio's first sample.
+    ///
+    /// Recording usually starts at song position 0, making this 0 — but
+    /// arming mid-song does not, and without it the spectrum and the
+    /// muxed track would both sit at the wrong place by exactly however
+    /// far in you started.
+    #[serde(default)]
+    pub audio_start: Option<f64>,
 }
 
 impl Default for Header {
@@ -83,6 +96,8 @@ impl Default for Header {
             ui_state: None,
             window_points: None,
             source: String::new(),
+            audio_file: None,
+            audio_start: None,
         }
     }
 }
@@ -488,5 +503,157 @@ mod tests {
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::Version(_))
         ));
+    }
+}
+
+/// Streams a 32-bit-float WAV alongside a take.
+///
+/// A take's notes tell you what the lattice does; the audio tells you
+/// what it sounded like, and the renderer needs both — one to draw the
+/// spectrum, the other to put in the video. Recording it here rather
+/// than asking for a separate DAW bounce is what makes the whole thing
+/// one gesture.
+///
+/// Float rather than 16-bit PCM: no conversion, no dither, and nothing
+/// to clip if the bus is hot. The size fields are patched on close, so a
+/// file from a crashed session is still readable by anything that
+/// tolerates a short RIFF size — and `lattice-offline`'s reader
+/// deliberately does.
+pub struct WavWriter {
+    file: std::fs::File,
+    channels: u16,
+    frames: u32,
+}
+
+impl WavWriter {
+    /// 32-bit IEEE float.
+    const BITS: u16 = 32;
+    const FORMAT_FLOAT: u16 = 3;
+    const HEADER_BYTES: u32 = 44;
+
+    pub fn create(
+        path: impl AsRef<std::path::Path>,
+        sample_rate: f32,
+        channels: u16,
+    ) -> std::io::Result<WavWriter> {
+        let mut file = std::fs::File::create(path)?;
+        let channels = channels.max(1);
+        let rate = sample_rate.max(1.0) as u32;
+        let block_align = channels * (Self::BITS / 8);
+
+        let mut header = Vec::with_capacity(Self::HEADER_BYTES as usize);
+        header.extend(b"RIFF");
+        header.extend(0u32.to_le_bytes()); // patched by finish()
+        header.extend(b"WAVE");
+        header.extend(b"fmt ");
+        header.extend(16u32.to_le_bytes());
+        header.extend(Self::FORMAT_FLOAT.to_le_bytes());
+        header.extend(channels.to_le_bytes());
+        header.extend(rate.to_le_bytes());
+        header.extend((rate * u32::from(block_align)).to_le_bytes());
+        header.extend(block_align.to_le_bytes());
+        header.extend(Self::BITS.to_le_bytes());
+        header.extend(b"data");
+        header.extend(0u32.to_le_bytes()); // patched by finish()
+        std::io::Write::write_all(&mut file, &header)?;
+
+        Ok(WavWriter { file, channels, frames: 0 })
+    }
+
+    /// Append interleaved samples. A partial frame at the end of a chunk
+    /// is impossible in practice (blocks are whole frames) and would
+    /// desync the channels, so the count is taken in whole frames.
+    pub fn write(&mut self, interleaved: &[f32]) -> std::io::Result<()> {
+        if interleaved.is_empty() {
+            return Ok(());
+        }
+        let mut bytes = Vec::with_capacity(interleaved.len() * 4);
+        for sample in interleaved {
+            bytes.extend(sample.to_le_bytes());
+        }
+        std::io::Write::write_all(&mut self.file, &bytes)?;
+        self.frames += (interleaved.len() / usize::from(self.channels)) as u32;
+        Ok(())
+    }
+
+    pub fn frames(&self) -> u32 {
+        self.frames
+    }
+
+    /// Patch the two size fields and close.
+    pub fn finish(mut self) -> std::io::Result<()> {
+        self.patch()
+    }
+
+    fn patch(&mut self) -> std::io::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let data_bytes = self.frames * u32::from(self.channels) * u32::from(Self::BITS / 8);
+        self.file.seek(SeekFrom::Start(4))?;
+        self.file.write_all(&(Self::HEADER_BYTES - 8 + data_bytes).to_le_bytes())?;
+        self.file.seek(SeekFrom::Start(40))?;
+        self.file.write_all(&data_bytes.to_le_bytes())?;
+        self.file.flush()
+    }
+}
+
+impl Drop for WavWriter {
+    fn drop(&mut self) {
+        // A take cut short by a crash still gets valid sizes if the
+        // process unwinds at all; `finish` is the path that reports why
+        // when it doesn't.
+        let _ = self.patch();
+    }
+}
+
+#[cfg(test)]
+mod wav_tests {
+    use super::*;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("take-wav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn a_written_wav_has_the_sizes_and_samples_it_claims() {
+        let path = temp("basic.wav");
+        {
+            let mut writer = WavWriter::create(&path, 48_000.0, 2).unwrap();
+            writer.write(&[0.5, -0.5, 0.25, -0.25]).unwrap();
+            writer.write(&[1.0, -1.0]).unwrap();
+            assert_eq!(writer.frames(), 3);
+            writer.finish().unwrap();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        let riff = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        let data = u32::from_le_bytes(bytes[40..44].try_into().unwrap());
+        assert_eq!(data, 3 * 2 * 4, "3 stereo float frames");
+        assert_eq!(riff as usize, bytes.len() - 8);
+        // Format tag 3 = IEEE float, 32-bit.
+        assert_eq!(u16::from_le_bytes(bytes[20..22].try_into().unwrap()), 3);
+        assert_eq!(u16::from_le_bytes(bytes[34..36].try_into().unwrap()), 32);
+        // The samples round-trip bit-exactly, which is the point of float.
+        let first = f32::from_le_bytes(bytes[44..48].try_into().unwrap());
+        assert_eq!(first, 0.5);
+    }
+
+    /// Dropping without `finish` still patches the sizes: a session that
+    /// ends unexpectedly should leave a playable file, not a header of
+    /// zeros claiming an empty stream.
+    #[test]
+    fn dropping_the_writer_still_patches_the_sizes() {
+        let path = temp("dropped.wav");
+        {
+            let mut writer = WavWriter::create(&path, 44_100.0, 1).unwrap();
+            writer.write(&[0.1, 0.2, 0.3]).unwrap();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 3 * 4);
     }
 }

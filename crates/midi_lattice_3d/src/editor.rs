@@ -154,13 +154,18 @@ impl EditorShared {
         // The plugin can record; the control is hidden in shells that
         // can't (the standalone uses an env var instead).
         self.ui.take_supported = true;
+        self.ui.take_audio = self.ui.render_config.record_audio;
         let recording = self.take.is_recording();
         if self.ui.take_recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
             // is on screen right now is what the render should reproduce.
             self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
             self.take_last_count = 0;
-            self.take.start(sample_rate, self.ui.save_persist());
+            self.take.start(
+                sample_rate,
+                self.ui.save_persist(),
+                self.ui.render_config.record_audio,
+            );
         } else if !self.ui.take_recording && recording {
             self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
         }

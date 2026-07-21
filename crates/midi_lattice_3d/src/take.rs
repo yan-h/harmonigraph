@@ -58,6 +58,13 @@ const TAKE_RING_CAPACITY: usize = 1 << 16;
 /// How long the writer thread sleeps when it finds the ring empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 
+/// Capacity of the audio ring, in interleaved samples. Generous on
+/// purpose: during an offline export audio arrives many times faster than
+/// realtime, and unlike the spectrum's ring — which drops by design,
+/// because a stalled meter must never stall audio — dropping here would
+/// put a silent hole in the finished video.
+const AUDIO_RING_CAPACITY: usize = 1 << 20;
+
 /// One recorded thing, in a form the audio thread can push without
 /// allocating. Converted to a `lattice_take::Record` on the writer thread.
 #[derive(Clone, Copy)]
@@ -66,6 +73,10 @@ pub enum Entry {
     /// `key` is an index into [`ParamKey::ALL`] — an id string would mean
     /// allocating on the audio thread.
     Param { t: f64, key: usize, value: f32 },
+    /// The take time of the first audio sample about to be written.
+    /// Sent once per pass, before any audio, so the header can say where
+    /// the WAV sits relative to the notes.
+    AudioStart(f64),
     /// The transport jumped backwards: a loop wrapped, or the playhead
     /// was dragged. Everything after this belongs to a different pass
     /// through the song, so the writer starts a new file rather than
@@ -73,8 +84,15 @@ pub enum Entry {
     NewPass,
 }
 
+/// What the writer thread needs to open a WAV beside the take.
+#[derive(Clone, Copy)]
+pub struct AudioSpec {
+    pub sample_rate: f32,
+    pub channels: u16,
+}
+
 enum Command {
-    Start(Box<lattice_take::Header>, std::path::PathBuf),
+    Start(Box<lattice_take::Header>, std::path::PathBuf, Option<AudioSpec>),
     /// Close the file, and — if asked — render it to video.
     Stop(Option<Box<RenderRequest>>),
 }
@@ -131,6 +149,10 @@ pub fn default_renderer_path() -> std::path::PathBuf {
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
 pub struct Recorder {
     producer: rtrb::Producer<Entry>,
+    /// Interleaved input samples, when the take is recording audio too.
+    audio: rtrb::Producer<f32>,
+    /// Set by the GUI alongside `armed`.
+    with_audio: Arc<AtomicBool>,
     armed: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     /// Last value written per parameter, so only changes are recorded.
@@ -143,6 +165,8 @@ pub struct Recorder {
     last_position: Option<f64>,
     /// Published for the GUI: is the transport actually moving?
     rolling: Arc<AtomicBool>,
+    /// Whether this pass has already declared its audio start.
+    audio_started: bool,
 }
 
 impl Recorder {
@@ -151,6 +175,7 @@ impl Recorder {
         if armed && !self.was_armed {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.last_position = None;
+            self.audio_started = false;
         }
         self.was_armed = armed;
         armed
@@ -164,6 +189,38 @@ impl Recorder {
 
     pub fn note(&mut self, t: f64, channel: u8, note: u8, kind: NoteEventKind) {
         self.push(Entry::Note { t, channel, note, kind });
+    }
+
+    pub fn wants_audio(&self) -> bool {
+        self.with_audio.load(Ordering::Relaxed)
+    }
+
+    /// Declare where the audio about to be written sits in take time.
+    /// Idempotent per pass; the first call is the one that counts.
+    pub fn mark_audio_start(&mut self, t: f64) {
+        if !self.audio_started {
+            self.audio_started = true;
+            self.push(Entry::AudioStart(t));
+        }
+    }
+
+    /// Append one block of interleaved input samples.
+    ///
+    /// Reserves the whole block at once rather than pushing per sample:
+    /// one ring-atomic touch per block instead of tens of thousands a
+    /// second. A short reservation means the ring filled, which is a
+    /// hole in the recording, so it is counted like any dropped record.
+    pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize) {
+        let room = self.audio.slots().min(samples);
+        if room < samples {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        if room == 0 {
+            return;
+        }
+        if let Ok(chunk) = self.audio.write_chunk_uninit(room) {
+            chunk.fill_from_iter(block.take(room));
+        }
     }
 
     /// Note where the transport is, and answer whether it is rolling —
@@ -190,8 +247,10 @@ impl Recorder {
                 self.push(Entry::NewPass);
                 // A new file starts empty, so every parameter must be
                 // written again or the new pass replays with whatever the
-                // previous one happened to end on.
+                // previous one happened to end on. The next pass's audio
+                // also starts somewhere new.
                 self.last_params = [f32::NAN; ParamKey::ALL.len()];
+                self.audio_started = false;
                 true
             }
             Some(last) => playing || position > last,
@@ -230,6 +289,7 @@ pub struct Control {
     /// Set by the audio thread; the GUI's only honest view of whether
     /// the transport is moving.
     rolling: Arc<AtomicBool>,
+    with_audio: Arc<AtomicBool>,
 }
 
 impl Control {
@@ -247,8 +307,9 @@ impl Control {
     }
 
     /// Begin a take. `ui_state` is the persist blob that decides how the
-    /// replay will look; `sample_rate` stamps the header.
-    pub fn start(&self, sample_rate: f32, ui_state: String) {
+    /// replay will look; `sample_rate` stamps the header. `audio`
+    /// records the input bus alongside the notes.
+    pub fn start(&self, sample_rate: f32, ui_state: String, audio: bool) {
         if self.is_recording() {
             return;
         }
@@ -270,7 +331,9 @@ impl Control {
         };
 
         self.dropped.store(0, Ordering::Relaxed);
-        if self.commands.send(Command::Start(Box::new(header), path)).is_err() {
+        self.with_audio.store(audio, Ordering::Relaxed);
+        let spec = audio.then_some(AudioSpec { sample_rate, channels: 2 });
+        if self.commands.send(Command::Start(Box::new(header), path, spec)).is_err() {
             *self.status.lock() = "take writer thread is gone".into();
             return;
         }
@@ -291,6 +354,7 @@ impl Control {
         // Disarm first, so the audio thread stops pushing before the
         // writer is told to close.
         self.armed.store(false, Ordering::Relaxed);
+        self.with_audio.store(false, Ordering::Relaxed);
         let _ = self.commands.send(Command::Stop(render.map(Box::new)));
         self.recording.store(false, Ordering::Relaxed);
     }
@@ -330,11 +394,13 @@ fn take_dir() -> std::path::PathBuf {
 /// the audio thread's producer.
 pub fn channel() -> (Recorder, Control) {
     let (producer, mut consumer) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
+    let (audio_producer, mut audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
     let (commands, orders) = mpsc::channel::<Command>();
     let armed = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicU64::new(0));
     let recording = Arc::new(AtomicBool::new(false));
     let rolling = Arc::new(AtomicBool::new(false));
+    let with_audio = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(String::new()));
 
     let thread_status = status.clone();
@@ -344,8 +410,8 @@ pub fn channel() -> (Recorder, Control) {
             let mut open: Option<Open> = None;
             loop {
                 match orders.try_recv() {
-                    Ok(Command::Start(header, path)) => {
-                        open = Open::create(*header, path, 1, &thread_status);
+                    Ok(Command::Start(header, path, spec)) => {
+                        open = Open::create(*header, path, 1, spec, &thread_status);
                     }
                     Ok(Command::Stop(render)) => {
                         // Drain what the audio thread already queued
@@ -362,7 +428,9 @@ pub fn channel() -> (Recorder, Control) {
                         return;
                     }
                 }
-                if !drain(&mut consumer, &mut open, &thread_status) {
+                let had_records = drain(&mut consumer, &mut open, &thread_status);
+                let had_audio = drain_audio(&mut audio_consumer, &mut open);
+                if !had_records && !had_audio {
                     std::thread::sleep(DRAIN_IDLE);
                 }
             }
@@ -377,9 +445,30 @@ pub fn channel() -> (Recorder, Control) {
             was_armed: false,
             last_position: None,
             rolling: rolling.clone(),
+            audio_started: false,
+            audio: audio_producer,
+            with_audio: with_audio.clone(),
         },
-        Control { commands, armed, dropped, status, recording, rolling },
+        Control { commands, armed, dropped, status, recording, rolling, with_audio },
     )
+}
+
+/// Move queued audio into the WAV. Separate from [`drain`] because the
+/// volume is different by orders of magnitude: one ring read per pass
+/// rather than per sample.
+fn drain_audio(consumer: &mut rtrb::Consumer<f32>, open: &mut Option<Open>) -> bool {
+    let available = consumer.slots();
+    if available == 0 {
+        return false;
+    }
+    let Ok(chunk) = consumer.read_chunk(available) else { return false };
+    if let Some(audio) = open.as_mut().and_then(|o| o.audio.as_mut()) {
+        let (first, second) = chunk.as_slices();
+        let _ = audio.write(first);
+        let _ = audio.write(second);
+    }
+    chunk.commit_all();
+    true
 }
 
 /// The file currently being written, and what it takes to open the next
@@ -390,21 +479,38 @@ struct Open {
     /// The first pass's path; later passes append `-2`, `-3`, ...
     base: std::path::PathBuf,
     pass: u32,
+    /// The WAV recorded beside this pass, if audio was asked for.
+    audio: Option<lattice_take::WavWriter>,
+    spec: Option<AudioSpec>,
 }
 
 impl Open {
     fn create(
-        header: lattice_take::Header,
+        mut header: lattice_take::Header,
         base: std::path::PathBuf,
         pass: u32,
+        spec: Option<AudioSpec>,
         status: &Mutex<String>,
     ) -> Option<Open> {
-        let path = if pass <= 1 {
-            base.clone()
-        } else {
-            let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
-            base.with_file_name(format!("{stem}-{pass}.{}", lattice_take::EXTENSION))
-        };
+        let path = Self::path_for(&base, pass);
+
+        // The WAV opens first, so its name can go in the take's header —
+        // which is the take's first line and cannot be revised later.
+        let audio = spec.and_then(|spec| {
+            let wav = path.with_extension("wav");
+            match lattice_take::WavWriter::create(&wav, spec.sample_rate, spec.channels) {
+                Ok(writer) => {
+                    header.audio_file =
+                        wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
+                    Some(writer)
+                }
+                Err(err) => {
+                    *status.lock() = format!("cannot write {}: {err}", wav.display());
+                    None
+                }
+            }
+        });
+
         match lattice_take::Writer::create(&path, &header) {
             Ok(writer) => {
                 *status.lock() = if pass <= 1 {
@@ -412,7 +518,7 @@ impl Open {
                 } else {
                     format!("pass {pass} -> {}", path.display())
                 };
-                Some(Open { writer, header, base, pass })
+                Some(Open { writer, header, base, pass, audio, spec })
             }
             Err(err) => {
                 *status.lock() = format!("cannot write {}: {err}", path.display());
@@ -421,28 +527,41 @@ impl Open {
         }
     }
 
-    /// Close the file and hand back the path that was written.
+    fn path_for(base: &std::path::Path, pass: u32) -> std::path::PathBuf {
+        if pass <= 1 {
+            base.to_path_buf()
+        } else {
+            let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
+            base.with_file_name(format!("{stem}-{pass}.{}", lattice_take::EXTENSION))
+        }
+    }
+
+    /// Close both files and hand back the take's path.
     fn finish(self) -> std::path::PathBuf {
         let path = self.path();
+        if let Some(audio) = self.audio {
+            let _ = audio.finish();
+        }
         drop(self.writer);
         path
     }
 
     /// The file this pass is writing to.
     fn path(&self) -> std::path::PathBuf {
-        if self.pass <= 1 {
-            self.base.clone()
-        } else {
-            let stem = self.base.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
-            self.base.with_file_name(format!("{stem}-{}.{}", self.pass, lattice_take::EXTENSION))
-        }
+        Self::path_for(&self.base, self.pass)
     }
 
-    /// Close this file and open the next pass's.
+    /// Close this pass's files and open the next pass's.
     fn next_pass(self, status: &Mutex<String>) -> Option<Open> {
-        let Open { header, base, pass, writer } = self;
+        let Open { mut header, base, pass, writer, audio, spec } = self;
+        if let Some(audio) = audio {
+            let _ = audio.finish();
+        }
         drop(writer);
-        Open::create(header, base, pass + 1, status)
+        // Each pass records its own audio from its own start, so the
+        // previous pass's alignment must not be inherited.
+        header.audio_start = None;
+        Open::create(header, base, pass + 1, spec, status)
     }
 }
 
@@ -459,6 +578,18 @@ fn drain(
         if matches!(entry, Entry::NewPass) {
             if let Some(current) = open.take() {
                 *open = current.next_pass(status);
+            }
+            continue;
+        }
+        if let Entry::AudioStart(t) = entry {
+            // Rewrite the header now that the WAV's alignment is known.
+            // The format is line-oriented and the reader takes the LAST
+            // Header record, so a corrected one simply supersedes the
+            // first — no seeking, no fixed-width fields.
+            if let Some(current) = open.as_mut() {
+                current.header.audio_start = Some(t);
+                let header = current.header.clone();
+                let _ = current.writer.write(&lattice_take::Record::Header(header));
             }
             continue;
         }
@@ -482,8 +613,8 @@ fn drain(
                 id: ParamKey::ALL[key].id().to_string(),
                 value,
             }),
-            // Handled above; the writer never sees it.
-            Entry::NewPass => Ok(()),
+            // Both handled above; the writer never sees them.
+            Entry::NewPass | Entry::AudioStart(_) => Ok(()),
         };
     }
     any
@@ -549,6 +680,7 @@ mod tests {
     fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
         let config = RenderConfig {
             auto_render: true,
+            record_audio: false,
             trigger: Default::default(),
             renderer_path: "  ".into(),
             audio_path: "   ".into(),
@@ -564,6 +696,7 @@ mod tests {
     fn options_split_on_whitespace_and_paths_stay_whole() {
         let config = RenderConfig {
             auto_render: true,
+            record_audio: false,
             trigger: Default::default(),
             renderer_path: "/opt/lattice-offline".into(),
             audio_path: "/Users/yan/My Bounces/piece.wav".into(),

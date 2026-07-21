@@ -346,6 +346,23 @@ impl Plugin for MidiLattice3d {
         if let Some(origin) = take_origin {
             self.take
                 .params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
+
+            // The take's own audio, when asked for: the input bus exactly
+            // as it arrives, so the render gets a spectrum and a
+            // soundtrack without a separate bounce. Always stereo,
+            // matching AUDIO_IO_LAYOUTS — a mono host input is
+            // duplicated rather than desyncing the WAV's frames.
+            if self.take.wants_audio() && channels > 0 {
+                self.take.mark_audio_start(origin);
+                let right = usize::from(channels > 1);
+                let wanted = buffer.samples() * 2;
+                let mut interleaved = buffer.iter_samples().flat_map(|mut frame| {
+                    let l = frame.get_mut(0).map_or(0.0, |s| *s);
+                    let r = frame.get_mut(right).map_or(0.0, |s| *s);
+                    [l, r]
+                });
+                self.take.audio(&mut interleaved, wanted);
+            }
         }
 
         self.samples_processed += buffer.samples() as u64;

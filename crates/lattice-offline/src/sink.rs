@@ -30,6 +30,9 @@ pub struct VideoOptions<'a> {
     pub crf: u32,
     /// Explicit ffmpeg path (`--ffmpeg`), overriding the search.
     pub ffmpeg: Option<&'a str>,
+    /// Where in the audio file the video's first frame falls, in
+    /// seconds. Positive seeks into the audio; negative delays it.
+    pub audio_offset: f64,
 }
 
 impl Sink {
@@ -79,6 +82,14 @@ impl Sink {
             .args(["-r", &format!("{}", options.fps)])
             .args(["-i", "-"]);
         if let Some(audio) = options.audio {
+            // Line the soundtrack up with frame 0. Seeking forward and
+            // delaying are different flags, and they must go BEFORE the
+            // input they apply to.
+            if options.audio_offset > 0.001 {
+                command.args(["-ss", &format!("{:.6}", options.audio_offset)]);
+            } else if options.audio_offset < -0.001 {
+                command.args(["-itsoffset", &format!("{:.6}", -options.audio_offset)]);
+            }
             command.arg("-i").arg(audio);
         }
         command

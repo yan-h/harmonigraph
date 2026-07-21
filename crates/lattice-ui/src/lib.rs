@@ -158,6 +158,10 @@ pub enum RenderTrigger {
 /// plugin can do is *run* it, the moment a take is complete.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RenderConfig {
+    /// Record the plugin's audio input into the take (see
+    /// `SharedState::take_audio`, which mirrors this at runtime).
+    #[serde(default)]
+    pub record_audio: bool,
     /// Run the renderer as soon as a take finishes.
     #[serde(default)]
     pub auto_render: bool,
@@ -182,6 +186,7 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
+            record_audio: false,
             auto_render: false,
             trigger: RenderTrigger::OnDisarm,
             renderer_path: String::new(),
@@ -504,6 +509,11 @@ pub struct SharedState {
     pub take_supported: bool,
     /// Toggled by the View pane, acted on by the shell.
     pub take_recording: bool,
+    /// Record the input bus alongside the notes, so the render has a
+    /// spectrum and a soundtrack without a separate bounce. Persisted
+    /// with the render settings rather than the take state, since it is
+    /// a preference, not a live flag.
+    pub take_audio: bool,
     /// What to do with a take once it is finished (persisted).
     pub render_config: RenderConfig,
     /// Shell-supplied one-liner shown under the toggle: where the file is
@@ -585,6 +595,7 @@ impl SharedState {
             preset_name: String::new(),
             take_supported: false,
             take_recording: false,
+            take_audio: false,
             render_config: RenderConfig::default(),
             take_status: String::new(),
             spectrum: AudioSpectrum::default(),

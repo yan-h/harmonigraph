@@ -53,6 +53,18 @@ Takes are written to `~/Music/MIDI Lattice 3D Takes/take-<unixtime>.take`
 (`LATTICE_TAKE_DIR` overrides the directory). The status line under the
 toggle tells you where the file is going and how many events have landed.
 
+Tick **"Record audio too"** and the plugin writes a WAV beside the take,
+so the render gets its spectrum and its soundtrack with no separate
+bounce and nothing to point at. The catch is placement: the device has to
+be somewhere audio actually reaches it — after the instrument, or on a
+bus. On a pure note track there is nothing to record, and the take is
+notes-only (which still renders; you just get no spectrum curve).
+
+The WAV is 32-bit float, exactly as the input arrives, and it carries the
+take time of its first sample — so arming part-way into a song still
+lines the sound up with the picture, in both the spectrum and the muxed
+track.
+
 Three things to know:
 
 - **Nothing is recorded until the transport rolls.** Events are stamped
@@ -153,7 +165,7 @@ The flags worth knowing (`--help` lists them all):
 | flag | what it does |
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
-| `--audio` | the bounce: feeds the spectrum **and** is muxed into the video |
+| `--audio` | audio to use instead of the take's own: feeds the spectrum **and** is muxed in |
 | `--layout` | preset name or a `.ron` file (see below) |
 | `--size` | output pixels, e.g. `3840x2160` |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
@@ -209,6 +221,9 @@ inset over a full-bleed lattice.
 60 fps render is not quantized to 60 fps — envelopes start where they
 actually started), per-note tuning and MPE bends, all eight automatable
 parameters over time, and the view/camera/spectrum settings.
+
+**Captured with "Record audio too":** the input bus as 32-bit float,
+aligned to the notes.
 
 **Not captured:** camera *movement* (the camera is a UI control, not an
 automatable parameter, so a take holds one fixed angle), anything you
