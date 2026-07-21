@@ -76,6 +76,32 @@ Three things to know:
 > short offline probe and then renders in realtime mode. Recording is
 > explicit now, and works in any process mode.
 
+#### Rendering automatically when the take ends
+
+Tick **"Render video when done"** under the toggle and the plugin runs
+`lattice-offline` itself the moment you disarm, writing the video next to
+the take. Three fields appear:
+
+| field | meaning |
+|---|---|
+| Renderer | path to the `lattice-offline` binary — leave empty to use the copy `update-plugin.sh` installs |
+| Audio | bounced WAV to mux in and feed the spectrum; empty renders silent, with no spectrum curve |
+| Options | extra flags, split on spaces: `--size 3840x2160 --layout side-by-side` |
+
+The render runs on its own thread and never touches the audio thread or
+the GUI, so a long one does not hold up the DAW. The status line reports
+`rendering ...`, then either the finished path or the renderer's own error
+— which is the only place you'll see it, since a plugin has no terminal.
+
+`update-plugin.sh` builds the renderer alongside the plugin and installs
+it to `~/Library/Application Support/MIDI Lattice 3D/lattice-offline`, so
+the two always match — they share the take format, so a mismatched pair
+would fail at the version check.
+
+Note the ordering: the render is launched by the *writer thread*, right
+after it closes the file. That is the only point that knows the take is
+actually complete on disk.
+
 ### From the standalone harness (no DAW)
 
 ```sh

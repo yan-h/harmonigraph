@@ -151,7 +151,7 @@ impl EditorShared {
             self.take_last_count = 0;
             self.take.start(sample_rate, self.ui.save_persist());
         } else if !self.ui.take_recording && recording {
-            self.take.stop();
+            self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
         }
 
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);

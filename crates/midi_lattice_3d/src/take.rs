@@ -75,7 +75,57 @@ pub enum Entry {
 
 enum Command {
     Start(Box<lattice_take::Header>, std::path::PathBuf),
-    Stop,
+    /// Close the file, and — if asked — render it to video.
+    Stop(Option<Box<RenderRequest>>),
+}
+
+/// What to run once a take is complete.
+///
+/// The plugin does not render video; `lattice-offline` does, with a
+/// headless GPU device and an ffmpeg pipe, neither of which belongs in a
+/// real-time audio plugin. This just launches it, off the audio thread
+/// and off the GUI thread, so a long render never touches the DAW.
+pub struct RenderRequest {
+    pub program: std::path::PathBuf,
+    /// Bounced audio to mux in and feed the spectrum, if any.
+    pub audio: Option<String>,
+    /// Extra flags, already split.
+    pub extra_args: Vec<String>,
+}
+
+impl RenderRequest {
+    /// Build a request from the View pane's settings, or `None` if
+    /// auto-render is off. Blank fields mean "use the default" rather
+    /// than passing an empty argument, which the renderer would reject.
+    pub fn from_config(config: &lattice_ui::RenderConfig) -> Option<RenderRequest> {
+        if !config.auto_render {
+            return None;
+        }
+        let program = if config.renderer_path.trim().is_empty() {
+            default_renderer_path()
+        } else {
+            std::path::PathBuf::from(config.renderer_path.trim())
+        };
+        Some(RenderRequest {
+            program,
+            audio: Some(config.audio_path.trim())
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned),
+            // Whitespace split, no shell quoting: these are flags like
+            // `--size 3840x2160`. A path with spaces belongs in the Audio
+            // field, which is passed as a single argument.
+            extra_args: config.extra_args.split_whitespace().map(str::to_owned).collect(),
+        })
+    }
+}
+
+/// Where `update-plugin.sh` installs the renderer, and where the plugin
+/// looks when the path setting is left empty. A fixed location beats
+/// guessing at the host's working directory or the bundle's own path.
+pub fn default_renderer_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home)
+        .join("Library/Application Support/MIDI Lattice 3D/lattice-offline")
 }
 
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
@@ -198,14 +248,18 @@ impl Control {
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }
 
-    pub fn stop(&self) {
+    /// Stop recording, optionally rendering the finished take to video.
+    ///
+    /// The render is launched by the writer thread, after it has closed
+    /// the file — the only place that knows the take is actually complete.
+    pub fn stop(&self, render: Option<RenderRequest>) {
         if !self.is_recording() {
             return;
         }
         // Disarm first, so the audio thread stops pushing before the
         // writer is told to close.
         self.armed.store(false, Ordering::Relaxed);
-        let _ = self.commands.send(Command::Stop);
+        let _ = self.commands.send(Command::Stop(render.map(Box::new)));
         self.recording.store(false, Ordering::Relaxed);
     }
 
@@ -260,11 +314,14 @@ pub fn channel() -> (Recorder, Control) {
                     Ok(Command::Start(header, path)) => {
                         open = Open::create(*header, path, 1, &thread_status);
                     }
-                    Ok(Command::Stop) => {
+                    Ok(Command::Stop(render)) => {
                         // Drain what the audio thread already queued
                         // before closing, or the tail of the take is lost.
                         drain(&mut consumer, &mut open, &thread_status);
-                        open = None;
+                        let finished = open.take().map(|o| o.finish());
+                        if let (Some(path), Some(render)) = (finished, render) {
+                            spawn_render(*render, path, thread_status.clone());
+                        }
                     }
                     Err(mpsc::TryRecvError::Empty) => {}
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -330,6 +387,23 @@ impl Open {
         }
     }
 
+    /// Close the file and hand back the path that was written.
+    fn finish(self) -> std::path::PathBuf {
+        let path = self.path();
+        drop(self.writer);
+        path
+    }
+
+    /// The file this pass is writing to.
+    fn path(&self) -> std::path::PathBuf {
+        if self.pass <= 1 {
+            self.base.clone()
+        } else {
+            let stem = self.base.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
+            self.base.with_file_name(format!("{stem}-{}.{}", self.pass, lattice_take::EXTENSION))
+        }
+    }
+
     /// Close this file and open the next pass's.
     fn next_pass(self, status: &Mutex<String>) -> Option<Open> {
         let Open { header, base, pass, writer } = self;
@@ -379,4 +453,100 @@ fn drain(
         };
     }
     any
+}
+
+/// Run the renderer on the finished take, on a thread of its own so a
+/// long render neither blocks the writer nor the DAW. The video lands
+/// next to the take.
+fn spawn_render(
+    request: RenderRequest,
+    take_path: std::path::PathBuf,
+    status: Arc<Mutex<String>>,
+) {
+    let _ = std::thread::Builder::new()
+        .name("lattice-take-render".into())
+        .spawn(move || {
+            let out = take_path.with_extension("mp4");
+            let mut command = std::process::Command::new(&request.program);
+            command.arg(&take_path).arg("--out").arg(&out);
+            if let Some(audio) = &request.audio {
+                command.arg("--audio").arg(audio);
+            }
+            command.args(&request.extra_args);
+
+            *status.lock() = format!("rendering {}...", out.display());
+            match command.output() {
+                Ok(done) if done.status.success() => {
+                    *status.lock() = format!("rendered {}", out.display());
+                }
+                Ok(done) => {
+                    // The renderer's own diagnostics are far more useful
+                    // than the exit code, and this is the only place a
+                    // plugin user will ever see them.
+                    let stderr = String::from_utf8_lossy(&done.stderr);
+                    let last = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+                    *status.lock() = format!("render failed: {last}");
+                }
+                Err(err) => {
+                    *status.lock() = format!(
+                        "could not run {}: {err} — check the Renderer path",
+                        request.program.display()
+                    );
+                }
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lattice_ui::RenderConfig;
+
+    #[test]
+    fn auto_render_off_means_no_request() {
+        let config = RenderConfig { auto_render: false, ..Default::default() };
+        assert!(RenderRequest::from_config(&config).is_none());
+    }
+
+    /// Blank fields must fall back, not become empty arguments — an
+    /// empty `--audio ""` makes the renderer fail on a file that isn't
+    /// there, which would be a baffling way for this to break.
+    #[test]
+    fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
+        let config = RenderConfig {
+            auto_render: true,
+            renderer_path: "  ".into(),
+            audio_path: "   ".into(),
+            extra_args: "   ".into(),
+        };
+        let request = RenderRequest::from_config(&config).unwrap();
+        assert_eq!(request.program, default_renderer_path());
+        assert_eq!(request.audio, None);
+        assert!(request.extra_args.is_empty());
+    }
+
+    #[test]
+    fn options_split_on_whitespace_and_paths_stay_whole() {
+        let config = RenderConfig {
+            auto_render: true,
+            renderer_path: "/opt/lattice-offline".into(),
+            audio_path: "/Users/yan/My Bounces/piece.wav".into(),
+            extra_args: "--size 3840x2160   --layout side-by-side".into(),
+        };
+        let request = RenderRequest::from_config(&config).unwrap();
+        assert_eq!(request.program, std::path::PathBuf::from("/opt/lattice-offline"));
+        // One argument, spaces and all — it is passed directly, never
+        // through a shell.
+        assert_eq!(request.audio.as_deref(), Some("/Users/yan/My Bounces/piece.wav"));
+        assert_eq!(
+            request.extra_args,
+            vec!["--size", "3840x2160", "--layout", "side-by-side"]
+        );
+    }
+
+    #[test]
+    fn the_default_renderer_path_is_where_update_plugin_installs_it() {
+        let path = default_renderer_path();
+        assert!(path.ends_with("MIDI Lattice 3D/lattice-offline"), "{path:?}");
+    }
 }

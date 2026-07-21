@@ -48,6 +48,21 @@ for EXT in clap vst3; do
   updated=$((updated + 1))
 done
 
+# The offline video renderer, installed where the plugin's "Render video
+# when done" setting looks for it by default. A fixed location beats the
+# plugin trying to guess at a host's working directory or its own bundle
+# path — and it means the renderer always matches the build it shipped
+# with, which matters because they share the take format.
+SUPPORT="$HOME/Library/Application Support/$NAME"
+( cd "$HERE" && cargo build --release -p lattice-offline )
+if [ -f "$HERE/target/release/lattice-offline" ]; then
+  mkdir -p "$SUPPORT"
+  cp "$HERE/target/release/lattice-offline" "$SUPPORT/lattice-offline"
+  echo "Updated renderer:  $SUPPORT/lattice-offline"
+else
+  echo "WARNING: lattice-offline not built; auto-render will not work" >&2
+fi
+
 echo
 if [ "$updated" -gt 0 ]; then
   echo "Done ($updated bundle(s)). Rescan/restart the plugin in Bitwig."

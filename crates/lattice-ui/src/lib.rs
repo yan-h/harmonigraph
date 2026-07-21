@@ -132,6 +132,44 @@ pub enum RollColor {
     Accent,
 }
 
+/// How a finished take gets turned into a video, edited in the View
+/// pane's Record section and persisted with the UI state.
+///
+/// The plugin cannot render video itself — that is `lattice-offline`, a
+/// separate binary with a headless GPU device and an ffmpeg pipe, and
+/// nothing about it belongs inside a real-time audio plugin. What the
+/// plugin can do is *run* it, the moment a take is complete.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RenderConfig {
+    /// Run the renderer as soon as a take finishes.
+    #[serde(default)]
+    pub auto_render: bool,
+    /// Path to the `lattice-offline` binary. Empty means the
+    /// conventional install location, which `update-plugin.sh` writes to.
+    #[serde(default)]
+    pub renderer_path: String,
+    /// Bounced audio to pass as `--audio`: it feeds the spectrum curve
+    /// and is muxed into the video. Empty renders silent, with no
+    /// spectrum — the roll and the lattice are unaffected.
+    #[serde(default)]
+    pub audio_path: String,
+    /// Extra flags, split on whitespace (no shell quoting):
+    /// `--size 3840x2160 --layout side-by-side`.
+    #[serde(default)]
+    pub extra_args: String,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        RenderConfig {
+            auto_render: false,
+            renderer_path: String::new(),
+            audio_path: String::new(),
+            extra_args: "--size 1920x1080".into(),
+        }
+    }
+}
+
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
@@ -445,6 +483,8 @@ pub struct SharedState {
     pub take_supported: bool,
     /// Toggled by the View pane, acted on by the shell.
     pub take_recording: bool,
+    /// What to do with a take once it is finished (persisted).
+    pub render_config: RenderConfig,
     /// Shell-supplied one-liner shown under the toggle: where the file is
     /// going, how many events, or what went wrong.
     pub take_status: String,
@@ -524,6 +564,7 @@ impl SharedState {
             preset_name: String::new(),
             take_supported: false,
             take_recording: false,
+            render_config: RenderConfig::default(),
             take_status: String::new(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
@@ -555,6 +596,7 @@ impl SharedState {
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
             spectrum: self.spectrum_config,
+            render: self.render_config.clone(),
         })
         .unwrap_or_default()
     }
@@ -571,6 +613,7 @@ impl SharedState {
             self.view.migrate_legacy();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
+            self.render_config = persist.render;
         }
     }
 }
@@ -588,6 +631,8 @@ struct UiPersist {
     /// serde(default) keeps pre-Spectrum-tab blobs loadable.
     #[serde(default)]
     spectrum: SpectrumConfig,
+    #[serde(default)]
+    render: RenderConfig,
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
