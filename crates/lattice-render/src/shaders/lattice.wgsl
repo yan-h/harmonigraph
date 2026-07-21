@@ -96,26 +96,22 @@ struct Instance {
     // The octave glyphs sit at the note's absolute-pitch angle, which needs
     // the pitch class within the octave.
     @location(5) cents: f32,
-    // Depth-cue size multiplier from the scene (1 at the camera's focus
-    // distance; larger nearer the eye, smaller farther), exaggerating
-    // perspective so depth reads at a glance.
-    @location(6) scale: f32,
     // 1 on the home (center sevens) sheet: idle home nodes draw a blank
     // placeholder ring where their disc would be.
-    @location(7) home: f32,
+    @location(6) home: f32,
     // Melody/bass marks: x = melody slots, y = bass slots, one bit per
     // octave slot. Which SECTOR each mark's ring links back to (see
     // mark_ring); the ring itself is per node, and its fade level rides
     // params.y/params.z.
-    @location(8) marks: vec2<u32>,
+    @location(7) marks: vec2<u32>,
     // Each mark's own color: the marked note's, lightened a little (see
     // NodeInstance::melody_color), so a ring reads as belonging to the note
     // it marks rather than as a fixed livery.
-    @location(9) melody_color: vec4<f32>,
-    @location(10) bass_color: vec4<f32>,
+    @location(8) melody_color: vec4<f32>,
+    @location(9) bass_color: vec4<f32>,
     // How strongly the music is remembered at this node, 0..1 (see
     // NodeInstance::trail). Feeds the idle marker and nothing else.
-    @location(11) visited: f32,
+    @location(10) visited: f32,
 };
 
 struct VsOut {
@@ -143,13 +139,13 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     );
     let corner = corners[vertex_index];
 
-    // Node size never responds to notes or hover: idle, active, and hovered
-    // nodes are all the same size, so a note changes only brightness and
-    // glow. Size DOES carry the depth cue (inst.scale). (The quad is twice
-    // the disc radius to leave room for the glow, plus QUAD_MARGIN for the
-    // outer glyphs' soft edge; uv is scaled to match so content is
+    // Every node is the same world-space size: notes, hover, and distance
+    // from the camera all leave it alone, so a note changes only brightness
+    // and glow, and depth reads from the projection alone. (The quad is
+    // twice the disc radius to leave room for the glow, plus QUAD_MARGIN
+    // for the outer glyphs' soft edge; uv is scaled to match so content is
     // unchanged — see QUAD_MARGIN.)
-    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN * inst.scale;
+    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
