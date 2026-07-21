@@ -51,12 +51,14 @@ OPTIONS:
         --crf <N>          x264 quality, lower is better.  [default: 16]
         --ui-state <FILE>  Override the look recorded in the take with a
                            persist blob (see read-plugin-state.py).
+        --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
+                           PATH or in the usual install locations.
         --dump-layout      Print the resolved layout as .ron and exit —
                            the starting point for a custom one.
     -h, --help             Show this.
 
 ENVIRONMENT:
-    LATTICE_FFMPEG         ffmpeg to run.  [default: ffmpeg]
+    LATTICE_FFMPEG         ffmpeg to run, if --ffmpeg is not given.
 ";
 
 fn main() -> std::process::ExitCode {
@@ -84,6 +86,7 @@ struct Args {
     tail: f64,
     crf: u32,
     ui_state: Option<String>,
+    ffmpeg: Option<String>,
     dump_layout: bool,
 }
 
@@ -102,6 +105,7 @@ impl Default for Args {
             tail: 4.0,
             crf: 16,
             ui_state: None,
+            ffmpeg: None,
             dump_layout: false,
         }
     }
@@ -130,6 +134,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--tail" => args.tail = parse_number("--tail", &value("--tail")?)?,
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
             "--ui-state" => args.ui_state = Some(value("--ui-state")?),
+            "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
             "--dump-layout" => args.dump_layout = true,
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?} (--help for the list)"))
@@ -227,6 +232,7 @@ fn run() -> Result<(), String> {
             fps: args.fps,
             audio: args.audio.as_ref().map(std::path::Path::new),
             crf: args.crf,
+            ffmpeg: args.ffmpeg.as_deref(),
         },
     )?;
 

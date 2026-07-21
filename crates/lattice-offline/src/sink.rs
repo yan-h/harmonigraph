@@ -28,6 +28,8 @@ pub struct VideoOptions<'a> {
     pub audio: Option<&'a std::path::Path>,
     /// x264 constant-rate-factor: lower is better and bigger.
     pub crf: u32,
+    /// Explicit ffmpeg path (`--ffmpeg`), overriding the search.
+    pub ffmpeg: Option<&'a str>,
 }
 
 impl Sink {
@@ -68,7 +70,8 @@ impl Sink {
                 "video output needs even dimensions for yuv420p; {w}x{h} is odd"
             ));
         }
-        let mut command = Command::new(ffmpeg());
+        let ffmpeg = find_ffmpeg(options.ffmpeg)?;
+        let mut command = Command::new(&ffmpeg);
         command
             .args(["-hide_banner", "-loglevel", "warning", "-y"])
             .args(["-f", "rawvideo", "-pix_fmt", "rgba"])
@@ -94,14 +97,9 @@ impl Sink {
         }
         command.arg(path).stdin(Stdio::piped());
 
-        let child = command.spawn().map_err(|e| {
-            format!(
-                "could not start {}: {e}\n\
-                 Install ffmpeg (brew install ffmpeg), set LATTICE_FFMPEG to its path, \
-                 or render to a .png sequence or .rgba stream instead.",
-                ffmpeg()
-            )
-        })?;
+        let child = command
+            .spawn()
+            .map_err(|e| format!("could not start {}: {e}", ffmpeg.display()))?;
         Ok(Sink::Video { child })
     }
 
@@ -142,8 +140,87 @@ impl Sink {
     }
 }
 
-/// The ffmpeg to run. A DAW's process environment often has a minimal
-/// PATH, and this tool may be launched from one, so an override exists.
-fn ffmpeg() -> String {
-    std::env::var("LATTICE_FFMPEG").unwrap_or_else(|_| "ffmpeg".into())
+/// Where ffmpeg is installed, when it isn't simply on `PATH`.
+///
+/// This exists because of how this tool actually gets run. Launched from
+/// a shell, `ffmpeg` resolves fine. Launched by the *plugin*, it inherits
+/// the DAW's environment — and a macOS app started from Finder gets a
+/// minimal `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin`, which contains no
+/// Homebrew. Searching these by hand turns "render failed, install
+/// ffmpeg" (on a machine that has ffmpeg) into a render that works.
+const FFMPEG_LOCATIONS: [&str; 4] = [
+    "/opt/homebrew/bin/ffmpeg", // Homebrew, Apple Silicon
+    "/usr/local/bin/ffmpeg",    // Homebrew, Intel
+    "/opt/local/bin/ffmpeg",    // MacPorts
+    "/usr/bin/ffmpeg",          // system / Linux
+];
+
+/// Resolve ffmpeg: an explicit choice, then `LATTICE_FFMPEG`, then
+/// `PATH`, then the conventional install locations. The error names
+/// everything tried, because "not found" with no list is unactionable.
+fn find_ffmpeg(explicit: Option<&str>) -> Result<std::path::PathBuf, String> {
+    let runnable = |path: &std::path::Path| path.is_file();
+
+    if let Some(explicit) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        let path = std::path::PathBuf::from(explicit);
+        return if runnable(&path) {
+            Ok(path)
+        } else {
+            Err(format!("--ffmpeg {explicit:?} is not a file"))
+        };
+    }
+    if let Ok(from_env) = std::env::var("LATTICE_FFMPEG") {
+        let path = std::path::PathBuf::from(&from_env);
+        return if runnable(&path) {
+            Ok(path)
+        } else {
+            Err(format!("LATTICE_FFMPEG={from_env:?} is not a file"))
+        };
+    }
+    let searched: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).map(|dir| dir.join("ffmpeg")).collect())
+        .unwrap_or_default();
+    for candidate in searched.iter().cloned().chain(FFMPEG_LOCATIONS.iter().map(Into::into)) {
+        if runnable(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "ffmpeg not found. Looked on PATH ({} entr{}) and in {}.\n\
+         Install it (brew install ffmpeg), pass --ffmpeg /path/to/ffmpeg, set \
+         LATTICE_FFMPEG, or render to a .png sequence or .rgba stream instead.",
+        searched.len(),
+        if searched.len() == 1 { "y" } else { "ies" },
+        FFMPEG_LOCATIONS.join(", "),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_explicit_ffmpeg_that_does_not_exist_is_reported_not_ignored() {
+        let err = find_ffmpeg(Some("/definitely/not/here/ffmpeg")).unwrap_err();
+        assert!(err.contains("not a file"), "{err}");
+    }
+
+    /// A blank field (the plugin's Options box, left empty) must fall
+    /// through to the search rather than being treated as a path.
+    #[test]
+    fn a_blank_explicit_path_falls_through_to_the_search() {
+        // Whatever the machine has, this must not complain about "" .
+        match find_ffmpeg(Some("   ")) {
+            Ok(_) => {}
+            Err(err) => assert!(!err.contains("not a file"), "{err}"),
+        }
+    }
+
+    /// The conventional locations are the whole point: a plugin inherits
+    /// the DAW's minimal PATH, so the list has to cover Homebrew.
+    #[test]
+    fn the_search_list_covers_both_homebrew_prefixes() {
+        assert!(FFMPEG_LOCATIONS.contains(&"/opt/homebrew/bin/ffmpeg"));
+        assert!(FFMPEG_LOCATIONS.contains(&"/usr/local/bin/ffmpeg"));
+    }
 }

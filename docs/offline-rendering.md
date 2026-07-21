@@ -110,6 +110,13 @@ something; recording switches itself off too). The second is what makes
 **exporting audio produce a video with nothing further to click**: arm
 Record take, export, and both files land together.
 
+ffmpeg is found automatically — on `PATH`, then in the usual install
+locations. This matters more than it sounds: a macOS app launched from
+Finder gets a `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin`, with no Homebrew
+in it, so a plugin-launched render would otherwise fail with "install
+ffmpeg" on a machine that has ffmpeg. Override with `--ffmpeg /path` in
+the Options field if you need to.
+
 The render runs on its own thread and never touches the audio thread or
 the GUI, so a long one does not hold up the DAW. The status line reports
 `rendering ...`, then either the finished path or the renderer's own error
