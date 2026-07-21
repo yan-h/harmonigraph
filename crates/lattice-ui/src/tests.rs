@@ -544,3 +544,88 @@ fn a_natural_note_label_is_just_the_letter() {
     assert!(texts.iter().all(|(_, t)| t == "G"), "only the letter: {texts:?}");
     assert!((text_box(&texts, "G").center().x - anchor.x).abs() < 0.5);
 }
+
+
+/// The cents readout hangs off the note name's GLYPHS, not its galley box --
+/// a monospace line box carries several pixels of leading below the letter,
+/// and spacing box-to-box left the readout visibly adrift from the name it
+/// belongs to. Drives the whole lattice pane, so it pins what is drawn.
+#[test]
+fn the_cents_readout_sits_right_under_the_note_name() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    state.view.show_labels = true;
+    state.view.show_cents = true;
+    // Middle C: the origin node, which the default camera looks straight at.
+    state.tracker.handle_event(lattice_core::NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: lattice_core::NoteEventKind::On { velocity: 1.0 },
+    });
+
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let output = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
+        |ui| root_ui(ui, &mut state, &backend, 0.0),
+    );
+
+    // A held note lights every node of its pitch class, so each piece of text
+    // turns up once per lit node -- and once per halo stamp on top of that.
+    // Cluster the stamps back into the pieces they were drawn as, keeping the
+    // ink each covers on screen, which is what the eye actually reads.
+    let mut names = Vec::new();
+    let mut cents = Vec::new();
+    for clipped in &output.shapes {
+        let egui::Shape::Text(text) = &clipped.shape else { continue };
+        // Sort by the label's own type sizes, which nothing else in the dock
+        // shares. Not by the text: one pitch class is spelled several ways
+        // across the lattice (C, B\u{266F}, D\u{266D}\u{266D}), and every node
+        // lit by the held note draws its own name.
+        let Some(size) = text.galley.job.sections.first().map(|s| s.format.font_id.size) else {
+            continue;
+        };
+        let pieces = if size == panes::lattice::NAME_SIZE || size == panes::lattice::MARK_SIZE {
+            // Letter and marks together: the readout has to clear the comma,
+            // which hangs lower than the letter does.
+            &mut names
+        } else if size == panes::lattice::CENTS_SIZE {
+            &mut cents
+        } else {
+            continue;
+        };
+        let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+        match pieces.iter_mut().find(|seen: &&mut egui::Rect| seen.intersects(ink)) {
+            Some(seen) => *seen = seen.union(ink),
+            None => pieces.push(ink),
+        }
+    }
+    assert!(!names.is_empty() && !cents.is_empty(), "the held C should be labeled");
+    // Each cluster is the piece's ink grown by the halo's rim in every
+    // direction; take the rim back off to get the glyphs the eye reads.
+    const HALO: f32 = 2.0;
+    for piece in names.iter_mut().chain(cents.iter_mut()) {
+        *piece = piece.shrink(HALO);
+    }
+
+    // Every readout belongs to the name directly above it, and sits against
+    // it -- a couple of pixels of air, not the six that box-to-box spacing
+    // left behind.
+    for readout in &cents {
+        let name = names
+            .iter()
+            // Overlap, not equal centers: on a node whose name carries marks
+            // the letter is pushed left to make room for the mark column,
+            // while the readout stays centered on the node itself.
+            .filter(|n| n.left() < readout.right() && n.right() > readout.left())
+            .filter(|n| n.bottom() <= readout.top())
+            .min_by(|a, b| (readout.top() - a.bottom()).total_cmp(&(readout.top() - b.bottom())))
+            .unwrap_or_else(|| panic!("no name above {readout:?}, of {names:?}"));
+        let gap = readout.top() - name.bottom();
+        assert!(
+            (0.0..=3.0).contains(&gap),
+            "cents should sit right under the name, not adrift ({gap}px of ink-to-ink gap)"
+        );
+    }
+}
