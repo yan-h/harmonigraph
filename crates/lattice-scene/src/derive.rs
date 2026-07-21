@@ -5,6 +5,7 @@
 use crate::camera::Camera;
 use crate::color::{channel_color, idle_color, pitch_ramp_lut};
 use crate::style::HighlightExtremes;
+use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, EdgeInstance, NodeInstance, Scene, MARK_WHITEN, NODE_RADIUS_FACTOR,
@@ -87,6 +88,10 @@ pub fn derive_scene(
     now: f64,
 ) -> Scene {
     let mut nodes = Vec::with_capacity(view.visible_count());
+    // Kept parallel to `nodes` for the trail, which matches remembered
+    // pitches against every node afterwards and would otherwise have to
+    // recompute each node's pitch class to do it.
+    let mut node_pcs = Vec::with_capacity(view.visible_count());
     let center = view.center();
     let eye = camera.eye();
     let live_extremes = held_extremes(tracker, view.highlight_extremes);
@@ -196,7 +201,16 @@ pub fn derive_scene(
             bass_level,
             melody_color,
             bass_color,
+            trail: 0.0,
         });
+        node_pcs.push(node_pc);
+    }
+
+    // Marks only the idle layer (see `trail`), so nothing downstream that
+    // reads "is sounding" — the grid's sevens chains above all — can pick a
+    // memory up by mistake, whatever order these run in.
+    if let Some(field) = TrailField::build(tracker.history(), view, frame, now) {
+        field.apply(&mut nodes, &node_pcs, tuning);
     }
 
     let grid = derive_grid(view, &nodes);
@@ -234,6 +248,8 @@ pub fn derive_scene(
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
         node_idle: idle_color(view),
+        trail_mark: view.trail_mark,
+        trail_strength: view.trail_strength.clamp(0.0, 1.0),
         mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
         mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
         pitch_lut: pitch_ramp_lut(),

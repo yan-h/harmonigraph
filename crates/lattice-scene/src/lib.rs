@@ -15,6 +15,7 @@
 //!   for label placement and picking.
 //! - [`color`] — the LCh pitch ramp and channel/idle colors.
 //! - [`skin`] — the static palette the UI and renderer share.
+//! - [`trail`] — a quiet mark on the nodes the music has already been to.
 //!
 //! Every public item is re-exported at the crate root, so downstream code
 //! keeps using `lattice_scene::Camera` rather than module paths.
@@ -24,6 +25,7 @@ pub mod color;
 pub mod derive;
 pub mod skin;
 pub mod style;
+pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector};
@@ -32,6 +34,7 @@ pub use derive::derive_scene;
 pub use style::{
     CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
 };
+pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
 
 use glam::{Vec3, Vec4};
@@ -132,6 +135,15 @@ pub struct NodeInstance {
     /// background.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
+    /// How strongly the music is remembered here (see [`trail`]): 0 where
+    /// it has never been, up to 1 where it has. Drives ONLY the idle
+    /// marker, so a memory can never be mistaken for a sounding note; the
+    /// label layer reads it too, to caption a visited node.
+    ///
+    /// While the mark is [`TrailMark::Tint`] this node's `color` carries
+    /// the remembered note's color instead of the idle grey — but only when
+    /// nothing sounds here, since a sounding note owns that field.
+    pub trail: f32,
 }
 
 impl NodeInstance {
@@ -144,8 +156,11 @@ impl NodeInstance {
     /// Deliberately ignores [`Scene::idle_marker`] being `None`: that
     /// setting hides the idle markers but shouldn't make the home sheet
     /// unhoverable, which would leave an empty lattice uninspectable.
+    /// A visited off-sheet node counts: it draws a trail marker where an
+    /// unvisited one draws nothing, and the music having gone there is
+    /// exactly what makes its pitch worth revealing.
     pub fn is_visible(&self) -> bool {
-        self.activation > 0.0 || self.on_home
+        self.activation > 0.0 || self.on_home || self.trail > 0.0
     }
 }
 
@@ -209,6 +224,12 @@ pub struct Scene {
     /// Grid line thickness as a multiple of the shader's built-in grid
     /// width (see [`ViewConfig::grid_thickness`]), already clamped.
     pub grid_thickness: f32,
+    /// How a node the music has already visited is marked (see
+    /// [`TrailMark`]), and how strongly, 0..1. The renderer hands both to
+    /// the shader's idle-marker branch; which NODES are marked rides on
+    /// each node's own `trail`.
+    pub trail_mark: TrailMark,
+    pub trail_strength: f32,
     /// Color of the idle node markers (see [`ViewConfig::grid_color`]):
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.

@@ -1,11 +1,11 @@
 //! The Appearance pane: how a sounding note is drawn — core, octaves,
-//! melody/bass marks, home grid, color, labels, effects.
+//! melody/bass marks, home grid, color, labels, trail, effects.
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle};
+use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle, TrailMark};
 
 /// Cosmetic settings, apart from the structural View pane: how a sounding
 /// note is drawn, colored, and faded — not what the grid shows. Laid out
@@ -245,6 +245,93 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
             ui.add_enabled(
                 state.view.show_labels,
                 egui::Checkbox::new(&mut state.view.show_cents, "Cents"),
+            );
+
+            // Trail: where the music has already been. Rides the IDLE
+            // layer only -- a visited node wears a quietly different
+            // version of the same small grey mark an unvisited one does --
+            // so it can accumulate over a whole piece without ever
+            // competing with the notes actually sounding.
+            section(ui, "Trail");
+            choice_row(
+                ui,
+                "Mark",
+                &mut state.view.trail_mark,
+                &[
+                    (TrailMark::Off, "Off", "Show only what is sounding"),
+                    (
+                        TrailMark::Lift,
+                        "Lift",
+                        "A visited node's idle marker draws a lighter grey. \
+                         The quietest option: no new shape and no color, \
+                         just a little more presence",
+                    ),
+                    (
+                        TrailMark::Ring,
+                        "Ring",
+                        "A pale circle around the node, where its sounding \
+                         disc would be -- a ghost of the note that was \
+                         there. The only mark that draws with the idle \
+                         marker off",
+                    ),
+                    (
+                        TrailMark::Tint,
+                        "Tint",
+                        "The idle marker keeps a hint of the color the note \
+                         was played in, at idle brightness -- so the trail \
+                         says what the music was doing there, not just that \
+                         it was",
+                    ),
+                ],
+            );
+            ui.add_enabled_ui(state.view.trail_mark != TrailMark::Off, |ui| {
+                ValueBar::new(&mut state.view.trail_strength, 0.0..=1.0, "Strength")
+                    .show(ui)
+                    .on_hover_text(
+                        "How far the mark departs from a plain idle node. \
+                         The whole range is quiet -- even 1 stays well short \
+                         of reading as a sounding note",
+                    );
+                // Marks that MODIFY the idle marker need one to be showing;
+                // say so rather than leaving a setting that does nothing.
+                if state.view.trail_mark.needs_idle_marker()
+                    && state.view.idle_marker == IdleMarker::None
+                {
+                    ui.weak("Needs a Home grid marker other than None.");
+                }
+            });
+            // Independent of the mark: the text is its own channel, and is
+            // useful with the marks off.
+            ui.checkbox(&mut state.view.trail_labels, "Keep note names")
+                .on_hover_text(
+                    "Leave the note name and cents on a visited node, so the \
+                     harmonic space reads off the screen by name with its \
+                     tuning. Needs Note names on",
+                );
+            ui.add_enabled_ui(
+                state.view.trail_mark != TrailMark::Off || state.view.trail_labels,
+                |ui| {
+                    // 0 = never forget, which is the point of the feature;
+                    // the bar doubles as the on/off for forgetting at all.
+                    ValueBar::new(&mut state.view.trail_memory, 0.0..=600.0, "Memory")
+                        .show(ui)
+                        .on_hover_text(
+                            "Seconds before a note is forgotten, counted from \
+                             when it last sounded. 0 = never, so a whole \
+                             piece's territory stays",
+                        );
+                    button_row(ui, |ui| {
+                        if ui
+                            .button("Clear trail")
+                            .on_hover_text(
+                                "Forget everything played so far; sounding notes stay",
+                            )
+                            .clicked()
+                        {
+                            state.tracker.clear_history();
+                        }
+                    });
+                },
             );
 
             // Effects: scene-wide extras layered over the notes.

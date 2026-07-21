@@ -28,6 +28,12 @@ cargo xtask bundle midi_lattice_3d --release
 # Rebuild + hot-swap the binary into the main checkout's bundles (works
 # from a git worktree; re-signs ad-hoc). Then rescan the plugin in the DAW.
 ./update-plugin.sh
+
+# Read the plugin's live settings back out of a saved Bitwig project
+# (--rust prints them as an impl Default body). CLOSE the plugin window
+# and save the project first — the UI state is only written on window
+# close. See the script header.
+./read-plugin-state.py
 ```
 
 Bundles land in `target/bundled/`.

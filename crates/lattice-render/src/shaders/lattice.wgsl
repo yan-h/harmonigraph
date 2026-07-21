@@ -53,6 +53,13 @@ struct Uniforms {
     // between neighbouring sectors AND between the band and the mark
     // rings. w: melody/bass ring thickness, same units; 0 = no rings.
     misc5: vec4<f32>,
+    // x: trail mark style — how a node the music has already visited is
+    //    marked (0 off, 1 lift, 2 ring, 3 tint; see TrailMark). y: trail
+    //    strength 0..1. z/w unused.
+    // Read ONLY by idle_marker: a memory must never be mistakable for a
+    // sounding note, and confining it to the idle layer is what guarantees
+    // that rather than merely intending it.
+    misc6: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -106,6 +113,9 @@ struct Instance {
     // it marks rather than as a fixed livery.
     @location(9) melody_color: vec4<f32>,
     @location(10) bass_color: vec4<f32>,
+    // How strongly the music is remembered at this node, 0..1 (see
+    // NodeInstance::trail). Feeds the idle marker and nothing else.
+    @location(11) visited: f32,
 };
 
 struct VsOut {
@@ -120,6 +130,7 @@ struct VsOut {
     @location(7) @interpolate(flat) marks: vec2<u32>,
     @location(8) @interpolate(flat) melody_color: vec4<f32>,
     @location(9) @interpolate(flat) bass_color: vec4<f32>,
+    @location(10) @interpolate(flat) visited: f32,
 };
 
 @vertex
@@ -155,6 +166,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.marks = inst.marks;
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
+    out.visited = inst.visited;
     return out;
 }
 
@@ -558,24 +570,83 @@ fn field_halo(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
     return exp(-h * 9.0 / max(reach, 0.15)) * (0.30 + 0.70 * waft) * (0.35 + 0.65 * plume);
 }
 
+// ---- Trail marks -----------------------------------------------------------
+// How a node the music has ALREADY been to differs from one it hasn't. The
+// whole feature lives inside idle_marker below, which is the point: it can
+// only ever change the small grey mark on a resting node, so no setting and
+// no future edit can let a memory read as a sounding note.
+//
+// Every constant here is a ceiling on how loud a mark can get at strength 1.
+// They are deliberately low. A trail is meant to be noticed on the second
+// look, not the first.
+
+// Lift: how far toward white the idle grey goes.
+const TRAIL_LIFT_MAX: f32 = 0.55;
+// Ring: radius of the pale circle, its thickness, its opacity, and how
+// pale it is. The radius is the classic disc edge -- the circle sits where
+// the note's own core would light, reading as a ghost of it -- and is
+// deliberately independent of the idle marker's radius, so the ring keeps
+// its size (and stays inside the default octave band) whatever that is set
+// to.
+const TRAIL_RING_R: f32 = 0.40;
+const TRAIL_RING_THICK: f32 = 0.045;
+const TRAIL_RING_ALPHA: f32 = 0.55;
+const TRAIL_RING_PALE: f32 = 0.45;
+// Tint: how much of the remembered note's color the grey takes.
+const TRAIL_TINT_MAX: f32 = 0.75;
+
 // The idle (unlit) node marker: a minimal grey mark at a home-sheet
 // position, drawn from its OWN uniforms (misc4.z/.w) so it is independent
 // of the active appearance. A filled dot or an outline circle at the idle
 // radius (style in misc4.w: 0 none, 1 dot, 2 circle), in the idle grey.
-// Returns the grey premultiplied in .xyz with coverage in .w; off-sheet
-// nodes (home < 0.5) and style None draw nothing. The caller keeps it
-// showing regardless of the note state.
-fn idle_marker(d: f32, home: f32, aa: f32) -> vec4<f32> {
+// Returns the color premultiplied in .xyz with coverage in .w; style None
+// draws nothing. The caller keeps it showing regardless of the note state.
+//
+// A node the music has been to (visited > 0) wears a quietly different
+// version of that same mark -- see the trail constants above. It also gets
+// a marker OFF the home sheet, where an unvisited node draws nothing: a
+// blank off-sheet node is blank because its pitch would be information from
+// nowhere, and having been played there is exactly what answers that.
+//
+// `tint` is the node's own color, which for a silent node the scene sets to
+// the remembered note's (see TrailField::apply).
+fn idle_marker(d: f32, home: f32, visited: f32, tint: vec3<f32>, aa: f32) -> vec4<f32> {
     let style = u32(u.misc4.w + 0.5);
-    if home < 0.5 || style == 0u {
-        return vec4<f32>(0.0);
+    let trail_style = u32(u.misc6.x + 0.5);
+    var trail = 0.0;
+    if trail_style != 0u {
+        trail = clamp(visited, 0.0, 1.0) * clamp(u.misc6.y, 0.0, 1.0);
     }
-    let r = u.misc4.z;
-    var cov = aa_inside(r, d, aa);                // dot: filled disc
-    if style == 2u {                              // circle: hollow it out
-        cov = cov * (1.0 - aa_inside(r - IDLE_RING_THICK, d, aa));
+
+    // Straight (non-premultiplied) color and coverage; premultiplied on the
+    // way out so the two marks below can composite in the obvious order.
+    var rgb = u.node_idle.rgb;
+    var cov = 0.0;
+    if style != 0u && (home >= 0.5 || trail > 0.0) {
+        let r = u.misc4.z;
+        cov = aa_inside(r, d, aa);                // dot: filled disc
+        if style == 2u {                          // circle: hollow it out
+            cov = cov * (1.0 - aa_inside(r - IDLE_RING_THICK, d, aa));
+        }
+        if trail_style == 1u {                    // lift: a lighter grey
+            rgb = mix(rgb, vec3<f32>(1.0), trail * TRAIL_LIFT_MAX);
+        } else if trail_style == 3u {             // tint: a hint of the note
+            rgb = mix(rgb, tint, trail * TRAIL_TINT_MAX);
+        }
     }
-    return vec4<f32>(u.node_idle.rgb * cov, cov);
+
+    // The pale circle is its own mark rather than a change to the marker,
+    // so it still reads with the idle marker turned off.
+    if trail_style == 2u && trail > 0.0 {
+        let ring = aa_inside(TRAIL_RING_R, d, aa)
+            * (1.0 - aa_inside(TRAIL_RING_R - TRAIL_RING_THICK, d, aa));
+        let a = ring * trail * TRAIL_RING_ALPHA;
+        let pale = mix(u.node_idle.rgb, vec3<f32>(1.0), TRAIL_RING_PALE);
+        // Circle over the marker, premultiplied.
+        return vec4<f32>(pale * a + rgb * cov * (1.0 - a), a + cov * (1.0 - a));
+    }
+
+    return vec4<f32>(rgb * cov, cov);
 }
 
 // ---- Melody / bass marks ---------------------------------------------------
@@ -892,7 +963,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // note state: it is drawn at full strength always. A sounding note
     // simply composites over it below (occluding it where the note is
     // opaque, showing it around/through the note otherwise).
-    let idle = idle_marker(d, in.home, aa);
+    let idle = idle_marker(d, in.home, in.visited, in.color.rgb, aa);
 
     // Active over idle, premultiplied: a sounding note draws over its own
     // marker; the marker is unchanged whether or not a note plays.

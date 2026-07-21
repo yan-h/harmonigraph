@@ -27,3 +27,31 @@ by stating which branch is now loaded.
 - Don't use `cargo xtask bundle` from a nested worktree — it resolves the
   topmost workspace and builds main. `update-plugin.sh` exists to sidestep
   this; see its header comment.
+
+## Reading the plugin's live settings back out of Bitwig
+
+When Yan has dialed in a look in the DAW and wants it captured (new
+`ViewConfig::default()`, a bug reproduced against real state), don't guess
+and don't read numbers off a screenshot — the exact values are recoverable:
+
+```sh
+./read-plugin-state.py            # newest project: params, camera, view
+./read-plugin-state.py --rust     # view fields as an impl Default body
+```
+
+**The trap, which costs a round trip with Yan every time it's missed:** the
+UI state (dock, camera, ViewConfig) is written into the plugin state ONLY
+when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`,
+`crates/midi_lattice_3d/src/editor.rs`). Saving a project with the plugin
+window open silently keeps the previous values. So ask Yan for, in order:
+
+1. close the MIDI Lattice 3D **window**, then
+2. save the project (Cmd+S).
+
+Only then run the script. Host-automatable params (tuning, fade, color
+range) are exempt — they live in the param system and are always current,
+which is why a project can show fresh params next to a missing `ui-state`.
+
+The script explains the container format in its header. Projects live under
+Google Drive, not `~/Documents/Bitwig Studio/Projects` (empty); it finds
+them via `mdfind`.

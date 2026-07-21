@@ -83,7 +83,7 @@ pub(super) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         draw_learn_overlay(ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, state.view.show_cents, state.view.meantone);
+        draw_node_labels(ui, rect, &scene, &state.view);
     }
 }
 
@@ -109,23 +109,30 @@ fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
     );
 }
 
-/// Labels on hovered and sounding nodes, drawn as egui text over the 3D
-/// view (projected with the same camera as the nodes): the note name
-/// centered on the node, optionally its pitch class in cents just below.
+/// How readable a label on a visited node is next to a sounding one. Well
+/// below full so the notes actually playing still read first -- but flat,
+/// not scaled by the trail level, because the whole point of keeping the
+/// text is that it can be read: a name at 5% alpha says nothing.
+const TRAIL_LABEL_STRENGTH: f32 = 0.5;
+
+/// Labels on hovered, sounding, and -- with the trail's "Keep note names"
+/// on -- already-visited nodes, drawn as egui text over the 3D view
+/// (projected with the same camera as the nodes): the note name centered on
+/// the node, optionally its pitch class in cents just below.
 fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
     scene: &lattice_scene::Scene,
-    show_cents: bool,
-    meantone: bool,
+    view: &lattice_scene::ViewConfig,
 ) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     for node in &scene.nodes {
+        let trailed = view.trail_labels && node.trail > 0.0;
         // `is_visible` re-checks what `Scene::pick` already enforces,
         // because hover also arrives from the Spectral pane
         // (`nearest_visible_node`), which can land on an off-sheet node.
         // Either way a label only belongs on a node you can actually see.
-        if !(node.hovered || node.activation > 0.0) || !node.is_visible() {
+        if !(node.hovered || node.activation > 0.0 || trailed) || !node.is_visible() {
             continue;
         }
         let Some(p) = projector.project(node.world_pos) else {
@@ -142,14 +149,18 @@ fn draw_node_labels(
             1.0
         } else {
             let t = (node.activation / LABEL_FADE_TAIL).clamp(0.0, 1.0);
-            visibility_floor(node.activation) * t * t * (3.0 - 2.0 * t)
+            let sounding = visibility_floor(node.activation) * t * t * (3.0 - 2.0 * t);
+            // A note's label hands over to its memory's as it dies, so the
+            // text never blinks at the moment the fade completes. The trail
+            // level rides along, so a forgetting note dims out with it.
+            sounding.max(if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 })
         };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);
         // Meantone tempers out the syntonic comma, so drop the comma marks
         // (E- and E name the same pitch).
         let name = node.lattice_pos.note_name();
-        let name = if meantone { name.without_syntonic_commas() } else { name };
+        let name = if view.meantone { name.without_syntonic_commas() } else { name };
         // Monospace for in-lattice text: labels align across nodes and
         // match the technical feel of the readouts.
         outlined_text(
@@ -161,7 +172,7 @@ fn draw_node_labels(
             theme::text().gamma_multiply(strength),
             outline,
         );
-        if show_cents {
+        if view.show_cents {
             outlined_text(
                 ui.painter(),
                 center + egui::vec2(0.0, 9.0),

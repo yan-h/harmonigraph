@@ -112,6 +112,7 @@ fn parity_scene() -> Scene {
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
             bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
+            trail: 0.0,
         });
     }
     let grid = vec![
@@ -150,6 +151,11 @@ fn parity_scene() -> Scene {
         idle_radius: 0.0,
         grid,
         grid_thickness: 1.0,
+        // The parity image is about how a NOTE is drawn; the trail marks
+        // only idle nodes and has its own tests. Off keeps this baseline
+        // comparable to the ones taken before it existed.
+        trail_mark: Default::default(),
+        trail_strength: 0.0,
         node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
         pitch_lut: std::array::from_fn(|k| {
             Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
@@ -387,6 +393,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // rings apart; in the app these are the marked notes' own colors.
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
+        trail: 0.0,
     }];
     scene.grid.clear();
     // Fill a good share of the frame, so the measurements below are
@@ -654,6 +661,7 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
+
 
 
 

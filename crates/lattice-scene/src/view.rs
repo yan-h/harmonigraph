@@ -6,6 +6,7 @@ use crate::skin;
 use crate::style::{
     CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
 };
+use crate::trail::TrailMark;
 use lattice_core::{coords, LatticePos};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
@@ -204,6 +205,33 @@ pub struct ViewConfig {
     /// link from an in-sheet line, and isn't a style choice.
     #[serde(default)]
     pub grid_dashed: bool,
+    // ---- Trail (where the music has already been) ------------------------
+    // The one part of the view about the past rather than the present. It
+    // rides the IDLE layer only -- see the `trail` module for why that is
+    // the whole design and not an implementation detail.
+    /// How a node the music has visited is marked (see [`TrailMark`]). Off
+    /// by default: showing only what is audible is what every saved view
+    /// was drawn with, and leaving marks behind is a deliberate choice.
+    #[serde(default)]
+    pub trail_mark: TrailMark,
+    /// How far the mark departs from a plain idle node, 0..1 — how much
+    /// lighter the Lift grey, how visible the Ring, how much color the
+    /// Tint. 1 is still quiet by construction; every mark is bounded well
+    /// short of reading as a sounding note.
+    #[serde(default = "default_trail_strength")]
+    pub trail_strength: f32,
+    /// Seconds before a pitch is forgotten, measured from when it last
+    /// sounded. **0 means never** -- the default, and the point of the
+    /// feature: a whole piece's territory rather than a rolling window.
+    #[serde(default)]
+    pub trail_memory: f32,
+    /// Keep the note name and cents on a visited node, not just on sounding
+    /// and hovered ones -- so the harmonic space can be read off the screen
+    /// by name, with its tuning. Independent of the mark above: the text is
+    /// its own channel and is useful with the marks off.
+    #[serde(default)]
+    pub trail_labels: bool,
+
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
     /// derived from the fifth (in `root_ui`) and note-name labels drop
@@ -303,6 +331,12 @@ fn default_outer_outer() -> f32 {
 
 fn default_render_scale() -> f32 {
     1.0
+}
+
+/// Half travel on a bar whose whole range is quiet: clearly a different
+/// node, still clearly not a lit one.
+fn default_trail_strength() -> f32 {
+    0.5
 }
 
 /// The grid's color comes from the skin by default, which is the only
@@ -414,28 +448,50 @@ impl Default for ViewConfig {
             // and the octaves carry the node's outline.
             core_solidity: 0.4,
             core_radius: 0.2,
-            outer_inner: 0.45,
-            outer_outer: 1.0,
+            // A narrower octave band, set well off the core and stopping
+            // short of the quad edge, with a tight gap between sectors: the
+            // octaves read as a ring of distinct marks rather than a solid
+            // annulus, and the core keeps clear space around it.
+            outer_inner: 0.605_904,
+            outer_outer: 0.836_332_2,
             outer_backdrop: 0.6,
             legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
-            outer_gap: default_outer_gap(),
-            // Idle nodes are small dots with the grid lines running close
-            // in to them, matching the compact core.
-            idle_marker: IdleMarker::Dot,
+            outer_gap: 0.061_245_676,
+            // No idle marker: the grid lines alone carry the lattice's
+            // shape where nothing is playing, leaving the node positions
+            // themselves empty. (`idle_radius` rides along inert, so
+            // switching a marker back on lands at the compact size that
+            // matches the core.)
+            idle_marker: IdleMarker::None,
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            mark_unlinked: default_mark_unlinked(),
-            mark_thickness: default_mark_thickness(),
+            // The mark rings are thin, and mostly cut away: only the arc
+            // over the marked octave draws at full strength, the rest of
+            // the circle at about a third. Says WHICH octave loudly, at
+            // some cost to reading as a ring.
+            mark_unlinked: 0.371_107_28,
+            mark_thickness: 0.070_653_12,
             grid_color: default_grid_color(),
-            grid_thickness: default_grid_thickness(),
+            grid_thickness: 1.103_806_3,
             grid_inset: 0.3,
             grid_dashed: false,
+            // Trail on, with the note names kept on visited nodes. NOTE:
+            // Lift works by lightening the idle marker, and the marker is
+            // None above, so out of the box the trail shows as the labels
+            // alone. See TrailMark::needs_idle_marker.
+            trail_mark: TrailMark::Lift,
+            trail_strength: default_trail_strength(),
+            trail_memory: 0.0,
+            trail_labels: true,
             meantone: false,
             frameless: false,
             render_scale: default_render_scale(),
-            bloom_strength: 0.5,
+            // A strong halo: the small soft core and the thin octave
+            // marks are quiet shapes, and the bloom is what gives them
+            // presence.
+            bloom_strength: 1.132_461_1,
         }
     }
 }

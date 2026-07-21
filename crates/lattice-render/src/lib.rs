@@ -151,6 +151,10 @@ struct Uniforms {
     /// earlier misc slot is spoken for, so the grid's knob starts a new
     /// one — safe per the note on `misc4`.
     misc5: [f32; 4],
+    /// x: trail mark style (0 off, 1 lift, 2 ring, 3 tint); y: trail
+    /// strength 0..1; z/w unused. Both feed the idle-marker branch alone
+    /// (see `TrailMark`); misc5 is full, so the trail starts its own slot.
+    misc6: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -195,6 +199,10 @@ struct GpuInstance {
     /// it marks.
     melody_color: [f32; 4],
     bass_color: [f32; 4],
+    /// How strongly the music is remembered at this node, 0..1 (see
+    /// `NodeInstance::trail`). Reaches only the shader's idle-marker
+    /// branch — a memory must never read as a sounding note.
+    visited: f32,
 }
 
 impl GpuInstance {
@@ -204,7 +212,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
             5 => Float32, 6 => Float32, 7 => Float32, 8 => Uint32x2,
-            9 => Float32x4, 10 => Float32x4
+            9 => Float32x4, 10 => Float32x4, 11 => Float32
         ],
     };
 }
@@ -321,6 +329,7 @@ impl LatticeCallback {
                 marks: [n.melody_slots, n.bass_slots],
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
+                visited: n.trail,
             })
             .collect();
 
@@ -374,6 +383,12 @@ impl LatticeCallback {
                     scene.mark_unlinked,
                     scene.outer_gap,
                     scene.mark_thickness,
+                ],
+                misc6: [
+                    scene.trail_mark.shader_index() as f32,
+                    scene.trail_strength,
+                    0.0,
+                    0.0,
                 ],
             },
             target_format,
