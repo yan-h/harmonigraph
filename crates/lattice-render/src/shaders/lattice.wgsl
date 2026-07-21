@@ -646,8 +646,8 @@ fn idle_marker(d: f32, home: f32, visited: f32, tint: vec3<f32>, aa: f32) -> vec
 }
 
 // ---- Melody / bass marks ---------------------------------------------------
-// Two full rings concentric with the octave band: the bass just INSIDE it,
-// the melody just OUTSIDE. Radius is what tells them apart -- each ring is
+// Two full rings concentric with the octave band: the melody just INSIDE
+// it, the bass just OUTSIDE. Radius is what tells them apart -- each ring is
 // drawn in its own note's color, not a fixed livery -- and because they
 // never share one, both draw at full weight even when ONE note is both ends
 // of the chord (a lone held note, or a chord whose top and bottom share a
@@ -709,7 +709,7 @@ fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, rest: f32, aa: f32) ->
 }
 
 // Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
-// derived so the melody ring (outside the band) and the bass ring (inside)
+// derived so the bass ring (outside the band) and the melody ring (inside)
 // can share this one body.
 fn mark_ring(
     slots: u32,
@@ -721,7 +721,7 @@ fn mark_ring(
     aa: f32,
 ) -> f32 {
     // No room for this ring: the band's inner radius can be dialed to 0
-    // (pie wedges), which leaves the bass nothing to sit in.
+    // (pie wedges), which leaves the inner ring nothing to sit in.
     if r_out <= 0.0 || r_out <= r_in {
         return 0.0;
     }
@@ -870,13 +870,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ring_w = select(max(ring_thick, outer_aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
     let ring_gap = slice_gap_half() * 2.0;
     let mark_rest = clamp(u.misc5.y, 0.0, 1.0);
-    // Headroom: the band's outer radius can be dialed to 1.0, so the melody
+    // Headroom: the band's outer radius can be dialed to 1.0, so the outer
     // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
     // circle of radius QUAD_MARGIN fits the square quad) and ease it off
     // there, rather than letting the corner clip it flat.
     let lim = QUAD_MARGIN - 0.02;
-    let mel_in = min(band_out + ring_gap, lim);
-    let bass_out = band_in - ring_gap;
+    let outer_in = min(band_out + ring_gap, lim);
+    let inner_out = band_in - ring_gap;
     if outer_on {
         // Sounding slots draw bright, tinted by their own pitch, each
         // fading on its own envelope. The backdrop opacity (its own
@@ -923,18 +923,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // overflow into the headroom is eased to zero by GLYPH_FADE_LIMIT.
     glyph = glyph * (1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d));
 
-    // Melody/bass rings, bracketing the octave band: bass inside, melody
-    // outside. Their own layer, composited over the glyphs — a sector's
-    // color is its pitch, which is what the octave layer is FOR, so nothing
-    // here repaints one.
+    // Melody/bass rings, bracketing the octave band: melody inside, bass
+    // outside — the ring's radius echoes where its note sits in the chord.
+    // Their own layer, composited over the glyphs — a sector's color is its
+    // pitch, which is what the octave layer is FOR, so nothing here
+    // repaints one.
     let melody_cov = mark_ring(
         in.marks.x, in.cents, in.uv,
-        mel_in, min(mel_in + ring_w, lim),
+        inner_out - ring_w, inner_out,
         mark_rest, outer_aa,
     ) * in.params.y;
     let bass_cov = mark_ring(
         in.marks.y, in.cents, in.uv,
-        bass_out - ring_w, bass_out,
+        outer_in, min(outer_in + ring_w, lim),
         mark_rest, outer_aa,
     ) * in.params.z;
     // Disjoint radii, so at most one of the two covers any given pixel.

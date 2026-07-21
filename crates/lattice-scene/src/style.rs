@@ -171,7 +171,7 @@ pub enum HighlightExtremes {
     /// The lowest held note — the bass.
     Bass,
     /// Both. Each ring takes its own note's color, and they are told apart
-    /// by radius (bass inside the octave band, melody outside) rather than
+    /// by radius (melody inside the octave band, bass outside) rather than
     /// by hue. The default: the marks are subtle
     /// enough to live with always-on, and a chord's outer voices are
     /// worth seeing without having to go turn something on first. Blobs

@@ -137,8 +137,8 @@ pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params
                     ),
                 ],
             );
-            // The marks are full rings bracketing the octave band (bass
-            // inside, melody outside), each slit either side of the octave
+            // The marks are full rings bracketing the octave band (melody
+            // inside, bass outside), each slit either side of the octave
             // responsible so that stretch reads as its own piece. This
             // fades everything BUT that stretch, from a whole ring down to
             // just the arc over the marked octave.
