@@ -452,12 +452,12 @@ impl Default for ViewConfig {
             // short of the quad edge, with a tight gap between sectors: the
             // octaves read as a ring of distinct marks rather than a solid
             // annulus, and the core keeps clear space around it.
-            outer_inner: 0.602_400_54,
+            outer_inner: 0.605_904,
             outer_outer: 0.836_332_2,
             outer_backdrop: 0.6,
             legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
-            outer_gap: 0.085_986_16,
+            outer_gap: 0.061_245_676,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so
@@ -467,10 +467,14 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            mark_unlinked: default_mark_unlinked(),
-            mark_thickness: 0.082_711_12,
+            // The mark rings are thin, and mostly cut away: only the arc
+            // over the marked octave draws at full strength, the rest of
+            // the circle at about a third. Says WHICH octave loudly, at
+            // some cost to reading as a ring.
+            mark_unlinked: 0.371_107_28,
+            mark_thickness: 0.070_653_12,
             grid_color: default_grid_color(),
-            grid_thickness: default_grid_thickness(),
+            grid_thickness: 1.103_806_3,
             grid_inset: 0.3,
             grid_dashed: false,
             // Trail on, with the note names kept on visited nodes. NOTE:
@@ -484,7 +488,10 @@ impl Default for ViewConfig {
             meantone: false,
             frameless: false,
             render_scale: default_render_scale(),
-            bloom_strength: 0.5,
+            // A strong halo: the small soft core and the thin octave
+            // marks are quiet shapes, and the bloom is what gives them
+            // presence.
+            bloom_strength: 1.132_461_1,
         }
     }
 }
