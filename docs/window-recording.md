@@ -170,8 +170,8 @@ thread and out to ffmpeg; pool 3-4 readback buffers and memcpy padded rows
 rather than using egui's per-pixel `ColorImage` conversion, whose own
 comment warns it isn't built for video. The redeeming feature: exposing
 `RenderState` is exactly the accessor `editor.rs:24-31` already wants, so
-this patch retires the `ASSUMED_SURFACE_FORMAT` hack at the same time and
-is genuinely upstreamable.
+this patch retires the `ASSUMED_SURFACE_FORMAT` hack at the same time —
+one more entry in `PATCHES.md`, paying for two things.
 
 **Route 4, ScreenCaptureKit/AVFoundation in-process, rejects itself.** The
 TCC screen-recording prompt would be attributed to the *host* — precisely
