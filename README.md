@@ -127,3 +127,24 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   OuterStyle→4, CoreStyle folded into a solidity slider); a final aesthetic
   trim of the 5 surviving node styles is the remaining call. See
   [`docs/deferred-work.md`](docs/deferred-work.md).
+
+## License
+
+Copyright (C) 2026 Yan Han.
+
+MIDI Lattice 3D is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See [`LICENSE`](LICENSE) for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+more details.
+
+The vendored forks under [`vendor/`](vendor) (`baseview`, `egui-baseview`)
+are **not** covered by this license — they remain under their upstream
+`MIT OR Apache-2.0` terms, with their own license files in each directory.
+See [`PATCHES.md`](PATCHES.md) for what was changed and why.
+
+VST is a trademark of Steinberg Media Technologies GmbH.
