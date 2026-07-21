@@ -18,3 +18,14 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+      # lattice-core is MIT OR Apache-2.0 inside a GPL workspace; that split
+      # holds only while it stays self-contained. See ci.sh for the rationale.
+      - name: lattice-core dependency guard
+        run: |
+          deps=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; p=[x for x in json.load(sys.stdin)["packages"] if x["name"]=="lattice-core"][0]; print(" ".join(sorted(d["name"] for d in p["dependencies"])))')
+          if [ -n "$deps" ]; then
+            echo "::error::lattice-core must stay dependency-free (MIT OR Apache-2.0 inside a GPL workspace). Found: $deps"
+            exit 1
+          fi
+          echo "ok — no dependencies"
