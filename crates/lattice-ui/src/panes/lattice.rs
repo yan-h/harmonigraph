@@ -161,29 +161,135 @@ fn draw_node_labels(
         // (E- and E name the same pitch).
         let name = node.lattice_pos.note_name();
         let name = if view.meantone { name.without_syntonic_commas() } else { name };
-        // Monospace for in-lattice text: labels align across nodes and
-        // match the technical feel of the readouts.
-        outlined_text(
+        let name_bottom = draw_stacked_name(
             ui.painter(),
             center,
-            egui::Align2::CENTER_CENTER,
-            name.to_string(),
-            egui::FontId::monospace(12.0),
+            name,
             theme::text().gamma_multiply(strength),
             outline,
         );
         if view.show_cents {
+            let text = format!("{:.2}", node.cents);
+            let font = egui::FontId::monospace(CENTS_SIZE);
+            // Hang the readout off the name's INK, not its galley box: a
+            // monospace box carries enough leading above and below the glyphs
+            // that box-to-box spacing left the two floating far apart.
+            let top = painter_ink(ui.painter(), &text, &font).min.y;
             outlined_text(
                 ui.painter(),
-                center + egui::vec2(0.0, 9.0),
+                center + egui::vec2(0.0, name_bottom + CENTS_GAP - top),
                 egui::Align2::CENTER_TOP,
-                format!("{:.2}", node.cents),
-                egui::FontId::monospace(10.0),
+                text,
+                font,
                 theme::text_dim().gamma_multiply(strength),
                 outline,
             );
         }
     }
+}
+
+/// The note name's letter, the size the label reads at.
+pub(crate) const NAME_SIZE: f32 = 15.0;
+/// The cents readout under it: subordinate to the name, so smaller, and
+/// tucked right beneath it rather than floating free.
+pub(crate) const CENTS_SIZE: f32 = 8.0;
+/// Air between the bottom of the name's glyphs and the top of the cents
+/// readout's. Real pixels of gap, since both ends are measured as ink: the
+/// two are one label, sitting together without crowding.
+pub(crate) const CENTS_GAP: f32 = 3.0;
+/// Accidental and comma marks, relative to the letter. Small enough that the
+/// two of them stacked still fit inside the letter's own height -- the pair
+/// is an annotation on the name, and a label that grows taller than its
+/// letter reads as two lines rather than one name.
+const MARK_SCALE: f32 = 0.55;
+/// The size the marks are actually laid out at.
+pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
+
+/// A note name centered on `anchor`, with its accidental stacked above its
+/// syntonic-comma mark in a single column after the letter (`♯` riding high
+/// like a superscript, `+` low like a subscript). Both marks are counted
+/// rather than repeated (see [`lattice_core::NoteName`]), so even a name
+/// deep in the lattice stays roughly two characters wide instead of
+/// sprawling off its node.
+///
+/// Returns how far the lowest glyph drawn reaches below `anchor.y` -- the
+/// name's ink, not its box -- which is what the cents readout hangs off.
+///
+/// Monospace for in-lattice text: labels align across nodes and match the
+/// technical feel of the readouts.
+pub(crate) fn draw_stacked_name(
+    painter: &egui::Painter,
+    anchor: egui::Pos2,
+    name: lattice_core::NoteName,
+    color: egui::Color32,
+    outline: egui::Color32,
+) -> f32 {
+    let name_font = egui::FontId::monospace(NAME_SIZE);
+    let mark_font = egui::FontId::monospace(MARK_SIZE);
+    let measure = |text: &str, font: &egui::FontId| {
+        painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size()
+    };
+    // Each piece is drawn centered on its own line, so its ink reaches this
+    // far below that line.
+    let ink_below = |text: &str, font: &egui::FontId, size: egui::Vec2| {
+        painter_ink(painter, text, font).max.y - size.y / 2.0
+    };
+
+    let accidental = (name.accidental_mark(), -1.0);
+    let comma = (name.comma_mark(), 1.0);
+    let letter = measure(&name.letter.to_string(), &name_font);
+    let mark_size = |(text, _): &(String, f32)| measure(text, &mark_font);
+    // The two marks share one column, so it is as wide as the wider of them
+    // -- and zero wide for a plain name, which then centers as before.
+    let column = mark_size(&accidental).x.max(mark_size(&comma).x);
+    let left = anchor.x - (letter.x + column) / 2.0;
+
+    let letter_text = name.letter.to_string();
+    outlined_text(
+        painter,
+        egui::pos2(left, anchor.y),
+        egui::Align2::LEFT_CENTER,
+        letter_text.clone(),
+        name_font.clone(),
+        color,
+        outline,
+    );
+    let mut bottom = ink_below(&letter_text, &name_font, letter);
+    for mark in [&accidental, &comma] {
+        let (text, direction) = mark;
+        if text.is_empty() {
+            continue;
+        }
+        // Push each mark out until its own outer edge is flush with the
+        // letter's, which is as far as it can go without standing proud of
+        // the name. That the pair then meets near the middle is what makes
+        // it read as a super/subscript stack rather than two loose glyphs.
+        let size = mark_size(mark);
+        let rise = (letter.y - size.y) / 2.0;
+        outlined_text(
+            painter,
+            egui::pos2(left + letter.x, anchor.y + direction * rise),
+            egui::Align2::LEFT_CENTER,
+            text.clone(),
+            mark_font.clone(),
+            color,
+            outline,
+        );
+        // The comma hangs below the letter's baseline, so it -- not the
+        // letter -- is what the cents readout has to clear.
+        bottom = bottom.max(direction * rise + ink_below(text, &mark_font, size));
+    }
+    bottom
+}
+
+/// The box the glyphs of `text` actually cover, relative to the galley's own
+/// top-left. Distinct from the galley's size, which pads the glyphs out to a
+/// full line box; laying two pieces of text out edge to edge by their boxes
+/// leaves a visible gap that neither piece's ink accounts for.
+fn painter_ink(painter: &egui::Painter, text: &str, font: &egui::FontId) -> egui::Rect {
+    painter
+        .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+        .mesh_bounds
 }
 
 /// Text drawn over the 3D view, haloed so it stays readable whatever

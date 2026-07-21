@@ -432,3 +432,200 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
     assert_eq!(restored.spectrum_config.low_octave, 1);
 }
+
+/// Every text drawn by one pass over a closure, as (rect, text). The halo
+/// stamps each string many times over, so callers fold the stamps of one
+/// piece back together into the box that piece occupies.
+fn drawn_texts(draw: impl Fn(&egui::Painter)) -> Vec<(egui::Rect, String)> {
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+    let output = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| draw(ui.painter()),
+    );
+    output
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => Some((
+                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                text.galley.text().to_owned(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The box one piece of text occupies, halo stamps and all.
+fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
+    texts
+        .iter()
+        .filter(|(_, t)| t == want)
+        .map(|(r, _)| *r)
+        .reduce(|a, b| a.union(b))
+        .unwrap_or_else(|| panic!("no {want:?} drawn, got {texts:?}"))
+}
+
+/// The lattice's note labels stack the accidental over the comma mark in one
+/// column after the letter, so a name deep in the lattice stays narrow. The
+/// whole name still has to sit centered on its node.
+#[test]
+fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = lattice_core::NoteName { letter: 'C', sharps: 5, syntonic_commas: 4 };
+    let texts = drawn_texts(|painter| {
+        panes::lattice::draw_stacked_name(
+            painter,
+            anchor,
+            name,
+            egui::Color32::WHITE,
+            egui::Color32::BLACK,
+        );
+    });
+
+    // Counted marks, not five sharps and four pluses spelled out.
+    let letter = text_box(&texts, "C");
+    let accidental = text_box(&texts, "\u{266F}5");
+    let comma = text_box(&texts, "+4");
+
+    // One column, beginning where the letter ends. (Every box here is grown
+    // by the halo's rim, so the two edges meet to within that much.)
+    const HALO: f32 = 2.0;
+    assert!(
+        (accidental.left() - letter.right()).abs() <= 2.0 * HALO,
+        "marks should follow the letter ({accidental:?} after {letter:?})"
+    );
+    assert!((accidental.left() - comma.left()).abs() < 0.5, "marks share a column");
+    // Superscript over subscript, straddling the letter's own line.
+    assert!(accidental.center().y < letter.center().y, "the accidental rides high");
+    assert!(comma.center().y > letter.center().y, "the comma sits low");
+    // Marks are subordinate to the letter, not the same weight...
+    assert!(accidental.height() < letter.height(), "marks are the smaller size");
+    // ...and neither stands proud of it: the stacked pair has to stay inside
+    // the letter's own height, or the label reads as two lines, not one name.
+    assert!(
+        accidental.top() >= letter.top() - 0.01 && comma.bottom() <= letter.bottom() + 0.01,
+        "marks should not overhang the letter (acc {accidental:?}, comma {comma:?}, \
+         letter {letter:?})"
+    );
+
+    // The name as a whole straddles the node it labels. (The halo is
+    // symmetric, so it grows the box evenly and does not shift the center.)
+    let name_box = letter.union(accidental).union(comma);
+    assert!(
+        (name_box.center().x - anchor.x).abs() < 0.5,
+        "name should center on the node ({name_box:?} vs {anchor:?})"
+    );
+    // ...and stays about as wide as two letters, which is the whole point of
+    // counting the marks rather than repeating them.
+    assert!(
+        name_box.width() < letter.width() * 2.5,
+        "a deep name should still fit a node, got {}",
+        name_box.width()
+    );
+}
+
+/// A plain name has no marks to stack -- nothing extra is drawn, and the
+/// letter alone centers on the node.
+#[test]
+fn a_natural_note_label_is_just_the_letter() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = lattice_core::NoteName { letter: 'G', sharps: 0, syntonic_commas: 0 };
+    let texts = drawn_texts(|painter| {
+        panes::lattice::draw_stacked_name(
+            painter,
+            anchor,
+            name,
+            egui::Color32::WHITE,
+            egui::Color32::BLACK,
+        );
+    });
+    assert!(texts.iter().all(|(_, t)| t == "G"), "only the letter: {texts:?}");
+    assert!((text_box(&texts, "G").center().x - anchor.x).abs() < 0.5);
+}
+
+
+/// The cents readout hangs off the note name's GLYPHS, not its galley box --
+/// a monospace line box carries several pixels of leading below the letter,
+/// and spacing box-to-box left the readout visibly adrift from the name it
+/// belongs to. Drives the whole lattice pane, so it pins what is drawn.
+#[test]
+fn the_cents_readout_sits_right_under_the_note_name() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    state.view.show_labels = true;
+    state.view.show_cents = true;
+    // Middle C: the origin node, which the default camera looks straight at.
+    state.tracker.handle_event(lattice_core::NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: lattice_core::NoteEventKind::On { velocity: 1.0 },
+    });
+
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let output = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
+        |ui| root_ui(ui, &mut state, &backend, 0.0),
+    );
+
+    // A held note lights every node of its pitch class, so each piece of text
+    // turns up once per lit node -- and once per halo stamp on top of that.
+    // Cluster the stamps back into the pieces they were drawn as, keeping the
+    // ink each covers on screen, which is what the eye actually reads.
+    let mut names = Vec::new();
+    let mut cents = Vec::new();
+    for clipped in &output.shapes {
+        let egui::Shape::Text(text) = &clipped.shape else { continue };
+        // Sort by the label's own type sizes, which nothing else in the dock
+        // shares. Not by the text: one pitch class is spelled several ways
+        // across the lattice (C, B\u{266F}, D\u{266D}\u{266D}), and every node
+        // lit by the held note draws its own name.
+        let Some(size) = text.galley.job.sections.first().map(|s| s.format.font_id.size) else {
+            continue;
+        };
+        let pieces = if size == panes::lattice::NAME_SIZE || size == panes::lattice::MARK_SIZE {
+            // Letter and marks together: the readout has to clear the comma,
+            // which hangs lower than the letter does.
+            &mut names
+        } else if size == panes::lattice::CENTS_SIZE {
+            &mut cents
+        } else {
+            continue;
+        };
+        let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+        match pieces.iter_mut().find(|seen: &&mut egui::Rect| seen.intersects(ink)) {
+            Some(seen) => *seen = seen.union(ink),
+            None => pieces.push(ink),
+        }
+    }
+    assert!(!names.is_empty() && !cents.is_empty(), "the held C should be labeled");
+    // Each cluster is the piece's ink grown by the halo's rim in every
+    // direction; take the rim back off to get the glyphs the eye reads.
+    const HALO: f32 = 2.0;
+    for piece in names.iter_mut().chain(cents.iter_mut()) {
+        *piece = piece.shrink(HALO);
+    }
+
+    // Every readout belongs to the name directly above it, and sits the
+    // intended air below it -- not the wider, font-dependent gap that
+    // box-to-box spacing left behind (6px against a 1px constant).
+    for readout in &cents {
+        let name = names
+            .iter()
+            // Overlap, not equal centers: on a node whose name carries marks
+            // the letter is pushed left to make room for the mark column,
+            // while the readout stays centered on the node itself.
+            .filter(|n| n.left() < readout.right() && n.right() > readout.left())
+            .filter(|n| n.bottom() <= readout.top())
+            .min_by(|a, b| (readout.top() - a.bottom()).total_cmp(&(readout.top() - b.bottom())))
+            .unwrap_or_else(|| panic!("no name above {readout:?}, of {names:?}"));
+        let gap = readout.top() - name.bottom();
+        assert!(
+            (gap - panes::lattice::CENTS_GAP).abs() <= 1.0,
+            "cents should sit CENTS_GAP under the name, got {gap}px of ink-to-ink gap"
+        );
+    }
+}
