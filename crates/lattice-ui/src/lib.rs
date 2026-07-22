@@ -307,20 +307,9 @@ pub struct SpectrumConfig {
     /// Scale a note's opacity by its velocity.
     #[serde(default = "default_true")]
     pub roll_velocity_alpha: bool,
-    /// How much a note dims as it ages toward the far edge (0 = not at
-    /// all, 1 = to nothing).
-    #[serde(default = "default_roll_age_fade")]
-    pub roll_age_fade: f32,
     /// Outline every note in its own color, brightened.
     #[serde(default)]
     pub roll_outline: bool,
-    /// Mark each note's attack with a bright cap.
-    #[serde(default = "default_true")]
-    pub roll_onsets: bool,
-    /// Keep still-held notes at full brightness regardless of age fade,
-    /// so what is sounding stands out from what has been.
-    #[serde(default = "default_true")]
-    pub roll_highlight_held: bool,
     /// Seconds between the roll's time gridlines; 0 draws none.
     #[serde(default = "default_roll_grid_seconds")]
     pub roll_grid_seconds: f32,
@@ -390,10 +379,6 @@ fn default_roll_color() -> RollColor {
     RollColor::Channel
 }
 
-fn default_roll_age_fade() -> f32 {
-    0.45
-}
-
 fn default_roll_grid_seconds() -> f32 {
     1.0
 }
@@ -429,10 +414,7 @@ impl Default for SpectrumConfig {
             roll_fill: default_roll_fill(),
             roll_color: default_roll_color(),
             roll_velocity_alpha: true,
-            roll_age_fade: default_roll_age_fade(),
             roll_outline: false,
-            roll_onsets: true,
-            roll_highlight_held: true,
             roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
             show_spectrogram: false,

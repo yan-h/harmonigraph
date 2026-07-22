@@ -192,9 +192,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              each note's fundamental, right under the ribbon) show through; 0 \
              leaves a hollow outline. Below 1 the outline is drawn automatically.",
         );
-    ValueBar::new(&mut cfg.roll_age_fade, 0.0..=1.0, "Age fade")
-        .show(ui)
-        .on_hover_text("How far a note dims as it travels to the far edge");
     ValueBar::new(&mut cfg.roll_grid_seconds, 0.0..=10.0, "Grid (s)")
         .decimals(1)
         .show(ui)
@@ -211,10 +208,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     );
     ui.checkbox(&mut cfg.roll_velocity_alpha, "Velocity opacity")
         .on_hover_text("Quiet notes draw fainter");
-    ui.checkbox(&mut cfg.roll_highlight_held, "Highlight held")
-        .on_hover_text("Notes still sounding keep full brightness");
-    ui.checkbox(&mut cfg.roll_onsets, "Onset caps")
-        .on_hover_text("A bright cap at each note's attack");
     ui.checkbox(&mut cfg.roll_outline, "Outline")
         .on_hover_text("Trace every note in a brightened edge");
     ui.checkbox(&mut cfg.roll_now_line, "Now line")

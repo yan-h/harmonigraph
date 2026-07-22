@@ -89,7 +89,6 @@ pub(super) fn draw_roll(
             continue;
         }
 
-        let live = note.is_live();
         for ((t0, p0), (t1, p1)) in note.segments(now) {
             let (t0, t1) = (t0.max(oldest), t1.max(oldest));
             if t1 < oldest {
@@ -98,16 +97,9 @@ pub(super) fn draw_roll(
             let (d0, d1) = (depth_of(t0), depth_of(t1));
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
-            // Age fade is sampled once per segment, at its midpoint: a
-            // note bent across the window gets a gradient for free, an
-            // unbent one drawn as a single segment reads as one tone.
-            let age = ((now - (t0 + t1) * 0.5) / window).clamp(0.0, 1.0) as f32;
-            let mut alpha = opacity * (1.0 - cfg.roll_age_fade * age);
+            let mut alpha = opacity;
             if cfg.roll_velocity_alpha {
                 alpha *= super::visibility_floor(note.velocity);
-            }
-            if live && cfg.roll_highlight_held {
-                alpha = opacity;
             }
             if alpha <= 0.004 {
                 continue;
@@ -161,18 +153,6 @@ pub(super) fn draw_roll(
                 };
                 painter.add(egui::Shape::convex_polygon(quad, fill, stroke));
             }
-        }
-
-        // Attack cap: a bright line across the ribbon at the note's start,
-        // which is what makes a run of repeated notes countable.
-        if cfg.roll_onsets && note.start >= oldest && ribbon_px >= MIN_RIBBON_PX {
-            let d = depth_of(note.start);
-            let t = scale.t_of(note.start_pitch());
-            let color = note_color(note, cfg, state, note.start_pitch(), opacity);
-            painter.line_segment(
-                [axes.at(t - half, d), axes.at(t + half, d)],
-                egui::Stroke::new(1.5, brighten(color)),
-            );
         }
     }
 
