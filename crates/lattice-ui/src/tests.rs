@@ -410,7 +410,10 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
         .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(i, _)| i as i32)
         .unwrap();
-    assert!((peak - 114).abs() <= 1, "440 Hz should peak at A4 (bucket 114), got {peak}");
+    // A4 is MIDI 69; its bucket scales with the axis resolution.
+    let a4 = ((69.0 - lattice_core::spectrum::SPECTRUM_MIN_MIDI)
+        * lattice_core::spectrum::BINS_PER_SEMITONE as f32) as i32;
+    assert!((peak - a4).abs() <= 1, "440 Hz should peak at A4 (bucket {a4}), got {peak}");
 
     // Once samples stop, the curve hides instead of freezing.
     assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1, &config).is_none());

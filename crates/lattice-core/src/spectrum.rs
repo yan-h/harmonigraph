@@ -17,8 +17,12 @@
 /// gets equal width.
 pub const SPECTRUM_MIN_MIDI: f32 = 12.0;
 pub const SPECTRUM_MAX_MIDI: f32 = 132.0;
-/// Axis resolution: 2 buckets per semitone (50 cents).
-pub const BINS_PER_SEMITONE: usize = 2;
+/// Axis resolution: 4 buckets per semitone (25 cents). Fine enough that a
+/// partial wandering under vibrato/chorus/beating slides between buckets
+/// smoothly instead of staircasing across coarse ones — the parabolic peak
+/// refinement already resolves pitch well below a bucket, so the extra rows
+/// carry real detail rather than interpolation.
+pub const BINS_PER_SEMITONE: usize = 4;
 pub const SPECTRUM_BINS: usize =
     (SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) as usize * BINS_PER_SEMITONE;
 

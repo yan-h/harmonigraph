@@ -55,8 +55,6 @@ pub(super) fn draw_spectrogram(
     }
     let window = cfg.roll_seconds.max(0.05) as f64;
     let depth_span = 1.0 - split;
-    // Same mapping as the roll: `now` at the split, the window's far end at 1.
-    let depth_of = |t: f64| split + ((now - t) / window).clamp(0.0, 1.0) as f32 * depth_span;
     let oldest = now - window;
 
     // The visible buckets (idx, center MIDI, center pitch fraction), one image
@@ -88,38 +86,40 @@ pub(super) fn draw_spectrogram(
         return;
     }
 
-    // The near/far depth the image spans (newest column near the split, oldest
-    // near the far edge) and the pitch fractions of the first/last bins. Bail
-    // on a degenerate span rather than dividing by it.
-    let d_far = depth_of(centers[0]);
-    let d_near = depth_of(centers[w - 1]);
+    // The image covers absolute time `[t_origin, t_origin + w*bucket]` — the
+    // oldest slab's start to the newest slab's end. Its texel centers sit at
+    // the slab centers, so `u = (t - t_origin) / span` places time exactly.
+    let t_origin = centers[0] - 0.5 * bucket;
+    let span = w as f64 * bucket;
     let (t0, tn) = (bins[0].2, bins[h - 1].2);
-    if (d_far - d_near).abs() < 1e-6 || (tn - t0).abs() < 1e-6 {
+    if span < 1e-9 || (tn - t0).abs() < 1e-6 {
         return;
     }
 
     // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
     let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
     let image = egui::ColorImage::new([w, h], pixels);
-    let opts = egui::TextureOptions::LINEAR;
+    let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
     match &mut spectrum.spectrogram_tex {
         Some(handle) => handle.set(image, opts),
         slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
     }
     let Some(tex) = &spectrum.spectrogram_tex else { return };
 
-    // UV of a point: `u` runs oldest(0)->newest(1) along depth, `v` runs
-    // low(0)->high(1) along pitch. Clamped, so the thin slivers past the data
-    // (the last <50 ms, and beyond the oldest slab) take the edge column
-    // rather than leaving a gap — the region stays fully filled.
-    let uv = |d: f32, p: f32| {
-        egui::pos2(
-            ((d_far - d) / (d_far - d_near)).clamp(0.0, 1.0),
-            ((p - t0) / (tn - t0)).clamp(0.0, 1.0),
-        )
-    };
+    // Map a screen depth to the texture's time axis CONTINUOUSLY, through the
+    // roll's own `now`-anchored depth<->time relation (unclamped, the inverse
+    // of `depth_of`). This is the fix for the image not tracking the notes and
+    // for the per-slab stutter: `u` now slides with `now` frame to frame,
+    // exactly as a note ribbon at the same depth does, instead of being pinned
+    // to the slab endpoints (which jump a whole slab at a time). `v` maps pitch
+    // to the bin rows. UVs run past 0..1 in the thin slivers with no data (the
+    // sub-slab at `now`, the bit beyond the oldest slab); ClampToEdge fills
+    // those from the edge column so the plane stays whole.
+    let u_at = |d: f32| ((now - window * ((d - split) / depth_span) as f64 - t_origin) / span) as f32;
+    let v_at = |p: f32| (p - t0) / (tn - t0);
     let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
-    let vert = |p: f32, d: f32| egui::epaint::Vertex { pos: axes.at(p, d), uv: uv(d, p), color: tint };
+    let vert =
+        |p: f32, d: f32| egui::epaint::Vertex { pos: axes.at(p, d), uv: egui::pos2(u_at(d), v_at(p)), color: tint };
 
     // One quad over pitch [0,1] x depth [split,1]; the GPU bilinear-samples it.
     let mut mesh = egui::Mesh::with_texture(tex.id());
