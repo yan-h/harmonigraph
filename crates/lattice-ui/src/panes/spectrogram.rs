@@ -76,31 +76,34 @@ pub(super) fn draw_spectrogram(
         return;
     }
 
-    // The columns inside the window, oldest first, including the one just past
-    // the far edge so the grid reaches depth 1 as columns scroll off. Cap the
-    // grid to about the depth's pixel resolution — more rows than pixels only
-    // costs vertices — striding a long window down to fit.
+    // Aggregate the in-window columns into one grid row per depth pixel,
+    // grouping by a FIXED time grid (each row a `bucket`-second slab) and
+    // taking the element-wise MAX of the columns in it. Two things this buys:
+    // a short, bright note keeps its peak (max, not a dropped sample) and it
+    // stays put as the scroll advances (the slab is a function of absolute
+    // time, not of position in the ring), so it no longer flickers on and off.
+    // With fewer columns than rows each column simply lands in its own slab.
+    let nb = bins.len();
+    let target_rows = (depth_span * axes.depth_len()).round().clamp(2.0, 512.0) as usize;
+    let bucket = window / target_rows as f64;
     let first = history.partition_point(|c| c.time < oldest).saturating_sub(1);
-    let max_cols = (axes.depth_len().ceil() as usize).clamp(2, 600);
-    let available = history.len() - first;
-    let stride = available.div_ceil(max_cols).max(1);
-    let cols: Vec<&crate::SpectrogramColumn> =
-        history.iter().skip(first).step_by(stride).collect();
-    if cols.len() < 2 {
+    let bin_idx: Vec<usize> = bins.iter().map(|&(idx, _, _)| idx).collect();
+    let (centers, power) = aggregate_rows(history.iter().skip(first), &bin_idx, bucket);
+    if centers.len() < 2 {
         return;
     }
 
-    let nb = bins.len();
     let mut mesh = egui::Mesh::default();
-    mesh.reserve_vertices(cols.len() * nb);
-    mesh.reserve_triangles((cols.len() - 1) * (nb - 1) * 2);
+    mesh.reserve_vertices(centers.len() * nb);
+    mesh.reserve_triangles((centers.len() - 1) * (nb - 1) * 2);
 
-    // Vertices: column-major, so vertex (c, r) is at index `c * nb + r`.
-    for col in &cols {
-        let d = depth_of(col.time);
-        for &(idx, midi, t) in &bins {
-            let power = col.power[idx];
-            let level = if power <= NEAR_ZERO { 0.0 } else { loudness(cfg, power, midi) };
+    // Vertices: row-major, so vertex (row, k) is at index `row * nb + k`.
+    for (row, &center) in centers.iter().enumerate() {
+        let d = depth_of(center);
+        let base = row * nb;
+        for (k, &(_, midi, t)) in bins.iter().enumerate() {
+            let p = power[base + k];
+            let level = if p <= NEAR_ZERO { 0.0 } else { loudness(cfg, p, midi) };
             let color = cell_color(cfg.spectrogram_color, level, midi, &state.frame_params, opacity);
             // Axis space -> screen via `at`, so orientation and flips are free.
             mesh.colored_vertex(axes.at(t, d), color);
@@ -108,10 +111,10 @@ pub(super) fn draw_spectrogram(
     }
     // Stitch each 2x2 block of neighbouring vertices into a quad. egui blends
     // the four corner colors across it — the smoothing that removes the blocks.
-    for c in 0..cols.len() - 1 {
-        let (a, b) = (c * nb, (c + 1) * nb);
-        for r in 0..nb - 1 {
-            let (v00, v01, v10, v11) = (a + r, a + r + 1, b + r, b + r + 1);
+    for row in 0..centers.len() - 1 {
+        let (a, b) = (row * nb, (row + 1) * nb);
+        for k in 0..nb - 1 {
+            let (v00, v01, v10, v11) = (a + k, a + k + 1, b + k, b + k + 1);
             mesh.add_triangle(v00 as u32, v10 as u32, v11 as u32);
             mesh.add_triangle(v00 as u32, v11 as u32, v01 as u32);
         }
@@ -119,6 +122,43 @@ pub(super) fn draw_spectrogram(
     if !mesh.is_empty() {
         painter.add(egui::Shape::mesh(mesh));
     }
+}
+
+/// Group `columns` (oldest first) into time-slabs of `bucket` seconds, taking
+/// the element-wise MAX over the bins listed in `bin_idx` within each slab.
+/// Returns each slab's center time and a flat row-major power grid
+/// (`rows * bin_idx.len()`).
+///
+/// The slab a column lands in is `floor(time / bucket)` — a function of
+/// absolute time alone, so it doesn't move as columns scroll off the far end
+/// of the ring. That, plus MAX (rather than dropping samples), is what stops a
+/// short, bright note from flickering: its peak is kept and stays in one
+/// slowly-scrolling slab instead of blinking in and out with the sampling.
+fn aggregate_rows<'a>(
+    columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
+    bin_idx: &[usize],
+    bucket: f64,
+) -> (Vec<f64>, Vec<f32>) {
+    let nb = bin_idx.len();
+    let mut centers: Vec<f64> = Vec::new();
+    let mut power: Vec<f32> = Vec::new();
+    let mut cur_key: Option<i64> = None;
+    for col in columns {
+        let key = (col.time / bucket).floor() as i64;
+        if Some(key) != cur_key {
+            cur_key = Some(key);
+            centers.push((key as f64 + 0.5) * bucket);
+            power.resize(power.len() + nb, 0.0);
+        }
+        let base = power.len() - nb;
+        for (k, &idx) in bin_idx.iter().enumerate() {
+            let p = col.power[idx];
+            if p > power[base + k] {
+                power[base + k] = p;
+            }
+        }
+    }
+    (centers, power)
 }
 
 /// A cell's color: `level` (0..1 loudness) mapped through the chosen ramp.
@@ -185,6 +225,44 @@ fn ramp(t: f32, stops: &[[u8; 3]]) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lattice_core::spectrum::SPECTRUM_BINS;
+
+    /// A column at `time` with the given (bin, power) energy, rest silent.
+    fn col(time: f64, energy: &[(usize, f32)]) -> crate::SpectrogramColumn {
+        let mut power = Box::new([0.0f32; SPECTRUM_BINS]);
+        for &(i, p) in energy {
+            power[i] = p;
+        }
+        crate::SpectrogramColumn { time, power }
+    }
+
+    #[test]
+    fn a_short_loud_column_keeps_its_peak_through_aggregation() {
+        // A brief loud note (a short note) between two quiet columns, all in
+        // one slab. MAX must keep the peak — the flicker came from dropping
+        // exactly this kind of thin, bright sample.
+        let cols = [
+            col(0.00, &[(5, 0.001)]),
+            col(0.02, &[(5, 1.0)]), // the short note
+            col(0.04, &[(5, 0.002)]),
+        ];
+        let (centers, power) = aggregate_rows(cols.iter(), &[5], 1.0);
+        assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
+        assert_eq!(power[0], 1.0, "the short note's peak survives");
+    }
+
+    #[test]
+    fn a_slab_is_anchored_to_absolute_time_not_ring_position() {
+        // The same note must land in the same slab whether or not older
+        // columns are still present — otherwise scrolling would shift it and
+        // it would shimmer. A note at t=2.6 sits in slab floor(2.6)=2.
+        let with_old = [col(0.1, &[(0, 0.1)]), col(2.6, &[(0, 0.5)])];
+        let (c_full, _) = aggregate_rows(with_old.iter(), &[0], 1.0);
+        let just_note = [col(2.6, &[(0, 0.5)])];
+        let (c_scrolled, _) = aggregate_rows(just_note.iter(), &[0], 1.0);
+        assert!(c_full.contains(&2.5), "slab center is 2.5 with old columns");
+        assert!(c_scrolled.contains(&2.5), "and still 2.5 after they scroll off");
+    }
 
     #[test]
     fn ramp_hits_its_endpoints_and_midpoint() {
