@@ -55,6 +55,8 @@ pub(super) fn draw_spectrogram(
     }
     let window = cfg.roll_seconds.max(0.05) as f64;
     let depth_span = 1.0 - split;
+    // `now` at the split, the window's far end at 1 (the roll's mapping).
+    let depth_of = |t: f64| split + ((now - t) / window).clamp(0.0, 1.0) as f32 * depth_span;
     let oldest = now - window;
 
     // The visible buckets (idx, center MIDI, center pitch fraction), one image
@@ -81,6 +83,7 @@ pub(super) fn draw_spectrogram(
     let first = spectrum.history().partition_point(|c| c.time < oldest).saturating_sub(1);
     let bin_idx: Vec<usize> = bins.iter().map(|&(idx, _, _)| idx).collect();
     let (centers, power) = aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket);
+    let newest = spectrum.history().back().map_or(now, |c| c.time);
     let (w, h) = (centers.len(), bins.len());
     if w < 2 {
         return;
@@ -121,12 +124,23 @@ pub(super) fn draw_spectrogram(
     let vert =
         |p: f32, d: f32| egui::epaint::Vertex { pos: axes.at(p, d), uv: egui::pos2(u_at(d), v_at(p)), color: tint };
 
-    // One quad over pitch [0,1] x depth [split,1]; the GPU bilinear-samples it.
+    // The near edge fills to the split (the now-line) while fresh columns keep
+    // arriving, but stops at the newest data's depth once it goes stale. That
+    // stall happens most visibly when switching the window algorithm, which
+    // empties the ring for a window's worth of samples: without this the last
+    // slice before the switch gets ClampToEdge-smeared over the growing gap up
+    // to `now`. The grace keeps the ordinary ~one-FFT lag from opening a
+    // flickering sliver — only a real stall (longer than a couple of FFTs)
+    // recedes, showing the roll's well through the gap instead of a smear.
+    const FRESH: f64 = 0.12;
+    let d_near = if now - newest <= FRESH { split } else { depth_of(newest) };
+
+    // One quad over pitch [0,1] x depth [d_near,1]; the GPU bilinear-samples it.
     let mut mesh = egui::Mesh::with_texture(tex.id());
     mesh.vertices.push(vert(0.0, 1.0)); // far, low
     mesh.vertices.push(vert(1.0, 1.0)); // far, high
-    mesh.vertices.push(vert(1.0, split)); // near, high
-    mesh.vertices.push(vert(0.0, split)); // near, low
+    mesh.vertices.push(vert(1.0, d_near)); // near, high
+    mesh.vertices.push(vert(0.0, d_near)); // near, low
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
     painter.add(egui::Shape::mesh(mesh));
