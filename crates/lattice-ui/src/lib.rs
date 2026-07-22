@@ -85,21 +85,27 @@ pub enum SpectrumLabels {
 /// spectrum curve, voice bars, piano roll — turns together.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectralOrientation {
-    /// Follow the pane's shape: a pane taller than it is wide goes
-    /// vertical, otherwise horizontal. Means the pane reads correctly
-    /// both under the lattice and beside it, with no setting to change.
+    /// Follow the pane's shape: time runs along the LONG side (so a
+    /// scrolling spectrogram gets the room), pitch across the short one.
+    /// Reads correctly both under the lattice and beside it, no setting to
+    /// change.
     #[default]
     Auto,
-    /// Pitch left-to-right; the spectrum grows upward from the bottom.
+    /// "Across": time runs left(now)->right(past) along the pane, pitch
+    /// climbs bottom->top, and the spectrum sits on the left, joined to the
+    /// spectrogram. (Serialized name kept from when this meant pitch axis.)
     Horizontal,
-    /// Pitch bottom-to-top; the spectrum grows rightward from the left.
-    /// The classic piano-roll orientation.
+    /// "Upright": time runs top(now)->bottom(past) down the pane, pitch runs
+    /// left->right, and the spectrum sits on top, joined to the spectrogram.
     Vertical,
 }
 
 impl SpectralOrientation {
-    /// Resolve [`Auto`](Self::Auto) against the pane it is drawing into.
-    fn is_vertical(self, rect: egui::Rect) -> bool {
+    /// Whether TIME (the spectrogram/roll axis) runs vertically down the
+    /// pane, with pitch across it. Resolves [`Auto`](Self::Auto) to the
+    /// pane's long side. (The boolean matches the old pitch-axis flag, so
+    /// only its interpretation in [`Axes`](crate::panes) changed.)
+    fn is_time_vertical(self, rect: egui::Rect) -> bool {
         match self {
             SpectralOrientation::Auto => rect.height() > rect.width(),
             SpectralOrientation::Horizontal => false,
@@ -223,11 +229,6 @@ pub struct SpectrumConfig {
     /// standalone: a synth on the held notes).
     #[serde(default = "default_true")]
     pub show_audio: bool,
-    /// Grow the spectrum from the now-line (its baseline joins the roll /
-    /// spectrogram) instead of from the outer edge. The pitch/frequency
-    /// labels move to the baseline with it.
-    #[serde(default)]
-    pub spectrum_flip: bool,
     pub window: SpectrumWindow,
     /// Bottom of the dB height scale; a full-scale sine sits at 0 dB.
     pub floor_db: f32,
@@ -371,7 +372,6 @@ impl Default for SpectrumConfig {
         SpectrumConfig {
             orientation: SpectralOrientation::Auto,
             show_audio: true,
-            spectrum_flip: false,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             smoothing: 0.55,

@@ -74,7 +74,18 @@ pub(super) fn draw_roll(
     let opacity = cfg.roll_opacity.clamp(0.0, 1.0);
     let oldest = now - window;
 
-    for note in state.tracker.roll().notes() {
+    // Draw in a stable order (the live notes come out of a HashMap, whose
+    // iteration order varies per run): with translucent glows the paint order
+    // of overlapping notes is visible, and the offline render must be
+    // byte-identical between runs.
+    let mut notes: Vec<&RollNote> = state.tracker.roll().notes().collect();
+    notes.sort_unstable_by(|a, b| {
+        a.start
+            .total_cmp(&b.start)
+            .then(a.channel.cmp(&b.channel))
+            .then(a.note.cmp(&b.note))
+    });
+    for note in notes {
         // Entirely past the window's far end, or entirely off the octave
         // zoom (both endpoints outside and on the same side, so a note
         // that merely crosses the edge still draws its visible part).
