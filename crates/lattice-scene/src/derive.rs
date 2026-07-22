@@ -17,6 +17,27 @@ use lattice_core::{ChannelRole, LatticePos, NoteTracker, Tuning};
 /// Identifies one voice, matching `NoteTracker`'s own held-voice key.
 type VoiceKey = (u8, u8);
 
+/// A melody- or bass-ring accumulator for one node: which octave slots it
+/// marks, plus the color and envelope of the strongest marking voice seen so
+/// far. The `>=` in [`Mark::add`] means ties favor the later voice, so a
+/// release crossfading two voices lands on the newer color.
+#[derive(Default)]
+struct Mark {
+    slots: u32,
+    level: f32,
+    color: Vec4,
+}
+
+impl Mark {
+    fn add(&mut self, slot: usize, envelope: f32, color: Vec4) {
+        self.slots |= 1 << slot;
+        if envelope >= self.level {
+            self.level = envelope;
+            self.color = color;
+        }
+    }
+}
+
 /// The highest and lowest HELD voices, as the caller asked for them —
 /// either is `None` when that end isn't being marked or nothing is held.
 ///
@@ -99,12 +120,8 @@ pub fn derive_scene(
         let mut color = idle_color(view);
         let mut outlined = false;
         let mut seed = 0.0f32;
-        let mut melody_slots = 0u32;
-        let mut bass_slots = 0u32;
-        let mut melody_level = 0.0f32;
-        let mut bass_level = 0.0f32;
-        let mut melody_color = Vec4::ZERO;
-        let mut bass_color = Vec4::ZERO;
+        let mut melody = Mark::default();
+        let mut bass = Mark::default();
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
@@ -151,18 +168,10 @@ pub fn derive_scene(
                     )
                     .lerp(Vec4::ONE, MARK_WHITEN);
                     if is_melody {
-                        melody_slots |= 1 << slot;
-                        if envelope >= melody_level {
-                            melody_level = envelope;
-                            melody_color = own;
-                        }
+                        melody.add(slot, envelope, own);
                     }
                     if is_bass {
-                        bass_slots |= 1 << slot;
-                        if envelope >= bass_level {
-                            bass_level = envelope;
-                            bass_color = own;
-                        }
+                        bass.add(slot, envelope, own);
                     }
                 }
             }
@@ -190,12 +199,12 @@ pub fn derive_scene(
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
             cents: node_pc.to_cents(),
-            melody_slots,
-            bass_slots,
-            melody_level,
-            bass_level,
-            melody_color,
-            bass_color,
+            melody_slots: melody.slots,
+            bass_slots: bass.slots,
+            melody_level: melody.level,
+            bass_level: bass.level,
+            melody_color: melody.color,
+            bass_color: bass.color,
             trail: 0.0,
         });
         node_pcs.push(node_pc);

@@ -280,6 +280,10 @@ struct LatticeCallback {
     render_scale: f32,
 }
 
+/// One pass of the bloom chain: the pipeline to run, its bind group, and the
+/// texture it renders into. See [`LatticeCallback::run_bloom_chain`].
+type BloomStep<'a> = (&'a wgpu::RenderPipeline, &'a wgpu::BindGroup, &'a wgpu::TextureView);
+
 impl LatticeCallback {
     fn from_scene(
         scene: &Scene,
@@ -409,7 +413,7 @@ impl LatticeCallback {
         resources: &LatticeResources,
         offscreen: &Offscreen,
     ) {
-        let steps: [(&wgpu::RenderPipeline, &wgpu::BindGroup, &wgpu::TextureView); 4] = [
+        let steps: [BloomStep; 4] = [
             (&resources.bright_pipeline, &offscreen.bright_bind_group, &offscreen.half_view),
             (
                 &resources.downsample_pipeline,
@@ -897,11 +901,19 @@ impl LatticeResources {
             PaneBuffers {
                 uniform_buffer,
                 bind_group,
-                instance_buffer: create_instance_buffer(device, 256),
-                instance_capacity: 256,
+                instance_buffer: create_vertex_buffer::<GpuInstance>(
+                    device,
+                    "lattice_instances",
+                    INITIAL_INSTANCE_CAPACITY,
+                ),
+                instance_capacity: INITIAL_INSTANCE_CAPACITY,
                 instance_count: 0,
-                edge_buffer: create_edge_buffer(device, 64),
-                edge_capacity: 64,
+                edge_buffer: create_vertex_buffer::<GpuEdge>(
+                    device,
+                    "lattice_edges",
+                    INITIAL_EDGE_CAPACITY,
+                ),
+                edge_capacity: INITIAL_EDGE_CAPACITY,
                 edge_count: 0,
                 offscreen: None,
             }
@@ -920,19 +932,18 @@ impl LatticeResources {
     }
 }
 
-fn create_instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("lattice_instances"),
-        size: (capacity * std::mem::size_of::<GpuInstance>()) as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
+/// Starting element counts for a pane's per-instance and per-edge buffers;
+/// both grow by `next_power_of_two` when a frame overflows them.
+const INITIAL_INSTANCE_CAPACITY: usize = 256;
+const INITIAL_EDGE_CAPACITY: usize = 64;
 
-fn create_edge_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+/// A `capacity`-element vertex buffer (VERTEX | COPY_DST) sized for `T`.
+/// Used for both the instance and edge buffers, which differ only in label
+/// and element type.
+fn create_vertex_buffer<T>(device: &wgpu::Device, label: &str, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("lattice_edges"),
-        size: (capacity * std::mem::size_of::<GpuEdge>()) as u64,
+        label: Some(label),
+        size: (capacity * std::mem::size_of::<T>()) as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
@@ -1003,7 +1014,11 @@ impl CallbackTrait for LatticeCallback {
 
         if self.instances.len() > pane.instance_capacity {
             pane.instance_capacity = self.instances.len().next_power_of_two();
-            pane.instance_buffer = create_instance_buffer(device, pane.instance_capacity);
+            pane.instance_buffer = create_vertex_buffer::<GpuInstance>(
+                device,
+                "lattice_instances",
+                pane.instance_capacity,
+            );
         }
         pane.instance_count = self.instances.len() as u32;
         if !self.instances.is_empty() {
@@ -1016,7 +1031,8 @@ impl CallbackTrait for LatticeCallback {
 
         if self.edges.len() > pane.edge_capacity {
             pane.edge_capacity = self.edges.len().next_power_of_two();
-            pane.edge_buffer = create_edge_buffer(device, pane.edge_capacity);
+            pane.edge_buffer =
+                create_vertex_buffer::<GpuEdge>(device, "lattice_edges", pane.edge_capacity);
         }
         pane.edge_count = self.edges.len() as u32;
         if !self.edges.is_empty() {

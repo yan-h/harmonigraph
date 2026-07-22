@@ -3,7 +3,7 @@
 
 use crate::widgets::button_row;
 use crate::{theme, SharedState};
-use super::{nearest_visible_node, KEY_NAMES};
+use super::{display_note_name, nearest_visible_node, KEY_NAMES};
 
 pub(super) fn console_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     button_row(ui, |ui| {
@@ -52,12 +52,7 @@ pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .show(ui, |ui| {
             for voice in voices {
                 let node = nearest_visible_node(&state.view, &state.tuning, voice.pitch_class)
-                    .map(|pos| {
-                        let name = pos.note_name();
-                        let name =
-                            if state.view.meantone { name.without_syntonic_commas() } else { name };
-                        name.to_string()
-                    });
+                    .map(|pos| display_note_name(pos, state.view.meantone).to_string());
                 let line = format!(
                     "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",
                     name = KEY_NAMES[usize::from(voice.note % 12)],

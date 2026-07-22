@@ -141,6 +141,13 @@ impl EditorShared {
         }
     }
 
+    /// The host sample rate the audio thread published, as an f32. It lives
+    /// in an `AtomicU32` as the f32's bit pattern (a lock-free f32); this
+    /// names the bit-cast so its readers can't spell it inconsistently.
+    fn sample_rate(&self) -> f32 {
+        f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
+    }
+
     /// Frames the transport must be still before OnTransportStop ends a
     /// take. At the editor's repaint rate this is a fraction of a second
     /// — long enough to ride out a host reporting one stalled block,
@@ -251,7 +258,7 @@ impl EditorShared {
             self.audio_buf.push(sample);
         }
         if self.ui.spectrum_config.show_audio && !self.audio_buf.is_empty() {
-            let sample_rate = f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed));
+            let sample_rate = self.sample_rate();
             self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now);
         }
     }
@@ -348,7 +355,7 @@ fn frame(
         ui.ctx().request_repaint();
     }
     shared.drain_audio(now);
-    let sample_rate = f32::from_bits(shared.sample_rate_bits.load(Ordering::Relaxed));
+    let sample_rate = shared.sample_rate();
     shared.sync_take(sample_rate);
 
     let backend = PluginParamBackend {

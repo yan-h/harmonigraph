@@ -137,13 +137,17 @@ impl RenderRequest {
     }
 }
 
+/// The user's home directory, or `.` when `HOME` is unset — the base for the
+/// renderer and takes locations below.
+fn home_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+}
+
 /// Where `update-plugin.sh` installs the renderer, and where the plugin
 /// looks when the path setting is left empty. A fixed location beats
 /// guessing at the host's working directory or the bundle's own path.
 pub fn default_renderer_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    std::path::Path::new(&home)
-        .join("Library/Application Support/MIDI Lattice 3D/lattice-offline")
+    home_dir().join("Library/Application Support/MIDI Lattice 3D/lattice-offline")
 }
 
 /// The audio-thread half: push entries, gated by an atomic the GUI owns.
@@ -385,8 +389,7 @@ fn take_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("LATTICE_TAKE_DIR") {
         return std::path::PathBuf::from(dir);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    std::path::Path::new(&home).join("Music").join("MIDI Lattice 3D Takes")
+    home_dir().join("Music").join("MIDI Lattice 3D Takes")
 }
 
 /// Build the ring and start the writer thread. Called once, from the

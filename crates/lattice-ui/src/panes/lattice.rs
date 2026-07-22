@@ -1,9 +1,8 @@
 //! The 3D lattice view pane: orbit camera on drag, zoom on scroll, node
 //! labels, and the tuning-learn overlay.
 
-use super::visibility_floor;
+use super::{display_note_name, learn_pulse, visibility_floor};
 use crate::{theme, SharedState};
-use super::learn_pulse;
 use egui::Sense;
 use lattice_render::lattice_paint_callback;
 use lattice_scene::{derive_scene, Camera, Projection};
@@ -157,10 +156,7 @@ fn draw_node_labels(
         };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);
-        // Meantone tempers out the syntonic comma, so drop the comma marks
-        // (E- and E name the same pitch).
-        let name = node.lattice_pos.note_name();
-        let name = if view.meantone { name.without_syntonic_commas() } else { name };
+        let name = display_note_name(node.lattice_pos, view.meantone);
         let name_bottom = draw_stacked_name(
             ui.painter(),
             center,

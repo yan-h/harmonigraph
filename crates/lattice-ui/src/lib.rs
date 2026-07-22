@@ -398,6 +398,10 @@ impl Default for SpectrumConfig {
     }
 }
 
+/// One power value per pitch-spectrum bucket, the array the analyzer fills
+/// and the pane draws. See [`lattice_core::spectrum::SPECTRUM_BINS`].
+type SpectrumBuckets = [f32; lattice_core::spectrum::SPECTRUM_BINS];
+
 /// Audio-derived pitch spectrum shown in the Spectral pane. The shell
 /// feeds mono samples every frame from wherever its audio comes from
 /// (plugin: input bus via a ring buffer; standalone: the mock synth); the
@@ -405,9 +409,9 @@ impl Default for SpectrumConfig {
 pub struct AudioSpectrum {
     analyzer: lattice_core::spectrum::SpectrumAnalyzer,
     /// Smoothed display buckets (power; the pane maps to height).
-    display: [f32; lattice_core::spectrum::SPECTRUM_BINS],
+    display: SpectrumBuckets,
     /// Decaying per-bucket maxima for the peak-hold outline.
-    peaks: [f32; lattice_core::spectrum::SPECTRUM_BINS],
+    peaks: SpectrumBuckets,
     /// When the FFT last ran, on the shell clock. The FFT is throttled
     /// well below frame rate — it feeds a meter, not an oscilloscope.
     last_fft: Option<f64>,
@@ -428,7 +432,7 @@ pub struct AudioSpectrum {
 /// shell clock, so it can be placed on the roll's time axis.
 pub struct SpectrogramColumn {
     pub time: f64,
-    pub power: Box<[f32; lattice_core::spectrum::SPECTRUM_BINS]>,
+    pub power: Box<SpectrumBuckets>,
 }
 
 impl Default for AudioSpectrum {
@@ -467,15 +471,11 @@ impl AudioSpectrum {
     /// Advance the display (runs the FFT at most every FFT_INTERVAL under
     /// the config's window/smoothing) and return (levels, peak-holds) to
     /// draw, or None while no audio is flowing.
-    #[allow(clippy::type_complexity)]
     pub fn display(
         &mut self,
         now: f64,
         config: &SpectrumConfig,
-    ) -> Option<(
-        &[f32; lattice_core::spectrum::SPECTRUM_BINS],
-        &[f32; lattice_core::spectrum::SPECTRUM_BINS],
-    )> {
+    ) -> Option<(&SpectrumBuckets, &SpectrumBuckets)> {
         // A window change mid-stream just refills the ring; the display
         // holds its last values until the new window fills.
         self.analyzer.set_fft_size(config.window.samples());
@@ -516,11 +516,7 @@ impl AudioSpectrum {
     const HISTORY_MAX: usize = 4000;
 
     /// Append one raw spectrum to the ring, trimming the far past.
-    fn push_history(
-        &mut self,
-        now: f64,
-        power: [f32; lattice_core::spectrum::SPECTRUM_BINS],
-    ) {
+    fn push_history(&mut self, now: f64, power: SpectrumBuckets) {
         self.history.push_back(SpectrogramColumn { time: now, power: Box::new(power) });
         let oldest_kept = now - Self::HISTORY_SECONDS;
         while self
@@ -814,11 +810,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         dt,
         cpu_ms,
         now,
-        state.tracker.voices().count(),
-        state.tracker.held_count(),
-        state.view.visible_count(),
-        state.view.render_scale,
-        animating,
+        perf::Workload {
+            active_voices: state.tracker.voices().count(),
+            held_voices: state.tracker.held_count(),
+            visible_nodes: state.view.visible_count(),
+            render_scale: state.view.render_scale,
+            animating,
+        },
     );
     if state.view.show_perf {
         perf::draw_overlay(ui.ctx(), ui.max_rect(), &state.perf);

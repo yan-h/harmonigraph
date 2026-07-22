@@ -23,6 +23,11 @@ const EVENT_RING_CAPACITY: usize = 4096;
 /// meter would rather skip than stall the audio thread.
 const AUDIO_RING_CAPACITY: usize = 65_536;
 
+/// Sample rate assumed until the host reports the real one in `initialize`.
+/// Held in two representations (the f64 `sample_rate` field and the f32 bit
+/// pattern in `sample_rate_bits`), so derive both from one constant.
+const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
+
 pub struct MidiLattice3d {
     params: Arc<MidiLattice3dParams>,
     note_producer: rtrb::Producer<CoreNoteEvent>,
@@ -177,7 +182,7 @@ impl Default for MidiLattice3d {
     fn default() -> Self {
         let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
         let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
-        let sample_rate_bits = Arc::new(AtomicU32::new(44_100.0f32.to_bits()));
+        let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
         let (take, take_control) = take::channel();
         let take_events = Arc::new(AtomicU64::new(0));
         MidiLattice3d {
@@ -192,7 +197,7 @@ impl Default for MidiLattice3d {
                 take_control,
                 take_events.clone(),
             ))),
-            sample_rate: 44_100.0,
+            sample_rate: DEFAULT_SAMPLE_RATE,
             samples_processed: 0,
             take,
             take_events,

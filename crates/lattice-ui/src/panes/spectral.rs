@@ -10,7 +10,7 @@
 use super::visibility_floor;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::{theme, SharedState};
-use super::{nearest_visible_node, section, KEY_NAMES};
+use super::{nearest_visible_node, scene_color, section, KEY_NAMES};
 use lattice_core::notes::{display_octave_of, octave_start_midi};
 use egui::Sense;
 use lattice_scene::channel_color;
@@ -610,8 +610,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                 state.frame_params.darkest_pitch,
                 state.frame_params.brightest_pitch,
             );
-            let color =
-                egui::Color32::from_rgb((c.x * 255.0) as u8, (c.y * 255.0) as u8, (c.z * 255.0) as u8);
+            let color = scene_color(c, 1.0);
             painter.line_segment(
                 [axes.at(t, split), axes.at(t, split - depth)],
                 egui::Stroke::new(3.0, color),

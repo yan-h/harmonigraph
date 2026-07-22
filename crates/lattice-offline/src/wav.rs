@@ -55,12 +55,21 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
 
+/// The WAV `fmt ` chunk's fields: encoding tag, channel count, sample rate,
+/// and bit depth. Internal to [`decode`], not the on-disk layout.
+struct WavFormat {
+    tag: u16,
+    channels: u16,
+    rate: u32,
+    bits: u16,
+}
+
 pub fn decode(bytes: &[u8]) -> Result<Audio, String> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err("not a RIFF/WAVE file".into());
     }
 
-    let mut format: Option<(u16, u16, u32, u16)> = None; // tag, channels, rate, bits
+    let mut format: Option<WavFormat> = None;
     let mut data: Option<&[u8]> = None;
     let mut at = 12;
     while at + 8 <= bytes.len() {
@@ -76,7 +85,12 @@ pub fn decode(bytes: &[u8]) -> Result<Audio, String> {
                 // WAVE_FORMAT_EXTENSIBLE stores the real tag in its GUID's
                 // first two bytes; DAWs write it for anything above stereo.
                 let tag = if tag == 0xFFFE && body.len() >= 26 { u16_at(body, 24) } else { tag };
-                format = Some((tag, u16_at(body, 2), u32_at(body, 4), u16_at(body, 14)));
+                format = Some(WavFormat {
+                    tag,
+                    channels: u16_at(body, 2),
+                    rate: u32_at(body, 4),
+                    bits: u16_at(body, 14),
+                });
             }
             b"data" => data = Some(body),
             _ => {}
@@ -85,7 +99,7 @@ pub fn decode(bytes: &[u8]) -> Result<Audio, String> {
         at = body_at + size + (size & 1);
     }
 
-    let (tag, channels, rate, bits) = format.ok_or("no fmt chunk")?;
+    let WavFormat { tag, channels, rate, bits } = format.ok_or("no fmt chunk")?;
     let data = data.ok_or("no data chunk")?;
     if channels == 0 {
         return Err("fmt chunk claims zero channels".into());
