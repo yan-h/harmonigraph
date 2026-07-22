@@ -138,6 +138,15 @@ impl Camera {
         Mat4::look_at_rh(self.eye(), self.target, Vec3::Y)
     }
 
+    /// The orthographic projection whose window is the perspective frustum's
+    /// cross-section at the target. Shared by the `Orthographic` and
+    /// `Cabinet` projections (Cabinet post-multiplies a shear onto it).
+    fn ortho(&self, aspect: f32) -> Mat4 {
+        let half_h = self.distance * (self.fov_y * 0.5).tan();
+        let half_w = half_h * aspect;
+        Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
+    }
+
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         // Both glam _rh constructors produce 0..1 clip-space depth, which
         // is what wgpu expects.
@@ -149,21 +158,14 @@ impl Camera {
             // The ortho window is the perspective frustum's cross-section
             // at the target, so toggling projections keeps the framing at
             // the focus plane, and zoom (distance) keeps scaling the view.
-            Projection::Orthographic => {
-                let half_h = self.distance * (self.fov_y * 0.5).tan();
-                let half_w = half_h * aspect;
-                Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR)
-            }
+            Projection::Orthographic => self.ortho(aspect),
             // Orthographic window plus a shear: view-space depth relative
             // to the focus plane becomes a screen offset along
             // `cabinet_angle` scaled by `cabinet_scale`. The focus plane
             // itself is unmoved (the shear's translation term cancels
             // there), so framing still matches the other projections.
             Projection::Cabinet => {
-                let half_h = self.distance * (self.fov_y * 0.5).tan();
-                let half_w = half_h * aspect;
-                let ortho =
-                    Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, CLIP_NEAR, CLIP_FAR);
+                let ortho = self.ortho(aspect);
                 let (sin, cos) = self.cabinet_angle.sin_cos();
                 let (kx, ky) = (self.cabinet_scale * cos, self.cabinet_scale * sin);
                 let mut shear = Mat4::IDENTITY;
