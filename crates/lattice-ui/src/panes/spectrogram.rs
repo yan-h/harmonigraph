@@ -33,6 +33,14 @@ const NEAR_ZERO: f32 = 1e-9;
 /// single bilinear-filtered quad — smooth in both axes, and opaque (silence is
 /// the ramp's dark end, not transparent) so the plane is a filled image rather
 /// than bright patches floating on the background.
+/// One visible spectrogram row: the source spectrum bucket, its center MIDI
+/// pitch, and that pitch's fraction `t` up the pitch axis.
+struct Bin {
+    idx: usize,
+    midi: f32,
+    t: f32,
+}
+
 pub(super) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -61,11 +69,11 @@ pub(super) fn draw_spectrogram(
     // filtering carry the visible range cleanly to its edges.
     let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
     let margin = (bin_semis / scale.span).min(0.5);
-    let bins: Vec<(usize, f32, f32)> = (0..SPECTRUM_BINS)
+    let bins: Vec<Bin> = (0..SPECTRUM_BINS)
         .filter_map(|idx| {
             let midi = SPECTRUM_MIN_MIDI + (idx as f32 + 0.5) * bin_semis;
             let t = scale.t_of(midi);
-            (t > -margin && t < 1.0 + margin).then_some((idx, midi, t))
+            (t > -margin && t < 1.0 + margin).then_some(Bin { idx, midi, t })
         })
         .collect();
     if bins.len() < 2 {
@@ -83,7 +91,7 @@ pub(super) fn draw_spectrogram(
     const MIN_BUCKET: f64 = 0.08;
     let bucket = (window / target_cols as f64).max(MIN_BUCKET);
     let first = spectrum.history().partition_point(|c| c.time < oldest).saturating_sub(1);
-    let bin_idx: Vec<usize> = bins.iter().map(|&(idx, _, _)| idx).collect();
+    let bin_idx: Vec<usize> = bins.iter().map(|b| b.idx).collect();
     let (centers, mut power) = aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket);
     let newest = spectrum.history().back().map_or(now, |c| c.time);
     let (w, h) = (centers.len(), bins.len());
@@ -98,7 +106,7 @@ pub(super) fn draw_spectrogram(
     // the slab centers, so `u = (t - t_origin) / span` places time exactly.
     let t_origin = centers[0] - 0.5 * bucket;
     let span = w as f64 * bucket;
-    let (t0, tn) = (bins[0].2, bins[h - 1].2);
+    let (t0, tn) = (bins[0].t, bins[h - 1].t);
     if span < 1e-9 || (tn - t0).abs() < 1e-6 {
         return;
     }
@@ -224,17 +232,17 @@ fn fill_pixels(
     cfg: &SpectrumConfig,
     frame: &FrameParams,
     w: usize,
-    bins: &[(usize, f32, f32)],
+    bins: &[Bin],
     power: &[f32],
 ) -> Vec<Color32> {
     let h = bins.len();
     let mut pixels = vec![Color32::BLACK; w * h];
     for x in 0..w {
         let base = x * h;
-        for (y, &(_, midi, _)) in bins.iter().enumerate() {
+        for (y, bin) in bins.iter().enumerate() {
             let p = power[base + y];
-            let level = if p <= NEAR_ZERO { 0.0 } else { loudness(cfg, p, midi) };
-            pixels[y * w + x] = cell_color(cfg.spectrogram_color, level, midi, frame);
+            let level = if p <= NEAR_ZERO { 0.0 } else { loudness(cfg, p, bin.midi) };
+            pixels[y * w + x] = cell_color(cfg.spectrogram_color, level, bin.midi, frame);
         }
     }
     pixels
@@ -342,7 +350,11 @@ mod tests {
         let cfg = SpectrumConfig::default();
         let frame = FrameParams::default();
         let w = 2;
-        let bins = [(10usize, 40.0f32, 0.1f32), (11, 41.0, 0.2), (12, 42.0, 0.3)];
+        let bins = [
+            Bin { idx: 10, midi: 40.0, t: 0.1 },
+            Bin { idx: 11, midi: 41.0, t: 0.2 },
+            Bin { idx: 12, midi: 42.0, t: 0.3 },
+        ];
         let mut power = vec![0.0f32; w * bins.len()]; // row-major [slab][bin]
         power[bins.len() + 2] = 1.0; // slab 1, bin 2 loud
         let px = fill_pixels(&cfg, &frame, w, &bins, &power);
