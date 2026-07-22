@@ -810,11 +810,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         dt,
         cpu_ms,
         now,
-        state.tracker.voices().count(),
-        state.tracker.held_count(),
-        state.view.visible_count(),
-        state.view.render_scale,
-        animating,
+        perf::Workload {
+            active_voices: state.tracker.voices().count(),
+            held_voices: state.tracker.held_count(),
+            visible_nodes: state.view.visible_count(),
+            render_scale: state.view.render_scale,
+            animating,
+        },
     );
     if state.view.show_perf {
         perf::draw_overlay(ui.ctx(), ui.max_rect(), &state.perf);

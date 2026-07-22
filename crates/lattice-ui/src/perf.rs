@@ -17,6 +17,35 @@ const SMOOTH: f32 = 0.1;
 /// so once a second is plenty and keeps it off the per-frame path.
 const MEM_INTERVAL: f64 = 1.0;
 
+/// One interactive frame's workload: what the overlay reports as the load
+/// driving the frame rate and CPU cost. Built by the shell each frame and
+/// folded in via [`PerfStats::record`].
+#[derive(Clone, Copy)]
+pub(crate) struct Workload {
+    pub(crate) active_voices: usize,
+    pub(crate) held_voices: usize,
+    pub(crate) visible_nodes: usize,
+    pub(crate) render_scale: f32,
+    /// Whether the last frame was repainting continuously (something moving)
+    /// rather than idling. The FPS number means different things in each: idle
+    /// caps at the ~20 Hz poll by design, so a low idle rate is not a problem.
+    pub(crate) animating: bool,
+}
+
+impl Default for Workload {
+    fn default() -> Self {
+        // render_scale is the 1.0 identity, not 0.0, so an unmeasured frame
+        // reads as "full scale, idle".
+        Workload {
+            active_voices: 0,
+            held_voices: 0,
+            visible_nodes: 0,
+            render_scale: 1.0,
+            animating: false,
+        }
+    }
+}
+
 /// Rolling performance numbers, updated once per interactive frame. Runtime
 /// only — never persisted, and never touched by the offline renderer.
 pub struct PerfStats {
@@ -32,14 +61,9 @@ pub struct PerfStats {
     rss_bytes: u64,
     /// Shell-clock time of the last memory read, to throttle it.
     last_mem_read: f64,
-    active_voices: usize,
-    held_voices: usize,
-    visible_nodes: usize,
-    render_scale: f32,
-    /// Whether the last frame was repainting continuously (something moving)
-    /// rather than idling. The FPS number means different things in each: idle
-    /// caps at the ~20 Hz poll by design, so a low idle rate is not a problem.
-    animating: bool,
+    /// This frame's workload (voice counts, visible nodes, render scale,
+    /// whether it was animating).
+    workload: Workload,
 }
 
 impl Default for PerfStats {
@@ -49,11 +73,7 @@ impl Default for PerfStats {
             cpu_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
-            active_voices: 0,
-            held_voices: 0,
-            visible_nodes: 0,
-            render_scale: 1.0,
-            animating: false,
+            workload: Workload::default(),
         }
     }
 }
@@ -62,27 +82,12 @@ impl PerfStats {
     /// Fold this frame's measurements in. `dt` is egui's stable frame time,
     /// `cpu_ms` the measured dock-build time, `now` the shell clock (for
     /// throttling the memory read).
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record(
-        &mut self,
-        dt: f32,
-        cpu_ms: f32,
-        now: f64,
-        active_voices: usize,
-        held_voices: usize,
-        visible_nodes: usize,
-        render_scale: f32,
-        animating: bool,
-    ) {
+    pub(crate) fn record(&mut self, dt: f32, cpu_ms: f32, now: f64, workload: Workload) {
         if dt > 0.0 {
             self.frame_dt += (dt - self.frame_dt) * SMOOTH;
         }
         self.cpu_ms += (cpu_ms - self.cpu_ms) * SMOOTH;
-        self.active_voices = active_voices;
-        self.held_voices = held_voices;
-        self.visible_nodes = visible_nodes;
-        self.render_scale = render_scale;
-        self.animating = animating;
+        self.workload = workload;
         if now - self.last_mem_read >= MEM_INTERVAL {
             self.rss_bytes = rss_bytes();
             self.last_mem_read = now;
@@ -105,14 +110,14 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     let fps = perf.fps();
     // Only flag a low rate while something is actually animating — an idle
     // editor is meant to drop to the poll rate, so a low idle number is fine.
-    let health = if perf.animating && fps < 30.0 {
+    let health = if perf.workload.animating && fps < 30.0 {
         egui::Color32::from_rgb(0xE5, 0x7A, 0x5A) // warm red
-    } else if perf.animating && fps < 50.0 {
+    } else if perf.workload.animating && fps < 50.0 {
         egui::Color32::from_rgb(0xE0, 0xB0, 0x4A) // amber
     } else {
         egui::Color32::from_rgb(0x7A, 0xC8, 0x8A) // calm green
     };
-    let state = if perf.animating { "live" } else { "idle" };
+    let state = if perf.workload.animating { "live" } else { "idle" };
 
     let dim = egui::Color32::from_gray(0x9A);
     let bright = egui::Color32::from_gray(0xE6);
@@ -131,7 +136,7 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "n/a".to_string()
     };
-    let fading = perf.active_voices.saturating_sub(perf.held_voices);
+    let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
 
     egui::Area::new(egui::Id::new("perf_overlay"))
         .order(egui::Order::Foreground)
@@ -157,11 +162,14 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
                     row(ui, "frame", format!("{:.1} ms", perf.frame_dt * 1000.0));
                     row(ui, "ui cpu", format!("{:.1} ms", perf.cpu_ms));
                     row(ui, "memory", memory);
-                    row(ui, "voices", format!("{} held · {fading} fading", perf.held_voices));
+                    row(ui, "voices", format!("{} held · {fading} fading", perf.workload.held_voices));
                     row(
                         ui,
                         "nodes",
-                        format!("{}  ·  {:.2}× scale", perf.visible_nodes, perf.render_scale),
+                        format!(
+                            "{}  ·  {:.2}× scale",
+                            perf.workload.visible_nodes, perf.workload.render_scale
+                        ),
                     );
                 });
         });
@@ -222,7 +230,7 @@ mod tests {
         assert!((perf.fps() - 60.0).abs() < 1.0);
         // Feed a steady 30 Hz; the EMA should chase it down.
         for _ in 0..500 {
-            perf.record(1.0 / 30.0, 2.0, 0.0, 0, 0, 0, 1.0, true);
+            perf.record(1.0 / 30.0, 2.0, 0.0, Workload { animating: true, ..Default::default() });
         }
         assert!((perf.fps() - 30.0).abs() < 0.5, "fps = {}", perf.fps());
     }
@@ -230,10 +238,21 @@ mod tests {
     #[test]
     fn records_workload_and_reads_memory() {
         let mut perf = PerfStats::default();
-        perf.record(1.0 / 60.0, 1.5, 1.0, 5, 3, 49, 2.0, true);
-        assert_eq!(perf.active_voices, 5);
-        assert_eq!(perf.held_voices, 3);
-        assert_eq!(perf.visible_nodes, 49);
+        perf.record(
+            1.0 / 60.0,
+            1.5,
+            1.0,
+            Workload {
+                active_voices: 5,
+                held_voices: 3,
+                visible_nodes: 49,
+                render_scale: 2.0,
+                animating: true,
+            },
+        );
+        assert_eq!(perf.workload.active_voices, 5);
+        assert_eq!(perf.workload.held_voices, 3);
+        assert_eq!(perf.workload.visible_nodes, 49);
         // The first read always fires (last_mem_read starts at -inf). On the
         // platforms with a reader it must return a real footprint; elsewhere
         // 0 ("n/a") is the documented result.
@@ -244,14 +263,14 @@ mod tests {
     #[test]
     fn memory_read_is_throttled_to_one_per_interval() {
         let mut perf = PerfStats::default();
-        perf.record(1.0 / 60.0, 1.0, 10.0, 0, 0, 0, 1.0, false);
+        perf.record(1.0 / 60.0, 1.0, 10.0, Workload::default());
         let first = perf.last_mem_read;
         assert_eq!(first, 10.0);
         // A read less than MEM_INTERVAL later must not refresh the timestamp.
-        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL / 2.0, 0, 0, 0, 1.0, false);
+        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
         assert_eq!(perf.last_mem_read, first, "read again too soon");
         // Past the interval, it refreshes.
-        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL, 0, 0, 0, 1.0, false);
+        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL, Workload::default());
         assert_eq!(perf.last_mem_read, 10.0 + MEM_INTERVAL);
     }
 }
