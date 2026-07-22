@@ -27,6 +27,15 @@ pub fn microcents(cents: f32) -> i32 {
     (f64::from(cents) * f64::from(CENTS_TO_MICROCENTS)).round() as i32
 }
 
+/// Convert integer microcents back to cents, the inverse of [`microcents`],
+/// for the display / host-param boundary. Takes any integer that widens
+/// losslessly to `i64` (the `u32` pitch-class storage and the `i32` tuning
+/// steps both do); every microcent value in the lattice fits in `i32`, so
+/// widening before the `as f32` cast is bit-identical to casting directly.
+fn cents(microcents: impl Into<i64>) -> f32 {
+    microcents.into() as f32 / CENTS_TO_MICROCENTS as f32
+}
+
 /// The syntonic comma (81/80, ~21.506¢): the gap between four just fifths
 /// and a just major third. Meantone temperaments temper it out.
 pub const SYNTONIC_COMMA: f32 = 4.0 * THREE_JUST - 2.0 * 1200.0 - FIVE_JUST;
@@ -74,7 +83,7 @@ impl PitchClass {
     }
 
     pub fn to_cents(self) -> f32 {
-        self.0 as f32 / CENTS_TO_MICROCENTS as f32
+        cents(self.0)
     }
 
     /// Distance to another pitch class, accounting for octave wraparound
@@ -122,7 +131,7 @@ impl PitchClassDistance {
     }
 
     pub fn to_cents(self) -> f32 {
-        self.0 as f32 / CENTS_TO_MICROCENTS as f32
+        cents(self.0)
     }
 }
 
@@ -202,20 +211,20 @@ impl Tuning {
 
     /// Step sizes back in cents, for the display / host-param boundary.
     pub fn c_offset_cents(&self) -> f32 {
-        self.c_offset as f32 / CENTS_TO_MICROCENTS as f32
+        cents(self.c_offset)
     }
     pub fn three_cents(&self) -> f32 {
-        self.three as f32 / CENTS_TO_MICROCENTS as f32
+        cents(self.three)
     }
     pub fn five_cents(&self) -> f32 {
-        self.five as f32 / CENTS_TO_MICROCENTS as f32
+        cents(self.five)
     }
     pub fn seven_cents(&self) -> f32 {
-        self.seven as f32 / CENTS_TO_MICROCENTS as f32
+        cents(self.seven)
     }
     /// The matching tolerance in cents, for the display / host-param layer.
     pub fn tolerance_cents(&self) -> f32 {
-        self.tolerance as f32 / CENTS_TO_MICROCENTS as f32
+        cents(self.tolerance)
     }
 }
 

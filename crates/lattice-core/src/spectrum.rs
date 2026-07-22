@@ -27,11 +27,11 @@ pub const BINS_PER_SEMITONE: usize = 8;
 pub const SPECTRUM_BINS: usize =
     (SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) as usize * BINS_PER_SEMITONE;
 
-/// Frequency of a (fractional) MIDI pitch at A440.
 /// Normalized magnitude below which a spectral peak is treated as noise
 /// and skipped entirely.
 const PEAK_FLOOR: f32 = 1e-4;
 
+/// Frequency of a (fractional) MIDI pitch at A440.
 pub fn midi_to_hz(midi: f32) -> f32 {
     440.0 * ((midi - 69.0) / 12.0).exp2()
 }
