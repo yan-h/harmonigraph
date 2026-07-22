@@ -130,7 +130,13 @@ pub(super) fn draw_roll(
                 passes.push((width + g * 1.5, 0.20 * g));
             }
             passes.push((width, 1.0));
-            let stroke_color = |af: f32| brighten(note_color(note, cfg, state, pitch, alpha * af));
+            // The crisp outline (af == 1) is the note's TRUE color, so it
+            // matches the same note on the lattice; only the fainter glow
+            // passes brighten, toward the bloom halo.
+            let stroke_color = |af: f32| {
+                let c = note_color(note, cfg, state, pitch, alpha * af);
+                if af >= 1.0 { c } else { brighten(c) }
+            };
 
             if ribbon_px < MIN_RIBBON_PX {
                 // Too thin to bound: the note IS its spine.
