@@ -18,42 +18,12 @@ use lattice_scene::channel_color;
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{
-        RollColor, SpectralOrientation, SpectralPlacement, SpectrogramColor, SpectrumLabels,
-        SpectrumWindow,
-    };
+    use crate::{RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow};
 
     // ---- Layout ---------------------------------------------------------
-    // Placement rebuilds the dock, so it needs the whole state; everything
-    // below only touches the config.
+    // Just the orientation now; drag the pane wherever you like (egui_dock
+    // docks it freely), and Auto follows the shape it lands in.
     section(ui, "Layout");
-    button_row(ui, |ui| {
-        ui.label("Place").on_hover_text(
-            "Where the Spectral pane sits. Changing this rebuilds the pane \
-             arrangement, discarding any hand-docking.",
-        );
-        for (placement, label, hint) in [
-            (
-                SpectralPlacement::Below,
-                "Below lattice",
-                "A wide strip under the lattice: what sounds is directly \
-                 under what lights up",
-            ),
-            (
-                SpectralPlacement::Right,
-                "Right of lattice",
-                "A tall strip beside the lattice — with Auto orientation \
-                 this turns the pane into an upright piano roll",
-            ),
-        ] {
-            let selected = state.spectrum_config.placement == placement;
-            if ui.selectable_label(selected, label).on_hover_text(hint).clicked() && !selected {
-                state.spectrum_config.placement = placement;
-                state.reset_dock_layout();
-            }
-        }
-    });
-
     let cfg = &mut state.spectrum_config;
     choice_row(
         ui,
@@ -69,14 +39,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (SpectralOrientation::Vertical, "Upright", "Pitch bottom to top"),
         ],
     );
-    button_row(ui, |ui| {
-        ui.checkbox(&mut cfg.flip_pitch, "Flip pitch")
-            .on_hover_text("Run the pitch axis the other way (high notes first)");
-        ui.checkbox(&mut cfg.flip_depth, "Flip depth").on_hover_text(
-            "Put the baseline on the opposite edge: the spectrum hangs \
-             instead of standing, and the roll flows the other way",
-        );
-    });
 
     // ---- Audio spectrum -------------------------------------------------
     section(ui, "Spectrum");
@@ -290,31 +252,24 @@ pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f3
 ///   stands up from) and 1 the far edge (where the roll's oldest notes
 ///   are).
 ///
-/// Orientation and the two flips are all handled inside [`at`](Self::at);
-/// nothing else in the pane names a screen side.
+/// Orientation is handled inside [`at`](Self::at); nothing else in the pane
+/// names a screen side. Pitch always ascends (left-to-right, or bottom-to-top)
+/// and the spectrum always stands up from its baseline — the only two valid
+/// layouts — so there is nothing to flip.
 #[derive(Clone, Copy)]
 pub(super) struct Axes {
     pub rect: egui::Rect,
     /// Pitch runs up the pane rather than across it.
     vertical: bool,
-    flip_pitch: bool,
-    flip_depth: bool,
 }
 
 impl Axes {
     fn new(rect: egui::Rect, cfg: &crate::SpectrumConfig) -> Axes {
-        Axes {
-            rect,
-            vertical: cfg.orientation.is_vertical(rect),
-            flip_pitch: cfg.flip_pitch,
-            flip_depth: cfg.flip_depth,
-        }
+        Axes { rect, vertical: cfg.orientation.is_vertical(rect) }
     }
 
     /// The screen point at pitch fraction `p` and depth fraction `d`.
     pub fn at(&self, p: f32, d: f32) -> egui::Pos2 {
-        let p = if self.flip_pitch { 1.0 - p } else { p };
-        let d = if self.flip_depth { 1.0 - d } else { d };
         if self.vertical {
             // Pitch climbs the pane (low notes at the bottom, a keyboard
             // stood on end); depth runs out from the left edge.
@@ -370,17 +325,16 @@ impl Axes {
     /// The pitch fraction under a screen position — the inverse of the
     /// pitch half of [`at`](Self::at). Unclamped.
     fn pitch_at(&self, pos: egui::Pos2) -> f32 {
-        let t = if self.vertical {
+        if self.vertical {
             (self.rect.bottom() - pos.y) / self.rect.height().max(1.0)
         } else {
             (pos.x - self.rect.left()) / self.rect.width().max(1.0)
-        };
-        if self.flip_pitch { 1.0 - t } else { t }
+        }
     }
 
     /// Anchor and alignment for a text label at `(p, d)`, offset `along`
     /// pixels up the pitch axis and `into` pixels up the depth axis, and
-    /// growing in those same directions. One helper covers all four
+    /// growing in those same directions. One helper covers both
     /// orientations: the growth direction is read off the axes rather
     /// than case-matched per side.
     fn text_anchor(&self, p: f32, d: f32, along: f32, into: f32) -> (egui::Pos2, egui::Align2) {
@@ -674,20 +628,15 @@ mod tests {
     const TALL: egui::Rect =
         egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(110.0, 320.0) };
 
-    fn axes(rect: egui::Rect, orientation: SpectralOrientation, flips: (bool, bool)) -> Axes {
-        let cfg = SpectrumConfig {
-            orientation,
-            flip_pitch: flips.0,
-            flip_depth: flips.1,
-            ..Default::default()
-        };
+    fn axes(rect: egui::Rect, orientation: SpectralOrientation) -> Axes {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
         Axes::new(rect, &cfg)
     }
 
     /// Pitch runs left to right along the bottom; depth stands up from it.
     #[test]
     fn across_puts_the_baseline_on_the_bottom_edge() {
-        let a = axes(WIDE, SpectralOrientation::Horizontal, (false, false));
+        let a = axes(WIDE, SpectralOrientation::Horizontal);
         assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 120.0), "low pitch, baseline");
         assert_eq!(a.at(1.0, 0.0), egui::pos2(310.0, 120.0), "high pitch, baseline");
         assert_eq!(a.at(0.0, 1.0), egui::pos2(10.0, 20.0), "low pitch, far edge");
@@ -699,7 +648,7 @@ mod tests {
     /// keyboard stood on end); depth runs out to the right.
     #[test]
     fn upright_puts_the_baseline_on_the_left_edge() {
-        let a = axes(TALL, SpectralOrientation::Vertical, (false, false));
+        let a = axes(TALL, SpectralOrientation::Vertical);
         assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 320.0), "low pitch, baseline");
         assert_eq!(a.at(1.0, 0.0), egui::pos2(10.0, 20.0), "high pitch, baseline");
         assert_eq!(a.at(0.0, 1.0), egui::pos2(110.0, 320.0), "low pitch, far edge");
@@ -709,26 +658,15 @@ mod tests {
 
     #[test]
     fn auto_orientation_follows_the_pane_shape() {
-        let wide = axes(WIDE, SpectralOrientation::Auto, (false, false));
-        let tall = axes(TALL, SpectralOrientation::Auto, (false, false));
+        let wide = axes(WIDE, SpectralOrientation::Auto);
+        let tall = axes(TALL, SpectralOrientation::Auto);
         // Same corner, opposite meanings: on the wide pane the far end of
         // the pitch axis is to the right, on the tall one it is up.
         assert_eq!(wide.at(1.0, 0.0), egui::pos2(310.0, 120.0));
         assert_eq!(tall.at(1.0, 0.0), egui::pos2(10.0, 20.0));
     }
 
-    #[test]
-    fn the_flips_reverse_exactly_one_axis_each() {
-        let plain = axes(WIDE, SpectralOrientation::Horizontal, (false, false));
-        let pitch = axes(WIDE, SpectralOrientation::Horizontal, (true, false));
-        let depth = axes(WIDE, SpectralOrientation::Horizontal, (false, true));
-        assert_eq!(pitch.at(0.0, 0.0), plain.at(1.0, 0.0));
-        assert_eq!(pitch.at(0.0, 1.0), plain.at(1.0, 1.0));
-        assert_eq!(depth.at(0.0, 0.0), plain.at(0.0, 1.0));
-        assert_eq!(depth.at(1.0, 0.0), plain.at(1.0, 1.0));
-    }
-
-    /// Hover has to name the pitch the pointer is actually over, in every
+    /// Hover has to name the pitch the pointer is actually over, in either
     /// orientation — the readout and the lattice highlight both hang off
     /// this one inverse.
     #[test]
@@ -739,17 +677,12 @@ mod tests {
                 SpectralOrientation::Horizontal,
                 SpectralOrientation::Vertical,
             ] {
-                for flips in [(false, false), (true, false), (false, true), (true, true)] {
-                    let a = axes(rect, orientation, flips);
-                    for step in 0..=10 {
-                        let p = step as f32 / 10.0;
-                        // Any depth: the inverse reads the pitch axis only.
-                        let back = a.pitch_at(a.at(p, 0.37));
-                        assert!(
-                            (back - p).abs() < 1e-4,
-                            "{orientation:?} {flips:?}: {p} -> {back}"
-                        );
-                    }
+                let a = axes(rect, orientation);
+                for step in 0..=10 {
+                    let p = step as f32 / 10.0;
+                    // Any depth: the inverse reads the pitch axis only.
+                    let back = a.pitch_at(a.at(p, 0.37));
+                    assert!((back - p).abs() < 1e-4, "{orientation:?}: {p} -> {back}");
                 }
             }
         }
@@ -761,7 +694,7 @@ mod tests {
     /// that code was written for.
     #[test]
     fn gridline_labels_land_where_they_always_did_on_a_wide_pane() {
-        let a = axes(WIDE, SpectralOrientation::Horizontal, (false, false));
+        let a = axes(WIDE, SpectralOrientation::Horizontal);
         let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
         assert_eq!(pos, egui::pos2(163.0, 118.0));
         assert_eq!(align, egui::Align2::LEFT_BOTTOM);
@@ -772,16 +705,11 @@ mod tests {
     #[test]
     fn label_anchors_grow_into_the_pane() {
         for orientation in [SpectralOrientation::Horizontal, SpectralOrientation::Vertical] {
-            for flips in [(false, false), (true, false), (false, true), (true, true)] {
-                let a = axes(WIDE, orientation, flips);
-                let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
-                // A nominal 40x12 label placed by this anchor.
-                let box_ = align.anchor_size(pos, egui::vec2(40.0, 12.0));
-                assert!(
-                    WIDE.contains_rect(box_),
-                    "{orientation:?} {flips:?}: {box_:?} escapes {WIDE:?}"
-                );
-            }
+            let a = axes(WIDE, orientation);
+            let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
+            // A nominal 40x12 label placed by this anchor.
+            let box_ = align.anchor_size(pos, egui::vec2(40.0, 12.0));
+            assert!(WIDE.contains_rect(box_), "{orientation:?}: {box_:?} escapes {WIDE:?}");
         }
     }
 
@@ -810,11 +738,9 @@ mod tests {
                 SpectralOrientation::Horizontal,
                 SpectralOrientation::Vertical,
             ] {
-                for flips in [(false, false), (true, true)] {
-                    for roll_fraction in [0.0, 0.55, 1.0] {
-                        let shapes = paint(rect, orientation, flips, roll_fraction);
-                        assert!(shapes > 0, "{orientation:?} {flips:?} drew nothing");
-                    }
+                for roll_fraction in [0.0, 0.55, 1.0] {
+                    let shapes = paint(rect, orientation, roll_fraction);
+                    assert!(shapes > 0, "{orientation:?} drew nothing");
                 }
             }
         }
@@ -822,16 +748,9 @@ mod tests {
 
     /// Run one frame of the Spectral pane into `rect` and count the shapes
     /// it emitted.
-    fn paint(
-        rect: egui::Rect,
-        orientation: SpectralOrientation,
-        flips: (bool, bool),
-        roll_fraction: f32,
-    ) -> usize {
+    fn paint(rect: egui::Rect, orientation: SpectralOrientation, roll_fraction: f32) -> usize {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = orientation;
-        state.spectrum_config.flip_pitch = flips.0;
-        state.spectrum_config.flip_depth = flips.1;
         state.spectrum_config.roll_fraction = roll_fraction;
         state.spectrum_config.roll_outline = true;
         state.spectrum_config.roll_fill = 0.5; // translucent fill + auto-outline path

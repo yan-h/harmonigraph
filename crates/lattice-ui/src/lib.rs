@@ -108,20 +108,6 @@ impl SpectralOrientation {
     }
 }
 
-/// Where the Spectral pane sits in the default pane arrangement. Changing
-/// it rebuilds the dock (the arrangement is otherwise persisted forever).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SpectralPlacement {
-    /// A wide strip under the lattice (the original layout): what sounds
-    /// is directly under what lights up.
-    #[default]
-    Below,
-    /// A tall strip between the lattice and the settings column. Paired
-    /// with [`SpectralOrientation::Auto`] this turns the pane vertical,
-    /// which is also the natural piano-roll orientation.
-    Right,
-}
-
 /// What colors a note in the piano roll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RollColor {
@@ -227,19 +213,12 @@ impl Default for RenderConfig {
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
-    /// Which way the pitch axis runs; see [`SpectralOrientation`].
+    /// Horizontal (pitch left-to-right) or vertical (pitch bottom-to-top),
+    /// or Auto to follow the pane's shape; see [`SpectralOrientation`]. Those
+    /// are the only orientations offered — the spectrum always stands up from
+    /// its baseline with pitch ascending, so there is nothing to flip.
     #[serde(default)]
     pub orientation: SpectralOrientation,
-    /// Reverse the pitch axis (high notes first).
-    #[serde(default)]
-    pub flip_pitch: bool,
-    /// Put the baseline on the opposite edge: the spectrum hangs down
-    /// instead of standing up (and the roll flows the other way).
-    #[serde(default)]
-    pub flip_depth: bool,
-    /// Where the pane sits when the layout is (re)built.
-    #[serde(default)]
-    pub placement: SpectralPlacement,
     /// Analyze and overlay the shell's audio (plugin: the input bus;
     /// standalone: a synth on the held notes).
     #[serde(default = "default_true")]
@@ -391,9 +370,6 @@ impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
             orientation: SpectralOrientation::Auto,
-            flip_pitch: false,
-            flip_depth: false,
-            placement: SpectralPlacement::Below,
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
@@ -652,7 +628,7 @@ pub struct CameraPreset {
 /// column on the right, console and notes tucked below that. Users can
 /// re-dock at runtime; the result persists via UiPersist, and the View
 /// pane's "Reset layout" button returns here.
-fn default_dock(placement: SpectralPlacement) -> DockState<panes::Tab> {
+fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [lattice, right] = surface.split_right(
@@ -668,23 +644,16 @@ fn default_dock(placement: SpectralPlacement) -> DockState<panes::Tab> {
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
     surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
-    // The fractions differ because the strip's short side is what matters:
-    // a wide strip under the lattice needs less of the height than a tall
-    // strip beside it needs of the (already narrowed) width.
-    match placement {
-        SpectralPlacement::Below => {
-            surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
-        }
-        SpectralPlacement::Right => {
-            surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
-        }
-    }
+    // Spectral as a wide strip under the lattice: what sounds is directly
+    // under what lights up. Drag it wherever from here — egui_dock docks it
+    // freely, and the Spectral pane's orientation follows the shape it lands.
+    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
     dock
 }
 
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        let dock = default_dock(SpectralPlacement::default());
+        let dock = default_dock();
 
         SharedState {
             tracker: NoteTracker::new(),
@@ -819,7 +788,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Deferred from the View pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
-        state.dock = default_dock(state.spectrum_config.placement);
+        state.dock = default_dock();
     }
 
     // Render continuously only while something is animating (sounding or
