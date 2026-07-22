@@ -17,7 +17,7 @@ use egui::Color32;
 use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 use lattice_scene::{channel_color, FrameParams};
 
-use super::spectral::{loudness, Axes, PitchScale};
+use super::spectral::{loudness, Axes, PitchScale, TimeAxis};
 use super::PITCH_RAMP_CHANNEL;
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
@@ -53,16 +53,24 @@ pub(super) fn draw_spectrogram(
     // texture handle) without fighting the config/frame reads.
     let cfg = state.spectrum_config;
     let frame = state.frame_params;
+    // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
+    // the whole take laid out statically (offline playhead mode).
+    let time = TimeAxis::new(state, split, now);
+    let whole = state.whole_song.as_ref();
     let spectrum = &mut state.spectrum;
     let opacity = cfg.spectrogram_opacity.clamp(0.0, 1.0);
-    if opacity <= 0.0 || spectrum.history().len() < 2 {
+    // Columns come from the precomputed whole-take set (playhead mode) or the
+    // live ring.
+    let enough = match whole {
+        Some(ws) => ws.columns.len() >= 2,
+        None => spectrum.history().len() >= 2,
+    };
+    if opacity <= 0.0 || !enough {
         return;
     }
-    let window = cfg.roll_seconds.max(0.05) as f64;
     let depth_span = 1.0 - split;
-    // `now` at the split, the window's far end at 1 (the roll's mapping).
-    let depth_of = |t: f64| split + ((now - t) / window).clamp(0.0, 1.0) as f32 * depth_span;
-    let oldest = now - window;
+    let window = time.window();
+    let oldest = time.oldest();
 
     // The visible buckets (idx, center MIDI, center pitch fraction), one image
     // row each, low pitch first. A bucket of slack on each side lets the
@@ -83,17 +91,28 @@ pub(super) fn draw_spectrogram(
     // Aggregate the in-window columns into one image column per depth pixel by
     // a FIXED time grid, MAX within each slab (keeps a short note's peak and
     // pins it against the scroll — see `aggregate_rows`).
-    let target_cols = (depth_span * axes.depth_len()).round().clamp(2.0, 512.0) as usize;
+    // One image column per output depth pixel; whole-song spans the entire
+    // take, so it needs a higher cap than the live window.
+    let col_cap = if whole.is_some() { 4096.0 } else { 512.0 };
+    let target_cols = (depth_span * axes.depth_len()).round().clamp(2.0, col_cap) as usize;
     // Never subdivide finer than the data arrives (~50 ms FFT period, plus a
     // little for frame jitter). A shorter bucket leaves empty buckets between
     // columns, and the texture's linear time axis assumes evenly-spaced slabs —
     // gaps there stretch the edge columns into flat streaks (short spans).
     const MIN_BUCKET: f64 = 0.08;
     let bucket = (window / target_cols as f64).max(MIN_BUCKET);
-    let first = spectrum.history().partition_point(|c| c.time < oldest).saturating_sub(1);
     let bin_idx: Vec<usize> = bins.iter().map(|b| b.idx).collect();
-    let (centers, mut power) = aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket);
-    let newest = spectrum.history().back().map_or(now, |c| c.time);
+    let (centers, mut power) = match whole {
+        Some(ws) => aggregate_rows(ws.columns.iter(), &bin_idx, bucket),
+        None => {
+            let first = spectrum.history().partition_point(|c| c.time < oldest).saturating_sub(1);
+            aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket)
+        }
+    };
+    let newest = match whole {
+        Some(ws) => ws.columns.last().map_or(now, |c| c.time),
+        None => spectrum.history().back().map_or(now, |c| c.time),
+    };
     let (w, h) = (centers.len(), bins.len());
     if w < 2 {
         return;
@@ -105,9 +124,9 @@ pub(super) fn draw_spectrogram(
     // oldest slab's start to the newest slab's end. Its texel centers sit at
     // the slab centers, so `u = (t - t_origin) / span` places time exactly.
     let t_origin = centers[0] - 0.5 * bucket;
-    let span = w as f64 * bucket;
+    let tex_span = w as f64 * bucket;
     let (t0, tn) = (bins[0].t, bins[h - 1].t);
-    if span < 1e-9 || (tn - t0).abs() < 1e-6 {
+    if tex_span < 1e-9 || (tn - t0).abs() < 1e-6 {
         return;
     }
 
@@ -130,7 +149,7 @@ pub(super) fn draw_spectrogram(
     // to the bin rows. UVs run past 0..1 in the thin slivers with no data (the
     // sub-slab at `now`, the bit beyond the oldest slab); ClampToEdge fills
     // those from the edge column so the plane stays whole.
-    let u_at = |d: f32| ((now - window * ((d - split) / depth_span) as f64 - t_origin) / span) as f32;
+    let u_at = |d: f32| ((time.time_at(d) - t_origin) / tex_span) as f32;
     let v_at = |p: f32| (p - t0) / (tn - t0);
     let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
     let vert =
@@ -149,9 +168,15 @@ pub(super) fn draw_spectrogram(
     // The grace keeps the ordinary ~one-FFT lag from opening a flickering
     // sliver. Far edge: the oldest slab's depth, which is 1 once history spans
     // the window (depth_of clamps there) and nearer while it is still filling.
-    const FRESH: f64 = 0.12;
-    let d_near = if now - newest <= FRESH { split } else { depth_of(newest) };
-    let d_far = depth_of(t_origin);
+    let (d_near, d_far) = if time.whole_song() {
+        // The whole take is present from the first frame, so the strip fills the
+        // region edge to edge; only the playhead moves.
+        (time.depth_of(t_origin), time.depth_of(t_origin + tex_span))
+    } else {
+        const FRESH: f64 = 0.12;
+        let near = if now - newest <= FRESH { split } else { time.depth_of(newest) };
+        (near, time.depth_of(t_origin))
+    };
 
     // One quad over pitch [0,1] x depth [d_near, d_far]; GPU bilinear-samples it.
     let mut mesh = egui::Mesh::with_texture(tex.id());

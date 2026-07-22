@@ -471,6 +471,54 @@ fn spectrogram_history_stays_bounded() {
     assert!(spec.history().is_empty());
 }
 
+#[test]
+fn whole_song_precompute_lays_the_take_out_deterministically() {
+    use lattice_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
+    let sr = 48_000.0f32;
+    let seconds = 2.0;
+    let n = (sr as f64 * seconds) as usize;
+    // A steady A4 (MIDI 69) across the whole buffer.
+    let freq = midi_to_hz(69.0);
+    let samples: Vec<f32> =
+        (0..n).map(|i| 0.8 * (std::f32::consts::TAU * freq * i as f32 / sr).sin()).collect();
+    let cfg = SpectrumConfig::default();
+
+    let ws = WholeSong::precompute(&samples, sr, 0.0, 0.0, seconds, &cfg);
+    assert_eq!(ws.span, seconds);
+    assert_eq!(ws.start, 0.0);
+    assert!(ws.columns.len() > 10, "a 2 s take yields many columns, got {}", ws.columns.len());
+
+    // Columns are in take time, strictly increasing, inside the take.
+    let mut prev = -1.0;
+    for c in &ws.columns {
+        assert!(c.time > prev, "columns are time-ordered");
+        assert!(c.time > 0.0 && c.time <= seconds + 0.1, "column time {} in range", c.time);
+        prev = c.time;
+    }
+
+    // A steady tone lands its energy at A4's bin.
+    let a4 = ((69.0 - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).round() as usize;
+    let mid = &ws.columns[ws.columns.len() / 2];
+    let peak = (0..SPECTRUM_BINS).max_by(|&a, &b| mid.power[a].total_cmp(&mid.power[b])).unwrap();
+    assert!(peak.abs_diff(a4) <= 1, "peak bin {peak} should be A4 (bin {a4})");
+
+    // `time_origin` shifts every column onto the take's timeline.
+    let shifted = WholeSong::precompute(&samples, sr, 5.0, 0.0, seconds, &cfg);
+    assert!(
+        (shifted.columns[0].time - ws.columns[0].time - 5.0).abs() < 1e-6,
+        "time_origin offsets the columns"
+    );
+
+    // Pure: same inputs in, byte-identical columns out (the render leans on
+    // this for reproducibility).
+    let again = WholeSong::precompute(&samples, sr, 0.0, 0.0, seconds, &cfg);
+    assert_eq!(ws.columns.len(), again.columns.len());
+    for (a, b) in ws.columns.iter().zip(&again.columns) {
+        assert_eq!(a.time, b.time);
+        assert_eq!(a.power, b.power, "precompute is deterministic");
+    }
+}
+
 /// Every text drawn by one pass over a closure, as (rect, text). The halo
 /// stamps each string many times over, so callers fold the stamps of one
 /// piece back together into the box that piece occupies.

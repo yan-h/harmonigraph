@@ -60,6 +60,9 @@ OPTIONS:
                            auto (default) cross-correlates it against the
                            take\'s own recording; off assumes it starts at
                            take zero; a number sets the start by hand.
+        --playhead         Lay the whole take\'s spectrogram out at once and
+                           sweep a playhead across it, instead of the live
+                           scrolling window. Needs audio.
         --dump-layout      Print the resolved layout as .ron and exit —
                            the starting point for a custom one.
     -h, --help             Show this.
@@ -96,6 +99,7 @@ struct Args {
     ffmpeg: Option<String>,
     align: Align,
     dump_layout: bool,
+    playhead: bool,
 }
 
 /// How to place a soundtrack on the take's timeline.
@@ -129,6 +133,7 @@ impl Default for Args {
             ffmpeg: None,
             align: Align::Auto,
             dump_layout: false,
+            playhead: false,
         }
     }
 }
@@ -158,6 +163,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--ui-state" => args.ui_state = Some(value("--ui-state")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
             "--align" => args.align = parse_align(&value("--align")?)?,
+            "--playhead" => args.playhead = true,
             "--dump-layout" => args.dump_layout = true,
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?} (--help for the list)"))
@@ -304,6 +310,13 @@ fn run() -> Result<(), String> {
     };
     let audio = audio_path.as_deref().map(wav::read).transpose()?;
 
+    if args.playhead && audio.is_none() {
+        eprintln!(
+            "note: --playhead lays out the audio spectrogram, but this render has \
+             no audio; falling back to the scrolling view."
+        );
+    }
+
     // Where the soundtrack's first sample falls on the take's timeline.
     // The take's own recording is aligned by construction (the header
     // says where it started). A REPLACEMENT — a clean bounce standing in
@@ -340,6 +353,7 @@ fn run() -> Result<(), String> {
         start: args.start,
         end,
         audio_start,
+        whole_song_spectrogram: args.playhead,
     };
     if settings.frame_count() == 0 {
         return Err(format!(

@@ -395,6 +395,102 @@ impl PitchScale {
     }
 }
 
+/// Maps take time to a depth fraction on the shared time axis (the region the
+/// roll and spectrogram split between them), and back. One mapping for two
+/// modes, so the live and offline paths go through the same place instead of
+/// each carrying a copy:
+///
+/// - **Live**: a `now`-anchored window. `now` sits on the near edge (`split`)
+///   and the past scrolls out to the far edge (1), spanning `roll_seconds`.
+/// - **Whole-song** (offline playhead): the entire take laid out statically —
+///   the near edge is the render's start, the far edge its end — and only the
+///   playhead ([`depth_of`](Self::depth_of) of `now`) moves.
+#[derive(Clone, Copy)]
+pub(super) struct TimeAxis {
+    split: f32,
+    depth_span: f32,
+    /// Live: `roll_seconds`. Whole-song: the take span.
+    window: f64,
+    /// Take time at the near edge. Live: `now`. Whole-song: the render start.
+    origin: f64,
+    now: f64,
+    whole_song: bool,
+}
+
+impl TimeAxis {
+    pub(super) fn new(state: &SharedState, split: f32, now: f64) -> Self {
+        let depth_span = 1.0 - split;
+        match state.whole_song.as_ref() {
+            Some(ws) => TimeAxis {
+                split,
+                depth_span,
+                window: ws.span.max(0.05),
+                origin: ws.start,
+                now,
+                whole_song: true,
+            },
+            None => TimeAxis {
+                split,
+                depth_span,
+                window: state.spectrum_config.roll_seconds.max(0.05) as f64,
+                origin: now,
+                now,
+                whole_song: false,
+            },
+        }
+    }
+
+    /// Fraction from the near edge (0) to the far edge (1) for take time `t`,
+    /// unclamped.
+    fn frac(&self, t: f64) -> f64 {
+        if self.whole_song {
+            (t - self.origin) / self.window
+        } else {
+            (self.origin - t) / self.window
+        }
+    }
+
+    /// Depth for take time `t`, clamped into the region.
+    pub(super) fn depth_of(&self, t: f64) -> f32 {
+        self.split + self.frac(t).clamp(0.0, 1.0) as f32 * self.depth_span
+    }
+
+    /// Take time at a screen depth — the unclamped inverse of
+    /// [`depth_of`](Self::depth_of).
+    pub(super) fn time_at(&self, d: f32) -> f64 {
+        let f = ((d - self.split) / self.depth_span) as f64;
+        if self.whole_song {
+            self.origin + f * self.window
+        } else {
+            self.origin - f * self.window
+        }
+    }
+
+    /// The oldest take time the region shows — its far-edge cull point.
+    pub(super) fn oldest(&self) -> f64 {
+        if self.whole_song {
+            self.origin
+        } else {
+            self.now - self.window
+        }
+    }
+
+    /// Seconds spanned across the region.
+    pub(super) fn window(&self) -> f64 {
+        self.window
+    }
+
+    /// Whether this is the offline whole-song layout.
+    pub(super) fn whole_song(&self) -> bool {
+        self.whole_song
+    }
+
+    /// Depth of the playhead (the present moment).
+    pub(super) fn playhead_depth(&self) -> f32 {
+        self.depth_of(self.now)
+    }
+}
+
 /// Three views of the same music over one shared MIDI-pitch axis: the
 /// audio spectrum as a curve (FFT of the input bus, every partial at its
 /// actual pitch), the sounding MIDI voices as bars, and the piano roll of
@@ -430,7 +526,12 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     let max_midi = octave_start_midi(cfg.high_octave) as f32;
     let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
 
-    let split = spectrum_share(&cfg);
+    // Offline playhead render: the whole take laid out statically with a
+    // sweeping playhead. It takes the whole pane (split = 0), which also drops
+    // the live curve and voice bars via their `split > 0` guards — leaving the
+    // spectrogram, roll, and playhead.
+    let whole_song = state.whole_song.is_some();
+    let split = if whole_song { 0.0 } else { spectrum_share(&cfg) };
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
     // spectrum's share; the Spectrum tab's floor sets the bottom. Tilt is
     // the conventional reference slope (negative), so the display
@@ -444,8 +545,10 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     let joined = split < 1.0;
     let sd = |d: f32| if joined { split - d } else { d };
     // Labels ride the baseline: the now-line when joined (offsetting into the
-    // spectrum, whichever way that runs), else the outer edge.
-    let (label_d, label_into) = if joined { (split, -2.0) } else { (0.0, 2.0) };
+    // spectrum, whichever way that runs), else the outer edge. Whole-song has
+    // no spectrum to join, so its labels ride the near edge like the latter.
+    let (label_d, label_into) =
+        if joined && !whole_song { (split, -2.0) } else { (0.0, 2.0) };
 
     // Axis gridlines: every C (note labels) or the analyzer-standard
     // 1-2-5 frequency series, per the Spectrum tab. Both run the full
@@ -517,6 +620,16 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
         if cfg.show_roll {
             super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
         }
+    }
+
+    // The playhead: in whole-song mode, the one moving mark sweeping across the
+    // static spectrogram and roll (it replaces the roll's fixed now-line).
+    if whole_song {
+        let time = TimeAxis::new(state, split, now);
+        painter.line_segment(
+            axes.across_pitch(time.playhead_depth()),
+            egui::Stroke::new(1.5, theme::accent()),
+        );
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
