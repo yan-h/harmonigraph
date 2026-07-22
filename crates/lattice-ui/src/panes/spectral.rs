@@ -551,10 +551,11 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                 egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
             };
 
-            // Each element is drawn per-segment (rather than one flat line) so
-            // it takes its own bucket's color.
+            // The FILL carries the per-bucket palette color (each slab is its
+            // own bar, so no joints to look ragged). The outlines are single
+            // smooth polylines — egui joins them cleanly — in the palette's
+            // loud color (the curve rides the loud end anyway).
             if cfg.fill {
-                // One slab per bucket, wide enough to meet its neighbors.
                 let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
                 for &(midi, t, level, _) in &visible {
                     let d = d_of(level, midi);
@@ -566,24 +567,16 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                     }
                 }
             }
+            let mid_midi = (min_midi + max_midi) * 0.5;
+            let loud = super::spectrogram::cell_color(cfg.spectrogram_color, 1.0, mid_midi, &frame);
             if cfg.peak_hold {
-                for w in visible.windows(2) {
-                    let (m0, t0, _, pk0) = w[0];
-                    let (m1, t1, _, pk1) = w[1];
-                    painter.line_segment(
-                        [axes.at(t0, sd(d_of(pk0, m0))), axes.at(t1, sd(d_of(pk1, m1)))],
-                        egui::Stroke::new(1.0, tint(hue(pk0, m0), 150)),
-                    );
-                }
+                let pts: Vec<egui::Pos2> =
+                    visible.iter().map(|&(m, t, _, pk)| axes.at(t, sd(d_of(pk, m)))).collect();
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 130))));
             }
-            for w in visible.windows(2) {
-                let (m0, t0, l0, _) = w[0];
-                let (m1, t1, l1, _) = w[1];
-                painter.line_segment(
-                    [axes.at(t0, sd(d_of(l0, m0))), axes.at(t1, sd(d_of(l1, m1)))],
-                    egui::Stroke::new(1.5, tint(hue(l0, m0), 235)),
-                );
-            }
+            let pts: Vec<egui::Pos2> =
+                visible.iter().map(|&(m, t, l, _)| axes.at(t, sd(d_of(l, m)))).collect();
+            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, tint(loud, 235))));
         }
     }
 
