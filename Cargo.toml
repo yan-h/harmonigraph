@@ -5,6 +5,8 @@ members = [
     "crates/lattice-scene",
     "crates/lattice-render",
     "crates/lattice-ui",
+    "crates/lattice-take",
+    "crates/lattice-offline",
     "crates/lattice-standalone",
     "crates/midi_lattice_3d",
     "xtask",
@@ -24,6 +26,7 @@ lattice-core = { path = "crates/lattice-core" }
 lattice-scene = { path = "crates/lattice-scene" }
 lattice-render = { path = "crates/lattice-render" }
 lattice-ui = { path = "crates/lattice-ui" }
+lattice-take = { path = "crates/lattice-take" }
 
 # GUI stack. These versions are coupled:
 #   egui-baseview 0.3 -> egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview 0.1

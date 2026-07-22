@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use crate::history::NoteHistory;
+use crate::roll::NoteRoll;
 use crate::tuning::PitchClass;
 
 /// Timestamps are seconds on a monotonic clock chosen by the shell (sample
@@ -161,12 +162,14 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 
 /// Tracks held voices plus a tail of recently released ones (so releases can
 /// fade out instead of vanishing), and behind those a [`NoteHistory`] of
-/// every pitch that has finished fading.
+/// every pitch that has finished fading and a [`NoteRoll`] of when each
+/// note sounded.
 #[derive(Default)]
 pub struct NoteTracker {
     held: HashMap<(u8, u8), Voice>,
     released: Vec<Voice>,
     history: NoteHistory,
+    roll: NoteRoll,
 }
 
 impl NoteTracker {
@@ -182,10 +185,15 @@ impl NoteTracker {
             NoteEventKind::On { velocity } => {
                 // A retrigger without an Off silently replaces the held
                 // voice (same key); the old voice gets no release fade.
-                self.held.insert(
-                    (event.channel, event.note),
-                    Voice::new(event.channel, event.note, velocity, event.time),
+                let voice = Voice::new(event.channel, event.note, velocity, event.time);
+                self.roll.note_on(
+                    event.channel,
+                    event.note,
+                    velocity,
+                    voice.pitch,
+                    event.time,
                 );
+                self.held.insert((event.channel, event.note), voice);
             }
             NoteEventKind::Off => {
                 // Measured against the chord as it stands WITH this voice
@@ -194,12 +202,14 @@ impl NoteTracker {
                 if let Some(mut voice) = self.held.remove(&(event.channel, event.note)) {
                     release(&mut voice, event.time, extremes);
                     self.released.push(voice);
+                    self.roll.note_off(event.channel, event.note, event.time);
                 }
             }
             NoteEventKind::Tuning { semitones } => {
                 if let Some(voice) = self.held.get_mut(&(event.channel, event.note)) {
                     // Octave indicators track the sounding pitch too.
                     voice.set_pitch(f32::from(event.note) + semitones);
+                    self.roll.bend(event.channel, event.note, event.time, voice.pitch);
                 }
             }
         }
@@ -214,6 +224,7 @@ impl NoteTracker {
     /// replaces its voice outright — see `handle_event` — so that voice is
     /// never recorded; the retrigger's own release covers the pitch.)
     pub fn prune(&mut self, now: Time, fade_time: f32) {
+        self.roll.trim(now);
         let history = &mut self.history;
         self.released.retain(|voice| {
             if voice.activation(now, fade_time) > 0.0 {
@@ -234,6 +245,18 @@ impl NoteTracker {
         self.history.clear();
     }
 
+    /// When each note sounded, for the piano roll (see [`NoteRoll`]).
+    pub fn roll(&self) -> &NoteRoll {
+        &self.roll
+    }
+
+    /// Forget the played-note timeline. Independent of
+    /// [`clear_history`](Self::clear_history): the two answer different
+    /// questions and are cleared from different places in the UI.
+    pub fn clear_roll(&mut self) {
+        self.roll.clear();
+    }
+
     /// All voices that should currently be visualized (held first).
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
         self.held.values().chain(self.released.iter())
@@ -244,6 +267,7 @@ impl NoteTracker {
     }
 
     pub fn all_notes_off(&mut self, now: Time) {
+        self.roll.all_off(now);
         let extremes = self.held_pitch_range();
         for (_, mut voice) in self.held.drain() {
             release(&mut voice, now, extremes);

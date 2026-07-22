@@ -3,7 +3,7 @@
 //! crate only adapts them to the plugin world.
 
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use lattice_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
@@ -12,6 +12,7 @@ use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
 mod editor;
+mod take;
 
 /// Capacity of the audio→GUI note event ring buffer. Events are dropped
 /// (silently) if the GUI stalls long enough to fill it.
@@ -35,6 +36,12 @@ pub struct MidiLattice3d {
     editor_shared: Arc<Mutex<editor::EditorShared>>,
     sample_rate: f64,
     samples_processed: u64,
+    /// Take recording (see `take`). The recorder is always present; it
+    /// only writes while the user has armed it from the View pane.
+    take: take::Recorder,
+    /// Count of events recorded in the current take, for the UI's status
+    /// line. Reset when recording starts.
+    take_events: Arc<AtomicU64>,
 }
 
 #[derive(Params)]
@@ -171,6 +178,8 @@ impl Default for MidiLattice3d {
         let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
         let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new(44_100.0f32.to_bits()));
+        let (take, take_control) = take::channel();
+        let take_events = Arc::new(AtomicU64::new(0));
         MidiLattice3d {
             params: Arc::new(MidiLattice3dParams::default()),
             note_producer: producer,
@@ -180,9 +189,13 @@ impl Default for MidiLattice3d {
                 consumer,
                 audio_consumer,
                 sample_rate_bits,
+                take_control,
+                take_events.clone(),
             ))),
             sample_rate: 44_100.0,
             samples_processed: 0,
+            take,
+            take_events,
         }
     }
 }
@@ -239,6 +252,7 @@ impl Plugin for MidiLattice3d {
             note: 0,
             kind: NoteEventKind::AllOff,
         });
+
     }
 
     fn process(
@@ -248,6 +262,25 @@ impl Plugin for MidiLattice3d {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let block_start = self.samples_processed;
+        // Take timestamps come from the TRANSPORT, not the plugin's own
+        // sample counter, so a take lines up with a bounce of the same
+        // song without an offset to work out. Nothing is recorded while
+        // the transport is stopped; a host that reports no position at
+        // all falls back to the local clock so "just record what I play"
+        // still works.
+        let transport = context.transport();
+        let take_origin = if !self.take.is_armed() {
+            None
+        } else if let Some(seconds) = transport.pos_seconds() {
+            // observe_transport decides whether the transport is rolling
+            // (and splits the take on a loop wrap). It is deliberately
+            // more permissive than the host's `playing` flag — see there.
+            self.take.observe_transport(seconds, transport.playing).then_some(seconds)
+        } else {
+            // No transport at all: fall back to the plugin's own clock so
+            // "just record what I play" still works.
+            Some(block_start as f64 / self.sample_rate)
+        };
 
         while let Some(event) = context.next_event() {
             let mapped = match event {
@@ -270,6 +303,15 @@ impl Plugin for MidiLattice3d {
                 // Full ring = GUI stalled; dropping visualization events is
                 // the right failure mode for the audio thread.
                 let _ = self.note_producer.push(CoreNoteEvent { time, channel, note, kind });
+                if let Some(origin) = take_origin {
+                    self.take.note(
+                        origin + f64::from(timing) / self.sample_rate,
+                        channel,
+                        note,
+                        kind,
+                    );
+                    self.take_events.fetch_add(1, Ordering::Relaxed);
+                }
             }
             // Behave as a transparent MIDI effect.
             context.send_event(event);
@@ -301,6 +343,28 @@ impl Plugin for MidiLattice3d {
             }
         }
 
+        if let Some(origin) = take_origin {
+            self.take
+                .params(origin, ParamKey::ALL.map(|key| self.params.param_for(key).value()));
+
+            // The take's own audio, when asked for: the input bus exactly
+            // as it arrives, so the render gets a spectrum and a
+            // soundtrack without a separate bounce. Always stereo,
+            // matching AUDIO_IO_LAYOUTS — a mono host input is
+            // duplicated rather than desyncing the WAV's frames.
+            if self.take.wants_audio() && channels > 0 {
+                self.take.mark_audio_start(origin);
+                let right = usize::from(channels > 1);
+                let wanted = buffer.samples() * 2;
+                let mut interleaved = buffer.iter_samples().flat_map(|mut frame| {
+                    let l = frame.get_mut(0).map_or(0.0, |s| *s);
+                    let r = frame.get_mut(right).map_or(0.0, |s| *s);
+                    [l, r]
+                });
+                self.take.audio(&mut interleaved, wanted);
+            }
+        }
+
         self.samples_processed += buffer.samples() as u64;
         ProcessStatus::Normal
     }
@@ -327,3 +391,35 @@ impl Vst3Plugin for MidiLattice3d {
 
 nice_export_clap!(MidiLattice3d);
 nice_export_vst3!(MidiLattice3d);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ParamKey::id` is what a recorded take names its automation by, and
+    /// what the host names its automation lanes by. They are declared in
+    /// two places — the enum's `id()` and the `#[id = "..."]` attributes
+    /// here — and if they drift, takes silently replay with default
+    /// parameters and projects silently lose their automation. Neither
+    /// failure is visible until someone watches a render and wonders why
+    /// the tuning is wrong.
+    #[test]
+    fn every_param_key_id_matches_the_host_facing_id() {
+        let params = MidiLattice3dParams::default();
+        let host_ids: Vec<String> =
+            params.param_map().into_iter().map(|(id, _, _)| id).collect();
+        for key in ParamKey::ALL {
+            assert!(
+                host_ids.iter().any(|id| id == key.id()),
+                "ParamKey::{key:?} claims id {:?}, which no #[id] attribute declares; \
+                 the host exposes {host_ids:?}",
+                key.id(),
+            );
+        }
+        assert_eq!(
+            host_ids.len(),
+            ParamKey::ALL.len(),
+            "the plugin exposes parameters ParamKey doesn't know about: {host_ids:?}"
+        );
+    }
+}

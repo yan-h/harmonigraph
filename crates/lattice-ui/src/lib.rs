@@ -75,10 +75,144 @@ pub enum SpectrumLabels {
     Frequency,
 }
 
+/// Which way the Spectral pane's pitch axis runs.
+///
+/// The pane is written once against an abstract (pitch, depth) plane and
+/// mapped onto the screen at draw time, so every element — gridlines,
+/// spectrum curve, voice bars, piano roll — turns together.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectralOrientation {
+    /// Follow the pane's shape: a pane taller than it is wide goes
+    /// vertical, otherwise horizontal. Means the pane reads correctly
+    /// both under the lattice and beside it, with no setting to change.
+    #[default]
+    Auto,
+    /// Pitch left-to-right; the spectrum grows upward from the bottom.
+    Horizontal,
+    /// Pitch bottom-to-top; the spectrum grows rightward from the left.
+    /// The classic piano-roll orientation.
+    Vertical,
+}
+
+impl SpectralOrientation {
+    /// Resolve [`Auto`](Self::Auto) against the pane it is drawing into.
+    fn is_vertical(self, rect: egui::Rect) -> bool {
+        match self {
+            SpectralOrientation::Auto => rect.height() > rect.width(),
+            SpectralOrientation::Horizontal => false,
+            SpectralOrientation::Vertical => true,
+        }
+    }
+}
+
+/// Where the Spectral pane sits in the default pane arrangement. Changing
+/// it rebuilds the dock (the arrangement is otherwise persisted forever).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectralPlacement {
+    /// A wide strip under the lattice (the original layout): what sounds
+    /// is directly under what lights up.
+    #[default]
+    Below,
+    /// A tall strip between the lattice and the settings column. Paired
+    /// with [`SpectralOrientation::Auto`] this turns the pane vertical,
+    /// which is also the natural piano-roll orientation.
+    Right,
+}
+
+/// What colors a note in the piano roll.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RollColor {
+    /// The lattice's own channel colors, so a note is the same color here
+    /// as the node it lit up.
+    Channel,
+    /// The pitch gradient every channel-9..13 voice uses, applied to all
+    /// channels — reads as a single ramp low-to-high.
+    Pitch,
+    /// One flat accent color: the roll recedes and the lattice leads.
+    Accent,
+}
+
+/// What counts as "the take is done", and so when a video gets rendered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RenderTrigger {
+    /// When you switch Record take off. Predictable, and the only option
+    /// that works when the transport is looping.
+    #[default]
+    OnDisarm,
+    /// As soon as the transport stops after recording something — so a
+    /// play-through, or an audio export, produces a video with nothing
+    /// further to click. Recording disarms itself at the same moment.
+    ///
+    /// Falls back gracefully: if a host stops calling `process` the
+    /// instant a render finishes, the stop is never observed and the take
+    /// simply waits for you to disarm it, as before.
+    OnTransportStop,
+}
+
+/// How a finished take gets turned into a video, edited in the View
+/// pane's Record section and persisted with the UI state.
+///
+/// The plugin cannot render video itself — that is `lattice-offline`, a
+/// separate binary with a headless GPU device and an ffmpeg pipe, and
+/// nothing about it belongs inside a real-time audio plugin. What the
+/// plugin can do is *run* it, the moment a take is complete.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RenderConfig {
+    /// Record the plugin's audio input into the take (see
+    /// `SharedState::take_audio`, which mirrors this at runtime).
+    #[serde(default)]
+    pub record_audio: bool,
+    /// Run the renderer as soon as a take finishes.
+    #[serde(default)]
+    pub auto_render: bool,
+    /// What "finishes" means; see [`RenderTrigger`].
+    #[serde(default)]
+    pub trigger: RenderTrigger,
+    /// Path to the `lattice-offline` binary. Empty means the
+    /// conventional install location, which `update-plugin.sh` writes to.
+    #[serde(default)]
+    pub renderer_path: String,
+    /// Bounced audio to pass as `--audio`: it feeds the spectrum curve
+    /// and is muxed into the video. Empty renders silent, with no
+    /// spectrum — the roll and the lattice are unaffected.
+    #[serde(default)]
+    pub audio_path: String,
+    /// Extra flags, split on whitespace (no shell quoting):
+    /// `--size 3840x2160 --layout side-by-side`.
+    #[serde(default)]
+    pub extra_args: String,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        RenderConfig {
+            record_audio: false,
+            auto_render: false,
+            trigger: RenderTrigger::OnDisarm,
+            renderer_path: String::new(),
+            audio_path: String::new(),
+            extra_args: "--size 1920x1080".into(),
+        }
+    }
+}
+
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
+    /// Which way the pitch axis runs; see [`SpectralOrientation`].
+    #[serde(default)]
+    pub orientation: SpectralOrientation,
+    /// Reverse the pitch axis (high notes first).
+    #[serde(default)]
+    pub flip_pitch: bool,
+    /// Put the baseline on the opposite edge: the spectrum hangs down
+    /// instead of standing up (and the roll flows the other way).
+    #[serde(default)]
+    pub flip_depth: bool,
+    /// Where the pane sits when the layout is (re)built.
+    #[serde(default)]
+    pub placement: SpectralPlacement,
     /// Analyze and overlay the shell's audio (plugin: the input bus;
     /// standalone: a synth on the held notes).
     #[serde(default = "default_true")]
@@ -110,6 +244,56 @@ pub struct SpectrumConfig {
     /// the view.
     pub low_octave: i32,
     pub high_octave: i32,
+
+    // ---- Piano roll -------------------------------------------------
+    // The played-note timeline (lattice-core's NoteRoll) drawn over the
+    // same pitch axis, occupying the far end of the depth axis. Time runs
+    // away from the spectrum: a note leaving the roll's near edge meets
+    // the spectrum peak it is making.
+    /// Draw the incoming MIDI's history at all.
+    #[serde(default = "default_true")]
+    pub show_roll: bool,
+    /// Share of the pane's depth given to the roll (the rest is the
+    /// spectrum). 0 hides it; 1 gives the whole pane to the roll.
+    #[serde(default = "default_roll_fraction")]
+    pub roll_fraction: f32,
+    /// Seconds of history the roll's depth spans.
+    #[serde(default = "default_roll_seconds")]
+    pub roll_seconds: f32,
+    /// Note ribbon width, in semitones of the pitch axis.
+    #[serde(default = "default_roll_thickness")]
+    pub roll_thickness: f32,
+    /// Corner rounding of an unbent note, as a fraction of half its width.
+    #[serde(default = "default_roll_rounding")]
+    pub roll_rounding: f32,
+    /// Overall roll opacity.
+    #[serde(default = "default_roll_opacity")]
+    pub roll_opacity: f32,
+    #[serde(default = "default_roll_color")]
+    pub roll_color: RollColor,
+    /// Scale a note's opacity by its velocity.
+    #[serde(default = "default_true")]
+    pub roll_velocity_alpha: bool,
+    /// How much a note dims as it ages toward the far edge (0 = not at
+    /// all, 1 = to nothing).
+    #[serde(default = "default_roll_age_fade")]
+    pub roll_age_fade: f32,
+    /// Outline every note in its own color, brightened.
+    #[serde(default)]
+    pub roll_outline: bool,
+    /// Mark each note's attack with a bright cap.
+    #[serde(default = "default_true")]
+    pub roll_onsets: bool,
+    /// Keep still-held notes at full brightness regardless of age fade,
+    /// so what is sounding stands out from what has been.
+    #[serde(default = "default_true")]
+    pub roll_highlight_held: bool,
+    /// Seconds between the roll's time gridlines; 0 draws none.
+    #[serde(default = "default_roll_grid_seconds")]
+    pub roll_grid_seconds: f32,
+    /// Draw the line where the roll meets the spectrum ("now").
+    #[serde(default = "default_true")]
+    pub roll_now_line: bool,
 }
 
 fn default_true() -> bool {
@@ -120,6 +304,38 @@ fn default_labels() -> SpectrumLabels {
     SpectrumLabels::Notes
 }
 
+fn default_roll_fraction() -> f32 {
+    0.55
+}
+
+fn default_roll_seconds() -> f32 {
+    12.0
+}
+
+fn default_roll_thickness() -> f32 {
+    0.8
+}
+
+fn default_roll_rounding() -> f32 {
+    0.5
+}
+
+fn default_roll_opacity() -> f32 {
+    0.9
+}
+
+fn default_roll_color() -> RollColor {
+    RollColor::Channel
+}
+
+fn default_roll_age_fade() -> f32 {
+    0.45
+}
+
+fn default_roll_grid_seconds() -> f32 {
+    1.0
+}
+
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
@@ -127,6 +343,10 @@ pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
+            orientation: SpectralOrientation::Auto,
+            flip_pitch: false,
+            flip_depth: false,
+            placement: SpectralPlacement::Below,
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
@@ -138,6 +358,20 @@ impl Default for SpectrumConfig {
             show_voice_bars: true,
             low_octave: -1,
             high_octave: 9,
+            show_roll: true,
+            roll_fraction: default_roll_fraction(),
+            roll_seconds: default_roll_seconds(),
+            roll_thickness: default_roll_thickness(),
+            roll_rounding: default_roll_rounding(),
+            roll_opacity: default_roll_opacity(),
+            roll_color: default_roll_color(),
+            roll_velocity_alpha: true,
+            roll_age_fade: default_roll_age_fade(),
+            roll_outline: false,
+            roll_onsets: true,
+            roll_highlight_held: true,
+            roll_grid_seconds: default_roll_grid_seconds(),
+            roll_now_line: true,
         }
     }
 }
@@ -265,6 +499,26 @@ pub struct SharedState {
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
+    /// Take recording, for offline video rendering. The shell owns the
+    /// actual recorder; these three fields are the whole contract.
+    /// Runtime-only — a take is a deliberate act, never resumed on load.
+    ///
+    /// `take_supported` gates the control: shells that cannot record
+    /// (or a build without a writer) simply don't show it, rather than
+    /// offering a button that does nothing.
+    pub take_supported: bool,
+    /// Toggled by the View pane, acted on by the shell.
+    pub take_recording: bool,
+    /// Record the input bus alongside the notes, so the render has a
+    /// spectrum and a soundtrack without a separate bounce. Persisted
+    /// with the render settings rather than the take state, since it is
+    /// a preference, not a live flag.
+    pub take_audio: bool,
+    /// What to do with a take once it is finished (persisted).
+    pub render_config: RenderConfig,
+    /// Shell-supplied one-liner shown under the toggle: where the file is
+    /// going, how many events, or what went wrong.
+    pub take_status: String,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// The Spectral pane's settings (Spectrum tab; persisted).
@@ -287,12 +541,12 @@ pub struct CameraPreset {
 }
 
 /// The default pane arrangement: big lattice with the Spectral pane in
-/// its own strip directly below it (sharing the pitch intuition: what
-/// sounds is what lights up), tuning column on the right, console and
-/// notes tucked below that. Users can re-dock at runtime; the result
-/// persists via UiPersist, and the View pane's "Reset layout" button
-/// returns here.
-fn default_dock() -> DockState<panes::Tab> {
+/// its own strip (below it by default — sharing the pitch intuition: what
+/// sounds is what lights up — or beside it, per `placement`), tuning
+/// column on the right, console and notes tucked below that. Users can
+/// re-dock at runtime; the result persists via UiPersist, and the View
+/// pane's "Reset layout" button returns here.
+fn default_dock(placement: SpectralPlacement) -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [lattice, right] = surface.split_right(
@@ -308,13 +562,23 @@ fn default_dock() -> DockState<panes::Tab> {
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
     surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
-    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+    // The fractions differ because the strip's short side is what matters:
+    // a wide strip under the lattice needs less of the height than a tall
+    // strip beside it needs of the (already narrowed) width.
+    match placement {
+        SpectralPlacement::Below => {
+            surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+        }
+        SpectralPlacement::Right => {
+            surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
+        }
+    }
     dock
 }
 
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        let dock = default_dock();
+        let dock = default_dock(SpectralPlacement::default());
 
         SharedState {
             tracker: NoteTracker::new(),
@@ -329,6 +593,11 @@ impl SharedState {
             last_learned_classes: None,
             camera_presets: Vec::new(),
             preset_name: String::new(),
+            take_supported: false,
+            take_recording: false,
+            take_audio: false,
+            render_config: RenderConfig::default(),
+            take_status: String::new(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             reset_layout: false,
@@ -359,6 +628,7 @@ impl SharedState {
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
             spectrum: self.spectrum_config,
+            render: self.render_config.clone(),
         })
         .unwrap_or_default()
     }
@@ -375,6 +645,7 @@ impl SharedState {
             self.view.migrate_legacy();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
+            self.render_config = persist.render;
         }
     }
 }
@@ -392,6 +663,8 @@ struct UiPersist {
     /// serde(default) keeps pre-Spectrum-tab blobs loadable.
     #[serde(default)]
     spectrum: SpectrumConfig,
+    #[serde(default)]
+    render: RenderConfig,
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
@@ -404,26 +677,7 @@ struct UiPersist {
 /// shell's clock, and must be the SAME clock that timestamped those
 /// `NoteEvent`s — envelopes are derived from the difference.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
-    learn_step(state, params);
-
-    state.tuning = params::tuning_from_params(params);
-    // Meantone mode locks the major third to four perfect fifths: derive it
-    // from the fifth here, so the whole pipeline (scene pitch classes,
-    // matching, readouts) sees the locked value without any meantone
-    // awareness of its own. The lock is exact in integer microcents, so
-    // comma-equivalent nodes collapse to one pitch. The Five param is left
-    // untouched (inert while the lock is on).
-    if state.view.meantone {
-        state.tuning.lock_meantone();
-    }
-    state.frame_params = FrameParams {
-        fade_time: params.get(params::ParamKey::Fade),
-        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
-        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
-    };
-    // Every layer of a node now fades on this one time, so a voice is dead
-    // to the display exactly when its envelope reaches zero.
-    state.tracker.prune(now, state.frame_params.fade_time);
+    begin_frame(state, params, now);
 
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
     // meet with no chrome between them — clean for captures). The pane
@@ -453,7 +707,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Deferred from the View pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
-        state.dock = default_dock();
+        state.dock = default_dock(state.spectrum_config.placement);
     }
 
     // Render continuously only while something is animating (sounding or
@@ -461,16 +715,92 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // up promptly. egui repaints on input events by itself, so interaction
     // never waits on this. The plugin shell additionally requests a
     // repaint the moment it drains new note events.
-    if state.tracker.voices().next().is_some() || state.learn_active {
+    //
+    // The piano roll keeps animating well past the last release fade — it
+    // scrolls for as long as its window still reaches a played note — so
+    // it gets its own say here. Without this the roll would advance in
+    // 50 ms jerks once the voices died.
+    if state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now) {
         ui.ctx().request_repaint();
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
     }
 }
 
+/// Everything that must happen once per frame before any pane draws:
+/// refresh the per-frame mirrors of the parameters and age out voices
+/// whose fade has completed.
+///
+/// [`root_ui`] calls this itself. It is public for shells that compose
+/// their own layout instead of using the dock — the offline renderer
+/// draws [`Pane`]s directly, and skipping this would leave it rendering
+/// last frame's tuning against never-pruned voices.
+pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+    learn_step(state, params);
+
+    state.tuning = params::tuning_from_params(params);
+    // Meantone mode locks the major third to four perfect fifths: derive it
+    // from the fifth here, so the whole pipeline (scene pitch classes,
+    // matching, readouts) sees the locked value without any meantone
+    // awareness of its own. The lock is exact in integer microcents, so
+    // comma-equivalent nodes collapse to one pitch. The Five param is left
+    // untouched (inert while the lock is on).
+    if state.view.meantone {
+        state.tuning.lock_meantone();
+    }
+    state.frame_params = FrameParams {
+        fade_time: params.get(params::ParamKey::Fade),
+        darkest_pitch: params.get(params::ParamKey::DarkestPitch),
+        brightest_pitch: params.get(params::ParamKey::BrightestPitch),
+    };
+    // Every layer of a node now fades on this one time, so a voice is dead
+    // to the display exactly when its envelope reaches zero.
+    state.tracker.prune(now, state.frame_params.fade_time);
+}
+
+/// A pane that stands on its own, outside the dock.
+///
+/// Only the two *views* are here. The settings panes edit state that a
+/// non-interactive renderer cannot change and a viewer should not see, so
+/// they are deliberately unreachable this way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Pane {
+    /// The 3D lattice.
+    Lattice,
+    /// The spectrum, voice bars and piano roll.
+    Spectral,
+}
+
+/// Draw one pane's body into `ui`, filling it, with no dock or tab bar.
+///
+/// Callers must have run [`begin_frame`] for this `now` already. Panes
+/// still read hover and pointer state from `ui`, so an offline caller
+/// feeding synthetic input simply gets no hover — which is what a
+/// recording wants.
+pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
+    match pane {
+        Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now),
+    }
+}
+
 /// Repaint cadence while nothing animates: newly arriving MIDI shows up
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Whether the piano roll still has something moving across it: its window
+/// reaches back to a note that was sounding. Goes quiet once the last note
+/// has scrolled off the far edge, so an idle plugin still idles.
+fn roll_scrolling(state: &SharedState, now: f64) -> bool {
+    let cfg = &state.spectrum_config;
+    cfg.show_roll
+        && cfg.roll_fraction > 0.0
+        && state
+            .tracker
+            .roll()
+            .latest_activity(now)
+            .is_some_and(|last| now - last <= cfg.roll_seconds as f64)
+}
 
 /// One tick of learn mode (v1 semantics): while armed, whenever the set of
 /// held pitch classes changes, re-infer the tuning and write it through the

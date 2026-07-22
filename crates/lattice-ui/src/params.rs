@@ -90,6 +90,32 @@ impl ParamKey {
         }
     }
 
+    /// The stable string id this parameter is known by outside the
+    /// program: the host's automation lane, a saved project, a recorded
+    /// take. **These strings must match the `#[id = "..."]` attributes on
+    /// `MidiLattice3dParams`** — changing one orphans every project that
+    /// automates it, which is why `Fade` still carries its pre-merge
+    /// `pitch-class-fade` id.
+    pub fn id(self) -> &'static str {
+        match self {
+            ParamKey::COffset => "tuning-c-offset",
+            ParamKey::Three => "tuning-three",
+            ParamKey::Five => "tuning-five",
+            ParamKey::Seven => "tuning-seven",
+            ParamKey::Tolerance => "tuning-tolerance",
+            ParamKey::Fade => "pitch-class-fade",
+            ParamKey::DarkestPitch => "darkest-pitch",
+            ParamKey::BrightestPitch => "brightest-pitch",
+        }
+    }
+
+    /// The inverse of [`id`](Self::id). Unknown ids give `None` — a take
+    /// recorded by a newer build may name a parameter this one has never
+    /// heard of, and skipping it beats refusing to render.
+    pub fn from_id(id: &str) -> Option<ParamKey> {
+        ParamKey::ALL.into_iter().find(|key| key.id() == id)
+    }
+
     /// Default value: 12-TET tuning as in v1, so the lattice matches a
     /// plain MIDI keyboard until the user dials in a tuning. Shells may
     /// deliberately override (the standalone harness demos a just lattice).

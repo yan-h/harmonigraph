@@ -40,6 +40,7 @@ fn main() -> eframe::Result {
             {
                 app.state.load_persist(&serialized);
             }
+            app.recorder = Recorder::from_env(&app.state);
             Ok(Box::new(app))
         }),
     )
@@ -75,6 +76,79 @@ struct App {
     log_events: bool,
     /// Scripted self-screenshot (see [`SelfShot`]); None in normal runs.
     self_shot: Option<SelfShot>,
+    /// Take recorder (see [`Recorder`]); None unless LATTICE_TAKE is set.
+    recorder: Option<Recorder>,
+}
+
+/// Env-gated take recorder: `LATTICE_TAKE=/path/piece.take` writes every
+/// note event this harness sees, in the format `lattice-offline` replays.
+///
+/// This is the cheap half of the offline video pipeline, and the half
+/// that needs no DAW at all — play into the harness from a keyboard or
+/// over an IAC bus, then render the take at 4K afterwards. It is also how
+/// the renderer gets exercised without depending on Bitwig's export
+/// behavior, which is the one part of the pipeline this repo cannot
+/// verify on its own.
+///
+/// The harness has no audio worth recording (the spectrum runs off a mock
+/// synth), so takes from here are note-only; pass the real bounce to
+/// `lattice-offline --audio` at render time.
+struct Recorder {
+    writer: lattice_take::Writer,
+    /// Last value seen for each parameter, so only changes are written.
+    last: [f32; ParamKey::ALL.len()],
+}
+
+impl Recorder {
+    fn from_env(state: &SharedState) -> Option<Recorder> {
+        let path = std::env::var("LATTICE_TAKE").ok()?;
+        let header = lattice_take::Header {
+            sample_rate: SYNTH_RATE as f32,
+            ui_state: Some(state.save_persist()),
+            source: "lattice-standalone".into(),
+            ..Default::default()
+        };
+        match lattice_take::Writer::create(&path, &header) {
+            Ok(writer) => {
+                eprintln!("recording take: {path}");
+                Some(Recorder { writer, last: [f32::NAN; ParamKey::ALL.len()] })
+            }
+            Err(err) => {
+                eprintln!("could not record take to {path}: {err}");
+                None
+            }
+        }
+    }
+
+    fn note(&mut self, event: &NoteEvent) {
+        let kind = match event.kind {
+            NoteEventKind::On { velocity } => lattice_take::NoteKind::On { velocity },
+            NoteEventKind::Off => lattice_take::NoteKind::Off,
+            NoteEventKind::Tuning { semitones } => lattice_take::NoteKind::Tuning { semitones },
+            NoteEventKind::AllOff => lattice_take::NoteKind::AllOff,
+        };
+        let _ = self.writer.note(lattice_take::NoteRecord {
+            t: event.time,
+            channel: event.channel,
+            note: event.note,
+            kind,
+        });
+    }
+
+    /// Write any parameter that moved since the last frame.
+    fn params(&mut self, params: &StandaloneParams, now: f64) {
+        for (i, key) in ParamKey::ALL.into_iter().enumerate() {
+            let value = params.get(key);
+            if self.last[i] != value {
+                self.last[i] = value;
+                let _ = self.writer.param(lattice_take::ParamRecord {
+                    t: now,
+                    id: key.id().to_string(),
+                    value,
+                });
+            }
+        }
+    }
 }
 
 /// Env-gated self-screenshot for scripted visual verification:
@@ -316,6 +390,9 @@ impl App {
             decoder: MidiDecoder::default(),
             log_events: true,
             self_shot: SelfShot::from_env(),
+            // Needs the restored UI state in the header, so it is
+            // installed after load_persist rather than here.
+            recorder: None,
         }
     }
 
@@ -429,7 +506,13 @@ impl eframe::App for App {
                     }
                 ));
             }
+            if let Some(recorder) = &mut self.recorder {
+                recorder.note(&event);
+            }
             self.state.tracker.handle_event(event);
+        }
+        if let Some(recorder) = &mut self.recorder {
+            recorder.params(&self.params, now);
         }
 
         // The harness has no real audio; synthesize the held notes so the

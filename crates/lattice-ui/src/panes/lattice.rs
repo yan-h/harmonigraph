@@ -9,7 +9,7 @@ use lattice_render::lattice_paint_callback;
 use lattice_scene::{derive_scene, Camera, Projection};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
-pub(super) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;

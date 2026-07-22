@@ -98,6 +98,20 @@ pub struct EditorShared {
     last_frame: Option<Instant>,
     /// Param key currently inside a begin_set/end_set automation gesture.
     gesture: std::cell::Cell<Option<lattice_ui::params::ParamKey>>,
+    /// Take recording, driven from the View pane's toggle.
+    take: crate::take::Control,
+    /// Events the audio thread has recorded into the current take.
+    take_events: Arc<std::sync::atomic::AtomicU64>,
+    /// Whether the transport was rolling as of the last recorded event,
+    /// for the status line. Derived, not authoritative.
+    take_rolling: bool,
+    /// Event count at the previous frame; a rise means the transport is
+    /// rolling and the audio thread is actually capturing.
+    take_last_count: u64,
+    /// Consecutive frames the transport has been stopped for, while a
+    /// take is recording. Debounces the OnTransportStop trigger: a host
+    /// reporting one still block mid-playback must not end a take.
+    take_still_frames: u32,
 }
 
 impl EditorShared {
@@ -105,6 +119,8 @@ impl EditorShared {
         consumer: rtrb::Consumer<CoreNoteEvent>,
         audio_consumer: rtrb::Consumer<f32>,
         sample_rate_bits: Arc<AtomicU32>,
+        take: crate::take::Control,
+        take_events: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         EditorShared {
             consumer,
@@ -117,7 +133,76 @@ impl EditorShared {
             audio_buf: Vec::new(),
             last_frame: None,
             gesture: std::cell::Cell::new(None),
+            take,
+            take_events,
+            take_rolling: false,
+            take_last_count: 0,
+            take_still_frames: 0,
         }
+    }
+
+    /// Frames the transport must be still before OnTransportStop ends a
+    /// take. At the editor's repaint rate this is a fraction of a second
+    /// — long enough to ride out a host reporting one stalled block,
+    /// short enough that the render feels immediate.
+    const STOP_FRAMES: u32 = 20;
+
+    /// Reflect the View pane's toggle into the recorder, and the
+    /// recorder's progress back into the pane. Called once per frame,
+    /// before `root_ui` reads the state it draws.
+    fn sync_take(&mut self, sample_rate: f32) {
+        // The plugin can record; the control is hidden in shells that
+        // can't (the standalone uses an env var instead).
+        self.ui.take_supported = true;
+        self.ui.take_audio = self.ui.render_config.record_audio;
+        let recording = self.take.is_recording();
+        if self.ui.take_recording && !recording {
+            // Start from the CURRENT look, not the last-saved one: what
+            // is on screen right now is what the render should reproduce.
+            self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
+            self.take_last_count = 0;
+            self.take.start(
+                sample_rate,
+                self.ui.save_persist(),
+                self.ui.render_config.record_audio,
+            );
+        } else if !self.ui.take_recording && recording {
+            self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
+        }
+
+        let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
+        self.take_last_count = count;
+        // The audio thread's own view, rather than inferring it from
+        // events arriving: music has gaps, and a gap is not a stop.
+        self.take_rolling = self.take.is_rolling();
+
+        // "The take is done" as soon as the transport stops, if asked —
+        // so a play-through or an audio export yields a video with
+        // nothing further to click.
+        if self.take.is_recording()
+            && self.ui.render_config.trigger == lattice_ui::RenderTrigger::OnTransportStop
+        {
+            // Only after something was actually captured: arming ahead of
+            // the downbeat must not immediately end the take.
+            if self.take_rolling || count == 0 {
+                self.take_still_frames = 0;
+            } else {
+                self.take_still_frames += 1;
+                if self.take_still_frames >= Self::STOP_FRAMES {
+                    self.ui.take_recording = false;
+                    self.take.stop(crate::take::RenderRequest::from_config(
+                        &self.ui.render_config,
+                    ));
+                }
+            }
+        } else {
+            self.take_still_frames = 0;
+        }
+        self.take.tick(self.take_rolling, count);
+        self.ui.take_status = self.take.status();
+        // The shell may have refused to start (unwritable directory);
+        // don't leave the toggle claiming otherwise.
+        self.ui.take_recording = self.take.is_recording();
     }
 
     /// Record a GUI frame, logging a console warning when the event loop
@@ -263,6 +348,8 @@ fn frame(
         ui.ctx().request_repaint();
     }
     shared.drain_audio(now);
+    let sample_rate = f32::from_bits(shared.sample_rate_bits.load(Ordering::Relaxed));
+    shared.sync_take(sample_rate);
 
     let backend = PluginParamBackend {
         params: &state.params,
@@ -515,10 +602,13 @@ mod tests {
         // tests below can't cover: observe-newest-THEN-map ordering.)
         let (mut producer, consumer) = rtrb::RingBuffer::new(64);
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
+        let (_recorder, take_control) = crate::take::channel();
         let mut shared = EditorShared::new(
             consumer,
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            take_control,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );
         for (note, time) in [(60u8, 99.950), (64u8, 99.995)] {
             producer

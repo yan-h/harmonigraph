@@ -16,6 +16,10 @@ use crate::SharedState;
 pub mod appearance;
 pub mod lattice;
 pub mod notes;
+/// The Spectral pane's piano roll. Not a pane of its own — it draws into
+/// the far share of [`spectral`]'s depth axis, and is only split out
+/// because it is the biggest single thing that pane draws.
+pub mod roll;
 pub mod spectral;
 pub mod tuning;
 pub mod view;
@@ -103,6 +107,15 @@ impl egui_dock::TabViewer for Viewer<'_> {
             style
         })
     }
+}
+
+/// A scene color (linear-ish RGBA in `0..1`, as `lattice_scene` hands
+/// them out) as an egui color. Alpha comes from `alpha` rather than the
+/// vector's own: scene colors are opaque, and every 2D use of them wants
+/// its own transparency.
+pub(super) fn scene_color(c: glam::Vec4, alpha: f32) -> egui::Color32 {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+    egui::Color32::from_rgba_unmultiplied(byte(c.x), byte(c.y), byte(c.z), byte(alpha))
 }
 
 /// The dimmest-visible convention shared with the shader (level_floor in

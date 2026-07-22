@@ -56,7 +56,8 @@ plumbing.
 
 ```
 lattice-core    pure logic: PitchClass (integer microcents), Tuning,
-                LatticePos, NoteTracker, SpectrumAnalyzer (FFT). No deps.
+                LatticePos, NoteTracker, NoteHistory/NoteRoll (what was
+                played, by pitch and by time), SpectrumAnalyzer (FFT). No deps.
                 Unit-tested. One module per concern; see its crate doc.
 lattice-scene   per-frame view model: derive_scene() turns tracker+tuning
                 into NodeInstances; orbit Camera; envelopes; CPU picking.
@@ -68,6 +69,12 @@ lattice-ui      egui_dock pane shell: Lattice / Tuning / View / Appearance /
                 Console / Spectral / Spectrum / Notes tabs, one file each
                 under src/panes/. SharedState (incl. cross-pane hover),
                 ParamBackend trait abstracting "where params live".
+lattice-take    the recorded input to a visualization: note events and
+                parameter automation on the audio clock. Linked into the
+                plugin, so serde+ron only. See docs/offline-rendering.md.
+lattice-offline offline video renderer: replays a take headless at an
+                exact frame rate, any resolution, own pane layout, frames
+                piped to ffmpeg. No window, no DAW, no realtime.
 lattice-standalone  eframe dev harness: mock chord progression OR hardware
                     MIDI in (midir, with MPE bend decoding), plus a mock
                     synth feeding the spectrum analyzer.
@@ -103,6 +110,11 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   learn from held chords, per-note tuning (MPE), v1's full channel
   semantics, host-native window resizing, UI state persistence, and
   single-gesture parameter automation.
+- The Spectral pane also draws a **piano roll** of incoming MIDI over the
+  same pitch axis (continuous in cents, so bends and microtonal tunings sit
+  between the keys), and **turns at right angles**: it can run upright as a
+  tall strip beside the lattice, or across as a wide strip below it, with
+  the orientation following the pane's own shape by default.
 
 ## Known gaps / next steps
 
@@ -119,6 +131,16 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   see [`docs/deferred-work.md`](docs/deferred-work.md)).
 - **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
+- **Making videos**: done, by offline replay rather than screen capture.
+  Arm "Record take" in the View pane and play the piece; the plugin writes
+  a *take* (every note event and parameter change, stamped on the host
+  transport so it lines up with a bounce). `lattice-offline` replays it
+  headless into an exact-CFR video at any resolution, with its own pane
+  layout and the bounced audio muxed in. See
+  [`docs/offline-rendering.md`](docs/offline-rendering.md). Live capture of
+  the plugin window itself was investigated and rejected as the more
+  expensive, lower-quality route —
+  [`docs/window-recording.md`](docs/window-recording.md) has the analysis.
 - **Spectral audio FFT**: done — the Spectral pane analyzes a real FFT of
   the plugin's audio input (mono mixdown of the input bus, gated on
   `show_audio`), no longer MIDI-only. Remaining work is analysis polish,
