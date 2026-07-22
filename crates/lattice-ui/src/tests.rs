@@ -423,6 +423,9 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.floor_db = -48.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
     state.spectrum_config.low_octave = 1;
+    state.spectrum_config.show_spectrogram = true;
+    state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
+    state.spectrum_config.spectrogram_opacity = 0.5;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -431,6 +434,34 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
     assert_eq!(restored.spectrum_config.low_octave, 1);
+    assert!(restored.spectrum_config.show_spectrogram);
+    assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
+    assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
+}
+
+#[test]
+fn spectrogram_history_stays_bounded() {
+    let bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
+
+    // Age trim: columns older than HISTORY_SECONDS before the newest go.
+    let mut spec = AudioSpectrum::default();
+    for i in 0..300 {
+        spec.push_history(i as f64, bins);
+    }
+    let cutoff = 299.0 - AudioSpectrum::HISTORY_SECONDS;
+    assert!(spec.history().front().unwrap().time >= cutoff, "old columns dropped");
+    assert_eq!(spec.history().back().unwrap().time, 299.0, "newest kept");
+
+    // Count cap holds even when every column shares one timestamp (so the
+    // age trim never fires) — the backstop against an unbounded ring.
+    let mut spec = AudioSpectrum::default();
+    for _ in 0..(AudioSpectrum::HISTORY_MAX + 50) {
+        spec.push_history(0.0, bins);
+    }
+    assert!(spec.history().len() <= AudioSpectrum::HISTORY_MAX, "count capped");
+
+    spec.clear_history();
+    assert!(spec.history().is_empty());
 }
 
 /// Every text drawn by one pass over a closure, as (rect, text). The halo

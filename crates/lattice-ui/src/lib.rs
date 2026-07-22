@@ -135,6 +135,30 @@ pub enum RollColor {
     Accent,
 }
 
+/// The color ramp a spectrogram cell's intensity maps through. A set of
+/// looks to pick from — the spectrogram is a heatmap, and the palette is
+/// most of its character. Intensity always runs dark (quiet) to bright
+/// (loud); these differ only in the hues it passes through.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrogramColor {
+    /// Grayscale: black to white. The classic, and the most neutral over
+    /// the roll's own colors.
+    Mono,
+    /// Black → deep red → orange → yellow → white. The familiar "heat"
+    /// spectrogram; reads loudest as hottest.
+    #[default]
+    Heat,
+    /// Black → navy → blue → cyan → white. Cool counterpart to Heat.
+    Ice,
+    /// Black → violet → teal → green → yellow. A perceptually even ramp
+    /// (viridis-like) where every step reads as an equal change.
+    Aurora,
+    /// Each cell takes the lattice's own low-to-high pitch color, dimmed by
+    /// intensity — so the spectrogram speaks the same color language as the
+    /// nodes and the Pitch-colored roll.
+    Pitch,
+}
+
 /// What counts as "the take is done", and so when a video gets rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RenderTrigger {
@@ -297,6 +321,26 @@ pub struct SpectrumConfig {
     /// Draw the line where the roll meets the spectrum ("now").
     #[serde(default = "default_true")]
     pub roll_now_line: bool,
+
+    // ---- Spectrogram ------------------------------------------------
+    // A frequency-vs-time heatmap of the analyzed audio, drawn in the
+    // roll's depth region on the roll's own time axis — so each column of
+    // spectral energy lines up with the notes that made it.
+    /// Draw the spectrogram heatmap (over the roll's time window).
+    #[serde(default)]
+    pub show_spectrogram: bool,
+    /// The heatmap's color ramp.
+    #[serde(default)]
+    pub spectrogram_color: SpectrogramColor,
+    /// Overall spectrogram opacity, so it can sit under the notes without
+    /// swamping them. (For the heatmap alone, turn the note ribbons off with
+    /// `show_roll`.)
+    #[serde(default = "default_spectrogram_opacity")]
+    pub spectrogram_opacity: f32,
+}
+
+fn default_spectrogram_opacity() -> f32 {
+    0.85
 }
 
 fn default_true() -> bool {
@@ -375,6 +419,9 @@ impl Default for SpectrumConfig {
             roll_highlight_held: true,
             roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
+            show_spectrogram: false,
+            spectrogram_color: SpectrogramColor::default(),
+            spectrogram_opacity: default_spectrogram_opacity(),
         }
     }
 }
@@ -395,6 +442,17 @@ pub struct AudioSpectrum {
     /// When samples last arrived; the curve hides once the source stops
     /// (closed input bus, switched-off synth) rather than freezing.
     last_samples: Option<f64>,
+    /// Timestamped raw spectra, one per FFT, for the spectrogram — oldest
+    /// first. Raw (unsmoothed) so time isn't blurred across columns.
+    /// Bounded by age and count (see [`AudioSpectrum::push_history`]).
+    history: VecDeque<SpectrogramColumn>,
+}
+
+/// One column of the spectrogram: the raw power spectrum at a moment, on the
+/// shell clock, so it can be placed on the roll's time axis.
+pub struct SpectrogramColumn {
+    pub time: f64,
+    pub power: Box<[f32; lattice_core::spectrum::SPECTRUM_BINS]>,
 }
 
 impl Default for AudioSpectrum {
@@ -405,6 +463,7 @@ impl Default for AudioSpectrum {
             peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             last_fft: None,
             last_samples: None,
+            history: VecDeque::new(),
         }
     }
 }
@@ -464,10 +523,46 @@ impl AudioSpectrum {
                         *shown
                     };
                 }
+                // Keep the RAW spectrum for the spectrogram (the smoothed
+                // `display` would smear one column into the next).
+                self.push_history(now, fresh);
                 self.last_fft = Some(now);
             }
         }
         Some((&self.display, &self.peaks))
+    }
+
+    /// The longest roll window (`roll_seconds` max), plus a margin, is the
+    /// most history the spectrogram can ever show; drop older columns.
+    const HISTORY_SECONDS: f64 = 130.0;
+    /// Backstop on the column count regardless of timing.
+    const HISTORY_MAX: usize = 4000;
+
+    /// Append one raw spectrum to the ring, trimming the far past.
+    fn push_history(
+        &mut self,
+        now: f64,
+        power: [f32; lattice_core::spectrum::SPECTRUM_BINS],
+    ) {
+        self.history.push_back(SpectrogramColumn { time: now, power: Box::new(power) });
+        let oldest_kept = now - Self::HISTORY_SECONDS;
+        while self
+            .history
+            .front()
+            .is_some_and(|c| c.time < oldest_kept || self.history.len() > Self::HISTORY_MAX)
+        {
+            self.history.pop_front();
+        }
+    }
+
+    /// The spectrogram columns, oldest first. Empty until audio has flowed.
+    pub fn history(&self) -> &VecDeque<SpectrogramColumn> {
+        &self.history
+    }
+
+    /// Forget the spectrogram history (paired with clearing the roll).
+    pub fn clear_history(&mut self) {
+        self.history.clear();
     }
 }
 

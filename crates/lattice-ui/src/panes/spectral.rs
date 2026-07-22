@@ -19,7 +19,8 @@ use lattice_scene::channel_color;
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     use crate::{
-        RollColor, SpectralOrientation, SpectralPlacement, SpectrumLabels, SpectrumWindow,
+        RollColor, SpectralOrientation, SpectralPlacement, SpectrogramColor, SpectrumLabels,
+        SpectrumWindow,
     };
 
     // ---- Layout ---------------------------------------------------------
@@ -220,6 +221,39 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             state.tracker.clear_roll();
         }
     });
+
+    // ---- Spectrogram ----------------------------------------------------
+    section(ui, "Spectrogram");
+    ui.checkbox(&mut cfg.show_spectrogram, "Spectrogram").on_hover_text(
+        "A frequency-vs-time heatmap of the audio, drawn in the roll's \
+         region on the same time axis — so each column of energy lines up \
+         with the notes that made it. Shares the Spectrum's Floor and Tilt \
+         for intensity. Turn Note history off to see the heatmap alone.",
+    );
+    choice_row(
+        ui,
+        "Palette",
+        &mut cfg.spectrogram_color,
+        &[
+            (SpectrogramColor::Mono, "Mono", "Grayscale; the most neutral over the roll"),
+            (SpectrogramColor::Heat, "Heat", "Black-red-orange-yellow-white"),
+            (SpectrogramColor::Ice, "Ice", "Black-blue-cyan-white"),
+            (SpectrogramColor::Aurora, "Aurora", "Violet-teal-green-yellow (even ramp)"),
+            (SpectrogramColor::Pitch, "Pitch", "The lattice's own low-to-high pitch colors"),
+        ],
+    );
+    ValueBar::new(&mut cfg.spectrogram_opacity, 0.05..=1.0, "Opacity")
+        .show(ui)
+        .on_hover_text("Overall heatmap opacity, so it can sit under the notes");
+    button_row(ui, |ui| {
+        if ui
+            .button("Clear spectrogram")
+            .on_hover_text("Forget the accumulated spectral history")
+            .clicked()
+        {
+            state.spectrum.clear_history();
+        }
+    });
 }
 
 /// Depth budget for both plots, as a fraction of the *spectrum's share* of
@@ -230,6 +264,16 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
+
+/// How loud `power` reads at pitch `midi`, on a 0..1 scale: the configured
+/// floor is 0, a full-scale (0 dB) sine is 1, and the tilt lifts treble by
+/// its slope above the 1 kHz pivot. The spectrum curve's height and the
+/// spectrogram's cell intensity both read from this, so the two always agree
+/// on what "loud" means for a given bucket.
+pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
+    let db = 10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+    ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0)
+}
 
 /// The pane's abstract drawing plane, and how it lands on screen.
 ///
@@ -351,11 +395,17 @@ impl Axes {
 }
 
 /// How the depth axis is shared out: the spectrum owns `0..split`, the
-/// roll `split..1`. With the roll off the spectrum owns all of it, which
-/// reproduces the pre-roll layout exactly — that equality is what keeps
-/// the voice bars and the curve calibrated against each other.
+/// roll (and/or spectrogram) `split..1`. With that far region off the
+/// spectrum owns all of it, which reproduces the pre-roll layout exactly —
+/// that equality is what keeps the voice bars and the curve calibrated
+/// against each other. The spectrogram shares the roll's region and time
+/// axis, so it carves out the same share.
 fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
-    if cfg.show_roll { (1.0 - cfg.roll_fraction).clamp(0.0, 1.0) } else { 1.0 }
+    if cfg.show_roll || cfg.show_spectrogram {
+        (1.0 - cfg.roll_fraction).clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
 }
 
 /// Where a pitch sits on the pane's axis: the octave zoom, as a mapping.
@@ -419,11 +469,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // the conventional reference slope (negative), so the display
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble
     // 4.5 dB/oct.
-    let d_of = |power: f32, midi: f32| {
-        let db =
-            10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-        ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0) * split * PLOT_HEIGHT_FRACTION
-    };
+    let d_of = |power: f32, midi: f32| loudness(&cfg, power, midi) * split * PLOT_HEIGHT_FRACTION;
 
     // Axis gridlines: every C (note labels) or the analyzer-standard
     // 1-2-5 frequency series, per the Spectrum tab. Both run the full
@@ -474,11 +520,27 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
         }
     }
 
-    // The piano roll of what has been played, in the far share of the
-    // depth axis. Drawn before the spectrum so a live curve stays legible
-    // over it.
-    if cfg.show_roll && split < 1.0 {
-        super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
+    // Advance the analyzer up front (it throttles the FFT internally) so the
+    // spectrogram accumulates this frame's column even when the curve is
+    // hidden. The curve below calls display() again and gets the same result
+    // without re-running the FFT.
+    if cfg.show_audio || cfg.show_spectrogram {
+        let _ = state.spectrum.display(now, &cfg);
+    }
+
+    // The far share of the depth axis: a spectrogram heatmap of the audio
+    // and/or the piano roll of what has been played, both on the same
+    // `now`-anchored time axis. The spectrogram lays down first (it's a
+    // background); the roll's ribbons sit over it, and the live spectrum
+    // curve over everything. Turning the ribbons off (`show_roll`) with the
+    // spectrogram on leaves the heatmap alone.
+    if split < 1.0 {
+        if cfg.show_spectrogram {
+            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now);
+        }
+        if cfg.show_roll {
+            super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
+        }
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
@@ -767,6 +829,17 @@ mod tests {
         state.spectrum_config.roll_fraction = roll_fraction;
         state.spectrum_config.roll_outline = true;
         state.spectrum_config.roll_seconds = 10.0;
+        // Exercise the spectrogram's mesh path in every orientation too, with
+        // energy at both axis extremes (where cell clamping is most likely to
+        // fold a quad to zero area — which egui panics on).
+        state.spectrum_config.show_spectrogram = true;
+        let mut spectrum_bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
+        spectrum_bins[0] = 1.0;
+        spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.5;
+        spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS - 1] = 0.3;
+        for i in 0..80 {
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, spectrum_bins);
+        }
 
         let on = |time, note| NoteEvent {
             time,
