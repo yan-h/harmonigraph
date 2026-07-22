@@ -97,6 +97,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
     ui.checkbox(&mut cfg.show_voice_bars, "Voice bars")
         .on_hover_text("MIDI-derived bars at each voice's actual pitch");
+    ui.checkbox(&mut cfg.spectrum_flip, "Flip to roll").on_hover_text(
+        "Grow the spectrum from the now-line so its baseline joins the roll / \
+         spectrogram, peaks pointing outward; the pitch labels move with it",
+    );
 
     // ---- Pitch axis -----------------------------------------------------
     section(ui, "Pitch axis");
@@ -430,6 +434,13 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble
     // 4.5 dB/oct.
     let d_of = |power: f32, midi: f32| loudness(&cfg, power, midi) * split * PLOT_HEIGHT_FRACTION;
+    // Where a spectrum-region depth lands: normally straight through, but with
+    // `spectrum_flip` the whole region mirrors so the baseline sits on the
+    // now-line (joining the roll/spectrogram) and the peaks point outward.
+    let sd = |d: f32| if cfg.spectrum_flip { split - d } else { d };
+    // The labels ride the baseline: the outer edge normally, the now-line when
+    // flipped (offsetting into the spectrum, whichever way that now runs).
+    let (label_d, label_into) = if cfg.spectrum_flip { (split, -2.0) } else { (0.0, 2.0) };
 
     // Axis gridlines: every C (note labels) or the analyzer-standard
     // 1-2-5 frequency series, per the Spectrum tab. Both run the full
@@ -437,7 +448,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     let gridline = |p: f32, label: Option<String>| {
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
         if let Some(label) = label {
-            let (pos, align) = axes.text_anchor(p, 0.0, 3.0, 2.0);
+            let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
             painter.text(pos, align, label, egui::FontId::monospace(10.0), theme::text_dim());
         }
     };
@@ -525,7 +536,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                     let d = d_of(level, midi);
                     if d * axes.depth_len() > 0.5 {
                         painter.line_segment(
-                            [axes.at(t, 0.0), axes.at(t, d)],
+                            [axes.at(t, sd(0.0)), axes.at(t, sd(d))],
                             egui::Stroke::new(slab, fill_color),
                         );
                     }
@@ -534,7 +545,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
             if cfg.peak_hold {
                 let peak_points: Vec<egui::Pos2> = visible
                     .iter()
-                    .map(|&(midi, t, _, peak)| axes.at(t, d_of(peak, midi)))
+                    .map(|&(midi, t, _, peak)| axes.at(t, sd(d_of(peak, midi))))
                     .collect();
                 painter.add(egui::Shape::line(
                     peak_points,
@@ -543,7 +554,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
             }
             let points: Vec<egui::Pos2> = visible
                 .iter()
-                .map(|&(midi, t, level, _)| axes.at(t, d_of(level, midi)))
+                .map(|&(midi, t, level, _)| axes.at(t, sd(d_of(level, midi))))
                 .collect();
             painter.add(egui::Shape::line(
                 points,
@@ -751,6 +762,7 @@ mod tests {
     fn paint(rect: egui::Rect, orientation: SpectralOrientation, roll_fraction: f32) -> usize {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = orientation;
+        state.spectrum_config.spectrum_flip = true; // flipped labels/curve path
         state.spectrum_config.roll_fraction = roll_fraction;
         state.spectrum_config.roll_outline = true;
         state.spectrum_config.roll_fill = 0.5; // translucent fill + auto-outline path

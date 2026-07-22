@@ -223,6 +223,11 @@ pub struct SpectrumConfig {
     /// standalone: a synth on the held notes).
     #[serde(default = "default_true")]
     pub show_audio: bool,
+    /// Grow the spectrum from the now-line (its baseline joins the roll /
+    /// spectrogram) instead of from the outer edge. The pitch/frequency
+    /// labels move to the baseline with it.
+    #[serde(default)]
+    pub spectrum_flip: bool,
     pub window: SpectrumWindow,
     /// Bottom of the dB height scale; a full-scale sine sits at 0 dB.
     pub floor_db: f32,
@@ -371,6 +376,7 @@ impl Default for SpectrumConfig {
         SpectrumConfig {
             orientation: SpectralOrientation::Auto,
             show_audio: true,
+            spectrum_flip: false,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             smoothing: 0.55,
