@@ -18,41 +18,12 @@ use lattice_scene::channel_color;
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{
-        RollColor, SpectralOrientation, SpectralPlacement, SpectrumLabels, SpectrumWindow,
-    };
+    use crate::{RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow};
 
     // ---- Layout ---------------------------------------------------------
-    // Placement rebuilds the dock, so it needs the whole state; everything
-    // below only touches the config.
+    // Just the orientation now; drag the pane wherever you like (egui_dock
+    // docks it freely), and Auto follows the shape it lands in.
     section(ui, "Layout");
-    button_row(ui, |ui| {
-        ui.label("Place").on_hover_text(
-            "Where the Spectral pane sits. Changing this rebuilds the pane \
-             arrangement, discarding any hand-docking.",
-        );
-        for (placement, label, hint) in [
-            (
-                SpectralPlacement::Below,
-                "Below lattice",
-                "A wide strip under the lattice: what sounds is directly \
-                 under what lights up",
-            ),
-            (
-                SpectralPlacement::Right,
-                "Right of lattice",
-                "A tall strip beside the lattice — with Auto orientation \
-                 this turns the pane into an upright piano roll",
-            ),
-        ] {
-            let selected = state.spectrum_config.placement == placement;
-            if ui.selectable_label(selected, label).on_hover_text(hint).clicked() && !selected {
-                state.spectrum_config.placement = placement;
-                state.reset_dock_layout();
-            }
-        }
-    });
-
     let cfg = &mut state.spectrum_config;
     choice_row(
         ui,
@@ -62,20 +33,20 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (
                 SpectralOrientation::Auto,
                 "Auto",
-                "Follow the pane's shape: taller than wide reads upright",
+                "Follow the pane's shape: the spectrogram scrolls along the long side",
             ),
-            (SpectralOrientation::Horizontal, "Across", "Pitch left to right"),
-            (SpectralOrientation::Vertical, "Upright", "Pitch bottom to top"),
+            (
+                SpectralOrientation::Horizontal,
+                "Across",
+                "Time scrolls sideways (now on the left); pitch is vertical, spectrum on the left",
+            ),
+            (
+                SpectralOrientation::Vertical,
+                "Upright",
+                "Time scrolls downward (now on top); pitch is horizontal, spectrum on top",
+            ),
         ],
     );
-    button_row(ui, |ui| {
-        ui.checkbox(&mut cfg.flip_pitch, "Flip pitch")
-            .on_hover_text("Run the pitch axis the other way (high notes first)");
-        ui.checkbox(&mut cfg.flip_depth, "Flip depth").on_hover_text(
-            "Put the baseline on the opposite edge: the spectrum hangs \
-             instead of standing, and the roll flows the other way",
-        );
-    });
 
     // ---- Audio spectrum -------------------------------------------------
     section(ui, "Spectrum");
@@ -128,8 +99,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         }
     });
 
-    ui.checkbox(&mut cfg.fill, "Fill")
-        .on_hover_text("Shade under the spectrum curve");
     ui.checkbox(&mut cfg.peak_hold, "Peak hold")
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
     ui.checkbox(&mut cfg.show_voice_bars, "Voice bars")
@@ -184,9 +153,12 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         .show(ui)
         .on_hover_text("Corner rounding of an unbent note (bent notes stay angular)");
     ValueBar::new(&mut cfg.roll_opacity, 0.05..=1.0, "Opacity").show(ui);
-    ValueBar::new(&mut cfg.roll_age_fade, 0.0..=1.0, "Age fade")
+    ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
         .show(ui)
-        .on_hover_text("How far a note dims as it travels to the far edge");
+        .on_hover_text(
+            "Stroke width of a note's outline. Notes are hollow, so the \
+             spectrogram shows through them; lattice bloom adds a glow.",
+        );
     ValueBar::new(&mut cfg.roll_grid_seconds, 0.0..=10.0, "Grid (s)")
         .decimals(1)
         .show(ui)
@@ -203,12 +175,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     );
     ui.checkbox(&mut cfg.roll_velocity_alpha, "Velocity opacity")
         .on_hover_text("Quiet notes draw fainter");
-    ui.checkbox(&mut cfg.roll_highlight_held, "Highlight held")
-        .on_hover_text("Notes still sounding keep full brightness");
-    ui.checkbox(&mut cfg.roll_onsets, "Onset caps")
-        .on_hover_text("A bright cap at each note's attack");
-    ui.checkbox(&mut cfg.roll_outline, "Outline")
-        .on_hover_text("Trace every note in a brightened edge");
     ui.checkbox(&mut cfg.roll_now_line, "Now line")
         .on_hover_text("Mark where the roll meets the spectrum");
     button_row(ui, |ui| {
@@ -218,6 +184,45 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             .clicked()
         {
             state.tracker.clear_roll();
+        }
+    });
+
+    // ---- Spectrogram ----------------------------------------------------
+    section(ui, "Spectrogram");
+    ui.checkbox(&mut cfg.show_spectrogram, "Spectrogram").on_hover_text(
+        "A frequency-vs-time heatmap of the audio, drawn in the roll's \
+         region on the same time axis — so each column of energy lines up \
+         with the notes that made it. Shares the Spectrum's Floor and Tilt \
+         for intensity. Turn Note history off to see the heatmap alone.",
+    );
+    choice_row(
+        ui,
+        "Palette",
+        &mut cfg.spectrogram_color,
+        &[
+            (SpectrogramColor::Mono, "Mono", "Grayscale; the most neutral over the roll"),
+            (SpectrogramColor::Heat, "Heat", "Black-red-orange-yellow-white"),
+            (SpectrogramColor::Ice, "Ice", "Black-blue-cyan-white"),
+            (SpectrogramColor::Aurora, "Aurora", "Violet-teal-green-yellow (even ramp)"),
+            (SpectrogramColor::Pitch, "Pitch", "The lattice's own low-to-high pitch colors"),
+        ],
+    );
+    ValueBar::new(&mut cfg.spectrogram_opacity, 0.05..=1.0, "Opacity")
+        .show(ui)
+        .on_hover_text("Overall heatmap opacity, so it can sit under the notes");
+    ValueBar::new(&mut cfg.spectrogram_smoothing, 0.0..=0.9, "Smoothing")
+        .show(ui)
+        .on_hover_text(
+            "Average each column with its neighbors in time: 0 is off, higher \
+             smooths fast beating/chorus/reverb wobble, softening onsets a little",
+        );
+    button_row(ui, |ui| {
+        if ui
+            .button("Clear spectrogram")
+            .on_hover_text("Forget the accumulated spectral history")
+            .clicked()
+        {
+            state.spectrum.clear_history();
         }
     });
 }
@@ -231,63 +236,70 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
+/// How loud `power` reads at pitch `midi`, on a 0..1 scale: the configured
+/// floor is 0, a full-scale (0 dB) sine is 1, and the tilt lifts treble by
+/// its slope above the 1 kHz pivot. The spectrum curve's height and the
+/// spectrogram's cell intensity both read from this, so the two always agree
+/// on what "loud" means for a given bucket.
+pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
+    let db = 10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+    ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0)
+}
+
 /// The pane's abstract drawing plane, and how it lands on screen.
 ///
 /// Two axes, both running `0..1`:
 ///
-/// - **pitch** runs along the pane; 0 is the low end of the octave zoom.
-/// - **depth** runs across it; 0 is the *baseline* (where the spectrum
-///   stands up from) and 1 the far edge (where the roll's oldest notes
-///   are).
+/// - **pitch** runs across the pane's SHORT side; 0 is the low end of the
+///   octave zoom.
+/// - **depth** is the time axis, running along the LONG side; 0 is the
+///   spectrum's outer edge, `split` the now-line (where the spectrum joins
+///   the spectrogram), and 1 the far edge (the roll's oldest notes).
 ///
-/// Orientation and the two flips are all handled inside [`at`](Self::at);
-/// nothing else in the pane names a screen side.
+/// Orientation is handled inside [`at`](Self::at); nothing else in the pane
+/// names a screen side. Two layouts: **Across** — time left(now)->right(past),
+/// pitch bottom->top; and **Upright** — time top(now)->bottom(past), pitch
+/// left->right. In both the spectrum sits at the now-line end.
 #[derive(Clone, Copy)]
 pub(super) struct Axes {
     pub rect: egui::Rect,
-    /// Pitch runs up the pane rather than across it.
-    vertical: bool,
-    flip_pitch: bool,
-    flip_depth: bool,
+    /// Time (the depth axis) runs down the pane rather than along it, with
+    /// pitch across. See [`SpectralOrientation`](crate::SpectralOrientation).
+    time_vertical: bool,
 }
 
 impl Axes {
     fn new(rect: egui::Rect, cfg: &crate::SpectrumConfig) -> Axes {
-        Axes {
-            rect,
-            vertical: cfg.orientation.is_vertical(rect),
-            flip_pitch: cfg.flip_pitch,
-            flip_depth: cfg.flip_depth,
-        }
+        Axes { rect, time_vertical: cfg.orientation.is_time_vertical(rect) }
     }
 
-    /// The screen point at pitch fraction `p` and depth fraction `d`.
+    /// The screen point at pitch fraction `p` and depth (time) fraction `d`.
     pub fn at(&self, p: f32, d: f32) -> egui::Pos2 {
-        let p = if self.flip_pitch { 1.0 - p } else { p };
-        let d = if self.flip_depth { 1.0 - d } else { d };
-        if self.vertical {
-            // Pitch climbs the pane (low notes at the bottom, a keyboard
-            // stood on end); depth runs out from the left edge.
+        if self.time_vertical {
+            // Upright: time runs down (now/spectrum at the top, past below);
+            // pitch runs across (low left, high right).
+            egui::pos2(
+                self.rect.left() + self.rect.width() * p,
+                self.rect.top() + self.rect.height() * d,
+            )
+        } else {
+            // Across: time runs along the pane (now/spectrum at the left, past
+            // to the right); pitch climbs (low bottom, high top).
             egui::pos2(
                 self.rect.left() + self.rect.width() * d,
                 self.rect.bottom() - self.rect.height() * p,
             )
-        } else {
-            egui::pos2(
-                self.rect.left() + self.rect.width() * p,
-                self.rect.bottom() - self.rect.height() * d,
-            )
         }
     }
 
-    /// Pixels spanned by the full pitch axis.
+    /// Pixels spanned by the full pitch axis (the short side).
     pub fn pitch_len(&self) -> f32 {
-        if self.vertical { self.rect.height() } else { self.rect.width() }
+        if self.time_vertical { self.rect.width() } else { self.rect.height() }
     }
 
-    /// Pixels spanned by the full depth axis.
+    /// Pixels spanned by the full depth/time axis (the long side).
     pub fn depth_len(&self) -> f32 {
-        if self.vertical { self.rect.width() } else { self.rect.height() }
+        if self.time_vertical { self.rect.height() } else { self.rect.width() }
     }
 
     /// Which way the pitch axis points on screen (unit vector).
@@ -320,17 +332,16 @@ impl Axes {
     /// The pitch fraction under a screen position — the inverse of the
     /// pitch half of [`at`](Self::at). Unclamped.
     fn pitch_at(&self, pos: egui::Pos2) -> f32 {
-        let t = if self.vertical {
-            (self.rect.bottom() - pos.y) / self.rect.height().max(1.0)
-        } else {
+        if self.time_vertical {
             (pos.x - self.rect.left()) / self.rect.width().max(1.0)
-        };
-        if self.flip_pitch { 1.0 - t } else { t }
+        } else {
+            (self.rect.bottom() - pos.y) / self.rect.height().max(1.0)
+        }
     }
 
     /// Anchor and alignment for a text label at `(p, d)`, offset `along`
     /// pixels up the pitch axis and `into` pixels up the depth axis, and
-    /// growing in those same directions. One helper covers all four
+    /// growing in those same directions. One helper covers both
     /// orientations: the growth direction is read off the axes rather
     /// than case-matched per side.
     fn text_anchor(&self, p: f32, d: f32, along: f32, into: f32) -> (egui::Pos2, egui::Align2) {
@@ -351,11 +362,17 @@ impl Axes {
 }
 
 /// How the depth axis is shared out: the spectrum owns `0..split`, the
-/// roll `split..1`. With the roll off the spectrum owns all of it, which
-/// reproduces the pre-roll layout exactly — that equality is what keeps
-/// the voice bars and the curve calibrated against each other.
+/// roll (and/or spectrogram) `split..1`. With that far region off the
+/// spectrum owns all of it, which reproduces the pre-roll layout exactly —
+/// that equality is what keeps the voice bars and the curve calibrated
+/// against each other. The spectrogram shares the roll's region and time
+/// axis, so it carves out the same share.
 fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
-    if cfg.show_roll { (1.0 - cfg.roll_fraction).clamp(0.0, 1.0) } else { 1.0 }
+    if cfg.show_roll || cfg.show_spectrogram {
+        (1.0 - cfg.roll_fraction).clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
 }
 
 /// Where a pitch sits on the pane's axis: the octave zoom, as a mapping.
@@ -419,11 +436,16 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // the conventional reference slope (negative), so the display
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble
     // 4.5 dB/oct.
-    let d_of = |power: f32, midi: f32| {
-        let db =
-            10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-        ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0) * split * PLOT_HEIGHT_FRACTION
-    };
+    let d_of = |power: f32, midi: f32| loudness(&cfg, power, midi) * split * PLOT_HEIGHT_FRACTION;
+    // The spectrum joins the spectrogram: its region mirrors so the baseline
+    // sits on the now-line (against the spectrogram's newest column) and the
+    // peaks point outward. With no roll/spectrogram (split == 1) there's
+    // nothing to join, so it stands up from the outer edge as usual.
+    let joined = split < 1.0;
+    let sd = |d: f32| if joined { split - d } else { d };
+    // Labels ride the baseline: the now-line when joined (offsetting into the
+    // spectrum, whichever way that runs), else the outer edge.
+    let (label_d, label_into) = if joined { (split, -2.0) } else { (0.0, 2.0) };
 
     // Axis gridlines: every C (note labels) or the analyzer-standard
     // 1-2-5 frequency series, per the Spectrum tab. Both run the full
@@ -431,7 +453,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     let gridline = |p: f32, label: Option<String>| {
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
         if let Some(label) = label {
-            let (pos, align) = axes.text_anchor(p, 0.0, 3.0, 2.0);
+            let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
             painter.text(pos, align, label, egui::FontId::monospace(10.0), theme::text_dim());
         }
     };
@@ -474,17 +496,34 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
         }
     }
 
-    // The piano roll of what has been played, in the far share of the
-    // depth axis. Drawn before the spectrum so a live curve stays legible
-    // over it.
-    if cfg.show_roll && split < 1.0 {
-        super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
+    // Advance the analyzer up front (it throttles the FFT internally) so the
+    // spectrogram accumulates this frame's column even when the curve is
+    // hidden. The curve below calls display() again and gets the same result
+    // without re-running the FFT.
+    if cfg.show_audio || cfg.show_spectrogram {
+        let _ = state.spectrum.display(now, &cfg);
+    }
+
+    // The far share of the depth axis: a spectrogram heatmap of the audio
+    // and/or the piano roll of what has been played, both on the same
+    // `now`-anchored time axis. The spectrogram lays down first (it's a
+    // background); the roll's ribbons sit over it, and the live spectrum
+    // curve over everything. Turning the ribbons off (`show_roll`) with the
+    // spectrogram on leaves the heatmap alone.
+    if split < 1.0 {
+        if cfg.show_spectrogram {
+            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now);
+        }
+        if cfg.show_roll {
+            super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
+        }
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
     if cfg.show_audio && split > 0.0 {
+        let frame = state.frame_params;
         if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
             // Only the buckets inside the octave zoom.
             let visible: Vec<(f32, f32, f32, f32)> = (0..levels.len())
@@ -494,39 +533,49 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                 })
                 .collect();
 
-            if cfg.fill {
-                // One translucent slab per bucket, wide enough to meet its
-                // neighbors.
-                let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
-                let fill_color = theme::accent().gamma_multiply(0.15);
-                for &(midi, t, level, _) in &visible {
-                    let d = d_of(level, midi);
-                    if d * axes.depth_len() > 0.5 {
-                        painter.line_segment(
-                            [axes.at(t, 0.0), axes.at(t, d)],
-                            egui::Stroke::new(slab, fill_color),
-                        );
-                    }
+            // Color from the SAME palette as the spectrogram, keyed by the same
+            // loudness, so the curve reads in the heatmap's scheme rather than a
+            // flat accent. `tint` keeps the palette's hue/brightness and only
+            // sets opacity (gamma_multiply would darken it toward black).
+            let hue = |power: f32, midi: f32| {
+                super::spectrogram::cell_color(
+                    cfg.spectrogram_color,
+                    loudness(&cfg, power, midi),
+                    midi,
+                    &frame,
+                )
+            };
+            let tint = |c: egui::Color32, a: u8| {
+                egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+            };
+
+            // The spectrum is a filled shape, like the spectrogram — no outline
+            // curve. Each slab is one bucket in its own palette color, opaque
+            // enough to read as a solid fill; densely packed, their tops make
+            // the shape's edge (no separate line to fray).
+            let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
+            for &(midi, t, level, _) in &visible {
+                let d = d_of(level, midi);
+                if d * axes.depth_len() > 0.5 {
+                    painter.line_segment(
+                        [axes.at(t, sd(0.0)), axes.at(t, sd(d))],
+                        egui::Stroke::new(slab, tint(hue(level, midi), 210)),
+                    );
                 }
             }
             if cfg.peak_hold {
-                let peak_points: Vec<egui::Pos2> = visible
-                    .iter()
-                    .map(|&(midi, t, _, peak)| axes.at(t, d_of(peak, midi)))
-                    .collect();
-                painter.add(egui::Shape::line(
-                    peak_points,
-                    egui::Stroke::new(1.0, theme::accent().gamma_multiply(0.35)),
-                ));
+                // The one remaining line: a decaying trace of recent maxima,
+                // in the palette's loud color.
+                let loud = super::spectrogram::cell_color(
+                    cfg.spectrogram_color,
+                    1.0,
+                    (min_midi + max_midi) * 0.5,
+                    &frame,
+                );
+                let pts: Vec<egui::Pos2> =
+                    visible.iter().map(|&(m, t, _, pk)| axes.at(t, sd(d_of(pk, m)))).collect();
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 150))));
             }
-            let points: Vec<egui::Pos2> = visible
-                .iter()
-                .map(|&(midi, t, level, _)| axes.at(t, d_of(level, midi)))
-                .collect();
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(1.5, theme::accent().gamma_multiply(0.65)),
-            ));
         }
     }
 
@@ -540,7 +589,14 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // hiding it — and they start where the roll's live notes end, so a
     // note's ribbon and its bar read as one continuous mark.
     if cfg.show_voice_bars && split > 0.0 {
-        for voice in state.tracker.voices() {
+        // Stable order: held voices iterate a HashMap, and overlapping opaque
+        // bars paint order-dependently — the offline render must match between
+        // runs.
+        let mut voices: Vec<&lattice_core::Voice> = state.tracker.voices().collect();
+        voices.sort_unstable_by(|a, b| {
+            a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
+        });
+        for voice in voices {
             let activation = voice.activation(now, state.frame_params.fade_time);
             if activation <= 0.0 || !scale.contains(voice.pitch) {
                 continue;
@@ -606,61 +662,46 @@ mod tests {
     const TALL: egui::Rect =
         egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(110.0, 320.0) };
 
-    fn axes(rect: egui::Rect, orientation: SpectralOrientation, flips: (bool, bool)) -> Axes {
-        let cfg = SpectrumConfig {
-            orientation,
-            flip_pitch: flips.0,
-            flip_depth: flips.1,
-            ..Default::default()
-        };
+    fn axes(rect: egui::Rect, orientation: SpectralOrientation) -> Axes {
+        let cfg = SpectrumConfig { orientation, ..Default::default() };
         Axes::new(rect, &cfg)
     }
 
-    /// Pitch runs left to right along the bottom; depth stands up from it.
+    /// Across: time runs along the pane (now/spectrum on the left, past to
+    /// the right); pitch climbs bottom to top.
     #[test]
-    fn across_puts_the_baseline_on_the_bottom_edge() {
-        let a = axes(WIDE, SpectralOrientation::Horizontal, (false, false));
-        assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 120.0), "low pitch, baseline");
-        assert_eq!(a.at(1.0, 0.0), egui::pos2(310.0, 120.0), "high pitch, baseline");
-        assert_eq!(a.at(0.0, 1.0), egui::pos2(10.0, 20.0), "low pitch, far edge");
-        assert_eq!(a.pitch_len(), 300.0);
-        assert_eq!(a.depth_len(), 100.0);
+    fn across_runs_time_sideways_with_pitch_climbing() {
+        let a = axes(WIDE, SpectralOrientation::Horizontal);
+        assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 120.0), "low pitch, now edge (left)");
+        assert_eq!(a.at(0.0, 1.0), egui::pos2(310.0, 120.0), "low pitch, past edge (right)");
+        assert_eq!(a.at(1.0, 0.0), egui::pos2(10.0, 20.0), "high pitch, now edge");
+        assert_eq!(a.pitch_len(), 100.0, "pitch is the short (vertical) side");
+        assert_eq!(a.depth_len(), 300.0, "time is the long (horizontal) side");
     }
 
-    /// Pitch climbs the left edge (low notes at the bottom, like a
-    /// keyboard stood on end); depth runs out to the right.
+    /// Upright: time runs down the pane (now/spectrum on top, past below);
+    /// pitch runs left to right.
     #[test]
-    fn upright_puts_the_baseline_on_the_left_edge() {
-        let a = axes(TALL, SpectralOrientation::Vertical, (false, false));
-        assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 320.0), "low pitch, baseline");
-        assert_eq!(a.at(1.0, 0.0), egui::pos2(10.0, 20.0), "high pitch, baseline");
-        assert_eq!(a.at(0.0, 1.0), egui::pos2(110.0, 320.0), "low pitch, far edge");
-        assert_eq!(a.pitch_len(), 300.0);
-        assert_eq!(a.depth_len(), 100.0);
+    fn upright_runs_time_downward_with_pitch_across() {
+        let a = axes(TALL, SpectralOrientation::Vertical);
+        assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 20.0), "low pitch, now edge (top)");
+        assert_eq!(a.at(1.0, 0.0), egui::pos2(110.0, 20.0), "high pitch, top");
+        assert_eq!(a.at(0.0, 1.0), egui::pos2(10.0, 320.0), "low pitch, past edge (bottom)");
+        assert_eq!(a.pitch_len(), 100.0, "pitch is the short (horizontal) side");
+        assert_eq!(a.depth_len(), 300.0, "time is the long (vertical) side");
     }
 
     #[test]
     fn auto_orientation_follows_the_pane_shape() {
-        let wide = axes(WIDE, SpectralOrientation::Auto, (false, false));
-        let tall = axes(TALL, SpectralOrientation::Auto, (false, false));
-        // Same corner, opposite meanings: on the wide pane the far end of
-        // the pitch axis is to the right, on the tall one it is up.
-        assert_eq!(wide.at(1.0, 0.0), egui::pos2(310.0, 120.0));
-        assert_eq!(tall.at(1.0, 0.0), egui::pos2(10.0, 20.0));
+        let wide = axes(WIDE, SpectralOrientation::Auto); // time along the width
+        let tall = axes(TALL, SpectralOrientation::Auto); // time down the height
+        // High pitch at the now edge: on the wide pane that's up top, on the
+        // tall one it's to the right.
+        assert_eq!(wide.at(1.0, 0.0), egui::pos2(10.0, 20.0));
+        assert_eq!(tall.at(1.0, 0.0), egui::pos2(110.0, 20.0));
     }
 
-    #[test]
-    fn the_flips_reverse_exactly_one_axis_each() {
-        let plain = axes(WIDE, SpectralOrientation::Horizontal, (false, false));
-        let pitch = axes(WIDE, SpectralOrientation::Horizontal, (true, false));
-        let depth = axes(WIDE, SpectralOrientation::Horizontal, (false, true));
-        assert_eq!(pitch.at(0.0, 0.0), plain.at(1.0, 0.0));
-        assert_eq!(pitch.at(0.0, 1.0), plain.at(1.0, 1.0));
-        assert_eq!(depth.at(0.0, 0.0), plain.at(0.0, 1.0));
-        assert_eq!(depth.at(1.0, 0.0), plain.at(1.0, 1.0));
-    }
-
-    /// Hover has to name the pitch the pointer is actually over, in every
+    /// Hover has to name the pitch the pointer is actually over, in either
     /// orientation — the readout and the lattice highlight both hang off
     /// this one inverse.
     #[test]
@@ -671,31 +712,24 @@ mod tests {
                 SpectralOrientation::Horizontal,
                 SpectralOrientation::Vertical,
             ] {
-                for flips in [(false, false), (true, false), (false, true), (true, true)] {
-                    let a = axes(rect, orientation, flips);
-                    for step in 0..=10 {
-                        let p = step as f32 / 10.0;
-                        // Any depth: the inverse reads the pitch axis only.
-                        let back = a.pitch_at(a.at(p, 0.37));
-                        assert!(
-                            (back - p).abs() < 1e-4,
-                            "{orientation:?} {flips:?}: {p} -> {back}"
-                        );
-                    }
+                let a = axes(rect, orientation);
+                for step in 0..=10 {
+                    let p = step as f32 / 10.0;
+                    // Any depth: the inverse reads the pitch axis only.
+                    let back = a.pitch_at(a.at(p, 0.37));
+                    assert!((back - p).abs() < 1e-4, "{orientation:?}: {p} -> {back}");
                 }
             }
         }
     }
 
-    /// Pin the pre-rotation label placement: gridline labels used to be
-    /// hard-coded to `(x + 3, bottom - 2)` / `LEFT_BOTTOM`, and the
-    /// orientation-agnostic anchor has to still land there on the layout
-    /// that code was written for.
+    /// A gridline label at the now edge of a wide (Across) pane sits just
+    /// inside it and grows up-and-inward (LEFT_BOTTOM anchor).
     #[test]
-    fn gridline_labels_land_where_they_always_did_on_a_wide_pane() {
-        let a = axes(WIDE, SpectralOrientation::Horizontal, (false, false));
+    fn gridline_labels_sit_just_inside_the_now_edge() {
+        let a = axes(WIDE, SpectralOrientation::Horizontal);
         let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
-        assert_eq!(pos, egui::pos2(163.0, 118.0));
+        assert_eq!(pos, egui::pos2(12.0, 67.0));
         assert_eq!(align, egui::Align2::LEFT_BOTTOM);
     }
 
@@ -704,16 +738,11 @@ mod tests {
     #[test]
     fn label_anchors_grow_into_the_pane() {
         for orientation in [SpectralOrientation::Horizontal, SpectralOrientation::Vertical] {
-            for flips in [(false, false), (true, false), (false, true), (true, true)] {
-                let a = axes(WIDE, orientation, flips);
-                let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
-                // A nominal 40x12 label placed by this anchor.
-                let box_ = align.anchor_size(pos, egui::vec2(40.0, 12.0));
-                assert!(
-                    WIDE.contains_rect(box_),
-                    "{orientation:?} {flips:?}: {box_:?} escapes {WIDE:?}"
-                );
-            }
+            let a = axes(WIDE, orientation);
+            let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
+            // A nominal 40x12 label placed by this anchor.
+            let box_ = align.anchor_size(pos, egui::vec2(40.0, 12.0));
+            assert!(WIDE.contains_rect(box_), "{orientation:?}: {box_:?} escapes {WIDE:?}");
         }
     }
 
@@ -742,11 +771,9 @@ mod tests {
                 SpectralOrientation::Horizontal,
                 SpectralOrientation::Vertical,
             ] {
-                for flips in [(false, false), (true, true)] {
-                    for roll_fraction in [0.0, 0.55, 1.0] {
-                        let shapes = paint(rect, orientation, flips, roll_fraction);
-                        assert!(shapes > 0, "{orientation:?} {flips:?} drew nothing");
-                    }
+                for roll_fraction in [0.0, 0.55, 1.0] {
+                    let shapes = paint(rect, orientation, roll_fraction);
+                    assert!(shapes > 0, "{orientation:?} drew nothing");
                 }
             }
         }
@@ -754,19 +781,24 @@ mod tests {
 
     /// Run one frame of the Spectral pane into `rect` and count the shapes
     /// it emitted.
-    fn paint(
-        rect: egui::Rect,
-        orientation: SpectralOrientation,
-        flips: (bool, bool),
-        roll_fraction: f32,
-    ) -> usize {
+    fn paint(rect: egui::Rect, orientation: SpectralOrientation, roll_fraction: f32) -> usize {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = orientation;
-        state.spectrum_config.flip_pitch = flips.0;
-        state.spectrum_config.flip_depth = flips.1;
         state.spectrum_config.roll_fraction = roll_fraction;
-        state.spectrum_config.roll_outline = true;
+        state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_seconds = 10.0;
+        state.view.bloom_strength = 1.2; // exercise the note-glow passes
+        // Exercise the spectrogram's mesh path in every orientation too, with
+        // energy at both axis extremes (where cell clamping is most likely to
+        // fold a quad to zero area — which egui panics on).
+        state.spectrum_config.show_spectrogram = true;
+        let mut spectrum_bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
+        spectrum_bins[0] = 1.0;
+        spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.5;
+        spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS - 1] = 0.3;
+        for i in 0..80 {
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, spectrum_bins);
+        }
 
         let on = |time, note| NoteEvent {
             time,

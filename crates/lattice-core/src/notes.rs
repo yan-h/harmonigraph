@@ -83,15 +83,6 @@ pub struct Voice {
     pub octave: i8,
     pub on_time: Time,
     pub state: VoiceState,
-    /// Whether this voice was the highest / lowest held pitch at the moment
-    /// it was released. Always false while `Held` — a held voice's place in
-    /// the chord is compared live, and only a released one needs the answer
-    /// remembered: once it leaves `held` it can no longer be measured
-    /// against its chord, and asking again later would hand its mark to
-    /// whatever is being held now. This is what lets a melody/bass mark fade
-    /// out with the note instead of snapping off the instant it is let go.
-    pub was_melody: bool,
-    pub was_bass: bool,
 }
 
 impl Voice {
@@ -105,8 +96,6 @@ impl Voice {
             octave: 0,
             on_time,
             state: VoiceState::Held,
-            was_melody: false,
-            was_bass: false,
         };
         voice.set_pitch(f32::from(note));
         voice
@@ -196,11 +185,8 @@ impl NoteTracker {
                 self.held.insert((event.channel, event.note), voice);
             }
             NoteEventKind::Off => {
-                // Measured against the chord as it stands WITH this voice
-                // still in it — it is one of the ends it's being compared to.
-                let extremes = self.held_pitch_range();
                 if let Some(mut voice) = self.held.remove(&(event.channel, event.note)) {
-                    release(&mut voice, event.time, extremes);
+                    voice.state = VoiceState::Released { at: event.time };
                     self.released.push(voice);
                     self.roll.note_off(event.channel, event.note, event.time);
                 }
@@ -268,35 +254,11 @@ impl NoteTracker {
 
     pub fn all_notes_off(&mut self, now: Time) {
         self.roll.all_off(now);
-        let extremes = self.held_pitch_range();
         for (_, mut voice) in self.held.drain() {
-            release(&mut voice, now, extremes);
+            voice.state = VoiceState::Released { at: now };
             self.released.push(voice);
         }
     }
-
-    /// Highest and lowest sounding pitch among the HELD voices (both `None`
-    /// when nothing is held). Compared on `pitch` rather than note number
-    /// because per-note tuning and MPE can bend a voice past its neighbor.
-    fn held_pitch_range(&self) -> (Option<f32>, Option<f32>) {
-        let mut top: Option<f32> = None;
-        let mut bottom: Option<f32> = None;
-        for voice in self.held.values() {
-            top = Some(top.map_or(voice.pitch, |t| t.max(voice.pitch)));
-            bottom = Some(bottom.map_or(voice.pitch, |b| b.min(voice.pitch)));
-        }
-        (top, bottom)
-    }
-}
-
-/// Release `voice` at `at`, recording which end(s) of the chord it held.
-/// `extremes` is the [`NoteTracker::held_pitch_range`] of the chord it is
-/// leaving, this voice included. Ties (two voices at one pitch) flag both;
-/// they are the same end of the chord, so both marks are equally true.
-fn release(voice: &mut Voice, at: Time, extremes: (Option<f32>, Option<f32>)) {
-    voice.state = VoiceState::Released { at };
-    voice.was_melody = extremes.0 == Some(voice.pitch);
-    voice.was_bass = extremes.1 == Some(voice.pitch);
 }
 
 #[cfg(test)]
@@ -438,74 +400,6 @@ mod tests {
         assert_eq!(tracker.voices().count(), 2);
         tracker.prune(2.1, 1.0);
         assert_eq!(tracker.voices().count(), 0);
-    }
-
-    #[test]
-    fn release_records_which_end_of_the_chord_the_voice_held() {
-        // The scene needs this to keep a melody/bass mark on a note while
-        // it fades: once a voice leaves `held` it can no longer be
-        // measured against its chord.
-        let mut tracker = NoteTracker::new();
-        for note in [60u8, 64, 67] {
-            tracker.handle_event(on(0.0, note));
-        }
-        // The middle of the chord: neither end.
-        tracker.handle_event(off(1.0, 64));
-        let e = *tracker.voices().find(|v| v.note == 64).unwrap();
-        assert!(!e.was_melody && !e.was_bass);
-        // The top, measured against what is still held.
-        tracker.handle_event(off(1.0, 67));
-        let g = *tracker.voices().find(|v| v.note == 67).unwrap();
-        assert!(g.was_melody && !g.was_bass);
-        // The last note standing is at once the highest and the lowest.
-        tracker.handle_event(off(1.0, 60));
-        let c = *tracker.voices().find(|v| v.note == 60).unwrap();
-        assert!(c.was_melody && c.was_bass);
-        // Each answer is stamped once, at that voice's own release: the
-        // later releases did not reach back and rewrite E's.
-        let e = *tracker.voices().find(|v| v.note == 64).unwrap();
-        assert!(!e.was_melody && !e.was_bass, "an earlier release keeps its answer");
-    }
-
-    #[test]
-    fn all_off_records_the_ends_of_the_chord_it_drops() {
-        // Every voice goes at once, so each is measured against the whole
-        // chord rather than against whatever the drain happens to leave.
-        let mut tracker = NoteTracker::new();
-        for note in [48u8, 55, 72] {
-            tracker.handle_event(on(0.0, note));
-        }
-        tracker.handle_event(NoteEvent {
-            time: 1.0,
-            channel: 0,
-            note: 0,
-            kind: NoteEventKind::AllOff,
-        });
-        let ends: Vec<(u8, bool, bool)> =
-            tracker.voices().map(|v| (v.note, v.was_melody, v.was_bass)).collect();
-        assert!(ends.contains(&(72, true, false)), "{ends:?}");
-        assert!(ends.contains(&(55, false, false)), "{ends:?}");
-        assert!(ends.contains(&(48, false, true)), "{ends:?}");
-    }
-
-    #[test]
-    fn per_note_tuning_decides_the_ends_not_the_note_number() {
-        // MPE can bend a voice past its neighbor; the chord's ends follow
-        // the sounding pitch, as the notes pane's sort does.
-        let mut tracker = NoteTracker::new();
-        tracker.handle_event(on(0.0, 60));
-        tracker.handle_event(on(0.0, 62));
-        // Bend the LOWER note a major third above the upper one.
-        tracker.handle_event(NoteEvent {
-            time: 0.1,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::Tuning { semitones: 6.0 },
-        });
-        tracker.handle_event(off(1.0, 60));
-        let bent = *tracker.voices().find(|v| v.note == 60).unwrap();
-        assert!(bent.was_melody, "bent up past its neighbor, so it IS the melody");
-        assert!(!bent.was_bass);
     }
 
     #[test]

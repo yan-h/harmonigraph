@@ -21,6 +21,9 @@ pub mod notes;
 /// because it is the biggest single thing that pane draws.
 pub mod roll;
 pub mod spectral;
+/// The Spectral pane's spectrogram heatmap. Like [`roll`], a layer of
+/// [`spectral`]'s far depth region rather than a pane of its own.
+pub mod spectrogram;
 pub mod tuning;
 pub mod view;
 

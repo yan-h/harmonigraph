@@ -88,11 +88,11 @@ fn octaves_fade_independently() {
 }
 
 #[test]
-fn one_fade_time_carries_every_layer_of_the_node() {
-    // The core, the octave glyphs, and the melody/bass marks all ride the
-    // single Fade param: release a two-note chord and half a fade later
-    // every layer must be half-way down together, none of them already
-    // dark and none still at full.
+fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
+    // The core and the octave glyphs ride the single Fade param: release a
+    // two-note chord and half a fade later both are half-way down. The
+    // melody/bass rings do NOT ride it — they come off with the key, so a
+    // released note wears no mark at all even mid-fade.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {
@@ -116,21 +116,61 @@ fn one_fade_time_carries_every_layer_of_the_node() {
     let half = |what: &str, v: f32| {
         assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
     };
-    // C4 is the bass and sits on the origin node.
+    // C4 sits on the origin node; its body is half-faded...
     let origin = origin_node(&scene);
     half("the core", origin.activation);
-    // The mark rides its octave slot's envelope, so a half-faded glyph is a
-    // half-faded mark; what matters here is that the slot is still MARKED
-    // rather than having snapped off at release.
     half("the octave glyph", origin.octaves[4]);
-    assert_eq!(origin.bass_slots, 1 << 4, "the released bass keeps its mark");
-    // G4 is the melody, one fifth up the lattice.
-    let melody = scene
-        .nodes
-        .iter()
-        .find(|n| n.melody_slots != 0)
-        .expect("the released melody keeps its mark while it fades");
-    half("the melody's octave glyph", melody.octaves[4]);
+    // ...but no ring survives the release, on any node.
+    assert!(
+        scene.nodes.iter().all(|n| n.melody_slots == 0 && n.bass_slots == 0),
+        "released notes wear no melody/bass mark",
+    );
+    assert!(
+        scene.nodes.iter().all(|n| n.melody_level == 0.0 && n.bass_level == 0.0),
+        "and no mark level lingers",
+    );
+}
+
+#[test]
+fn releasing_a_chord_leaves_no_fading_marks() {
+    // The reported bug: releasing a held chord smeared a fading melody/bass
+    // ring across most pitch classes, because each key-lift was measured
+    // against the notes still down and so kept re-crowning a new momentary
+    // extreme. Now a released note wears no mark at all, so whatever order a
+    // chord's keys come up in, nothing is left fading behind them.
+    let chord = [60u8, 62, 64, 65, 67]; // C D E F G
+    let mut tracker = NoteTracker::new();
+    for &note in &chord {
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    // Lift the keys one at a time, top-down, each a hair apart.
+    for (i, &note) in [67u8, 65, 64, 62, 60].iter().enumerate() {
+        tracker.handle_event(NoteEvent {
+            time: 0.001 * (i as f64 + 1.0),
+            channel: 0,
+            note,
+            kind: NoteEventKind::Off,
+        });
+    }
+    // Mid-fade, well within one fade time.
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let view = ViewConfig {
+        highlight_extremes: HighlightExtremes::Both,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.5);
+    // The discs are still fading (the notes remain visible)...
+    assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "discs still fading");
+    // ...but not one melody or bass ring survives the release.
+    for n in &scene.nodes {
+        assert_eq!(n.melody_slots, 0, "no melody ring on a released chord");
+        assert_eq!(n.bass_slots, 0, "no bass ring on a released chord");
+    }
 }
 
 #[test]
@@ -471,11 +511,12 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
 }
 
 #[test]
-fn a_released_mark_fades_out_while_a_held_note_keeps_its_node_lit() {
-    // The motivating case for tracking mark levels apart from the node's
-    // activation. C4 and C5 share a pitch class, so they light ONE node.
-    // Release the top one: the node stays fully lit by the held C4, but
-    // the melody mark it was wearing has to fade out on its own.
+fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
+    // C4 and C5 share a pitch class, so they light ONE node. Release the
+    // top one: the node stays fully lit by the held C4, and C4 — now the
+    // only held note — takes BOTH live ends. The released C5's mark does not
+    // linger: it snaps off with the key even as its octave glyph keeps
+    // fading, so the marks never disagree about which notes are down.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 72] {
         tracker.handle_event(NoteEvent {
@@ -494,14 +535,13 @@ fn a_released_mark_fades_out_while_a_held_note_keeps_its_node_lit() {
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "the held C4 keeps the node lit");
-    // The released C5 wears a fading melody mark on ITS octave slot while
-    // C4, now the top held note, takes the live one — the two crossfade
-    // rather than the mark jumping. C4 is also the bass (it is the only
-    // note held), so it claims both ends and the shader splits its glyph.
-    assert_eq!(origin.melody_slots, (1 << 5) | (1 << 4), "the two melodies crossfade");
-    assert_eq!(origin.bass_slots, 1 << 4, "only the held C4 is the bass");
-    // The octave marks fade with their own slots, which is what separates
-    // the fading C5 from the held C4 here.
+    // Only the held C4's slot is marked, at both ends; the released C5's
+    // slot (5) carries no mark, and the mark level is at full, not fading.
+    assert_eq!(origin.melody_slots, 1 << 4, "only the held C4 is the melody");
+    assert_eq!(origin.bass_slots, 1 << 4, "and the bass");
+    assert_eq!(origin.melody_level, 1.0, "the held mark is at full, not mid-fade");
+    // The octave glyph for the released C5 still fades on its own envelope —
+    // it is only the RING that snaps off, not the disc or the glyph.
     assert!(
         (origin.octaves[5] - 0.5).abs() < 1e-5,
         "the released C5's octave is half-faded, got {}",
@@ -512,9 +552,9 @@ fn a_released_mark_fades_out_while_a_held_note_keeps_its_node_lit() {
 
 #[test]
 fn held_extremes_never_names_a_released_voice() {
-    // A released voice keeps whatever mark it was wearing (above), but it
-    // is out of the running for the LIVE ends: letting it stay "the
-    // melody" would steal that from the note that actually replaced it.
+    // A released voice wears no mark at all (above), and it is likewise out
+    // of the running for the LIVE ends: letting it stay "the melody" would
+    // steal that from the note that actually replaced it.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {

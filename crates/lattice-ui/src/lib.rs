@@ -6,6 +6,9 @@ pub mod params;
 pub mod theme;
 pub mod widgets;
 mod panes;
+mod perf;
+
+use perf::PerfStats;
 
 use std::collections::VecDeque;
 
@@ -82,41 +85,33 @@ pub enum SpectrumLabels {
 /// spectrum curve, voice bars, piano roll — turns together.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectralOrientation {
-    /// Follow the pane's shape: a pane taller than it is wide goes
-    /// vertical, otherwise horizontal. Means the pane reads correctly
-    /// both under the lattice and beside it, with no setting to change.
+    /// Follow the pane's shape: time runs along the LONG side (so a
+    /// scrolling spectrogram gets the room), pitch across the short one.
+    /// Reads correctly both under the lattice and beside it, no setting to
+    /// change.
     #[default]
     Auto,
-    /// Pitch left-to-right; the spectrum grows upward from the bottom.
+    /// "Across": time runs left(now)->right(past) along the pane, pitch
+    /// climbs bottom->top, and the spectrum sits on the left, joined to the
+    /// spectrogram. (Serialized name kept from when this meant pitch axis.)
     Horizontal,
-    /// Pitch bottom-to-top; the spectrum grows rightward from the left.
-    /// The classic piano-roll orientation.
+    /// "Upright": time runs top(now)->bottom(past) down the pane, pitch runs
+    /// left->right, and the spectrum sits on top, joined to the spectrogram.
     Vertical,
 }
 
 impl SpectralOrientation {
-    /// Resolve [`Auto`](Self::Auto) against the pane it is drawing into.
-    fn is_vertical(self, rect: egui::Rect) -> bool {
+    /// Whether TIME (the spectrogram/roll axis) runs vertically down the
+    /// pane, with pitch across it. Resolves [`Auto`](Self::Auto) to the
+    /// pane's long side. (The boolean matches the old pitch-axis flag, so
+    /// only its interpretation in [`Axes`](crate::panes) changed.)
+    fn is_time_vertical(self, rect: egui::Rect) -> bool {
         match self {
             SpectralOrientation::Auto => rect.height() > rect.width(),
             SpectralOrientation::Horizontal => false,
             SpectralOrientation::Vertical => true,
         }
     }
-}
-
-/// Where the Spectral pane sits in the default pane arrangement. Changing
-/// it rebuilds the dock (the arrangement is otherwise persisted forever).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SpectralPlacement {
-    /// A wide strip under the lattice (the original layout): what sounds
-    /// is directly under what lights up.
-    #[default]
-    Below,
-    /// A tall strip between the lattice and the settings column. Paired
-    /// with [`SpectralOrientation::Auto`] this turns the pane vertical,
-    /// which is also the natural piano-roll orientation.
-    Right,
 }
 
 /// What colors a note in the piano roll.
@@ -130,6 +125,30 @@ pub enum RollColor {
     Pitch,
     /// One flat accent color: the roll recedes and the lattice leads.
     Accent,
+}
+
+/// The color ramp a spectrogram cell's intensity maps through. A set of
+/// looks to pick from — the spectrogram is a heatmap, and the palette is
+/// most of its character. Intensity always runs dark (quiet) to bright
+/// (loud); these differ only in the hues it passes through.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SpectrogramColor {
+    /// Grayscale: black to white. The classic, and the most neutral over
+    /// the roll's own colors.
+    Mono,
+    /// Black → deep red → orange → yellow → white. The familiar "heat"
+    /// spectrogram; reads loudest as hottest.
+    #[default]
+    Heat,
+    /// Black → navy → blue → cyan → white. Cool counterpart to Heat.
+    Ice,
+    /// Black → violet → teal → green → yellow. A perceptually even ramp
+    /// (viridis-like) where every step reads as an equal change.
+    Aurora,
+    /// Each cell takes the lattice's own low-to-high pitch color, dimmed by
+    /// intensity — so the spectrogram speaks the same color language as the
+    /// nodes and the Pitch-colored roll.
+    Pitch,
 }
 
 /// What counts as "the take is done", and so when a video gets rendered.
@@ -200,19 +219,12 @@ impl Default for RenderConfig {
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
-    /// Which way the pitch axis runs; see [`SpectralOrientation`].
+    /// Horizontal (pitch left-to-right) or vertical (pitch bottom-to-top),
+    /// or Auto to follow the pane's shape; see [`SpectralOrientation`]. Those
+    /// are the only orientations offered — the spectrum always stands up from
+    /// its baseline with pitch ascending, so there is nothing to flip.
     #[serde(default)]
     pub orientation: SpectralOrientation,
-    /// Reverse the pitch axis (high notes first).
-    #[serde(default)]
-    pub flip_pitch: bool,
-    /// Put the baseline on the opposite edge: the spectrum hangs down
-    /// instead of standing up (and the roll flows the other way).
-    #[serde(default)]
-    pub flip_depth: bool,
-    /// Where the pane sits when the layout is (re)built.
-    #[serde(default)]
-    pub placement: SpectralPlacement,
     /// Analyze and overlay the shell's audio (plugin: the input bus;
     /// standalone: a synth on the held notes).
     #[serde(default = "default_true")]
@@ -233,8 +245,6 @@ pub struct SpectrumConfig {
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
     pub labels: SpectrumLabels,
-    /// Fill under the curve instead of a bare line.
-    pub fill: bool,
     /// Keep a slowly decaying outline at each bucket's recent maximum.
     pub peak_hold: bool,
     /// MIDI-derived bars at each voice's actual pitch.
@@ -269,31 +279,46 @@ pub struct SpectrumConfig {
     /// Overall roll opacity.
     #[serde(default = "default_roll_opacity")]
     pub roll_opacity: f32,
+    /// Stroke width of a note's outline, in pixels (notes are drawn as hollow
+    /// outlines so the spectrogram shows through them).
+    #[serde(default = "default_roll_outline_width")]
+    pub roll_outline_width: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
     /// Scale a note's opacity by its velocity.
     #[serde(default = "default_true")]
     pub roll_velocity_alpha: bool,
-    /// How much a note dims as it ages toward the far edge (0 = not at
-    /// all, 1 = to nothing).
-    #[serde(default = "default_roll_age_fade")]
-    pub roll_age_fade: f32,
-    /// Outline every note in its own color, brightened.
-    #[serde(default)]
-    pub roll_outline: bool,
-    /// Mark each note's attack with a bright cap.
-    #[serde(default = "default_true")]
-    pub roll_onsets: bool,
-    /// Keep still-held notes at full brightness regardless of age fade,
-    /// so what is sounding stands out from what has been.
-    #[serde(default = "default_true")]
-    pub roll_highlight_held: bool,
     /// Seconds between the roll's time gridlines; 0 draws none.
     #[serde(default = "default_roll_grid_seconds")]
     pub roll_grid_seconds: f32,
     /// Draw the line where the roll meets the spectrum ("now").
     #[serde(default = "default_true")]
     pub roll_now_line: bool,
+
+    // ---- Spectrogram ------------------------------------------------
+    // A frequency-vs-time heatmap of the analyzed audio, drawn in the
+    // roll's depth region on the roll's own time axis — so each column of
+    // spectral energy lines up with the notes that made it.
+    /// Draw the spectrogram heatmap (over the roll's time window).
+    #[serde(default)]
+    pub show_spectrogram: bool,
+    /// The heatmap's color ramp.
+    #[serde(default)]
+    pub spectrogram_color: SpectrogramColor,
+    /// Overall spectrogram opacity, so it can sit under the notes without
+    /// swamping them. (For the heatmap alone, turn the note ribbons off with
+    /// `show_roll`.)
+    #[serde(default = "default_spectrogram_opacity")]
+    pub spectrogram_opacity: f32,
+    /// Temporal smoothing of the heatmap, 0 = off. Blends each time column
+    /// with its neighbors (symmetric, so no directional smear) to average out
+    /// fast beating/chorus wobble, at the cost of some time-sharpness.
+    #[serde(default)]
+    pub spectrogram_smoothing: f32,
+}
+
+fn default_spectrogram_opacity() -> f32 {
+    0.85
 }
 
 fn default_true() -> bool {
@@ -324,12 +349,12 @@ fn default_roll_opacity() -> f32 {
     0.9
 }
 
-fn default_roll_color() -> RollColor {
-    RollColor::Channel
+fn default_roll_outline_width() -> f32 {
+    1.5
 }
 
-fn default_roll_age_fade() -> f32 {
-    0.45
+fn default_roll_color() -> RollColor {
+    RollColor::Channel
 }
 
 fn default_roll_grid_seconds() -> f32 {
@@ -344,16 +369,12 @@ impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
             orientation: SpectralOrientation::Auto,
-            flip_pitch: false,
-            flip_depth: false,
-            placement: SpectralPlacement::Below,
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             smoothing: 0.55,
             tilt: 0.0,
             labels: SpectrumLabels::Notes,
-            fill: true,
             peak_hold: false,
             show_voice_bars: true,
             low_octave: -1,
@@ -364,14 +385,15 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_rounding: default_roll_rounding(),
             roll_opacity: default_roll_opacity(),
+            roll_outline_width: default_roll_outline_width(),
             roll_color: default_roll_color(),
             roll_velocity_alpha: true,
-            roll_age_fade: default_roll_age_fade(),
-            roll_outline: false,
-            roll_onsets: true,
-            roll_highlight_held: true,
             roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
+            show_spectrogram: false,
+            spectrogram_color: SpectrogramColor::default(),
+            spectrogram_opacity: default_spectrogram_opacity(),
+            spectrogram_smoothing: 0.0,
         }
     }
 }
@@ -392,6 +414,21 @@ pub struct AudioSpectrum {
     /// When samples last arrived; the curve hides once the source stops
     /// (closed input bus, switched-off synth) rather than freezing.
     last_samples: Option<f64>,
+    /// Timestamped raw spectra, one per FFT, for the spectrogram — oldest
+    /// first. Raw (unsmoothed) so time isn't blurred across columns.
+    /// Bounded by age and count (see [`AudioSpectrum::push_history`]).
+    history: VecDeque<SpectrogramColumn>,
+    /// The spectrogram's pixels, uploaded once and sampled with bilinear
+    /// filtering so the heatmap reads as a smooth image rather than a mesh of
+    /// interpolated triangles. Runtime-only; created lazily on first draw.
+    spectrogram_tex: Option<egui::TextureHandle>,
+}
+
+/// One column of the spectrogram: the raw power spectrum at a moment, on the
+/// shell clock, so it can be placed on the roll's time axis.
+pub struct SpectrogramColumn {
+    pub time: f64,
+    pub power: Box<[f32; lattice_core::spectrum::SPECTRUM_BINS]>,
 }
 
 impl Default for AudioSpectrum {
@@ -402,6 +439,8 @@ impl Default for AudioSpectrum {
             peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             last_fft: None,
             last_samples: None,
+            history: VecDeque::new(),
+            spectrogram_tex: None,
         }
     }
 }
@@ -461,10 +500,46 @@ impl AudioSpectrum {
                         *shown
                     };
                 }
+                // Keep the RAW spectrum for the spectrogram (the smoothed
+                // `display` would smear one column into the next).
+                self.push_history(now, fresh);
                 self.last_fft = Some(now);
             }
         }
         Some((&self.display, &self.peaks))
+    }
+
+    /// The longest roll window (`roll_seconds` max), plus a margin, is the
+    /// most history the spectrogram can ever show; drop older columns.
+    const HISTORY_SECONDS: f64 = 130.0;
+    /// Backstop on the column count regardless of timing.
+    const HISTORY_MAX: usize = 4000;
+
+    /// Append one raw spectrum to the ring, trimming the far past.
+    fn push_history(
+        &mut self,
+        now: f64,
+        power: [f32; lattice_core::spectrum::SPECTRUM_BINS],
+    ) {
+        self.history.push_back(SpectrogramColumn { time: now, power: Box::new(power) });
+        let oldest_kept = now - Self::HISTORY_SECONDS;
+        while self
+            .history
+            .front()
+            .is_some_and(|c| c.time < oldest_kept || self.history.len() > Self::HISTORY_MAX)
+        {
+            self.history.pop_front();
+        }
+    }
+
+    /// The spectrogram columns, oldest first. Empty until audio has flowed.
+    pub fn history(&self) -> &VecDeque<SpectrogramColumn> {
+        &self.history
+    }
+
+    /// Forget the spectrogram history (paired with clearing the roll).
+    pub fn clear_history(&mut self) {
+        self.history.clear();
     }
 }
 
@@ -528,6 +603,10 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
     dock: DockState<panes::Tab>,
+    /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
+    /// Runtime-only; filled and drawn by [`root_ui`], never by the offline
+    /// renderer (so recorded frames stay deterministic).
+    perf: PerfStats,
 }
 
 /// A saved camera angle: what the built-in Flat/Isometric buttons are,
@@ -546,7 +625,7 @@ pub struct CameraPreset {
 /// column on the right, console and notes tucked below that. Users can
 /// re-dock at runtime; the result persists via UiPersist, and the View
 /// pane's "Reset layout" button returns here.
-fn default_dock(placement: SpectralPlacement) -> DockState<panes::Tab> {
+fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [lattice, right] = surface.split_right(
@@ -562,23 +641,16 @@ fn default_dock(placement: SpectralPlacement) -> DockState<panes::Tab> {
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
     surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
-    // The fractions differ because the strip's short side is what matters:
-    // a wide strip under the lattice needs less of the height than a tall
-    // strip beside it needs of the (already narrowed) width.
-    match placement {
-        SpectralPlacement::Below => {
-            surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
-        }
-        SpectralPlacement::Right => {
-            surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
-        }
-    }
+    // Spectral as a wide strip under the lattice: what sounds is directly
+    // under what lights up. Drag it wherever from here — egui_dock docks it
+    // freely, and the Spectral pane's orientation follows the shape it lands.
+    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
     dock
 }
 
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
-        let dock = default_dock(SpectralPlacement::default());
+        let dock = default_dock();
 
         SharedState {
             tracker: NoteTracker::new(),
@@ -602,6 +674,7 @@ impl SharedState {
             spectrum_config: SpectrumConfig::default(),
             reset_layout: false,
             dock,
+            perf: PerfStats::default(),
         }
     }
 
@@ -694,6 +767,10 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
+    // Time the whole dock build — every pane's layout and the scene
+    // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
+    // is submitted inside and finishes off-thread, so this is CPU, not GPU.
+    let cpu_start = std::time::Instant::now();
     DockArea::new(&mut dock)
         .style(dock_style)
         // The pane set is fixed, so closing chrome stays off — but the
@@ -703,11 +780,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_leaf_close_all_buttons(false)
         .show_leaf_collapse_buttons(true)
         .show_inside(ui, &mut panes::Viewer { state, params, now });
+    let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
     state.dock = dock;
     // Deferred from the View pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
-        state.dock = default_dock(state.spectrum_config.placement);
+        state.dock = default_dock();
     }
 
     // Render continuously only while something is animating (sounding or
@@ -720,10 +798,30 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // scrolls for as long as its window still reaches a played note — so
     // it gets its own say here. Without this the roll would advance in
     // 50 ms jerks once the voices died.
-    if state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now) {
+    let animating =
+        state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now);
+    if animating {
         ui.ctx().request_repaint();
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
+    }
+
+    // Performance overlay: fold this frame's numbers in and, if it's on, draw
+    // the corner HUD. Interactive path only — the offline renderer never
+    // reaches root_ui, so nothing here touches a recorded frame.
+    let dt = ui.input(|i| i.stable_dt);
+    state.perf.record(
+        dt,
+        cpu_ms,
+        now,
+        state.tracker.voices().count(),
+        state.tracker.held_count(),
+        state.view.visible_count(),
+        state.view.render_scale,
+        animating,
+    );
+    if state.view.show_perf {
+        perf::draw_overlay(ui.ctx(), ui.max_rect(), &state.perf);
     }
 }
 

@@ -187,6 +187,12 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             "Hide the tab bars so adjacent panes (lattice over spectrum) \
              record as one seamless surface. Esc restores.",
         );
+        ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
+            "A corner HUD with frame rate, the GUI's CPU time per frame, \
+             process memory, and the voice/node workload — to see if the \
+             plugin is working the machine hard. (GPU time isn't measured \
+             directly; the node count and render scale stand in for it.)",
+        );
     });
 
     // Take recording: the input half of offline video rendering. A mode
