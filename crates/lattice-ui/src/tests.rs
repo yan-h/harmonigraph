@@ -431,7 +431,7 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
     state.spectrum_config.spectrogram_opacity = 0.5;
     state.spectrum_config.spectrogram_smoothing = 0.6;
-    state.spectrum_config.roll_fill = 0.4;
+    state.spectrum_config.roll_outline_width = 2.5;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -445,7 +445,7 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
     assert_eq!(restored.spectrum_config.spectrogram_smoothing, 0.6);
-    assert_eq!(restored.spectrum_config.roll_fill, 0.4);
+    assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
 }
 
 #[test]

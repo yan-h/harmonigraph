@@ -280,20 +280,15 @@ pub struct SpectrumConfig {
     /// Overall roll opacity.
     #[serde(default = "default_roll_opacity")]
     pub roll_opacity: f32,
-    /// Note interior opacity as a fraction of `roll_opacity`: 1 is solid,
-    /// lower lets the spectrogram (and each note's own fundamental) show
-    /// through the ribbon. Below 1 an outline is drawn regardless of
-    /// `roll_outline`, so a hollow note stays clearly bounded.
-    #[serde(default = "default_roll_fill")]
-    pub roll_fill: f32,
+    /// Stroke width of a note's outline, in pixels (notes are drawn as hollow
+    /// outlines so the spectrogram shows through them).
+    #[serde(default = "default_roll_outline_width")]
+    pub roll_outline_width: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
     /// Scale a note's opacity by its velocity.
     #[serde(default = "default_true")]
     pub roll_velocity_alpha: bool,
-    /// Outline every note in its own color, brightened.
-    #[serde(default)]
-    pub roll_outline: bool,
     /// Seconds between the roll's time gridlines; 0 draws none.
     #[serde(default = "default_roll_grid_seconds")]
     pub roll_grid_seconds: f32,
@@ -355,8 +350,8 @@ fn default_roll_opacity() -> f32 {
     0.9
 }
 
-fn default_roll_fill() -> f32 {
-    1.0
+fn default_roll_outline_width() -> f32 {
+    1.5
 }
 
 fn default_roll_color() -> RollColor {
@@ -393,10 +388,9 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_rounding: default_roll_rounding(),
             roll_opacity: default_roll_opacity(),
-            roll_fill: default_roll_fill(),
+            roll_outline_width: default_roll_outline_width(),
             roll_color: default_roll_color(),
             roll_velocity_alpha: true,
-            roll_outline: false,
             roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
             show_spectrogram: false,

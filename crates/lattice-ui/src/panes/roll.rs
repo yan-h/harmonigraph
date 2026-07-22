@@ -105,53 +105,60 @@ pub(super) fn draw_roll(
                 continue;
             }
             let pitch = (p0 + p1) * 0.5;
-            // Full-strength color for the outline (and thin spines); the fill
-            // takes a fraction of it so the spectrogram — and the note's own
-            // fundamental, which sits right under the ribbon — shows through.
-            let color = note_color(note, cfg, state, pitch, alpha);
-            let fill = note_color(note, cfg, state, pitch, alpha * cfg.roll_fill.clamp(0.0, 1.0));
-            // A translucent fill would read as a vague smear without an edge, so
-            // outline it whenever the fill is dialed back, on top of the setting.
-            let outline_on = cfg.roll_outline || cfg.roll_fill < 0.999;
+            let width = cfg.roll_outline_width.clamp(0.5, 8.0);
+            // Bloom: a soft glow around the outline, driven by the SAME setting
+            // as the lattice's bloom so the two panes share the look. egui has
+            // no post-process pass like the lattice's wgpu bloom, so approximate
+            // one — a couple of wider, fainter passes of the stroke under the
+            // crisp one; more bloom widens and brightens the halo.
+            let g = state.view.bloom_strength.clamp(0.0, 2.0);
+            // (stroke width, alpha fraction) per pass; the crisp outline is last.
+            let mut passes: Vec<(f32, f32)> = Vec::with_capacity(3);
+            if g > 0.0 {
+                passes.push((width + g * 3.0, 0.12 * g));
+                passes.push((width + g * 1.5, 0.20 * g));
+            }
+            passes.push((width, 1.0));
+            let stroke_color = |af: f32| brighten(note_color(note, cfg, state, pitch, alpha * af));
 
             if ribbon_px < MIN_RIBBON_PX {
-                // Too thin to fill: a stroke down the note's spine (kept solid;
-                // there's no interior to reveal).
-                painter.line_segment(
-                    [axes.at(a0, d0), axes.at(a1, d1)],
-                    egui::Stroke::new(MIN_RIBBON_PX, color),
-                );
+                // Too thin to bound: the note IS its spine.
+                for &(w, af) in &passes {
+                    painter.line_segment(
+                        [axes.at(a0, d0), axes.at(a1, d1)],
+                        egui::Stroke::new(w.max(MIN_RIBBON_PX), stroke_color(af)),
+                    );
+                }
             } else if p0 == p1 {
-                // Unbent: an axis-aligned rectangle, which is the only
-                // shape egui will round the corners of.
+                // Unbent: a hollow axis-aligned rectangle (the only shape egui
+                // will round the corners of).
                 let rect = egui::Rect::from_two_pos(axes.at(a0 - half, d0), axes.at(a1 + half, d1));
                 let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
                 let rounding = egui::CornerRadius::same(radius.min(127.0) as u8);
-                painter.rect_filled(rect, rounding, fill);
-                if outline_on {
+                for &(w, af) in &passes {
                     painter.rect_stroke(
                         rect,
                         rounding,
-                        egui::Stroke::new(1.0, brighten(color)),
-                        egui::StrokeKind::Inside,
+                        egui::Stroke::new(w, stroke_color(af)),
+                        egui::StrokeKind::Middle,
                     );
                 }
             } else {
-                // Bent: a quad following the glide. Wound consistently so
-                // egui's convex-polygon fill stays valid whichever way the
-                // axes run.
+                // Bent: a hollow quad following the glide. Wound consistently so
+                // egui's convex-polygon stays valid whichever way the axes run.
                 let quad = vec![
                     axes.at(a0 - half, d0),
                     axes.at(a0 + half, d0),
                     axes.at(a1 + half, d1),
                     axes.at(a1 - half, d1),
                 ];
-                let stroke = if outline_on {
-                    egui::Stroke::new(1.0, brighten(color))
-                } else {
-                    egui::Stroke::NONE
-                };
-                painter.add(egui::Shape::convex_polygon(quad, fill, stroke));
+                for &(w, af) in &passes {
+                    painter.add(egui::Shape::convex_polygon(
+                        quad.clone(),
+                        egui::Color32::TRANSPARENT,
+                        egui::Stroke::new(w, stroke_color(af)),
+                    ));
+                }
             }
         }
     }

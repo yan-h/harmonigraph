@@ -151,12 +151,11 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         .show(ui)
         .on_hover_text("Corner rounding of an unbent note (bent notes stay angular)");
     ValueBar::new(&mut cfg.roll_opacity, 0.05..=1.0, "Opacity").show(ui);
-    ValueBar::new(&mut cfg.roll_fill, 0.0..=1.0, "Fill")
+    ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
         .show(ui)
         .on_hover_text(
-            "Note interior opacity: 1 is solid, lower lets the spectrogram (and \
-             each note's fundamental, right under the ribbon) show through; 0 \
-             leaves a hollow outline. Below 1 the outline is drawn automatically.",
+            "Stroke width of a note's outline. Notes are hollow, so the \
+             spectrogram shows through them; lattice bloom adds a glow.",
         );
     ValueBar::new(&mut cfg.roll_grid_seconds, 0.0..=10.0, "Grid (s)")
         .decimals(1)
@@ -174,8 +173,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     );
     ui.checkbox(&mut cfg.roll_velocity_alpha, "Velocity opacity")
         .on_hover_text("Quiet notes draw fainter");
-    ui.checkbox(&mut cfg.roll_outline, "Outline")
-        .on_hover_text("Trace every note in a brightened edge");
     ui.checkbox(&mut cfg.roll_now_line, "Now line")
         .on_hover_text("Mark where the roll meets the spectrum");
     button_row(ui, |ui| {
@@ -764,9 +761,9 @@ mod tests {
         state.spectrum_config.orientation = orientation;
         state.spectrum_config.spectrum_flip = true; // flipped labels/curve path
         state.spectrum_config.roll_fraction = roll_fraction;
-        state.spectrum_config.roll_outline = true;
-        state.spectrum_config.roll_fill = 0.5; // translucent fill + auto-outline path
+        state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_seconds = 10.0;
+        state.view.bloom_strength = 1.2; // exercise the note-glow passes
         // Exercise the spectrogram's mesh path in every orientation too, with
         // energy at both axis extremes (where cell clamping is most likely to
         // fold a quad to zero area — which egui panics on).
