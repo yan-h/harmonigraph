@@ -99,8 +99,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         }
     });
 
-    ui.checkbox(&mut cfg.fill, "Fill")
-        .on_hover_text("Shade under the spectrum curve");
     ui.checkbox(&mut cfg.peak_hold, "Peak hold")
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
     ui.checkbox(&mut cfg.show_voice_bars, "Voice bars")
@@ -551,32 +549,33 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                 egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
             };
 
-            // The FILL carries the per-bucket palette color (each slab is its
-            // own bar, so no joints to look ragged). The outlines are single
-            // smooth polylines — egui joins them cleanly — in the palette's
-            // loud color (the curve rides the loud end anyway).
-            if cfg.fill {
-                let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
-                for &(midi, t, level, _) in &visible {
-                    let d = d_of(level, midi);
-                    if d * axes.depth_len() > 0.5 {
-                        painter.line_segment(
-                            [axes.at(t, sd(0.0)), axes.at(t, sd(d))],
-                            egui::Stroke::new(slab, tint(hue(level, midi), 105)),
-                        );
-                    }
+            // The spectrum is a filled shape, like the spectrogram — no outline
+            // curve. Each slab is one bucket in its own palette color, opaque
+            // enough to read as a solid fill; densely packed, their tops make
+            // the shape's edge (no separate line to fray).
+            let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
+            for &(midi, t, level, _) in &visible {
+                let d = d_of(level, midi);
+                if d * axes.depth_len() > 0.5 {
+                    painter.line_segment(
+                        [axes.at(t, sd(0.0)), axes.at(t, sd(d))],
+                        egui::Stroke::new(slab, tint(hue(level, midi), 210)),
+                    );
                 }
             }
-            let mid_midi = (min_midi + max_midi) * 0.5;
-            let loud = super::spectrogram::cell_color(cfg.spectrogram_color, 1.0, mid_midi, &frame);
             if cfg.peak_hold {
+                // The one remaining line: a decaying trace of recent maxima,
+                // in the palette's loud color.
+                let loud = super::spectrogram::cell_color(
+                    cfg.spectrogram_color,
+                    1.0,
+                    (min_midi + max_midi) * 0.5,
+                    &frame,
+                );
                 let pts: Vec<egui::Pos2> =
                     visible.iter().map(|&(m, t, _, pk)| axes.at(t, sd(d_of(pk, m)))).collect();
-                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 130))));
+                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 150))));
             }
-            let pts: Vec<egui::Pos2> =
-                visible.iter().map(|&(m, t, l, _)| axes.at(t, sd(d_of(l, m)))).collect();
-            painter.add(egui::Shape::line(pts, egui::Stroke::new(1.5, tint(loud, 235))));
         }
     }
 

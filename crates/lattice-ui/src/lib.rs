@@ -245,8 +245,6 @@ pub struct SpectrumConfig {
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
     pub labels: SpectrumLabels,
-    /// Fill under the curve instead of a bare line.
-    pub fill: bool,
     /// Keep a slowly decaying outline at each bucket's recent maximum.
     pub peak_hold: bool,
     /// MIDI-derived bars at each voice's actual pitch.
@@ -377,7 +375,6 @@ impl Default for SpectrumConfig {
             smoothing: 0.55,
             tilt: 0.0,
             labels: SpectrumLabels::Notes,
-            fill: true,
             peak_hold: false,
             show_voice_bars: true,
             low_octave: -1,
