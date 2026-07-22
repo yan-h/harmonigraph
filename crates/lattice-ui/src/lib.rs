@@ -446,6 +446,10 @@ pub struct AudioSpectrum {
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
     /// Bounded by age and count (see [`AudioSpectrum::push_history`]).
     history: VecDeque<SpectrogramColumn>,
+    /// The spectrogram's pixels, uploaded once and sampled with bilinear
+    /// filtering so the heatmap reads as a smooth image rather than a mesh of
+    /// interpolated triangles. Runtime-only; created lazily on first draw.
+    spectrogram_tex: Option<egui::TextureHandle>,
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -464,6 +468,7 @@ impl Default for AudioSpectrum {
             last_fft: None,
             last_samples: None,
             history: VecDeque::new(),
+            spectrogram_tex: None,
         }
     }
 }
