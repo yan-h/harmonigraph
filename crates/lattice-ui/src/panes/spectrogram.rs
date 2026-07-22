@@ -82,12 +82,14 @@ pub(super) fn draw_spectrogram(
     let bucket = window / target_cols as f64;
     let first = spectrum.history().partition_point(|c| c.time < oldest).saturating_sub(1);
     let bin_idx: Vec<usize> = bins.iter().map(|&(idx, _, _)| idx).collect();
-    let (centers, power) = aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket);
+    let (centers, mut power) = aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket);
     let newest = spectrum.history().back().map_or(now, |c| c.time);
     let (w, h) = (centers.len(), bins.len());
     if w < 2 {
         return;
     }
+    // Optional temporal smoothing: average out fast beating/chorus wobble.
+    smooth_time(&mut power, w, h, cfg.spectrogram_smoothing);
 
     // The image covers absolute time `[t_origin, t_origin + w*bucket]` — the
     // oldest slab's start to the newest slab's end. Its texel centers sit at
@@ -180,6 +182,30 @@ fn aggregate_rows<'a>(
         }
     }
     (centers, power)
+}
+
+/// Smooth `power` (flat `rows * nb`, row-major over time slabs) along time,
+/// in place. `smoothing` in `0..1` sets the strength: 0 leaves it untouched,
+/// toward 1 blends ever more of each column into its neighbors. Runs an EMA
+/// forward then backward, so the smoothing is symmetric (zero-phase) and a
+/// peak doesn't drift in either time direction.
+fn smooth_time(power: &mut [f32], rows: usize, nb: usize, smoothing: f32) {
+    let a = 1.0 - smoothing.clamp(0.0, 0.95);
+    if a >= 1.0 || rows < 2 {
+        return;
+    }
+    for row in 1..rows {
+        let (i, prev) = (row * nb, (row - 1) * nb);
+        for k in 0..nb {
+            power[i + k] += (1.0 - a) * (power[prev + k] - power[i + k]);
+        }
+    }
+    for row in (0..rows - 1).rev() {
+        let (i, next) = (row * nb, (row + 1) * nb);
+        for k in 0..nb {
+            power[i + k] += (1.0 - a) * (power[next + k] - power[i + k]);
+        }
+    }
 }
 
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
@@ -334,6 +360,30 @@ mod tests {
         let lum = |c: Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
         assert_eq!(lum(quiet), 0, "silence is the ramp's black end");
         assert!(lum(loud) > lum(quiet));
+    }
+
+    #[test]
+    fn smoothing_off_is_a_no_op_and_on_spreads_a_spike_without_drift() {
+        // One bin (nb=1), a spike well inside a long run of slabs so the
+        // forward+backward passes reach a symmetric interior (edge rows aside).
+        let n = 15;
+        let center = 7;
+        let mut base = vec![0.0f32; n];
+        base[center] = 1.0;
+
+        // Off: untouched.
+        let mut p = base.clone();
+        smooth_time(&mut p, n, 1, 0.0);
+        assert_eq!(p, base);
+
+        // On: the spike spreads into both neighbors, the peak drops, and the
+        // two sides match — the forward+backward passes leave no time drift.
+        let mut p = base.clone();
+        smooth_time(&mut p, n, 1, 0.7);
+        assert!(p[center] < 1.0, "peak drops as it spreads");
+        assert!(p[center - 1] > 0.0 && p[center + 1] > 0.0, "reaches both neighbors");
+        assert!((p[center - 1] - p[center + 1]).abs() < 1e-3, "no time-direction drift");
+        assert!(p[center - 1] > p[center - 2], "monotonic falloff away from the peak");
     }
 
     #[test]

@@ -337,6 +337,11 @@ pub struct SpectrumConfig {
     /// `show_roll`.)
     #[serde(default = "default_spectrogram_opacity")]
     pub spectrogram_opacity: f32,
+    /// Temporal smoothing of the heatmap, 0 = off. Blends each time column
+    /// with its neighbors (symmetric, so no directional smear) to average out
+    /// fast beating/chorus wobble, at the cost of some time-sharpness.
+    #[serde(default)]
+    pub spectrogram_smoothing: f32,
 }
 
 fn default_spectrogram_opacity() -> f32 {
@@ -422,6 +427,7 @@ impl Default for SpectrumConfig {
             show_spectrogram: false,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
+            spectrogram_smoothing: 0.0,
         }
     }
 }
