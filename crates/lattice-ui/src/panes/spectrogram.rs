@@ -79,7 +79,12 @@ pub(super) fn draw_spectrogram(
     // a FIXED time grid, MAX within each slab (keeps a short note's peak and
     // pins it against the scroll — see `aggregate_rows`).
     let target_cols = (depth_span * axes.depth_len()).round().clamp(2.0, 512.0) as usize;
-    let bucket = window / target_cols as f64;
+    // Never subdivide finer than the data arrives (~50 ms FFT period, plus a
+    // little for frame jitter). A shorter bucket leaves empty buckets between
+    // columns, and the texture's linear time axis assumes evenly-spaced slabs —
+    // gaps there stretch the edge columns into flat streaks (short spans).
+    const MIN_BUCKET: f64 = 0.08;
+    let bucket = (window / target_cols as f64).max(MIN_BUCKET);
     let first = spectrum.history().partition_point(|c| c.time < oldest).saturating_sub(1);
     let bin_idx: Vec<usize> = bins.iter().map(|&(idx, _, _)| idx).collect();
     let (centers, mut power) = aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket);
