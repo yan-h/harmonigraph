@@ -20,11 +20,11 @@ type VoiceKey = (u8, u8);
 /// The highest and lowest HELD voices, as the caller asked for them —
 /// either is `None` when that end isn't being marked or nothing is held.
 ///
-/// Held only: a released voice is no longer part of the chord, so it can't
-/// take the mark from the note that replaced it. It doesn't lose the mark
-/// outright, though — it keeps whichever end it held at the moment it was
-/// let go (`Voice::was_melody`/`was_bass`, stamped by the tracker) and fades
-/// out still wearing it, which is what [`marks`] resolves per voice.
+/// Held only: the melody/bass rings live on the notes actually down. A
+/// released voice is no longer part of the chord and wears no mark at all —
+/// its ring comes off the instant the key does, even as its disc fades out
+/// (see [`marks`]). This is what keeps a chord's release from smearing a
+/// fading melody/bass ring across every note as the keys lift one by one.
 ///
 /// Compared on `pitch` rather than the raw key, because MPE and per-note
 /// tuning can bend a voice past its neighbor — the same reason the notes
@@ -53,14 +53,13 @@ pub(crate) fn held_extremes(
     (melody, bass)
 }
 
-/// Which ends `voice` currently wears, as `(melody, bass)`. A held voice
-/// wears an end while it IS that end of the chord; a released one keeps
-/// whatever it wore when it was let go, so its mark fades out with it
-/// rather than vanishing the instant the key comes up. Both can be true at
-/// once — a lone note is its own melody and bass.
+/// Which ends `voice` currently wears, as `(melody, bass)`. Only a HELD
+/// voice wears an end — the melody/bass rings live on the notes actually
+/// down. A released voice wears neither: its ring comes off the instant the
+/// key does, even though its disc keeps fading. Both can be true at once —
+/// a lone held note is its own melody and bass.
 fn marks(
     voice: &lattice_core::Voice,
-    which: HighlightExtremes,
     live: (Option<VoiceKey>, Option<VoiceKey>),
 ) -> (bool, bool) {
     match voice.state {
@@ -69,10 +68,7 @@ fn marks(
             let key = Some((voice.channel, voice.note));
             (live.0 == key, live.1 == key)
         }
-        lattice_core::VoiceState::Released { .. } => (
-            which.marks_melody() && voice.was_melody,
-            which.marks_bass() && voice.was_bass,
-        ),
+        lattice_core::VoiceState::Released { .. } => (false, false),
     }
 }
 
@@ -137,10 +133,11 @@ pub fn derive_scene(
                 // every node the voice matches, exactly as its activation
                 // is, so the mark can't disagree with the lighting.
                 //
-                // The level is the strongest marked voice ON THIS NODE, not
-                // the node's own activation: a released melody fades while a
-                // still-held voice can keep the node at full.
-                let (is_melody, is_bass) = marks(voice, view.highlight_extremes, live_extremes);
+                // The level is the strongest marking voice ON THIS NODE.
+                // Only held voices mark, so the ring is full while its end is
+                // held and gone the frame it is released — it never outlives
+                // the key, even as the disc keeps fading.
+                let (is_melody, is_bass) = marks(voice, live_extremes);
                 if is_melody || is_bass {
                     // The mark takes the marked note's OWN color, lightened
                     // so a low note's near-black doesn't vanish. Strongest
