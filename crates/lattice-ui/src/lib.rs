@@ -296,6 +296,12 @@ pub struct SpectrumConfig {
     /// Overall roll opacity.
     #[serde(default = "default_roll_opacity")]
     pub roll_opacity: f32,
+    /// Note interior opacity as a fraction of `roll_opacity`: 1 is solid,
+    /// lower lets the spectrogram (and each note's own fundamental) show
+    /// through the ribbon. Below 1 an outline is drawn regardless of
+    /// `roll_outline`, so a hollow note stays clearly bounded.
+    #[serde(default = "default_roll_fill")]
+    pub roll_fill: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
     /// Scale a note's opacity by its velocity.
@@ -376,6 +382,10 @@ fn default_roll_opacity() -> f32 {
     0.9
 }
 
+fn default_roll_fill() -> f32 {
+    1.0
+}
+
 fn default_roll_color() -> RollColor {
     RollColor::Channel
 }
@@ -416,6 +426,7 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_rounding: default_roll_rounding(),
             roll_opacity: default_roll_opacity(),
+            roll_fill: default_roll_fill(),
             roll_color: default_roll_color(),
             roll_velocity_alpha: true,
             roll_age_fade: default_roll_age_fade(),

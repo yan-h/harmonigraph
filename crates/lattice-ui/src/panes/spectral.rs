@@ -185,6 +185,13 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         .show(ui)
         .on_hover_text("Corner rounding of an unbent note (bent notes stay angular)");
     ValueBar::new(&mut cfg.roll_opacity, 0.05..=1.0, "Opacity").show(ui);
+    ValueBar::new(&mut cfg.roll_fill, 0.0..=1.0, "Fill")
+        .show(ui)
+        .on_hover_text(
+            "Note interior opacity: 1 is solid, lower lets the spectrogram (and \
+             each note's fundamental, right under the ribbon) show through; 0 \
+             leaves a hollow outline. Below 1 the outline is drawn automatically.",
+        );
     ValueBar::new(&mut cfg.roll_age_fade, 0.0..=1.0, "Age fade")
         .show(ui)
         .on_hover_text("How far a note dims as it travels to the far edge");
@@ -834,6 +841,7 @@ mod tests {
         state.spectrum_config.flip_depth = flips.1;
         state.spectrum_config.roll_fraction = roll_fraction;
         state.spectrum_config.roll_outline = true;
+        state.spectrum_config.roll_fill = 0.5; // translucent fill + auto-outline path
         state.spectrum_config.roll_seconds = 10.0;
         // Exercise the spectrogram's mesh path in every orientation too, with
         // energy at both axis extremes (where cell clamping is most likely to
