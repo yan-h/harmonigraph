@@ -1797,6 +1797,7 @@ dependencies = [
  "lattice-core",
  "lattice-render",
  "lattice-scene",
+ "libc",
  "ron 0.8.1",
  "serde",
 ]

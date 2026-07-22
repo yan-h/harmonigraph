@@ -6,6 +6,9 @@ pub mod params;
 pub mod theme;
 pub mod widgets;
 mod panes;
+mod perf;
+
+use perf::PerfStats;
 
 use std::collections::VecDeque;
 
@@ -528,6 +531,10 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
     dock: DockState<panes::Tab>,
+    /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
+    /// Runtime-only; filled and drawn by [`root_ui`], never by the offline
+    /// renderer (so recorded frames stay deterministic).
+    perf: PerfStats,
 }
 
 /// A saved camera angle: what the built-in Flat/Isometric buttons are,
@@ -602,6 +609,7 @@ impl SharedState {
             spectrum_config: SpectrumConfig::default(),
             reset_layout: false,
             dock,
+            perf: PerfStats::default(),
         }
     }
 
@@ -694,6 +702,10 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
+    // Time the whole dock build — every pane's layout and the scene
+    // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
+    // is submitted inside and finishes off-thread, so this is CPU, not GPU.
+    let cpu_start = std::time::Instant::now();
     DockArea::new(&mut dock)
         .style(dock_style)
         // The pane set is fixed, so closing chrome stays off — but the
@@ -703,6 +715,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_leaf_close_all_buttons(false)
         .show_leaf_collapse_buttons(true)
         .show_inside(ui, &mut panes::Viewer { state, params, now });
+    let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
     state.dock = dock;
     // Deferred from the View pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
@@ -720,10 +733,30 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // scrolls for as long as its window still reaches a played note — so
     // it gets its own say here. Without this the roll would advance in
     // 50 ms jerks once the voices died.
-    if state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now) {
+    let animating =
+        state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now);
+    if animating {
         ui.ctx().request_repaint();
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
+    }
+
+    // Performance overlay: fold this frame's numbers in and, if it's on, draw
+    // the corner HUD. Interactive path only — the offline renderer never
+    // reaches root_ui, so nothing here touches a recorded frame.
+    let dt = ui.input(|i| i.stable_dt);
+    state.perf.record(
+        dt,
+        cpu_ms,
+        now,
+        state.tracker.voices().count(),
+        state.tracker.held_count(),
+        state.view.visible_count(),
+        state.view.render_scale,
+        animating,
+    );
+    if state.view.show_perf {
+        perf::draw_overlay(ui.ctx(), ui.max_rect(), &state.perf);
     }
 }
 
