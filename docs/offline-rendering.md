@@ -166,6 +166,7 @@ The flags worth knowing (`--help` lists them all):
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
 | `--audio` | audio to use instead of the take's own: feeds the spectrum **and** is muxed in |
+| `--align` | how `--audio` lines up: `auto` (default), `off`, or a start in seconds |
 | `--layout` | preset name or a `.ron` file (see below) |
 | `--size` | output pixels, e.g. `3840x2160` |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
@@ -180,6 +181,41 @@ resolution; raise it for chunkier text, lower it to fit more lattice in.
 
 Rendering is faster than realtime on an M-series Mac (roughly 19 s of
 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.
+
+## Replacing crackly audio with a clean bounce
+
+Live playback can crackle, so the audio a take records is not always good
+enough to ship. Bounce a clean WAV of the same performance and pass it as
+`--audio`:
+
+```sh
+lattice-offline take.take --audio clean-bounce.wav --out piece.mp4
+```
+
+The catch a naive swap hits is alignment. The clean bounce might start at
+a different song position than where recording armed, and plugin-delay
+compensation can shift it by a constant amount — either way the sound
+drifts against the picture.
+
+The fix uses the take's own recording as a timing reference. That
+recording is crackly, but it is stamped to the same clock as the notes,
+so it is *already* aligned to the visualization. `--audio` cross-correlates
+the clean bounce against it — on onset envelopes, which shrug off the
+crackle and the level difference — and places the bounce wherever it
+actually belongs. It prints what it found:
+
+```
+aligned audio to the take's recording: soundtrack starts at 3.500s (confidence 0.97)
+```
+
+Confidence near 1 is a solid match; if it comes out low, the two files may
+not be the same performance, and `--align <seconds>` sets the start by
+hand. `--align off` skips correlation and assumes the bounce starts at
+take zero.
+
+This needs the take to have recorded its own audio ("Record audio too").
+Without a reference there is nothing to correlate against, and the bounce
+is assumed to start at take zero unless you say otherwise.
 
 ## Layouts
 

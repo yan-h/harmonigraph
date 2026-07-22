@@ -12,6 +12,7 @@
 //!
 //! See `docs/offline-rendering.md` for the whole workflow.
 
+mod align;
 mod frames;
 mod layout;
 mod render;
@@ -34,8 +35,10 @@ OPTIONS:
     -o, --out <PATH>       Output. .mp4/.mov/.mkv go through ffmpeg;
                            .png writes a numbered sequence; .rgba writes
                            a raw stream.  [default: <take>.mp4]
-    -a, --audio <WAV>      Bounced audio: feeds the spectrum analyzer and
-                           is muxed into the video.
+    -a, --audio <WAV>      Audio to use instead of the take's own recording
+                           — a clean bounce in place of a crackly one. It
+                           is auto-aligned to the take (see --align), feeds
+                           the spectrum, and is muxed into the video.
     -l, --layout <SPEC>    Preset name or path to a .ron layout.
                            Presets: side-by-side, stacked, lattice, spectral
                            [default: side-by-side]
@@ -53,6 +56,10 @@ OPTIONS:
                            persist blob (see read-plugin-state.py).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
                            PATH or in the usual install locations.
+        --align <MODE>     How to line a --audio file up with the picture:
+                           auto (default) cross-correlates it against the
+                           take\'s own recording; off assumes it starts at
+                           take zero; a number sets the start by hand.
         --dump-layout      Print the resolved layout as .ron and exit —
                            the starting point for a custom one.
     -h, --help             Show this.
@@ -87,7 +94,21 @@ struct Args {
     crf: u32,
     ui_state: Option<String>,
     ffmpeg: Option<String>,
+    align: Align,
     dump_layout: bool,
+}
+
+/// How to place a soundtrack on the take's timeline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Align {
+    /// The take's own recording as-is; a replacement cross-correlated
+    /// against that recording. The default, and the point of the feature.
+    Auto,
+    /// Assume the soundtrack starts where the take does (take zero for a
+    /// replacement, the recording's own start otherwise).
+    Off,
+    /// A hand-set start, in seconds of take time.
+    Fixed(f64),
 }
 
 impl Default for Args {
@@ -106,6 +127,7 @@ impl Default for Args {
             crf: 16,
             ui_state: None,
             ffmpeg: None,
+            align: Align::Auto,
             dump_layout: false,
         }
     }
@@ -135,6 +157,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
             "--ui-state" => args.ui_state = Some(value("--ui-state")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
+            "--align" => args.align = parse_align(&value("--align")?)?,
             "--dump-layout" => args.dump_layout = true,
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?} (--help for the list)"))
@@ -147,6 +170,17 @@ fn parse_args() -> Result<Option<Args>, String> {
 
 fn parse_number<T: std::str::FromStr>(name: &str, text: &str) -> Result<T, String> {
     text.parse().map_err(|_| format!("{name}: {text:?} is not a number"))
+}
+
+fn parse_align(text: &str) -> Result<Align, String> {
+    match text {
+        "auto" => Ok(Align::Auto),
+        "off" | "none" => Ok(Align::Off),
+        other => other
+            .parse()
+            .map(Align::Fixed)
+            .map_err(|_| format!("--align: expected auto, off, or a number, got {other:?}")),
+    }
 }
 
 fn parse_size(text: &str) -> Result<[u32; 2], String> {
@@ -166,6 +200,47 @@ fn parse_size(text: &str) -> Result<[u32; 2], String> {
 fn default_scale(size: [u32; 2]) -> f32 {
     const REFERENCE_POINTS_ACROSS: f32 = 1280.0;
     (size[0] as f32 / REFERENCE_POINTS_ACROSS).clamp(1.0, 4.0)
+}
+
+/// Cross-correlate a replacement soundtrack against the take\'s own
+/// recording to find where it sits on the take timeline, reporting what
+/// it found. Falls back to take zero, loudly, when there is no recording
+/// to match against — that is the case a user hits when they never
+/// recorded audio, and silence with no explanation would be worse.
+fn align_replacement(
+    recorded: Option<&std::path::Path>,
+    soundtrack: Option<&wav::Audio>,
+    reference_start: f64,
+) -> Result<f64, String> {
+    let (Some(recorded), Some(soundtrack)) = (recorded, soundtrack) else {
+        eprintln!(
+            "note: this take has no recorded audio to align against, so the \
+             replacement is assumed to start at take zero.\n      Record with \
+             \"Record audio too\" to enable auto-align, or pass --align <seconds>."
+        );
+        return Ok(0.0);
+    };
+    let reference = wav::read(recorded)?;
+    match align::align(&reference, reference_start, soundtrack) {
+        Some(found) => {
+            eprintln!(
+                "aligned audio to the take\'s recording: soundtrack starts at \
+                 {:.3}s (confidence {:.2})",
+                found.start, found.confidence,
+            );
+            if found.confidence < 0.35 {
+                eprintln!(
+                    "  low confidence — if the sound drifts against the picture, \
+                     set the start by hand with --align <seconds>"
+                );
+            }
+            Ok(found.start)
+        }
+        None => {
+            eprintln!("note: too little audio to align; assuming the replacement starts at take zero");
+            Ok(0.0)
+        }
+    }
 }
 
 fn run() -> Result<(), String> {
@@ -196,37 +271,58 @@ fn run() -> Result<(), String> {
         );
     }
 
-    // Audio: an explicit --audio wins; otherwise the WAV the take
-    // recorded for itself, which sits beside it so the pair can be moved
-    // together.
-    let recorded = take.header.audio_file.as_ref().map(|name| {
-        std::path::Path::new(&take_path)
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join(name)
-    });
+    // The WAV the take recorded for itself, beside the take file, if any.
+    let recorded = take
+        .header
+        .audio_file
+        .as_ref()
+        .map(|name| {
+            std::path::Path::new(&take_path)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join(name)
+        })
+        .filter(|path| path.is_file());
+
+    // The soundtrack: a `--audio` file replaces the take's own recording;
+    // otherwise the recording is the soundtrack.
+    let is_replacement = args.audio.is_some();
     let audio_path: Option<std::path::PathBuf> = match &args.audio {
         Some(path) => Some(std::path::PathBuf::from(path)),
-        None => match recorded {
-            // A take that names an audio file it no longer has is worth
-            // saying out loud: the render would otherwise come out silent
-            // with no spectrum and no explanation.
-            Some(path) if path.is_file() => Some(path),
-            Some(path) => {
-                eprintln!("warning: take names {} but it is not there", path.display());
-                None
+        None => {
+            if take.header.audio_file.is_some() && recorded.is_none() {
+                // A take that names an audio file it no longer has beside
+                // it is worth saying out loud: the render would otherwise
+                // come out silent with no spectrum and no explanation.
+                eprintln!(
+                    "warning: take names {:?} but it is not beside the take",
+                    take.header.audio_file.as_deref().unwrap_or_default()
+                );
             }
-            None => None,
-        },
-    };
-    // Only the take's own audio is aligned by the header; an explicitly
-    // given file is assumed to start at the same zero the take does.
-    let audio_start = if args.audio.is_some() {
-        0.0
-    } else {
-        take.header.audio_start.unwrap_or(0.0)
+            recorded.clone()
+        }
     };
     let audio = audio_path.as_deref().map(wav::read).transpose()?;
+
+    // Where the soundtrack's first sample falls on the take's timeline.
+    // The take's own recording is aligned by construction (the header
+    // says where it started). A REPLACEMENT — a clean bounce standing in
+    // for a crackly recording — is aligned against that recording by
+    // cross-correlation, so it inherits the same alignment to the
+    // picture. --align overrides either.
+    let reference_start = take.header.audio_start.unwrap_or(0.0);
+    let audio_start = match args.align {
+        Align::Fixed(seconds) => seconds,
+        Align::Off => {
+            if is_replacement {
+                0.0
+            } else {
+                reference_start
+            }
+        }
+        Align::Auto if !is_replacement => reference_start,
+        Align::Auto => align_replacement(recorded.as_deref(), audio.as_ref(), reference_start)?,
+    };
 
     // Default end: the last event plus a tail, so releases finish fading
     // and the roll clears instead of the video cutting mid-decay. If
