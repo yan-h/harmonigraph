@@ -246,7 +246,8 @@ fn fill_pixels(
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the chosen
 /// ramp. The ramp's dark end matches the pane's well, so silence recedes while
 /// energy stands out — the overall opacity is applied once, as the quad's tint.
-fn cell_color(kind: SpectrogramColor, level: f32, midi: f32, frame: &FrameParams) -> Color32 {
+/// Shared with the spectrum curve so the two read in the same scheme.
+pub(super) fn cell_color(kind: SpectrogramColor, level: f32, midi: f32, frame: &FrameParams) -> Color32 {
     let t = level.clamp(0.0, 1.0);
     let rgb = match kind {
         SpectrogramColor::Mono => ramp(t, &[[0, 0, 0], [255, 255, 255]]),

@@ -525,6 +525,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
     if cfg.show_audio && split > 0.0 {
+        let frame = state.frame_params;
         if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
             // Only the buckets inside the octave zoom.
             let visible: Vec<(f32, f32, f32, f32)> = (0..levels.len())
@@ -534,39 +535,55 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                 })
                 .collect();
 
+            // Color from the SAME palette as the spectrogram, keyed by the same
+            // loudness, so the curve reads in the heatmap's scheme rather than a
+            // flat accent. `tint` keeps the palette's hue/brightness and only
+            // sets opacity (gamma_multiply would darken it toward black).
+            let hue = |power: f32, midi: f32| {
+                super::spectrogram::cell_color(
+                    cfg.spectrogram_color,
+                    loudness(&cfg, power, midi),
+                    midi,
+                    &frame,
+                )
+            };
+            let tint = |c: egui::Color32, a: u8| {
+                egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+            };
+
+            // Each element is drawn per-segment (rather than one flat line) so
+            // it takes its own bucket's color.
             if cfg.fill {
-                // One translucent slab per bucket, wide enough to meet its
-                // neighbors.
+                // One slab per bucket, wide enough to meet its neighbors.
                 let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
-                let fill_color = theme::accent().gamma_multiply(0.15);
                 for &(midi, t, level, _) in &visible {
                     let d = d_of(level, midi);
                     if d * axes.depth_len() > 0.5 {
                         painter.line_segment(
                             [axes.at(t, sd(0.0)), axes.at(t, sd(d))],
-                            egui::Stroke::new(slab, fill_color),
+                            egui::Stroke::new(slab, tint(hue(level, midi), 105)),
                         );
                     }
                 }
             }
             if cfg.peak_hold {
-                let peak_points: Vec<egui::Pos2> = visible
-                    .iter()
-                    .map(|&(midi, t, _, peak)| axes.at(t, sd(d_of(peak, midi))))
-                    .collect();
-                painter.add(egui::Shape::line(
-                    peak_points,
-                    egui::Stroke::new(1.0, theme::accent().gamma_multiply(0.35)),
-                ));
+                for w in visible.windows(2) {
+                    let (m0, t0, _, pk0) = w[0];
+                    let (m1, t1, _, pk1) = w[1];
+                    painter.line_segment(
+                        [axes.at(t0, sd(d_of(pk0, m0))), axes.at(t1, sd(d_of(pk1, m1)))],
+                        egui::Stroke::new(1.0, tint(hue(pk0, m0), 150)),
+                    );
+                }
             }
-            let points: Vec<egui::Pos2> = visible
-                .iter()
-                .map(|&(midi, t, level, _)| axes.at(t, sd(d_of(level, midi))))
-                .collect();
-            painter.add(egui::Shape::line(
-                points,
-                egui::Stroke::new(1.5, theme::accent().gamma_multiply(0.65)),
-            ));
+            for w in visible.windows(2) {
+                let (m0, t0, l0, _) = w[0];
+                let (m1, t1, l1, _) = w[1];
+                painter.line_segment(
+                    [axes.at(t0, sd(d_of(l0, m0))), axes.at(t1, sd(d_of(l1, m1)))],
+                    egui::Stroke::new(1.5, tint(hue(l0, m0), 235)),
+                );
+            }
         }
     }
 
