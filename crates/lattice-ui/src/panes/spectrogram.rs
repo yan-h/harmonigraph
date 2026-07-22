@@ -18,11 +18,8 @@ use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI
 use lattice_scene::{channel_color, FrameParams};
 
 use super::spectral::{loudness, Axes, PitchScale};
+use super::PITCH_RAMP_CHANNEL;
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
-
-/// The channel whose role borrows the lattice's low-to-high pitch ramp, for
-/// the `Pitch` colormap (matches the roll's Pitch coloring).
-const PITCH_RAMP_CHANNEL: u8 = 9;
 
 /// Bin power at or below this is treated as flat silence — skips the `log10`
 /// in the intensity map for the many empty buckets, without changing the look.

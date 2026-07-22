@@ -17,15 +17,9 @@ use egui::Color32;
 use lattice_core::RollNote;
 use lattice_scene::channel_color;
 
-use super::scene_color;
 use super::spectral::{Axes, PitchScale};
+use super::{scene_color, PITCH_RAMP_CHANNEL};
 use crate::{theme, RollColor, SharedState};
-
-/// A channel in the [`PitchGradient`](lattice_core::ChannelRole::PitchGradient)
-/// role, used to borrow the lattice's low-to-high color ramp for the
-/// roll's Pitch coloring — the ramp has no entry point of its own that
-/// takes the display's darkest/brightest bounds.
-const PITCH_RAMP_CHANNEL: u8 = 9;
 
 /// Below this many pixels a ribbon is too thin to read as a shape, so it
 /// is drawn as a bare line instead (which stays visible at hairline
