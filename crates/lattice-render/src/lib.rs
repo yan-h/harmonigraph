@@ -1014,8 +1014,11 @@ impl CallbackTrait for LatticeCallback {
 
         if self.instances.len() > pane.instance_capacity {
             pane.instance_capacity = self.instances.len().next_power_of_two();
-            pane.instance_buffer =
-                create_vertex_buffer::<GpuInstance>(device, "lattice_instances", pane.instance_capacity);
+            pane.instance_buffer = create_vertex_buffer::<GpuInstance>(
+                device,
+                "lattice_instances",
+                pane.instance_capacity,
+            );
         }
         pane.instance_count = self.instances.len() as u32;
         if !self.instances.is_empty() {

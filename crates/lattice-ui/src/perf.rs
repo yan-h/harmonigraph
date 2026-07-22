@@ -162,7 +162,11 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
                     row(ui, "frame", format!("{:.1} ms", perf.frame_dt * 1000.0));
                     row(ui, "ui cpu", format!("{:.1} ms", perf.cpu_ms));
                     row(ui, "memory", memory);
-                    row(ui, "voices", format!("{} held · {fading} fading", perf.workload.held_voices));
+                    row(
+                        ui,
+                        "voices",
+                        format!("{} held · {fading} fading", perf.workload.held_voices),
+                    );
                     row(
                         ui,
                         "nodes",
