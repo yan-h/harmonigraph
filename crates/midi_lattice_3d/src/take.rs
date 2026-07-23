@@ -275,7 +275,7 @@ impl Recorder {
     /// A backward jump means a loop wrapped or the playhead was dragged,
     /// so the take splits. The threshold ignores a host's own jitter
     /// around a loop point; a real wrap is far larger.
-    pub fn observe_transport(&mut self, position: f64, playing: bool, loop_active: bool) -> bool {
+    pub fn observe_transport(&mut self, position: f64, playing: bool) -> bool {
         // Once the loop end has ended the take (AtLoopEnd), record nothing more
         // until a fresh arm clears the latch.
         if self.finished {
@@ -284,13 +284,19 @@ impl Recorder {
         const BACKWARD_JUMP: f64 = 0.05;
         let rolling = match self.last_position {
             Some(last) if position < last - BACKWARD_JUMP => {
-                // The loop wrapped (or the playhead was dragged back). Under
-                // AtLoopEnd with a loop active, one pass is exactly the take we
-                // want: latch done and tell the GUI to stop + render, WITHOUT
-                // pushing NewPass — the writer opens the next pass eagerly on
-                // NewPass, so splitting here would leave the empty second file
-                // as the one that renders.
-                if loop_active && self.stop_at_loop_end.load(Ordering::Relaxed) {
+                // A backward jump means the transport looped back (or the
+                // playhead was dragged). Under AtLoopEnd that first wrap IS the
+                // take: one loop has been recorded, so latch done and tell the
+                // GUI to stop + render — WITHOUT pushing NewPass, because the
+                // writer opens the next pass eagerly and a split here would
+                // leave the empty second file as the one that renders.
+                //
+                // Keyed off the wrap itself, not the host's loop range: hosts
+                // (Bitwig included) don't flag the loop as active to the plugin,
+                // so nih-plug's loop_range stays None and could never fire this.
+                // The cost is that a manual rewind mid-take also ends it — fine
+                // for a mode you opt into specifically for looped recording.
+                if self.stop_at_loop_end.load(Ordering::Relaxed) {
                     self.finished = true;
                     self.hit_loop_end.store(true, Ordering::Relaxed);
                     self.last_position = Some(position);
@@ -853,19 +859,19 @@ mod tests {
         ctrl.set_stop_at_loop_end(true);
         assert!(rec.is_armed(), "arming clears last_position and the done latch");
 
-        // One loop's worth of forward motion, with the loop active.
-        assert!(rec.observe_transport(0.0, true, true));
-        assert!(rec.observe_transport(1.0, true, true));
-        assert!(rec.observe_transport(2.0, true, true));
+        // One loop's worth of forward motion.
+        assert!(rec.observe_transport(0.0, true));
+        assert!(rec.observe_transport(1.0, true));
+        assert!(rec.observe_transport(2.0, true));
         assert!(!ctrl.hit_loop_end(), "still mid-loop");
 
-        // The loop wraps back to the start: end the take here, and signal the
-        // GUI — do NOT keep rolling into a second pass.
-        assert!(!rec.observe_transport(0.0, true, true), "the wrap ends the take");
+        // The transport wraps back to the loop start: end the take here, and
+        // signal the GUI — do NOT keep rolling into a second pass.
+        assert!(!rec.observe_transport(0.0, true), "the wrap ends the take");
         assert!(ctrl.hit_loop_end(), "GUI is told to stop and render the pass");
 
         // Latched: nothing rolls again until a fresh arm.
-        assert!(!rec.observe_transport(1.0, true, true));
+        assert!(!rec.observe_transport(1.0, true));
     }
 
     #[test]
@@ -874,24 +880,31 @@ mod tests {
         ctrl.armed.store(true, Ordering::Relaxed);
         // stop_at_loop_end stays off — the default OnDisarm/looping behavior.
         assert!(rec.is_armed());
-        assert!(rec.observe_transport(0.0, true, true));
-        assert!(rec.observe_transport(2.0, true, true));
+        assert!(rec.observe_transport(0.0, true));
+        assert!(rec.observe_transport(2.0, true));
         // The wrap starts a new pass but keeps recording, as before.
-        assert!(rec.observe_transport(0.0, true, true), "a normal loop keeps going");
+        assert!(rec.observe_transport(0.0, true), "a normal loop keeps going");
         assert!(!ctrl.hit_loop_end());
     }
 
     #[test]
-    fn at_loop_end_only_fires_while_a_loop_is_active() {
+    fn re_arming_clears_the_loop_end_latch() {
         let (mut rec, ctrl) = channel();
         ctrl.armed.store(true, Ordering::Relaxed);
         ctrl.set_stop_at_loop_end(true);
         assert!(rec.is_armed());
-        assert!(rec.observe_transport(0.0, true, false));
-        assert!(rec.observe_transport(2.0, true, false));
-        // A backward jump with no loop active (a manual rewind) must not end
-        // the take: it splits like any other jump and keeps going.
-        assert!(rec.observe_transport(0.0, true, false));
-        assert!(!ctrl.hit_loop_end());
+        assert!(rec.observe_transport(0.0, true));
+        assert!(rec.observe_transport(2.0, true));
+        assert!(!rec.observe_transport(0.0, true), "the wrap ends the first take");
+        assert!(ctrl.hit_loop_end());
+
+        // Disarm, then re-arm: the done latch and the loop-end flag clear, so
+        // the next take records from scratch rather than starting finished.
+        ctrl.armed.store(false, Ordering::Relaxed);
+        assert!(!rec.is_armed());
+        ctrl.armed.store(true, Ordering::Relaxed);
+        assert!(rec.is_armed(), "re-arm");
+        assert!(!ctrl.hit_loop_end(), "the latch cleared on re-arm");
+        assert!(rec.observe_transport(0.0, true), "records again");
     }
 }

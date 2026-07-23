@@ -169,12 +169,16 @@ pub enum RenderTrigger {
     /// instant a render finishes, the stop is never observed and the take
     /// simply waits for you to disarm it, as before.
     OnTransportStop,
-    /// When the arranger loop first wraps: exactly one loop is recorded, the
+    /// When the arranger loop first repeats: exactly one loop is recorded, the
     /// take ends at the loop's end, and that pass renders — no catching the
     /// stop by hand. Meant for looped recording, where a manual stop is always
-    /// a beat or two off. Needs the host's loop to be active (Bitwig reports
-    /// the loop range); with no loop there is nothing to wrap on, so it waits
-    /// for you to disarm, like [`OnDisarm`](Self::OnDisarm).
+    /// a beat or two off.
+    ///
+    /// Detected by the transport wrapping, so **looping must be enabled**.
+    /// Hosts don't reliably tell a plugin where the loop markers are (Bitwig
+    /// doesn't flag its loop as active, so nih-plug's loop range is `None`), so
+    /// with looping off there is nothing to wrap on and it waits for you to
+    /// disarm, like [`OnDisarm`](Self::OnDisarm).
     AtLoopEnd,
 }
 

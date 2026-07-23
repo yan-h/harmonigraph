@@ -172,9 +172,9 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
                  the same moment — a play-through renders itself.",
             );
         ui.selectable_value(trigger, crate::RenderTrigger::AtLoopEnd, "At loop end").on_hover_text(
-            "Record one arranger-loop pass, then end exactly at the loop's end and render it — no \
-             manual stop to mistime. Needs the loop active; with no loop it waits for you to \
-             disarm.",
+            "Record one arranger-loop pass, then end the moment the loop repeats and render it — \
+             no manual stop to mistime. Turn LOOPING ON: it ends when the transport wraps back. \
+             With looping off it just waits for you to disarm.",
         );
     });
 
