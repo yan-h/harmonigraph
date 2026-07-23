@@ -188,6 +188,33 @@ impl EditorShared {
             ));
         }
 
+        // Analyze the bounced audio for the Render pane's spectrogram preview,
+        // once per path change. Empty columns mark a path that failed to read,
+        // so it isn't retried every frame. (A big WAV briefly hitches the GUI on
+        // load; acceptable for a one-time analyze.)
+        let path = self.ui.render_config.audio_path.trim().to_string();
+        let loaded = self.ui.bounce_preview.as_ref().map(|b| b.path.as_str());
+        if path.is_empty() {
+            self.ui.bounce_preview = None;
+        } else if loaded != Some(path.as_str()) {
+            let preview = match lattice_core::wav::read(std::path::Path::new(&path)) {
+                Ok(audio) => {
+                    let seconds = audio.seconds();
+                    let song = lattice_ui::WholeSong::precompute(
+                        &audio.samples,
+                        audio.sample_rate,
+                        0.0,
+                        0.0,
+                        seconds,
+                        &self.ui.spectrum_config,
+                    );
+                    lattice_ui::BouncePreview { path, columns: song.columns, span: seconds }
+                }
+                Err(_) => lattice_ui::BouncePreview { path, columns: Vec::new(), span: 0.0 },
+            };
+            self.ui.bounce_preview = Some(preview);
+        }
+
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
         self.take_last_count = count;
         // The audio thread's own view, rather than inferring it from

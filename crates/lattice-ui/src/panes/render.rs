@@ -38,6 +38,7 @@ const RENDER_POINTS_ACROSS: f32 = 1280.0;
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     render_settings(ui, state);
     frame_controls(ui, state);
+    bounce_strip(ui, state);
 
     section(ui, "Preview");
     let frame = state.render_config.frame;
@@ -93,6 +94,28 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     });
     let label = if f.stacked { "Lattice height" } else { "Lattice width" };
     ValueBar::new(&mut f.split, 0.15..=0.85, label).show(ui);
+}
+
+/// A flat spectrogram of the loaded bounce, so you can see it read in before
+/// rendering — shown only once a bounce has analyzed to non-empty columns.
+fn bounce_strip(ui: &mut egui::Ui, state: &mut SharedState) {
+    if state.bounce_preview.as_ref().is_none_or(|b| b.columns.len() < 2) {
+        return;
+    }
+    section(ui, "Bounce");
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 96.0), Sense::hover());
+    let cfg = state.spectrum_config;
+    let frame = state.frame_params;
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme::well());
+    // Disjoint field borrows: the bounce's columns and the spectrogram's own
+    // texture slot (2).
+    let Some(preview) = state.bounce_preview.as_ref() else {
+        return;
+    };
+    let (columns, span) = (&preview.columns, preview.span);
+    let slot = &mut state.spectrum.spectrogram_tex[2];
+    super::spectrogram::draw_flat_spectrogram(&painter, rect, &cfg, &frame, slot, columns, span);
 }
 
 /// The largest sub-rect of `outer` with the given width:height aspect, centered
