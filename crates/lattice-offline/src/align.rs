@@ -162,6 +162,57 @@ fn best_lag(template: &[f32], template_norm: f64, haystack: &[f32]) -> (usize, f
 pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<Alignment> {
     let reference_onsets = onset_strength(&envelope(&reference.samples, reference.sample_rate));
     let clean_onsets = onset_strength(&envelope(&clean.samples, clean.sample_rate));
+    align_onsets(&reference_onsets, reference_start, &clean_onsets)
+}
+
+/// Find where `clean` sits on the take's timeline by matching its onsets
+/// against the MIDI **note-ons** directly — no reference recording needed.
+/// Each onset is `(take-time seconds, velocity)`; `span` is the take's
+/// duration.
+///
+/// This is the path for a take that recorded no scratch audio: the notes are
+/// already on the take clock, so a bounce of the same performance lines its
+/// transients up against them. Reliable when the material has clear attacks
+/// (percussive, plucked); soft or legato material gives a low confidence and
+/// is better nudged by eye.
+pub fn align_to_notes(onsets: &[(f64, f32)], span: f64, clean: &Audio) -> Option<Alignment> {
+    let reference_onsets = note_onset_envelope(onsets, span);
+    let clean_onsets = onset_strength(&envelope(&clean.samples, clean.sample_rate));
+    // The note train is on the take clock, so its frame 0 is take-time 0.
+    align_onsets(&reference_onsets, 0.0, &clean_onsets)
+}
+
+/// An onset-strength envelope synthesized from MIDI note-on times, on the same
+/// [`HOP`] grid as [`envelope`], so it correlates against an audio onset
+/// envelope directly. Each note-on is a short velocity-weighted attack bump.
+fn note_onset_envelope(onsets: &[(f64, f32)], span: f64) -> Vec<f32> {
+    let frames = (span.max(0.0) / HOP).ceil() as usize + 2;
+    let mut env = vec![0.0f32; frames];
+    for &(t, velocity) in onsets {
+        if t < 0.0 {
+            continue;
+        }
+        let f = (t / HOP) as usize;
+        if f < frames {
+            // A two-frame bump: an audio onset spike has a few ms of width, so
+            // this tolerates sub-frame timing without smearing the peak.
+            env[f] += velocity.max(0.0);
+            if f + 1 < frames {
+                env[f + 1] += 0.5 * velocity.max(0.0);
+            }
+        }
+    }
+    env
+}
+
+/// The correlation core shared by [`align`] and [`align_to_notes`]: slide the
+/// reference's strongest window over the clean file's onsets and read off the
+/// best lag. `reference_start` is the take-time of the reference's frame 0.
+fn align_onsets(
+    reference_onsets: &[f32],
+    reference_start: f64,
+    clean_onsets: &[f32],
+) -> Option<Alignment> {
     if reference_onsets.len() < MIN_FRAMES || clean_onsets.len() < MIN_FRAMES {
         return None;
     }
@@ -170,18 +221,18 @@ pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<A
         .min(reference_onsets.len())
         .min(clean_onsets.len())
         .max(MIN_FRAMES);
-    let anchor = strongest_window(&reference_onsets, width);
+    let anchor = strongest_window(reference_onsets, width);
     let template = &reference_onsets[anchor..anchor + width];
 
     let mean = template.iter().map(|&x| f64::from(x)).sum::<f64>() / width as f64;
     let centered: Vec<f32> = template.iter().map(|&x| (f64::from(x) - mean) as f32).collect();
     let norm = centered.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>().sqrt();
     if norm <= 1e-9 {
-        // A silent template — nothing to lock onto.
+        // A silent (or eventless) template — nothing to lock onto.
         return None;
     }
 
-    let (lag, confidence) = best_lag(&centered, norm, &clean_onsets);
+    let (lag, confidence) = best_lag(&centered, norm, clean_onsets);
 
     // The template frame `anchor` and the clean frame `lag` are the same
     // moment, so their take-times are equal:
@@ -329,5 +380,33 @@ mod tests {
     fn too_little_audio_declines_rather_than_guessing() {
         let tiny = Audio { sample_rate: 48_000.0, samples: vec![0.0; 32] };
         assert!(align(&tiny, 0.0, &tiny).is_none());
+    }
+
+    #[test]
+    fn aligns_a_bounce_to_midi_onsets_with_no_reference_recording() {
+        // A take with no scratch audio: line the bounce up against the
+        // note-ons alone, at a few offsets (starts at zero, mid-song, and with
+        // a pre-roll).
+        let span = 22.0;
+        let events = beat(span);
+        let onsets: Vec<(f64, f32)> = events.iter().map(|&t| (t, 0.8)).collect();
+        for offset in [0.0, 1.3, -0.4] {
+            // The bounce's sample 0 sits at take-time `offset`, so an event at
+            // take-time e is at bounce-time e - offset; events before the
+            // bounce starts aren't captured.
+            let bounce_events: Vec<f64> =
+                events.iter().map(|&e| e - offset).filter(|&t| t >= 0.0).collect();
+            let clean = Audio {
+                sample_rate: 48_000.0,
+                samples: clicks(&bounce_events, span - offset + 1.0, 48_000.0),
+            };
+            let a = align_to_notes(&onsets, span, &clean).expect("enough signal");
+            assert!(
+                (a.start - offset).abs() < 0.03,
+                "offset {offset}: got {:.4}s (confidence {:.2})",
+                a.start,
+                a.confidence,
+            );
+        }
     }
 }

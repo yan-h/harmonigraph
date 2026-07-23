@@ -224,27 +224,25 @@ fn size_for_frame(frame: &lattice_ui::RenderFrame) -> [u32; 2] {
     }
 }
 
-/// Cross-correlate a replacement soundtrack against the take\'s own
-/// recording to find where it sits on the take timeline, reporting what
-/// it found. Falls back to take zero, loudly, when there is no recording
-/// to match against — that is the case a user hits when they never
-/// recorded audio, and silence with no explanation would be worse.
+/// Line a replacement soundtrack up with the take timeline, reporting what it
+/// found. Prefers the take\'s own recording as a timing reference; with no
+/// recording it correlates the bounce against the MIDI note-ons directly (the
+/// notes are already on the take clock). Falls back to take zero, loudly, only
+/// when neither can place it.
 fn align_replacement(
     recorded: Option<&std::path::Path>,
     soundtrack: Option<&wav::Audio>,
     reference_start: f64,
+    midi_onsets: &[(f64, f32)],
+    span: f64,
 ) -> Result<f64, String> {
-    let (Some(recorded), Some(soundtrack)) = (recorded, soundtrack) else {
-        eprintln!(
-            "note: this take has no recorded audio to align against, so the \
-             replacement is assumed to start at take zero.\n      Record with \
-             \"Record audio too\" to enable auto-align, or pass --align <seconds>."
-        );
-        return Ok(0.0);
-    };
-    let reference = wav::read(recorded)?;
-    match align::align(&reference, reference_start, soundtrack) {
-        Some(found) => {
+    let Some(soundtrack) = soundtrack else { return Ok(0.0) };
+
+    // Most robust: the take\'s own recording, stamped to the same clock as the
+    // notes. Fall through only if it is missing or too short to lock onto.
+    if let Some(recorded) = recorded {
+        let reference = wav::read(recorded)?;
+        if let Some(found) = align::align(&reference, reference_start, soundtrack) {
             eprintln!(
                 "aligned audio to the take\'s recording: soundtrack starts at \
                  {:.3}s (confidence {:.2})",
@@ -256,10 +254,33 @@ fn align_replacement(
                      set the start by hand with --align <seconds>"
                 );
             }
+            return Ok(found.start);
+        }
+    }
+
+    // No usable recording: line the bounce up against the MIDI note onsets.
+    // Great for clear attacks; soft or legato onsets match weakly, so say so.
+    match align::align_to_notes(midi_onsets, span, soundtrack) {
+        Some(found) if found.confidence >= 0.25 => {
+            eprintln!(
+                "aligned audio to the MIDI note onsets: soundtrack starts at \
+                 {:.3}s (confidence {:.2})",
+                found.start, found.confidence,
+            );
+            if found.confidence < 0.4 {
+                eprintln!(
+                    "  low confidence (soft or sparse onsets) — set --align \
+                     <seconds> by hand if it drifts"
+                );
+            }
             Ok(found.start)
         }
-        None => {
-            eprintln!("note: too little audio to align; assuming the replacement starts at take zero");
+        _ => {
+            eprintln!(
+                "note: no scratch recording, and the MIDI onsets did not match the \
+                 audio confidently — assuming it starts at take zero. Set --align \
+                 <seconds> if it drifts."
+            );
             Ok(0.0)
         }
     }
@@ -358,6 +379,16 @@ fn run() -> Result<(), String> {
     // cross-correlation, so it inherits the same alignment to the
     // picture. --align overrides either.
     let reference_start = take.header.audio_start.unwrap_or(0.0);
+    // Note-on times on the take clock, for aligning a bounce that has no
+    // scratch recording to correlate against.
+    let midi_onsets: Vec<(f64, f32)> = take
+        .notes
+        .iter()
+        .filter_map(|note| match note.kind {
+            lattice_take::NoteKind::On { velocity } => Some((note.t, velocity)),
+            _ => None,
+        })
+        .collect();
     let audio_start = match args.align {
         Align::Fixed(seconds) => seconds,
         Align::Off => {
@@ -368,7 +399,13 @@ fn run() -> Result<(), String> {
             }
         }
         Align::Auto if !is_replacement => reference_start,
-        Align::Auto => align_replacement(recorded.as_deref(), audio.as_ref(), reference_start)?,
+        Align::Auto => align_replacement(
+            recorded.as_deref(),
+            audio.as_ref(),
+            reference_start,
+            &midi_onsets,
+            take.duration(),
+        )?,
     };
 
     // Default end: the last event plus a tail, so releases finish fading
