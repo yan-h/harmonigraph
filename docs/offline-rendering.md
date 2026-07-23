@@ -173,11 +173,21 @@ The flags worth knowing (`--help` lists them all):
 | `--fps` | default 60 |
 | `--start` / `--end` / `--tail` | trim; `--tail` is the run-out after the last note |
 | `--ui-state` | use a different look than the one in the take |
+| `--playhead` | lay the whole take's spectrogram out at once and sweep a playhead through it |
 
 `--scale` is the one that isn't obvious. Font sizes and paddings are in
 *points*, so the scale decides how large the UI reads **relative to the
 frame**. The default keeps the same apparent size at any output
 resolution; raise it for chunkier text, lower it to fit more lattice in.
+
+`--playhead` changes how time reads. Normally the spectrogram and roll
+scroll past a fixed now-line, showing the last few seconds. With `--playhead`
+the whole take is laid out at once — the entire spectrogram across the frame —
+and a playhead sweeps through it, so the finished shape of the piece is visible
+the whole way rather than arriving and scrolling off. It needs audio (the
+spectrogram is audio-derived) and uses whatever spectrogram and roll look the
+take already carries. The roll's notes still fill in as the playhead reaches
+them; only the spectrogram is laid out ahead.
 
 Rendering is faster than realtime on an M-series Mac (roughly 19 s of
 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.

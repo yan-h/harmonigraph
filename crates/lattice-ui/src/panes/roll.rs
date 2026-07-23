@@ -17,7 +17,7 @@ use egui::Color32;
 use lattice_core::RollNote;
 use lattice_scene::channel_color;
 
-use super::spectral::{Axes, PitchScale};
+use super::spectral::{Axes, PitchScale, TimeAxis};
 use super::{scene_color, PITCH_RAMP_CHANNEL};
 use crate::{theme, RollColor, SharedState};
 
@@ -38,13 +38,11 @@ pub(super) fn draw_roll(
     now: f64,
 ) {
     let cfg = &state.spectrum_config;
-    // A degenerate span would put every note on one line; clamp rather
-    // than divide by it.
-    let window = cfg.roll_seconds.max(0.05) as f64;
-    let depth_span = 1.0 - split;
-
-    // Time to depth: `now` sits on the split, the window's far end at 1.
-    let depth_of = |t: f64| split + ((now - t) / window).clamp(0.0, 1.0) as f32 * depth_span;
+    // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
+    // the whole take laid out statically (offline playhead mode).
+    let time = TimeAxis::new(state, split, now);
+    let window = time.window();
+    let oldest = time.oldest();
 
     // Time gridlines first, so notes sit on top of them.
     if cfg.roll_grid_seconds > 0.0 {
@@ -54,10 +52,10 @@ pub(super) fn draw_roll(
         // would otherwise ask for thousands of hairlines.
         let mut drawn = 0;
         while t <= window && drawn < 400 {
-            painter.line_segment(
-                axes.across_pitch(depth_of(now - t)),
-                egui::Stroke::new(1.0, theme::surface_faint()),
-            );
+            // Absolute-time lines across the whole take, or `now`-relative
+            // lines receding into the past, per mode.
+            let d = if time.whole_song() { time.depth_of(oldest + t) } else { time.depth_of(now - t) };
+            painter.line_segment(axes.across_pitch(d), egui::Stroke::new(1.0, theme::surface_faint()));
             t += step;
             drawn += 1;
         }
@@ -66,7 +64,6 @@ pub(super) fn draw_roll(
     let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
     let ribbon_px = 2.0 * half * axes.pitch_len();
     let opacity = cfg.roll_opacity.clamp(0.0, 1.0);
-    let oldest = now - window;
 
     // Draw in a stable order (the live notes come out of a HashMap, whose
     // iteration order varies per run): with translucent glows the paint order
@@ -99,7 +96,7 @@ pub(super) fn draw_roll(
             if t1 < oldest {
                 continue;
             }
-            let (d0, d1) = (depth_of(t0), depth_of(t1));
+            let (d0, d1) = (time.depth_of(t0), time.depth_of(t1));
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
             let mut alpha = opacity;
@@ -174,8 +171,9 @@ pub(super) fn draw_roll(
         }
     }
 
-    // The present moment, where the roll hands over to the spectrum.
-    if cfg.roll_now_line {
+    // The present moment, where the roll hands over to the spectrum. In
+    // whole-song mode the pane sweeps a playhead instead, so skip it.
+    if cfg.roll_now_line && !time.whole_song() {
         painter.line_segment(
             axes.across_pitch(split),
             egui::Stroke::new(1.0, theme::hairline()),

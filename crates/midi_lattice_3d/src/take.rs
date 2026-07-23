@@ -688,6 +688,7 @@ mod tests {
             renderer_path: "  ".into(),
             audio_path: "   ".into(),
             extra_args: "   ".into(),
+            playhead: false,
         };
         let request = RenderRequest::from_config(&config).unwrap();
         assert_eq!(request.program, default_renderer_path());
@@ -704,6 +705,7 @@ mod tests {
             renderer_path: "/opt/lattice-offline".into(),
             audio_path: "/Users/yan/My Bounces/piece.wav".into(),
             extra_args: "--size 3840x2160   --layout side-by-side".into(),
+            playhead: false,
         };
         let request = RenderRequest::from_config(&config).unwrap();
         assert_eq!(request.program, std::path::PathBuf::from("/opt/lattice-offline"));

@@ -31,6 +31,9 @@ pub struct Settings {
     /// read the wrong part of the bounce, by exactly however far in you
     /// started.
     pub audio_start: f64,
+    /// Lay the whole take's spectrogram out at once and sweep a playhead
+    /// across it, instead of the live scrolling window. Needs audio.
+    pub whole_song_spectrogram: bool,
 }
 
 impl Settings {
@@ -65,6 +68,29 @@ pub fn render(
     // picture: no armed-mode pulse, no hover highlight.
     state.learn_active = false;
     state.hovered = None;
+
+    // Playhead mode: precompute the whole take's spectrogram from the full
+    // audio, once, up front. It's a pure function of (audio, config, span), so
+    // the per-frame draw just reads it and the render stays byte-identical
+    // between runs. The live ring can't hold a whole song, hence the separate
+    // precomputed set.
+    // `--playhead` on the command line, or the take's own "Whole-song
+    // playhead" render setting — either turns it on.
+    if settings.whole_song_spectrogram || state.render_config.playhead {
+        if let Some(audio) = audio {
+            let span = (settings.end - settings.start).max(0.0);
+            if span > 0.0 {
+                state.whole_song = Some(lattice_ui::WholeSong::precompute(
+                    &audio.samples,
+                    audio.sample_rate,
+                    settings.audio_start,
+                    settings.start,
+                    span,
+                    &state.spectrum_config,
+                ));
+            }
+        }
+    }
 
     let points = egui::vec2(
         settings.size[0] as f32 / settings.pixels_per_point,
@@ -174,6 +200,7 @@ mod tests {
             start: 0.0,
             end: 1.0,
             audio_start: 0.0,
+            whole_song_spectrogram: false,
         }
     }
 
@@ -231,5 +258,47 @@ mod tests {
         let settings = settings();
         let Some(frames) = render_frames(&settings) else { return };
         assert!(frames[0] != frames[frames.len() / 2], "nothing changed as notes arrived");
+    }
+
+    /// Whole-song playhead mode: the spectrogram is precomputed from the whole
+    /// audio up front, so it must stay as reproducible as the scrolling view,
+    /// and the playhead must actually sweep.
+    #[test]
+    fn whole_song_playhead_render_is_deterministic_and_moves() {
+        // A synthetic tone, so the precomputed spectrogram has content to lay
+        // out across the frame.
+        let sr = 48_000.0f32;
+        let n = (sr as f64) as usize; // one second
+        let samples: Vec<f32> =
+            (0..n).map(|i| 0.6 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
+        let audio = crate::wav::Audio { sample_rate: sr, samples };
+
+        let mut settings = settings();
+        settings.whole_song_spectrogram = true;
+        settings.layout = Layout::preset("spectral").unwrap();
+
+        let run = || -> Option<Vec<Vec<u8>>> {
+            let mut replay = Replay::new(take());
+            let mut frames = Vec::new();
+            match render(&mut replay, Some(&audio), &settings, |bytes| {
+                frames.push(bytes.to_vec());
+                Ok(())
+            }) {
+                Ok(_) => Some(frames),
+                Err(e) if e.contains("no usable GPU adapter") => {
+                    eprintln!("skipping: {e}");
+                    None
+                }
+                Err(e) => panic!("{e}"),
+            }
+        };
+
+        let Some(first) = run() else { return };
+        let second = run().expect("second run also has a GPU");
+        assert_eq!(first.len(), second.len());
+        for (i, (a, b)) in first.iter().zip(&second).enumerate() {
+            assert!(a == b, "whole-song frame {i} differs between runs");
+        }
+        assert!(first[0] != first[first.len() / 2], "the playhead should sweep across the frame");
     }
 }

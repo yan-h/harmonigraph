@@ -224,6 +224,12 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
              video next to the take. The render happens in the background \
              — it does not hold up the DAW.",
         );
+        ui.checkbox(&mut render.playhead, "Whole-song playhead").on_hover_text(
+            "Lay the whole take's spectrogram out at once and sweep a \
+             playhead through it, instead of the live scrolling window. \
+             Needs audio. Applies to every render of this take; the \
+             --playhead flag turns it on too.",
+        );
         if render.auto_render {
             crate::widgets::choice_row(
                 ui,

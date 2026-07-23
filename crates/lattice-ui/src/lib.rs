@@ -200,6 +200,12 @@ pub struct RenderConfig {
     /// `--size 3840x2160 --layout side-by-side`.
     #[serde(default)]
     pub extra_args: String,
+    /// Whole-song playhead spectrogram: lay the take out at once and sweep a
+    /// playhead through it, instead of the live scrolling window. Read by the
+    /// offline renderer from the take; `--playhead` on the command line also
+    /// turns it on. Needs audio.
+    #[serde(default)]
+    pub playhead: bool,
 }
 
 impl Default for RenderConfig {
@@ -211,6 +217,7 @@ impl Default for RenderConfig {
             renderer_path: String::new(),
             audio_path: String::new(),
             extra_args: "--size 1920x1080".into(),
+            playhead: false,
         }
     }
 }
@@ -435,6 +442,68 @@ pub struct SpectrogramColumn {
     pub power: Box<SpectrumBuckets>,
 }
 
+/// The whole take's spectrogram, precomputed for the offline renderer's
+/// playhead mode: every column of the full audio, laid out statically along
+/// the time axis with a playhead at `now`, instead of the live scrolling
+/// window. `Some` only in the offline renderer — the live ring
+/// ([`AudioSpectrum::history`]) is bounded and cannot hold a whole song.
+/// Runtime-only, never persisted (like [`SharedState::learn_active`]).
+pub struct WholeSong {
+    /// Take time at the near edge: the playhead sits here at the render's
+    /// start.
+    pub start: f64,
+    /// Seconds spanned across the depth axis — the render's duration.
+    pub span: f64,
+    /// Every spectrogram column, oldest first.
+    pub columns: Vec<SpectrogramColumn>,
+}
+
+impl WholeSong {
+    /// Analyze the entire `samples` buffer at the live FFT cadence, one raw
+    /// column per hop, `time`-stamped in take time (`time_origin` is the take
+    /// time of sample 0). Raw and unsmoothed exactly like the live ring — the
+    /// spectrogram applies its own temporal smoothing when it draws.
+    ///
+    /// Pure: `(samples, rate, config)` in, columns out, no clock or RNG, so a
+    /// render built on it stays byte-identical between runs.
+    pub fn precompute(
+        samples: &[f32],
+        sample_rate: f32,
+        time_origin: f64,
+        start: f64,
+        span: f64,
+        config: &SpectrumConfig,
+    ) -> WholeSong {
+        let mut analyzer = lattice_core::spectrum::SpectrumAnalyzer::new(sample_rate);
+        analyzer.set_fft_size(config.window.samples());
+        let sr = (sample_rate as f64).max(1.0);
+        let hop = AudioSpectrum::FFT_INTERVAL;
+        let total = samples.len();
+        let mut columns = Vec::new();
+        // Feed the buffer in one-hop chunks; once the window has filled every
+        // hop yields a column, exactly as the live `display` loop does.
+        let (mut fed, mut k) = (0usize, 1usize);
+        loop {
+            let end = ((k as f64 * hop * sr).round() as usize).min(total);
+            if end > fed {
+                analyzer.push_samples(&samples[fed..end]);
+                fed = end;
+            }
+            if let Some(power) = analyzer.pitch_spectrum() {
+                columns.push(SpectrogramColumn {
+                    time: time_origin + end as f64 / sr,
+                    power: Box::new(power),
+                });
+            }
+            if end >= total {
+                break;
+            }
+            k += 1;
+        }
+        WholeSong { start, span, columns }
+    }
+}
+
 impl Default for AudioSpectrum {
     fn default() -> Self {
         AudioSpectrum {
@@ -594,6 +663,11 @@ pub struct SharedState {
     pub spectrum: AudioSpectrum,
     /// The Spectral pane's settings (Spectrum tab; persisted).
     pub spectrum_config: SpectrumConfig,
+    /// Offline playhead render: the whole take's spectrogram laid out
+    /// statically with a playhead at `now`, instead of the live scrolling
+    /// window. `Some` only in the offline renderer. Runtime-only, never
+    /// persisted (mirrors `learn_active`).
+    pub whole_song: Option<WholeSong>,
     /// Set by the View pane's "Reset layout" button; consumed by root_ui
     /// AFTER the frame's DockArea writes the dock back (panes run inside
     /// that pass, so a direct write from one would be overwritten).
@@ -668,6 +742,7 @@ impl SharedState {
             take_status: String::new(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
+            whole_song: None,
             reset_layout: false,
             dock,
             perf: PerfStats::default(),
