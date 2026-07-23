@@ -511,6 +511,11 @@ pub struct WholeSong {
     pub span: f64,
     /// Every spectrogram column, oldest first.
     pub columns: Vec<SpectrogramColumn>,
+    /// The whole take's notes, laid out from the start. The live tracker only
+    /// holds notes replayed up to `now`, so the roll would otherwise fill in as
+    /// the playhead reached them; the render wants the whole piece at once. Set
+    /// by the offline renderer; empty in the spectrogram-only bounce preview.
+    pub roll: lattice_core::NoteRoll,
 }
 
 /// A loaded bounce and its precomputed spectrogram, for the Render pane's
@@ -569,7 +574,9 @@ impl WholeSong {
             }
             k += 1;
         }
-        WholeSong { start, span, columns }
+        // The roll is filled in separately by the renderer (it needs the notes,
+        // not the audio); the bounce preview leaves it empty.
+        WholeSong { start, span, columns, roll: lattice_core::NoteRoll::default() }
     }
 }
 

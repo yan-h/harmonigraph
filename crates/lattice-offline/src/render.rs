@@ -90,6 +90,11 @@ pub fn render(
                 ));
             }
         }
+        // The whole take's notes, laid out from the start — the roll shows the
+        // whole piece at once, not filling in as the playhead passes over it.
+        if let Some(ws) = state.whole_song.as_mut() {
+            ws.roll = replay.full_roll();
+        }
     }
 
     let points = egui::vec2(
