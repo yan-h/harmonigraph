@@ -118,6 +118,29 @@ impl Replay {
         }
     }
 
+    /// A [`lattice_core::NoteRoll`] holding EVERY note in the take, laid out
+    /// from the start — for the whole-song render, where the roll shows the
+    /// whole piece at once rather than filling in up to `now`. Pitch comes from
+    /// the notes and their bends, exactly as the live tracker builds it.
+    pub fn full_roll(&self) -> lattice_core::NoteRoll {
+        let mut tracker = lattice_core::NoteTracker::new();
+        for record in &self.take.notes {
+            let kind = match record.kind {
+                NoteKind::On { velocity } => NoteEventKind::On { velocity },
+                NoteKind::Off => NoteEventKind::Off,
+                NoteKind::Tuning { semitones } => NoteEventKind::Tuning { semitones },
+                NoteKind::AllOff => NoteEventKind::AllOff,
+            };
+            tracker.handle_event(NoteEvent {
+                time: record.t,
+                channel: record.channel,
+                note: record.note,
+                kind,
+            });
+        }
+        tracker.roll().clone()
+    }
+
     /// Whether every recorded event has been delivered.
     pub fn is_spent(&self) -> bool {
         self.next_note == self.take.notes.len() && self.next_param == self.take.params.len()

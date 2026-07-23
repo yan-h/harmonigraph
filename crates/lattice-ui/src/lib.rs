@@ -2,11 +2,14 @@
 //! per-frame root function. Both the standalone harness and the plugin
 //! editor call [`root_ui`] once per egui frame; everything else is internal.
 
+pub mod layout;
 pub mod params;
 pub mod theme;
 pub mod widgets;
 mod panes;
 mod perf;
+
+pub use layout::{Layout, Placement, PRESETS};
 
 use perf::PerfStats;
 
@@ -196,6 +199,11 @@ pub struct RenderConfig {
     /// spectrum — the roll and the lattice are unaffected.
     #[serde(default)]
     pub audio_path: String,
+    /// Take-time (seconds) where the bounce starts — empty means auto-align to
+    /// the MIDI onsets, a number passes `--align`. A string so "empty = auto"
+    /// reads naturally and it matches the other free-text fields.
+    #[serde(default)]
+    pub audio_offset: String,
     /// Extra flags, split on whitespace (no shell quoting):
     /// `--size 3840x2160 --layout side-by-side`.
     #[serde(default)]
@@ -206,6 +214,11 @@ pub struct RenderConfig {
     /// turns it on. Needs audio.
     #[serde(default)]
     pub playhead: bool,
+    /// The composed video frame — aspect ratio and the lattice/spectral split.
+    /// Edited and previewed in the Render pane; the offline renderer reads it
+    /// to compose the same picture.
+    #[serde(default)]
+    pub frame: RenderFrame,
 }
 
 impl Default for RenderConfig {
@@ -216,9 +229,47 @@ impl Default for RenderConfig {
             trigger: RenderTrigger::OnDisarm,
             renderer_path: String::new(),
             audio_path: String::new(),
+            audio_offset: String::new(),
             extra_args: "--size 1920x1080".into(),
             playhead: false,
+            frame: RenderFrame::default(),
         }
+    }
+}
+
+/// The video frame the Render pane composes: an aspect ratio plus the
+/// lattice/spectral split. Aspect is size-agnostic (the render's resolution is
+/// chosen separately); the split feeds [`Layout::split`], so the plugin's live
+/// preview and the offline renderer build the identical frame.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RenderFrame {
+    /// Frame aspect numerator (e.g. 16 of 16:9). Drives the preview letterbox
+    /// and the render's default resolution.
+    #[serde(default = "default_aspect_w")]
+    pub aspect_w: u32,
+    #[serde(default = "default_aspect_h")]
+    pub aspect_h: u32,
+    /// The lattice's share of the frame, `0..1` (the rest is the spectral pane).
+    #[serde(default = "default_frame_split")]
+    pub split: f32,
+    /// Lattice over spectral, rather than side by side.
+    #[serde(default)]
+    pub stacked: bool,
+}
+
+fn default_aspect_w() -> u32 {
+    16
+}
+fn default_aspect_h() -> u32 {
+    9
+}
+fn default_frame_split() -> f32 {
+    0.68
+}
+
+impl Default for RenderFrame {
+    fn default() -> Self {
+        RenderFrame { aspect_w: 16, aspect_h: 9, split: 0.68, stacked: false }
     }
 }
 
@@ -429,10 +480,13 @@ pub struct AudioSpectrum {
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
     /// Bounded by age and count (see [`AudioSpectrum::push_history`]).
     history: VecDeque<SpectrogramColumn>,
-    /// The spectrogram's pixels, uploaded once and sampled with bilinear
-    /// filtering so the heatmap reads as a smooth image rather than a mesh of
-    /// interpolated triangles. Runtime-only; created lazily on first draw.
-    spectrogram_tex: Option<egui::TextureHandle>,
+    /// The spectrogram's pixels, uploaded and sampled with bilinear filtering
+    /// so the heatmap reads as a smooth image rather than a mesh of interpolated
+    /// triangles. One texture per drawing surface — index 0 the docked Spectral
+    /// pane (and the offline render), index 1 the Render pane's preview — so two
+    /// live spectrograms in one frame don't overwrite each other's texture.
+    /// Runtime-only; created lazily on first draw.
+    spectrogram_tex: [Option<egui::TextureHandle>; 2],
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -456,6 +510,11 @@ pub struct WholeSong {
     pub span: f64,
     /// Every spectrogram column, oldest first.
     pub columns: Vec<SpectrogramColumn>,
+    /// The whole take's notes, laid out from the start. The live tracker only
+    /// holds notes replayed up to `now`, so the roll would otherwise fill in as
+    /// the playhead reached them; the render wants the whole piece at once. Set
+    /// by the offline renderer; empty in the spectrogram-only bounce preview.
+    pub roll: lattice_core::NoteRoll,
 }
 
 impl WholeSong {
@@ -500,7 +559,9 @@ impl WholeSong {
             }
             k += 1;
         }
-        WholeSong { start, span, columns }
+        // The roll is filled in separately by the renderer (it needs the notes,
+        // not the audio); the bounce preview leaves it empty.
+        WholeSong { start, span, columns, roll: lattice_core::NoteRoll::default() }
     }
 }
 
@@ -513,7 +574,7 @@ impl Default for AudioSpectrum {
             last_fft: None,
             last_samples: None,
             history: VecDeque::new(),
-            spectrogram_tex: None,
+            spectrogram_tex: [None, None],
         }
     }
 }
@@ -606,6 +667,15 @@ impl AudioSpectrum {
     pub fn clear_history(&mut self) {
         self.history.clear();
     }
+
+    /// Whether audio has arrived within the hold window — i.e. the spectrum is
+    /// still live. Drives continuous repaint so the curve and spectrogram stay
+    /// smooth even when no MIDI is animating the frame. Reads true only while
+    /// samples are actually arriving (the shell pushes them when the spectrum is
+    /// shown), so it idles cleanly once audio stops.
+    pub fn is_flowing(&self, now: f64) -> bool {
+        self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS)
+    }
 }
 
 /// Everything the UI reads and mutates each frame. One instance lives in the
@@ -649,6 +719,12 @@ pub struct SharedState {
     pub take_supported: bool,
     /// Toggled by the View pane, acted on by the shell.
     pub take_recording: bool,
+    /// One-shot: set by the Render pane's "Render now" button, consumed by the
+    /// shell to render the last take with the CURRENT settings. Runtime-only.
+    pub render_now: bool,
+    /// Whether a take has been recorded this session — the shell sets it so the
+    /// Render pane can offer "Render now". Runtime-only.
+    pub last_take_ready: bool,
     /// Record the input bus alongside the notes, so the render has a
     /// spectrum and a soundtrack without a separate bounce. Persisted
     /// with the render settings rather than the take state, since it is
@@ -706,6 +782,7 @@ fn default_dock() -> DockState<panes::Tab> {
             panes::Tab::View,
             panes::Tab::Appearance,
             panes::Tab::Spectrum,
+            panes::Tab::Render,
         ],
     );
     // Notes first so it sits left of Console and is the selected tab by
@@ -737,6 +814,8 @@ impl SharedState {
             preset_name: String::new(),
             take_supported: false,
             take_recording: false,
+            render_now: false,
+            last_take_ready: false,
             take_audio: false,
             render_config: RenderConfig::default(),
             take_status: String::new(),
@@ -811,6 +890,13 @@ struct UiPersist {
     render: RenderConfig,
 }
 
+/// Parse just the render frame out of a persisted UI-state blob — so the
+/// offline renderer can default its size and layout to what the take was
+/// composed for, without building a whole [`SharedState`].
+pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
+    ron::from_str::<UiPersist>(serialized).ok().map(|persist| persist.render.frame)
+}
+
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
 /// window (egui-baseview hands the plugin editor exactly that; eframe hands
 /// the standalone harness the same via its `App::ui` hook).
@@ -869,8 +955,14 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // scrolls for as long as its window still reaches a played note — so
     // it gets its own say here. Without this the roll would advance in
     // 50 ms jerks once the voices died.
-    let animating =
-        state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now);
+    //
+    // Flowing audio counts too: the spectrum and spectrogram advance every
+    // frame off the analyzer, so with audio playing but no MIDI they'd
+    // otherwise crawl at the 50 ms idle poll.
+    let animating = state.tracker.voices().next().is_some()
+        || state.learn_active
+        || roll_scrolling(state, now)
+        || state.spectrum.is_flowing(now);
     if animating {
         ui.ctx().request_repaint();
     } else {
@@ -951,7 +1043,9 @@ pub enum Pane {
 pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
     match pane {
         Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
-        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now),
+        // Offline: pixels-per-point already scales text, so no extra factor;
+        // one spectrogram per frame, so texture slot 0.
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 1.0, 0),
     }
 }
 

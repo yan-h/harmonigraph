@@ -102,7 +102,7 @@ impl RollNote {
 }
 
 /// Every note press the roll still remembers, in time order.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct NoteRoll {
     /// Finished notes, oldest release first.
     past: VecDeque<RollNote>,

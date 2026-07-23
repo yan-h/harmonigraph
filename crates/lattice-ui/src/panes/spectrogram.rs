@@ -48,6 +48,9 @@ pub(super) fn draw_spectrogram(
     state: &mut SharedState,
     split: f32,
     now: f64,
+    // Which texture slot to build into (0 the docked pane / offline render, 1
+    // the Render preview) — two live spectrograms in a frame need their own.
+    surface: usize,
 ) {
     // Small copies, so `state.spectrum` is then free to take mutably (its
     // texture handle) without fighting the config/frame reads.
@@ -134,11 +137,11 @@ pub(super) fn draw_spectrogram(
     let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
     let image = egui::ColorImage::new([w, h], pixels);
     let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-    match &mut spectrum.spectrogram_tex {
+    match &mut spectrum.spectrogram_tex[surface] {
         Some(handle) => handle.set(image, opts),
         slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
     }
-    let Some(tex) = &spectrum.spectrogram_tex else { return };
+    let Some(tex) = &spectrum.spectrogram_tex[surface] else { return };
 
     // Map a screen depth to the texture's time axis CONTINUOUSLY, through the
     // roll's own `now`-anchored depth<->time relation (unclamped, the inverse
@@ -274,9 +277,10 @@ fn fill_pixels(
 }
 
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the chosen
-/// ramp. The ramp's dark end matches the pane's well, so silence recedes while
-/// energy stands out — the overall opacity is applied once, as the quad's tint.
-/// Shared with the spectrum curve so the two read in the same scheme.
+/// ramp. The ramp's dark end is black, matching the region's black bed (laid
+/// down in `spectral_pane`), so silence recedes while energy stands out — the
+/// overall opacity is applied once, as the quad's tint. Shared with the spectrum
+/// curve so the two read in the same scheme.
 pub(super) fn cell_color(kind: SpectrogramColor, level: f32, midi: f32, frame: &FrameParams) -> Color32 {
     let t = level.clamp(0.0, 1.0);
     let rgb = match kind {

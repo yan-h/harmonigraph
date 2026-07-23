@@ -161,20 +161,31 @@ impl EditorShared {
         // The plugin can record; the control is hidden in shells that
         // can't (the standalone uses an env var instead).
         self.ui.take_supported = true;
-        self.ui.take_audio = self.ui.render_config.record_audio;
+        // Recording always captures the plugin's audio input now: the render
+        // uses it as the spectrogram, aligned to the picture by construction (no
+        // bounce, no offset). Silent-but-harmless if the plugin sits where no
+        // audio reaches it.
+        self.ui.take_audio = true;
         let recording = self.take.is_recording();
         if self.ui.take_recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
             // is on screen right now is what the render should reproduce.
             self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
             self.take_last_count = 0;
-            self.take.start(
-                sample_rate,
-                self.ui.save_persist(),
-                self.ui.render_config.record_audio,
-            );
+            self.take.start(sample_rate, self.ui.save_persist(), true);
         } else if !self.ui.take_recording && recording {
             self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
+        }
+
+        // "Render now": render the last finished take with the CURRENT settings.
+        // The persist blob rides along as --ui-state, so the frame, bounce, and
+        // offset dialed in after recording all reach the video.
+        self.ui.last_take_ready = self.take.last_take().is_some();
+        if std::mem::take(&mut self.ui.render_now) {
+            self.take.render_now(crate::take::RenderRequest::render_now(
+                &self.ui.render_config,
+                self.ui.save_persist(),
+            ));
         }
 
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
@@ -251,13 +262,18 @@ impl EditorShared {
 
     /// Drain the audio sample ring into the spectrum analyzer. Always
     /// drains — the ring must not hold stale audio for a burst when the
-    /// overlay is toggled on — but skips the analyzer while it's off.
+    /// display is toggled on — but skips the analyzer while nothing shows it.
     fn drain_audio(&mut self, now: f64) {
         self.audio_buf.clear();
         while let Ok(sample) = self.audio_consumer.pop() {
             self.audio_buf.push(sample);
         }
-        if self.ui.spectrum_config.show_audio && !self.audio_buf.is_empty() {
+        // Feed it when EITHER the curve or the spectrogram is shown — both read
+        // from this one analyzer, so a spectrogram with the curve off still
+        // needs samples (and, via `is_flowing`, still drives smooth repaint).
+        let shown =
+            self.ui.spectrum_config.show_audio || self.ui.spectrum_config.show_spectrogram;
+        if shown && !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
             self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now);
         }

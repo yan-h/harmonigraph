@@ -69,7 +69,14 @@ pub(super) fn draw_roll(
     // iteration order varies per run): with translucent glows the paint order
     // of overlapping notes is visible, and the offline render must be
     // byte-identical between runs.
-    let mut notes: Vec<&RollNote> = state.tracker.roll().notes().collect();
+    // Whole-song (offline playhead): the render lays the whole take out at once
+    // from a full roll built up front. Live: the causal tracker's rolling
+    // window, filling in as notes arrive.
+    let roll = match state.whole_song.as_ref() {
+        Some(ws) => &ws.roll,
+        None => state.tracker.roll(),
+    };
+    let mut notes: Vec<&RollNote> = roll.notes().collect();
     notes.sort_unstable_by(|a, b| {
         a.start
             .total_cmp(&b.start)

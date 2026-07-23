@@ -17,12 +17,14 @@
 //! functions and constants are reached through their module
 //! (`lattice_core::tuning::microcents`, `lattice_core::coords::positions_within`).
 
+pub mod align;
 pub mod coords;
 pub mod history;
 pub mod notes;
 pub mod roll;
 pub mod spectrum;
 pub mod tuning;
+pub mod wav;
 
 pub use coords::{positions_within, LatticePos, NoteName};
 pub use history::{NoteHistory, Visit};

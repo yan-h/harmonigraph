@@ -505,7 +505,15 @@ impl TimeAxis {
 /// Hover sync goes both ways: the lattice-hovered pitch class shows as a
 /// band here, and hovering a pitch here highlights the matching lattice
 /// node (if one is in view).
-pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+pub(crate) fn spectral_pane(
+    ui: &mut egui::Ui,
+    state: &mut SharedState,
+    now: f64,
+    label_scale: f32,
+    // Spectrogram texture slot: 0 the docked pane / offline render, 1 the
+    // Render preview, so two live copies don't clobber one shared texture.
+    surface: usize,
+) {
     use crate::SpectrumLabels;
     use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
@@ -550,6 +558,18 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     let (label_d, label_into) =
         if joined && !whole_song { (split, -2.0) } else { (0.0, 2.0) };
 
+    // A uniform dark bed under the whole spectrogram region, so it reads as one
+    // surface. The heatmap mesh only covers the depths that actually have
+    // columns, and its silence is black; without this bed the un-covered depths
+    // (before history fills the window, or past its oldest column) show the
+    // lighter pane `well` in jarring patches. Black is the heatmap's own silence
+    // color, so covered and un-covered silence match at any opacity. Drawn under
+    // the gridlines, so they still read as pitch lanes across the region.
+    if cfg.show_spectrogram && cfg.spectrogram_opacity > 0.0 && split < 1.0 {
+        let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
+        painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
+    }
+
     // Axis gridlines: every C (note labels) or the analyzer-standard
     // 1-2-5 frequency series, per the Spectrum tab. Both run the full
     // depth, so they double as the roll's pitch lanes.
@@ -557,7 +577,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
         if let Some(label) = label {
             let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
-            painter.text(pos, align, label, egui::FontId::monospace(10.0), theme::text_dim());
+            painter.text(pos, align, label, egui::FontId::monospace(10.0 * label_scale), theme::text_dim());
         }
     };
     match cfg.labels {
@@ -615,7 +635,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
     // spectrogram on leaves the heatmap alone.
     if split < 1.0 {
         if cfg.show_spectrogram {
-            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now);
+            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
         }
         if cfg.show_roll {
             super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
@@ -755,7 +775,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                 (midi - nearest) * 100.0,
                 midi_to_hz(midi),
             ),
-            egui::FontId::monospace(10.5),
+            egui::FontId::monospace(10.5 * label_scale),
             theme::text(),
         );
     }
@@ -947,7 +967,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, &mut state, now);
+                spectral_pane(&mut child, &mut state, now, 1.0, 0);
             },
         );
         output.shapes.len()
