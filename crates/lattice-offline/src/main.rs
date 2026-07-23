@@ -459,14 +459,19 @@ fn run() -> Result<(), String> {
     let mut replay = Replay::new(take);
     let mut done = 0u64;
     let rendered = render::render(&mut replay, audio.as_ref(), &settings, |frame| {
-        sink.push(frame)?;
+        if !sink.push(frame)? {
+            // ffmpeg closed the pipe (e.g. -shortest, the soundtrack ending
+            // before the visuals). Stop feeding; finish() below reads whether
+            // that was a clean finish or a crash from ffmpeg's exit status.
+            return Ok(false);
+        }
         done += 1;
         // Progress on one rewritten line; renders are long enough that
         // silence reads as a hang.
         if done.is_multiple_of(30) || done == total {
             eprint!("\r  {done}/{total} frames ({:.0}%)", 100.0 * done as f64 / total as f64);
         }
-        Ok(())
+        Ok(true)
     })?;
     eprintln!();
     sink.finish()?;
