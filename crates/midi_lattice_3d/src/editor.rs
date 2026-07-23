@@ -262,13 +262,18 @@ impl EditorShared {
 
     /// Drain the audio sample ring into the spectrum analyzer. Always
     /// drains — the ring must not hold stale audio for a burst when the
-    /// overlay is toggled on — but skips the analyzer while it's off.
+    /// display is toggled on — but skips the analyzer while nothing shows it.
     fn drain_audio(&mut self, now: f64) {
         self.audio_buf.clear();
         while let Ok(sample) = self.audio_consumer.pop() {
             self.audio_buf.push(sample);
         }
-        if self.ui.spectrum_config.show_audio && !self.audio_buf.is_empty() {
+        // Feed it when EITHER the curve or the spectrogram is shown — both read
+        // from this one analyzer, so a spectrogram with the curve off still
+        // needs samples (and, via `is_flowing`, still drives smooth repaint).
+        let shown =
+            self.ui.spectrum_config.show_audio || self.ui.spectrum_config.show_spectrogram;
+        if shown && !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
             self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now);
         }

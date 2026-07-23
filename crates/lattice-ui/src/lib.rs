@@ -667,6 +667,15 @@ impl AudioSpectrum {
     pub fn clear_history(&mut self) {
         self.history.clear();
     }
+
+    /// Whether audio has arrived within the hold window — i.e. the spectrum is
+    /// still live. Drives continuous repaint so the curve and spectrogram stay
+    /// smooth even when no MIDI is animating the frame. Reads true only while
+    /// samples are actually arriving (the shell pushes them when the spectrum is
+    /// shown), so it idles cleanly once audio stops.
+    pub fn is_flowing(&self, now: f64) -> bool {
+        self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS)
+    }
 }
 
 /// Everything the UI reads and mutates each frame. One instance lives in the
@@ -946,8 +955,14 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // scrolls for as long as its window still reaches a played note — so
     // it gets its own say here. Without this the roll would advance in
     // 50 ms jerks once the voices died.
-    let animating =
-        state.tracker.voices().next().is_some() || state.learn_active || roll_scrolling(state, now);
+    //
+    // Flowing audio counts too: the spectrum and spectrogram advance every
+    // frame off the analyzer, so with audio playing but no MIDI they'd
+    // otherwise crawl at the 50 ms idle poll.
+    let animating = state.tracker.voices().next().is_some()
+        || state.learn_active
+        || roll_scrolling(state, now)
+        || state.spectrum.is_flowing(now);
     if animating {
         ui.ctx().request_repaint();
     } else {
