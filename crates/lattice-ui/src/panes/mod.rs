@@ -95,7 +95,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::View => view_pane(ui, self.state),
             Tab::Appearance => appearance_pane(ui, self.state, self.params),
             Tab::Console => console_pane(ui, self.state),
-            Tab::Spectral => spectral_pane(ui, self.state, self.now),
+            Tab::Spectral => spectral_pane(ui, self.state, self.now, 1.0),
             Tab::Spectrum => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Render => render_pane(ui, self.state, self.now),

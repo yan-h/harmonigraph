@@ -505,7 +505,12 @@ impl TimeAxis {
 /// Hover sync goes both ways: the lattice-hovered pitch class shows as a
 /// band here, and hovering a pitch here highlights the matching lattice
 /// node (if one is in view).
-pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+pub(crate) fn spectral_pane(
+    ui: &mut egui::Ui,
+    state: &mut SharedState,
+    now: f64,
+    label_scale: f32,
+) {
     use crate::SpectrumLabels;
     use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
@@ -557,7 +562,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
         if let Some(label) = label {
             let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
-            painter.text(pos, align, label, egui::FontId::monospace(10.0), theme::text_dim());
+            painter.text(pos, align, label, egui::FontId::monospace(10.0 * label_scale), theme::text_dim());
         }
     };
     match cfg.labels {
@@ -755,7 +760,7 @@ pub(crate) fn spectral_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64
                 (midi - nearest) * 100.0,
                 midi_to_hz(midi),
             ),
-            egui::FontId::monospace(10.5),
+            egui::FontId::monospace(10.5 * label_scale),
             theme::text(),
         );
     }
@@ -947,7 +952,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, &mut state, now);
+                spectral_pane(&mut child, &mut state, now, 1.0);
             },
         );
         output.shapes.len()

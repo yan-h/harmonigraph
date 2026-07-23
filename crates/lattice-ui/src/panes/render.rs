@@ -19,7 +19,7 @@ use lattice_scene::derive_scene;
 
 use super::section;
 use crate::widgets::ValueBar;
-use crate::{draw_pane, theme, Layout, Pane, SharedState};
+use crate::{theme, Layout, Pane, SharedState};
 
 /// The preview's lattice is a second live view, so it needs its own GPU id —
 /// the docked Lattice tab owns 0, and two views sharing an id overwrite each
@@ -61,7 +61,9 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
         match pane {
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                draw_pane(&mut child, Pane::Spectral, state, now);
+                // Directly, so the preview's shrink scales its text too — the
+                // one fixed-size thing draw_pane can't carry.
+                super::spectral::spectral_pane(&mut child, state, now, label_scale);
             }
             Pane::Lattice => preview_lattice(ui, rect, state, now, label_scale),
         }

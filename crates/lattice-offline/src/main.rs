@@ -86,8 +86,11 @@ struct Args {
     take: Option<String>,
     out: Option<String>,
     audio: Option<String>,
-    layout: String,
-    size: [u32; 2],
+    /// `None` means "use the frame the take was composed for" (its RenderFrame),
+    /// falling back to a preset.
+    layout: Option<String>,
+    /// `None` means "size to the take's frame aspect".
+    size: Option<[u32; 2]>,
     scale: Option<f32>,
     fps: f64,
     start: f64,
@@ -120,8 +123,8 @@ impl Default for Args {
             take: None,
             out: None,
             audio: None,
-            layout: "side-by-side".into(),
-            size: [1920, 1080],
+            layout: None,
+            size: None,
             scale: None,
             fps: 60.0,
             start: 0.0,
@@ -151,8 +154,8 @@ fn parse_args() -> Result<Option<Args>, String> {
             }
             "-o" | "--out" => args.out = Some(value("--out")?),
             "-a" | "--audio" => args.audio = Some(value("--audio")?),
-            "-l" | "--layout" => args.layout = value("--layout")?,
-            "-s" | "--size" => args.size = parse_size(&value("--size")?)?,
+            "-l" | "--layout" => args.layout = Some(value("--layout")?),
+            "-s" | "--size" => args.size = Some(parse_size(&value("--size")?)?),
             "--scale" => args.scale = Some(parse_number("--scale", &value("--scale")?)?),
             "--fps" => args.fps = parse_number("--fps", &value("--fps")?)?,
             "--start" => args.start = parse_number("--start", &value("--start")?)?,
@@ -207,6 +210,20 @@ fn default_scale(size: [u32; 2]) -> f32 {
     (size[0] as f32 / REFERENCE_POINTS_ACROSS).clamp(1.0, 4.0)
 }
 
+/// Output pixels for a take's frame aspect when `--size` isn't given: the
+/// shorter edge at 1080, so 16:9 lands on 1920x1080 and 9:16 on 1080x1920.
+/// Even dimensions (ffmpeg requires them).
+fn size_for_frame(frame: &lattice_ui::RenderFrame) -> [u32; 2] {
+    let (w, h) = (frame.aspect_w.max(1) as f64, frame.aspect_h.max(1) as f64);
+    let short = 1080.0;
+    let even = |x: f64| ((x.round() as u32).max(2)) & !1;
+    if w >= h {
+        [even(short * w / h), even(short)]
+    } else {
+        [even(short), even(short * h / w)]
+    }
+}
+
 /// Cross-correlate a replacement soundtrack against the take\'s own
 /// recording to find where it sits on the take timeline, reporting what
 /// it found. Falls back to take zero, loudly, when there is no recording
@@ -251,8 +268,10 @@ fn align_replacement(
 fn run() -> Result<(), String> {
     let Some(args) = parse_args()? else { return Ok(()) };
 
-    let layout = Layout::load(&args.layout)?;
     if args.dump_layout {
+        // Without a take there's no frame to compose, so dump the named preset
+        // (or the default) as a starting point for a custom .ron.
+        let layout = Layout::load(args.layout.as_deref().unwrap_or("side-by-side"))?;
         let pretty = ron::ser::PrettyConfig::new().depth_limit(4);
         println!(
             "{}",
@@ -267,6 +286,22 @@ fn run() -> Result<(), String> {
         take.header.ui_state =
             Some(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
     }
+
+    // The frame the take was composed for in the Render pane. The offline
+    // render defaults its size and layout to this, so a plain `lattice-offline
+    // take.take` reproduces exactly what was previewed; --size / --layout
+    // override.
+    let frame = take
+        .header
+        .ui_state
+        .as_deref()
+        .and_then(lattice_ui::render_frame_from_persist)
+        .unwrap_or_default();
+    let layout = match &args.layout {
+        Some(spec) => Layout::load(spec)?,
+        None => Layout::split(frame.stacked, frame.split),
+    };
+    let size = args.size.unwrap_or_else(|| size_for_frame(&frame));
 
     if take.truncated {
         eprintln!(
@@ -343,10 +378,10 @@ fn run() -> Result<(), String> {
         let visual = take.duration() + args.tail;
         audio.as_ref().map_or(visual, |a| visual.max(audio_start + a.seconds()))
     });
-    let scale = args.scale.unwrap_or_else(|| default_scale(args.size));
+    let scale = args.scale.unwrap_or_else(|| default_scale(size));
     let settings = Settings {
         layout,
-        size: args.size,
+        size,
         pixels_per_point: scale,
         fps: args.fps,
         start: args.start,
@@ -368,7 +403,7 @@ fn run() -> Result<(), String> {
     let mut sink = Sink::create(
         &out,
         &VideoOptions {
-            size: args.size,
+            size,
             fps: args.fps,
             audio: audio_path.as_deref(),
             crf: args.crf,
@@ -377,7 +412,7 @@ fn run() -> Result<(), String> {
         },
     )?;
 
-    let [w, h] = args.size;
+    let [w, h] = size;
     let total = settings.frame_count();
     eprintln!(
         "{take_path}: {:.1}s of events -> {total} frames at {} fps, {w}x{h} @ {scale:.2}x -> {}",
@@ -444,5 +479,19 @@ mod tests {
         assert!((points_across([1920, 1080]) - points_across([3840, 2160])).abs() < 1.0);
         // Small outputs don't go below 1:1, which would render sub-pixel text.
         assert_eq!(default_scale([640, 360]), 1.0);
+    }
+
+    #[test]
+    fn size_for_frame_puts_the_short_edge_at_1080_with_even_dimensions() {
+        let sz = |aspect_w, aspect_h| {
+            size_for_frame(&lattice_ui::RenderFrame { aspect_w, aspect_h, split: 0.5, stacked: false })
+        };
+        assert_eq!(sz(16, 9), [1920, 1080]);
+        assert_eq!(sz(9, 16), [1080, 1920]);
+        assert_eq!(sz(1, 1), [1080, 1080]);
+        // A non-integer ratio still comes out even (ffmpeg requires it).
+        let [w, h] = sz(21, 9);
+        assert_eq!(h, 1080);
+        assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h} not even");
     }
 }

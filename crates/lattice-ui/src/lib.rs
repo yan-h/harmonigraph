@@ -857,6 +857,13 @@ struct UiPersist {
     render: RenderConfig,
 }
 
+/// Parse just the render frame out of a persisted UI-state blob — so the
+/// offline renderer can default its size and layout to what the take was
+/// composed for, without building a whole [`SharedState`].
+pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
+    ron::from_str::<UiPersist>(serialized).ok().map(|persist| persist.render.frame)
+}
+
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
 /// window (egui-baseview hands the plugin editor exactly that; eframe hands
 /// the standalone harness the same via its `App::ui` hook).
@@ -997,7 +1004,8 @@ pub enum Pane {
 pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
     match pane {
         Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
-        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now),
+        // Offline: pixels-per-point already scales text, so no extra factor.
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 1.0),
     }
 }
 
