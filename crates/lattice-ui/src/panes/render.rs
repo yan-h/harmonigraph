@@ -38,7 +38,6 @@ const RENDER_POINTS_ACROSS: f32 = 1280.0;
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     render_settings(ui, state);
     frame_controls(ui, state);
-    bounce_strip(ui, state);
 
     section(ui, "Preview");
     let frame = state.render_config.frame;
@@ -96,28 +95,6 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     ValueBar::new(&mut f.split, 0.15..=0.85, label).show(ui);
 }
 
-/// A flat spectrogram of the loaded bounce, so you can see it read in before
-/// rendering — shown only once a bounce has analyzed to non-empty columns.
-fn bounce_strip(ui: &mut egui::Ui, state: &mut SharedState) {
-    if state.bounce_preview.as_ref().is_none_or(|b| b.columns.len() < 2) {
-        return;
-    }
-    section(ui, "Bounce");
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 96.0), Sense::hover());
-    let cfg = state.spectrum_config;
-    let frame = state.frame_params;
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, theme::well());
-    // Disjoint field borrows: the bounce's columns and the spectrogram's own
-    // texture slot (2).
-    let Some(preview) = state.bounce_preview.as_ref() else {
-        return;
-    };
-    let (columns, span) = (&preview.columns, preview.span);
-    let slot = &mut state.spectrum.spectrogram_tex[2];
-    super::spectrogram::draw_flat_spectrogram(&painter, rect, &cfg, &frame, slot, columns, span);
-}
-
 /// The largest sub-rect of `outer` with the given width:height aspect, centered
 /// — the render frame letterboxed inside the pane.
 fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
@@ -169,154 +146,41 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     }
     section(ui, "Record");
     toggle_switch(ui, &mut state.take_recording, "Record take").on_hover_text(
-        "Record everything the visualization is a function of — notes, bends, \
-         parameter automation, and the current look — to a .take file. Render \
-         it to video afterwards with lattice-offline, at any resolution and \
-         frame rate. Events are stamped with transport position, so nothing is \
-         captured until the transport rolls and the take lines up with a bounce \
-         of the same song.",
+        "Record the performance — notes, bends, parameter automation, the \
+         current look, and the plugin's audio input — to a .take file. Switch \
+         it off and the take renders to video automatically: the recorded audio \
+         becomes the spectrogram and a playhead sweeps the whole piece. Events \
+         are stamped with transport position, so nothing is captured until the \
+         transport rolls.",
     );
     if !state.take_status.is_empty() {
         ui.weak(&state.take_status);
     }
 
+    // Resolution and any other lattice-offline flags, split on spaces. The
+    // frame's aspect already picks a default resolution, so this is only for
+    // going bigger (e.g. 4K) or the occasional override.
     let render = &mut state.render_config;
-    ui.checkbox(&mut render.record_audio, "Record audio too").on_hover_text(
-        "Write the plugin's audio input beside the take, so the render gets a \
-         spectrum and a soundtrack with no separate bounce. Needs the device to \
-         be somewhere audio actually reaches it — after the instrument, or on a \
-         bus.",
+    labeled_path(ui, "Options", &mut render.extra_args).on_hover_text(
+        "Extra lattice-offline flags, split on spaces — resolution and the \
+         like: --size 3840x2160",
     );
-    ui.checkbox(&mut render.auto_render, "Render video when done").on_hover_text(
-        "Run lattice-offline as soon as a take finishes, writing the video next \
-         to the take. The render happens in the background — it does not hold up \
-         the DAW.",
-    );
-    ui.checkbox(&mut render.playhead, "Whole-song playhead").on_hover_text(
-        "Lay the whole take's spectrogram out at once and sweep a playhead \
-         through it, instead of the live scrolling window. Needs audio. Applies \
-         to every render of this take; the --playhead flag turns it on too.",
-    );
-    labeled_path(ui, "Bounced audio", &mut render.audio_path).on_hover_text(
-        "A clean WAV bounce of this take to render with — muxed into the video \
-         and analyzed for the spectrum. Paste its path here. Leave empty to use \
-         the take's own recording, or to render silent.",
-    );
-    audio_offset_control(ui, &mut render.audio_offset);
-    if render.auto_render {
-        crate::widgets::choice_row(
-            ui,
-            "When",
-            &mut render.trigger,
-            &[
-                (
-                    crate::RenderTrigger::OnDisarm,
-                    "Switched off",
-                    "Render when you turn Record take off. The only choice that \
-                     works with a looping transport.",
-                ),
-                (
-                    crate::RenderTrigger::OnTransportStop,
-                    "Transport stops",
-                    "Render the moment the transport stops after recording \
-                     something — a play-through or an audio export then needs no \
-                     further clicks. Recording switches itself off too.",
-                ),
-            ],
-        );
-        // Free-text paths rather than a file dialog: a plugin GUI has no
-        // portable one, and these are set once and then left.
-        labeled_path(ui, "Renderer", &mut render.renderer_path).on_hover_text(
-            "Path to the lattice-offline binary. Leave empty to use the copy \
-             update-plugin.sh installs.",
-        );
-        labeled_path(ui, "Options", &mut render.extra_args).on_hover_text(
-            "Extra lattice-offline flags, split on spaces: \
-             --size 3840x2160 --layout side-by-side",
-        );
-    }
 
-    // Render the take you just recorded with the settings on screen NOW — the
-    // take file itself only carries a record-time snapshot, so this is what
-    // makes a post-record frame/bounce/offset actually reach the video.
+    // Re-render the last take with the frame you've dialed in since recording.
+    // The take carries only a record-time snapshot, so this is how a reframed
+    // preview reaches the video without recording again.
     if state.last_take_ready {
         ui.add_space(2.0);
         if ui
             .button("Render now")
             .on_hover_text(
-                "Render the take you last recorded, now, with these current \
-                 settings — frame, bounced audio, and offset. Runs in the \
-                 background; the video lands next to the take.",
+                "Render the take you last recorded again, now, with the current \
+                 frame. Runs in the background; the video lands next to the take.",
             )
             .clicked()
         {
             state.render_now = true;
         }
-    }
-}
-
-/// Where the bounce lines up with the picture. Stored as a string because
-/// that's what the renderer's `--align` flag reads: empty means auto-align to
-/// the MIDI onsets, a number means a fixed take-time offset.
-///
-/// Typing raw seconds was the friction the user hit — you can't tell which
-/// number to type. So: a checkbox for the common case (auto), and when it's
-/// off, a drag-to-scrub value flanked by coarse/fine nudges. Everything routes
-/// through `secs`, re-parsed from the string each frame, and only rewrites the
-/// string when something actually changed — so a clean value stays clean.
-fn audio_offset_control(ui: &mut egui::Ui, offset: &mut String) {
-    let mut auto = offset.trim().is_empty();
-    let mut secs: f64 = offset.trim().parse().unwrap_or(0.0);
-    if ui
-        .checkbox(&mut auto, "Auto-align audio to MIDI")
-        .on_hover_text(
-            "Line the bounce up with the picture by correlating the take's MIDI \
-             note-onsets against the audio's onsets — no scratch recording \
-             needed. Turn off to set the offset by hand if the auto-align drifts.",
-        )
-        .changed()
-    {
-        // Seed the manual field with wherever auto had it (0 if it was empty).
-        *offset = if auto { String::new() } else { format!("{secs:.2}") };
-    }
-    if auto {
-        return;
-    }
-    let mut changed = false;
-    button_row(ui, |ui| {
-        ui.label("Offset");
-        // Arrows read left = earlier, right = later. Coarse then fine on each
-        // side, mirroring the drawn control: << < [value] > >>.
-        changed |= nudge(ui, "\u{ab}", -1.0, &mut secs);
-        changed |= nudge(ui, "\u{2039}", -0.1, &mut secs);
-        changed |= ui
-            .add(egui::DragValue::new(&mut secs).speed(0.01).suffix(" s").fixed_decimals(2))
-            .on_hover_text(
-                "Take-time seconds where the bounce's first sample lands. Drag \
-                 to scrub, double-click to type. Larger delays the audio against \
-                 the notes.",
-            )
-            .changed();
-        changed |= nudge(ui, "\u{203a}", 0.1, &mut secs);
-        changed |= nudge(ui, "\u{bb}", 1.0, &mut secs);
-    });
-    if changed {
-        // Two decimals: matches the 0.01 drag step and the 0.1 nudges, and keeps
-        // float slop (0.1 + 0.2...) out of the persisted string.
-        *offset = format!("{secs:.2}");
-    }
-}
-
-/// One nudge button: bumps `secs` by `delta` seconds when clicked, returning
-/// whether it did. Its tooltip states the step so the coarse/fine pair reads
-/// without a legend.
-fn nudge(ui: &mut egui::Ui, glyph: &str, delta: f64, secs: &mut f64) -> bool {
-    let hint = format!("{}{delta} s", if delta > 0.0 { "+" } else { "" });
-    if ui.button(glyph).on_hover_text(hint).clicked() {
-        *secs += delta;
-        true
-    } else {
-        false
     }
 }
 

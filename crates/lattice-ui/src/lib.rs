@@ -483,11 +483,10 @@ pub struct AudioSpectrum {
     /// The spectrogram's pixels, uploaded and sampled with bilinear filtering
     /// so the heatmap reads as a smooth image rather than a mesh of interpolated
     /// triangles. One texture per drawing surface — index 0 the docked Spectral
-    /// pane (and the offline render), index 1 the Render pane's preview, index 2
-    /// the Render pane's bounce strip — so multiple live spectrograms in one
-    /// frame don't overwrite each other's texture. Runtime-only; created lazily
-    /// on first draw.
-    spectrogram_tex: [Option<egui::TextureHandle>; 3],
+    /// pane (and the offline render), index 1 the Render pane's preview — so two
+    /// live spectrograms in one frame don't overwrite each other's texture.
+    /// Runtime-only; created lazily on first draw.
+    spectrogram_tex: [Option<egui::TextureHandle>; 2],
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -516,20 +515,6 @@ pub struct WholeSong {
     /// the playhead reached them; the render wants the whole piece at once. Set
     /// by the offline renderer; empty in the spectrogram-only bounce preview.
     pub roll: lattice_core::NoteRoll,
-}
-
-/// A loaded bounce and its precomputed spectrogram, for the Render pane's
-/// preview. The plugin shell reads and analyzes the WAV ONCE on path change and
-/// caches it here; runtime-only, never persisted, and `None` in the offline
-/// renderer. Empty `columns` mark a path that failed to load, so it isn't
-/// retried every frame.
-pub struct BouncePreview {
-    /// The path it was loaded from — the cache key.
-    pub path: String,
-    /// The bounce's spectrogram columns, oldest first.
-    pub columns: Vec<SpectrogramColumn>,
-    /// Length in seconds.
-    pub span: f64,
 }
 
 impl WholeSong {
@@ -589,7 +574,7 @@ impl Default for AudioSpectrum {
             last_fft: None,
             last_samples: None,
             history: VecDeque::new(),
-            spectrogram_tex: [None, None, None],
+            spectrogram_tex: [None, None],
         }
     }
 }
@@ -750,10 +735,6 @@ pub struct SharedState {
     /// window. `Some` only in the offline renderer. Runtime-only, never
     /// persisted (mirrors `learn_active`).
     pub whole_song: Option<WholeSong>,
-    /// The bounced audio loaded for the Render pane, analyzed for its
-    /// spectrogram preview. `Some` only in the plugin; runtime-only, the shell
-    /// (re)loads it when the audio path changes.
-    pub bounce_preview: Option<BouncePreview>,
     /// Set by the View pane's "Reset layout" button; consumed by root_ui
     /// AFTER the frame's DockArea writes the dock back (panes run inside
     /// that pass, so a direct write from one would be overwritten).
@@ -832,7 +813,6 @@ impl SharedState {
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             whole_song: None,
-            bounce_preview: None,
             reset_layout: false,
             dock,
             perf: PerfStats::default(),

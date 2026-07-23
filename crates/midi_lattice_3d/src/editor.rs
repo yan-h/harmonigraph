@@ -161,18 +161,18 @@ impl EditorShared {
         // The plugin can record; the control is hidden in shells that
         // can't (the standalone uses an env var instead).
         self.ui.take_supported = true;
-        self.ui.take_audio = self.ui.render_config.record_audio;
+        // Recording always captures the plugin's audio input now: the render
+        // uses it as the spectrogram, aligned to the picture by construction (no
+        // bounce, no offset). Silent-but-harmless if the plugin sits where no
+        // audio reaches it.
+        self.ui.take_audio = true;
         let recording = self.take.is_recording();
         if self.ui.take_recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
             // is on screen right now is what the render should reproduce.
             self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
             self.take_last_count = 0;
-            self.take.start(
-                sample_rate,
-                self.ui.save_persist(),
-                self.ui.render_config.record_audio,
-            );
+            self.take.start(sample_rate, self.ui.save_persist(), true);
         } else if !self.ui.take_recording && recording {
             self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
         }
@@ -186,33 +186,6 @@ impl EditorShared {
                 &self.ui.render_config,
                 self.ui.save_persist(),
             ));
-        }
-
-        // Analyze the bounced audio for the Render pane's spectrogram preview,
-        // once per path change. Empty columns mark a path that failed to read,
-        // so it isn't retried every frame. (A big WAV briefly hitches the GUI on
-        // load; acceptable for a one-time analyze.)
-        let path = self.ui.render_config.audio_path.trim().to_string();
-        let loaded = self.ui.bounce_preview.as_ref().map(|b| b.path.as_str());
-        if path.is_empty() {
-            self.ui.bounce_preview = None;
-        } else if loaded != Some(path.as_str()) {
-            let preview = match lattice_core::wav::read(std::path::Path::new(&path)) {
-                Ok(audio) => {
-                    let seconds = audio.seconds();
-                    let song = lattice_ui::WholeSong::precompute(
-                        &audio.samples,
-                        audio.sample_rate,
-                        0.0,
-                        0.0,
-                        seconds,
-                        &self.ui.spectrum_config,
-                    );
-                    lattice_ui::BouncePreview { path, columns: song.columns, span: seconds }
-                }
-                Err(_) => lattice_ui::BouncePreview { path, columns: Vec::new(), span: 0.0 },
-            };
-            self.ui.bounce_preview = Some(preview);
         }
 
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);

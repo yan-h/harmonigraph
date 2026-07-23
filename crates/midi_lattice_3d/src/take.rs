@@ -118,10 +118,12 @@ pub struct RenderRequest {
 }
 
 impl RenderRequest {
-    /// Build a request from the render settings for auto-render on take finish,
-    /// or `None` if auto-render is off. Uses the take's own recorded look.
+    /// The render that runs when a take finishes. A finished take always renders
+    /// now — its own recorded audio as the spectrogram, playhead on — so this is
+    /// unconditional; the `Option` is kept only for `Control::stop`'s signature.
+    /// Uses the take's own recorded look.
     pub fn from_config(config: &lattice_ui::RenderConfig) -> Option<RenderRequest> {
-        config.auto_render.then(|| Self::build(config, None))
+        Some(Self::build(config, None))
     }
 
     /// Build a request for an explicit "Render now": always built, and it
@@ -132,23 +134,24 @@ impl RenderRequest {
         Self::build(config, Some(ui_state))
     }
 
-    /// Blank fields mean "use the default" rather than passing an empty
-    /// argument, which the renderer would reject.
+    /// A blank renderer path means "use the default" rather than an empty
+    /// argument the renderer would reject.
     fn build(config: &lattice_ui::RenderConfig, ui_state: Option<String>) -> RenderRequest {
         let program = if config.renderer_path.trim().is_empty() {
             default_renderer_path()
         } else {
             std::path::PathBuf::from(config.renderer_path.trim())
         };
-        let trimmed = |s: &str| Some(s.trim()).filter(|v| !v.is_empty()).map(str::to_owned);
         RenderRequest {
             program,
-            audio: trimmed(&config.audio_path),
-            align: trimmed(&config.audio_offset),
+            // Bounced audio is shelved: every render uses the take's own
+            // recording as soundtrack and spectrum, aligned by construction — so
+            // no --audio replacement and no --align override.
+            audio: None,
+            align: None,
             ui_state,
             // Whitespace split, no shell quoting: these are flags like
-            // `--size 3840x2160`. A path with spaces belongs in the Audio
-            // field, which is passed as a single argument.
+            // `--size 3840x2160`.
             extra_args: config.extra_args.split_whitespace().map(str::to_owned).collect(),
         }
     }
@@ -703,6 +706,10 @@ fn spawn_render(
                 command.arg("--ui-state").arg(file);
             }
             command.args(&request.extra_args);
+            // The take's own recording is the spectrogram: lay the whole piece
+            // out and sweep a playhead over it. Harmless if the take has no
+            // audio — the renderer notes it and falls back to the scrolling view.
+            command.arg("--playhead");
 
             *status.lock() = format!("rendering {}...", out.display());
             let result = command.output();
@@ -737,26 +744,21 @@ mod tests {
     use lattice_ui::RenderConfig;
 
     #[test]
-    fn auto_render_off_means_no_request() {
+    fn a_finished_take_always_renders() {
+        // Auto-render is no longer gated: stopping a take always kicks off a
+        // render (recorded audio + playhead), so from_config is always `Some`.
         let config = RenderConfig { auto_render: false, ..Default::default() };
-        assert!(RenderRequest::from_config(&config).is_none());
+        assert!(RenderRequest::from_config(&config).is_some());
     }
 
-    /// Blank fields must fall back, not become empty arguments — an
-    /// empty `--audio ""` makes the renderer fail on a file that isn't
-    /// there, which would be a baffling way for this to break.
+    /// A blank renderer path must fall back to the default, and blank options
+    /// must not become an empty argument the renderer would choke on.
     #[test]
     fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
         let config = RenderConfig {
-            auto_render: true,
-            record_audio: false,
-            trigger: Default::default(),
             renderer_path: "  ".into(),
-            audio_path: "   ".into(),
-            audio_offset: String::new(),
             extra_args: "   ".into(),
-            playhead: false,
-            frame: Default::default(),
+            ..Default::default()
         };
         let request = RenderRequest::from_config(&config).unwrap();
         assert_eq!(request.program, default_renderer_path());
@@ -765,23 +767,17 @@ mod tests {
     }
 
     #[test]
-    fn options_split_on_whitespace_and_paths_stay_whole() {
+    fn options_split_on_whitespace() {
         let config = RenderConfig {
-            auto_render: true,
-            record_audio: false,
-            trigger: Default::default(),
             renderer_path: "/opt/lattice-offline".into(),
-            audio_path: "/Users/yan/My Bounces/piece.wav".into(),
-            audio_offset: String::new(),
             extra_args: "--size 3840x2160   --layout side-by-side".into(),
-            playhead: false,
-            frame: Default::default(),
+            ..Default::default()
         };
         let request = RenderRequest::from_config(&config).unwrap();
         assert_eq!(request.program, std::path::PathBuf::from("/opt/lattice-offline"));
-        // One argument, spaces and all — it is passed directly, never
-        // through a shell.
-        assert_eq!(request.audio.as_deref(), Some("/Users/yan/My Bounces/piece.wav"));
+        // Bounced audio is shelved: a render always uses the take's own
+        // recording, never a --audio replacement.
+        assert_eq!(request.audio, None);
         assert_eq!(
             request.extra_args,
             vec!["--size", "3840x2160", "--layout", "side-by-side"]
