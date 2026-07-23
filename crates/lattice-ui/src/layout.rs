@@ -1,7 +1,7 @@
 //! Where the panes go in a composed frame.
 //!
 //! Shared by the offline renderer (which composes a video frame headlessly)
-//! and the plugin's Render panel (which previews that exact frame). A layout
+//! and the plugin's Video panel (which previews that exact frame). A layout
 //! is deliberately NOT the plugin's working dock — it is a clean composition
 //! of just the panes you want in the video, at whatever proportions suit the
 //! piece, with no tab bars or settings columns. Keeping it here, next to the
@@ -105,7 +105,7 @@ impl Layout {
 
     /// A two-pane composition of the lattice and the spectral pane, split at
     /// `fraction` — the lattice's share. Side by side unless `stacked`, then
-    /// lattice over spectral. Shared by the Render panel's live preview and
+    /// lattice over spectral. Shared by the Video panel's live preview and
     /// the offline renderer, so both compose the identical frame.
     pub fn split(stacked: bool, fraction: f32) -> Layout {
         let f = fraction.clamp(0.05, 0.95);

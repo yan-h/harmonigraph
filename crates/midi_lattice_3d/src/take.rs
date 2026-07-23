@@ -13,7 +13,7 @@
 //! in realtime mode.
 //!
 //! Rather than reverse-engineer which pass is the real one, recording is
-//! now explicit: a toggle in the View pane, armed by the user, working
+//! now explicit: a toggle in the Video pane, armed by the user, working
 //! in any process mode. That also makes the good workflow possible —
 //! play the piece once, as you would anyway, and render the video from
 //! the take afterwards. The export never has to cooperate.

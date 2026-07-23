@@ -182,7 +182,7 @@ pub enum RenderTrigger {
     AtLoopEnd,
 }
 
-/// How a finished take gets turned into a video, edited in the View
+/// How a finished take gets turned into a video, edited in the Video
 /// pane's Record section and persisted with the UI state.
 ///
 /// The plugin cannot render video itself — that is `lattice-offline`, a
@@ -226,7 +226,7 @@ pub struct RenderConfig {
     #[serde(default)]
     pub playhead: bool,
     /// The composed video frame — aspect ratio and the lattice/spectral split.
-    /// Edited and previewed in the Render pane; the offline renderer reads it
+    /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
     #[serde(default)]
     pub frame: RenderFrame,
@@ -248,7 +248,7 @@ impl Default for RenderConfig {
     }
 }
 
-/// The video frame the Render pane composes: an aspect ratio plus the
+/// The video frame the Video pane composes: an aspect ratio plus the
 /// lattice/spectral split. Aspect is size-agnostic (the render's resolution is
 /// chosen separately); the split feeds [`Layout::split`], so the plugin's live
 /// preview and the offline renderer build the identical frame.
@@ -437,7 +437,7 @@ pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
-            orientation: SpectralOrientation::Auto,
+            orientation: SpectralOrientation::Horizontal,
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
@@ -459,7 +459,7 @@ impl Default for SpectrumConfig {
             roll_velocity_alpha: true,
             roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
-            show_spectrogram: false,
+            show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
             spectrogram_smoothing: 0.0,
@@ -494,7 +494,7 @@ pub struct AudioSpectrum {
     /// The spectrogram's pixels, uploaded and sampled with bilinear filtering
     /// so the heatmap reads as a smooth image rather than a mesh of interpolated
     /// triangles. One texture per drawing surface — index 0 the docked Spectral
-    /// pane (and the offline render), index 1 the Render pane's preview — so two
+    /// pane (and the offline render), index 1 the Video pane's preview — so two
     /// live spectrograms in one frame don't overwrite each other's texture.
     /// Runtime-only; created lazily on first draw.
     spectrogram_tex: [Option<egui::TextureHandle>; 2],
@@ -716,7 +716,7 @@ pub struct SharedState {
     /// Held pitch classes the last learn ran against (change detection).
     last_learned_classes: Option<Vec<PitchClass>>,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
-    /// presets (persisted; see the View pane).
+    /// presets (persisted; see the Frame pane).
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
@@ -728,13 +728,17 @@ pub struct SharedState {
     /// (or a build without a writer) simply don't show it, rather than
     /// offering a button that does nothing.
     pub take_supported: bool,
-    /// Toggled by the View pane, acted on by the shell.
+    /// Toggled by the Video pane, acted on by the shell.
     pub take_recording: bool,
-    /// One-shot: set by the Render pane's "Render now" button, consumed by the
+    /// Whether the transport is actually rolling (capture is happening), as
+    /// opposed to armed-and-waiting. Drives the record indicator: a steady dot
+    /// while rolling, a breathing one while it waits. Shell-set, runtime-only.
+    pub take_rolling: bool,
+    /// One-shot: set by the Video pane's "Render now" button, consumed by the
     /// shell to render the last take with the CURRENT settings. Runtime-only.
     pub render_now: bool,
     /// Whether a take has been recorded this session — the shell sets it so the
-    /// Render pane can offer "Render now". Runtime-only.
+    /// Video pane can offer "Render now". Runtime-only.
     pub last_take_ready: bool,
     /// Record the input bus alongside the notes, so the render has a
     /// spectrum and a soundtrack without a separate bounce. Persisted
@@ -748,14 +752,14 @@ pub struct SharedState {
     pub take_status: String,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
-    /// The Spectral pane's settings (Spectrum tab; persisted).
+    /// The Spectral pane's settings (Analyzer tab; persisted).
     pub spectrum_config: SpectrumConfig,
     /// Offline playhead render: the whole take's spectrogram laid out
     /// statically with a playhead at `now`, instead of the live scrolling
     /// window. `Some` only in the offline renderer. Runtime-only, never
     /// persisted (mirrors `learn_active`).
     pub whole_song: Option<WholeSong>,
-    /// Set by the View pane's "Reset layout" button; consumed by root_ui
+    /// Set by the Panel pane's "Reset layout" button; consumed by root_ui
     /// AFTER the frame's DockArea writes the dock back (panes run inside
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
@@ -776,12 +780,11 @@ pub struct CameraPreset {
     pub pitch: f32,
 }
 
-/// The default pane arrangement: big lattice with the Spectral pane in
-/// its own strip (below it by default — sharing the pitch intuition: what
-/// sounds is what lights up — or beside it, per `placement`), tuning
-/// column on the right, console and notes tucked below that. Users can
-/// re-dock at runtime; the result persists via UiPersist, and the View
-/// pane's "Reset layout" button returns here.
+/// The default pane arrangement: big lattice with the Spectral pane
+/// beside it on the right (sharing the pitch intuition: what sounds is
+/// what lights up), the tuning column further right, console and notes
+/// tucked below that. Users can re-dock at runtime; the result persists
+/// via UiPersist, and the Panel pane's "Reset layout" button returns here.
 fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
@@ -789,20 +792,27 @@ fn default_dock() -> DockState<panes::Tab> {
         NodeIndex::root(),
         0.72,
         vec![
+            // Reading outward from the picture: harmony, then how it's framed,
+            // how a note is drawn, the scene around it, the analyzer, video
+            // export, and the plugin's own render/layout knobs last.
             panes::Tab::Tuning,
-            panes::Tab::View,
-            panes::Tab::Appearance,
-            panes::Tab::Spectrum,
-            panes::Tab::Render,
+            panes::Tab::Frame,
+            panes::Tab::Nodes,
+            panes::Tab::Scene,
+            panes::Tab::Analyzer,
+            panes::Tab::Video,
+            panes::Tab::Panel,
         ],
     );
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
     surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
-    // Spectral as a wide strip under the lattice: what sounds is directly
-    // under what lights up. Drag it wherever from here — egui_dock docks it
-    // freely, and the Spectral pane's orientation follows the shape it lands.
-    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+    // Spectral as a column just right of the lattice: what sounds is directly
+    // beside what lights up. Paired with the "Across" default orientation
+    // (SpectrumConfig::default). Drag it wherever from here — egui_dock docks
+    // it freely, and in Auto the Spectral pane's orientation follows the shape
+    // it lands.
+    surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
     dock
 }
 
@@ -825,6 +835,7 @@ impl SharedState {
             preset_name: String::new(),
             take_supported: false,
             take_recording: false,
+            take_rolling: false,
             render_now: false,
             last_take_ready: false,
             take_audio: false,
@@ -857,6 +868,7 @@ impl SharedState {
         // RON rather than JSON: dock layout rects can be NaN (before first
         // layout), which JSON cannot round-trip.
         ron::to_string(&UiPersist {
+            version: UI_PERSIST_VERSION,
             dock: self.dock.clone(),
             camera: self.camera,
             view: self.view.clone(),
@@ -871,7 +883,17 @@ impl SharedState {
     /// ignored (fresh defaults win over a broken restore).
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
-            self.dock = persist.dock;
+            // A pre-reorg (version 0) layout names the old tabs and is missing
+            // the split-out Scene and new Panel tabs, so those controls would
+            // be unreachable. The old tab names still deserialize (Tab's serde
+            // aliases), which is what lets the settings below survive — but the
+            // arrangement itself is stale, so refresh it to the new default.
+            // Everything else the user dialed in is kept.
+            self.dock = if persist.version < UI_PERSIST_VERSION {
+                default_dock()
+            } else {
+                persist.dock
+            };
             self.camera = persist.camera;
             self.view = persist.view;
             // Fold fields from older blob layouts (the NodeBody
@@ -884,10 +906,19 @@ impl SharedState {
     }
 }
 
+/// The current [`UiPersist`] layout version. Bumped when the `Tab` set changes
+/// shape (rename/split/add) so `load_persist` can refresh a stale dock instead
+/// of stranding the user with missing tabs.
+const UI_PERSIST_VERSION: u32 = 1;
+
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct UiPersist {
+    /// serde(default) reads a pre-versioning blob as version 0, which
+    /// [`SharedState::load_persist`] treats as "refresh the dock layout".
+    #[serde(default)]
+    version: u32,
     dock: DockState<panes::Tab>,
     camera: Camera,
     view: ViewConfig,
@@ -923,8 +954,9 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
     // meet with no chrome between them — clean for captures). The pane
     // separators keep their regular width, so the spacing between windows
-    // matches framed mode. No tab bar also means no way to click the View
-    // pane back if it's hidden, so Esc always restores.
+    // matches framed mode. No tab bar also means no way to click back to
+    // the Panel pane (which holds the toggle) if it's hidden, so Esc always
+    // restores.
     if state.view.frameless && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         state.view.frameless = false;
     }
@@ -950,7 +982,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
     state.dock = dock;
-    // Deferred from the View pane's button: replacing the dock BEFORE the
+    // Deferred from the Panel pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
         state.dock = default_dock();
