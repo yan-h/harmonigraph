@@ -19,7 +19,7 @@ use lattice_render::lattice_paint_callback;
 use lattice_scene::derive_scene;
 
 use super::section;
-use crate::widgets::{button_row, toggle_switch, ValueBar};
+use crate::widgets::{button_row, record_button, ValueBar};
 use crate::{theme, Layout, Pane, SharedState};
 
 /// The preview's lattice is a second live view, so it needs its own GPU id —
@@ -210,20 +210,21 @@ fn preview_lattice(
 /// Recording and render-output settings. Lives here, in the Video tab, so that
 /// tab is the one home for everything about turning a take into a video.
 fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
-    // Take recording: the input half of offline video rendering. A mode with
-    // ongoing side effects (it keeps writing a file), so a switch rather than a
-    // checkbox — the house rule in widgets.rs.
+    // Take recording: the input half of offline video rendering. A record
+    // button that doubles as its own indicator — press to arm; the dot breathes
+    // while it waits for the transport, then goes solid while capturing. See
+    // record_button in widgets.rs.
     if !state.take_supported {
         return;
     }
     section(ui, "Record");
-    toggle_switch(ui, &mut state.take_recording, "Record take").on_hover_text(
+    let rolling = state.take_rolling;
+    record_button(ui, &mut state.take_recording, rolling, "Record take").on_hover_text(
         "Record the performance — notes, bends, parameter automation, the \
-         current look, and the plugin's audio input — to a .take file. Switch \
-         it off and the take renders to video automatically: the recorded audio \
-         becomes the spectrogram and a playhead sweeps the whole piece. Events \
-         are stamped with transport position, so nothing is captured until the \
-         transport rolls.",
+         current look, and the plugin's audio input — to a .take file. Press \
+         again to stop; the take then renders to video (its audio becomes the \
+         spectrogram and a playhead sweeps the piece). Events are stamped with \
+         transport position, so nothing is captured until the transport rolls.",
     );
     if !state.take_status.is_empty() {
         ui.weak(&state.take_status);

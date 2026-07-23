@@ -219,8 +219,10 @@ impl EditorShared {
         self.take.tick(self.take_rolling, count);
         self.ui.take_status = self.take.status();
         // The shell may have refused to start (unwritable directory);
-        // don't leave the toggle claiming otherwise.
+        // don't leave the indicator claiming otherwise.
         self.ui.take_recording = self.take.is_recording();
+        // Steady dot vs. breathing one: whether capture is actually happening.
+        self.ui.take_rolling = self.take_rolling;
     }
 
     /// Record a GUI frame, logging a console warning when the event loop
