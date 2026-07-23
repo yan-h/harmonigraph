@@ -778,11 +778,16 @@ fn default_dock() -> DockState<panes::Tab> {
         NodeIndex::root(),
         0.72,
         vec![
+            // Reading outward from the picture: harmony, then how it's framed,
+            // how a note is drawn, the scene around it, the analyzer, video
+            // export, and the plugin's own render/layout knobs last.
             panes::Tab::Tuning,
-            panes::Tab::View,
-            panes::Tab::Appearance,
-            panes::Tab::Spectrum,
-            panes::Tab::Render,
+            panes::Tab::Frame,
+            panes::Tab::Nodes,
+            panes::Tab::Scene,
+            panes::Tab::Analyzer,
+            panes::Tab::Video,
+            panes::Tab::Panel,
         ],
     );
     // Notes first so it sits left of Console and is the selected tab by
@@ -846,6 +851,7 @@ impl SharedState {
         // RON rather than JSON: dock layout rects can be NaN (before first
         // layout), which JSON cannot round-trip.
         ron::to_string(&UiPersist {
+            version: UI_PERSIST_VERSION,
             dock: self.dock.clone(),
             camera: self.camera,
             view: self.view.clone(),
@@ -860,7 +866,17 @@ impl SharedState {
     /// ignored (fresh defaults win over a broken restore).
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
-            self.dock = persist.dock;
+            // A pre-reorg (version 0) layout names the old tabs and is missing
+            // the split-out Scene and new Panel tabs, so those controls would
+            // be unreachable. The old tab names still deserialize (Tab's serde
+            // aliases), which is what lets the settings below survive — but the
+            // arrangement itself is stale, so refresh it to the new default.
+            // Everything else the user dialed in is kept.
+            self.dock = if persist.version < UI_PERSIST_VERSION {
+                default_dock()
+            } else {
+                persist.dock
+            };
             self.camera = persist.camera;
             self.view = persist.view;
             // Fold fields from older blob layouts (the NodeBody
@@ -873,10 +889,19 @@ impl SharedState {
     }
 }
 
+/// The current [`UiPersist`] layout version. Bumped when the `Tab` set changes
+/// shape (rename/split/add) so `load_persist` can refresh a stale dock instead
+/// of stranding the user with missing tabs.
+const UI_PERSIST_VERSION: u32 = 1;
+
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct UiPersist {
+    /// serde(default) reads a pre-versioning blob as version 0, which
+    /// [`SharedState::load_persist`] treats as "refresh the dock layout".
+    #[serde(default)]
+    version: u32,
     dock: DockState<panes::Tab>,
     camera: Camera,
     view: ViewConfig,
