@@ -1,32 +1,51 @@
 # CLAUDE.md
 
-## Pausing = loaded in Bitwig (swap the bundle first)
+## Pausing = a loadable build exists (sessions build, Yan loads)
 
 Bitwig loads exactly ONE plugin build: the main checkout's
 `target/bundled/MIDI Lattice 3D.{clap,vst3}`. A branch or worktree build is
-invisible in the DAW until its binary is swapped into that slot.
+invisible in the DAW until its binary is swapped into that slot. With
+parallel sessions that slot is shared, so sessions do NOT fight over it — the
+model is pull, not push: every session builds into its own worktree, and Yan
+chooses which build goes live.
 
-Yan assumes that whenever a session pauses, its changes are already loaded
-and testable in Bitwig. So before ending ANY turn after changing
-plugin-affecting code — task complete, blocked on a question, partial
-progress — run `./update-plugin.sh` from YOUR checkout and end your message
-by stating which branch is now loaded.
+**Sessions: build before you pause; do NOT swap the slot.** Before ending ANY
+turn after changing plugin-affecting code — task done, blocked on a question,
+partial progress — leave a fresh release build in YOUR worktree so it is
+loadable:
 
-- The script builds whatever checkout it runs FROM. Run it from your
-  worktree; run from the main checkout it silently rebuilds main and
-  reinstalls that (this exact miss has burned real sessions).
-- Skip the swap only when nothing plugin-visible changed (docs, backlog,
-  pure test changes) — swapping then would just evict the build Yan is
-  currently testing.
-- The bundle is a single slot and the last pauser wins; that's accepted.
-  Always announce what you loaded so the current state is known. Evicted
-  builds survive in each worktree's own `target/release/` and can be
-  re-swapped the same way.
-- After a swap, the plugin must be reopened/rescanned in Bitwig to load the
-  new binary; say so.
+```
+cargo build --release -p midi_lattice_3d          # add -p lattice-offline if you touched video render
+```
+
+Then end your message telling Yan it's `loadable via ./load-plugin.sh
+<branch>`. Yan assumes a paused session's change is *built and loadable*, not
+that it is already live in the DAW — so the build is the contract, and
+touching the shared slot yourself would just evict whatever he is currently
+testing. Skip the build only when nothing plugin-visible changed (docs,
+backlog, pure-test edits).
+
+**Yan: load whichever build you want.**
+
+- `./load-plugin.sh` — menu of every worktree's build (freshness + which one
+  is live now); pick a number to swap it in.
+- `./load-plugin.sh <branch>` — load that branch's build directly (unique
+  substring is fine).
+- `./load-plugin.sh --list` — just print the table, load nothing.
+
+It copies only, never builds; a build must already exist in the worktree.
+Stale builds (dylib older than the branch's HEAD) are flagged but still
+loadable. After a swap, rescan/restart the plugin in Bitwig to pick it up.
+
+- Both `load-plugin.sh` and `update-plugin.sh` record the live build in
+  `target/bundled/.loaded`, so "what's loaded?" is answerable without guessing.
+- `./update-plugin.sh` remains the build-and-load-in-one-shot path (it builds
+  the checkout it runs FROM and swaps that immediately) — use it when you
+  explicitly want a session to make its own build live, e.g. a single-session
+  flow. Run it from the main checkout and it rebuilds main, not your branch.
 - Don't use `cargo xtask bundle` from a nested worktree — it resolves the
-  topmost workspace and builds main. `update-plugin.sh` exists to sidestep
-  this; see its header comment.
+  topmost workspace and builds main. These scripts exist to sidestep this;
+  see `update-plugin.sh`'s header comment.
 
 ## Reading the plugin's live settings back out of Bitwig
 

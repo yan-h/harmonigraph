@@ -65,6 +65,14 @@ fi
 
 echo
 if [ "$updated" -gt 0 ]; then
+  # Record which build is now in the shared slot so load-plugin.sh's "<- now"
+  # marker (and any session asking "what's loaded?") reflects this swap too.
+  {
+    echo "worktree=$HERE"
+    echo "branch=$(git -C "$HERE" symbolic-ref --short -q HEAD || git -C "$HERE" rev-parse --short HEAD)"
+    echo "commit=$(git -C "$HERE" rev-parse --short HEAD)"
+    echo "loaded_at=$(date +%s)"
+  } > "$BUNDLED/.loaded"
   echo "Done ($updated bundle(s)). Rescan/restart the plugin in Bitwig."
 else
   echo "No bundles updated — see warnings above." >&2
