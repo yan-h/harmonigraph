@@ -179,6 +179,10 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
          and analyzed for the spectrum. Paste its path here. Leave empty to use \
          the take's own recording, or to render silent.",
     );
+    labeled_path(ui, "Audio offset (s)", &mut render.audio_offset).on_hover_text(
+        "Take-time seconds where the bounce starts. Leave empty to auto-align to \
+         the MIDI onsets; set a number if the auto-align drifts.",
+    );
     if render.auto_render {
         crate::widgets::choice_row(
             ui,
@@ -210,6 +214,24 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
             "Extra lattice-offline flags, split on spaces: \
              --size 3840x2160 --layout side-by-side",
         );
+    }
+
+    // Render the take you just recorded with the settings on screen NOW — the
+    // take file itself only carries a record-time snapshot, so this is what
+    // makes a post-record frame/bounce/offset actually reach the video.
+    if state.last_take_ready {
+        ui.add_space(2.0);
+        if ui
+            .button("Render now")
+            .on_hover_text(
+                "Render the take you last recorded, now, with these current \
+                 settings — frame, bounced audio, and offset. Runs in the \
+                 background; the video lands next to the take.",
+            )
+            .clicked()
+        {
+            state.render_now = true;
+        }
     }
 }
 

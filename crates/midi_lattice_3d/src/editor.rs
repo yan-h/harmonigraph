@@ -177,6 +177,17 @@ impl EditorShared {
             self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
         }
 
+        // "Render now": render the last finished take with the CURRENT settings.
+        // The persist blob rides along as --ui-state, so the frame, bounce, and
+        // offset dialed in after recording all reach the video.
+        self.ui.last_take_ready = self.take.last_take().is_some();
+        if std::mem::take(&mut self.ui.render_now) {
+            self.take.render_now(crate::take::RenderRequest::render_now(
+                &self.ui.render_config,
+                self.ui.save_persist(),
+            ));
+        }
+
         let count = self.take_events.load(std::sync::atomic::Ordering::Relaxed);
         self.take_last_count = count;
         // The audio thread's own view, rather than inferring it from

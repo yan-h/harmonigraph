@@ -107,33 +107,50 @@ pub struct RenderRequest {
     pub program: std::path::PathBuf,
     /// Bounced audio to mux in and feed the spectrum, if any.
     pub audio: Option<String>,
+    /// `--align` value (take-time the audio starts), if set; else auto-align.
+    pub align: Option<String>,
+    /// A persist blob passed as `--ui-state`, overriding the take's record-time
+    /// look — set for "Render now" so post-record settings reach the video;
+    /// `None` for auto-render (which uses the take's own recorded look).
+    pub ui_state: Option<String>,
     /// Extra flags, already split.
     pub extra_args: Vec<String>,
 }
 
 impl RenderRequest {
-    /// Build a request from the View pane's settings, or `None` if
-    /// auto-render is off. Blank fields mean "use the default" rather
-    /// than passing an empty argument, which the renderer would reject.
+    /// Build a request from the render settings for auto-render on take finish,
+    /// or `None` if auto-render is off. Uses the take's own recorded look.
     pub fn from_config(config: &lattice_ui::RenderConfig) -> Option<RenderRequest> {
-        if !config.auto_render {
-            return None;
-        }
+        config.auto_render.then(|| Self::build(config, None))
+    }
+
+    /// Build a request for an explicit "Render now": always built, and it
+    /// carries the CURRENT `ui_state` blob so the render reflects the frame,
+    /// bounce, and offset dialed in *after* recording — not the take's
+    /// record-time snapshot.
+    pub fn render_now(config: &lattice_ui::RenderConfig, ui_state: String) -> RenderRequest {
+        Self::build(config, Some(ui_state))
+    }
+
+    /// Blank fields mean "use the default" rather than passing an empty
+    /// argument, which the renderer would reject.
+    fn build(config: &lattice_ui::RenderConfig, ui_state: Option<String>) -> RenderRequest {
         let program = if config.renderer_path.trim().is_empty() {
             default_renderer_path()
         } else {
             std::path::PathBuf::from(config.renderer_path.trim())
         };
-        Some(RenderRequest {
+        let trimmed = |s: &str| Some(s.trim()).filter(|v| !v.is_empty()).map(str::to_owned);
+        RenderRequest {
             program,
-            audio: Some(config.audio_path.trim())
-                .filter(|path| !path.is_empty())
-                .map(str::to_owned),
+            audio: trimmed(&config.audio_path),
+            align: trimmed(&config.audio_offset),
+            ui_state,
             // Whitespace split, no shell quoting: these are flags like
             // `--size 3840x2160`. A path with spaces belongs in the Audio
             // field, which is passed as a single argument.
             extra_args: config.extra_args.split_whitespace().map(str::to_owned).collect(),
-        })
+        }
     }
 }
 
@@ -289,6 +306,9 @@ pub struct Control {
     dropped: Arc<AtomicU64>,
     /// One line for the UI, owned by whichever side last had news.
     status: Arc<Mutex<String>>,
+    /// Path of the take most recently finished this session — the target for
+    /// [`render_now`](Self::render_now).
+    last_take: Arc<Mutex<Option<std::path::PathBuf>>>,
     recording: Arc<AtomicBool>,
     /// Set by the audio thread; the GUI's only honest view of whether
     /// the transport is moving.
@@ -308,6 +328,20 @@ impl Control {
 
     pub fn status(&self) -> String {
         self.status.lock().clone()
+    }
+
+    /// The take most recently finished this session, if any.
+    pub fn last_take(&self) -> Option<std::path::PathBuf> {
+        self.last_take.lock().clone()
+    }
+
+    /// Render the last finished take now, in the background, with `request`
+    /// (which carries the current look, bounce, and offset).
+    pub fn render_now(&self, request: RenderRequest) {
+        match self.last_take() {
+            Some(path) => spawn_render(request, path, self.status.clone()),
+            None => *self.status.lock() = "no take recorded yet to render".into(),
+        }
     }
 
     /// Begin a take. `ui_state` is the persist blob that decides how the
@@ -405,8 +439,10 @@ pub fn channel() -> (Recorder, Control) {
     let rolling = Arc::new(AtomicBool::new(false));
     let with_audio = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(String::new()));
+    let last_take = Arc::new(Mutex::new(None));
 
     let thread_status = status.clone();
+    let thread_last_take = last_take.clone();
     let _ = std::thread::Builder::new()
         .name("lattice-take-writer".into())
         .spawn(move || {
@@ -421,6 +457,9 @@ pub fn channel() -> (Recorder, Control) {
                         // before closing, or the tail of the take is lost.
                         drain(&mut consumer, &mut open, &thread_status);
                         let finished = open.take().map(|o| o.finish());
+                        if let Some(path) = &finished {
+                            *thread_last_take.lock() = Some(path.clone());
+                        }
                         if let (Some(path), Some(render)) = (finished, render) {
                             spawn_render(*render, path, thread_status.clone());
                         }
@@ -452,7 +491,16 @@ pub fn channel() -> (Recorder, Control) {
             audio: audio_producer,
             with_audio: with_audio.clone(),
         },
-        Control { commands, armed, dropped, status, recording, rolling, with_audio },
+        Control {
+            commands,
+            armed,
+            dropped,
+            status,
+            last_take,
+            recording,
+            rolling,
+            with_audio,
+        },
     )
 }
 
@@ -635,15 +683,33 @@ fn spawn_render(
         .name("lattice-take-render".into())
         .spawn(move || {
             let out = take_path.with_extension("mp4");
+            // A "Render now" carries the current look as a persist blob; write
+            // it beside the take and pass --ui-state so post-record settings
+            // override the take's record-time snapshot. Removed after the run.
+            let ui_state_file = request.ui_state.as_ref().and_then(|blob| {
+                let path = take_path.with_extension("rendernow.ron");
+                std::fs::write(&path, blob).ok().map(|()| path)
+            });
+
             let mut command = std::process::Command::new(&request.program);
             command.arg(&take_path).arg("--out").arg(&out);
             if let Some(audio) = &request.audio {
                 command.arg("--audio").arg(audio);
             }
+            if let Some(align) = &request.align {
+                command.arg("--align").arg(align);
+            }
+            if let Some(file) = &ui_state_file {
+                command.arg("--ui-state").arg(file);
+            }
             command.args(&request.extra_args);
 
             *status.lock() = format!("rendering {}...", out.display());
-            match command.output() {
+            let result = command.output();
+            if let Some(file) = &ui_state_file {
+                let _ = std::fs::remove_file(file);
+            }
+            match result {
                 Ok(done) if done.status.success() => {
                     *status.lock() = format!("rendered {}", out.display());
                 }
@@ -687,6 +753,7 @@ mod tests {
             trigger: Default::default(),
             renderer_path: "  ".into(),
             audio_path: "   ".into(),
+            audio_offset: String::new(),
             extra_args: "   ".into(),
             playhead: false,
             frame: Default::default(),
@@ -705,6 +772,7 @@ mod tests {
             trigger: Default::default(),
             renderer_path: "/opt/lattice-offline".into(),
             audio_path: "/Users/yan/My Bounces/piece.wav".into(),
+            audio_offset: String::new(),
             extra_args: "--size 3840x2160   --layout side-by-side".into(),
             playhead: false,
             frame: Default::default(),

@@ -199,6 +199,11 @@ pub struct RenderConfig {
     /// spectrum — the roll and the lattice are unaffected.
     #[serde(default)]
     pub audio_path: String,
+    /// Take-time (seconds) where the bounce starts — empty means auto-align to
+    /// the MIDI onsets, a number passes `--align`. A string so "empty = auto"
+    /// reads naturally and it matches the other free-text fields.
+    #[serde(default)]
+    pub audio_offset: String,
     /// Extra flags, split on whitespace (no shell quoting):
     /// `--size 3840x2160 --layout side-by-side`.
     #[serde(default)]
@@ -224,6 +229,7 @@ impl Default for RenderConfig {
             trigger: RenderTrigger::OnDisarm,
             renderer_path: String::new(),
             audio_path: String::new(),
+            audio_offset: String::new(),
             extra_args: "--size 1920x1080".into(),
             playhead: false,
             frame: RenderFrame::default(),
@@ -697,6 +703,12 @@ pub struct SharedState {
     pub take_supported: bool,
     /// Toggled by the View pane, acted on by the shell.
     pub take_recording: bool,
+    /// One-shot: set by the Render pane's "Render now" button, consumed by the
+    /// shell to render the last take with the CURRENT settings. Runtime-only.
+    pub render_now: bool,
+    /// Whether a take has been recorded this session — the shell sets it so the
+    /// Render pane can offer "Render now". Runtime-only.
+    pub last_take_ready: bool,
     /// Record the input bus alongside the notes, so the render has a
     /// spectrum and a soundtrack without a separate bounce. Persisted
     /// with the render settings rather than the take state, since it is
@@ -786,6 +798,8 @@ impl SharedState {
             preset_name: String::new(),
             take_supported: false,
             take_recording: false,
+            render_now: false,
+            last_take_ready: false,
             take_audio: false,
             render_config: RenderConfig::default(),
             take_status: String::new(),
