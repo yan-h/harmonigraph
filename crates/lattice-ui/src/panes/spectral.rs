@@ -749,10 +749,17 @@ pub(crate) fn spectral_pane(
                 state.frame_params.brightest_pitch,
             );
             let color = scene_color(c, 1.0);
-            painter.line_segment(
-                [axes.at(t, split), axes.at(t, split - depth)],
-                egui::Stroke::new(3.0, color),
-            );
+            let ends = [axes.at(t, split), axes.at(t, split - depth)];
+            // A note sounding off the visible lattice lights up no node, so
+            // pulse an accent halo behind its bar: the Spectral pane is where
+            // you'd otherwise miss that a pitch you can't see is playing. Same
+            // match the lattice uses, so "off-lattice" agrees with the view.
+            if nearest_visible_node(&state.view, &state.tuning, voice.pitch_class).is_none() {
+                let pulse = 0.5 + 0.5 * (now * std::f64::consts::TAU * 1.6).sin() as f32;
+                let halo = theme::accent().gamma_multiply(0.35 + 0.5 * pulse);
+                painter.line_segment(ends, egui::Stroke::new(3.0 + 4.0 * pulse, halo));
+            }
+            painter.line_segment(ends, egui::Stroke::new(3.0, color));
         }
     }
 
