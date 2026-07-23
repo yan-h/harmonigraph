@@ -39,6 +39,7 @@ const RENDER_POINTS_ACROSS: f32 = 1280.0;
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     render_settings(ui, state);
     frame_controls(ui, state);
+    spectrogram_controls(ui, state);
 
     section(ui, "Preview");
     let frame = state.render_config.frame;
@@ -47,9 +48,6 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
         return;
     }
     let (outer, _) = ui.allocate_exact_size(avail, Sense::hover());
-    // The frame background fills the pane; the aspect box sits centered in it,
-    // so the letterboxing reads exactly as the render's own margins will.
-    ui.painter().rect_filled(outer, 0.0, theme::well());
     let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
     let box_rect = letterbox(outer, aspect);
     // How far the preview shrinks the render frame — labels scale by this so
@@ -58,6 +56,26 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
 
     // Compose with the SAME Layout the offline renderer resolves.
     let layout = Layout::split(frame.stacked, frame.split);
+
+    // Make the render frame obvious against the pane. The letterbox padding
+    // takes the panel color, so it reads as inert chrome rather than part of
+    // the shot; the aspect box takes the render's OWN frame background — the
+    // color the offline renderer shows in its margins and inter-pane gaps — so
+    // the box is exactly the pixels the video will contain. Before this the
+    // padding and the pane fills were both `well()`, and you couldn't tell
+    // where the frame ended. A hairline edge keeps the boundary crisp even
+    // when a pane fills the box edge to edge.
+    let bg = layout.background;
+    ui.painter().rect_filled(outer, 0.0, theme::panel());
+    ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
+    ui.painter().rect_stroke(
+        box_rect,
+        0,
+        egui::Stroke::new(1.0, theme::accent_edge()),
+        egui::StrokeKind::Inside,
+    );
+
+    let mut spectral_rect = None;
     for (pane, rect) in layout.resolve(box_rect.size()) {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
@@ -67,9 +85,19 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
                 // one fixed-size thing draw_pane can't carry. Texture slot 1, so
                 // its spectrogram doesn't clobber the docked pane's (slot 0).
                 super::spectral::spectral_pane(&mut child, state, now, label_scale, 1);
+                spectral_rect = Some(rect);
             }
             Pane::Lattice => preview_lattice(ui, rect, state, now, label_scale),
         }
+    }
+
+    // The "Playhead" render variant lays the whole take's spectrogram out with
+    // a sweeping playhead; the live preview shows the live scrolling
+    // spectrogram and can't reproduce it, so badge the spectral region to flag
+    // that the render's spectrogram will differ from what's on screen here.
+    // Indicator only, per the backlog.
+    if state.render_config.playhead {
+        playhead_badge(ui, spectral_rect.unwrap_or(box_rect));
     }
 }
 
@@ -94,6 +122,43 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     });
     let label = if f.stacked { "Lattice height" } else { "Lattice width" };
     ValueBar::new(&mut f.split, 0.15..=0.85, label).show(ui);
+}
+
+/// Which spectrogram the render bakes: the live scrolling window (exactly what
+/// the preview shows), or the whole take laid out at once with a sweeping
+/// playhead. Sets `RenderConfig.playhead`, which lattice-offline reads. The
+/// live preview can't lay the whole take out, so a Playhead choice is only
+/// flagged there, by `playhead_badge`.
+fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+    section(ui, "Spectrogram");
+    let playhead = &mut state.render_config.playhead;
+    ui.horizontal(|ui| {
+        ui.label("Render");
+        ui.selectable_value(playhead, false, "Live")
+            .on_hover_text("Bake the live scrolling spectrogram, exactly as previewed here");
+        ui.selectable_value(playhead, true, "Playhead").on_hover_text(
+            "Lay the whole take's spectrogram out at once with a sweeping playhead. \
+             Needs recorded audio. The live preview can't reproduce it, so it only \
+             flags the choice.",
+        );
+    });
+}
+
+/// A small "Playhead" pill in the corner of the preview's spectral region,
+/// shown when the whole-song playhead render variant is selected — the live
+/// preview renders the live spectrogram, so this tells you the render's
+/// spectrogram will differ from what's on screen.
+fn playhead_badge(ui: &egui::Ui, rect: egui::Rect) {
+    if rect.width() < 70.0 || rect.height() < 24.0 {
+        return;
+    }
+    let p = ui.painter_at(rect);
+    let font = egui::FontId::proportional(11.0);
+    let galley = p.layout_no_wrap("Playhead".to_owned(), font, theme::accent());
+    let pad = egui::vec2(5.0, 2.5);
+    let pill = egui::Rect::from_min_size(rect.left_top() + egui::vec2(6.0, 6.0), galley.size() + pad * 2.0);
+    p.rect_filled(pill, 3.0, theme::panel());
+    p.galley(pill.min + pad, galley, theme::accent());
 }
 
 /// The largest sub-rect of `outer` with the given width:height aspect, centered
@@ -130,9 +195,15 @@ fn preview_lattice(
     );
     ui.painter().add(lattice_paint_callback(rect, &scene, state.target_format, PREVIEW_PANE_ID));
     // Node names/cents, exactly as the Lattice pane and the render draw them —
-    // scaled down so they read at render size in the shrunken preview.
+    // scaled down so they read at render size in the shrunken preview. Clipped
+    // to the lattice rect: a node near the frame edge would otherwise paint its
+    // label out past the preview box, since draw_node_labels uses an unclipped
+    // painter (harmless in the docked pane, which owns its whole rect and is
+    // clipped by the dock; here the rect is only a sub-region of the pane).
     if state.view.show_labels {
-        super::lattice::draw_node_labels(ui, rect, &scene, &state.view, label_scale);
+        let mut clipped = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        clipped.set_clip_rect(rect);
+        super::lattice::draw_node_labels(&clipped, rect, &scene, &state.view, label_scale);
     }
 }
 

@@ -426,7 +426,7 @@ pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
-            orientation: SpectralOrientation::Auto,
+            orientation: SpectralOrientation::Horizontal,
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
@@ -448,7 +448,7 @@ impl Default for SpectrumConfig {
             roll_velocity_alpha: true,
             roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
-            show_spectrogram: false,
+            show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
             spectrogram_smoothing: 0.0,
@@ -765,12 +765,11 @@ pub struct CameraPreset {
     pub pitch: f32,
 }
 
-/// The default pane arrangement: big lattice with the Spectral pane in
-/// its own strip (below it by default — sharing the pitch intuition: what
-/// sounds is what lights up — or beside it, per `placement`), tuning
-/// column on the right, console and notes tucked below that. Users can
-/// re-dock at runtime; the result persists via UiPersist, and the Panel
-/// pane's "Reset layout" button returns here.
+/// The default pane arrangement: big lattice with the Spectral pane
+/// beside it on the right (sharing the pitch intuition: what sounds is
+/// what lights up), the tuning column further right, console and notes
+/// tucked below that. Users can re-dock at runtime; the result persists
+/// via UiPersist, and the Panel pane's "Reset layout" button returns here.
 fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
@@ -793,10 +792,12 @@ fn default_dock() -> DockState<panes::Tab> {
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
     surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
-    // Spectral as a wide strip under the lattice: what sounds is directly
-    // under what lights up. Drag it wherever from here — egui_dock docks it
-    // freely, and the Spectral pane's orientation follows the shape it lands.
-    surface.split_below(lattice, 0.76, vec![panes::Tab::Spectral]);
+    // Spectral as a column just right of the lattice: what sounds is directly
+    // beside what lights up. Paired with the "Across" default orientation
+    // (SpectrumConfig::default). Drag it wherever from here — egui_dock docks
+    // it freely, and in Auto the Spectral pane's orientation follows the shape
+    // it lands.
+    surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
     dock
 }
 

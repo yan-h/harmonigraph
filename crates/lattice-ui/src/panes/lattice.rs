@@ -5,7 +5,7 @@ use super::{display_note_name, learn_pulse, visibility_floor};
 use crate::{theme, SharedState};
 use egui::Sense;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{derive_scene, Camera, Projection};
+use lattice_scene::{derive_scene, Camera, Projection, TrailMark};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -126,6 +126,11 @@ pub(super) fn draw_node_labels(
     scale: f32,
 ) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+    // "Keep note names" retains a name only while the trail marks that
+    // populate `node.trail` are on; with the marks Off the field never fills,
+    // so a fading name has nothing to settle onto and should ease all the way
+    // out (the pre-existing behavior).
+    let keeps_names = view.trail_labels && view.trail_mark != TrailMark::Off;
     for node in &scene.nodes {
         let trailed = view.trail_labels && node.trail > 0.0;
         // `is_visible` re-checks what `Scene::pick` already enforces,
@@ -142,7 +147,7 @@ pub(super) fn draw_node_labels(
         // label readable through most of the release, but on its own it
         // bottoms out at 35% and then pops to nothing when the voice is
         // pruned at activation 0. Ease that last stretch out with a
-        // smoothstep tail so the label fades gradually to zero instead.
+        // smoothstep tail so the label fades gradually instead of snapping.
         // Hovered nodes get a full, steady label.
         const LABEL_FADE_TAIL: f32 = 0.25;
         let strength = if node.hovered {
@@ -150,10 +155,18 @@ pub(super) fn draw_node_labels(
         } else {
             let t = (node.activation / LABEL_FADE_TAIL).clamp(0.0, 1.0);
             let sounding = visibility_floor(node.activation) * t * t * (3.0 - 2.0 * t);
-            // A note's label hands over to its memory's as it dies, so the
-            // text never blinks at the moment the fade completes. The trail
-            // level rides along, so a forgetting note dims out with it.
-            sounding.max(if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 })
+            // The level a kept name settles on. `node.trail` is the recorded
+            // memory, but it is only written the frame the release finishes —
+            // during the fade it's still zero. So for a note still sounding
+            // under "Keep note names", reserve its resting level NOW: the
+            // fading `sounding` term then lands on the same value the recorded
+            // trail takes over at, instead of easing to zero and the trail
+            // popping back a frame later. That pop was the "flash back in"
+            // that made one label read as two.
+            let recorded = if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 };
+            let reserved =
+                if keeps_names && node.activation > 0.0 { TRAIL_LABEL_STRENGTH } else { 0.0 };
+            sounding.max(recorded).max(reserved)
         };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);
