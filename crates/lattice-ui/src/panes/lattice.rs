@@ -82,7 +82,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         draw_learn_overlay(ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.view);
+        draw_node_labels(ui, rect, &scene, &state.view, 1.0);
     }
 }
 
@@ -123,6 +123,7 @@ pub(super) fn draw_node_labels(
     rect: egui::Rect,
     scene: &lattice_scene::Scene,
     view: &lattice_scene::ViewConfig,
+    scale: f32,
 ) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     for node in &scene.nodes {
@@ -163,17 +164,18 @@ pub(super) fn draw_node_labels(
             name,
             theme::text().gamma_multiply(strength),
             outline,
+            scale,
         );
         if view.show_cents {
             let text = format!("{:.2}", node.cents);
-            let font = egui::FontId::monospace(CENTS_SIZE);
+            let font = egui::FontId::monospace(CENTS_SIZE * scale);
             // Hang the readout off the name's INK, not its galley box: a
             // monospace box carries enough leading above and below the glyphs
             // that box-to-box spacing left the two floating far apart.
             let top = painter_ink(ui.painter(), &text, &font).min.y;
             outlined_text(
                 ui.painter(),
-                center + egui::vec2(0.0, name_bottom + CENTS_GAP - top),
+                center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
                 egui::Align2::CENTER_TOP,
                 text,
                 font,
@@ -219,9 +221,10 @@ pub(crate) fn draw_stacked_name(
     name: lattice_core::NoteName,
     color: egui::Color32,
     outline: egui::Color32,
+    scale: f32,
 ) -> f32 {
-    let name_font = egui::FontId::monospace(NAME_SIZE);
-    let mark_font = egui::FontId::monospace(MARK_SIZE);
+    let name_font = egui::FontId::monospace(NAME_SIZE * scale);
+    let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
     let measure = |text: &str, font: &egui::FontId| {
         painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size()
     };

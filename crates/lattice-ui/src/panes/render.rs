@@ -26,6 +26,13 @@ use crate::{draw_pane, theme, Layout, Pane, SharedState};
 /// other's buffers within a frame.
 const PREVIEW_PANE_ID: u64 = 1;
 
+/// The offline renderer composes its frame at about this many points across
+/// (its default pixels-per-point reference in `lattice-offline`). A preview
+/// `box_rect.width()` points wide is therefore that frame scaled by
+/// `width / this`, and fixed-point-size labels have to scale with it or they
+/// swamp a small preview.
+const RENDER_POINTS_ACROSS: f32 = 1280.0;
+
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -43,6 +50,9 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     ui.painter().rect_filled(outer, 0.0, theme::well());
     let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
     let box_rect = letterbox(outer, aspect);
+    // How far the preview shrinks the render frame — labels scale by this so
+    // they read at the size they will in the render, not at full point size.
+    let label_scale = box_rect.width() / RENDER_POINTS_ACROSS;
 
     // Compose with the SAME Layout the offline renderer resolves.
     let layout = Layout::split(frame.stacked, frame.split);
@@ -53,7 +63,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 draw_pane(&mut child, Pane::Spectral, state, now);
             }
-            Pane::Lattice => preview_lattice(ui, rect, state, now),
+            Pane::Lattice => preview_lattice(ui, rect, state, now, label_scale),
         }
     }
 }
@@ -94,7 +104,13 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
 /// from `rect` inside the render callback, so this frames exactly as the render
 /// will. Non-interactive: `hovered` is left `None`, and the camera is framed in
 /// the Lattice tab (shared state), not here.
-fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now: f64) {
+fn preview_lattice(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    state: &SharedState,
+    now: f64,
+    label_scale: f32,
+) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
@@ -108,8 +124,9 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
         now,
     );
     ui.painter().add(lattice_paint_callback(rect, &scene, state.target_format, PREVIEW_PANE_ID));
-    // Node names/cents, exactly as the Lattice pane and the render draw them.
+    // Node names/cents, exactly as the Lattice pane and the render draw them —
+    // scaled down so they read at render size in the shrunken preview.
     if state.view.show_labels {
-        super::lattice::draw_node_labels(ui, rect, &scene, &state.view);
+        super::lattice::draw_node_labels(ui, rect, &scene, &state.view, label_scale);
     }
 }

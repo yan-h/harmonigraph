@@ -567,6 +567,7 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
             name,
             egui::Color32::WHITE,
             egui::Color32::BLACK,
+            1.0,
         );
     });
 
@@ -625,6 +626,7 @@ fn a_natural_note_label_is_just_the_letter() {
             name,
             egui::Color32::WHITE,
             egui::Color32::BLACK,
+            1.0,
         );
     });
     assert!(texts.iter().all(|(_, t)| t == "G"), "only the letter: {texts:?}");
