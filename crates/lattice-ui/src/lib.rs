@@ -474,10 +474,13 @@ pub struct AudioSpectrum {
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
     /// Bounded by age and count (see [`AudioSpectrum::push_history`]).
     history: VecDeque<SpectrogramColumn>,
-    /// The spectrogram's pixels, uploaded once and sampled with bilinear
-    /// filtering so the heatmap reads as a smooth image rather than a mesh of
-    /// interpolated triangles. Runtime-only; created lazily on first draw.
-    spectrogram_tex: Option<egui::TextureHandle>,
+    /// The spectrogram's pixels, uploaded and sampled with bilinear filtering
+    /// so the heatmap reads as a smooth image rather than a mesh of interpolated
+    /// triangles. One texture per drawing surface — index 0 the docked Spectral
+    /// pane (and the offline render), index 1 the Render pane's preview — so two
+    /// live spectrograms in one frame don't overwrite each other's texture.
+    /// Runtime-only; created lazily on first draw.
+    spectrogram_tex: [Option<egui::TextureHandle>; 2],
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -558,7 +561,7 @@ impl Default for AudioSpectrum {
             last_fft: None,
             last_samples: None,
             history: VecDeque::new(),
-            spectrogram_tex: None,
+            spectrogram_tex: [None, None],
         }
     }
 }
@@ -1004,8 +1007,9 @@ pub enum Pane {
 pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
     match pane {
         Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
-        // Offline: pixels-per-point already scales text, so no extra factor.
-        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 1.0),
+        // Offline: pixels-per-point already scales text, so no extra factor;
+        // one spectrogram per frame, so texture slot 0.
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 1.0, 0),
     }
 }
 

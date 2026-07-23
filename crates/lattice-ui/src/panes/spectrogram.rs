@@ -48,6 +48,9 @@ pub(super) fn draw_spectrogram(
     state: &mut SharedState,
     split: f32,
     now: f64,
+    // Which texture slot to build into (0 the docked pane / offline render, 1
+    // the Render preview) — two live spectrograms in a frame need their own.
+    surface: usize,
 ) {
     // Small copies, so `state.spectrum` is then free to take mutably (its
     // texture handle) without fighting the config/frame reads.
@@ -134,11 +137,11 @@ pub(super) fn draw_spectrogram(
     let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
     let image = egui::ColorImage::new([w, h], pixels);
     let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-    match &mut spectrum.spectrogram_tex {
+    match &mut spectrum.spectrogram_tex[surface] {
         Some(handle) => handle.set(image, opts),
         slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
     }
-    let Some(tex) = &spectrum.spectrogram_tex else { return };
+    let Some(tex) = &spectrum.spectrogram_tex[surface] else { return };
 
     // Map a screen depth to the texture's time axis CONTINUOUSLY, through the
     // roll's own `now`-anchored depth<->time relation (unclamped, the inverse

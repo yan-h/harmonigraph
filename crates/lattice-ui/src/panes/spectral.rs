@@ -510,6 +510,9 @@ pub(crate) fn spectral_pane(
     state: &mut SharedState,
     now: f64,
     label_scale: f32,
+    // Spectrogram texture slot: 0 the docked pane / offline render, 1 the
+    // Render preview, so two live copies don't clobber one shared texture.
+    surface: usize,
 ) {
     use crate::SpectrumLabels;
     use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
@@ -620,7 +623,7 @@ pub(crate) fn spectral_pane(
     // spectrogram on leaves the heatmap alone.
     if split < 1.0 {
         if cfg.show_spectrogram {
-            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now);
+            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
         }
         if cfg.show_roll {
             super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
@@ -952,7 +955,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, &mut state, now, 1.0);
+                spectral_pane(&mut child, &mut state, now, 1.0, 0);
             },
         );
         output.shapes.len()

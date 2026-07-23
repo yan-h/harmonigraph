@@ -63,8 +63,9 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 // Directly, so the preview's shrink scales its text too — the
-                // one fixed-size thing draw_pane can't carry.
-                super::spectral::spectral_pane(&mut child, state, now, label_scale);
+                // one fixed-size thing draw_pane can't carry. Texture slot 1, so
+                // its spectrogram doesn't clobber the docked pane's (slot 0).
+                super::spectral::spectral_pane(&mut child, state, now, label_scale, 1);
             }
             Pane::Lattice => preview_lattice(ui, rect, state, now, label_scale),
         }
