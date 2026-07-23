@@ -98,7 +98,7 @@ pub struct EditorShared {
     last_frame: Option<Instant>,
     /// Param key currently inside a begin_set/end_set automation gesture.
     gesture: std::cell::Cell<Option<lattice_ui::params::ParamKey>>,
-    /// Take recording, driven from the View pane's toggle.
+    /// Take recording, driven from the Video pane's toggle.
     take: crate::take::Control,
     /// Events the audio thread has recorded into the current take.
     take_events: Arc<std::sync::atomic::AtomicU64>,
@@ -154,7 +154,7 @@ impl EditorShared {
     /// short enough that the render feels immediate.
     const STOP_FRAMES: u32 = 20;
 
-    /// Reflect the View pane's toggle into the recorder, and the
+    /// Reflect the Video pane's toggle into the recorder, and the
     /// recorder's progress back into the pane. Called once per frame,
     /// before `root_ui` reads the state it draws.
     fn sync_take(&mut self, sample_rate: f32) {

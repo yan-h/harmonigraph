@@ -1,4 +1,5 @@
-//! The Render pane: a live, aspect-locked preview of the offline video frame.
+//! The Video pane (the `render` module): a live, aspect-locked preview of the
+//! offline video frame.
 //!
 //! It composes the Lattice and Spectral panes through the same
 //! [`Layout`](crate::Layout) the offline renderer uses, at a chosen aspect
@@ -206,7 +207,7 @@ fn preview_lattice(
     }
 }
 
-/// Recording and render-output settings. Lives here, in the Render tab, so that
+/// Recording and render-output settings. Lives here, in the Video tab, so that
 /// tab is the one home for everything about turning a take into a video.
 fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     // Take recording: the input half of offline video rendering. A mode with

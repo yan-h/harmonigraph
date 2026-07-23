@@ -42,7 +42,7 @@ pub struct MidiLattice3d {
     sample_rate: f64,
     samples_processed: u64,
     /// Take recording (see `take`). The recorder is always present; it
-    /// only writes while the user has armed it from the View pane.
+    /// only writes while the user has armed it from the Video pane.
     take: take::Recorder,
     /// Count of events recorded in the current take, for the UI's status
     /// line. Reset when recording starts.

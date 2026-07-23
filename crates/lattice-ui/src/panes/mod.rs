@@ -2,39 +2,46 @@
 //! a body function in the matching submodule; it immediately participates
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
-//! One file per pane — [`lattice`], [`tuning`], [`view`], [`appearance`],
-//! [`spectral`], [`notes`] (Console + Notes). This file holds the `Tab`
-//! enum, the `TabViewer` that dispatches to them, and the small helpers
-//! more than one pane needs.
+//! The lattice's settings read outward from the picture: [`frame`] is how
+//! it's framed, [`nodes`] is how a played note is drawn, [`scene`] is
+//! everything around the notes, and [`panel`] is the plugin's own render/
+//! layout knobs. Alongside are [`tuning`], the [`spectral`] display and its
+//! analyzer settings, [`render`] (the Video tab), and [`notes`] (Console +
+//! Notes). This file holds the `Tab` enum, the `TabViewer` that dispatches
+//! to them, and the small helpers more than one pane needs.
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::ValueBar;
 use crate::SharedState;
 
-pub mod appearance;
+pub mod frame;
 pub mod lattice;
+pub mod nodes;
 pub mod notes;
+pub mod panel;
 /// The offline video frame, composed live so you can preview and adjust it
-/// before rendering.
+/// before rendering. The "Video" tab.
 pub mod render;
 /// The Spectral pane's piano roll. Not a pane of its own — it draws into
 /// the far share of [`spectral`]'s depth axis, and is only split out
 /// because it is the biggest single thing that pane draws.
 pub mod roll;
+pub mod scene;
 pub mod spectral;
 /// The Spectral pane's spectrogram heatmap. Like [`roll`], a layer of
 /// [`spectral`]'s far depth region rather than a pane of its own.
 pub mod spectrogram;
 pub mod tuning;
-pub mod view;
 
-use appearance::appearance_pane;
+use frame::frame_pane;
 use lattice::lattice_pane;
+use nodes::nodes_pane;
 use notes::{console_pane, notes_pane};
+use panel::panel_pane;
 use render::render_pane;
+use scene::scene_pane;
 use spectral::{spectral_pane, spectrum_settings_pane};
 use tuning::tuning_pane;
-use view::view_pane;
 
 /// Wrap degrees into -180..=180 for display (orbit accumulates yaw
 /// without bound).
@@ -50,19 +57,37 @@ pub(super) const KEY_NAMES: [&str; 12] = [
     "F\u{266F}", "G", "G\u{266F}", "A", "A\u{266F}", "B",
 ];
 
+/// The serde `alias`es carry pre-reorg persisted layouts across the rename:
+/// an old blob names `View`/`Appearance`/`Spectrum`/`Render`, and without the
+/// aliases that unknown variant would fail the whole `UiPersist` parse and
+/// take the dialed-in camera/view/spectrum/render settings down with it. The
+/// dock arrangement itself is refreshed separately (see `UiPersist` version).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
     Tuning,
-    View,
-    Appearance,
+    /// Camera framing and the lattice window. Was "View".
+    #[serde(alias = "View")]
+    Frame,
+    /// How a sounding note is drawn (was the first half of "Appearance").
+    #[serde(alias = "Appearance")]
+    Nodes,
+    /// The structure and overlays around the notes (second half of the old
+    /// "Appearance").
+    Scene,
     Console,
+    /// The Spectral display: FFT curve, voices, and piano roll.
     Spectral,
-    /// Settings for the Spectral pane's display and analyzer.
-    Spectrum,
+    /// Settings for the Spectral display. Titled "Analyzer"; was "Spectrum".
+    #[serde(alias = "Spectrum")]
+    Analyzer,
     Notes,
     /// A live preview of the offline video frame, composed and adjusted here.
-    Render,
+    /// Titled "Video"; was "Render".
+    #[serde(alias = "Render")]
+    Video,
+    /// The plugin's own render-quality and pane-layout knobs.
+    Panel,
 }
 
 pub struct Viewer<'a> {
@@ -78,13 +103,15 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => "Lattice".into(),
             Tab::Tuning => "Tuning".into(),
-            Tab::View => "View".into(),
-            Tab::Appearance => "Appearance".into(),
+            Tab::Frame => "Frame".into(),
+            Tab::Nodes => "Nodes".into(),
+            Tab::Scene => "Scene".into(),
             Tab::Console => "Console".into(),
             Tab::Spectral => "Spectral".into(),
-            Tab::Spectrum => "Spectrum".into(),
+            Tab::Analyzer => "Analyzer".into(),
             Tab::Notes => "Notes".into(),
-            Tab::Render => "Render".into(),
+            Tab::Video => "Video".into(),
+            Tab::Panel => "Panel".into(),
         }
     }
 
@@ -92,13 +119,15 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::View => view_pane(ui, self.state),
-            Tab::Appearance => appearance_pane(ui, self.state, self.params),
+            Tab::Frame => frame_pane(ui, self.state),
+            Tab::Nodes => nodes_pane(ui, self.state, self.params),
+            Tab::Scene => scene_pane(ui, self.state),
             Tab::Console => console_pane(ui, self.state),
             Tab::Spectral => spectral_pane(ui, self.state, self.now, 1.0, 0),
-            Tab::Spectrum => spectrum_settings_pane(ui, self.state),
+            Tab::Analyzer => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
-            Tab::Render => render_pane(ui, self.state, self.now),
+            Tab::Video => render_pane(ui, self.state, self.now),
+            Tab::Panel => panel_pane(ui, self.state),
         }
     }
 
