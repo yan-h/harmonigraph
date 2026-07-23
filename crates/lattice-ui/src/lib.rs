@@ -157,8 +157,8 @@ pub enum SpectrogramColor {
 /// What counts as "the take is done", and so when a video gets rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RenderTrigger {
-    /// When you switch Record take off. Predictable, and the only option
-    /// that works when the transport is looping.
+    /// When you switch Record take off. Predictable, and works no matter how
+    /// the transport behaves.
     #[default]
     OnDisarm,
     /// As soon as the transport stops after recording something — so a
@@ -169,6 +169,13 @@ pub enum RenderTrigger {
     /// instant a render finishes, the stop is never observed and the take
     /// simply waits for you to disarm it, as before.
     OnTransportStop,
+    /// When the arranger loop first wraps: exactly one loop is recorded, the
+    /// take ends at the loop's end, and that pass renders — no catching the
+    /// stop by hand. Meant for looped recording, where a manual stop is always
+    /// a beat or two off. Needs the host's loop to be active (Bitwig reports
+    /// the loop range); with no loop there is nothing to wrap on, so it waits
+    /// for you to disarm, like [`OnDisarm`](Self::OnDisarm).
+    AtLoopEnd,
 }
 
 /// How a finished take gets turned into a video, edited in the View

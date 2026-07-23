@@ -191,6 +191,15 @@ pub struct Recorder {
     rolling: Arc<AtomicBool>,
     /// Whether this pass has already declared its audio start.
     audio_started: bool,
+    /// Set by the GUI when [`RenderTrigger::AtLoopEnd`] is chosen: end the
+    /// take on the first loop wrap rather than splitting into another pass.
+    stop_at_loop_end: Arc<AtomicBool>,
+    /// Published for the GUI: the loop wrapped under AtLoopEnd, so the take is
+    /// done — the GUI reads this, stops, and renders the one pass.
+    hit_loop_end: Arc<AtomicBool>,
+    /// Local latch: once the loop end has been hit, record nothing more until
+    /// re-armed, so the wrapped pass never reaches the file.
+    finished: bool,
 }
 
 impl Recorder {
@@ -200,6 +209,8 @@ impl Recorder {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.last_position = None;
             self.audio_started = false;
+            self.finished = false;
+            self.hit_loop_end.store(false, Ordering::Relaxed);
         }
         self.was_armed = armed;
         armed
@@ -264,10 +275,28 @@ impl Recorder {
     /// A backward jump means a loop wrapped or the playhead was dragged,
     /// so the take splits. The threshold ignores a host's own jitter
     /// around a loop point; a real wrap is far larger.
-    pub fn observe_transport(&mut self, position: f64, playing: bool) -> bool {
+    pub fn observe_transport(&mut self, position: f64, playing: bool, loop_active: bool) -> bool {
+        // Once the loop end has ended the take (AtLoopEnd), record nothing more
+        // until a fresh arm clears the latch.
+        if self.finished {
+            return false;
+        }
         const BACKWARD_JUMP: f64 = 0.05;
         let rolling = match self.last_position {
             Some(last) if position < last - BACKWARD_JUMP => {
+                // The loop wrapped (or the playhead was dragged back). Under
+                // AtLoopEnd with a loop active, one pass is exactly the take we
+                // want: latch done and tell the GUI to stop + render, WITHOUT
+                // pushing NewPass — the writer opens the next pass eagerly on
+                // NewPass, so splitting here would leave the empty second file
+                // as the one that renders.
+                if loop_active && self.stop_at_loop_end.load(Ordering::Relaxed) {
+                    self.finished = true;
+                    self.hit_loop_end.store(true, Ordering::Relaxed);
+                    self.last_position = Some(position);
+                    self.rolling.store(false, Ordering::Relaxed);
+                    return false;
+                }
                 self.push(Entry::NewPass);
                 // A new file starts empty, so every parameter must be
                 // written again or the new pass replays with whatever the
@@ -317,11 +346,28 @@ pub struct Control {
     /// the transport is moving.
     rolling: Arc<AtomicBool>,
     with_audio: Arc<AtomicBool>,
+    /// Mirror of [`RenderTrigger::AtLoopEnd`] for the audio thread.
+    stop_at_loop_end: Arc<AtomicBool>,
+    /// Set by the audio thread when a loop wrapped under AtLoopEnd: the take is
+    /// done and the GUI should stop + render it.
+    hit_loop_end: Arc<AtomicBool>,
 }
 
 impl Control {
     pub fn is_recording(&self) -> bool {
         self.recording.load(Ordering::Relaxed)
+    }
+
+    /// Tell the audio thread whether to end the take at the first loop wrap
+    /// (the [`RenderTrigger::AtLoopEnd`] mode). Called every GUI frame.
+    pub fn set_stop_at_loop_end(&self, on: bool) {
+        self.stop_at_loop_end.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether the audio thread has reached the loop end and ended the take —
+    /// the GUI's cue to stop recording and render the one pass.
+    pub fn hit_loop_end(&self) -> bool {
+        self.hit_loop_end.load(Ordering::Relaxed)
     }
 
     /// Whether the audio thread last saw the transport moving.
@@ -380,6 +426,9 @@ impl Control {
         }
         self.recording.store(true, Ordering::Relaxed);
         self.rolling.store(false, Ordering::Relaxed);
+        // Clear a previous take's loop-end latch so it can't end this one before
+        // the transport even rolls. The audio thread also clears it on arm.
+        self.hit_loop_end.store(false, Ordering::Relaxed);
         self.armed.store(true, Ordering::Relaxed);
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }
@@ -441,6 +490,8 @@ pub fn channel() -> (Recorder, Control) {
     let recording = Arc::new(AtomicBool::new(false));
     let rolling = Arc::new(AtomicBool::new(false));
     let with_audio = Arc::new(AtomicBool::new(false));
+    let stop_at_loop_end = Arc::new(AtomicBool::new(false));
+    let hit_loop_end = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
 
@@ -493,6 +544,9 @@ pub fn channel() -> (Recorder, Control) {
             audio_started: false,
             audio: audio_producer,
             with_audio: with_audio.clone(),
+            stop_at_loop_end: stop_at_loop_end.clone(),
+            hit_loop_end: hit_loop_end.clone(),
+            finished: false,
         },
         Control {
             commands,
@@ -503,6 +557,8 @@ pub fn channel() -> (Recorder, Control) {
             recording,
             rolling,
             with_audio,
+            stop_at_loop_end,
+            hit_loop_end,
         },
     )
 }
@@ -788,5 +844,54 @@ mod tests {
     fn the_default_renderer_path_is_where_update_plugin_installs_it() {
         let path = default_renderer_path();
         assert!(path.ends_with("MIDI Lattice 3D/lattice-offline"), "{path:?}");
+    }
+
+    #[test]
+    fn at_loop_end_ends_the_take_on_the_first_wrap_without_splitting() {
+        let (mut rec, ctrl) = channel();
+        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.set_stop_at_loop_end(true);
+        assert!(rec.is_armed(), "arming clears last_position and the done latch");
+
+        // One loop's worth of forward motion, with the loop active.
+        assert!(rec.observe_transport(0.0, true, true));
+        assert!(rec.observe_transport(1.0, true, true));
+        assert!(rec.observe_transport(2.0, true, true));
+        assert!(!ctrl.hit_loop_end(), "still mid-loop");
+
+        // The loop wraps back to the start: end the take here, and signal the
+        // GUI — do NOT keep rolling into a second pass.
+        assert!(!rec.observe_transport(0.0, true, true), "the wrap ends the take");
+        assert!(ctrl.hit_loop_end(), "GUI is told to stop and render the pass");
+
+        // Latched: nothing rolls again until a fresh arm.
+        assert!(!rec.observe_transport(1.0, true, true));
+    }
+
+    #[test]
+    fn a_wrap_without_at_loop_end_splits_and_keeps_rolling() {
+        let (mut rec, ctrl) = channel();
+        ctrl.armed.store(true, Ordering::Relaxed);
+        // stop_at_loop_end stays off — the default OnDisarm/looping behavior.
+        assert!(rec.is_armed());
+        assert!(rec.observe_transport(0.0, true, true));
+        assert!(rec.observe_transport(2.0, true, true));
+        // The wrap starts a new pass but keeps recording, as before.
+        assert!(rec.observe_transport(0.0, true, true), "a normal loop keeps going");
+        assert!(!ctrl.hit_loop_end());
+    }
+
+    #[test]
+    fn at_loop_end_only_fires_while_a_loop_is_active() {
+        let (mut rec, ctrl) = channel();
+        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.set_stop_at_loop_end(true);
+        assert!(rec.is_armed());
+        assert!(rec.observe_transport(0.0, true, false));
+        assert!(rec.observe_transport(2.0, true, false));
+        // A backward jump with no loop active (a manual rewind) must not end
+        // the take: it splits like any other jump and keeps going.
+        assert!(rec.observe_transport(0.0, true, false));
+        assert!(!ctrl.hit_loop_end());
     }
 }
