@@ -1,13 +1,15 @@
-//! Where the panes go in the frame.
+//! Where the panes go in a composed frame.
 //!
-//! Offline rendering does not reproduce the plugin's dock — it composes
-//! its own picture. That is the point: a video wants the lattice and the
-//! roll at whatever proportions suit the piece, at 4K, with no tab bars
-//! or settings columns, and none of that is what the window happened to
-//! look like.
+//! Shared by the offline renderer (which composes a video frame headlessly)
+//! and the plugin's Render panel (which previews that exact frame). A layout
+//! is deliberately NOT the plugin's working dock — it is a clean composition
+//! of just the panes you want in the video, at whatever proportions suit the
+//! piece, with no tab bars or settings columns. Keeping it here, next to the
+//! panes it places, is what lets the preview and the render be the same
+//! picture.
 //!
-//! A layout is a list of panes with fractional rectangles, so the same
-//! layout means the same picture at any output size:
+//! A layout is a list of panes with fractional rectangles, so the same layout
+//! means the same picture at any output size:
 //!
 //! ```ron
 //! (
@@ -21,13 +23,14 @@
 //! )
 //! ```
 //!
-//! `rect` is `(x0, y0, x1, y1)` as fractions of the frame, origin
-//! top-left. Panes are drawn in order, so a later one overlaps an
-//! earlier one — which is how you'd inset a small roll over a full-bleed
-//! lattice, if that's the look you want.
+//! `rect` is `(x0, y0, x1, y1)` as fractions of the frame, origin top-left.
+//! Panes are drawn in order, so a later one overlaps an earlier one — which is
+//! how you'd inset a small roll over a full-bleed lattice, if that's the look
+//! you want.
 
-use lattice_ui::Pane;
 use serde::{Deserialize, Serialize};
+
+use crate::Pane;
 
 /// One pane and the slice of the frame it fills.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -86,12 +89,7 @@ impl Layout {
             "spectral" => vec![full(Pane::Spectral)],
             _ => return None,
         };
-        Some(Layout {
-            background: default_background(),
-            margin: 0.0,
-            gap: 8.0,
-            panes,
-        })
+        Some(Layout { background: default_background(), margin: 0.0, gap: 8.0, panes })
     }
 
     /// A preset name or a path to a `.ron` file.
@@ -100,12 +98,29 @@ impl Layout {
             return Ok(preset);
         }
         let text = std::fs::read_to_string(spec).map_err(|e| {
-            format!(
-                "layout {spec:?} is not a preset ({}) and could not be read: {e}",
-                PRESETS.join(", ")
-            )
+            format!("layout {spec:?} is not a preset ({}) and could not be read: {e}", PRESETS.join(", "))
         })?;
         ron::from_str(&text).map_err(|e| format!("layout {spec:?}: {e}"))
+    }
+
+    /// A two-pane composition of the lattice and the spectral pane, split at
+    /// `fraction` — the lattice's share. Side by side unless `stacked`, then
+    /// lattice over spectral. Shared by the Render panel's live preview and
+    /// the offline renderer, so both compose the identical frame.
+    pub fn split(stacked: bool, fraction: f32) -> Layout {
+        let f = fraction.clamp(0.05, 0.95);
+        let panes = if stacked {
+            vec![
+                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 1.0, f) },
+                Placement { pane: Pane::Spectral, rect: (0.0, f, 1.0, 1.0) },
+            ]
+        } else {
+            vec![
+                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, f, 1.0) },
+                Placement { pane: Pane::Spectral, rect: (f, 0.0, 1.0, 1.0) },
+            ]
+        };
+        Layout { background: default_background(), margin: 0.0, gap: 8.0, panes }
     }
 
     /// Resolve to screen rectangles inside a frame of `size` points.
@@ -119,10 +134,7 @@ impl Layout {
             .filter_map(|placement| {
                 let (x0, y0, x1, y1) = placement.rect;
                 let at = |fx: f32, fy: f32| {
-                    egui::pos2(
-                        frame.left() + frame.width() * fx,
-                        frame.top() + frame.height() * fy,
-                    )
+                    egui::pos2(frame.left() + frame.width() * fx, frame.top() + frame.height() * fy)
                 };
                 let mut rect = egui::Rect::from_two_pos(at(x0, y0), at(x1, y1));
                 // Half a gap on every edge that meets another pane, and
@@ -156,8 +168,8 @@ mod tests {
     #[test]
     fn every_advertised_preset_exists_and_resolves() {
         for name in PRESETS {
-            let layout = Layout::preset(name)
-                .unwrap_or_else(|| panic!("{name} is advertised but missing"));
+            let layout =
+                Layout::preset(name).unwrap_or_else(|| panic!("{name} is advertised but missing"));
             let resolved = layout.resolve(FRAME);
             assert!(!resolved.is_empty(), "{name} resolved to nothing");
         }

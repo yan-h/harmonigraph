@@ -14,13 +14,12 @@
 
 mod align;
 mod frames;
-mod layout;
 mod render;
 mod replay;
 mod sink;
 mod wav;
 
-use layout::Layout;
+use lattice_ui::Layout;
 use render::Settings;
 use replay::Replay;
 use sink::{Sink, VideoOptions};

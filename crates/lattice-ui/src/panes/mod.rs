@@ -14,6 +14,9 @@ use crate::SharedState;
 pub mod appearance;
 pub mod lattice;
 pub mod notes;
+/// The offline video frame, composed live so you can preview and adjust it
+/// before rendering.
+pub mod render;
 /// The Spectral pane's piano roll. Not a pane of its own — it draws into
 /// the far share of [`spectral`]'s depth axis, and is only split out
 /// because it is the biggest single thing that pane draws.
@@ -28,6 +31,7 @@ pub mod view;
 use appearance::appearance_pane;
 use lattice::lattice_pane;
 use notes::{console_pane, notes_pane};
+use render::render_pane;
 use spectral::{spectral_pane, spectrum_settings_pane};
 use tuning::tuning_pane;
 use view::view_pane;
@@ -57,6 +61,8 @@ pub enum Tab {
     /// Settings for the Spectral pane's display and analyzer.
     Spectrum,
     Notes,
+    /// A live preview of the offline video frame, composed and adjusted here.
+    Render,
 }
 
 pub struct Viewer<'a> {
@@ -78,6 +84,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Spectral => "Spectral".into(),
             Tab::Spectrum => "Spectrum".into(),
             Tab::Notes => "Notes".into(),
+            Tab::Render => "Render".into(),
         }
     }
 
@@ -91,6 +98,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Spectral => spectral_pane(ui, self.state, self.now),
             Tab::Spectrum => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
+            Tab::Render => render_pane(ui, self.state, self.now),
         }
     }
 

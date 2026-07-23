@@ -7,10 +7,9 @@
 //! also carries.
 
 use lattice_render::wgpu::TextureFormat;
-use lattice_ui::{begin_frame, draw_pane, SharedState};
+use lattice_ui::{begin_frame, draw_pane, Layout, SharedState};
 
 use crate::frames::Renderer;
-use crate::layout::Layout;
 use crate::replay::Replay;
 use crate::wav::Audio;
 

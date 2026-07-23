@@ -2,11 +2,14 @@
 //! per-frame root function. Both the standalone harness and the plugin
 //! editor call [`root_ui`] once per egui frame; everything else is internal.
 
+pub mod layout;
 pub mod params;
 pub mod theme;
 pub mod widgets;
 mod panes;
 mod perf;
+
+pub use layout::{Layout, Placement, PRESETS};
 
 use perf::PerfStats;
 
@@ -206,6 +209,11 @@ pub struct RenderConfig {
     /// turns it on. Needs audio.
     #[serde(default)]
     pub playhead: bool,
+    /// The composed video frame — aspect ratio and the lattice/spectral split.
+    /// Edited and previewed in the Render pane; the offline renderer reads it
+    /// to compose the same picture.
+    #[serde(default)]
+    pub frame: RenderFrame,
 }
 
 impl Default for RenderConfig {
@@ -218,7 +226,44 @@ impl Default for RenderConfig {
             audio_path: String::new(),
             extra_args: "--size 1920x1080".into(),
             playhead: false,
+            frame: RenderFrame::default(),
         }
+    }
+}
+
+/// The video frame the Render pane composes: an aspect ratio plus the
+/// lattice/spectral split. Aspect is size-agnostic (the render's resolution is
+/// chosen separately); the split feeds [`Layout::split`], so the plugin's live
+/// preview and the offline renderer build the identical frame.
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RenderFrame {
+    /// Frame aspect numerator (e.g. 16 of 16:9). Drives the preview letterbox
+    /// and the render's default resolution.
+    #[serde(default = "default_aspect_w")]
+    pub aspect_w: u32,
+    #[serde(default = "default_aspect_h")]
+    pub aspect_h: u32,
+    /// The lattice's share of the frame, `0..1` (the rest is the spectral pane).
+    #[serde(default = "default_frame_split")]
+    pub split: f32,
+    /// Lattice over spectral, rather than side by side.
+    #[serde(default)]
+    pub stacked: bool,
+}
+
+fn default_aspect_w() -> u32 {
+    16
+}
+fn default_aspect_h() -> u32 {
+    9
+}
+fn default_frame_split() -> f32 {
+    0.68
+}
+
+impl Default for RenderFrame {
+    fn default() -> Self {
+        RenderFrame { aspect_w: 16, aspect_h: 9, split: 0.68, stacked: false }
     }
 }
 
@@ -706,6 +751,7 @@ fn default_dock() -> DockState<panes::Tab> {
             panes::Tab::View,
             panes::Tab::Appearance,
             panes::Tab::Spectrum,
+            panes::Tab::Render,
         ],
     );
     // Notes first so it sits left of Console and is the selected tab by
