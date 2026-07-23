@@ -132,6 +132,45 @@ fn pre_rename_octave_style_and_slice_band_fields_still_load() {
 }
 
 #[test]
+fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
+    // The settings tabs were renamed and split (View -> Frame, Appearance ->
+    // Nodes + Scene, Spectrum -> Analyzer, Render -> Video, plus a new Panel)
+    // and the persist blob gained a version. An old blob names the old tabs
+    // and has no version. Two things must hold: the `Tab` aliases keep it
+    // PARSING (a failed parse silently drops camera/view/spectrum with it),
+    // and the absent version refreshes the stale dock so the split-out Scene
+    // and Panel tabs aren't stranded off-layout.
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    state.view.extent_sevens = 3;
+    // Rewrite a current blob into a pre-reorg one: drop the version field
+    // (serde reads it back as 0) and rename the tabs to their old spellings,
+    // which only the aliases can still resolve. The capitalized tab tokens
+    // don't occur elsewhere in the blob, so these replacements are surgical.
+    let saved = state
+        .save_persist()
+        .replacen("version:1,", "", 1)
+        .replace("Frame", "View")
+        .replace("Nodes", "Appearance")
+        .replace("Analyzer", "Spectrum")
+        .replace("Video", "Render");
+    assert_ne!(saved, state.save_persist(), "the rewrite must have hit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    // Parsed despite the old tab names, so the dialed-in settings survive.
+    assert_eq!(restored.camera.yaw, 1.23, "settings survive the old tab names");
+    assert_eq!(restored.view.extent_sevens, 3);
+    // The stale arrangement is refreshed to the current default, which has
+    // every tab (including the ones an old blob couldn't name).
+    assert_eq!(
+        ron::to_string(&restored.dock).unwrap(),
+        ron::to_string(&default_dock()).unwrap(),
+        "a pre-versioning layout resets to the current default dock"
+    );
+}
+
+#[test]
 fn pre_radius_off_core_modes_fold_onto_radius_and_solidity() {
     // Pre-radius-off blobs wrote a `core_style` token the current layout
     // no longer serializes; loading one must fold it into radius (0 =

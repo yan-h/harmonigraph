@@ -528,7 +528,7 @@ pub(crate) fn spectral_pane(
     let axes = Axes::new(rect, &cfg);
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal room and every note draws at
-    // its actual pitch. The displayed range is the Spectrum tab's octave
+    // its actual pitch. The displayed range is the Analyzer tab's octave
     // zoom; the Bitwig octave<->MIDI convention lives in lattice-core.
     let min_midi = octave_start_midi(cfg.low_octave) as f32;
     let max_midi = octave_start_midi(cfg.high_octave) as f32;
@@ -541,7 +541,7 @@ pub(crate) fn spectral_pane(
     let whole_song = state.whole_song.is_some();
     let split = if whole_song { 0.0 } else { spectrum_share(&cfg) };
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
-    // spectrum's share; the Spectrum tab's floor sets the bottom. Tilt is
+    // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
     // the conventional reference slope (negative), so the display
     // SUBTRACTS it per octave above the 1 kHz pivot: -4.5 lifts treble
     // 4.5 dB/oct.
@@ -571,7 +571,7 @@ pub(crate) fn spectral_pane(
     }
 
     // Axis gridlines: every C (note labels) or the analyzer-standard
-    // 1-2-5 frequency series, per the Spectrum tab. Both run the full
+    // 1-2-5 frequency series, per the Analyzer tab. Both run the full
     // depth, so they double as the roll's pitch lanes.
     let gridline = |p: f32, label: Option<String>| {
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));

@@ -1,34 +1,27 @@
-//! The Appearance pane: how a sounding note is drawn — core, octaves,
-//! melody/bass marks, home grid, color, labels, trail, effects.
+//! The Nodes pane: how a sounding note is drawn — its core mark, the octave
+//! ring around it, the melody/bass marks on the outer held notes, and the
+//! color and fade the whole node wears. Everything here is the *played note*;
+//! the surrounding structure and overlays live in [`super::scene`].
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, ValueBar};
+use crate::widgets::{choice_row, ValueBar};
 use crate::SharedState;
-use lattice_core::NoteTracker;
-use lattice_scene::{HighlightExtremes, IdleMarker, NodeStyle, OuterStyle, TrailMark, ViewConfig};
+use lattice_scene::{HighlightExtremes, NodeStyle, OuterStyle, ViewConfig};
 
-/// Cosmetic settings, apart from the structural View pane: how a sounding
-/// note is drawn, colored, and faded — not what the grid shows. Laid out
-/// top to bottom as the note itself reads outward, then its color/timing,
-/// then overlays: Core (the mark at the node's center) and Octaves (the
-/// ring of octave indicators around it) are the two independent rendering
-/// layers; Color and Fade set how notes are tinted and how they linger;
-/// Labels is the note text; Effects are scene-wide extras. Scrolls so the
-/// full list is reachable in a short pane.
-pub(super) fn appearance_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+/// The sounding-note controls, top to bottom as the note reads outward: the
+/// Core mark at its center, the Octaves ring around it, the melody/bass marks
+/// on the outer notes, then the Color it's tinted and the Fade it lingers on
+/// release. Scrolls so the full list is reachable in a short pane.
+pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             core_section(ui, &mut state.view);
             octaves_section(ui, &mut state.view);
             melody_bass_section(ui, &mut state.view);
-            home_grid_section(ui, &mut state.view);
             color_section(ui, params);
             fade_section(ui, params);
-            labels_section(ui, &mut state.view);
-            trail_section(ui, &mut state.view, &mut state.tracker);
-            effects_section(ui, &mut state.view);
         });
 }
 
@@ -182,65 +175,6 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Home grid: the always-drawn structural layer -- the faint lines between
-/// node positions AND the idle marker sitting at each unlit home-sheet node.
-/// Idle positions draw no disc, so together these are what carry the
-/// lattice's shape when nothing is playing. They share one color for that
-/// reason.
-fn home_grid_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Home grid");
-    button_row(ui, |ui| {
-        ui.label("Color");
-        ui.color_edit_button_rgba_unmultiplied(&mut view.grid_color)
-            .on_hover_text(
-                "Color of the whole idle structure -- grid lines and \
-                 idle node markers alike. The alpha is how faint an \
-                 unlit LINE draws; markers keep their own presence. \
-                 Lit segments still take their notes' color",
-            );
-    });
-    ValueBar::new(&mut view.grid_thickness, 0.0..=4.0, "Thickness")
-        .show(ui)
-        .on_hover_text("Line width, as a multiple of the classic hairline");
-    ValueBar::new(&mut view.grid_inset, 0.0..=3.0, "Line gap")
-        .show(ui)
-        .on_hover_text(
-            "How far each line stops short of the node it runs to, as \
-             a multiple of the node radius; 0 runs it to the center",
-        );
-    ui.checkbox(&mut view.grid_dashed, "Dashed").on_hover_text(
-        "Dash the in-plane lines. The sevens-axis links are always \
-         dashed -- that's what marks them as depth links",
-    );
-
-    // The idle marker: shown ALWAYS at each unlit home-sheet node,
-    // independent of the active appearance and of whether a note
-    // plays there (a sounding note just draws over it). Off-sheet
-    // positions are marked by the lines alone.
-    choice_row(
-        ui,
-        "Marker",
-        &mut view.idle_marker,
-        &[
-            (IdleMarker::None, "None", "No idle marker"),
-            (IdleMarker::Dot, "Dot", "A filled dot at the radius below"),
-            (
-                IdleMarker::Circle,
-                "Circle",
-                "A thin outline circle at the radius below",
-            ),
-        ],
-    );
-    ui.add_enabled_ui(view.idle_marker != IdleMarker::None, |ui| {
-        ValueBar::new(&mut view.idle_radius, 0.0..=0.9, "Marker radius")
-            .show(ui)
-            .on_hover_text(
-                "Size of the idle marker; independent of the active \
-                 Core (0.46 is the classic placeholder ring)",
-            );
-    });
-}
-
 /// Color: the pitch->color gradient endpoints (MIDI notes) the pitch-colored
 /// channels map through.
 fn color_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
@@ -261,111 +195,4 @@ fn fade_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
          the octave glyphs, and the melody/bass marks together. 0 cuts \
          notes off the moment they're released",
     );
-}
-
-/// Labels: the note text drawn on hovered and sounding nodes.
-fn labels_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Labels");
-    ui.checkbox(&mut view.show_labels, "Note names");
-    // Cents ride on the labels, so the toggle grays out with them off.
-    ui.add_enabled(
-        view.show_labels,
-        egui::Checkbox::new(&mut view.show_cents, "Cents"),
-    );
-}
-
-/// Trail: where the music has already been. Rides the IDLE layer only -- a
-/// visited node wears a quietly different version of the same small grey mark
-/// an unvisited one does -- so it can accumulate over a whole piece without
-/// ever competing with the notes actually sounding.
-fn trail_section(ui: &mut egui::Ui, view: &mut ViewConfig, tracker: &mut NoteTracker) {
-    section(ui, "Trail");
-    choice_row(
-        ui,
-        "Mark",
-        &mut view.trail_mark,
-        &[
-            (TrailMark::Off, "Off", "Show only what is sounding"),
-            (
-                TrailMark::Lift,
-                "Lift",
-                "A visited node's idle marker draws a lighter grey. \
-                 The quietest option: no new shape and no color, \
-                 just a little more presence",
-            ),
-            (
-                TrailMark::Ring,
-                "Ring",
-                "A pale circle around the node, where its sounding \
-                 disc would be -- a ghost of the note that was \
-                 there. The only mark that draws with the idle \
-                 marker off",
-            ),
-            (
-                TrailMark::Tint,
-                "Tint",
-                "The idle marker keeps a hint of the color the note \
-                 was played in, at idle brightness -- so the trail \
-                 says what the music was doing there, not just that \
-                 it was",
-            ),
-        ],
-    );
-    ui.add_enabled_ui(view.trail_mark != TrailMark::Off, |ui| {
-        ValueBar::new(&mut view.trail_strength, 0.0..=1.0, "Strength")
-            .show(ui)
-            .on_hover_text(
-                "How far the mark departs from a plain idle node. \
-                 The whole range is quiet -- even 1 stays well short \
-                 of reading as a sounding note",
-            );
-        // Marks that MODIFY the idle marker need one to be showing;
-        // say so rather than leaving a setting that does nothing.
-        if view.trail_mark.needs_idle_marker() && view.idle_marker == IdleMarker::None {
-            ui.weak("Needs a Home grid marker other than None.");
-        }
-    });
-    // Independent of the mark: the text is its own channel, and is
-    // useful with the marks off.
-    ui.checkbox(&mut view.trail_labels, "Keep note names")
-        .on_hover_text(
-            "Leave the note name and cents on a visited node, so the \
-             harmonic space reads off the screen by name with its \
-             tuning. Needs Note names on",
-        );
-    ui.add_enabled_ui(
-        view.trail_mark != TrailMark::Off || view.trail_labels,
-        |ui| {
-            // 0 = never forget, which is the point of the feature;
-            // the bar doubles as the on/off for forgetting at all.
-            ValueBar::new(&mut view.trail_memory, 0.0..=600.0, "Memory")
-                .show(ui)
-                .on_hover_text(
-                    "Seconds before a note is forgotten, counted from \
-                     when it last sounded. 0 = never, so a whole \
-                     piece's territory stays",
-                );
-            button_row(ui, |ui| {
-                if ui
-                    .button("Clear trail")
-                    .on_hover_text(
-                        "Forget everything played so far; sounding notes stay",
-                    )
-                    .clicked()
-                {
-                    tracker.clear_history();
-                }
-            });
-        },
-    );
-}
-
-/// Effects: scene-wide extras layered over the notes.
-fn effects_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Effects");
-    // 0 = off (the renderer skips the whole post-process chain), so
-    // the bar doubles as the toggle.
-    ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
-        .show(ui)
-        .on_hover_text("Soft halo around bright notes; 0 turns the post-process off");
 }

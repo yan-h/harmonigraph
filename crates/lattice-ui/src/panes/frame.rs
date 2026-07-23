@@ -1,5 +1,7 @@
-//! The View pane: per-axis lattice extents, window center, and camera
-//! framing/projection.
+//! The Frame pane: how you look at the lattice (projection, camera angle,
+//! saved angles) and how much of it shows (per-axis extents and window
+//! center). Purely what's framed — the note styling lives in [`super::nodes`]
+//! and [`super::scene`], the render/workspace knobs in [`super::panel`].
 
 use crate::widgets::{button_row, button_row_wrapped, ValueBar};
 use crate::{CameraPreset, SharedState};
@@ -7,8 +9,9 @@ use super::normalize_deg;
 use lattice_scene::Camera;
 use lattice_scene::Projection;
 
-/// What the grid shows: per-axis extents and window center.
-pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+/// Camera framing and the lattice window: projection, angle, and per-axis
+/// extents/center.
+pub(super) fn frame_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).
@@ -162,36 +165,4 @@ pub(super) fn view_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             *extent = value as i32;
         }
     }
-
-    // Lattice render resolution relative to the pane's native pixels.
-    // 1.0 is exact; above it supersamples (crisper glyph edges at some GPU
-    // cost), below it renders coarse and upscales (cheaper on huge panes).
-    ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale")
-        .show(ui)
-        .on_hover_text(
-            "Lattice render resolution: 1.0 = native, higher supersamples, \
-             lower renders coarse and upscales",
-        );
-
-    button_row(ui, |ui| {
-        // Escape hatch for the persisted dock arrangement (it survives
-        // every reopen, so a new default layout is otherwise unreachable).
-        if ui
-            .button("Reset layout")
-            .on_hover_text("Restore the default pane arrangement")
-            .clicked()
-        {
-            state.reset_dock_layout();
-        }
-        ui.checkbox(&mut state.view.frameless, "Frameless").on_hover_text(
-            "Hide the tab bars so adjacent panes (lattice over spectrum) \
-             record as one seamless surface. Esc restores.",
-        );
-        ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
-            "A corner HUD with frame rate, the GUI's CPU time per frame, \
-             process memory, and the voice/node workload — to see if the \
-             plugin is working the machine hard. (GPU time isn't measured \
-             directly; the node count and render scale stand in for it.)",
-        );
-    });
 }

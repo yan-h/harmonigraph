@@ -306,7 +306,7 @@ fn run() -> Result<(), String> {
             Some(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
     }
 
-    // The frame the take was composed for in the Render pane. The offline
+    // The frame the take was composed for in the Video pane. The offline
     // render defaults its size and layout to this, so a plain `lattice-offline
     // take.take` reproduces exactly what was previewed; --size / --layout
     // override.
