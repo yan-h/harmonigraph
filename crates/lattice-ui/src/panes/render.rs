@@ -46,9 +46,6 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
         return;
     }
     let (outer, _) = ui.allocate_exact_size(avail, Sense::hover());
-    // The frame background fills the pane; the aspect box sits centered in it,
-    // so the letterboxing reads exactly as the render's own margins will.
-    ui.painter().rect_filled(outer, 0.0, theme::well());
     let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
     let box_rect = letterbox(outer, aspect);
     // How far the preview shrinks the render frame — labels scale by this so
@@ -57,6 +54,25 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
 
     // Compose with the SAME Layout the offline renderer resolves.
     let layout = Layout::split(frame.stacked, frame.split);
+
+    // Make the render frame obvious against the pane. The letterbox padding
+    // takes the panel color, so it reads as inert chrome rather than part of
+    // the shot; the aspect box takes the render's OWN frame background — the
+    // color the offline renderer shows in its margins and inter-pane gaps — so
+    // the box is exactly the pixels the video will contain. Before this the
+    // padding and the pane fills were both `well()`, and you couldn't tell
+    // where the frame ended. A hairline edge keeps the boundary crisp even
+    // when a pane fills the box edge to edge.
+    let bg = layout.background;
+    ui.painter().rect_filled(outer, 0.0, theme::panel());
+    ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
+    ui.painter().rect_stroke(
+        box_rect,
+        0,
+        egui::Stroke::new(1.0, theme::accent_edge()),
+        egui::StrokeKind::Inside,
+    );
+
     for (pane, rect) in layout.resolve(box_rect.size()) {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
