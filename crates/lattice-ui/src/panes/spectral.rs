@@ -558,6 +558,18 @@ pub(crate) fn spectral_pane(
     let (label_d, label_into) =
         if joined && !whole_song { (split, -2.0) } else { (0.0, 2.0) };
 
+    // A uniform dark bed under the whole spectrogram region, so it reads as one
+    // surface. The heatmap mesh only covers the depths that actually have
+    // columns, and its silence is black; without this bed the un-covered depths
+    // (before history fills the window, or past its oldest column) show the
+    // lighter pane `well` in jarring patches. Black is the heatmap's own silence
+    // color, so covered and un-covered silence match at any opacity. Drawn under
+    // the gridlines, so they still read as pitch lanes across the region.
+    if cfg.show_spectrogram && cfg.spectrogram_opacity > 0.0 && split < 1.0 {
+        let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
+        painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
+    }
+
     // Axis gridlines: every C (note labels) or the analyzer-standard
     // 1-2-5 frequency series, per the Spectrum tab. Both run the full
     // depth, so they double as the roll's pitch lanes.
