@@ -448,7 +448,7 @@ impl Default for SpectrumConfig {
             roll_velocity_alpha: true,
             roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
-            show_spectrogram: false,
+            show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
             spectrogram_smoothing: 0.0,

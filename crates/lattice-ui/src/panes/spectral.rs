@@ -902,7 +902,10 @@ mod tests {
     /// layout the voice-bar/curve calibration was set up against.
     #[test]
     fn the_roll_only_takes_depth_when_it_is_shown() {
+        // Isolate the roll's depth share. The spectrogram claims depth the
+        // same way and is on by default, so turn it off to test the roll alone.
         let mut cfg = SpectrumConfig { roll_fraction: 0.4, ..Default::default() };
+        cfg.show_spectrogram = false;
         cfg.show_roll = false;
         assert_eq!(spectrum_share(&cfg), 1.0);
         cfg.show_roll = true;
