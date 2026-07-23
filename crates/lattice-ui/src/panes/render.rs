@@ -18,7 +18,7 @@ use lattice_render::lattice_paint_callback;
 use lattice_scene::derive_scene;
 
 use super::section;
-use crate::widgets::ValueBar;
+use crate::widgets::{button_row, toggle_switch, ValueBar};
 use crate::{theme, Layout, Pane, SharedState};
 
 /// The preview's lattice is a second live view, so it needs its own GPU id —
@@ -36,6 +36,7 @@ const RENDER_POINTS_ACROSS: f32 = 1280.0;
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
+    render_settings(ui, state);
     frame_controls(ui, state);
 
     section(ui, "Preview");
@@ -131,4 +132,90 @@ fn preview_lattice(
     if state.view.show_labels {
         super::lattice::draw_node_labels(ui, rect, &scene, &state.view, label_scale);
     }
+}
+
+/// Recording and render-output settings. Lives here, in the Render tab, so that
+/// tab is the one home for everything about turning a take into a video.
+fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
+    // Take recording: the input half of offline video rendering. A mode with
+    // ongoing side effects (it keeps writing a file), so a switch rather than a
+    // checkbox — the house rule in widgets.rs.
+    if !state.take_supported {
+        return;
+    }
+    section(ui, "Record");
+    toggle_switch(ui, &mut state.take_recording, "Record take").on_hover_text(
+        "Record everything the visualization is a function of — notes, bends, \
+         parameter automation, and the current look — to a .take file. Render \
+         it to video afterwards with lattice-offline, at any resolution and \
+         frame rate. Events are stamped with transport position, so nothing is \
+         captured until the transport rolls and the take lines up with a bounce \
+         of the same song.",
+    );
+    if !state.take_status.is_empty() {
+        ui.weak(&state.take_status);
+    }
+
+    let render = &mut state.render_config;
+    ui.checkbox(&mut render.record_audio, "Record audio too").on_hover_text(
+        "Write the plugin's audio input beside the take, so the render gets a \
+         spectrum and a soundtrack with no separate bounce. Needs the device to \
+         be somewhere audio actually reaches it — after the instrument, or on a \
+         bus.",
+    );
+    ui.checkbox(&mut render.auto_render, "Render video when done").on_hover_text(
+        "Run lattice-offline as soon as a take finishes, writing the video next \
+         to the take. The render happens in the background — it does not hold up \
+         the DAW.",
+    );
+    ui.checkbox(&mut render.playhead, "Whole-song playhead").on_hover_text(
+        "Lay the whole take's spectrogram out at once and sweep a playhead \
+         through it, instead of the live scrolling window. Needs audio. Applies \
+         to every render of this take; the --playhead flag turns it on too.",
+    );
+    if render.auto_render {
+        crate::widgets::choice_row(
+            ui,
+            "When",
+            &mut render.trigger,
+            &[
+                (
+                    crate::RenderTrigger::OnDisarm,
+                    "Switched off",
+                    "Render when you turn Record take off. The only choice that \
+                     works with a looping transport.",
+                ),
+                (
+                    crate::RenderTrigger::OnTransportStop,
+                    "Transport stops",
+                    "Render the moment the transport stops after recording \
+                     something — a play-through or an audio export then needs no \
+                     further clicks. Recording switches itself off too.",
+                ),
+            ],
+        );
+        // Free-text paths rather than a file dialog: a plugin GUI has no
+        // portable one, and these are set once and then left.
+        labeled_path(ui, "Renderer", &mut render.renderer_path).on_hover_text(
+            "Path to the lattice-offline binary. Leave empty to use the copy \
+             update-plugin.sh installs.",
+        );
+        labeled_path(ui, "Audio", &mut render.audio_path).on_hover_text(
+            "Bounced WAV to mux in and feed the spectrum. Leave empty for a \
+             silent render with no spectrum curve.",
+        );
+        labeled_path(ui, "Options", &mut render.extra_args).on_hover_text(
+            "Extra lattice-offline flags, split on spaces: \
+             --size 3840x2160 --layout side-by-side",
+        );
+    }
+}
+
+/// A labeled single-line text field that fills the pane width — the shape every
+/// path setting in the render settings uses.
+fn labeled_path(ui: &mut egui::Ui, label: &str, value: &mut String) -> egui::Response {
+    button_row(ui, |ui| {
+        ui.label(label);
+        ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width()))
+    })
 }
