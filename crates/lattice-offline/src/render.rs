@@ -9,9 +9,10 @@
 use lattice_render::wgpu::TextureFormat;
 use lattice_ui::{begin_frame, draw_pane, Layout, SharedState};
 
+use lattice_core::wav::Audio;
+
 use crate::frames::Renderer;
 use crate::replay::Replay;
-use crate::wav::Audio;
 
 /// Everything the loop needs that isn't the take itself.
 pub struct Settings {
@@ -270,7 +271,7 @@ mod tests {
         let n = (sr as f64) as usize; // one second
         let samples: Vec<f32> =
             (0..n).map(|i| 0.6 * (std::f32::consts::TAU * 440.0 * i as f32 / sr).sin()).collect();
-        let audio = crate::wav::Audio { sample_rate: sr, samples };
+        let audio = Audio { sample_rate: sr, samples };
 
         let mut settings = settings();
         settings.whole_song_spectrogram = true;
