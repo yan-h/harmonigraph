@@ -129,9 +129,15 @@ fn preview_lattice(
     );
     ui.painter().add(lattice_paint_callback(rect, &scene, state.target_format, PREVIEW_PANE_ID));
     // Node names/cents, exactly as the Lattice pane and the render draw them —
-    // scaled down so they read at render size in the shrunken preview.
+    // scaled down so they read at render size in the shrunken preview. Clipped
+    // to the lattice rect: a node near the frame edge would otherwise paint its
+    // label out past the preview box, since draw_node_labels uses an unclipped
+    // painter (harmless in the docked pane, which owns its whole rect and is
+    // clipped by the dock; here the rect is only a sub-region of the pane).
     if state.view.show_labels {
-        super::lattice::draw_node_labels(ui, rect, &scene, &state.view, label_scale);
+        let mut clipped = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        clipped.set_clip_rect(rect);
+        super::lattice::draw_node_labels(&clipped, rect, &scene, &state.view, label_scale);
     }
 }
 
