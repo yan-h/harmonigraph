@@ -174,6 +174,11 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
          through it, instead of the live scrolling window. Needs audio. Applies \
          to every render of this take; the --playhead flag turns it on too.",
     );
+    labeled_path(ui, "Bounced audio", &mut render.audio_path).on_hover_text(
+        "A clean WAV bounce of this take to render with — muxed into the video \
+         and analyzed for the spectrum. Paste its path here. Leave empty to use \
+         the take's own recording, or to render silent.",
+    );
     if render.auto_render {
         crate::widgets::choice_row(
             ui,
@@ -200,10 +205,6 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
         labeled_path(ui, "Renderer", &mut render.renderer_path).on_hover_text(
             "Path to the lattice-offline binary. Leave empty to use the copy \
              update-plugin.sh installs.",
-        );
-        labeled_path(ui, "Audio", &mut render.audio_path).on_hover_text(
-            "Bounced WAV to mux in and feed the spectrum. Leave empty for a \
-             silent render with no spectrum curve.",
         );
         labeled_path(ui, "Options", &mut render.extra_args).on_hover_text(
             "Extra lattice-offline flags, split on spaces: \
