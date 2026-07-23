@@ -86,6 +86,72 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     response
 }
 
+/// A record control that doubles as its own live indicator. Press to arm; the
+/// dot shows the state — a hollow ring when idle, a breathing dot while armed
+/// and waiting for the transport, a solid dot while actually capturing. Press
+/// again to stop (which the On-disarm trigger needs, and which serves as a
+/// manual early stop under the others).
+///
+/// Recording is a mode with ongoing side effects, the reason a plain switch was
+/// chosen before — but its "off" is usually reached automatically (the
+/// transport stopping, a loop ending), so a two-way slider overstated the
+/// manual control. A record button that pulses while writing says "capturing a
+/// file" at least as clearly, without pretending you drag it both ways.
+pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        TextStyle::Button.resolve(ui.style()),
+        theme::text(),
+    );
+    let dot_r = 5.0;
+    let gap = 8.0;
+    let pad = Vec2::new(10.0, 5.0);
+    let inner = Vec2::new(dot_r * 2.0 + gap + galley.size().x, galley.size().y.max(dot_r * 2.0));
+    let (rect, mut response) = ui.allocate_exact_size(inner + pad * 2.0, Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), *on, label)
+    });
+
+    if ui.is_rect_visible(rect) {
+        // Breathing while armed-and-waiting; solid once the transport rolls.
+        // Keep repainting so the breath animates even when nothing else moves.
+        let alpha = if *on && !rolling {
+            let t = ui.ctx().input(|i| i.time);
+            ui.ctx().request_repaint();
+            0.4 + 0.6 * (0.5 + 0.5 * (t * std::f64::consts::TAU * 1.1).sin()) as f32
+        } else {
+            1.0
+        };
+        let painter = ui.painter();
+        let bg = if response.hovered() { theme::panel() } else { theme::well() };
+        painter.rect_filled(rect, CornerRadius::same(4), bg);
+        if response.hovered() {
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(4),
+                egui::Stroke::new(1.0, theme::accent_edge()),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let dot = egui::pos2(rect.left() + pad.x + dot_r, rect.center().y);
+        if *on {
+            painter.circle_filled(dot, dot_r, theme::armed().gamma_multiply(alpha));
+        } else {
+            painter.circle_stroke(dot, dot_r - 0.75, egui::Stroke::new(1.5, theme::text_dim()));
+        }
+        painter.galley(
+            egui::pos2(rect.left() + pad.x + dot_r * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
+            galley,
+            theme::text(),
+        );
+    }
+    response
+}
+
 /// Row height of a ValueBar (taller than the theme's interact_size: these
 /// are the primary controls and carry two text runs).
 const BAR_HEIGHT: f32 = 20.0;

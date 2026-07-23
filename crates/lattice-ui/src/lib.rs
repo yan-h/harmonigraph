@@ -719,6 +719,10 @@ pub struct SharedState {
     pub take_supported: bool,
     /// Toggled by the Video pane, acted on by the shell.
     pub take_recording: bool,
+    /// Whether the transport is actually rolling (capture is happening), as
+    /// opposed to armed-and-waiting. Drives the record indicator: a steady dot
+    /// while rolling, a breathing one while it waits. Shell-set, runtime-only.
+    pub take_rolling: bool,
     /// One-shot: set by the Video pane's "Render now" button, consumed by the
     /// shell to render the last take with the CURRENT settings. Runtime-only.
     pub render_now: bool,
@@ -820,6 +824,7 @@ impl SharedState {
             preset_name: String::new(),
             take_supported: false,
             take_recording: false,
+            take_rolling: false,
             render_now: false,
             last_take_ready: false,
             take_audio: false,
