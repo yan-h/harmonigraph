@@ -572,20 +572,23 @@ pub(crate) fn spectral_pane(
 
     // Axis gridlines: every C (note labels) or the analyzer-standard
     // 1-2-5 frequency series, per the Spectrum tab. Both run the full
-    // depth, so they double as the roll's pitch lanes.
-    let gridline = |p: f32, label: Option<String>| {
+    // depth, so they double as the roll's pitch lanes. The lines lay down
+    // here, under the spectrum; their text labels are collected and drawn
+    // last (below the voice bars), so a loud spectrum slab never buries
+    // which pitch a lane is.
+    let gridline = |p: f32| {
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
-        if let Some(label) = label {
-            let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
-            painter.text(pos, align, label, egui::FontId::monospace(10.0 * label_scale), theme::text_dim());
-        }
     };
+    let mut axis_labels: Vec<(f32, String)> = Vec::new();
     match cfg.labels {
         SpectrumLabels::Notes => {
             let mut c = min_midi as i32;
             while c <= max_midi as i32 {
-                let label = (c < max_midi as i32).then(|| format!("C{}", display_octave_of(c)));
-                gridline(scale.t_of(c as f32), label);
+                let t = scale.t_of(c as f32);
+                gridline(t);
+                if c < max_midi as i32 {
+                    axis_labels.push((t, format!("C{}", display_octave_of(c))));
+                }
                 c += 12;
             }
         }
@@ -597,9 +600,11 @@ pub(crate) fn spectral_pane(
                 if !scale.contains(midi) {
                     continue;
                 }
+                let t = scale.t_of(midi);
+                gridline(t);
                 let label =
                     if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
-                gridline(scale.t_of(midi), Some(label));
+                axis_labels.push((t, label));
             }
         }
     }
@@ -749,6 +754,21 @@ pub(crate) fn spectral_pane(
                 egui::Stroke::new(3.0, color),
             );
         }
+    }
+
+    // Axis labels last, riding on top of the spectrogram, spectrum, and
+    // voice bars: a label only earns its place if you can read which pitch a
+    // lane is, and a loud slab would otherwise bury it. The gridlines
+    // themselves stay underneath (drawn above) as pitch lanes.
+    for (p, label) in axis_labels {
+        let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
+        painter.text(
+            pos,
+            align,
+            label,
+            egui::FontId::monospace(10.0 * label_scale),
+            theme::text_dim(),
+        );
     }
 
     // Hovering here highlights the matching lattice node (if in view) and
