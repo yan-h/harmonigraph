@@ -118,7 +118,7 @@ const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 /// on -- already-visited nodes, drawn as egui text over the 3D view
 /// (projected with the same camera as the nodes): the note name centered on
 /// the node, optionally its pitch class in cents just below.
-fn draw_node_labels(
+pub(super) fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
     scene: &lattice_scene::Scene,

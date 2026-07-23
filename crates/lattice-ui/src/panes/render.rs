@@ -108,4 +108,8 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
         now,
     );
     ui.painter().add(lattice_paint_callback(rect, &scene, state.target_format, PREVIEW_PANE_ID));
+    // Node names/cents, exactly as the Lattice pane and the render draw them.
+    if state.view.show_labels {
+        super::lattice::draw_node_labels(ui, rect, &scene, &state.view);
+    }
 }
