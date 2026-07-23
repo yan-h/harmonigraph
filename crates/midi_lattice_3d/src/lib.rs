@@ -277,9 +277,10 @@ impl Plugin for MidiLattice3d {
         let take_origin = if !self.take.is_armed() {
             None
         } else if let Some(seconds) = transport.pos_seconds() {
-            // observe_transport decides whether the transport is rolling
-            // (and splits the take on a loop wrap). It is deliberately
-            // more permissive than the host's `playing` flag — see there.
+            // observe_transport decides whether the transport is rolling (and
+            // splits the take on a loop wrap, or ends it at the loop end under
+            // AtLoopEnd). It is deliberately more permissive than the host's
+            // `playing` flag — see there.
             self.take.observe_transport(seconds, transport.playing).then_some(seconds)
         } else {
             // No transport at all: fall back to the plugin's own clock so

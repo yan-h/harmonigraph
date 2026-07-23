@@ -114,19 +114,29 @@ impl Sink {
         Ok(Sink::Video { child })
     }
 
-    pub fn push(&mut self, frame: &[u8]) -> Result<(), String> {
+    /// Feed one frame. `Ok(true)` means keep going; `Ok(false)` means the
+    /// encoder has closed the pipe and wants no more frames — a clean early
+    /// stop, NOT a failure. ffmpeg does exactly this under `-shortest` when the
+    /// soundtrack ends before the visuals (a one-loop take: audio is the loop,
+    /// the picture keeps fading out past it). Whether that early stop was
+    /// success or a crash is ffmpeg's call, read from its exit status in
+    /// [`finish`]; the caller just stops feeding on `Ok(false)`.
+    pub fn push(&mut self, frame: &[u8]) -> Result<bool, String> {
         match self {
             Sink::Video { child } => {
                 let stdin = child.stdin.as_mut().ok_or("ffmpeg stdin closed")?;
-                stdin.write_all(frame).map_err(|e| {
-                    format!("ffmpeg stopped reading frames ({e}); it likely printed why above")
-                })
+                match stdin.write_all(frame) {
+                    Ok(()) => Ok(true),
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(false),
+                    Err(e) => Err(format!("writing a frame to ffmpeg failed: {e}")),
+                }
             }
-            Sink::Raw { file } => file.write_all(frame).map_err(|e| e.to_string()),
+            Sink::Raw { file } => file.write_all(frame).map(|()| true).map_err(|e| e.to_string()),
             Sink::Pngs { dir, stem, index, size } => {
                 let path = dir.join(format!("{stem}-{index:05}.png"));
                 *index += 1;
                 image::save_buffer(&path, frame, size[0], size[1], image::ExtendedColorType::Rgba8)
+                    .map(|()| true)
                     .map_err(|e| format!("{}: {e}", path.display()))
             }
         }

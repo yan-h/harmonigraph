@@ -44,14 +44,16 @@ impl Settings {
 
 /// Render every frame, handing each to `emit` as tightly packed RGBA8.
 ///
-/// `emit` returning an error stops the render — that is how a dead
-/// encoder gets reported rather than swallowed for another thousand
-/// frames.
+/// `emit` returning an error stops the render — that is how a dead encoder
+/// gets reported rather than swallowed for another thousand frames. `emit`
+/// returning `Ok(false)` also stops it, but cleanly: the encoder wants no more
+/// frames (ffmpeg under `-shortest`, its soundtrack shorter than the visuals),
+/// and the caller reads the true verdict from the encoder's exit status.
 pub fn render(
     replay: &mut Replay,
     audio: Option<&Audio>,
     settings: &Settings,
-    mut emit: impl FnMut(&[u8]) -> Result<(), String>,
+    mut emit: impl FnMut(&[u8]) -> Result<bool, String>,
 ) -> Result<u64, String> {
     let mut renderer = Renderer::new(settings.size)
         .ok_or("no usable GPU adapter (this needs a real GPU, not a container)")?;
@@ -157,7 +159,12 @@ pub fn render(
             settings.pixels_per_point,
             background,
         );
-        emit(&bytes)?;
+        if !emit(&bytes)? {
+            // The encoder wants no more frames (e.g. ffmpeg under -shortest,
+            // the soundtrack ending before the visuals). Stop here; the caller
+            // reads whether that was a clean finish from the exit status.
+            return Ok(frame);
+        }
     }
     Ok(frames)
 }
@@ -214,7 +221,7 @@ mod tests {
         let mut frames = Vec::new();
         match render(&mut replay, None, settings, |bytes| {
             frames.push(bytes.to_vec());
-            Ok(())
+            Ok(true)
         }) {
             Ok(_) => Some(frames),
             // CI without a GPU: the pipeline can't be exercised at all,
@@ -287,7 +294,7 @@ mod tests {
             let mut frames = Vec::new();
             match render(&mut replay, Some(&audio), &settings, |bytes| {
                 frames.push(bytes.to_vec());
-                Ok(())
+                Ok(true)
             }) {
                 Ok(_) => Some(frames),
                 Err(e) if e.contains("no usable GPU adapter") => {

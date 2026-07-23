@@ -230,6 +230,27 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
         ui.weak(&state.take_status);
     }
 
+    // When a take finishes and turns into a video. No other home, so it sits
+    // right under the switch that starts one.
+    ui.horizontal(|ui| {
+        ui.label("Finish");
+        let trigger = &mut state.render_config.trigger;
+        ui.selectable_value(trigger, crate::RenderTrigger::OnDisarm, "On disarm").on_hover_text(
+            "Render when you switch Record take off — predictable, and works however the \
+             transport behaves.",
+        );
+        ui.selectable_value(trigger, crate::RenderTrigger::OnTransportStop, "On stop")
+            .on_hover_text(
+                "Render as soon as the transport stops after recording something, disarming at \
+                 the same moment — a play-through renders itself.",
+            );
+        ui.selectable_value(trigger, crate::RenderTrigger::AtLoopEnd, "At loop end").on_hover_text(
+            "Record one arranger-loop pass, then end the moment the loop repeats and render it — \
+             no manual stop to mistime. Turn LOOPING ON: it ends when the transport wraps back. \
+             With looping off it just waits for you to disarm.",
+        );
+    });
+
     // Resolution and any other lattice-offline flags, split on spaces. The
     // frame's aspect already picks a default resolution, so this is only for
     // going bigger (e.g. 4K) or the occasional override.

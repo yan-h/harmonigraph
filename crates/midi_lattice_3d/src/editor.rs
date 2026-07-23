@@ -194,6 +194,22 @@ impl EditorShared {
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
+        // Tell the audio thread whether to end the take at the first loop wrap.
+        self.take.set_stop_at_loop_end(
+            self.ui.render_config.trigger == lattice_ui::RenderTrigger::AtLoopEnd,
+        );
+
+        // AtLoopEnd: the audio thread reached the loop end and ended the take
+        // (one pass captured, exactly at the loop boundary). Reflect it in the
+        // toggle and render that pass.
+        if self.take.is_recording()
+            && self.ui.render_config.trigger == lattice_ui::RenderTrigger::AtLoopEnd
+            && self.take.hit_loop_end()
+        {
+            self.ui.take_recording = false;
+            self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
+        }
+
         // "The take is done" as soon as the transport stops, if asked —
         // so a play-through or an audio export yields a video with
         // nothing further to click.
