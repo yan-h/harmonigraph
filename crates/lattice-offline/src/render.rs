@@ -74,7 +74,9 @@ pub fn render(
     // the per-frame draw just reads it and the render stays byte-identical
     // between runs. The live ring can't hold a whole song, hence the separate
     // precomputed set.
-    if settings.whole_song_spectrogram {
+    // `--playhead` on the command line, or the take's own "Whole-song
+    // playhead" render setting — either turns it on.
+    if settings.whole_song_spectrogram || state.render_config.playhead {
         if let Some(audio) = audio {
             let span = (settings.end - settings.start).max(0.0);
             if span > 0.0 {

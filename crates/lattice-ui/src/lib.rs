@@ -200,6 +200,12 @@ pub struct RenderConfig {
     /// `--size 3840x2160 --layout side-by-side`.
     #[serde(default)]
     pub extra_args: String,
+    /// Whole-song playhead spectrogram: lay the take out at once and sweep a
+    /// playhead through it, instead of the live scrolling window. Read by the
+    /// offline renderer from the take; `--playhead` on the command line also
+    /// turns it on. Needs audio.
+    #[serde(default)]
+    pub playhead: bool,
 }
 
 impl Default for RenderConfig {
@@ -211,6 +217,7 @@ impl Default for RenderConfig {
             renderer_path: String::new(),
             audio_path: String::new(),
             extra_args: "--size 1920x1080".into(),
+            playhead: false,
         }
     }
 }
