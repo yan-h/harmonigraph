@@ -202,10 +202,7 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
          and analyzed for the spectrum. Paste its path here. Leave empty to use \
          the take's own recording, or to render silent.",
     );
-    labeled_path(ui, "Audio offset (s)", &mut render.audio_offset).on_hover_text(
-        "Take-time seconds where the bounce starts. Leave empty to auto-align to \
-         the MIDI onsets; set a number if the auto-align drifts.",
-    );
+    audio_offset_control(ui, &mut render.audio_offset);
     if render.auto_render {
         crate::widgets::choice_row(
             ui,
@@ -255,6 +252,71 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
         {
             state.render_now = true;
         }
+    }
+}
+
+/// Where the bounce lines up with the picture. Stored as a string because
+/// that's what the renderer's `--align` flag reads: empty means auto-align to
+/// the MIDI onsets, a number means a fixed take-time offset.
+///
+/// Typing raw seconds was the friction the user hit — you can't tell which
+/// number to type. So: a checkbox for the common case (auto), and when it's
+/// off, a drag-to-scrub value flanked by coarse/fine nudges. Everything routes
+/// through `secs`, re-parsed from the string each frame, and only rewrites the
+/// string when something actually changed — so a clean value stays clean.
+fn audio_offset_control(ui: &mut egui::Ui, offset: &mut String) {
+    let mut auto = offset.trim().is_empty();
+    let mut secs: f64 = offset.trim().parse().unwrap_or(0.0);
+    if ui
+        .checkbox(&mut auto, "Auto-align audio to MIDI")
+        .on_hover_text(
+            "Line the bounce up with the picture by correlating the take's MIDI \
+             note-onsets against the audio's onsets — no scratch recording \
+             needed. Turn off to set the offset by hand if the auto-align drifts.",
+        )
+        .changed()
+    {
+        // Seed the manual field with wherever auto had it (0 if it was empty).
+        *offset = if auto { String::new() } else { format!("{secs:.2}") };
+    }
+    if auto {
+        return;
+    }
+    let mut changed = false;
+    button_row(ui, |ui| {
+        ui.label("Offset");
+        // Arrows read left = earlier, right = later. Coarse then fine on each
+        // side, mirroring the drawn control: << < [value] > >>.
+        changed |= nudge(ui, "\u{ab}", -1.0, &mut secs);
+        changed |= nudge(ui, "\u{2039}", -0.1, &mut secs);
+        changed |= ui
+            .add(egui::DragValue::new(&mut secs).speed(0.01).suffix(" s").fixed_decimals(2))
+            .on_hover_text(
+                "Take-time seconds where the bounce's first sample lands. Drag \
+                 to scrub, double-click to type. Larger delays the audio against \
+                 the notes.",
+            )
+            .changed();
+        changed |= nudge(ui, "\u{203a}", 0.1, &mut secs);
+        changed |= nudge(ui, "\u{bb}", 1.0, &mut secs);
+    });
+    if changed {
+        // Two decimals: matches the 0.01 drag step and the 0.1 nudges, and keeps
+        // float slop (0.1 + 0.2...) out of the persisted string.
+        *offset = format!("{secs:.2}");
+    }
+}
+
+/// One nudge button: bumps `secs` by `delta` seconds when clicked, returning
+/// whether it did. Its tooltip states the step so the coarse/fine pair reads
+/// without a legend.
+fn nudge(ui: &mut egui::Ui, glyph: &str, delta: f64, secs: &mut f64) -> bool {
+    let hint = format!("{}{delta} s", if delta > 0.0 { "+" } else { "" });
+    if ui.button(glyph).on_hover_text(hint).clicked() {
+        *secs += delta;
+        true
+    } else {
+        false
     }
 }
 
