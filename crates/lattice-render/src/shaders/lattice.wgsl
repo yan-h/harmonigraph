@@ -112,6 +112,46 @@ fn quad_margin(rim: f32, g: f32) -> f32 {
     return max(QUAD_MARGIN, rim + g + 0.05);
 }
 
+// Whether the fragment shader may stop early where it can prove it would
+// paint nothing (see `paint_reach` and the idle branch in `fs_main`). Only
+// ever false in the parity test, which compiles a second pipeline with this
+// flipped and requires the two to render the same pixels — the early-outs
+// are an optimization, and the test is what keeps them one.
+const EARLY_OUT: bool = true;
+
+// How far from the node's center anything can paint, in its own uv.
+//
+// The billboard is deliberately bigger than the node: QUAD_MARGIN of
+// headroom for the mark rings and a soft glyph's overflow, more when a
+// gutter has to finish inside it. Between that circle of content and the
+// square quad lies a lot of fragment — most of a quad, once the corners are
+// counted — where every layer below computes its coverage, arrives at zero,
+// and blends nothing. On a zoomed-in lattice, where one node can cover the
+// pane, that is the frame's dominant cost.
+//
+// Every term here is the radius at which the corresponding layer's own
+// smoothstep has reached zero, so the bound is exact rather than generous:
+//
+//   - the glow's `window` closes at 0.95, inside GLYPH_FADE_LIMIT;
+//   - the octave glyphs (and their soft overflow) end at GLYPH_FADE_LIMIT;
+//   - the core disc — and channel 14's ring — end at their radius plus the
+//     widest edge softness the solidity axis can ask for;
+//   - the idle marker ends at its own radius, or the trail ring's;
+//   - the mark rings taper off at QUAD_MARGIN, but only exist while a slot
+//     is marked;
+//   - the knockout clears out to rim + gutter, and nothing beyond.
+fn paint_reach(in: VsOut, aa: f32) -> f32 {
+    var reach = max(GLYPH_FADE_LIMIT, u.misc3.x + CORE_EDGE_SOFT + aa);
+    reach = max(reach, max(u.misc4.z, TRAIL_RING_R) + aa);
+    if in.marks.x != 0u || in.marks.y != 0u {
+        reach = max(reach, QUAD_MARGIN);
+    }
+    if in.gutter > 0.0 {
+        reach = max(reach, in.rim + in.gutter);
+    }
+    return reach;
+}
+
 struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
@@ -827,6 +867,34 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // take before any branching), scaled to the softness knob. Shape edges
     // below use this instead of fixed-uv smoothsteps.
     let aa = aa_width(fwidth(in.uv.x));
+
+    // Outside everything this node can paint. `fwidth` above is taken first
+    // and in uniform control flow, as its comment requires; from here on the
+    // shader is free to leave.
+    if EARLY_OUT && d > paint_reach(in, aa) {
+        discard;
+    }
+
+    // An idle node paints its marker and nothing else — no disc (presence
+    // gates it), no glow, no field, no glyphs (a ghost needs presence too),
+    // no mark rings (their own levels gate them), no knockout (it fades with
+    // the note). Everything below still computes all of it and multiplies it
+    // away, which on a lattice where most nodes are idle most of the time is
+    // most of the fragment work in the frame. The three levels and the
+    // octave word are exactly the terms those gates read, so this branch
+    // returns what the full path would, not an approximation of it.
+    if EARLY_OUT
+        && in.params.x <= 0.0
+        && in.params.y <= 0.0
+        && in.params.z <= 0.0
+        && (in.octaves.x | in.octaves.y | in.octaves.z) == 0u
+    {
+        let marker = idle_marker(d, in.home, in.visited, in.color.rgb, aa);
+        if marker.a < 0.01 {
+            discard;
+        }
+        return marker;
+    }
 
     // Core layer, unified onto ONE solidity axis. The radius (u.misc3.x,
     // quad UV units) sizes it, and a radius of 0 turns it off entirely — no
