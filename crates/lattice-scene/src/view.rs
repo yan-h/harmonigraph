@@ -81,6 +81,18 @@ pub struct ViewConfig {
     /// a node that sounds nothing clears nothing at all.
     #[serde(default)]
     pub sevens_gutter: f32,
+    /// How wide the clearing's fade is, same units — and deliberately NOT
+    /// derived from the reach above. The two used to be one number (the
+    /// fade was twice the reach), so widening the gap also blurred it and
+    /// there was no way to ask for a wide crisp one or a narrow soft one.
+    ///
+    /// The clearing is solid out to `reach - fade` past the node's rim and
+    /// gone by `reach`, so the reach is exactly where it ends whatever the
+    /// fade does. Floored at the node's own rim: a fade wider than the
+    /// reach would otherwise start eating into the node's own footprint,
+    /// which is the one part that must always be cleared.
+    #[serde(default = "default_sevens_gutter_soft")]
+    pub sevens_gutter_soft: f32,
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
     /// Only meaningful while `show_labels` is on.
     #[serde(default = "default_sevens_label")]
@@ -354,6 +366,12 @@ fn default_sevens_size() -> f32 {
     1.0
 }
 
+/// The fade a blob predating this key was drawn with, near enough: it was
+/// pinned to twice the reach, and the reach it shipped with was 0.12.
+fn default_sevens_gutter_soft() -> f32 {
+    0.24
+}
+
 /// The home sheet's own name, which every earlier build drew off the home
 /// sheet too — ambiguity and all.
 fn default_sevens_label() -> SevensLabel {
@@ -524,7 +542,12 @@ impl Default for ViewConfig {
             // fifths down wears (see SevensLabel) — for the letter plus the
             // signed comma to that namesake.
             sevens_size: 0.55,
-            sevens_gutter: 0.12,
+            // Reach and fade equal, which puts the clearing at full strength
+            // exactly to the node's rim and gone a quarter of a node-width
+            // past it — the shape the pair reproduced back when the fade was
+            // pinned to twice the reach.
+            sevens_gutter: 0.24,
+            sevens_gutter_soft: 0.24,
             sevens_label: SevensLabel::Comma,
             outer_style: OuterStyle::Slices,
             show_labels: true,

@@ -198,9 +198,18 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         ValueBar::new(&mut state.view.sevens_gutter, 0.0..=0.5, "Sevenths gutter")
             .show(ui)
             .on_hover_text(
-                "The dark gap an off-sheet node clears around itself, so it \
-                 reads over the home sheet instead of needing room of its \
-                 own. 0 draws none and the sheets simply overlap",
+                "The dark gap a node clears around itself, so a sheet reads \
+                 over the ones behind it instead of needing room of its own. \
+                 Measured past the node's own edge, and the same width on \
+                 screen whatever size the node draws at. 0 draws none and \
+                 the sheets simply overlap",
+            );
+        ValueBar::new(&mut state.view.sevens_gutter_soft, 0.0..=0.5, "Sevenths gutter fade")
+            .show(ui)
+            .on_hover_text(
+                "How gradually the gap ends, independent of how wide it is. \
+                 0 is a hard edge; past the gutter's own width it softens \
+                 outward rather than eating into the node",
             );
         choice_row(
             ui,

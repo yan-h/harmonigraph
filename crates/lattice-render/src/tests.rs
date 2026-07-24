@@ -143,6 +143,7 @@ fn parity_scene() -> Scene {
         // The ground the sevens knockout clears to; the half of this
         // scene's nodes that carry a gutter exercise it.
         background: lattice_scene::skin::panel_color(),
+        sevens_soft: 0.24,
         node_radius: 0.34,
         outer_style: Default::default(),
         mark_unlinked: 1.0,

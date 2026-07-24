@@ -242,6 +242,11 @@ pub struct Scene {
     /// each node's own `trail`.
     pub trail_mark: TrailMark,
     pub trail_strength: f32,
+    /// How wide the sevens knockout's fade is, in the uv of a full-size
+    /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, unlike the
+    /// per-node reach, which the envelope and the node's own rim both bear
+    /// on. Already clamped.
+    pub sevens_soft: f32,
     /// The ground the lattice is drawn onto: the pane fill this pass gets
     /// composited over, which is the skin's `panel` (what `egui_dock`'s
     /// `tab_body.bg_fill` paints under every pane).

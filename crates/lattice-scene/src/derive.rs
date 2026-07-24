@@ -236,10 +236,10 @@ pub fn derive_scene(
         // so "drawn over" covers very little — and neither sheet then read
         // as being in front of the other.
         //
-        // The home sheet's clearing is applied in a pass of its own, before
-        // the grid, precisely so it does not eat the grid it sits on; see
-        // `LatticeCallback::from_scene`. Nothing to clear at all when the
-        // window holds no depth.
+        // The home sheet's clearing cuts the grid lines as well as the
+        // sheets behind it — a sounding node sits in a clean gap in the
+        // lattice rather than on top of it. Nothing to clear at all when
+        // the window holds no depth.
         //
         // The WIDTH is a constant of the view; the STRENGTH is the note's
         // envelope, applied in the shader against the same `activation` it
@@ -325,6 +325,7 @@ pub fn derive_scene(
         trail_strength: view.trail_strength.clamp(0.0, 1.0),
         mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
         mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
+        sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),
         pitch_lut: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,

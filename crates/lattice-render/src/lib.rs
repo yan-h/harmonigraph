@@ -152,8 +152,10 @@ struct Uniforms {
     /// one — safe per the note on `misc4`.
     misc5: [f32; 4],
     /// x: trail mark style (0 off, 1 lift, 2 ring, 3 tint); y: trail
-    /// strength 0..1; z/w unused. Both feed the idle-marker branch alone
-    /// (see `TrailMark`); misc5 is full, so the trail starts its own slot.
+    /// strength 0..1 — both feed the idle-marker branch alone (see
+    /// `TrailMark`); misc5 was full, so the trail started its own slot.
+    /// z: the sevens knockout's fade width, in the uv of a full-size node
+    /// (`Scene::sevens_soft`); w unused.
     misc6: [f32; 4],
     /// The ground the lattice is drawn onto — the pane fill this pass gets
     /// composited over — as the sevens knockout's target color. Without it
@@ -317,19 +319,6 @@ impl LatticeCallback {
         // create_scene_pipeline), so alpha blending still relies on draw
         // order — exactly as it did before the offscreen pass existed.
         //
-        // This IS the sheet stack, and nothing else needs to be: the sevens
-        // axis runs along the view direction, so back-to-front puts each
-        // sheet over the one behind it, and a node's knockout gutter clears
-        // exactly what is behind it — the sheets it is in front of, never
-        // the ones it is behind.
-        //
-        // Do not reorder the sheets on top of this. Forcing the home sheet
-        // to the bottom (so off-sheet notes could never be hidden by it)
-        // inverts the near half of the axis: the sheet BEHIND home then
-        // draws last, and its clearing takes a bite out of the home sheet
-        // in front of it. Grouping by distance from home instead of by
-        // depth does the same thing more thoroughly. Depth is what the
-        // reader is being shown; it is what the order has to follow.
         // Sheets back to front FIRST, then painter's order within a sheet.
         // That is still just back-to-front — world z IS the sevens axis, and
         // the first key is only its depth — but it stays EXACT when the
@@ -341,6 +330,14 @@ impl LatticeCallback {
         // nothing under perspective and orthographic while working under
         // cabinet (where every home node shares one depth and the two sorts
         // agree).
+        //
+        // Do not reorder the sheets on top of this. Forcing the home sheet
+        // to the bottom (so off-sheet notes could never be hidden by it)
+        // inverts the far half of the axis: the sheet BEHIND home then draws
+        // last, and its clearing takes a bite out of the home sheet in front
+        // of it. Grouping by distance from home does the same thing more
+        // thoroughly. Depth is what the reader is being shown; it is what
+        // the order has to follow.
         //
         // The `forward.z` factor is what keeps it honest if the view is
         // orbited right around past the sheets: which way along z is "away"
@@ -355,30 +352,25 @@ impl LatticeCallback {
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
-        // The home sheet's clearings go in a pass of their OWN, before the
-        // grid; everything else clears from where it is drawn.
-        //
         // The grid belongs to the home sheet — that is the only sheet that
-        // draws one — so its place in the order is between the sheets
-        // behind and the home sheet itself. Which leaves a home node's
-        // clearing nowhere good to go: after the grid it eats the very grid
-        // it sits on (each node reaches past the halfway point to its
-        // neighbour, so the lines would vanish outright), and without one
-        // the sheets behind show straight through the gaps in its body and
-        // nothing occludes anything. So the clearing is emitted separately,
-        // ahead of the grid, marked by a NEGATIVE width — the shader paints
-        // nothing for those and only clears (see `gutter_coverage`).
+        // draws one — so its place in the order is between the sheets behind
+        // it and the home sheet itself. Under it, as it used to be, a node
+        // on a sheet BEHIND the home one punches its clearing through the
+        // home grid, putting a hole in the layer that is supposed to be
+        // hiding it.
+        //
+        // The home sheet then draws after the grid, so a home node's
+        // clearing cuts the grid lines as well as the sheets behind — the
+        // node sits in a clean gap in the lattice rather than on top of it.
+        // (An earlier cut drew the home clearings in a pass of their own
+        // ahead of the grid to spare the lines; the lines are wanted cut.)
         //
         // World z is measured from the home sheet, so its whole run sits at
         // sheet depth 0 — behind it is positive, in front negative. Sorting
         // by that above is what makes the home sheet one contiguous run,
         // under every projection rather than only the face-on one.
-        let split = order
-            .iter()
-            .position(|&(plane, _, _)| plane <= 0.0)
-            .unwrap_or(order.len());
         let to_gpu = |n: &lattice_scene::NodeInstance, gutter: f32| GpuInstance {
-                world_pos: n.world_pos.to_array(),
+            world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
                 params: [
                     n.activation,
@@ -397,25 +389,14 @@ impl LatticeCallback {
                 sevens: [n.scale, gutter],
         };
 
-        let mut instances = Vec::with_capacity(order.len() + split);
-        // Behind the home sheet: these clear only what is further back.
-        instances.extend(order[..split].iter().map(|(_, _, n)| to_gpu(n, n.gutter)));
-        // The home sheet's clearings, paint withheld.
-        instances.extend(
-            order[split..]
-                .iter()
-                .filter(|(_, _, n)| n.on_home && n.gutter > 0.0)
-                .map(|(_, _, n)| to_gpu(n, -n.gutter)),
-        );
-        let grid_at = instances.len() as u32;
-        // The home sheet's paint (its clearing is already spent above) and
-        // every sheet in front of it, which clear from here as usual — over
-        // the grid, which they are in front of.
-        instances.extend(
-            order[split..]
-                .iter()
-                .map(|(_, _, n)| to_gpu(n, if n.on_home { 0.0 } else { n.gutter })),
-        );
+        let split = order
+            .iter()
+            .position(|&(plane, _, _)| plane <= 0.0)
+            .unwrap_or(order.len());
+        let mut instances = Vec::with_capacity(order.len());
+        instances.extend(order.iter().map(|(_, _, n)| to_gpu(n, n.gutter)));
+        // Where the grid is drawn inside that run.
+        let grid_at = split as u32;
 
         // The grid draws under the nodes.
         let edges = scene
@@ -472,7 +453,7 @@ impl LatticeCallback {
                 misc6: [
                     scene.trail_mark.shader_index() as f32,
                     scene.trail_strength,
-                    0.0,
+                    scene.sevens_soft,
                     0.0,
                 ],
                 background: scene.background.to_array(),
