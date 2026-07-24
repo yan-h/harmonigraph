@@ -1494,7 +1494,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         },
     );
     if state.view.show_perf {
-        perf::draw_overlay(ui.ctx(), perf_overlay_area(state, ui.max_rect()), &state.perf);
+        perf::draw_overlay(
+            ui.ctx(),
+            perf_overlay_area(state, ui.max_rect()),
+            &state.perf,
+            state.view.show_perf_detail,
+        );
     }
 }
 

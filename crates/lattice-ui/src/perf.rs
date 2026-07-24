@@ -391,7 +391,12 @@ const OVERLAY_INSET: f32 = 8.0;
 /// it is on screen, the whole editor otherwise (see `perf_overlay_area`). A
 /// floating, non-interactive panel so it never steals clicks from the view
 /// under it.
-pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfStats) {
+pub(crate) fn draw_overlay(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    perf: &PerfStats,
+    detail: bool,
+) {
     let fps = perf.fps();
     // Only flag a low rate while something is actually animating — an idle
     // editor is meant to drop to the poll rate, so a low idle number is fine.
@@ -410,55 +415,66 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     let head_font = egui::FontId::monospace(12.0);
 
     let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
-    let gpu = if !perf.gpu_supported {
-        "n/a (no timestamps)".to_owned()
-    } else if perf.have_gpu {
-        format!("{:.1} ms", perf.shown_gpu_ms)
-    } else {
-        "measuring...".to_owned()
-    };
-    let rows: [(&str, String); 19] = [
-        ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
-        ("tick", format!("{:.1} ms", perf.shown_tick_ms)),
-        // The egui half is what `tick` leaves over, shown rather than left to
-        // be worked out — the gap is the whole point of these two rows.
-        ("egui", format!("{:.1} ms", (perf.shown_tick_ms - perf.shown_render_ms).max(0.0))),
-        // The renderer half, broken out — its parts are shown instead of its
-        // total, since the total is what sent us looking in here.
-        // Split, because they fail for unrelated reasons: textures are the
-        // spectrogram's doing, buffers are vertex volume plus the lattice's
-        // own `prepare`.
-        ("tex up", format!("{:.1} ms", perf.shown_texture_ms)),
+    let ms = |v: f32| format!("{v:.1} ms");
+    // Depth, label, value. The nesting is the point: every indented row is a
+    // PART of the one above it, so a total and its components can be read
+    // against each other instead of held in your head. Working out where a
+    // frame went meant repeatedly discovering that a cost sat between two
+    // readings; the shape of the list now says what contains what.
+    let mut rows: Vec<(u8, &str, String)> = vec![
+        (0, "frame", ms(perf.shown_frame_dt * 1000.0)),
+        (0, "tick", ms(perf.shown_tick_ms)),
+    ];
+    if detail {
+        let egui_ms = (perf.shown_tick_ms - perf.shown_render_ms).max(0.0);
+        let buf_up = (perf.shown_upload_ms - perf.shown_texture_ms).max(0.0);
+        rows.extend([
+            (1, "egui", ms(egui_ms)),
+            (2, "shell", ms(perf.shown_shell_ms)),
+            (2, "ui", ms(perf.shown_cpu_ms)),
+            (1, "render", ms(perf.shown_render_ms)),
+            (2, "tess", ms(perf.shown_tess_ms)),
+            (2, "tex up", ms(perf.shown_texture_ms)),
+            (2, "buf up", ms(buf_up)),
+            (3, "prep", ms(perf.shown_prepare_ms)),
+            (3, "poll", ms(perf.shown_poll_ms)),
+            (2, "wait", ms(perf.shown_acquire_ms)),
+            (2, "encode", ms(perf.shown_encode_ms)),
+            (2, "submit", ms(perf.shown_submit_ms)),
+        ]);
+    }
+    rows.push((0, "gpu", {
+        // Both passes on one line at the top level: they run alongside the CPU
+        // stages rather than inside any of them, so nesting either under
+        // `tick` would be a lie about what contains what.
+        let lattice = if !perf.gpu_supported {
+            "n/a".to_owned()
+        } else if perf.have_gpu {
+            format!("{:.1}", perf.shown_gpu_ms)
+        } else {
+            "—".to_owned()
+        };
+        format!("{:.1} ui · {lattice} 3d", perf.shown_egui_gpu_ms)
+    }));
+    if detail {
+        rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims)));
+    }
+    rows.extend([
+        (0, "memory", memory_readout(perf.rss_bytes)),
         (
-            "buf up",
-            format!("{:.1} ms", (perf.shown_upload_ms - perf.shown_texture_ms).max(0.0)),
+            0,
+            "voices",
+            format!("{} held · {fading} fading", perf.workload.held_voices),
         ),
-        // Inside `buf up`: the lattice's own callback, and inside THAT the
-        // cost of taking the GPU measurement.
-        ("prep", format!("{:.1} ms", perf.shown_prepare_ms)),
-        ("poll", format!("{:.1} ms", perf.shown_poll_ms)),
-        // Not a duration: what the upload was asked to move. Read against
-        // `buf up` these say whether the volume is absurd, or whether it is
-        // being moved in too many pieces.
-        ("verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims)),
-        ("encode", format!("{:.1} ms", perf.shown_encode_ms)),
-        ("submit", format!("{:.1} ms", perf.shown_submit_ms)),
-        ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
-        ("ui cpu", format!("{:.1} ms", perf.shown_cpu_ms)),
-        ("tess", format!("{:.1} ms", perf.shown_tess_ms)),
-        ("ui gpu", format!("{:.1} ms", perf.shown_egui_gpu_ms)),
-        ("3d gpu", gpu),
-        ("wait", format!("{:.1} ms", perf.shown_acquire_ms)),
-        ("memory", memory_readout(perf.rss_bytes)),
-        ("voices", format!("{} held · {fading} fading", perf.workload.held_voices)),
         (
+            0,
             "nodes",
             format!(
                 "{}  ·  {:.2}× scale",
                 perf.workload.visible_nodes, perf.workload.render_scale
             ),
         ),
-    ];
+    ]);
 
     // Painted straight onto a foreground layer rather than assembled from
     // widgets inside an Area.
@@ -489,8 +505,14 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     const COL_GAP: f32 = 10.0;
     let head_fps = layout(&format!("{fps:.0} fps"), &head_font, health);
     let head_state = layout(state, &mono, dim);
-    let labels: Vec<_> = rows.iter().map(|(l, _)| layout(l, &mono, dim)).collect();
-    let values: Vec<_> = rows.iter().map(|(_, v)| layout(v, &mono, bright)).collect();
+    // Indent by depth, so nesting reads without any drawn guides.
+    let labels: Vec<_> = rows
+        .iter()
+        .map(|(depth, label, _)| {
+            layout(&format!("{:indent$}{label}", "", indent = *depth as usize * 2), &mono, dim)
+        })
+        .collect();
+    let values: Vec<_> = rows.iter().map(|(_, _, v)| layout(v, &mono, bright)).collect();
     let widest = |gs: &[std::sync::Arc<egui::Galley>]| {
         gs.iter().map(|g| g.rect.width()).fold(0.0f32, f32::max)
     };
@@ -796,7 +818,7 @@ mod tests {
 
         let output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(area), ..Default::default() },
-            |ui| draw_overlay(ui.ctx(), area, &perf),
+            |ui| draw_overlay(ui.ctx(), area, &perf, true), // detail on: the widest case
         );
         let mut texts: Vec<(egui::Rect, String)> = output
             .shapes
