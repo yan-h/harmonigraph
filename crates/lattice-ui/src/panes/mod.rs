@@ -62,7 +62,7 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 /// aliases that unknown variant would fail the whole `UiPersist` parse and
 /// take the dialed-in camera/view/spectrum/render settings down with it. The
 /// dock arrangement itself is refreshed separately (see `UiPersist` version).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
     /// The lattice itself: how it is tuned, and how it is framed. The framing
@@ -119,6 +119,29 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Video => "Video".into(),
             Tab::Panel => "Panel".into(),
         }
+    }
+
+    /// Identify a tab by its VARIANT, never by its title.
+    ///
+    /// egui_dock's default is `Id::new(title)`, and this dock deliberately has
+    /// two tabs titled "Analyzer" — the display and the settings for it. That
+    /// made them one id, and the id keys the tab BODY's `Ui`
+    /// (`tab_body_id` mixes in the surface but not the node), so the two
+    /// bodies shared their state: egui_dock wraps every body in a
+    /// `ScrollArea`, and scrolling the settings scrolled the display instead.
+    fn id(&mut self, tab: &mut Tab) -> egui::Id {
+        egui::Id::new(("lattice-pane", *tab))
+    }
+
+    /// The picture panes never scroll. Both fill their body exactly — the
+    /// lattice with a wgpu callback, the analyzer with a painter over the
+    /// whole rect — so there is nothing under the edge to reach, and a scroll
+    /// area around them can only shift a picture that is meant to sit still.
+    /// Settings panes keep theirs: they are lists, and a short dock column
+    /// has to be able to reach the end of one.
+    fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
+        let picture = matches!(tab, Tab::Lattice | Tab::Spectral);
+        [!picture, !picture]
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
