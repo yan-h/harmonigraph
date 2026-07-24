@@ -254,7 +254,6 @@ pub fn derive_scene(
             outlined,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
-            sheet: sheets,
             scale,
             gutter,
             comma,

@@ -315,39 +315,31 @@ impl LatticeCallback {
         // create_scene_pipeline), so alpha blending still relies on draw
         // order — exactly as it did before the offscreen pass existed.
         //
-        // Under CABINET the nodes are additionally grouped into a STACK by
-        // sheet — home first, then each sheet outward (`NodeInstance::sheet`,
-        // distance from the home sheet) — with depth only breaking ties
-        // between the two sheets at the same distance. Every sheet is then
-        // laid over the ones nearer home, so each sheet's knockouts clear
-        // the sheets under it, and the stack runs in the same direction the
-        // sizes do: largest at the bottom, each smaller sheet over it.
+        // This IS the sheet stack, and nothing else needs to be: the sevens
+        // axis runs along the view direction, so back-to-front puts each
+        // sheet over the one behind it, and a node's knockout gutter clears
+        // exactly what is behind it — the sheets it is in front of, never
+        // the ones it is behind.
         //
-        // Cabinet earns this because it is a diagrammatic projection: it
-        // faces the fifths/thirds sheet head-on and shears the sevens axis
-        // into a fixed screen arrow, so "depth" there is notation, not
-        // distance. Sorting those nodes by camera depth instead stacks the
-        // two halves of the axis in opposite directions — `+2` over `+1`,
-        // but `-1` over `-2` — and lets the home sheet hide the very
-        // annotations it is being annotated with. Perspective and
-        // orthographic are real views of a real arrangement in space, so
-        // they keep occluding physically.
+        // Do not reorder the sheets on top of this. Forcing the home sheet
+        // to the bottom (so off-sheet notes could never be hidden by it)
+        // inverts the near half of the axis: the sheet BEHIND home then
+        // draws last, and its clearing takes a bite out of the home sheet
+        // in front of it. Grouping by distance from home instead of by
+        // depth does the same thing more thoroughly. Depth is what the
+        // reader is being shown; it is what the order has to follow.
         let eye = camera.eye();
         let forward = (camera.target - eye).normalize_or_zero();
-        let layered = camera.projection == lattice_scene::Projection::Cabinet;
-        let mut order: Vec<(u32, f32, &lattice_scene::NodeInstance)> = scene
+        let mut order: Vec<(f32, &lattice_scene::NodeInstance)> = scene
             .nodes
             .iter()
-            .map(|n| {
-                let layer = if layered { n.sheet } else { 0 };
-                (layer, (n.world_pos - eye).dot(forward), n)
-            })
+            .map(|n| ((n.world_pos - eye).dot(forward), n))
             .collect();
-        order.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
+        order.sort_by(|a, b| b.0.total_cmp(&a.0));
 
         let instances = order
             .into_iter()
-            .map(|(_, _, n)| GpuInstance {
+            .map(|(_, n)| GpuInstance {
                 world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
                 params: [

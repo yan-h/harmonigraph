@@ -90,24 +90,7 @@ pub struct NodeInstance {
     pub hovered: bool,
     /// On the home (center sevens) sheet. Home nodes keep a blank
     /// placeholder ring while idle; off-sheet nodes draw nothing.
-    /// Exactly `sheet == 0`.
     pub on_home: bool,
-    /// Which layer of the stack this node is on: how many sheets it sits
-    /// from the home one, `|sevens - center_sevens|`.
-    ///
-    /// The renderer draws nodes in this order — home sheet first, then each
-    /// sheet outward — so a sheet's knockouts clear every sheet nearer the
-    /// home one, and the stack reads in the same direction its sizes do:
-    /// the largest at the bottom, each smaller sheet laid over it. That the
-    /// SMALLEST sheets end up on top is the point rather than a side
-    /// effect; they are the ones easiest to lose behind something else.
-    ///
-    /// Distance, not signed depth, for the same reason [`scale`](Self::scale)
-    /// uses it: the home sheet is the ground, and a sheet in front of it is
-    /// no more the subject than one behind. Sorting the off-sheet nodes by
-    /// camera depth instead stacks the two halves of the axis in opposite
-    /// directions — `+2` over `+1`, but `-1` over `-2`.
-    pub sheet: u32,
     /// Billboard size, as a factor of the scene's `node_radius` (see
     /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
     /// step off it. Scales the whole node uniformly — the quad and its uv

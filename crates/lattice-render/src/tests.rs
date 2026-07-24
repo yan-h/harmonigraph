@@ -102,7 +102,6 @@ fn parity_scene() -> Scene {
             outlined: i == 4,
             hovered: i == 1,
             on_home: i % 2 == 0,
-            sheet: (i % 2 != 0) as u32,
             // The off-sheet half draws small and knocks out, so the
             // every-draw-path scene exercises both sevens-layer branches
             // (the scaled billboard and the gutter's extra alpha) as well.
@@ -390,7 +389,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         outlined: false,
         hovered: false,
         on_home: true,
-        sheet: 0,
         scale: 1.0,
         gutter: 0.0,
         comma: 0.0,
@@ -686,73 +684,53 @@ fn bloom_adds_light_over_the_plain_composite() {
 
 
 
-/// Each sevens sheet must be laid over the ones nearer the home sheet, so
-/// its knockouts clear them — a node can only clear what was drawn before
-/// it. Sorting the off-sheet nodes by camera DEPTH instead stacks the two
-/// halves of the axis in opposite directions (`+2` over `+1`, but `-1` over
-/// `-2`), which is what this pins against.
+/// A sheet in FRONT of the home sheet is drawn over it; a sheet BEHIND it
+/// is drawn under. Both directions matter, and only one of them is obvious:
+/// forcing the home sheet to the bottom (so an off-sheet note could never be
+/// hidden by it) inverts the far half of the axis, and since the knockout
+/// gutter clears whatever was drawn before it, the sheet behind then takes a
+/// bite out of the home sheet in front of it.
 #[test]
-fn cabinet_stacks_the_sheets_outward_from_home() {
+fn sheets_draw_back_to_front_along_the_sevens_axis() {
     use lattice_scene::{Camera, FrameParams, Projection, ViewConfig};
 
     let view = ViewConfig {
         extent_threes: 1,
         extent_fives: 1,
         extent_sevens: 2,
-        sevens_size: 0.5,
-        sevens_gutter: 0.1,
         ..ViewConfig::default()
     };
-    let scene = lattice_scene::derive_scene(
-        &lattice_core::NoteTracker::new(),
-        &lattice_core::Tuning::default(),
-        &view,
-        &FrameParams::default(),
-        Camera { projection: Projection::Cabinet, ..Camera::default() },
-        None,
-        0.0,
-    );
-    let call = LatticeCallback::from_scene(
-        &scene,
-        egui::vec2(800.0, 600.0),
-        wgpu::TextureFormat::Bgra8Unorm,
-        0,
-    );
-
-    // `sevens[0]` is the node's size factor, which shrinks by sheet — so
-    // reading the draw order back as sizes says the stack runs largest
-    // (home) first and each smaller sheet over it.
-    let sizes: Vec<f32> = call.instances.iter().map(|i| i.sevens[0]).collect();
-    assert!(sizes.len() > 1, "the window has to hold several sheets");
-    for pair in sizes.windows(2) {
-        assert!(
-            pair[1] <= pair[0] + 1e-6,
-            "a bigger (nearer-home) sheet is drawn over a smaller one: {pair:?}"
+    for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic]
+    {
+        let scene = lattice_scene::derive_scene(
+            &lattice_core::NoteTracker::new(),
+            &lattice_core::Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            // Facing the sheets head-on. Cabinet is always this way; the
+            // other two are orbited by default, and an orbited camera sorts
+            // by a depth that mixes all three axes — correctly, but then
+            // world z is no longer the key and there is nothing to assert.
+            Camera { projection, yaw: 0.0, pitch: 0.0, ..Camera::default() },
+            None,
+            0.0,
         );
+        let call = LatticeCallback::from_scene(
+            &scene,
+            egui::vec2(800.0, 600.0),
+            wgpu::TextureFormat::Bgra8Unorm,
+            0,
+        );
+        // World z IS the sevens axis (see lattice_to_world), so with the
+        // camera down that axis the draw order must run from the most
+        // negative sheet to the most positive.
+        let depths: Vec<f32> = call.instances.iter().map(|i| i.world_pos[2]).collect();
+        assert!(depths.len() > 1, "the window has to hold several sheets");
+        for pair in depths.windows(2) {
+            assert!(
+                pair[1] >= pair[0] - 1e-6,
+                "{projection:?}: a sheet behind is drawn after one in front: {pair:?}"
+            );
+        }
     }
-    assert_eq!(*sizes.first().unwrap(), 1.0, "the home sheet is the ground");
-    assert!((*sizes.last().unwrap() - 0.25).abs() < 1e-6, "the farthest sheet is on top");
-
-    // Under a real 3-D view the arrangement is real, so depth wins again
-    // and the stack is NOT sorted by sheet.
-    let perspective = lattice_scene::derive_scene(
-        &lattice_core::NoteTracker::new(),
-        &lattice_core::Tuning::default(),
-        &view,
-        &FrameParams::default(),
-        Camera { projection: Projection::Perspective, ..Camera::default() },
-        None,
-        0.0,
-    );
-    let call = LatticeCallback::from_scene(
-        &perspective,
-        egui::vec2(800.0, 600.0),
-        wgpu::TextureFormat::Bgra8Unorm,
-        0,
-    );
-    let sizes: Vec<f32> = call.instances.iter().map(|i| i.sevens[0]).collect();
-    assert!(
-        sizes.windows(2).any(|p| p[1] > p[0] + 1e-6),
-        "perspective should occlude physically, not stack by sheet"
-    );
 }
