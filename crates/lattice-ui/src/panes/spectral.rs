@@ -191,11 +191,16 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          Time runs away from the spectrum, so a note leaving the roll meets \
          the peak it is making.",
     );
-    ValueBar::new(&mut cfg.roll_seconds, 1.0..=120.0, "Span (s)")
+    ValueBar::new(&mut cfg.roll_seconds, 1.0..=600.0, "Span (s)")
         .eased(true)
         .decimals(1)
         .show(ui)
-        .on_hover_text("Seconds of history the roll spans end to end");
+        .on_hover_text(
+            "Seconds of history the roll spans end to end, up to 10 minutes. \
+             The scale is logarithmic, so the short spans you live in get most \
+             of the travel. The spectrogram fills the most recent few minutes \
+             of a long span; the notes span the whole of it.",
+        );
     ValueBar::new(&mut cfg.roll_thickness, 0.2..=4.0, "Note width")
         .show(ui)
         .on_hover_text("Ribbon width in semitones of the pitch axis");
@@ -1494,7 +1499,7 @@ mod tests {
         spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.5;
         spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS - 1] = 0.3;
         for i in 0..80 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, spectrum_bins);
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, spectrum_bins, 10.0);
         }
 
         let on = |time, note| NoteEvent {

@@ -668,20 +668,32 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
 
-    // Age trim: columns older than HISTORY_SECONDS before the newest go.
+    // Age trim tracks the CURRENT window: with a 30 s span, only ~30 s (plus
+    // the margin) of columns are kept, so a short span doesn't sit on a long
+    // history's worth of memory.
+    let window = 30.0f32;
     let mut spec = AudioSpectrum::default();
     for i in 0..300 {
-        spec.push_history(i as f64, bins);
+        spec.push_history(i as f64, bins, window);
     }
-    let cutoff = 299.0 - AudioSpectrum::HISTORY_SECONDS;
+    let cutoff = 299.0 - (f64::from(window) + AudioSpectrum::HISTORY_MARGIN);
     assert!(spec.history().front().unwrap().time >= cutoff, "old columns dropped");
     assert_eq!(spec.history().back().unwrap().time, 299.0, "newest kept");
+
+    // The retention never exceeds the hard cap, however long the window asks
+    // for — the ceiling on both history and memory.
+    let mut spec = AudioSpectrum::default();
+    for i in 0..800 {
+        spec.push_history(i as f64, bins, 100_000.0);
+    }
+    let cutoff = 799.0 - AudioSpectrum::HISTORY_MAX_SECONDS;
+    assert!(spec.history().front().unwrap().time >= cutoff, "capped at HISTORY_MAX_SECONDS");
 
     // Count cap holds even when every column shares one timestamp (so the
     // age trim never fires) — the backstop against an unbounded ring.
     let mut spec = AudioSpectrum::default();
     for _ in 0..(AudioSpectrum::HISTORY_MAX + 50) {
-        spec.push_history(0.0, bins);
+        spec.push_history(0.0, bins, 100_000.0);
     }
     assert!(spec.history().len() <= AudioSpectrum::HISTORY_MAX, "count capped");
 

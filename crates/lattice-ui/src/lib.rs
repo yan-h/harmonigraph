@@ -744,24 +744,37 @@ impl AudioSpectrum {
                     };
                 }
                 // Keep the RAW spectrum for the spectrogram (the smoothed
-                // `display` would smear one column into the next).
-                self.push_history(now, fresh);
+                // `display` would smear one column into the next). Retention
+                // tracks the current window, so a short span doesn't sit on a
+                // long history's worth of memory.
+                self.push_history(now, fresh, config.roll_seconds);
                 self.last_fft = Some(now);
             }
         }
         Some((&self.display, &self.peaks))
     }
 
-    /// The longest roll window (`roll_seconds` max), plus a margin, is the
-    /// most history the spectrogram can ever show; drop older columns.
-    const HISTORY_SECONDS: f64 = 130.0;
-    /// Backstop on the column count regardless of timing.
+    /// Kept past the roll's current window, so a column is ready the instant
+    /// the window reaches back to it.
+    const HISTORY_MARGIN: f64 = 10.0;
+    /// The most history ever kept, whatever the window: the longest span the
+    /// roll offers (`roll_seconds` max) plus the margin. Nothing older is
+    /// retained even at the maximum span.
+    const HISTORY_MAX_SECONDS: f64 = 610.0;
+    /// Backstop on the column count regardless of timing, and the real memory
+    /// bound — each column is a whole spectrum. At the FFT rate this is ~200 s,
+    /// so at a very long span the heatmap covers the most recent stretch while
+    /// the note roll still spans the whole window.
     const HISTORY_MAX: usize = 4000;
 
-    /// Append one raw spectrum to the ring, trimming the far past.
-    fn push_history(&mut self, now: f64, power: SpectrumBuckets) {
+    /// Append one raw spectrum to the ring, trimming anything older than the
+    /// current window needs (`window_seconds` plus a margin, capped) or past
+    /// the column backstop.
+    fn push_history(&mut self, now: f64, power: SpectrumBuckets, window_seconds: f32) {
         self.history.push_back(SpectrogramColumn { time: now, power: Box::new(power) });
-        let oldest_kept = now - Self::HISTORY_SECONDS;
+        let keep =
+            (f64::from(window_seconds) + Self::HISTORY_MARGIN).min(Self::HISTORY_MAX_SECONDS);
+        let oldest_kept = now - keep;
         while self
             .history
             .front()
