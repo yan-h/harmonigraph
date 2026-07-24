@@ -157,7 +157,67 @@ impl Layout {
             })
             .collect()
     }
+
+    /// The line segments that separate adjacent panes: one down the middle of
+    /// every gap [`resolve`](Self::resolve) opened between two panes, spanning
+    /// exactly the edge they share.
+    ///
+    /// The gap alone doesn't read as a boundary — it shows the frame
+    /// background, which is within a shade or two of both panes' own dark
+    /// fills, so the lattice and the spectral pane melt into one continuous
+    /// field. Geometry only, so it can be tested without a GPU;
+    /// [`paint_dividers`](Self::paint_dividers) draws it.
+    pub fn dividers(&self, placements: &[(Pane, egui::Rect)]) -> Vec<[egui::Pos2; 2]> {
+        // A gap is where `resolve` put one — exactly `gap` points wide (or
+        // zero, panes flush). Anything wider is two panes that simply aren't
+        // neighbours, and gets no line.
+        let facing = |near: f32, far: f32| {
+            ((far - near - self.gap).abs() < 1.0).then_some((near + far) * 0.5)
+        };
+        let mut lines = Vec::new();
+        for (i, (_, a)) in placements.iter().enumerate() {
+            for (_, b) in &placements[i + 1..] {
+                // Side by side: they share a vertical edge over the rows both
+                // of them cover.
+                let (top, bottom) = (a.top().max(b.top()), a.bottom().min(b.bottom()));
+                if bottom > top {
+                    if let Some(x) =
+                        facing(a.right(), b.left()).or_else(|| facing(b.right(), a.left()))
+                    {
+                        lines.push([egui::pos2(x, top), egui::pos2(x, bottom)]);
+                    }
+                }
+                // Stacked: a horizontal edge over the columns both cover.
+                let (left, right) = (a.left().max(b.left()), a.right().min(b.right()));
+                if right > left {
+                    if let Some(y) =
+                        facing(a.bottom(), b.top()).or_else(|| facing(b.bottom(), a.top()))
+                    {
+                        lines.push([egui::pos2(left, y), egui::pos2(right, y)]);
+                    }
+                }
+            }
+        }
+        lines
+    }
+
+    /// Draw [`dividers`](Self::dividers). Called by the offline renderer and
+    /// by the Video panel's preview, after the panes themselves, so both
+    /// compose the identical picture.
+    ///
+    /// The live dock deliberately does NOT get these: Frameless mode exists so
+    /// adjacent panes record as one seamless surface.
+    pub fn paint_dividers(&self, painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
+        let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::hairline());
+        for line in self.dividers(placements) {
+            painter.line_segment(line, stroke);
+        }
+    }
 }
+
+/// Divider thickness in points. A hairline: enough to separate two panels,
+/// not enough to become a graphic element of its own.
+const DIVIDER_WIDTH: f32 = 1.0;
 
 #[cfg(test)]
 mod tests {
@@ -212,6 +272,49 @@ mod tests {
         let back: Layout = ron::from_str(&text).unwrap();
         assert_eq!(back.resolve(FRAME).len(), layout.resolve(FRAME).len());
         assert_eq!(back.panes[0].rect, layout.panes[0].rect);
+    }
+
+    /// The line goes down the middle of the gap and spans the shared edge —
+    /// whichever way the two panes are arranged.
+    #[test]
+    fn adjacent_panes_get_one_divider_centered_in_their_gap() {
+        let layout = Layout { gap: 20.0, ..Layout::split(false, 0.6) };
+        let resolved = layout.resolve(FRAME);
+        let lines = layout.dividers(&resolved);
+        assert_eq!(lines.len(), 1, "two panes, one boundary");
+        let [a, b] = lines[0];
+        assert!((a.x - 1920.0 * 0.6).abs() < 0.01, "centered in the gap, not on a pane edge");
+        assert_eq!(a.x, b.x, "side by side means a vertical line");
+        assert_eq!((a.y, b.y), (0.0, 1080.0), "spanning the whole shared edge");
+
+        let stacked = Layout { gap: 20.0, ..Layout::split(true, 0.6) };
+        let lines = stacked.dividers(&stacked.resolve(FRAME));
+        assert_eq!(lines.len(), 1);
+        let [a, b] = lines[0];
+        assert!((a.y - 1080.0 * 0.6).abs() < 0.01);
+        assert_eq!((a.x, b.x), (0.0, 1920.0), "stacked means a horizontal line");
+    }
+
+    /// Nothing to delineate: one pane has no neighbour, and panes that don't
+    /// face each other across a gap aren't neighbours either.
+    #[test]
+    fn only_neighbours_get_a_divider() {
+        for name in ["lattice", "spectral"] {
+            let layout = Layout::preset(name).unwrap();
+            assert!(layout.dividers(&layout.resolve(FRAME)).is_empty(), "{name}");
+        }
+        // Two panes with a quarter of the frame between them: a gap that wide
+        // is a composition choice, not a seam.
+        let apart = Layout {
+            background: default_background(),
+            margin: 0.0,
+            gap: 8.0,
+            panes: vec![
+                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 0.25, 1.0) },
+                Placement { pane: Pane::Spectral, rect: (0.5, 0.0, 1.0, 1.0) },
+            ],
+        };
+        assert!(apart.dividers(&apart.resolve(FRAME)).is_empty());
     }
 
     #[test]

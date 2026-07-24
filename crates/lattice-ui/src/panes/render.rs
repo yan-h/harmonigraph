@@ -82,8 +82,9 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     // a sweeping playhead, from audio the live preview doesn't have. Rather
     // than show the live scrolling spectrogram and quietly mislead, leave the
     // spectral region empty and say so.
+    let placements = layout.resolve(box_rect.size());
     let placeholder = state.render_config.playhead;
-    for (pane, rect) in layout.resolve(box_rect.size()) {
+    for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
             Pane::Spectral if placeholder => playhead_placeholder(ui, rect),
@@ -97,6 +98,11 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
             Pane::Lattice => preview_lattice(ui, rect, state, now, label_scale),
         }
     }
+
+    // The seam between panes, exactly as the render bakes it.
+    let translated: Vec<_> =
+        placements.iter().map(|(p, r)| (*p, r.translate(box_rect.min.to_vec2()))).collect();
+    layout.paint_dividers(ui.painter(), &translated);
 }
 
 /// Aspect ratio, arrangement, and split — editing the persisted `RenderFrame`.
