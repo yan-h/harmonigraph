@@ -315,14 +315,21 @@ impl LatticeCallback {
         // create_scene_pipeline), so alpha blending still relies on draw
         // order — exactly as it did before the offscreen pass existed.
         //
-        // Under CABINET the home sheet is additionally forced to the bottom,
-        // so every off-sheet node composites over it. Cabinet is a
-        // diagrammatic projection: it faces the fifths/thirds sheet head-on
-        // and shears the sevens axis into a fixed screen arrow, so what
-        // "depth" means there is notation, not distance — a sevens sheet is
-        // an annotation on the home sheet and must not be hidden by it. The
-        // knockout gutter depends on this too: a node can only clear its own
-        // footprint out of what was drawn before it. Perspective and
+        // Under CABINET the nodes are additionally grouped into a STACK by
+        // sheet — home first, then each sheet outward (`NodeInstance::sheet`,
+        // distance from the home sheet) — with depth only breaking ties
+        // between the two sheets at the same distance. Every sheet is then
+        // laid over the ones nearer home, so each sheet's knockouts clear
+        // the sheets under it, and the stack runs in the same direction the
+        // sizes do: largest at the bottom, each smaller sheet over it.
+        //
+        // Cabinet earns this because it is a diagrammatic projection: it
+        // faces the fifths/thirds sheet head-on and shears the sevens axis
+        // into a fixed screen arrow, so "depth" there is notation, not
+        // distance. Sorting those nodes by camera depth instead stacks the
+        // two halves of the axis in opposite directions — `+2` over `+1`,
+        // but `-1` over `-2` — and lets the home sheet hide the very
+        // annotations it is being annotated with. Perspective and
         // orthographic are real views of a real arrangement in space, so
         // they keep occluding physically.
         let eye = camera.eye();
@@ -332,8 +339,8 @@ impl LatticeCallback {
             .nodes
             .iter()
             .map(|n| {
-                let sheet = if layered { !n.on_home as u32 } else { 0 };
-                (sheet, (n.world_pos - eye).dot(forward), n)
+                let layer = if layered { n.sheet } else { 0 };
+                (layer, (n.world_pos - eye).dot(forward), n)
             })
             .collect();
         order.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
