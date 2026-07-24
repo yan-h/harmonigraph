@@ -26,60 +26,86 @@ use crate::{theme, RollColor, SharedState};
 /// width, where a filled polygon disappears).
 const MIN_RIBBON_PX: f32 = 1.5;
 
-/// How thick the keyline is, on each side of the note, at full size.
-pub(super) const KEYLINE_PX: f32 = 1.0;
-
-/// How thick the dark border outside the keyline is, at full size.
+/// How thick the solid black outline is, hugging the note's own outline, at
+/// full size. This is the structural rim — the crisp dark line that separates
+/// the note's color from whatever the spectrogram is doing behind it.
 pub(super) const BORDER_PX: f32 = 1.0;
+
+/// How thick the white glow line outside the black outline is, at full size.
+/// Thinner than the border on purpose: it is a bright highlight riding the
+/// note's outer edge, not a second outline of its own.
+pub(super) const KEYLINE_PX: f32 = 0.6;
+
+/// The roll's glow reads this much brighter than the raw Edge fraction, so a
+/// modest Edge setting still lands a crisp highlight over a bright spectrogram.
+/// Only the roll's glow is boosted; the spectrum profile's edge ([`keyline`])
+/// is left at the fraction, since it is one line on a filled slab and does not
+/// have a dark backing to be seen against.
+const GLOW_INTENSITY: f32 = 2.0;
 
 /// Ribbon thickness at which the rim reaches its full width; thinner notes
 /// get a proportionally thinner one, down to [`RIM_MIN_SCALE`].
 ///
 /// A rim is an edge on something, and an edge has to be smaller than the thing
 /// it edges. The pane is used at pitch ranges where a note is three to seven
-/// pixels thick, and a fixed 1px keyline plus a 1px border would put four
-/// pixels of rim around three pixels of note: the note would read as a
-/// black-and-white stripe with a hint of color in it, which is no better than
-/// the flooding it replaced.
+/// pixels thick, and a fixed black outline plus a glow would put more rim than
+/// note around it: the note would read as a black-and-white stripe with a hint
+/// of color in it, which is no better than the flooding it replaced.
 const RIM_FULL_PX: f32 = 10.0;
 
 /// The rim never scales away entirely — a quarter-pixel line still tints, and
 /// the whole point of the rim is the notes that are too thin to see.
 const RIM_MIN_SCALE: f32 = 0.25;
 
-/// How strong the rim is here: the Edge setting scaled by the note's own
-/// opacity, or `None` when there is too little of it to draw.
+/// How strong the Edge rim is here: the Edge setting scaled by the note's own
+/// opacity, or `None` when there is too little of it to draw. The gate for the
+/// whole rim — turn Edge off and the note is drawn with its outline alone.
 fn edge_strength(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<f32> {
     let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
     (strength > 0.004).then_some(strength)
 }
 
-/// The light edge drawn around a note's outline and along the spectrum's
-/// profile, at `cfg.keyline` strength — `None` when the setting is off.
+/// The light edge drawn along the spectrum's profile, at `cfg.keyline`
+/// strength — `None` when the setting is off.
 ///
-/// Both sit over the spectrogram, whose ramps run from black to near-white,
-/// so either can end up almost exactly the brightness of what is behind it and
-/// lose its shape entirely. A light rim gives them an edge to be seen by
-/// whatever they cross. It is a setting because how much is right depends
+/// The curve's own colors come from the spectrogram palette, so where it is
+/// quiet it is drawn in that palette's dark end against the pane's dark
+/// background, with no edge, and the shape stops existing. A light rim gives
+/// it an edge to be seen by. It is a setting because how much is right depends
 /// entirely on the palette and opacity in play.
+///
+/// The roll's notes carry a brighter version of this (see [`glow`]); the
+/// profile keeps the plain fraction, having no black backing to compete with.
 pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
     edge_strength(cfg, alpha).map(|s| Color32::WHITE.gamma_multiply(s))
 }
 
-/// The dark border just outside a note's keyline, at that same strength.
+/// The white glow line a roll note carries on its outer edge, brighter than
+/// the raw Edge fraction (see [`GLOW_INTENSITY`]). `None` when Edge is off.
 ///
-/// The keyline alone solves half the problem: it is white, and the loudest
-/// spectrogram cells are near-white too, so over exactly the material the
-/// notes most need to be legible against, the rim meant to give them their
-/// shape washes out. Backing it with black means the rim always contains a
-/// contrast of its own — light against the note, dark against the picture —
-/// and the note reads as a distinct object over anything the heatmap does.
+/// It rides OUTSIDE the black outline, so it needs to punch — a faint white
+/// line lost against a bright spectrogram cell was the old keyline's failing.
+pub(super) fn glow(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
+    edge_strength(cfg, alpha)?;
+    let s = (cfg.keyline.clamp(0.0, 1.0) * GLOW_INTENSITY).min(1.0) * alpha;
+    Some(Color32::WHITE.gamma_multiply(s))
+}
+
+/// The solid black outline a roll note carries just outside its own colored
+/// outline — `None` when Edge is off.
+///
+/// Opaque at the note's opacity, independent of the Edge magnitude: Edge turns
+/// the rim on and sets the GLOW's intensity, but the black is structural and
+/// always fully drawn, so the note has a crisp dark separation from the picture
+/// however faint the glow is set. It fades only with the note's own opacity, so
+/// it never reads bolder than the note it edges.
 ///
 /// Roll notes only. The spectrum's profile is a single curve on one side of a
 /// filled slab, not a shape to pick out of a background, and a dark line under
 /// it just reads as a shadow.
 pub(super) fn border(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
-    edge_strength(cfg, alpha).map(|s| Color32::BLACK.gamma_multiply(s))
+    edge_strength(cfg, alpha)?;
+    Some(Color32::BLACK.gamma_multiply(alpha))
 }
 
 /// Draw every remembered note that falls inside the pane's time window and
@@ -176,10 +202,10 @@ pub(super) fn draw_roll(
             // the hairline branch, where there is no interior to stand outside
             // of and the bands go under the spine widest-first.
             let mut bands: Vec<(f32, f32, Color32)> = Vec::with_capacity(4);
-            let rim = keyline(cfg, alpha).zip(border(cfg, alpha));
-            // Where the rim ends, so the glow can start outside it.
-            let rim_px = if rim.is_some() { keyline_px + border_px } else { 0.0 };
-            // Bloom: a soft glow around the note, driven by the SAME setting as
+            let rim = glow(cfg, alpha).zip(border(cfg, alpha));
+            // Where the rim ends, so the bloom can start outside it.
+            let rim_px = if rim.is_some() { border_px + keyline_px } else { 0.0 };
+            // Bloom: a soft halo around the note, driven by the SAME setting as
             // the lattice's bloom so the two panes share the look. egui has no
             // post-process pass like the lattice's wgpu bloom, so approximate
             // one — two faint bands outside the rim, the brighter one nested
@@ -191,11 +217,13 @@ pub(super) fn draw_roll(
                 bands.push((rim_px, g * 1.5, brighten(body(alpha * 0.12 * g))));
                 bands.push((rim_px, g * 0.75, brighten(body(alpha * 0.20 * g))));
             }
-            if let Some((edge, dark)) = rim {
-                // Dark outside light: reading outward, a note is color, light,
-                // dark, then whatever the spectrogram is doing.
-                bands.push((keyline_px, border_px, dark));
-                bands.push((0.0, keyline_px, edge));
+            if let Some((light, dark)) = rim {
+                // Reading outward: the note's color, a solid black outline
+                // hugging it, then the bright white glow riding the black's
+                // outer edge, then whatever the spectrogram is doing. The black
+                // gives the note a crisp separation; the glow is the highlight.
+                bands.push((border_px, keyline_px, light));
+                bands.push((0.0, border_px, dark));
             }
             // The crisp outline is the note's TRUE color, so it matches the
             // same note on the lattice. It goes on top of everything.
@@ -422,16 +450,26 @@ mod tests {
         );
     }
 
-    /// The white keyline and its dark backing, identified by color among the
-    /// rects a lit note drew.
-    fn rim_of(rects: &[Ribbon]) -> (Option<&Ribbon>, Option<&Ribbon>) {
-        let by = |want: Color32| rects.iter().find(|r| r.color == want);
-        (by(Color32::WHITE.gamma_multiply(0.5)), by(Color32::BLACK.gamma_multiply(0.5)))
-    }
-
     /// The crisp outline: the widest stroke, in the note's own color.
     fn core_of(rects: &[Ribbon]) -> &Ribbon {
         rects.iter().max_by(|a, b| a.width.total_cmp(&b.width)).expect("no ribbon drawn")
+    }
+
+    /// The white glow and the solid black outline, told apart by brightness
+    /// among the note's rects — the two rim bands are neutral grey (r==g==b),
+    /// bright for the glow and dark for the outline. Identified this way rather
+    /// than by an exact color so tuning the glow's intensity leaves the
+    /// geometry tests alone. The core is excluded by width: it is the widest
+    /// stroke, and carries the note's own (hued) color anyway.
+    fn rim_of(rects: &[Ribbon]) -> (Option<&Ribbon>, Option<&Ribbon>) {
+        let core_w = core_of(rects).width;
+        let grey = |r: &&Ribbon| {
+            let c = r.color;
+            c.a() > 0 && c.r() == c.g() && c.g() == c.b() && r.width < core_w - 0.01
+        };
+        let white = rects.iter().filter(grey).find(|r| r.color.r() >= 128);
+        let black = rects.iter().filter(grey).find(|r| r.color.r() < 128);
+        (white, black)
     }
 
     /// The filled span of a stroked rect: the rectangle it is drawn on, grown
@@ -452,54 +490,87 @@ mod tests {
             && outer.max.y >= inner.max.y - 0.01
     }
 
-    /// The Edge setting draws a light keyline and a dark border, in that order
-    /// outward, and BOTH stand entirely outside the note's outline. This is
-    /// the whole fix: they used to be wider strokes of the same rectangle, so
-    /// on a thin note they grew inward and flooded the hollow interior — the
-    /// note read as a translucent white box instead of an edged ribbon. The
-    /// key invariant is that each rim band's INNER (filled) edge still encloses
+    /// The Edge rim is a solid black outline hugging the note with a white glow
+    /// riding its outer edge, and BOTH stand entirely outside the note's own
+    /// outline. This is the flood fix: they used to be wider strokes of the same
+    /// rectangle, so on a thin note they grew inward and painted the hollow
+    /// interior — the note read as a translucent box instead of an edged ribbon.
+    /// The invariant is that each rim band's INNER (filled) edge still encloses
     /// the outline's OUTER edge, so no rim pixel lands on the note's interior.
     #[test]
     fn the_edge_rim_stands_outside_the_note_never_inside_it() {
         let rects = ribbon(0.5);
         let core_outer = outer(core_of(&rects));
-        let (Some(key), Some(dark)) = rim_of(&rects) else {
-            panic!("expected a keyline and a dark border, got {} rects", rects.len());
+        let (Some(glow), Some(black)) = rim_of(&rects) else {
+            panic!("expected a glow and a black outline, got {} rects", rects.len());
         };
-        for (name, band) in [("keyline", key), ("border", dark)] {
+        for (name, band) in [("glow", glow), ("black outline", black)] {
             assert!(
                 encloses(inner(band), core_outer),
                 "the {name} reaches inside the note rather than sitting outside it",
             );
         }
-        // Dark outside light.
+        // The white glow rides the OUTSIDE of the black outline.
         assert!(
-            encloses(inner(dark), outer(key)),
-            "the border should sit outside the keyline it backs",
+            encloses(inner(glow), outer(black)),
+            "the white glow should sit outside the black outline it rides",
         );
 
         // Off is off: no rim at all, not a hairline that can't be cleared.
         let none = ribbon(0.0);
-        let (k, d) = rim_of(&none);
-        assert!(k.is_none() && d.is_none(), "Edge 0 still drew a rim");
+        let (g, b) = rim_of(&none);
+        assert!(g.is_none() && b.is_none(), "Edge 0 still drew a rim");
     }
 
     /// The same invariant at the pitch range where the bug actually bit: the
-    /// whole analyzer axis, where a note is a couple of pixels thick. A
-    /// centered keyline stroke would have painted straight across the interior
-    /// here — `inner(key)` would collapse or invert and stop enclosing the
-    /// outline. Thickness-independent by construction, so it holds regardless.
+    /// whole analyzer axis, where a note is a couple of pixels thick. A centered
+    /// stroke would have painted straight across the interior here — the band's
+    /// inner edge would collapse or invert and stop enclosing the outline.
+    /// Thickness-independent by construction, so it holds regardless.
     #[test]
     fn the_rim_does_not_flood_a_thin_note() {
         // ~120 semitones over 100px: the ribbon is under 2px thick.
         let rects = ribbon_with_range(0.5, 120.0);
         let core_outer = outer(core_of(&rects));
-        let (Some(key), _) = rim_of(&rects) else {
-            panic!("a lit note drew no keyline to check");
+        let (Some(glow), Some(black)) = rim_of(&rects) else {
+            panic!("a lit thin note drew no rim to check");
         };
+        for band in [glow, black] {
+            assert!(
+                encloses(inner(band), core_outer),
+                "the rim floods the thin note's interior instead of edging it",
+            );
+        }
+    }
+
+    /// The black outline is solid (opaque at the note's opacity) and the white
+    /// glow is thin and bright: reading outward, color, a crisp black line, then
+    /// a punchy highlight. The glow reads stronger than the raw Edge fraction —
+    /// that boost is the "more intense" ask — and its line is thinner than the
+    /// black it rides.
+    #[test]
+    fn the_black_outline_is_solid_and_the_glow_is_thin_and_bright() {
+        // A modest Edge, below the point where the boosted glow clips to full,
+        // so "brighter than the fraction" is a real comparison.
+        let edge = 0.3;
+        let rects = ribbon(edge);
+        let (Some(glow), Some(black)) = rim_of(&rects) else {
+            panic!("no rim drawn");
+        };
+        // Solid: opaque at the note's own opacity (1.0 here).
+        assert_eq!(black.color.a(), 255, "the black outline is not solid");
+        // Bright: the glow's alpha clears the raw Edge fraction by a margin.
         assert!(
-            encloses(inner(key), core_outer),
-            "the keyline floods the thin note's interior instead of edging it",
+            f32::from(glow.color.a()) / 255.0 > edge + 0.05,
+            "the glow ({}) is no brighter than the Edge fraction {edge}",
+            glow.color.a(),
+        );
+        // Small: the glow line is thinner than the black outline it rides.
+        assert!(
+            glow.width < black.width,
+            "the glow ({}) is not thinner than the black outline ({})",
+            glow.width,
+            black.width,
         );
     }
 }
