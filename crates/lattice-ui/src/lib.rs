@@ -845,21 +845,19 @@ impl AudioSpectrum {
                     };
                 }
                 // Keep the RAW spectrum for the spectrogram (the smoothed
-                // `display` would smear one column into the next). Retention
-                // tracks the current window, so a short span doesn't sit on a
-                // long history's worth of memory.
-                self.push_history(now, fresh, config.roll_seconds);
+                // `display` would smear one column into the next). Retention is
+                // span-INDEPENDENT (see `push_history`): shrinking the span and
+                // widening it again must not lose the history in between.
+                self.push_history(now, fresh);
                 self.last_fft = Some(now);
             }
         }
         Some((&self.display, &self.peaks))
     }
 
-    /// Kept past the roll's current window, so a column is ready the instant
-    /// the window reaches back to it.
-    const HISTORY_MARGIN: f64 = 10.0;
-    /// The most history ever kept, whatever the window: the longest span the
-    /// roll offers (`roll_seconds` max) plus the margin. Nothing older is
+    /// The most history ever kept, span-independent: the longest span the roll
+    /// offers (`roll_seconds` max, 600 s) plus 10 s of headroom so a column is
+    /// ready the instant the window reaches back to it. Nothing older is
     /// retained even at the maximum span.
     const HISTORY_MAX_SECONDS: f64 = 610.0;
     /// Backstop on the column count regardless of timing, and the real memory
@@ -868,14 +866,18 @@ impl AudioSpectrum {
     /// the note roll still spans the whole window.
     const HISTORY_MAX: usize = 4000;
 
-    /// Append one raw spectrum to the ring, trimming anything older than the
-    /// current window needs (`window_seconds` plus a margin, capped) or past
-    /// the column backstop.
-    fn push_history(&mut self, now: f64, power: SpectrumBuckets, window_seconds: f32) {
+    /// Append one raw spectrum to the ring, trimming anything past the
+    /// backstop (`HISTORY_MAX_SECONDS` of age or `HISTORY_MAX` columns).
+    ///
+    /// Retention is deliberately NOT keyed to the current span: trimming to the
+    /// live `roll_seconds` meant shrinking the span popped columns off the
+    /// front, and widening it again could never bring them back — the span
+    /// control silently erased spectrogram history. The heatmap simply reads
+    /// back as far as the span asks; anything it isn't showing yet stays in the
+    /// ring until it ages past the backstop.
+    fn push_history(&mut self, now: f64, power: SpectrumBuckets) {
         self.history.push_back(SpectrogramColumn { time: now, power: Box::new(power) });
-        let keep =
-            (f64::from(window_seconds) + Self::HISTORY_MARGIN).min(Self::HISTORY_MAX_SECONDS);
-        let oldest_kept = now - keep;
+        let oldest_kept = now - Self::HISTORY_MAX_SECONDS;
         while self
             .history
             .front()
