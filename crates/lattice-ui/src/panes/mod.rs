@@ -131,15 +131,20 @@ impl egui_dock::TabViewer for Viewer<'_> {
         }
     }
 
-    /// The Spectral display paints its own well-colored plot surface, so
-    /// the default 8px body margin reads as a pointless border around it:
-    /// drop the margin and let the plot fill the whole tab.
+    /// The two picture panes paint their own surface edge to edge — the
+    /// Spectral display its plot well, the Lattice its 3D view — so the
+    /// default 8px body margin reads as a pointless border around a picture
+    /// rather than as breathing room between controls. Drop it and let them
+    /// fill the whole tab.
+    ///
+    /// Settings panes keep the margin: there the padding is what stops the
+    /// bars and labels from running into the pane edge.
     fn tab_style_override(
         &self,
         tab: &Tab,
         global_style: &egui_dock::TabStyle,
     ) -> Option<egui_dock::TabStyle> {
-        matches!(tab, Tab::Spectral).then(|| {
+        matches!(tab, Tab::Spectral | Tab::Lattice).then(|| {
             let mut style = global_style.clone();
             style.tab_body.inner_margin = egui::Margin::ZERO;
             style
