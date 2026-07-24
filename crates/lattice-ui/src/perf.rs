@@ -17,6 +17,15 @@ const SMOOTH: f32 = 0.1;
 /// so once a second is plenty and keeps it off the per-frame path.
 const MEM_INTERVAL: f64 = 1.0;
 
+/// How quickly the memory readout chases a new reading. Applied per READ, so
+/// at [`MEM_INTERVAL`] this settles over a few seconds — fast enough to show
+/// something growing, slow enough that ordinary churn doesn't reach the
+/// digits.
+const MEM_SMOOTH: f64 = 0.3;
+
+/// Granularity of the memory readout, in MB. See [`memory_readout`].
+const MEM_STEP_MB: u64 = 10;
+
 /// One interactive frame's workload: what the overlay reports as the load
 /// driving the frame rate and CPU cost. Built by the shell each frame and
 /// folded in via [`PerfStats::record`].
@@ -56,8 +65,11 @@ pub struct PerfStats {
     /// building the dock and its panes on this thread. Not GPU time — the 3D
     /// draw is submitted to wgpu and finishes off-thread (see `draw_overlay`).
     cpu_ms: f32,
-    /// Resident set size in bytes, refreshed about once a second (0 when the
-    /// platform can't report it).
+    /// Smoothed resident set size in bytes, refreshed about once a second (0
+    /// when the platform can't report it). Smoothed for the same reason the
+    /// frame numbers are: this is read as a number, not watched as a trace,
+    /// and raw RSS wanders by megabytes between reads as the host and the GPU
+    /// driver take and give memory back.
     rss_bytes: u64,
     /// Shell-clock time of the last memory read, to throttle it.
     last_mem_read: f64,
@@ -89,7 +101,16 @@ impl PerfStats {
         self.cpu_ms += (cpu_ms - self.cpu_ms) * SMOOTH;
         self.workload = workload;
         if now - self.last_mem_read >= MEM_INTERVAL {
-            self.rss_bytes = rss_bytes();
+            let sample = rss_bytes();
+            // Seeded on the first reading rather than eased up from zero,
+            // which would read as a plugin growing into its memory over the
+            // first few seconds of every session.
+            self.rss_bytes = if self.rss_bytes == 0 {
+                sample
+            } else {
+                let (from, to) = (self.rss_bytes as f64, sample as f64);
+                (from + (to - from) * MEM_SMOOTH) as u64
+            };
             self.last_mem_read = now;
         }
     }
@@ -100,6 +121,29 @@ impl PerfStats {
         } else {
             0.0
         }
+    }
+}
+
+/// The memory row's text: resident size to the nearest [`MEM_STEP_MB`], or
+/// "n/a" where the platform won't say.
+///
+/// Quantized because of what the number is FOR. It answers "is this plugin
+/// sitting on a sane amount of memory, and is that amount growing?" — and
+/// neither reading needs the exact megabyte, which moves on every refresh.
+/// An unquantized readout spent every second rewriting its last digits, and
+/// digits that never hold still get squinted at rather than read.
+fn memory_readout(rss_bytes: u64) -> String {
+    if rss_bytes == 0 {
+        return "n/a".to_string();
+    }
+    let mb = rss_bytes / (1024 * 1024);
+    // Nearest step, but never down to a bare "0 MB" while there IS a reading:
+    // "<10 MB" is the honest thing to say about a process too small to round.
+    let rounded = (mb + MEM_STEP_MB / 2) / MEM_STEP_MB * MEM_STEP_MB;
+    if rounded == 0 {
+        format!("<{MEM_STEP_MB} MB")
+    } else {
+        format!("{rounded} MB")
     }
 }
 
@@ -131,11 +175,7 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
         });
     };
 
-    let memory = if perf.rss_bytes > 0 {
-        format!("{} MB", perf.rss_bytes / (1024 * 1024))
-    } else {
-        "n/a".to_string()
-    };
+    let memory = memory_readout(perf.rss_bytes);
     let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
 
     egui::Area::new(egui::Id::new("perf_overlay"))
@@ -262,6 +302,44 @@ mod tests {
         // 0 ("n/a") is the documented result.
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         assert!(perf.rss_bytes > 0, "expected a resident-size reading");
+    }
+
+    /// The megabyte that moves on every read is noise; the readout answers
+    /// "roughly how much, and is it growing", so it steps rather than churns.
+    #[test]
+    fn the_memory_readout_steps_rather_than_churning() {
+        let mb = |n: u64| n * 1024 * 1024;
+        // Everything inside one step reads the same, so the digits hold still.
+        for bytes in [mb(485), mb(487), mb(492), mb(494)] {
+            assert_eq!(memory_readout(bytes), "490 MB", "{bytes} bytes");
+        }
+        assert_eq!(memory_readout(mb(495)), "500 MB", "and it does step");
+        assert_eq!(memory_readout(0), "n/a", "no reading at all");
+        // A process too small to round still says something true, not "0 MB".
+        assert_eq!(memory_readout(mb(3)), "<10 MB");
+    }
+
+    /// A single spike shouldn't jump the number: it eases toward each new
+    /// reading, so what reaches the digits is where memory actually sits.
+    #[test]
+    fn memory_eases_toward_a_new_reading() {
+        let mut perf = PerfStats {
+            rss_bytes: 400 * 1024 * 1024,
+            last_mem_read: 0.0,
+            ..Default::default()
+        };
+        // Force a read whose sample is whatever the platform reports; what is
+        // under test is that the stored value MOVES but does not teleport.
+        let before = perf.rss_bytes;
+        perf.record(1.0 / 60.0, 1.0, MEM_INTERVAL, Workload::default());
+        let after = perf.rss_bytes as f64;
+        let sample = super::rss_bytes() as f64;
+        if sample > 0.0 && (sample - before as f64).abs() > 1.0 {
+            let step = (after - before as f64).abs();
+            let jump = (sample - before as f64).abs();
+            assert!(step < jump, "the readout teleported: {before} -> {after}");
+            assert!(step > 0.0, "the readout never moved at all");
+        }
     }
 
     #[test]
