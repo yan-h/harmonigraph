@@ -12,7 +12,7 @@
 //! and the small helpers more than one pane needs.
 
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::ValueBar;
+use crate::widgets::{RangeBar, ValueBar};
 use crate::SharedState;
 
 pub mod frame;
@@ -259,6 +259,43 @@ pub(super) fn param_bar(
     }
     if response.drag_stopped() {
         params.end_set(key);
+    }
+    response
+}
+
+/// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
+/// range whose ends are both automatable params (the Nodes pane's color
+/// range). `display` formats each end's readout.
+///
+/// Both params are bracketed for the whole drag and written every changed
+/// frame, so a drag on either handle records as one gesture on each. A
+/// double-click reset arrives as `changed` with no drag, and goes through the
+/// same `set` without a gesture — matching [`param_bar`]'s one-shot path.
+pub(super) fn param_range_bar(
+    ui: &mut egui::Ui,
+    params: &dyn ParamBackend,
+    low_key: ParamKey,
+    high_key: ParamKey,
+    range: std::ops::RangeInclusive<f32>,
+    min_span: f32,
+    display: fn(f32) -> String,
+) -> egui::Response {
+    let (mut low, mut high) = (params.get(low_key), params.get(high_key));
+    let response = RangeBar::new(&mut low, &mut high, range)
+        .min_span(min_span)
+        .display(display)
+        .show(ui);
+    if response.drag_started() {
+        params.begin_set(low_key);
+        params.begin_set(high_key);
+    }
+    if response.changed() {
+        params.set(low_key, low);
+        params.set(high_key, high);
+    }
+    if response.drag_stopped() {
+        params.end_set(low_key);
+        params.end_set(high_key);
     }
     response
 }

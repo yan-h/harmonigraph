@@ -179,13 +179,33 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Color: the pitch->color gradient endpoints (MIDI notes) the pitch-colored
-/// channels map through.
+/// A MIDI note as a key name and octave, for the color-range readout — "C1",
+/// "C8" — so the ends read as pitches rather than bare numbers.
+fn pitch_readout(midi: f32) -> String {
+    let n = midi.round() as i32;
+    let name = super::KEY_NAMES[n.rem_euclid(12) as usize];
+    format!("{name}{}", lattice_core::notes::display_octave_of(n))
+}
+
+/// Color: the pitch->color gradient endpoints the pitch-colored channels map
+/// through — the darkest pitch and the brightest, as one two-handle range.
 fn color_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     section(ui, "Color");
-    for &key in &ParamKey::COLOR {
-        param_bar(ui, params, key);
-    }
+    ui.label("Pitch range");
+    super::param_range_bar(
+        ui,
+        params,
+        ParamKey::DarkestPitch,
+        ParamKey::BrightestPitch,
+        0.0..=120.0,
+        crate::PITCH_RANGE_MIN_SPAN,
+        pitch_readout,
+    )
+    .on_hover_text(
+        "The pitch span the color gradient covers: the low end takes the \
+         darkest color, the high end the brightest. Drag either end, or drag \
+         between them to slide the whole range.",
+    );
 }
 
 /// Fade: how long a released note lingers. One time for the whole node —

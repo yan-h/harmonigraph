@@ -146,9 +146,11 @@ impl ParamKey {
             }
             ParamKey::Tolerance => 0.001..=49.999,
             ParamKey::Fade => 0.0..=100.0,
-            // Same ranges as v1's grid params.
-            ParamKey::DarkestPitch => 0.0..=60.0,
-            ParamKey::BrightestPitch => 60.0..=120.0,
+            // Both ends span the whole MIDI range so the pair reads as one
+            // two-handle control (the Nodes pane's Color range); ordering is
+            // kept by the range bar's min span, not by a hard 60-note split.
+            ParamKey::DarkestPitch => 0.0..=120.0,
+            ParamKey::BrightestPitch => 0.0..=120.0,
         }
     }
 
