@@ -90,9 +90,10 @@ fn octaves_fade_independently() {
 #[test]
 fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
     // The core and the octave glyphs ride the single Fade param: release a
-    // two-note chord and half a fade later both are half-way down. The
-    // melody/bass rings do NOT ride it — they come off with the key, so a
-    // released note wears no mark at all even mid-fade.
+    // two-note chord and half a fade later both are down to the same reading
+    // (a quarter, on the eased envelope — what matters here is that the two
+    // agree, not the curve). The melody/bass rings do NOT ride it — they come
+    // off with the key, so a released note wears no mark at all even mid-fade.
     let mut tracker = NoteTracker::new();
     for note in [60u8, 67] {
         tracker.handle_event(NoteEvent {
@@ -113,13 +114,13 @@ fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
     };
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
 
-    let half = |what: &str, v: f32| {
-        assert!((v - 0.5).abs() < 1e-5, "{what} should be half-faded, got {v}");
+    let mid_fade = |what: &str, v: f32| {
+        assert!((v - 0.25).abs() < 1e-5, "{what} should be mid-fade, got {v}");
     };
-    // C4 sits on the origin node; its body is half-faded...
+    // C4 sits on the origin node; its body is mid-fade...
     let origin = origin_node(&scene);
-    half("the core", origin.activation);
-    half("the octave glyph", origin.octaves[4]);
+    mid_fade("the core", origin.activation);
+    mid_fade("the octave glyph", origin.octaves[4]);
     // ...but no ring survives the release, on any node.
     assert!(
         scene.nodes.iter().all(|n| n.melody_slots == 0 && n.bass_slots == 0),
@@ -543,8 +544,8 @@ fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
     // The octave glyph for the released C5 still fades on its own envelope —
     // it is only the RING that snaps off, not the disc or the glyph.
     assert!(
-        (origin.octaves[5] - 0.5).abs() < 1e-5,
-        "the released C5's octave is half-faded, got {}",
+        (origin.octaves[5] - 0.25).abs() < 1e-5,
+        "the released C5's octave is mid-fade, got {}",
         origin.octaves[5]
     );
     assert_eq!(origin.octaves[4], 1.0, "the held C4's octave is at full");

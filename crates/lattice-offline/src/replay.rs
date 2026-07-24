@@ -189,8 +189,10 @@ mod tests {
         replay.advance_to(&mut state, 1.0);
         let voice = *state.tracker.voices().next().unwrap();
         assert_eq!(voice.on_time, 0.5);
-        // Released at 0.6 with a 1 s fade: 40% gone by t=1.0.
-        assert!((voice.activation(1.0, 1.0) - 0.6).abs() < 1e-6);
+        // Released at 0.6 with a 1 s fade: 0.4 of the fade gone by t=1.0,
+        // which the eased envelope reads as 0.6² of the note left. Framed off
+        // the release time, not the frame boundary — which is the point here.
+        assert!((voice.activation(1.0, 1.0) - 0.36).abs() < 1e-6);
     }
 
     #[test]

@@ -117,10 +117,19 @@ impl Voice {
     }
 
     /// Envelope in `[0, 1]` driving the visual intensity of this voice:
-    /// 1 while held, then a linear decay over `fade_time` seconds.
+    /// 1 while held, then an eased decay over `fade_time` seconds.
     /// The scene layer shapes this further (attack ramps, per-octave
     /// envelopes); this stays the single source of truth for "is this voice
     /// still visible".
+    ///
+    /// The decay is `(1 - u)²` rather than the straight `1 - u` it used to
+    /// be. Both reach zero at exactly `fade_time` — what changes is where the
+    /// brightness is spent. A straight ramp leaves the envelope falling at
+    /// full rate right up to the moment it hits zero, so the last visible
+    /// state of a note is a step down to nothing; squaring it lands with a
+    /// slope of zero, so the note is already almost gone by the time it goes.
+    /// The cost is a quicker start, which is the half of the release nobody
+    /// is watching.
     pub fn activation(&self, now: Time, fade_time: f32) -> f32 {
         match self.state {
             VoiceState::Held => 1.0,
@@ -129,7 +138,8 @@ impl Voice {
                     return 0.0;
                 }
                 let elapsed = (now - at).max(0.0) as f32;
-                (1.0 - elapsed / fade_time).max(0.0)
+                let remaining = (1.0 - elapsed / fade_time).max(0.0);
+                remaining * remaining
             }
         }
     }
@@ -348,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn activation_is_full_while_held_then_decays_linearly() {
+    fn activation_is_full_while_held_then_eases_out() {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         let held = *tracker.voices().next().unwrap();
@@ -359,13 +369,19 @@ mod tests {
         tracker.handle_event(off(10.0, 60));
         let released = *tracker.voices().next().unwrap();
         assert_eq!(released.activation(10.0, 2.0), 1.0); // full at release
-        assert!((released.activation(11.0, 2.0) - 0.5).abs() < 1e-6); // half-way
-        assert_eq!(released.activation(12.0, 2.0), 0.0); // fully faded
+        // Eased, not straight: half way through the fade a quarter is left.
+        assert!((released.activation(11.0, 2.0) - 0.25).abs() < 1e-6);
+        assert_eq!(released.activation(12.0, 2.0), 0.0); // fully faded, on time
         assert_eq!(released.activation(20.0, 2.0), 0.0); // clamps, not negative
         assert_eq!(released.activation(9.0, 2.0), 1.0); // `now` before release
         // A non-positive fade time releases instantly (guards div-by-zero).
         assert_eq!(released.activation(10.0, 0.0), 0.0);
         assert_eq!(released.activation(10.0, -1.0), 0.0);
+
+        // The point of the ease: it arrives at zero with a slope of zero, so
+        // the last visible state is already almost nothing rather than a step
+        // down from something. The straight ramp had a tenth left here.
+        assert!(released.activation(11.8, 2.0) < 0.02, "the tail should be nearly out");
     }
 
     #[test]
