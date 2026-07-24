@@ -29,6 +29,16 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// How far the keyline stands proud of the note's outline on each side.
 pub(super) const KEYLINE_PX: f32 = 1.0;
 
+/// How far the dark border stands proud of the keyline, on each side.
+pub(super) const BORDER_PX: f32 = 1.0;
+
+/// How strong the rim is here: the Edge setting scaled by the note's own
+/// opacity, or `None` when there is too little of it to draw.
+fn edge_strength(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<f32> {
+    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
+    (strength > 0.004).then_some(strength)
+}
+
 /// The light edge drawn around a note's outline and along the spectrum's
 /// profile, at `cfg.keyline` strength — `None` when the setting is off.
 ///
@@ -38,8 +48,23 @@ pub(super) const KEYLINE_PX: f32 = 1.0;
 /// whatever they cross. It is a setting because how much is right depends
 /// entirely on the palette and opacity in play.
 pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
-    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
-    (strength > 0.004).then(|| Color32::WHITE.gamma_multiply(strength))
+    edge_strength(cfg, alpha).map(|s| Color32::WHITE.gamma_multiply(s))
+}
+
+/// The dark border just outside a note's keyline, at that same strength.
+///
+/// The keyline alone solves half the problem: it is white, and the loudest
+/// spectrogram cells are near-white too, so over exactly the material the
+/// notes most need to be legible against, the rim meant to give them their
+/// shape washes out. Backing it with black means the rim always contains a
+/// contrast of its own — light against the note, dark against the picture —
+/// and the note reads as a distinct object over anything the heatmap does.
+///
+/// Roll notes only. The spectrum's profile is a single curve on one side of a
+/// filled slab, not a shape to pick out of a background, and a dark line under
+/// it just reads as a shadow.
+pub(super) fn border(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
+    edge_strength(cfg, alpha).map(|s| Color32::BLACK.gamma_multiply(s))
 }
 
 /// Draw every remembered note that falls inside the pane's time window and
@@ -113,6 +138,12 @@ pub(super) fn draw_roll(
             }
             let pitch = (p0 + p1) * 0.5;
             let width = cfg.roll_outline_width.clamp(0.5, 8.0);
+            // The rim the Edge setting asks for — a light keyline, and a dark
+            // border outside that — and how wide the note ends up because of
+            // it. See `keyline` and `border`.
+            let rim = keyline(cfg, alpha).zip(border(cfg, alpha));
+            let rimmed =
+                if rim.is_some() { width + 2.0 * (KEYLINE_PX + BORDER_PX) } else { width };
             // Bloom: a soft glow around the outline, driven by the SAME setting
             // as the lattice's bloom so the two panes share the look. egui has
             // no post-process pass like the lattice's wgpu bloom, so approximate
@@ -122,15 +153,18 @@ pub(super) fn draw_roll(
             let body = |a: f32| note_color(note, cfg, state, pitch, a);
             // (stroke width, color) per pass, painted in order; the crisp
             // outline is last and on top.
-            let mut passes: Vec<(f32, Color32)> = Vec::with_capacity(4);
+            let mut passes: Vec<(f32, Color32)> = Vec::with_capacity(5);
             if g > 0.0 {
-                // The glow passes brighten, toward the bloom halo.
-                passes.push((width + g * 3.0, brighten(body(alpha * 0.12 * g))));
-                passes.push((width + g * 1.5, brighten(body(alpha * 0.20 * g))));
+                // Measured from the RIMMED width, not the bare outline: a halo
+                // spills from the whole of what you can see of the note, and
+                // one anchored to the outline alone would be painted over by
+                // the rim instead of surrounding it.
+                passes.push((rimmed + g * 3.0, brighten(body(alpha * 0.12 * g))));
+                passes.push((rimmed + g * 1.5, brighten(body(alpha * 0.20 * g))));
             }
-            // A thin light keyline just outside the outline, at the strength
-            // the Edge setting asks for. See `keyline`.
-            if let Some(edge) = keyline(cfg, alpha) {
+            if let Some((edge, dark)) = rim {
+                // Dark first, so it lands outside the keyline it backs.
+                passes.push((rimmed, dark));
                 passes.push((width + 2.0 * KEYLINE_PX, edge));
             }
             // The crisp outline is the note's TRUE color, so it matches the
@@ -335,6 +369,34 @@ mod tests {
         assert!(
             !none.iter().any(|&(w, _, _)| (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01),
             "Edge 0 still drew a keyline: {none:?}",
+        );
+    }
+
+    /// The keyline is white and the spectrogram's loudest cells are nearly
+    /// white, so on its own it disappears exactly where a note most needs an
+    /// edge. A dark border sits outside it — wider, and painted first — so the
+    /// rim always holds a contrast of its own.
+    #[test]
+    fn a_dark_border_backs_the_keyline() {
+        let outline = 2.0;
+        let rects = ribbon(0.5);
+        let at = |target: f32, color: Color32| {
+            rects.iter().position(|&(w, c, _)| (w - target).abs() < 0.01 && c == color)
+        };
+        let dark = at(outline + 2.0 * (KEYLINE_PX + BORDER_PX), Color32::BLACK.gamma_multiply(0.5));
+        let key = at(outline + 2.0 * KEYLINE_PX, Color32::WHITE.gamma_multiply(0.5));
+        let (Some(dark), Some(key)) = (dark, key) else {
+            panic!("expected a dark border outside the keyline, got {rects:?}");
+        };
+        assert!(dark < key, "the border paints over the keyline it should sit outside");
+
+        // It is the same setting: Edge 0 draws neither.
+        let none = ribbon(0.0);
+        assert!(
+            !none
+                .iter()
+                .any(|&(w, _, _)| (w - (outline + 2.0 * (KEYLINE_PX + BORDER_PX))).abs() < 0.01),
+            "Edge 0 still drew a border: {none:?}",
         );
     }
 }
