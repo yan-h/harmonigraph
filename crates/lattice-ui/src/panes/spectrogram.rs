@@ -96,47 +96,13 @@ pub(super) fn draw_spectrogram(
     let window = time.window();
     let oldest = time.oldest();
 
-    // The image's rows: one per pixel of the pitch axis, never more buckets
-    // than the axis holds and never a taller image than the GPU will take. A
-    // row's pitch span maps back to a run of source buckets, which it reduces
-    // by MAX when it covers several (a peak must not be lost to averaging) and
-    // simply repeats when it covers less than one. A bucket of slack on each
-    // side lets the filtering carry the visible range cleanly to its edges.
-    let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
-    let margin = (bin_semis / scale.span).min(0.5);
-    let bucket_of = |t: f32| {
-        let midi = scale.min_midi + t * scale.span;
-        (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).floor() as isize)
-            .clamp(0, SPECTRUM_BINS as isize - 1) as usize
-    };
+    // ---- Layout the image is built on (rows x time-slabs) --------------------
+    // Both feed the cache key below AND the rebuild, so they're computed up
+    // front. `rows` is one per pitch pixel; `bucket` is the time-slab width.
     let max_rows = painter.ctx().input(|i| i.max_texture_side).max(64);
     let rows = (axes.pitch_len().round() as usize).clamp(2, max_rows);
-    let bins: Vec<Bin> = (0..rows)
-        .map(|r| {
-            // The row's own slice of the visible pitch range, widened by the
-            // margin so the edge rows reach past the range like the buckets did.
-            let span = 1.0 + 2.0 * margin;
-            let t0 = -margin + span * r as f32 / rows as f32;
-            let t1 = -margin + span * (r + 1) as f32 / rows as f32;
-            let (idx, last) = (bucket_of(t0), bucket_of(t1));
-            let t = 0.5 * (t0 + t1);
-            Bin {
-                idx,
-                end: (last + 1).max(idx + 1).min(SPECTRUM_BINS),
-                midi: scale.min_midi + t * scale.span,
-                t,
-            }
-        })
-        .collect();
-    if bins.len() < 2 {
-        return;
-    }
-
-    // Aggregate the in-window columns into one image column per depth pixel by
-    // a FIXED time grid, MAX within each slab (keeps a short note's peak and
-    // pins it against the scroll — see `aggregate_rows`).
-    // One image column per output depth pixel; whole-song spans the entire
-    // take, so it needs a higher cap than the live window.
+    // One image column per output depth pixel; whole-song spans the entire take,
+    // so it needs a higher cap than the live window.
     let col_cap = if whole.is_some() { 4096.0 } else { 512.0 };
     let target_cols = (depth_span * axes.depth_len()).round().clamp(2.0, col_cap) as usize;
     // Never subdivide finer than the data arrives (~50 ms FFT period, plus a
@@ -145,43 +111,119 @@ pub(super) fn draw_spectrogram(
     // gaps there stretch the edge columns into flat streaks (short spans).
     const MIN_BUCKET: f64 = 0.08;
     let bucket = (window / target_cols as f64).max(MIN_BUCKET);
-    let bin_idx: Vec<(usize, usize)> = bins.iter().map(|b| (b.idx, b.end)).collect();
-    let (centers, mut power) = match whole {
-        Some(ws) => aggregate_rows(ws.columns.iter(), &bin_idx, bucket),
+
+    // ---- Data identity -------------------------------------------------------
+    // `first` is the oldest in-window column (live); it advances as the window
+    // scrolls a column off the far end. `newest` moves whenever a fresh column
+    // arrives — catching it even in a saturated ring, where the count holds
+    // steady. Whole-song draws the entire fixed set, so `first` is 0.
+    let (first, cols_len, newest) = match whole {
+        Some(ws) => (0, ws.columns.len(), ws.columns.last().map_or(now, |c| c.time)),
         None => {
-            let first = spectrum.history().partition_point(|c| c.time < oldest).saturating_sub(1);
-            aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket)
+            let hist = spectrum.history();
+            let first = hist.partition_point(|c| c.time < oldest).saturating_sub(1);
+            (first, hist.len(), hist.back().map_or(now, |c| c.time))
         }
     };
-    let newest = match whole {
-        Some(ws) => ws.columns.last().map_or(now, |c| c.time),
-        None => spectrum.history().back().map_or(now, |c| c.time),
+
+    // The heatmap pixels are a pure function of these; if none has changed since
+    // the uploaded texture was built, the whole rebuild below is dead work.
+    let key = crate::SpectrogramKey::new(
+        rows,
+        bucket,
+        scale.min_midi,
+        scale.span,
+        first,
+        cols_len,
+        newest,
+        whole.is_some(),
+        cfg,
+        frame,
+    );
+
+    // Fast path: the built image is still valid — reuse the uploaded texture and
+    // its geometry; only the scrolling quad below is recomputed (with `now`).
+    let reused = match &spectrum.spectrogram_cache[surface] {
+        Some(c) if c.matches(&key) && spectrum.spectrogram_tex[surface].is_some() => Some(c.geometry()),
+        _ => None,
     };
-    let (w, h) = (centers.len(), bins.len());
-    if w < 2 {
-        return;
-    }
-    // Optional temporal smoothing: average out fast beating/chorus wobble.
-    smooth_time(&mut power, w, h, cfg.spectrogram_smoothing);
 
-    // The image covers absolute time `[t_origin, t_origin + w*bucket]` — the
-    // oldest slab's start to the newest slab's end. Its texel centers sit at
-    // the slab centers, so `u = (t - t_origin) / span` places time exactly.
-    let t_origin = centers[0] - 0.5 * bucket;
-    let tex_span = w as f64 * bucket;
-    let (t0, tn) = (bins[0].t, bins[h - 1].t);
-    if tex_span < 1e-9 || (tn - t0).abs() < 1e-6 {
-        return;
-    }
+    let (t_origin, tex_span, t0, tn) = match reused {
+        Some(geometry) => geometry,
+        None => {
+            // The image's rows: one per pixel of the pitch axis, never more
+            // buckets than the axis holds and never a taller image than the GPU
+            // will take. A row's pitch span maps back to a run of source
+            // buckets, which it reduces by MAX when it covers several (a peak
+            // must not be lost to averaging) and simply repeats when it covers
+            // less than one. A bucket of slack on each side lets the filtering
+            // carry the visible range cleanly to its edges.
+            let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
+            let margin = (bin_semis / scale.span).min(0.5);
+            let bucket_of = |t: f32| {
+                let midi = scale.min_midi + t * scale.span;
+                (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).floor() as isize)
+                    .clamp(0, SPECTRUM_BINS as isize - 1) as usize
+            };
+            let bins: Vec<Bin> = (0..rows)
+                .map(|r| {
+                    // The row's own slice of the visible pitch range, widened by
+                    // the margin so the edge rows reach past the range like the
+                    // buckets did.
+                    let span = 1.0 + 2.0 * margin;
+                    let t0 = -margin + span * r as f32 / rows as f32;
+                    let t1 = -margin + span * (r + 1) as f32 / rows as f32;
+                    let (idx, last) = (bucket_of(t0), bucket_of(t1));
+                    let t = 0.5 * (t0 + t1);
+                    Bin {
+                        idx,
+                        end: (last + 1).max(idx + 1).min(SPECTRUM_BINS),
+                        midi: scale.min_midi + t * scale.span,
+                        t,
+                    }
+                })
+                .collect();
 
-    // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
-    let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
-    let image = egui::ColorImage::new([w, h], pixels);
-    let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-    match &mut spectrum.spectrogram_tex[surface] {
-        Some(handle) => handle.set(image, opts),
-        slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
-    }
+            // Aggregate the in-window columns into one image column per depth
+            // pixel by a FIXED time grid, MAX within each slab (keeps a short
+            // note's peak and pins it against the scroll — see `aggregate_rows`).
+            let bin_idx: Vec<(usize, usize)> = bins.iter().map(|b| (b.idx, b.end)).collect();
+            let (centers, mut power) = match whole {
+                Some(ws) => aggregate_rows(ws.columns.iter(), &bin_idx, bucket),
+                None => aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket),
+            };
+            let (w, h) = (centers.len(), bins.len());
+            if w < 2 {
+                return;
+            }
+            // Optional temporal smoothing: average out fast beating/chorus wobble.
+            smooth_time(&mut power, w, h, cfg.spectrogram_smoothing);
+
+            // The image covers absolute time `[t_origin, t_origin + w*bucket]` —
+            // the oldest slab's start to the newest slab's end. Its texel
+            // centers sit at the slab centers, so `u = (t - t_origin) / span`
+            // places time exactly.
+            let t_origin = centers[0] - 0.5 * bucket;
+            let tex_span = w as f64 * bucket;
+            let (t0, tn) = (bins[0].t, bins[h - 1].t);
+            if tex_span < 1e-9 || (tn - t0).abs() < 1e-6 {
+                return;
+            }
+
+            // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
+            let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
+            let image = egui::ColorImage::new([w, h], pixels);
+            let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
+            match &mut spectrum.spectrogram_tex[surface] {
+                Some(handle) => handle.set(image, opts),
+                slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
+            }
+            spectrum.spectrogram_cache[surface] =
+                Some(crate::SpectrogramCache::new(key, t_origin, tex_span, t0, tn));
+            (t_origin, tex_span, t0, tn)
+        }
+    };
+
     let Some(tex) = &spectrum.spectrogram_tex[surface] else { return };
 
     // Map a screen depth to the texture's time axis CONTINUOUSLY, through the
@@ -572,5 +614,37 @@ mod tests {
         assert_eq!(ramp(1.0, &stops), [200, 200, 200]);
         assert_eq!(ramp(0.5, &stops), [100, 100, 100]);
         assert_eq!(ramp(0.25, &stops), [50, 50, 50]);
+    }
+
+    /// The cache reuses the uploaded texture only while its key matches, so the
+    /// key must move for EVERY input the pixels depend on — otherwise a change
+    /// would leave a stale image on screen. Identical inputs must compare equal
+    /// (the common case, a cache hit); each varied input must not.
+    #[test]
+    fn spectrogram_key_is_sensitive_to_every_input() {
+        let cfg = SpectrumConfig::default();
+        let frame = FrameParams::default();
+        let base =
+            || crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame);
+        // Same inputs -> equal: this is the hit that skips the rebuild.
+        assert_eq!(base(), base());
+        // Every layout / data field participates.
+        let vary = |k: crate::SpectrogramKey| assert_ne!(base(), k);
+        vary(crate::SpectrogramKey::new(101, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // rows
+        vary(crate::SpectrogramKey::new(100, 0.2, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // bucket
+        vary(crate::SpectrogramKey::new(100, 0.1, 41.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // scale min
+        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 49.0, 3, 200, 5.0, false, cfg, frame)); // scale span
+        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 4, 200, 5.0, false, cfg, frame)); // first (scroll)
+        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 201, 5.0, false, cfg, frame)); // count
+        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 6.0, false, cfg, frame)); // newest
+        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, true, cfg, frame)); // whole
+        // And the color inputs: a palette/floor/smoothing change (cfg) or a
+        // gradient-range change (frame) would recolor every pixel.
+        let mut cfg2 = cfg;
+        cfg2.spectrogram_smoothing += 0.1;
+        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg2, frame));
+        let mut frame2 = frame;
+        frame2.brightest_pitch += 1.0;
+        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame2));
     }
 }
