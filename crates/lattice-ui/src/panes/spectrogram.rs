@@ -189,8 +189,17 @@ pub(super) fn draw_spectrogram(
             // note's peak and pins it against the scroll — see `aggregate_rows`).
             let bin_idx: Vec<(usize, usize)> = bins.iter().map(|b| (b.idx, b.end)).collect();
             let (centers, mut power) = match whole {
+                // Offline whole-song: fixed column set, already cached after the
+                // first frame — a plain batch aggregate.
                 Some(ws) => aggregate_rows(ws.columns.iter(), &bin_idx, bucket),
-                None => aggregate_rows(spectrum.history().iter().skip(first), &bin_idx, bucket),
+                // Live: fold only the new column(s) into the kept slab grid
+                // instead of rescanning the whole window every rebuild. `hist`
+                // and the aggregator are disjoint fields of `spectrum`.
+                None => {
+                    let hist = &spectrum.history;
+                    let agg = spectrum.spectrogram_agg[surface].get_or_insert_with(SpectrogramAgg::new);
+                    agg.window(hist, first, bucket, &bin_idx)
+                }
             };
             let (w, h) = (centers.len(), bins.len());
             if w < 2 {
@@ -294,14 +303,36 @@ fn aggregate_rows<'a>(
     bin_idx: &[(usize, usize)],
     bucket: f64,
 ) -> (Vec<f64>, Vec<f32>) {
-    let nb = bin_idx.len();
-    let mut centers: Vec<f64> = Vec::new();
-    let mut power: Vec<f32> = Vec::new();
-    let mut cur_key: Option<i64> = None;
+    let mut grid = SlabGrid::default();
     for col in columns {
+        grid.fold(col, bin_idx, bucket);
+    }
+    (grid.centers, grid.power)
+}
+
+/// The growing slab grid the spectrogram image is built from: `centers[i]` is
+/// slab `i`'s center time and `power` is the flat row-major `[slab][bin]` MAX
+/// grid (`slab * nb + bin`). [`fold`](SlabGrid::fold) is the single per-column
+/// step both [`aggregate_rows`] (batch, from scratch) and [`SpectrogramAgg`]
+/// (incremental, live) drive — so the two can never disagree.
+#[derive(Default, Clone)]
+struct SlabGrid {
+    centers: Vec<f64>,
+    power: Vec<f32>,
+    cur_key: Option<i64>,
+}
+
+impl SlabGrid {
+    /// Fold one column (columns arrive oldest-first) into the grid, appending
+    /// slabs and MAXing the column into the current one. Returns `false` iff
+    /// the column ran BACKWARDS in time relative to the current slab — batch
+    /// ignores the result (it just starts a fresh row, as before), while the
+    /// incremental aggregator treats it as a broken invariant and rebuilds.
+    fn fold(&mut self, col: &crate::SpectrogramColumn, bin_idx: &[(usize, usize)], bucket: f64) -> bool {
+        let nb = bin_idx.len();
         let key = (col.time / bucket).floor() as i64;
-        match cur_key {
-            Some(k) if k == key => {}
+        let forward = match self.cur_key {
+            Some(k) if k == key => true,
             // A slab with no columns in it STILL gets a row, so the grid stays
             // one row per slab of elapsed time. The texture's time axis is
             // uniform — `u_at` maps time linearly across `w * bucket` — so
@@ -314,41 +345,177 @@ fn aggregate_rows<'a>(
             Some(k) if key > k => {
                 let empty = key - k - 1;
                 for slot in (k + 1)..key {
-                    centers.push((slot as f64 + 0.5) * bucket);
+                    self.centers.push((slot as f64 + 0.5) * bucket);
                     if empty <= JITTER_SLABS {
                         // Hold the previous column: at this width one empty
                         // slab is just a long frame, and painting it black
                         // would leave a stripe of false silence scrolling
                         // across the display for the rest of the window.
-                        power.extend_from_within(power.len() - nb..);
+                        self.power.extend_from_within(self.power.len() - nb..);
                     } else {
-                        power.resize(power.len() + nb, 0.0);
+                        self.power.resize(self.power.len() + nb, 0.0);
                     }
                 }
-                centers.push((key as f64 + 0.5) * bucket);
-                power.resize(power.len() + nb, 0.0);
-                cur_key = Some(key);
+                self.centers.push((key as f64 + 0.5) * bucket);
+                self.power.resize(self.power.len() + nb, 0.0);
+                self.cur_key = Some(key);
+                true
             }
-            // First column, or time running backwards (a transport jump):
-            // start a fresh row rather than trying to fill a negative gap.
-            _ => {
-                cur_key = Some(key);
-                centers.push((key as f64 + 0.5) * bucket);
-                power.resize(power.len() + nb, 0.0);
+            // First column (None), or time running backwards (Some, key < k, a
+            // transport jump): start a fresh row rather than fill a negative
+            // gap. Only the backward case breaks the incremental invariant.
+            other => {
+                self.cur_key = Some(key);
+                self.centers.push((key as f64 + 0.5) * bucket);
+                self.power.resize(self.power.len() + nb, 0.0);
+                other.is_none()
             }
-        }
-        let base = power.len() - nb;
+        };
+        let base = self.power.len() - nb;
         for (k, &(from, to)) in bin_idx.iter().enumerate() {
-            let mut p = power[base + k];
+            let mut p = self.power[base + k];
             for src in from..to {
                 if col.power[src] > p {
                     p = col.power[src];
                 }
             }
-            power[base + k] = p;
+            self.power[base + k] = p;
+        }
+        forward
+    }
+}
+
+/// Live-only incremental spectrogram aggregation. `aggregate_rows` re-scans
+/// EVERY in-window column on each ~20 Hz rebuild — O(columns-in-window), which
+/// grows with the roll Span and is the residual creep the texture cache didn't
+/// remove. This keeps the slab grid across frames instead: a rebuild folds only
+/// the newly-arrived column(s) and drops the scrolled-out front, so its cost is
+/// O(new columns), independent of how much history has accumulated.
+///
+/// It reproduces `aggregate_rows` EXACTLY: the shared [`SlabGrid::fold`] gives
+/// identical slab values, and the front is trimmed to the same first slab batch
+/// would start at. A layout change (bucket/bins), a backward transport jump, or
+/// a window that jumped outside the kept grid falls back to a full rebuild —
+/// each of which is just `aggregate_rows` again, so correctness never rides on
+/// the fast path alone. The offline whole-song path does NOT use this (its
+/// column set is fixed and already cached after the first frame).
+pub(crate) struct SpectrogramAgg {
+    grid: SlabGrid,
+    bucket_bits: u64,
+    bin_idx: Vec<(usize, usize)>,
+    /// Time of the newest column already folded; the next update folds only
+    /// columns past it.
+    last_time: f64,
+}
+
+impl SpectrogramAgg {
+    fn new() -> Self {
+        SpectrogramAgg {
+            grid: SlabGrid::default(),
+            bucket_bits: 0,
+            bin_idx: Vec::new(),
+            last_time: f64::NEG_INFINITY,
         }
     }
-    (centers, power)
+
+    /// Re-fold the whole window from scratch (== `aggregate_rows(history[first..])`).
+    fn rebuild(
+        &mut self,
+        history: &std::collections::VecDeque<crate::SpectrogramColumn>,
+        first: usize,
+        bucket: f64,
+        bin_idx: &[(usize, usize)],
+    ) {
+        self.grid = SlabGrid::default();
+        for col in history.iter().skip(first) {
+            self.grid.fold(col, bin_idx, bucket);
+        }
+        self.bucket_bits = bucket.to_bits();
+        self.bin_idx.clear();
+        self.bin_idx.extend_from_slice(bin_idx);
+        self.last_time = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
+    }
+
+    /// The window's `(centers, power)`, maintained incrementally. `first` is the
+    /// oldest in-window column index (as `draw_spectrogram` computes it), so the
+    /// window's first slab is `floor(history[first].time / bucket)` — exactly
+    /// where batch would start.
+    fn window(
+        &mut self,
+        history: &std::collections::VecDeque<crate::SpectrogramColumn>,
+        first: usize,
+        bucket: f64,
+        bin_idx: &[(usize, usize)],
+    ) -> (Vec<f64>, Vec<f32>) {
+        let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
+        let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
+        let layout_same = self.bucket_bits == bucket.to_bits() && self.bin_idx == bin_idx;
+        // The fast path is valid only when: the layout is unchanged, we have a
+        // prior grid, time hasn't gone backwards, and the window's first slab
+        // still sits inside the grid we kept (front..=back). Anything else is a
+        // full rebuild, which is always correct.
+        let can_increment = layout_same
+            && self.grid.cur_key.is_some()
+            && newest >= self.last_time
+            && target.zip(self.grid.centers.first()).zip(self.grid.cur_key).is_some_and(
+                |((t, &front_center), back)| {
+                    let front = (front_center / bucket).floor() as i64;
+                    t >= front && t <= back
+                },
+            );
+
+        if !can_increment {
+            self.rebuild(history, first, bucket, bin_idx);
+        } else {
+            // Fold only columns newer than the last we folded.
+            let start = history.partition_point(|c| c.time <= self.last_time);
+            let mut forward = true;
+            for col in history.iter().skip(start) {
+                if !self.grid.fold(col, bin_idx, bucket) {
+                    forward = false;
+                    break;
+                }
+                self.last_time = col.time;
+            }
+            if !forward {
+                // A mid-stream backward jump broke the grid; rebuild clean.
+                self.rebuild(history, first, bucket, bin_idx);
+            } else if let Some(t) = target {
+                let nb = bin_idx.len();
+                // Drop front slabs that have scrolled out of the window, leaving
+                // the same first slab batch would produce.
+                while self.grid.centers.len() > 1 {
+                    let front = (self.grid.centers[0] / bucket).floor() as i64;
+                    if front >= t {
+                        break;
+                    }
+                    self.grid.centers.remove(0);
+                    self.grid.power.drain(0..nb);
+                }
+                // The window's first slab is PARTIAL: batch folds only columns
+                // from `first` onward, so an earlier column sharing this slab —
+                // which we MAXed in before it fell behind `first` as the window
+                // scrolled — must not count. Recompute just this one slab from
+                // the in-window columns (a handful, so still O(1) per frame).
+                for v in &mut self.grid.power[0..nb] {
+                    *v = 0.0;
+                }
+                for c in history.iter().skip(first) {
+                    if (c.time / bucket).floor() as i64 != t {
+                        break;
+                    }
+                    for (k, &(from, to)) in bin_idx.iter().enumerate() {
+                        for src in from..to {
+                            if c.power[src] > self.grid.power[k] {
+                                self.grid.power[k] = c.power[src];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (self.grid.centers.clone(), self.grid.power.clone())
+    }
 }
 
 /// Smooth `power` (flat `rows * nb`, row-major over time slabs) along time,
@@ -614,6 +781,51 @@ mod tests {
         assert_eq!(ramp(1.0, &stops), [200, 200, 200]);
         assert_eq!(ramp(0.5, &stops), [100, 100, 100]);
         assert_eq!(ramp(0.25, &stops), [50, 50, 50]);
+    }
+
+    /// The incremental aggregator must produce EXACTLY what a from-scratch
+    /// `aggregate_rows` over the window would, at every step — otherwise the
+    /// live spectrogram would drift from what the batch/offline path draws. This
+    /// walks a column stream with same-slab clusters, a one-slab jitter gap
+    /// (hold-previous), a multi-slab gap (zeros), steady scroll (so `first`
+    /// advances and the front trims), a ring trim (so indices shift), and a
+    /// bucket change (a forced rebuild), comparing byte-for-byte each step.
+    #[test]
+    fn incremental_aggregation_matches_batch_step_for_step() {
+        use std::collections::VecDeque;
+        let bin_idx = [(4usize, 6usize), (6, 10), (10, 11)]; // 3 rows, varied ranges
+        let bucket = 0.25;
+        let window_span = 1.0;
+        // Exercises: cluster (0.30, 0.31), 1-slab gap (0.55->0.80 is 1 apart;
+        // 0.80->1.60 is a multi-slab gap), then steady scroll.
+        let times: [f64; 14] = [
+            0.05, 0.10, 0.30, 0.31, 0.55, 0.80, 1.60, 1.62, 1.90, 2.15, 2.40, 2.65, 2.90, 3.15,
+        ];
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history: VecDeque<crate::SpectrogramColumn> = VecDeque::new();
+        for (i, &t) in times.iter().enumerate() {
+            // Per-column, per-bin energy, so a wrong slab or a stale hold surfaces
+            // as a value mismatch, not just a shape one.
+            let e = [(4, 0.1 * (i as f32 + 1.0)), (7, 0.05 * i as f32), (10, 1.0 - 0.03 * i as f32)];
+            history.push_back(col(t, &e));
+            // Trim the ring, so `first` indices shift under the aggregator.
+            while history.front().is_some_and(|c| c.time < t - (window_span + 0.5)) {
+                history.pop_front();
+            }
+            let oldest = t - window_span;
+            let first = history.partition_point(|c| c.time < oldest).saturating_sub(1);
+            let inc = agg.window(&history, first, bucket, &bin_idx);
+            let bat = aggregate_rows(history.iter().skip(first), &bin_idx, bucket);
+            assert_eq!(inc, bat, "incremental != batch at step {i} (t={t})");
+        }
+
+        // A layout change (new bucket) must fall back to a rebuild — still exact.
+        let now = *times.last().unwrap();
+        let first = history.partition_point(|c| c.time < now - window_span).saturating_sub(1);
+        let inc = agg.window(&history, first, 0.4, &bin_idx);
+        let bat = aggregate_rows(history.iter().skip(first), &bin_idx, 0.4);
+        assert_eq!(inc, bat, "incremental != batch after a bucket change");
     }
 
     /// The cache reuses the uploaded texture only while its key matches, so the

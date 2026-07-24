@@ -1324,11 +1324,12 @@ mod tests {
         state.spectrum_config.show_spectrogram = true;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 79.0;
+        state.spectrum_config.roll_seconds = 10.0;
         let mut bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
         bins[lattice_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
         bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.4;
         for i in 0..40 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, bins);
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, bins, 10.0);
         }
 
         // ONE context across both frames, as in the live app: the cache hands
