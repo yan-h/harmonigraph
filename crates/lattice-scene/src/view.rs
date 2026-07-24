@@ -525,12 +525,18 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            // A tall window of fifths and a wide band of thirds; sevenths
-            // start collapsed to the single home sheet (extent 0), so the
-            // lattice opens flat and depth is opted into.
+            // A tall window of fifths and a wide band of thirds, and one
+            // sevens sheet either side of the home one. Depth used to start
+            // collapsed (extent 0) because a second sheet at full size made
+            // the picture unreadable — nothing said which sheet a node was
+            // on and an off-sheet label landed on top of its neighbours.
+            // The sevens layer settings below are the answer to that, and
+            // they only do anything when there is depth to draw, so opening
+            // flat now hides the feature rather than protecting anyone from
+            // it.
             extent_threes: 10,
             extent_fives: 6,
-            extent_sevens: 0,
+            extent_sevens: 1,
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
