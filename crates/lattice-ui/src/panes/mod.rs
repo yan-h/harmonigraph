@@ -137,11 +137,19 @@ impl egui_dock::TabViewer for Viewer<'_> {
     /// lattice with a wgpu callback, the analyzer with a painter over the
     /// whole rect — so there is nothing under the edge to reach, and a scroll
     /// area around them can only shift a picture that is meant to sit still.
-    /// Settings panes keep theirs: they are lists, and a short dock column
-    /// has to be able to reach the end of one.
+    /// Settings panes keep the VERTICAL bar only: they are lists, and a short
+    /// dock column has to be able to reach the end of one.
+    ///
+    /// Horizontal scrolling is off everywhere. egui_dock wraps the body in
+    /// `ScrollArea::new(self.scroll_bars(tab))`, and a both-axes area offers
+    /// its content an unbounded width; the settings panes that size to the
+    /// space they're given (`available_size`) then fill it and never report
+    /// vertical overflow, so the wheel had nothing to grab and they wouldn't
+    /// scroll at all. Vertical-only matches the panes that build their own
+    /// `ScrollArea::vertical()` — the ones that always scrolled fine.
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
         let picture = matches!(tab, Tab::Lattice | Tab::Spectral);
-        [!picture, !picture]
+        [false, !picture]
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {

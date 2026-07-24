@@ -62,12 +62,6 @@ pub const OCTAVE_SLOTS: usize = 10;
 /// short enough to still feel immediate.
 const OCTAVE_ATTACK_TIME: f64 = 0.15;
 
-/// How far a melody/bass mark's color is lightened toward white from the
-/// note's own. The same 0.30 the octave glyphs use, so a ring reads as the
-/// same family of color as the sectors beside it; without it the marks on
-/// low notes would be black rings on a black background.
-pub const MARK_WHITEN: f32 = 0.30;
-
 /// Samples in the pitch->color lookup the octave glyphs use to tint each
 /// slot by its own octave's pitch. The shader mirrors this length.
 pub const PITCH_LUT_N: usize = 16;
@@ -123,12 +117,13 @@ pub struct NodeInstance {
     /// whole node; the slots above only say which sector it links back to.
     pub melody_level: f32,
     pub bass_level: f32,
-    /// Each mark's color: the marked note's OWN color, so a ring reads as
-    /// belonging to the note it marks rather than as a fixed livery. Taken
-    /// from the strongest marking voice (they can differ mid-crossfade),
-    /// and lightened toward white by [`MARK_WHITEN`] — a low note's color
-    /// is nearly black, and a ring in it would vanish against the
-    /// background.
+    /// Each mark's color: the marked note's OWN color, identical to the one
+    /// its disc and octave glyph use, so a ring reads as belonging to the note
+    /// it marks rather than as a fixed livery. Taken from the strongest marking
+    /// voice (they can differ mid-crossfade). The shared pitch ramp already
+    /// bakes in the lift the disc/roll/glyphs carry (see `color::NOTE_LIGHTEN`),
+    /// so the ring inherits it and adds nothing — an extra lift once left the
+    /// ring a shade whiter than the very note it marks.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
     /// How strongly the music is remembered here (see [`trail`]): 0 where

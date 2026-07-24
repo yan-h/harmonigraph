@@ -1329,7 +1329,7 @@ mod tests {
         bins[lattice_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
         bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.4;
         for i in 0..40 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, bins, 10.0);
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, bins);
         }
 
         // ONE context across both frames, as in the live app: the cache hands
@@ -1561,7 +1561,7 @@ mod tests {
         spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.5;
         spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS - 1] = 0.3;
         for i in 0..80 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, spectrum_bins, 10.0);
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, spectrum_bins);
         }
 
         let on = |time, note| NoteEvent {

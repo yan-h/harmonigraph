@@ -8,7 +8,7 @@ use crate::style::HighlightExtremes;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Scene, MARK_WHITEN, NODE_RADIUS_FACTOR,
+    lattice_to_world, EdgeInstance, NodeInstance, Scene, NODE_RADIUS_FACTOR,
     OCTAVE_ATTACK_TIME, OCTAVE_SLOTS,
 };
 use glam::Vec4;
@@ -113,12 +113,15 @@ pub fn derive_scene(
     let node_idle = idle_color(view);
     let live_extremes = held_extremes(tracker, view.highlight_extremes);
 
-    // Each voice's disc color and its whitened mark color, computed once here
-    // rather than re-running the LCH->sRGB conversion on every node the voice
-    // matches (and a second time for its mark). Both depend only on the voice
-    // and the frame's gradient range — never on the node — so this lifts all
-    // the transcendental color math out of the O(nodes × voices) loop below.
-    let voices: Vec<(&lattice_core::Voice, Vec4, Vec4)> = tracker
+    // Each voice's color, computed once here rather than re-running the
+    // LCH->sRGB conversion on every node the voice matches. It depends only on
+    // the voice and the frame's gradient range — never on the node — so this
+    // lifts the transcendental color math out of the O(nodes × voices) loop
+    // below. The melody/bass ring reuses this SAME color: the pitch ramp
+    // already bakes in the lightening the disc, roll, and octave glyphs share
+    // (see `color::NOTE_LIGHTEN`), so a ring must not lift it a second time or
+    // it sits a shade whiter than the very note it marks.
+    let voices: Vec<(&lattice_core::Voice, Vec4)> = tracker
         .voices()
         .map(|voice| {
             let color = channel_color(
@@ -127,7 +130,7 @@ pub fn derive_scene(
                 frame.darkest_pitch,
                 frame.brightest_pitch,
             );
-            (voice, color, color.lerp(Vec4::ONE, MARK_WHITEN))
+            (voice, color)
         })
         .collect();
 
@@ -144,7 +147,7 @@ pub fn derive_scene(
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
-        for &(voice, voice_color, mark_color) in &voices {
+        for &(voice, voice_color) in &voices {
             if tuning.matches(voice.pitch_class, node_pc) {
                 let envelope = voice.activation(now, frame.fade_time);
                 if envelope > activation {
@@ -170,16 +173,17 @@ pub fn derive_scene(
                 // the key, even as the disc keeps fading.
                 let (is_melody, is_bass) = marks(voice, live_extremes);
                 if is_melody || is_bass {
-                    // The mark takes the marked note's OWN color, lightened
-                    // so a low note's near-black doesn't vanish (precomputed
-                    // above). Strongest marking voice wins the color; the
-                    // slots still collect every one of them, since a release
-                    // crossfades two.
+                    // The mark takes the marked note's OWN color — the very one
+                    // its disc and octave glyph use, so the ring reads as that
+                    // exact note. The ramp is already lightened, so there is no
+                    // extra lift here. Strongest marking voice wins the color;
+                    // the slots still collect every one of them, since a
+                    // release crossfades two.
                     if is_melody {
-                        melody.add(slot, envelope, mark_color);
+                        melody.add(slot, envelope, voice_color);
                     }
                     if is_bass {
-                        bass.add(slot, envelope, mark_color);
+                        bass.add(slot, envelope, voice_color);
                     }
                 }
             }
