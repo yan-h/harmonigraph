@@ -286,7 +286,7 @@ impl Default for RenderFrame {
 
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Spectrum settings tab and persisted with the UI state.
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
     /// Horizontal (pitch left-to-right) or vertical (pitch bottom-to-top),
     /// or Auto to follow the pane's shape; see [`SpectralOrientation`]. Those
@@ -576,6 +576,11 @@ pub struct AudioSpectrum {
     /// live spectrograms in one frame don't overwrite each other's texture.
     /// Runtime-only; created lazily on first draw.
     spectrogram_tex: [Option<egui::TextureHandle>; 2],
+    /// Validates the uploaded texture in the matching [`Self::spectrogram_tex`]
+    /// slot: while the key still matches, the whole build (aggregate -> smooth
+    /// -> color -> upload) is skipped and only the scrolling quad is redrawn.
+    /// See [`SpectrogramKey`]. Runtime-only, parallel to the textures.
+    spectrogram_cache: [Option<SpectrogramCache>; 2],
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -583,6 +588,92 @@ pub struct AudioSpectrum {
 pub struct SpectrogramColumn {
     pub time: f64,
     pub power: Box<SpectrumBuckets>,
+}
+
+/// The inputs the built spectrogram image depends on. Equal keys mean the
+/// uploaded texture is still valid, so `draw_spectrogram` skips the rebuild
+/// (aggregate -> smooth -> color -> texture upload) and only redraws the quad,
+/// which scrolls with `now` every frame regardless. The FFT refreshes at
+/// ~20 Hz while the pane redraws at frame rate, so most frames hit.
+///
+/// Staleness-safe by construction — every way the image can change moves a
+/// field: a fresh column moves `newest_bits` (even in a saturated ring, where
+/// the count holds), the oldest column scrolling out of the window moves
+/// `first`, a resize/zoom moves the layout fields, and a palette/range/
+/// smoothing change moves `cfg`/`frame`. Floats compare by bit pattern so
+/// equality is exact and free of NaN quirks.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SpectrogramKey {
+    rows: usize,
+    bucket_bits: u64,
+    scale_min_bits: u32,
+    scale_span_bits: u32,
+    first: usize,
+    cols_len: usize,
+    newest_bits: u64,
+    whole: bool,
+    cfg: SpectrumConfig,
+    frame: lattice_scene::FrameParams,
+}
+
+/// A validated spectrogram build: its [`SpectrogramKey`] plus the scalars the
+/// quad needs, so a cache hit can place the already-uploaded texture without
+/// re-running the pixel pipeline. The texture itself stays in
+/// [`AudioSpectrum::spectrogram_tex`].
+pub(crate) struct SpectrogramCache {
+    key: SpectrogramKey,
+    t_origin: f64,
+    tex_span: f64,
+    t0: f32,
+    tn: f32,
+}
+
+impl SpectrogramKey {
+    /// Pack the image's inputs into a key. Floats are stored as bit patterns so
+    /// equality is exact.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        rows: usize,
+        bucket: f64,
+        scale_min: f32,
+        scale_span: f32,
+        first: usize,
+        cols_len: usize,
+        newest: f64,
+        whole: bool,
+        cfg: SpectrumConfig,
+        frame: lattice_scene::FrameParams,
+    ) -> Self {
+        SpectrogramKey {
+            rows,
+            bucket_bits: bucket.to_bits(),
+            scale_min_bits: scale_min.to_bits(),
+            scale_span_bits: scale_span.to_bits(),
+            first,
+            cols_len,
+            newest_bits: newest.to_bits(),
+            whole,
+            cfg,
+            frame,
+        }
+    }
+}
+
+impl SpectrogramCache {
+    pub(crate) fn new(key: SpectrogramKey, t_origin: f64, tex_span: f64, t0: f32, tn: f32) -> Self {
+        SpectrogramCache { key, t_origin, tex_span, t0, tn }
+    }
+
+    /// Whether a freshly computed key matches this cached build's — i.e. the
+    /// uploaded texture is still the right one to draw.
+    pub(crate) fn matches(&self, key: &SpectrogramKey) -> bool {
+        &self.key == key
+    }
+
+    /// The scalars the scrolling quad needs: `(t_origin, tex_span, t0, tn)`.
+    pub(crate) fn geometry(&self) -> (f64, f64, f32, f32) {
+        (self.t_origin, self.tex_span, self.t0, self.tn)
+    }
 }
 
 /// The whole take's spectrogram, precomputed for the offline renderer's
@@ -664,6 +755,7 @@ impl Default for AudioSpectrum {
             last_samples: None,
             history: VecDeque::new(),
             spectrogram_tex: [None, None],
+            spectrogram_cache: [None, None],
         }
     }
 }
@@ -674,6 +766,9 @@ impl AudioSpectrum {
     /// [`SharedState::release_context_resources`].
     fn release_textures(&mut self) {
         self.spectrogram_tex = [None, None];
+        // The cached builds validate those textures; drop them together so a
+        // stale key can never point at a released (or newly reuploaded) slot.
+        self.spectrogram_cache = [None, None];
     }
 
     /// Seconds between FFTs (20 Hz refresh).

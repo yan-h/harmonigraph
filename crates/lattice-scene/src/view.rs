@@ -507,7 +507,7 @@ impl Default for ViewConfig {
 /// Deliberately NOT part of [`ViewConfig`] or the persist blob: the param
 /// system owns these values, and persisting a copy would create a second
 /// source of truth that's dead on arrival at load time.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameParams {
     /// Seconds a released note keeps fading, for EVERY layer of the node:
     /// the pitch class core, the octave glyphs, and the melody/bass marks.

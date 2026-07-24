@@ -1245,6 +1245,67 @@ mod tests {
         }
     }
 
+    /// The spectrogram heatmap is rebuilt and re-uploaded only when its inputs
+    /// change; between the ~20 Hz FFT columns most frames just redraw the quad
+    /// over the reused texture. Two frames with identical clock and history: the
+    /// second finds a matching key and takes that fast path — and must draw
+    /// exactly the quad the cold first frame built, since it reuses that build's
+    /// geometry. A stale or mis-cached build would move the quad.
+    #[test]
+    fn a_cached_spectrogram_frame_matches_the_cold_build() {
+        // The textured quad's per-vertex position + uv. The spectrogram is the
+        // pane's only 4-vertex textured mesh (notes are paths, labels are text),
+        // so its geometry is what these shapes carry.
+        fn quad(out: &egui::FullOutput) -> Vec<[f32; 4]> {
+            let mut v = Vec::new();
+            for c in &out.shapes {
+                if let egui::Shape::Mesh(m) = &c.shape {
+                    if m.vertices.len() == 4 && m.indices.len() == 6 {
+                        v.extend(m.vertices.iter().map(|x| [x.pos.x, x.pos.y, x.uv.x, x.uv.y]));
+                    }
+                }
+            }
+            v
+        }
+
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.show_spectrogram = true;
+        state.spectrum_config.low_midi = 55.0;
+        state.spectrum_config.high_midi = 79.0;
+        let mut bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
+        bins[lattice_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
+        bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.4;
+        for i in 0..40 {
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, bins);
+        }
+
+        // ONE context across both frames, as in the live app: the cache hands
+        // back a texture handle owned by this context.
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let now = 94.0;
+        let mut frame = || {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(0.0, 0.0),
+                        egui::vec2(500.0, 500.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                    spectral_pane(&mut child, &mut state, now, 1.0, 0);
+                },
+            )
+        };
+        let cold = quad(&frame());
+        assert!(!cold.is_empty(), "the spectrogram drew no textured quad to cache");
+        let hit = quad(&frame());
+        assert_eq!(cold, hit, "the cached frame drew a different quad than the cold build");
+    }
+
     /// A sounding note is marked by its own ribbon crossing the now-line, so
     /// the roll has to be painted after the line rather than before it. Every
     /// separate mark drawn for the job sat wrong against a rounded ribbon end;
