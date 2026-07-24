@@ -793,10 +793,17 @@ pub(crate) fn spectral_pane(
     }
 
     // Which notes are sounding, marked ON that line instead of as bars
-    // standing in the spectrum. Each mark spans exactly the width its roll
-    // ribbon covers, so the ribbon arriving at the line and the mark under it
-    // are one object seen from two sides — the note reaches the line, and the
-    // line lights up where it lands.
+    // standing in the spectrum: the ribbon arriving at the line and the mark
+    // under it are one object seen from two sides.
+    //
+    // Which means the mark has to match the ribbon's SILHOUETTE, not just its
+    // nominal width. A ribbon is a rounded rectangle (roll.rs), so its
+    // rounding pulls the outline in at the ends: where it meets the line it is
+    // only as wide as its flat middle, and a mark drawn across the full width
+    // overhangs it at both ends. The mark takes that flat span and rounds its
+    // own ends, so at any rounding the two shapes agree — up to full rounding,
+    // where the ribbon ends in a semicircle touching the line and the mark
+    // becomes the dot at its tip.
     //
     // The bars this replaces hung from the line back into the spectrum,
     // pointing at the peak they were meant to be compared with. That worked
@@ -821,7 +828,24 @@ pub(crate) fn spectral_pane(
                 continue;
             }
             let t = scale.t_of(voice.pitch);
-            let ends = [axes.at(t - half, base), axes.at(t + half, base)];
+            // The ribbon's own geometry, by the same arithmetic roll.rs uses.
+            let ribbon_px = 2.0 * half * axes.pitch_len();
+            let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
+            let flat = (ribbon_px - 2.0 * radius).max(NOTE_MARK_PX);
+            let (half_t, deep) = (
+                0.5 * flat / axes.pitch_len().max(1.0),
+                0.5 * NOTE_MARK_PX / axes.depth_len().max(1.0),
+            );
+            let mark = |grow: f32| {
+                egui::Rect::from_two_pos(
+                    axes.at(t - half_t, base - deep * grow),
+                    axes.at(t + half_t, base + deep * grow),
+                )
+            };
+            // Round ends, so the mark reads as a cap on the ribbon rather than
+            // a tick cutting across it. egui clamps the radius to half the
+            // short side, which is what makes this a capsule.
+            let capsule = egui::CornerRadius::same(NOTE_MARK_PX as u8);
             let c = channel_color(
                 voice.channel,
                 voice.pitch,
@@ -835,10 +859,9 @@ pub(crate) fn spectral_pane(
             if nearest_visible_node(&state.view, &state.tuning, voice.pitch_class).is_none() {
                 let pulse = 0.5 + 0.5 * (now * std::f64::consts::TAU * 1.6).sin() as f32;
                 let halo = theme::accent().gamma_multiply((0.35 + 0.5 * pulse) * strength);
-                painter.line_segment(ends, egui::Stroke::new(NOTE_MARK_PX + 4.0 * pulse, halo));
+                painter.rect_filled(mark(1.0 + 2.0 * pulse), capsule, halo);
             }
-            painter
-                .line_segment(ends, egui::Stroke::new(NOTE_MARK_PX, scene_color(c, strength)));
+            painter.rect_filled(mark(1.0), capsule, scene_color(c, strength));
         }
     }
 
@@ -1033,16 +1056,21 @@ mod tests {
     }
 
     /// A sounding note lights the now-line where its ribbon arrives: a mark
-    /// lying ALONG the line, spanning exactly the ribbon's width. It used to
-    /// be a bar standing out of the line into the spectrum, which crossed the
-    /// picture it was meant to be read against once every bucket was filled.
+    /// lying ALONG the line, not a bar standing out of it into the spectrum,
+    /// and matching the ribbon's silhouette — a rounded ribbon meets the line
+    /// only across its flat middle, so a mark drawn across the full width
+    /// would overhang it at both ends.
     #[test]
     fn a_sounding_note_marks_the_now_line_across_its_ribbon_width() {
-        let marks = |thickness: f32| {
+        // Zoomed to an octave, so a 2-semitone ribbon is worth some pixels.
+        let marks = |thickness: f32, rounding: f32| {
             let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
             state.spectrum_config.orientation = SpectralOrientation::Horizontal;
             state.spectrum_config.show_voice_bars = true;
             state.spectrum_config.roll_thickness = thickness;
+            state.spectrum_config.roll_rounding = rounding;
+            state.spectrum_config.low_midi = 60.0;
+            state.spectrum_config.high_midi = 72.0;
             state.tracker.handle_event(NoteEvent {
                 time: 0.0,
                 channel: 0,
@@ -1059,31 +1087,44 @@ mod tests {
                     spectral_pane(&mut child, &mut state, 0.1, 1.0, 0);
                 },
             );
+            // Across: depth runs horizontally, so the mark is exactly
+            // NOTE_MARK_PX wide and as tall as the span it covers. (The
+            // off-lattice halo is the same shape grown by its pulse, so the
+            // exact width picks out the mark itself.)
             out.shapes
                 .into_iter()
                 .filter_map(|s| match s.shape {
-                    egui::Shape::LineSegment { points, stroke }
-                        if (stroke.width - NOTE_MARK_PX).abs() < 0.01 =>
-                    {
-                        Some(points)
+                    egui::Shape::Rect(r) if (r.rect.width() - NOTE_MARK_PX).abs() < 0.05 => {
+                        Some(r.rect)
                     }
                     _ => None,
                 })
                 .collect::<Vec<_>>()
         };
 
-        let one = marks(2.0);
-        assert_eq!(one.len(), 1, "one held note, one mark");
-        let [a, b] = one[0];
-        // Across: time runs horizontally, so a mark lying along the pitch axis
-        // shares its depth — the same x at both ends.
-        assert!((a.x - b.x).abs() < 0.01, "the mark stands out of the line: {a:?} {b:?}");
-        assert!((a.y - b.y).abs() > 0.5, "the mark has no width");
+        let square = marks(2.0, 0.0);
+        assert_eq!(square.len(), 1, "one held note, one mark");
+        assert!(square[0].height() > square[0].width(), "the mark stands out of the line");
 
-        // Width tracks the ribbon it belongs to.
-        let [c, d] = marks(4.0)[0];
-        let (thin, thick) = ((a.y - b.y).abs(), (c.y - d.y).abs());
-        assert!((thick - 2.0 * thin).abs() < 0.5, "{thin} -> {thick} is not double");
+        // Unrounded, the mark takes the ribbon's whole width, and doubling the
+        // ribbon doubles the mark.
+        let wide = marks(4.0, 0.0);
+        assert!(
+            (wide[0].height() - 2.0 * square[0].height()).abs() < 0.5,
+            "{} -> {} is not double",
+            square[0].height(),
+            wide[0].height()
+        );
+
+        // Rounded, it shrinks to the flat part of the ribbon's end — the
+        // rounding is what the ribbon gives up at the line.
+        let rounded = marks(2.0, 0.5);
+        assert!(
+            rounded[0].height() < square[0].height(),
+            "rounding did not pull the mark in: {} vs {}",
+            rounded[0].height(),
+            square[0].height()
+        );
     }
 
     /// The axis labels are haloed like the lattice's node names. What sits

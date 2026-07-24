@@ -661,6 +661,13 @@ impl Default for AudioSpectrum {
 }
 
 impl AudioSpectrum {
+    /// Forget the spectrogram textures, so the next draw uploads fresh ones
+    /// into whatever context is current. See
+    /// [`SharedState::release_context_resources`].
+    fn release_textures(&mut self) {
+        self.spectrogram_tex = [None, None];
+    }
+
     /// Seconds between FFTs (20 Hz refresh).
     const FFT_INTERVAL: f64 = 0.05;
     /// How long after the last samples the curve keeps drawing.
@@ -951,6 +958,21 @@ impl SharedState {
 
     /// Restore state saved by [`save_persist`]. Unknown/corrupt input is
     /// ignored (fresh defaults win over a broken restore).
+    /// Drop everything that belongs to a particular egui context. Shells MUST
+    /// call this whenever they build one.
+    ///
+    /// The plugin's editor creates a brand new `Context` every time its window
+    /// opens, while this state lives on across them — so a `TextureHandle`
+    /// taken from the previous one survives into the new window looking
+    /// perfectly valid. It isn't: `set` on it reaches a context nobody is
+    /// drawing any more, and its id names a texture the new renderer never
+    /// allocated. The spectrogram simply vanished after hiding and re-showing
+    /// the window, and stayed gone, because nothing ever asked for a fresh
+    /// handle.
+    pub fn release_context_resources(&mut self) {
+        self.spectrum.release_textures();
+    }
+
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
             // A pre-reorg (version 0) layout names the old tabs and is missing

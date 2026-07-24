@@ -535,11 +535,18 @@ impl Editor for LatticeEditor {
             },
             |egui_ctx: &Context, _queue, state: &mut WindowState| {
                 lattice_ui::theme::apply_theme(egui_ctx);
+                // This is a NEW context; the shared UI state is not. Anything
+                // it holds that belongs to the last one has to go now, or it
+                // silently keeps drawing with handles that point nowhere —
+                // which is how the spectrogram disappeared for good after the
+                // window was hidden and shown again.
+                let mut shared = state.shared.lock();
+                shared.ui.release_context_resources();
                 // Restore dock layout / camera / view settings persisted
                 // with the plugin state (saved when the editor closes).
                 let serialized = state.params.ui_state.read().clone();
                 if !serialized.is_empty() {
-                    state.shared.lock().ui.load_persist(&serialized);
+                    shared.ui.load_persist(&serialized);
                 }
             },
             // Thin shim: the real per-frame work is `frame`, above. The
