@@ -97,20 +97,13 @@ pub(super) fn tuning_pane(
         }
     });
 
-    ui.separator();
-    // Cross-pane highlight demo: this pane reacts to the lattice hover,
-    // reporting the hovered node's pitch class under the current tuning.
-    match state.hovered {
-        Some(pos) => {
-            let pc = state.tuning.pitch_class(pos);
-            ui.label(format!(
-                "Hovered: ({}, {}, {}) = {}",
-                pos.threes, pos.fives, pos.sevens, pc
-            ));
-        }
-        None => {
-            ui.weak("Hover a node to inspect it");
-        }
+    // When a lattice node is hovered, report its coordinates and pitch class
+    // under the current tuning. Nothing when nothing is hovered — no standing
+    // placeholder line taking up the pane.
+    if let Some(pos) = state.hovered {
+        ui.separator();
+        let pc = state.tuning.pitch_class(pos);
+        ui.label(format!("Hovered: ({}, {}, {}) = {}", pos.threes, pos.fives, pos.sevens, pc));
     }
 
     // How the lattice is framed: the other half of "what am I looking at".
