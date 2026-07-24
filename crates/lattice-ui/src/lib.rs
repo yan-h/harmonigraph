@@ -1186,7 +1186,9 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
-            gpu_ms: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            gpu_ms: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
+                lattice_render::GPU_TIME_PENDING,
+            )),
             fps_cap: None,
             perf: PerfStats::default(),
         }

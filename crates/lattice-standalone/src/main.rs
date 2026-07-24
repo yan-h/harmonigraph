@@ -27,8 +27,7 @@ fn main() -> eframe::Result {
         setup.device_descriptor = std::sync::Arc::new(move |adapter: &lattice_render::wgpu::Adapter| {
             use lattice_render::wgpu::Features;
             let mut descriptor = base(adapter);
-            let wanted = Features::TIMESTAMP_QUERY | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-            descriptor.required_features |= adapter.features() & wanted;
+            descriptor.required_features |= adapter.features() & Features::TIMESTAMP_QUERY;
             descriptor
         });
     }

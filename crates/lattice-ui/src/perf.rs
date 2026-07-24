@@ -105,6 +105,8 @@ pub struct PerfStats {
     shown_gpu_ms: f32,
     /// Whether the device ever said it could measure GPU time at all.
     gpu_supported: bool,
+    /// Whether a measurement has actually come back.
+    have_gpu: bool,
     /// This frame's workload (voice counts, visible nodes, render scale,
     /// whether it was animating).
     workload: Workload,
@@ -123,6 +125,7 @@ impl Default for PerfStats {
             gpu_ms: 0.0,
             shown_gpu_ms: 0.0,
             gpu_supported: true,
+            have_gpu: false,
             last_readout: f64::NEG_INFINITY,
             workload: Workload::default(),
         }
@@ -158,14 +161,21 @@ impl PerfStats {
         // "none has landed yet". Collapsing the last two into one "n/a" made
         // a wiring bug and an unsupported GPU look identical, which is
         // exactly the question the row exists to answer.
-        if gpu_ms.to_bits() == lattice_render::GPU_TIME_UNSUPPORTED {
-            self.gpu_supported = false;
-        } else if gpu_ms > 0.0 {
-            self.gpu_ms = if self.gpu_ms > 0.0 {
-                self.gpu_ms + (gpu_ms - self.gpu_ms) * alpha
-            } else {
-                gpu_ms
-            };
+        match gpu_ms.to_bits() {
+            lattice_render::GPU_TIME_UNSUPPORTED => self.gpu_supported = false,
+            // Still waiting for the first readback; leave the row saying so.
+            lattice_render::GPU_TIME_PENDING => {}
+            // Anything else is a real reading, INCLUDING 0.0 — seeded rather
+            // than eased up from nothing, so the GPU doesn't appear to warm
+            // up over the first second of every session.
+            _ => {
+                self.have_gpu = true;
+                self.gpu_ms = if self.have_gpu && self.gpu_ms > 0.0 {
+                    self.gpu_ms + (gpu_ms - self.gpu_ms) * alpha
+                } else {
+                    gpu_ms
+                };
+            }
         }
         // Latch what the overlay prints. Seeded on the first frame rather
         // than eased up from the defaults, so the HUD opens showing the real
@@ -289,7 +299,7 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
                         "gpu",
                         if !perf.gpu_supported {
                             "n/a (no timestamps)".to_owned()
-                        } else if perf.shown_gpu_ms > 0.0 {
+                        } else if perf.have_gpu {
                             format!("{:.1} ms", perf.shown_gpu_ms)
                         } else {
                             "measuring...".to_owned()

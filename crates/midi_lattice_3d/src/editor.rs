@@ -430,9 +430,8 @@ fn graphics_config() -> GraphicsConfig {
         let base = setup.device_descriptor.clone();
         setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
             let mut descriptor = base(adapter);
-            let wanted = wgpu::Features::TIMESTAMP_QUERY
-                | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-            descriptor.required_features |= adapter.features() & wanted;
+            descriptor.required_features |=
+                adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
             descriptor
         });
     }

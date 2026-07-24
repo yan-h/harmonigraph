@@ -503,6 +503,9 @@ struct GpuTimer {
     state: TimerState,
     /// Set by the map callback, which the driver may run on another thread.
     ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// 1x1 target for the trailing pass that carries the closing sample.
+    /// One pixel, so beginning it costs nothing worth measuring.
+    tail: wgpu::TextureView,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -518,21 +521,22 @@ enum TimerState {
 /// Two timestamps, 8 bytes each.
 const TIMER_BYTES: u64 = 16;
 
-/// Sentinel published in place of a measurement when the device didn't grant
-/// timestamp queries. A NaN bit pattern, so it can never collide with a real
-/// millisecond reading; 0 keeps its own meaning of "none has landed yet".
+/// Published in place of a measurement when the device can't do timestamp
+/// queries at all.
+///
+/// A NaN bit pattern, as is [`GPU_TIME_PENDING`]. Zero would have been the
+/// obvious sentinel and is the wrong choice: a real reading of 0.0 ms is
+/// perfectly possible, and using it to mean "nothing yet" is what made a
+/// landed-but-zero measurement indistinguishable from a stuck one.
 pub const GPU_TIME_UNSUPPORTED: u32 = 0x7fc0_0001;
+
+/// The initial value: a timer exists, but no measurement has come back yet.
+pub const GPU_TIME_PENDING: u32 = 0x7fc0_0002;
 
 impl GpuTimer {
     /// Build the query set and buffers, or `None` when the device can't.
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
-        // Bracketing the passes from the ENCODER needs the inside-encoders
-        // feature. The plain timestamp feature alone only permits writes at
-        // pass boundaries, which would mean threading them through two
-        // separate pass descriptors for the same measurement.
-        let needed =
-            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-        if !device.features().contains(needed) {
+        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
         Some(GpuTimer {
@@ -556,6 +560,18 @@ impl GpuTimer {
             period: queue.get_timestamp_period(),
             state: TimerState::Idle,
             ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tail: device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("lattice_gpu_timer_tail"),
+                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
         })
     }
 
@@ -608,13 +624,46 @@ impl GpuTimer {
         self.state == TimerState::Idle
     }
 
-    fn begin(&self, encoder: &mut wgpu::CommandEncoder) {
-        encoder.write_timestamp(&self.set, 0);
+    /// The opening sample, to hang on the first lattice pass.
+    ///
+    /// Both samples are BEGINNING-of-pass writes. The obvious shape —
+    /// `write_timestamp` on the encoder, or beginning-and-end on one pass —
+    /// does not work here: Metal advertises and grants both
+    /// `TIMESTAMP_QUERY_INSIDE_ENCODERS` and end-of-pass writes, then
+    /// silently records ZERO for them. Only the beginning-of-pass sample
+    /// comes back with a real value, so the bracket is built from two of
+    /// those, the closing one on a pass that exists only to carry it.
+    fn opening(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        Some(wgpu::RenderPassTimestampWrites {
+            query_set: &self.set,
+            beginning_of_pass_write_index: Some(0),
+            end_of_pass_write_index: None,
+        })
     }
 
-    /// Close the bracket and stage the result for the next frame to map.
-    fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        encoder.write_timestamp(&self.set, 1);
+    /// Close the bracket with a 1x1 no-op pass, and stage the result for a
+    /// later frame to map.
+    fn close(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("lattice_gpu_timer_tail_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.tail,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
+                query_set: &self.set,
+                beginning_of_pass_write_index: Some(1),
+                end_of_pass_write_index: None,
+            }),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
         encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
         encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, TIMER_BYTES);
         self.state = TimerState::Recorded;
@@ -1231,11 +1280,11 @@ impl CallbackTrait for LatticeCallback {
             // Skipped while a readback is still in flight, so the query set is
             // never overwritten mid-cycle.
             let timing = resources.timer.as_ref().is_some_and(GpuTimer::arming);
-            if timing {
-                if let Some(timer) = resources.timer.as_ref() {
-                    timer.begin(egui_encoder);
-                }
-            }
+            let opening = if timing {
+                resources.timer.as_ref().and_then(GpuTimer::opening)
+            } else {
+                None
+            };
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lattice_scene_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1258,7 +1307,7 @@ impl CallbackTrait for LatticeCallback {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: opening,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1285,7 +1334,7 @@ impl CallbackTrait for LatticeCallback {
 
             if timing {
                 if let Some(timer) = resources.timer.as_mut() {
-                    timer.end(egui_encoder);
+                    timer.close(egui_encoder);
                 }
             }
         }
