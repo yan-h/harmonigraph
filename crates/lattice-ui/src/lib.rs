@@ -316,6 +316,10 @@ pub struct SpectrumConfig {
     pub labels: SpectrumLabels,
     /// Keep a slowly decaying outline at each bucket's recent maximum.
     pub peak_hold: bool,
+    /// Strength of the light edge drawn along the spectrum's profile and
+    /// around each note ribbon, 0 = none. See `panes::roll::keyline`.
+    #[serde(default = "default_keyline")]
+    pub keyline: f32,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
     /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
     /// (~16 Hz to ~16.7 kHz); this only zooms the view.
@@ -409,6 +413,12 @@ pub struct SpectrumConfig {
 
 fn default_spectrogram_opacity() -> f32 {
     0.85
+}
+
+/// Enough of an edge to hold a shape against a bright spectrogram cell,
+/// little enough that it doesn't read as a second outline of its own.
+fn default_keyline() -> f32 {
+    0.3
 }
 
 /// The default pitch range is the analyzer's whole axis — the zoom starts
@@ -511,6 +521,7 @@ impl Default for SpectrumConfig {
             tilt: 0.0,
             labels: SpectrumLabels::Notes,
             peak_hold: false,
+            keyline: default_keyline(),
             low_midi: default_low_midi(),
             high_midi: default_high_midi(),
             legacy_low_octave: no_legacy_octave(),

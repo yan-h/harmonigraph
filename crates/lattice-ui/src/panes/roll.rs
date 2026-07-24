@@ -27,10 +27,20 @@ use crate::{theme, RollColor, SharedState};
 const MIN_RIBBON_PX: f32 = 1.5;
 
 /// How far the keyline stands proud of the note's outline on each side.
-const KEYLINE_PX: f32 = 1.0;
-/// The keyline's color: white, dimmed enough to read as an edge rather than
-/// as a second outline competing with the note's own.
-const KEYLINE: Color32 = Color32::from_rgba_premultiplied(150, 150, 150, 150);
+pub(super) const KEYLINE_PX: f32 = 1.0;
+
+/// The light edge drawn around a note's outline and along the spectrum's
+/// profile, at `cfg.keyline` strength — `None` when the setting is off.
+///
+/// Both sit over the spectrogram, whose ramps run from black to near-white,
+/// so either can end up almost exactly the brightness of what is behind it and
+/// lose its shape entirely. A light rim gives them an edge to be seen by
+/// whatever they cross. It is a setting because how much is right depends
+/// entirely on the palette and opacity in play.
+pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
+    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
+    (strength > 0.004).then(|| Color32::WHITE.gamma_multiply(strength))
+}
 
 /// Draw every remembered note that falls inside the pane's time window and
 /// pitch range. `split` is the depth fraction the roll starts at; `now` is
@@ -120,18 +130,6 @@ pub(super) fn draw_roll(
                 continue;
             }
             let pitch = (p0 + p1) * 0.5;
-            // Sounding at a pitch the visible lattice has no node for. Flagged
-            // the way the Notes pane flags it — the color you read the note by
-            // goes to `warning_text`, over a `warning_bg` band — rather than
-            // with a mark of its own, so the two panes say it the same way.
-            // Same match the lattice uses, so all three agree on what
-            // "off-lattice" means.
-            let off_lattice = super::nearest_visible_node(
-                &state.view,
-                &state.tuning,
-                lattice_core::PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0),
-            )
-            .is_none();
             let width = cfg.roll_outline_width.clamp(0.5, 8.0);
             // Bloom: a soft glow around the outline, driven by the SAME setting
             // as the lattice's bloom so the two panes share the look. egui has
@@ -139,13 +137,7 @@ pub(super) fn draw_roll(
             // one — a couple of wider, fainter passes of the stroke under the
             // crisp one; more bloom widens and brightens the halo.
             let g = state.view.bloom_strength.clamp(0.0, 2.0);
-            let body = |a: f32| {
-                if off_lattice {
-                    theme::warning_text().gamma_multiply(a)
-                } else {
-                    note_color(note, cfg, state, pitch, a)
-                }
-            };
+            let body = |a: f32| note_color(note, cfg, state, pitch, a);
             // (stroke width, color) per pass, painted in order; the crisp
             // outline is last and on top.
             let mut passes: Vec<(f32, Color32)> = Vec::with_capacity(4);
@@ -154,24 +146,14 @@ pub(super) fn draw_roll(
                 passes.push((width + g * 3.0, brighten(body(alpha * 0.12 * g))));
                 passes.push((width + g * 1.5, brighten(body(alpha * 0.20 * g))));
             }
-            // A thin light keyline just outside the outline. The ribbons sit
-            // over the spectrogram, whose cells run the whole ramp from black
-            // to near-white, so a note's own color is sometimes almost exactly
-            // what is behind it; this gives every note an edge to be seen by
-            // whatever it crosses. Under the crisp outline and wider by a
-            // pixel each side, so it reads as a rim rather than a thickening.
-            passes.push((width + 2.0 * KEYLINE_PX, KEYLINE.gamma_multiply(alpha)));
+            // A thin light keyline just outside the outline, at the strength
+            // the Edge setting asks for. See `keyline`.
+            if let Some(edge) = keyline(cfg, alpha) {
+                passes.push((width + 2.0 * KEYLINE_PX, edge));
+            }
             // The crisp outline is the note's TRUE color, so it matches the
             // same note on the lattice.
             passes.push((width, body(alpha)));
-            // Off-lattice notes get the band behind them too — the ribbon is
-            // an outline, so its inside is where the Notes pane's row
-            // background belongs.
-            let fill = if off_lattice {
-                theme::warning_bg().gamma_multiply(alpha)
-            } else {
-                Color32::TRANSPARENT
-            };
 
             if ribbon_px < MIN_RIBBON_PX {
                 // Too thin to bound: the note IS its spine.
@@ -187,9 +169,6 @@ pub(super) fn draw_roll(
                 let rect = egui::Rect::from_two_pos(axes.at(a0 - half, d0), axes.at(a1 + half, d1));
                 let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
                 let rounding = egui::CornerRadius::same(radius.min(127.0) as u8);
-                if fill != Color32::TRANSPARENT {
-                    painter.rect_filled(rect, rounding, fill);
-                }
                 for &(w, color) in &passes {
                     painter.rect_stroke(
                         rect,
@@ -207,10 +186,10 @@ pub(super) fn draw_roll(
                     axes.at(a1 + half, d1),
                     axes.at(a1 - half, d1),
                 ];
-                for (i, &(w, color)) in passes.iter().enumerate() {
+                for &(w, color) in &passes {
                     painter.add(egui::Shape::convex_polygon(
                         quad.clone(),
-                        if i == 0 { fill } else { Color32::TRANSPARENT },
+                        Color32::TRANSPARENT,
                         egui::Stroke::new(w, color),
                     ));
                 }
@@ -254,9 +233,9 @@ mod tests {
     use crate::{SharedState, SpectralOrientation};
     use lattice_core::{NoteEvent, NoteEventKind};
 
-    /// Paint one held note and report every rect the roll emitted, as
-    /// (stroke width, stroke color, fill).
-    fn ribbon(tuning_offset: f32) -> Vec<(f32, Color32, Color32)> {
+    /// Paint one held note at the given Edge strength and report every rect
+    /// the roll emitted, as (stroke width, stroke color, fill).
+    fn ribbon(keyline: f32) -> Vec<(f32, Color32, Color32)> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
         state.spectrum_config.low_midi = 55.0;
@@ -265,6 +244,7 @@ mod tests {
         state.spectrum_config.roll_velocity_alpha = false;
         state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_thickness = 2.0;
+        state.spectrum_config.keyline = keyline;
         state.view.bloom_strength = 0.0;
         state.tracker.handle_event(NoteEvent {
             time: 0.0,
@@ -272,14 +252,6 @@ mod tests {
             note: 60,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
-        if tuning_offset != 0.0 {
-            state.tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note: 60,
-                kind: NoteEventKind::Tuning { semitones: tuning_offset },
-            });
-        }
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
@@ -302,41 +274,28 @@ mod tests {
 
     /// The ribbons lie over the spectrogram, whose cells run the whole ramp
     /// from black to near-white, so a note's own color is sometimes almost
-    /// exactly what is behind it. Every note carries a light keyline under its
-    /// outline, wider on both sides, to be seen by.
+    /// exactly what is behind it. The Edge setting puts a light keyline under
+    /// each outline, wider on both sides, to be seen by.
     #[test]
-    fn every_note_carries_a_keyline_under_its_outline() {
-        let rects = ribbon(0.0);
+    fn the_edge_setting_puts_a_keyline_under_each_outline() {
         let outline = 2.0;
+        let rects = ribbon(0.5);
         let key = rects.iter().position(|&(w, c, _)| {
-            (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01 && c == KEYLINE
+            (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01
+                && c == Color32::WHITE.gamma_multiply(0.5)
         });
         let crisp = rects.iter().position(|&(w, _, _)| (w - outline).abs() < 0.01);
         let (Some(key), Some(crisp)) = (key, crisp) else {
             panic!("expected a keyline and a crisp outline, got {rects:?}");
         };
         assert!(key < crisp, "the keyline paints over the outline it should sit under");
-    }
 
-    /// A pitch the visible lattice has no node for is flagged the way the
-    /// Notes pane flags it: the color you read the note by goes to
-    /// `warning_text`, over a `warning_bg` band.
-    #[test]
-    fn an_off_lattice_note_takes_the_notes_pane_warning_colors() {
-        let plain = ribbon(0.0);
+        // And nothing at all at zero, rather than a hairline that can't be
+        // turned off.
+        let none = ribbon(0.0);
         assert!(
-            !plain.iter().any(|&(_, c, _)| c == theme::warning_text()),
-            "a plain C should not be flagged",
-        );
-        // Half a semitone sharp: no lattice node matches that pitch class.
-        let flagged = ribbon(0.5);
-        assert!(
-            flagged.iter().any(|&(_, c, _)| c == theme::warning_text()),
-            "off-lattice note kept its own color: {flagged:?}",
-        );
-        assert!(
-            flagged.iter().any(|&(_, _, fill)| fill == theme::warning_bg()),
-            "off-lattice note has no band behind it",
+            !none.iter().any(|&(w, _, _)| (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01),
+            "Edge 0 still drew a keyline: {none:?}",
         );
     }
 }

@@ -121,6 +121,12 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     ui.checkbox(&mut cfg.peak_hold, "Peak hold")
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
+    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Edge").show(ui).on_hover_text(
+        "A light rim along the spectrum's profile and around each note \
+         ribbon. Both sit over the spectrogram, whose colors run from black \
+         to near-white, so either can end up the same brightness as what is \
+         behind it and lose its shape. 0 draws none.",
+    );
 
     // ---- Pitch axis -----------------------------------------------------
     section(ui, "Pitch axis");
@@ -744,6 +750,20 @@ pub(crate) fn spectral_pane(
                     );
                 }
             }
+
+            // ...and a light rim along their tops, the same edge the note
+            // ribbons carry. The spectrum's own colors come from the
+            // spectrogram's palette, so where the curve is quiet it is drawn
+            // in that palette's dark end — against the pane's dark background,
+            // with no edge, the shape simply stops existing. Follows the
+            // profile the slabs make rather than being a separate curve.
+            if let Some(edge) = super::roll::keyline(&cfg, 1.0) {
+                let top: Vec<egui::Pos2> = visible
+                    .iter()
+                    .map(|&(midi, t, level, _)| axes.at(t, sd(d_of(level, midi))))
+                    .collect();
+                painter.add(egui::Shape::line(top, egui::Stroke::new(1.0, edge)));
+            }
             if cfg.peak_hold {
                 // The one remaining line: a decaying trace of recent maxima,
                 // in the palette's loud color.
@@ -757,6 +777,42 @@ pub(crate) fn spectral_pane(
                     visible.iter().map(|&(m, t, _, pk)| axes.at(t, sd(d_of(pk, m)))).collect();
                 painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 150))));
             }
+        }
+    }
+
+    // Notes sounding at a pitch the visible lattice has no node for, flagged
+    // as a red band down the spectrum at that pitch. The lattice shows nothing
+    // for such a note by definition, so this pane is where you would otherwise
+    // never learn one was playing — and the band says it in the spectrum's own
+    // territory, where there is room for it, instead of recoloring the note
+    // and costing you the one thing the ribbon's color is for. Same
+    // `nearest_visible_node` match the Notes pane and the lattice use.
+    if split > 0.0 && !whole_song {
+        let mut voices: Vec<&lattice_core::Voice> = state
+            .tracker
+            .voices()
+            .filter(|v| {
+                nearest_visible_node(&state.view, &state.tuning, v.pitch_class).is_none()
+            })
+            .collect();
+        // Stable order: voices iterate a HashMap and translucent bands
+        // accumulate where they overlap, so the offline render must not
+        // depend on it.
+        voices.sort_unstable_by(|a, b| {
+            a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
+        });
+        let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
+        for voice in voices {
+            let strength = voice.activation(now, state.frame_params.fade_time);
+            if strength <= 0.0 || !scale.contains(voice.pitch) {
+                continue;
+            }
+            let t = scale.t_of(voice.pitch);
+            let band = egui::Rect::from_two_pos(
+                axes.at(t - half, 0.0),
+                axes.at(t + half, split),
+            );
+            painter.rect_filled(band, 0.0, theme::warning_text().gamma_multiply(0.3 * strength));
         }
     }
 
@@ -1015,6 +1071,52 @@ mod tests {
             panic!("expected both a now-line and a note ribbon in the frame");
         };
         assert!(note > hairline, "the note paints under the line it arrives at");
+    }
+
+    /// A note sounding where the visible lattice has no node is flagged by a
+    /// band down the spectrum at its pitch — the lattice shows nothing for
+    /// such a note by definition, so this pane is the only place you can learn
+    /// one is playing. Put in the spectrum's territory rather than on the
+    /// note, whose color is already saying which voice it is.
+    #[test]
+    fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
+        let bands = |tuning_offset: f32| {
+            let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+            state.spectrum_config.low_midi = 55.0;
+            state.spectrum_config.high_midi = 67.0;
+            state.tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+            if tuning_offset != 0.0 {
+                state.tracker.handle_event(NoteEvent {
+                    time: 0.0,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteEventKind::Tuning { semitones: tuning_offset },
+                });
+            }
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+            let out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                    spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+                },
+            );
+            let want = theme::warning_text().gamma_multiply(0.3);
+            out.shapes
+                .into_iter()
+                .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want))
+                .count()
+        };
+        assert_eq!(bands(0.0), 0, "a plain C has a node, so nothing to flag");
+        assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
     }
 
     /// The axis labels are haloed like the lattice's node names. What sits
