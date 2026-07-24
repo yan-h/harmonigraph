@@ -1086,6 +1086,15 @@ pub struct SharedState {
     /// Runtime-only, never persisted, and never read by the offline renderer —
     /// which also never asks for the feature, so it has no timer to begin with.
     pub(crate) gpu_ms: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// Milliseconds the shell spent tessellating egui's shapes last frame,
+    /// or 0 where the shell doesn't measure it (the standalone's eframe loop
+    /// isn't ours to instrument). Set by the shell before `root_ui`.
+    ///
+    /// Its own field rather than part of the frame's CPU time because it is
+    /// not the same work: `ui cpu` covers building the UI, which only APPENDS
+    /// shapes, and this covers turning those shapes into triangles afterwards.
+    /// A cost can be entirely in one and invisible in the other.
+    pub tess_ms: f32,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -1189,6 +1198,7 @@ impl SharedState {
             gpu_ms: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
                 lattice_render::GPU_TIME_PENDING,
             )),
+            tess_ms: 0.0,
             fps_cap: None,
             perf: PerfStats::default(),
         }
@@ -1394,6 +1404,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // reaches root_ui, so nothing here touches a recorded frame.
     state.perf.record(
         cpu_ms,
+        state.tess_ms,
         f32::from_bits(state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed)),
         now,
         perf::Workload {

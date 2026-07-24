@@ -51,6 +51,12 @@ pub struct Renderer {
     config: GraphicsConfig,
     msaa_texture_view: Option<TextureView>,
     msaa_samples: u32,
+    /// How long the last frame spent turning egui's shapes into triangles.
+    ///
+    /// Tessellation is neither the app's own per-frame work (it runs after the
+    /// UI closure returns) nor GPU time, so without this it falls in a gap
+    /// where a cost can hide from every other measurement.
+    last_tess_ms: f32,
     width: u32,
     height: u32,
 }
@@ -77,9 +83,15 @@ impl Renderer {
             config,
             msaa_texture_view: None,
             msaa_samples,
+            last_tess_ms: 0.0,
             width: 0,
             height: 0,
         })
+    }
+
+    /// Milliseconds the last frame spent in [`egui::Context::tessellate`].
+    pub fn last_tess_ms(&self) -> f32 {
+        self.last_tess_ms
     }
 
     pub fn max_texture_side(&self) -> usize {
@@ -169,7 +181,9 @@ impl Renderer {
 
         let shapes = std::mem::take(&mut full_output.shapes);
 
+        let tess_start = std::time::Instant::now();
         let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
+        self.last_tess_ms = tess_start.elapsed().as_secs_f32() * 1000.0;
 
         let mut encoder =
             self.render_state
