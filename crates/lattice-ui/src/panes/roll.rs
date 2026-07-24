@@ -134,7 +134,25 @@ pub(super) fn draw_roll(
         Some(ws) => &ws.roll,
         None => state.tracker.roll(),
     };
-    let mut notes: Vec<&RollNote> = roll.notes().collect();
+    // Cull to the visible window BEFORE sorting: the roll can remember
+    // thousands of notes while only a handful are on screen, and sorting the
+    // survivors alone (rather than every remembered note) keeps the same
+    // deterministic paint order for far less work.
+    //   - Entirely past the window's far end, or
+    //   - entirely off the octave zoom (both endpoints outside and on the
+    //     same side, so a note that merely crosses an edge still draws its
+    //     visible part).
+    let mut notes: Vec<&RollNote> = roll
+        .notes()
+        .filter(|note| {
+            if note.stop(now) < oldest {
+                return false;
+            }
+            let (a, b) = (note.start_pitch(), note.end_pitch());
+            let (lo, hi) = (a.min(b), a.max(b));
+            hi >= scale.min_midi - cfg.roll_thickness && lo <= scale.max_midi + cfg.roll_thickness
+        })
+        .collect();
     notes.sort_unstable_by(|a, b| {
         a.start
             .total_cmp(&b.start)
@@ -142,20 +160,6 @@ pub(super) fn draw_roll(
             .then(a.note.cmp(&b.note))
     });
     for note in notes {
-        // Entirely past the window's far end, or entirely off the octave
-        // zoom (both endpoints outside and on the same side, so a note
-        // that merely crosses the edge still draws its visible part).
-        if note.stop(now) < oldest {
-            continue;
-        }
-        let (lo, hi) = {
-            let (a, b) = (note.start_pitch(), note.end_pitch());
-            (a.min(b), a.max(b))
-        };
-        if hi < scale.min_midi - cfg.roll_thickness || lo > scale.max_midi + cfg.roll_thickness {
-            continue;
-        }
-
         for ((t0, p0), (t1, p1)) in note.segments(now) {
             let (t0, t1) = (t0.max(oldest), t1.max(oldest));
             if t1 < oldest {
@@ -172,7 +176,6 @@ pub(super) fn draw_roll(
             let pitch = (p0 + p1) * 0.5;
             let width = cfg.roll_outline_width.clamp(0.5, 8.0);
             let body = |a: f32| note_color(note, cfg, state, pitch, a);
-
             // Everything around the outline is drawn as a band standing
             // OUTSIDE it, never as a wider stroke of the same path.
             //
@@ -185,11 +188,14 @@ pub(super) fn draw_roll(
             // a light edge and read as a translucent white box instead.
             //
             // Each band is (standoff from the outline's outer edge, thickness,
-            // color), outermost first. Bands don't overlap, so for the shapes
-            // that can be expanded the order is cosmetic; it matters only in
-            // the hairline branch, where there is no interior to stand outside
-            // of and the bands go under the spine widest-first.
-            let mut bands: Vec<(f32, f32, Color32)> = Vec::with_capacity(4);
+            // color), outermost first. At most four (two bloom, glow, border),
+            // so a stack array avoids a heap allocation per segment per frame.
+            // Bands don't overlap, so for the shapes that can be expanded the
+            // order is cosmetic; it matters only in the hairline branch, where
+            // there is no interior to stand outside of and the bands go under
+            // the spine widest-first.
+            let mut bands: [(f32, f32, Color32); 4] = [(0.0, 0.0, Color32::TRANSPARENT); 4];
+            let mut nb = 0;
             let rim = glow(cfg, alpha).zip(border(cfg, alpha));
             // Where the rim ends, so the bloom can start outside it.
             let rim_px = if rim.is_some() { BORDER_PX + KEYLINE_PX } else { 0.0 };
@@ -202,17 +208,20 @@ pub(super) fn draw_roll(
             // can see of the note.
             let g = state.view.bloom_strength.clamp(0.0, 2.0);
             if g > 0.0 {
-                bands.push((rim_px, g * 1.5, brighten(body(alpha * 0.12 * g))));
-                bands.push((rim_px, g * 0.75, brighten(body(alpha * 0.20 * g))));
+                bands[nb] = (rim_px, g * 1.5, brighten(body(alpha * 0.12 * g)));
+                bands[nb + 1] = (rim_px, g * 0.75, brighten(body(alpha * 0.20 * g)));
+                nb += 2;
             }
             if let Some((light, dark)) = rim {
                 // Reading outward: the note's color, a solid black outline
                 // hugging it, then the bright white glow riding the black's
                 // outer edge, then whatever the spectrogram is doing. The black
                 // gives the note a crisp separation; the glow is the highlight.
-                bands.push((BORDER_PX, KEYLINE_PX, light));
-                bands.push((0.0, BORDER_PX, dark));
+                bands[nb] = (BORDER_PX, KEYLINE_PX, light);
+                bands[nb + 1] = (0.0, BORDER_PX, dark);
+                nb += 2;
             }
+            let bands = &bands[..nb];
             // The crisp outline is the note's TRUE color, so it matches the
             // same note on the lattice. It goes on top of everything.
             let core = body(alpha);
@@ -223,7 +232,7 @@ pub(super) fn draw_roll(
                 // stroke underneath — widest first.
                 let spine = [axes.at(a0, d0), axes.at(a1, d1)];
                 let core_w = width.max(MIN_RIBBON_PX);
-                for &(out, thick, color) in &bands {
+                for &(out, thick, color) in bands {
                     painter.line_segment(
                         spine,
                         egui::Stroke::new(core_w + 2.0 * (out + thick), color),
@@ -252,7 +261,7 @@ pub(super) fn draw_roll(
                     )
                     .with_round_to_pixels(false)
                 };
-                for &(out, thick, color) in &bands {
+                for &(out, thick, color) in bands {
                     // Grow the RECT by the band's distance and keep the stroke
                     // thin, rather than growing the stroke on the same rect:
                     // the shape moves outward, and nothing reaches back inside.
@@ -283,7 +292,7 @@ pub(super) fn draw_roll(
                         axes.at(a1 - half - ep, d1 + ed),
                     ]
                 };
-                for &(out, thick, color) in &bands {
+                for &(out, thick, color) in bands {
                     let e = width * 0.5 + out + thick * 0.5;
                     painter.add(egui::Shape::convex_polygon(
                         quad(e),
