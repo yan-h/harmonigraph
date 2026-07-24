@@ -299,8 +299,18 @@ pub struct SpectrumConfig {
     #[serde(default = "default_true")]
     pub show_audio: bool,
     pub window: SpectrumWindow,
-    /// Bottom of the dB height scale; a full-scale sine sits at 0 dB.
+    /// Bottom of the dB height scale: what reads as silence. A full-scale
+    /// sine sits at 0 dB.
     pub floor_db: f32,
+    /// Top of the dB height scale: what reads as full height (and as the
+    /// brightest spectrogram cell). 0 dB — a full-scale sine — is where it
+    /// starts and the loudest it goes; pulling it down lifts quiet material
+    /// into the whole picture instead of the bottom of it.
+    ///
+    /// The pair is one control, like the pitch range: the window on the
+    /// spectrum's dynamics, movable at either end.
+    #[serde(default = "default_ceiling_db")]
+    pub ceiling_db: f32,
     /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
     pub smoothing: f32,
     /// Spectral tilt, in the convention analyzers use: the reference
@@ -469,6 +479,23 @@ impl SpectrumConfig {
 /// what the octave-pair control guaranteed before it went continuous.
 pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 12.0;
 
+/// The level range's domain, in dB. The top is a full-scale sine, the
+/// loudest thing a bucket can hold; the bottom is well under any noise
+/// floor worth looking at.
+pub(crate) const LEVEL_MIN_DB: f32 = -100.0;
+pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
+
+/// Closest the two ends of the level range may come. A window narrower than
+/// this is all edge and no picture — and, unclamped, a collapsed one divides
+/// by zero in `loudness` and paints the NaN geometry egui panics on.
+pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
+
+/// A full-scale sine reads as full height, which is what the pane did before
+/// the ceiling was adjustable at all.
+fn default_ceiling_db() -> f32 {
+    LEVEL_MAX_DB
+}
+
 fn default_true() -> bool {
     true
 }
@@ -523,6 +550,7 @@ impl Default for SpectrumConfig {
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
+            ceiling_db: default_ceiling_db(),
             smoothing: 0.55,
             tilt: default_tilt(),
             labels: SpectrumLabels::Notes,

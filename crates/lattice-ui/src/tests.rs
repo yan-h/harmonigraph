@@ -463,6 +463,7 @@ fn spectrum_config_round_trips_through_persist() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.spectrum_config.show_audio = true;
     state.spectrum_config.floor_db = -48.0;
+    state.spectrum_config.ceiling_db = -12.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
     state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
@@ -476,6 +477,7 @@ fn spectrum_config_round_trips_through_persist() {
     restored.load_persist(&saved);
     assert!(restored.spectrum_config.show_audio);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
+    assert_eq!(restored.spectrum_config.ceiling_db, -12.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
     // A range off the C boundaries survives, which the octave pair could not
     // have expressed at all.

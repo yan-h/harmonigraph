@@ -35,6 +35,13 @@ fn hz_readout(midi: f32) -> String {
     }
 }
 
+/// A level as the range bar reads it out. Whole dB: the scale spans a
+/// hundred of them and is dragged by eye, so a decimal place is a digit that
+/// only ever moves.
+fn db_readout(db: f32) -> String {
+    format!("{db:.0} dB")
+}
+
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
@@ -95,9 +102,24 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         }
     });
 
-    ValueBar::new(&mut cfg.floor_db, -90.0..=-30.0, "Floor (dB)")
+    // Both ends of the height scale on one control, like the pitch range: the
+    // window on the spectrum's dynamics rather than just where it bottoms out.
+    // Named by a label of its own — a RangeBar carries no label, and the
+    // section heading above it is naming the whole group here, not this bar.
+    ui.label("Level");
+    RangeBar::new(&mut cfg.floor_db, &mut cfg.ceiling_db, crate::LEVEL_MIN_DB..=crate::LEVEL_MAX_DB)
+        .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+        .display(db_readout)
         .show(ui)
-        .on_hover_text("Bottom of the height scale; a full-scale sine is 0 dB");
+        .on_hover_text(
+            "The slice of the level scale on show. The low end is what reads \
+             as silence; the high end is what reads as full height — and as \
+             the brightest spectrogram cell — so pulling it down from 0 dB (a \
+             full-scale sine) lifts quiet material into the whole picture \
+             instead of the bottom of it. Drag either end to move it, drag \
+             between them to slide the window, double-click for the full \
+             scale.",
+        );
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)
         .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
@@ -261,13 +283,18 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
 /// How loud `power` reads at pitch `midi`, on a 0..1 scale: the configured
-/// floor is 0, a full-scale (0 dB) sine is 1, and the tilt lifts treble by
+/// floor is 0, the configured ceiling is 1, and the tilt lifts treble by
 /// its slope above the 1 kHz pivot. The spectrum curve's height and the
 /// spectrogram's cell intensity both read from this, so the two always agree
 /// on what "loud" means for a given bucket.
 pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
     let db = 10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-    ((db - cfg.floor_db) / -cfg.floor_db).clamp(0.0, 1.0)
+    // Never trust the pair to be ordered or apart, exactly as the pitch range
+    // is not trusted: the bar can't produce a collapsed one, a hand-edited
+    // state blob can, and dividing by its zero span paints NaN geometry that
+    // takes the editor — and with it the host — down.
+    let ceiling = cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
+    ((db - cfg.floor_db) / (ceiling - cfg.floor_db)).clamp(0.0, 1.0)
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.
@@ -986,6 +1013,55 @@ mod tests {
     fn axes(rect: egui::Rect, orientation: SpectralOrientation) -> Axes {
         let cfg = SpectrumConfig { orientation, ..Default::default() };
         Axes::new(rect, &cfg)
+    }
+
+    /// `power` for a level in dB, undoing the 10*log10 `loudness` applies.
+    fn power_at(db: f32) -> f32 {
+        10.0f32.powf(db / 10.0)
+    }
+
+    /// The level range is a window with two ends: the floor reads as silence
+    /// and the ceiling as full height, wherever each is put. Pulling the
+    /// ceiling down is what lets quiet material fill the picture.
+    #[test]
+    fn the_level_range_maps_floor_to_zero_and_ceiling_to_one() {
+        // No tilt, so the pivot pitch drops out and dB is dB.
+        let cfg =
+            SpectrumConfig { floor_db: -60.0, ceiling_db: 0.0, tilt: 0.0, ..Default::default() };
+        let at = |db| loudness(&cfg, power_at(db), TILT_PIVOT_MIDI);
+        assert!(at(-60.0).abs() < 1e-4, "the floor is silence");
+        assert!((at(0.0) - 1.0).abs() < 1e-4, "the ceiling is full height");
+        assert!((at(-30.0) - 0.5).abs() < 1e-4, "and it is linear in dB between them");
+        assert_eq!(at(-90.0), 0.0, "under the floor stays at silence");
+
+        // A ceiling pulled down onto the material lifts it to full height,
+        // which the fixed 0 dB top could not do.
+        let quiet =
+            SpectrumConfig { floor_db: -60.0, ceiling_db: -30.0, tilt: 0.0, ..Default::default() };
+        assert!((loudness(&quiet, power_at(-30.0), TILT_PIVOT_MIDI) - 1.0).abs() < 1e-4);
+        assert!((loudness(&quiet, power_at(-45.0), TILT_PIVOT_MIDI) - 0.5).abs() < 1e-4);
+    }
+
+    /// A hand-edited state blob can carry a collapsed or inverted pair; the
+    /// bar cannot. Unclamped that divides by zero and paints NaN geometry,
+    /// which egui panics on — inside the host, for a plugin.
+    #[test]
+    fn a_collapsed_level_range_still_maps_to_a_finite_number() {
+        for (floor, ceiling) in [(-60.0, -60.0), (-20.0, -80.0), (0.0, 0.0)] {
+            let cfg = SpectrumConfig {
+                floor_db: floor,
+                ceiling_db: ceiling,
+                tilt: 0.0,
+                ..Default::default()
+            };
+            for db in [-120.0, -60.0, -12.0, 0.0] {
+                let level = loudness(&cfg, power_at(db), TILT_PIVOT_MIDI);
+                assert!(
+                    level.is_finite() && (0.0..=1.0).contains(&level),
+                    "{floor}..{ceiling} dB at {db} dB gave {level}",
+                );
+            }
+        }
     }
 
     /// Across: time runs along the pane (now/spectrum on the left, past to
