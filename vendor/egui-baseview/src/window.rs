@@ -95,6 +95,7 @@ pub struct Queue<'a> {
     egui_gpu_ms: f32,
     acquire_ms: f32,
     tick_ms: f32,
+    render_ms: f32,
 }
 
 impl<'a> Queue<'a> {
@@ -109,6 +110,7 @@ impl<'a> Queue<'a> {
         egui_gpu_ms: f32,
         acquire_ms: f32,
         tick_ms: f32,
+        render_ms: f32,
     ) -> Self {
         Self {
             bg_color,
@@ -123,7 +125,15 @@ impl<'a> Queue<'a> {
             egui_gpu_ms,
             acquire_ms,
             tick_ms,
+            render_ms,
         }
+    }
+
+    /// Milliseconds the previous frame spent inside the renderer: tessellate,
+    /// buffer and texture uploads, encoding egui's pass, acquire, submit and
+    /// present. `tick_ms` minus this is the egui half.
+    pub fn render_ms(&self) -> f32 {
+        self.render_ms
     }
 
     /// Milliseconds the previous frame callback took, end to end.
@@ -259,6 +269,8 @@ where
     acquire_ms: f32,
     /// The whole previous callback, end to end.
     tick_ms: f32,
+    /// The renderer half of it.
+    render_ms: f32,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -338,6 +350,7 @@ where
             0.0,
             0.0,
             0.0,
+            0.0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -391,6 +404,7 @@ where
             egui_gpu_ms: 0.0,
             acquire_ms: 0.0,
             tick_ms: 0.0,
+            render_ms: 0.0,
         }
     }
 
@@ -507,6 +521,7 @@ where
             self.egui_gpu_ms,
             self.acquire_ms,
             self.tick_ms,
+            self.render_ms,
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
@@ -575,6 +590,11 @@ where
             };
 
         if do_repaint_now {
+            // The renderer half of the callback, whole. `tick` minus this is
+            // the egui half — the UI closure plus egui's own end-of-pass work
+            // — so between them nothing in the frame is unattributed, even
+            // though neither is a single stage.
+            let render_start = Instant::now();
             let presented = self.renderer.render(
                 window,
                 self.bg_color,
@@ -583,6 +603,8 @@ where
                 &mut self.egui_ctx,
                 &mut full_output,
             );
+
+            self.render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
 
             // A skipped present (occluded window, lost/outdated surface)
             // must not consume the repaint request: retry next tick, so

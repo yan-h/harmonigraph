@@ -70,6 +70,8 @@ pub struct FrameCosts {
     /// it, and they do not have to add up to it: whatever is missing is work
     /// nothing measures yet.
     pub tick_ms: f32,
+    /// Of that, the renderer half. The difference is the egui half.
+    pub render_ms: f32,
 }
 
 /// One interactive frame's workload: what the overlay reports as the load
@@ -120,6 +122,7 @@ pub struct PerfStats {
     shell_ms: f32,
     acquire_ms: f32,
     tick_ms: f32,
+    render_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it). Smoothed for the same reason the
     /// frame numbers are: this is read as a number, not watched as a trace,
@@ -140,6 +143,7 @@ pub struct PerfStats {
     shown_shell_ms: f32,
     shown_acquire_ms: f32,
     shown_tick_ms: f32,
+    shown_render_ms: f32,
     /// Shell-clock time of that latch.
     last_readout: f64,
     /// GPU milliseconds for the lattice passes, smoothed and held like the
@@ -165,6 +169,7 @@ impl Default for PerfStats {
             shell_ms: 0.0,
             acquire_ms: 0.0,
             tick_ms: 0.0,
+            render_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -175,6 +180,7 @@ impl Default for PerfStats {
             shown_shell_ms: 0.0,
             shown_acquire_ms: 0.0,
             shown_tick_ms: 0.0,
+            shown_render_ms: 0.0,
             gpu_ms: 0.0,
             shown_gpu_ms: 0.0,
             gpu_supported: true,
@@ -207,6 +213,7 @@ impl PerfStats {
             lattice_gpu_ms: gpu_ms,
             acquire_ms,
             tick_ms,
+            render_ms,
         } = costs;
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
@@ -224,6 +231,7 @@ impl PerfStats {
         self.shell_ms += (shell_ms - self.shell_ms) * alpha;
         self.acquire_ms += (acquire_ms - self.acquire_ms) * alpha;
         self.tick_ms += (tick_ms - self.tick_ms) * alpha;
+        self.render_ms += (render_ms - self.render_ms) * alpha;
         // Three states, not two: a real reading, "the device can't", and
         // "none has landed yet". Collapsing the last two into one "n/a" made
         // a wiring bug and an unsupported GPU look identical, which is
@@ -255,6 +263,7 @@ impl PerfStats {
             self.shown_shell_ms = self.shell_ms;
             self.shown_acquire_ms = self.acquire_ms;
             self.shown_tick_ms = self.tick_ms;
+            self.shown_render_ms = self.render_ms;
             self.shown_gpu_ms = self.gpu_ms;
             self.last_readout = now;
         }
@@ -342,9 +351,13 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "measuring...".to_owned()
     };
-    let rows: [(&str, String); 11] = [
+    let rows: [(&str, String); 13] = [
         ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
         ("tick", format!("{:.1} ms", perf.shown_tick_ms)),
+        // The egui half is what `tick` leaves over, shown rather than left to
+        // be worked out — the gap is the whole point of these two rows.
+        ("egui", format!("{:.1} ms", (perf.shown_tick_ms - perf.shown_render_ms).max(0.0))),
+        ("render", format!("{:.1} ms", perf.shown_render_ms)),
         ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
         ("ui cpu", format!("{:.1} ms", perf.shown_cpu_ms)),
         ("tess", format!("{:.1} ms", perf.shown_tess_ms)),
@@ -682,6 +695,7 @@ mod tests {
                 lattice_gpu_ms: 5.0,
                 acquire_ms: 6.0,
                 tick_ms: 7.0,
+                render_ms: 8.0,
             },
             1.0,
             Workload { animating: true, ..Default::default() },
