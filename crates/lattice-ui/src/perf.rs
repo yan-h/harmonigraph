@@ -77,6 +77,12 @@ pub struct FrameCosts {
     pub upload_ms: f32,
     /// Of the uploads, the texture half.
     pub texture_ms: f32,
+    /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
+    /// `update_buffers` — so it is billed to the buffer uploads.
+    pub prepare_ms: f32,
+    /// Of that, the `device.poll` the GPU timing needs: what the measurement
+    /// costs to take.
+    pub poll_ms: f32,
     pub encode_ms: f32,
     pub submit_ms: f32,
 }
@@ -132,6 +138,8 @@ pub struct PerfStats {
     render_ms: f32,
     upload_ms: f32,
     texture_ms: f32,
+    prepare_ms: f32,
+    poll_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
@@ -157,6 +165,8 @@ pub struct PerfStats {
     shown_render_ms: f32,
     shown_upload_ms: f32,
     shown_texture_ms: f32,
+    shown_prepare_ms: f32,
+    shown_poll_ms: f32,
     shown_encode_ms: f32,
     shown_submit_ms: f32,
     /// Shell-clock time of that latch.
@@ -187,6 +197,8 @@ impl Default for PerfStats {
             render_ms: 0.0,
             upload_ms: 0.0,
             texture_ms: 0.0,
+            prepare_ms: 0.0,
+            poll_ms: 0.0,
             encode_ms: 0.0,
             submit_ms: 0.0,
             rss_bytes: 0,
@@ -202,6 +214,8 @@ impl Default for PerfStats {
             shown_render_ms: 0.0,
             shown_upload_ms: 0.0,
             shown_texture_ms: 0.0,
+            shown_prepare_ms: 0.0,
+            shown_poll_ms: 0.0,
             shown_encode_ms: 0.0,
             shown_submit_ms: 0.0,
             gpu_ms: 0.0,
@@ -239,6 +253,8 @@ impl PerfStats {
             render_ms,
             upload_ms,
             texture_ms,
+            prepare_ms,
+            poll_ms,
             encode_ms,
             submit_ms,
         } = costs;
@@ -261,6 +277,8 @@ impl PerfStats {
         self.render_ms += (render_ms - self.render_ms) * alpha;
         self.upload_ms += (upload_ms - self.upload_ms) * alpha;
         self.texture_ms += (texture_ms - self.texture_ms) * alpha;
+        self.prepare_ms += (prepare_ms - self.prepare_ms) * alpha;
+        self.poll_ms += (poll_ms - self.poll_ms) * alpha;
         self.encode_ms += (encode_ms - self.encode_ms) * alpha;
         self.submit_ms += (submit_ms - self.submit_ms) * alpha;
         // Three states, not two: a real reading, "the device can't", and
@@ -297,6 +315,8 @@ impl PerfStats {
             self.shown_render_ms = self.render_ms;
             self.shown_upload_ms = self.upload_ms;
             self.shown_texture_ms = self.texture_ms;
+            self.shown_prepare_ms = self.prepare_ms;
+            self.shown_poll_ms = self.poll_ms;
             self.shown_encode_ms = self.encode_ms;
             self.shown_submit_ms = self.submit_ms;
             self.shown_gpu_ms = self.gpu_ms;
@@ -386,7 +406,7 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "measuring...".to_owned()
     };
-    let rows: [(&str, String); 16] = [
+    let rows: [(&str, String); 18] = [
         ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
         ("tick", format!("{:.1} ms", perf.shown_tick_ms)),
         // The egui half is what `tick` leaves over, shown rather than left to
@@ -402,6 +422,10 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
             "buf up",
             format!("{:.1} ms", (perf.shown_upload_ms - perf.shown_texture_ms).max(0.0)),
         ),
+        // Inside `buf up`: the lattice's own callback, and inside THAT the
+        // cost of taking the GPU measurement.
+        ("prepare", format!("{:.1} ms", perf.shown_prepare_ms)),
+        ("gpu poll", format!("{:.1} ms", perf.shown_poll_ms)),
         ("encode", format!("{:.1} ms", perf.shown_encode_ms)),
         ("submit", format!("{:.1} ms", perf.shown_submit_ms)),
         ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
@@ -744,6 +768,8 @@ mod tests {
                 render_ms: 8.0,
                 upload_ms: 9.0,
                 texture_ms: 8.5,
+                prepare_ms: 1.0,
+                poll_ms: 0.5,
                 encode_ms: 10.0,
                 submit_ms: 11.0,
             },

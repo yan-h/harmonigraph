@@ -1085,7 +1085,7 @@ pub struct SharedState {
     ///
     /// Runtime-only, never persisted, and never read by the offline renderer —
     /// which also never asks for the feature, so it has no timer to begin with.
-    pub(crate) gpu_ms: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub(crate) lattice_stats: std::sync::Arc<lattice_render::LatticeStats>,
     /// Milliseconds the shell spent tessellating egui's shapes last frame,
     /// or 0 where the shell doesn't measure it (the standalone's eframe loop
     /// isn't ours to instrument). Set by the shell before `root_ui`.
@@ -1233,9 +1233,13 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
-            gpu_ms: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
-                lattice_render::GPU_TIME_PENDING,
-            )),
+            lattice_stats: {
+                let stats = lattice_render::LatticeStats::default();
+                stats
+                    .gpu_ms
+                    .store(lattice_render::GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
+                std::sync::Arc::new(stats)
+            },
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
             shell_ms: 0.0,
@@ -1456,7 +1460,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             tess_ms: state.tess_ms,
             egui_gpu_ms: state.egui_gpu_ms,
             lattice_gpu_ms: f32::from_bits(
-                state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
+                state.lattice_stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            prepare_ms: f32::from_bits(
+                state.lattice_stats.prepare_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            poll_ms: f32::from_bits(
+                state.lattice_stats.poll_ms.load(std::sync::atomic::Ordering::Relaxed),
             ),
             acquire_ms: state.acquire_ms,
             tick_ms: state.tick_ms,
