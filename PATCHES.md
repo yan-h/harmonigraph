@@ -90,10 +90,28 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   hidden, which is expected — but pending writes drain and `maintain` runs
   every tick, so memory stays flat). Root-caused from a 26 GB balloon while
   tabbed away from Bitwig.
+- **Patch 5** (1 site, `src/window.rs` `on_frame`): make delayed repaints
+  actually come due. The repaint deadline was recomputed as
+  `now + repaint_delay` on *every* tick that painted nothing, and egui
+  rebuilds `repaint_delay` from scratch each pass (reset to `MAX` in
+  `begin_pass_repaint_logic`, then the min of that pass's requests) while the
+  UI closure runs on every tick, painting or not. So a steady
+  `request_repaint_after(N)` re-based the deadline on each tick, and for any
+  N longer than the tick interval (~15 ms, the macOS frame timer) `now` never
+  caught up: the deadline receded forever and the window painted nothing
+  until an input event or a texture upload forced it. Every delayed repaint
+  was silently dead — the idle poll included, which went unnoticed because
+  the plugin shell requests a repaint whenever it drains MIDI, and an idle
+  window has nothing to show anyway. Fix: keep the EARLIEST pending deadline
+  rather than overwriting it, and schedule the next one from the instant a
+  frame actually painted instead of leaving it unset (clearing it to `None`
+  cost a whole tick, so every capped interval ran one tick long). Found while
+  adding the Panel pane's frame-rate cap, which is built on exactly this
+  mechanism and did nothing at all without the fix.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
-  texture-delta forced render, the occlusion/skipped-present patch, and the
-  staged-upload flush.
+  texture-delta forced render, the occlusion/skipped-present patch, the
+  staged-upload flush, and the repaint-deadline fix.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

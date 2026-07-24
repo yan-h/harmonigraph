@@ -430,11 +430,14 @@ where
         // pending.
         let has_texture_updates = !full_output.textures_delta.set.is_empty()
             || !full_output.textures_delta.free.is_empty();
+        // Copied out of the borrow so it stays readable after `render()` takes
+        // `&mut full_output` below (Duration is Copy, so this costs nothing).
+        let repaint_delay = viewport_output.repaint_delay;
         let do_repaint_now = has_texture_updates
             || if let Some(t) = self.repaint_after {
-                now >= t || viewport_output.repaint_delay.is_zero()
+                now >= t || repaint_delay.is_zero()
             } else {
-                viewport_output.repaint_delay.is_zero()
+                repaint_delay.is_zero()
             };
 
         if do_repaint_now {
@@ -451,10 +454,29 @@ where
             // must not consume the repaint request: retry next tick, so
             // the first frame after the surface comes back is fresh
             // rather than the pre-occlusion ghost.
-            self.repaint_after = if presented { None } else { Some(now) };
-        } else if let Some(repaint_after) = now.checked_add(viewport_output.repaint_delay) {
-            // Schedule to repaint after the requested time has elapsed.
-            self.repaint_after = Some(repaint_after);
+            //
+            // On a successful paint, schedule the next deadline from THIS
+            // instant rather than leaving it unset. Clearing it to `None`
+            // costs a whole tick: the deadline would only be established on
+            // the following tick, from that later `now`, so every capped
+            // interval silently ran one tick long.
+            self.repaint_after =
+                if presented { now.checked_add(repaint_delay) } else { Some(now) };
+        } else if let Some(candidate) = now.checked_add(repaint_delay) {
+            // Keep the EARLIEST pending deadline rather than overwriting it.
+            //
+            // egui recomputes `repaint_delay` from scratch on every pass (it
+            // resets to MAX in `begin_pass_repaint_logic` and takes the min of
+            // that pass's requests), and the UI closure runs on every tick —
+            // including ticks that paint nothing. Overwriting meant a steady
+            // `request_repaint_after(N)` re-based the deadline to `now + N` on
+            // each tick, so for any N longer than the tick interval `now`
+            // never caught up and the deadline receded forever: the window
+            // stopped painting until an input event or a texture upload forced
+            // it. That silently disabled every delayed repaint, from the idle
+            // poll to a frame-rate cap.
+            self.repaint_after =
+                Some(self.repaint_after.map_or(candidate, |pending| pending.min(candidate)));
         }
 
         for command in full_output.platform_output.commands {

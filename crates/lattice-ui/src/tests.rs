@@ -1013,3 +1013,56 @@ fn the_spectral_divider_drags_through_the_dock() {
         "the split should have moved with the pointer ({before} -> {after})",
     );
 }
+
+#[test]
+fn frame_interval_converts_a_cap_to_a_spacing() {
+    assert_eq!(frame_interval(None), None, "uncapped asks for no spacing");
+    assert_eq!(
+        frame_interval(Some(30.0)),
+        Some(std::time::Duration::from_secs_f32(1.0 / 30.0)),
+    );
+    assert_eq!(
+        frame_interval(Some(144.0)),
+        Some(std::time::Duration::from_secs_f32(1.0 / 144.0)),
+    );
+}
+
+#[test]
+fn nonsense_caps_read_as_uncapped() {
+    // The control cannot produce these, but a hand-edited persist blob can.
+    // Uncapped is the safe reading: a zero interval is the uncapped
+    // behaviour with extra steps, and a huge one would freeze the UI.
+    for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(frame_interval(Some(bad)), None, "{bad} should read as uncapped");
+    }
+}
+
+#[test]
+fn persist_round_trips_the_frame_rate_cap() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Not one of the button values, so it proves the number round-trips
+    // rather than being re-derived from a default.
+    state.fps_cap = Some(45.0);
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&state.save_persist());
+    assert_eq!(restored.fps_cap, Some(45.0));
+}
+
+#[test]
+fn pre_cap_persist_blobs_load_as_uncapped() {
+    // The cap was added after these blobs were written; dropping the field
+    // must not fail the parse, which would silently discard the WHOLE
+    // persist (layout, camera, every view setting) rather than one setting.
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.fps_cap = Some(30.0);
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+    let stripped = saved.replace(",fps_cap:Some(30.0)", "");
+    assert_ne!(stripped, saved, "the field removal must have hit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&stripped);
+    assert_eq!(restored.fps_cap, None, "a missing cap reads as uncapped");
+    assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
+}

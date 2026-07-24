@@ -982,6 +982,23 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
     dock: DockState<panes::Tab>,
+    /// Upper bound on how often the UI asks to be repainted while something
+    /// is animating, in frames per second; `None` leaves it uncapped (repaint
+    /// every frame the shell offers). Persisted.
+    ///
+    /// A *request*, not a guarantee, and deliberately so — it is read only by
+    /// [`root_ui`]'s repaint scheduling, never by any drawing code. The
+    /// offline renderer steps its own clock and never reaches `root_ui`, so a
+    /// recorded frame cannot depend on this and the determinism test stays
+    /// honest.
+    ///
+    /// What you actually get is quantized by how often the shell polls the
+    /// UI, since a repaint can only land on one of those ticks. The plugin
+    /// shell polls on a fixed ~15 ms timer, so its achievable rates are
+    /// 67/33/22/17..., and a cap at or above 67 is simply inactive. The
+    /// standalone runs on eframe, which schedules a real wakeup and hits the
+    /// requested rate directly.
+    pub fps_cap: Option<f32>,
     /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
     /// Runtime-only; filled and drawn by [`root_ui`], never by the offline
     /// renderer (so recorded frames stay deterministic).
@@ -1064,6 +1081,7 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
+            fps_cap: None,
             perf: PerfStats::default(),
         }
     }
@@ -1093,6 +1111,7 @@ impl SharedState {
             camera_presets: self.camera_presets.clone(),
             spectrum: self.spectrum_config,
             render: self.render_config.clone(),
+            fps_cap: self.fps_cap,
         })
         .unwrap_or_default()
     }
@@ -1138,6 +1157,7 @@ impl SharedState {
             // octave numbers.
             self.spectrum_config.migrate_legacy();
             self.render_config = persist.render;
+            self.fps_cap = persist.fps_cap;
         }
     }
 }
@@ -1170,6 +1190,9 @@ struct UiPersist {
     spectrum: SpectrumConfig,
     #[serde(default)]
     render: RenderConfig,
+    /// serde(default) keeps pre-cap blobs loadable (as uncapped).
+    #[serde(default)]
+    fps_cap: Option<f32>,
 }
 
 /// Parse just the render frame out of a persisted UI-state blob — so the
@@ -1247,7 +1270,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         || roll_scrolling(state, now)
         || state.spectrum.is_flowing(now);
     if animating {
-        ui.ctx().request_repaint();
+        // Uncapped means "as fast as the shell offers"; a cap turns that into
+        // a minimum spacing between repaints. Only the request changes — the
+        // frame that does get drawn is identical either way.
+        match frame_interval(state.fps_cap) {
+            Some(interval) => ui.ctx().request_repaint_after(interval),
+            None => ui.ctx().request_repaint(),
+        }
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
     }
@@ -1335,6 +1364,23 @@ pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f6
 /// Repaint cadence while nothing animates: newly arriving MIDI shows up
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// The minimum spacing between repaints implied by a frame-rate cap, or
+/// `None` when uncapped.
+///
+/// A cap that isn't a positive, finite rate is treated as uncapped rather
+/// than turned into a zero or absurd interval. The control cannot produce
+/// one, but a hand-edited persisted blob can, and "no cap" is the safe
+/// reading of a nonsense value — a zero interval would merely be the
+/// uncapped behaviour with extra steps, while a huge one would freeze the UI.
+fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
+    match fps_cap {
+        Some(fps) if fps.is_finite() && fps > 0.0 => {
+            Some(std::time::Duration::from_secs_f32(1.0 / fps))
+        }
+        _ => None,
+    }
+}
 
 /// Whether the piano roll still has something moving across it: its window
 /// reaches back to a note that was sounding. Goes quiet once the last note
