@@ -84,6 +84,26 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
+// The node's own outermost feature, in ITS uv: the melody ring when the
+// rings are on, the octave band's outer edge otherwise. Scales with the
+// node, because it is part of the node.
+fn node_rim() -> f32 {
+    let rings = select(0.0, u.misc5.z + u.misc5.w, u.misc5.w > 0.0);
+    return u.misc3.z + rings;
+}
+
+// How far the billboard has to reach, in uv, for a gutter of `g` uv units
+// to finish inside it as a circle rather than being clipped square at the
+// corners. Never smaller than QUAD_MARGIN, so a node without a gutter — and
+// every node on a lattice with no depth — is sized exactly as before.
+//
+// Both stages compute this the same way from the same two numbers, which is
+// why the fragment shader needs no extra varying to know how big its own
+// quad is.
+fn quad_margin(g: f32) -> f32 {
+    return max(QUAD_MARGIN, node_rim() + g * 2.0 + 0.05);
+}
+
 struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
@@ -118,8 +138,11 @@ struct Instance {
     // NodeInstance::trail). Feeds the idle marker and nothing else.
     @location(10) visited: f32,
     // The sevens layer: x = billboard size factor (1 on the home sheet,
-    // smaller with every step off it), y = knockout gutter width in uv
-    // units (0 on the home sheet). See ViewConfig::sevens_size / _gutter.
+    // smaller with every step off it), y = knockout gutter width, in the uv
+    // units of a FULL-SIZE node — the vertex shader divides by the size
+    // factor so the gap comes out the same width whatever the node's size.
+    // 0 means no gutter; negative marks a knockout-only instance.
+    // See ViewConfig::sevens_size / _gutter.
     @location(11) sevens: vec2<f32>,
 };
 
@@ -136,6 +159,8 @@ struct VsOut {
     @location(8) @interpolate(flat) melody_color: vec4<f32>,
     @location(9) @interpolate(flat) bass_color: vec4<f32>,
     @location(10) @interpolate(flat) visited: f32,
+    // Already converted to THIS node's uv (see vs_main), and signed:
+    // negative marks a knockout-only instance.
     @location(11) @interpolate(flat) gutter: f32,
 };
 
@@ -159,14 +184,27 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // its proportions and only the node's size on screen changes. (The quad
     // is twice the disc radius to leave room for the glow, plus QUAD_MARGIN
     // for the outer glyphs' soft edge — see QUAD_MARGIN.)
-    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN * inst.sevens.x;
+    let scale = max(inst.sevens.x, 0.05);
+    // The gutter is a constant width ON SCREEN, not a share of the node.
+    // uv is the node's own coordinate system, so it shrinks with the node —
+    // which meant a half-size node cleared a half-size gap, and the gap read
+    // as a property of the note rather than of the layer it sits on. Dividing
+    // by the scale converts the setting from "of this node" back to "of a
+    // full-size node", i.e. one fixed distance everywhere.
+    let gutter_uv = abs(inst.sevens.y) / scale;
+    // ...which can want more room than the standard billboard has, on the
+    // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
+    // the same world distance either way, so nothing about the node's own
+    // content moves.
+    let margin = quad_margin(gutter_uv);
+    let radius = u.misc.y * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
 
     var out: VsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner * QUAD_MARGIN;
+    out.uv = corner * margin;
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
@@ -177,7 +215,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
     out.visited = inst.visited;
-    out.gutter = inst.sevens.y;
+    out.gutter = select(gutter_uv, -gutter_uv, inst.sevens.y < 0.0);
     return out;
 }
 
@@ -752,9 +790,10 @@ fn mark_ring(
 // quad so the tail finishes as a circle instead of being clipped square at
 // the billboard's corners.
 fn gutter_coverage(d: f32, width: f32) -> f32 {
-    let rings = select(0.0, u.misc5.z + u.misc5.w, u.misc5.w > 0.0);
-    let solid = u.misc3.z + rings;
-    let fade = min(solid + width * 2.0, QUAD_MARGIN - 0.05);
+    let solid = node_rim();
+    // No cap needed: the vertex shader sized the quad to contain exactly
+    // this (see quad_margin), so the falloff always finishes inside it.
+    let fade = solid + width * 2.0;
     return 1.0 - smoothstep(min(solid, fade - 0.001), fade, d);
 }
 

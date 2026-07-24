@@ -52,8 +52,12 @@ pub struct ViewConfig {
     /// sevens axis runs.
     #[serde(default = "default_sevens_size")]
     pub sevens_size: f32,
-    /// Width of the dark gutter an off-sheet node clears around itself, in
-    /// quad UV units. 0 draws none.
+    /// Width of the dark gutter a node clears around itself, in quad UV
+    /// units — the units a FULL-SIZE node uses, so the gap comes out the
+    /// same width on screen whatever size the node it belongs to draws at.
+    /// (The shader divides by the node's size factor to get there.) A gap
+    /// that shrank with its node read as a property of the note rather than
+    /// of the layer it sits on. 0 draws none.
     ///
     /// This is what lets the sevens layer OVERLAP the home sheet instead of
     /// needing room of its own: the node punches its own footprint out of
@@ -62,16 +66,19 @@ pub struct ViewConfig {
     /// the whole point — the alternative is shrinking the 5-limit sheet to
     /// open up clearance, and the 5-limit sheet is what you came to look at.
     ///
-    /// It knocks out to BLACK, not to the pane behind. The pass blends
-    /// premultiplied, so raising alpha while adding no color leaves an
-    /// opaque black disc — the shader is never told what color it is
-    /// erasing onto, and on this skin it does not need to be: the lattice's
-    /// ground is `well`, near enough to black that the hole reads as a hole.
-    /// A light skin would have to hand the color in (see `skin`, which has
-    /// only ever had the one dark look).
+    /// It clears to the GROUND the pass is composited over, which the shell
+    /// hands in (see [`Scene::background`](crate::Scene::background)). With
+    /// no color of its own a premultiplied layer knocks out to black, and
+    /// black is several shades darker than this skin's panel, so the
+    /// clearing announced itself as a plate sitting on the picture rather
+    /// than disappearing into the ground.
     ///
-    /// Scaled by the note's own envelope where it is derived, so a node
-    /// that draws nothing punches nothing — see [`derive_scene`].
+    /// It fades rather than ending at a rim, over a band twice this wide —
+    /// a hard circle cutting across a lit ring reads as a bite taken out of
+    /// it. And its STRENGTH is the note's own envelope (applied in the
+    /// shader, against the same activation that paints the node), so a
+    /// clearing fades out exactly as its note does while holding its width;
+    /// a node that sounds nothing clears nothing at all.
     #[serde(default)]
     pub sevens_gutter: f32,
     /// What text an off-sheet node's label carries (see [`SevensLabel`]).
