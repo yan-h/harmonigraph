@@ -394,9 +394,6 @@ pub struct SpectrumConfig {
     /// Scale a note's opacity by its velocity.
     #[serde(default = "default_true")]
     pub roll_velocity_alpha: bool,
-    /// Draw the line where the roll meets the spectrum ("now").
-    #[serde(default = "default_true")]
-    pub roll_now_line: bool,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
@@ -569,7 +566,6 @@ impl Default for SpectrumConfig {
             roll_outline_width: default_roll_outline_width(),
             roll_color: default_roll_color(),
             roll_velocity_alpha: true,
-            roll_now_line: true,
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),

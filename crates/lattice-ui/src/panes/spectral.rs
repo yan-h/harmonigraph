@@ -221,8 +221,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     );
     ui.checkbox(&mut cfg.roll_velocity_alpha, "Velocity opacity")
         .on_hover_text("Quiet notes draw fainter");
-    ui.checkbox(&mut cfg.roll_now_line, "Now line")
-        .on_hover_text("Mark where the roll meets the spectrum");
     button_row(ui, |ui| {
         if ui
             .button("Clear roll")
@@ -905,8 +903,10 @@ pub(crate) fn spectral_pane(
     // divider that flickered with the music instead of holding still.
     //
     // Whole-song mode sweeps a playhead across a static layout instead, and
-    // draws its own mark above.
-    if cfg.roll_now_line && !whole_song && split < 1.0 && split > 0.0 {
+    // draws its own mark above. Always drawn (there is no setting): a note
+    // crossing this line out of the roll and into its spectrum peak is how the
+    // pane reads as one picture, so the boundary has to be marked.
+    if !whole_song && split < 1.0 && split > 0.0 {
         painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
     }
 
@@ -1302,7 +1302,6 @@ mod tests {
     fn the_roll_paints_over_the_now_line() {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
-        state.spectrum_config.roll_now_line = true;
         state.spectrum_config.low_midi = 60.0;
         state.spectrum_config.high_midi = 72.0;
         state.tracker.handle_event(NoteEvent {
