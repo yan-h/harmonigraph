@@ -60,6 +60,11 @@ struct Uniforms {
     // sounding note, and confining it to the idle layer is what guarantees
     // that rather than merely intending it.
     misc6: vec4<f32>,
+    // The ground the lattice is painted onto (the pane fill this pass is
+    // composited over). Only the sevens knockout reads it: without it the
+    // gutter can knock out only to black, which is darker than the pane and
+    // reads as a plate sitting ON the picture rather than a hole THROUGH it.
+    background: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -78,6 +83,34 @@ const QUAD_MARGIN: f32 = 1.6;
 const GLYPH_FADE_LIMIT: f32 = 1.3;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// The node's own outermost feature, in ITS uv. That is the BASS ring when
+// this node is wearing one — the bass ring is the outer of the two, riding
+// just past the octave band — and the band's own outer edge when it is not.
+//
+// Per node, not per view: assuming the ring is always there made every
+// clearing as wide as the widest node's, so a node with no ring sat in a
+// gap visibly bigger than itself. The ring comes off the instant its key
+// does (marks are held-only), so the rim steps in at the same moment the
+// thing it was accounting for disappears.
+fn node_rim(has_bass: bool) -> f32 {
+    let ring = max(u.misc5.z, 0.0) + u.misc5.w;
+    return u.misc3.z + select(0.0, ring, has_bass && u.misc5.w > 0.0);
+}
+
+// Whether this node wears the outer (bass) ring: it needs both a slot to
+// link back to and a level to draw at.
+fn wears_bass_ring(marks: vec2<u32>, params: vec4<f32>) -> bool {
+    return marks.y != 0u && params.z > 0.0;
+}
+
+// How far the billboard has to reach, in uv, for a clearing of reach `g` to
+// finish inside it as a circle rather than being clipped square at the
+// corners. Never smaller than QUAD_MARGIN, so a node without a gutter — and
+// every node on a lattice with no depth — is sized exactly as before.
+fn quad_margin(rim: f32, g: f32) -> f32 {
+    return max(QUAD_MARGIN, rim + g + 0.05);
+}
 
 struct Instance {
     @location(0) world_pos: vec3<f32>,
@@ -112,6 +145,12 @@ struct Instance {
     // How strongly the music is remembered at this node, 0..1 (see
     // NodeInstance::trail). Feeds the idle marker and nothing else.
     @location(10) visited: f32,
+    // The sevens layer: x = billboard size factor (1 on the home sheet,
+    // smaller with every step off it), y = knockout gutter width, in the uv
+    // units of a FULL-SIZE node — the vertex shader divides by the size
+    // factor so the gap comes out the same width whatever the node's size.
+    // 0 means no gutter. See ViewConfig::sevens_size / _gutter.
+    @location(11) sevens: vec2<f32>,
 };
 
 struct VsOut {
@@ -127,6 +166,13 @@ struct VsOut {
     @location(8) @interpolate(flat) melody_color: vec4<f32>,
     @location(9) @interpolate(flat) bass_color: vec4<f32>,
     @location(10) @interpolate(flat) visited: f32,
+    // Already converted to THIS node's uv (see vs_main).
+    @location(11) @interpolate(flat) gutter: f32,
+    // The node's own outermost feature and the clearing's fade width, both
+    // in this node's uv — computed once in the vertex shader because both
+    // depend on the instance's size and its mark state.
+    @location(12) @interpolate(flat) rim: f32,
+    @location(13) @interpolate(flat) soft: f32,
 };
 
 @vertex
@@ -139,20 +185,38 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     );
     let corner = corners[vertex_index];
 
-    // Every node is the same world-space size: notes, hover, and distance
-    // from the camera all leave it alone, so a note changes only brightness
-    // and glow, and depth reads from the projection alone. (The quad is
-    // twice the disc radius to leave room for the glow, plus QUAD_MARGIN
-    // for the outer glyphs' soft edge; uv is scaled to match so content is
-    // unchanged — see QUAD_MARGIN.)
-    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN;
+    // Notes, hover, and distance from the camera all leave a node's size
+    // alone, so a note changes only brightness and glow. The ONE thing that
+    // sizes it is which sevens sheet it sits on (inst.sevens.x, 1 on the
+    // home sheet): the home sheet is the ground the music is read against,
+    // so sheets off it draw smaller — in both directions, since that is
+    // distance from the ground and not depth toward the eye. The uv is
+    // deliberately NOT scaled with it, so every layer inside the node keeps
+    // its proportions and only the node's size on screen changes. (The quad
+    // is twice the disc radius to leave room for the glow, plus QUAD_MARGIN
+    // for the outer glyphs' soft edge — see QUAD_MARGIN.)
+    let scale = max(inst.sevens.x, 0.05);
+    // The gutter is a constant width ON SCREEN, not a share of the node.
+    // uv is the node's own coordinate system, so it shrinks with the node —
+    // which meant a half-size node cleared a half-size gap, and the gap read
+    // as a property of the note rather than of the layer it sits on. Dividing
+    // by the scale converts the setting from "of this node" back to "of a
+    // full-size node", i.e. one fixed distance everywhere.
+    let gutter_uv = max(inst.sevens.y, 0.0) / scale;
+    let rim = node_rim(wears_bass_ring(inst.marks, inst.params));
+    // ...which can want more room than the standard billboard has, on the
+    // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
+    // the same world distance either way, so nothing about the node's own
+    // content moves.
+    let margin = quad_margin(rim, gutter_uv);
+    let radius = u.misc.y * 0.90 * 2.0 * margin * scale;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
 
     var out: VsOut;
     out.clip_pos = u.view_proj * vec4<f32>(world, 1.0);
-    out.uv = corner * QUAD_MARGIN;
+    out.uv = corner * margin;
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
@@ -163,6 +227,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
     out.visited = inst.visited;
+    out.gutter = gutter_uv;
+    out.rim = rim;
+    // The fade is a constant width on screen too, so it converts the
+    // same way the reach does.
+    out.soft = u.misc6.z / scale;
     return out;
 }
 
@@ -730,6 +799,21 @@ fn mark_ring(
     return ring * mark_ring_alpha(slots, cents, uv, rest, aa);
 }
 
+// How much of the destination a node's knockout clears at radius `d`.
+//
+// `reach` is where the clearing ENDS, measured past the node's own rim, and
+// `soft` is how gradual that ending is — two settings rather than one,
+// because tying the fade to the reach meant a wider gap was always a
+// blurrier one. Solid from the rim out to `reach - soft`, gone by `reach`.
+// The inner bound is floored at the rim so a fade wider than the reach eats
+// outward instead of into the node's own footprint, which is the one part
+// that always has to be cleared.
+fn gutter_coverage(d: f32, rim: f32, reach: f32, soft: f32) -> f32 {
+    let edge = rim + reach;
+    let inner = max(edge - soft, rim);
+    return 1.0 - smoothstep(min(inner, edge - 0.001), edge, d);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
@@ -968,12 +1052,48 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Active over idle, premultiplied: a sounding note draws over its own
     // marker; the marker is unchanged whether or not a note plays.
-    let final_alpha = active_alpha + idle.a * (1.0 - active_alpha);
+    let over_idle = active_alpha + idle.a * (1.0 - active_alpha);
+    let final_rgb = active_rgb + idle.rgb * (1.0 - active_alpha);
+
+    // The knockout gutter (off-sheet nodes only; in.gutter is 0 on the home
+    // sheet). This is what lets the sevens layer overlap the home sheet
+    // instead of needing clearance of its own: the node clears its own
+    // footprint out of whatever was drawn before it and sits in the hole.
+    //
+    // TWO things make it read as a hole rather than a dark blob stuck on the
+    // picture, and it needs both:
+    //
+    //  - It clears to the GROUND (u.background), not to black. With no color
+    //    of its own a premultiplied layer knocks out to black, and black is
+    //    several shades darker than this skin's panel, so the cleared disc
+    //    announced itself everywhere — including over empty lattice, where
+    //    it should be invisible. Against the real ground it disappears
+    //    wherever it crosses nothing.
+    //  - It FADES rather than ending at a rim. A hard circle cutting across
+    //    a lit ring reads as a bite taken out of it; a gradient reads as the
+    //    small node sitting in front. The clearing is solid across the
+    //    node's own footprint and eases off over a band twice the gutter
+    //    width, which is what the setting really buys.
+    //
+    // Compositing it UNDER the node's own paint is what the `(1 - over_idle)`
+    // terms say: the node keeps its color exactly, and the ground only fills
+    // the part of its quad the node itself leaves empty.
+    // Scaled by the note's OWN envelope, the same one `presence` paints the
+    // node with, so the clearing fades out with the note instead of
+    // outliving it. The width stays put while it does: a hole that shrinks
+    // as it fades reads as the node retreating, and a hole that holds full
+    // strength to the last frame (which is what scaling the width alone
+    // did) vanishes with an audible pop.
+    var gutter_cov = 0.0;
+    if in.gutter > 0.0 {
+        gutter_cov = gutter_coverage(d, in.rim, in.gutter, in.soft) * activation;
+    }
+    let final_alpha = over_idle + gutter_cov * (1.0 - over_idle);
     if final_alpha < 0.01 {
         discard;
     }
-    let final_rgb = active_rgb + idle.rgb * (1.0 - active_alpha);
-    return vec4<f32>(final_rgb, final_alpha);
+    let with_ground = final_rgb + u.background.rgb * gutter_cov * (1.0 - over_idle);
+    return vec4<f32>(with_ground, final_alpha);
 }
 
 // ---- Chord edges & grid lines ----------------------------------------------

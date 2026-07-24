@@ -208,3 +208,36 @@ pub enum LegacyNodeBody {
     Rings,
     Beads,
 }
+
+/// What text an OFF-SHEET node's label carries — a node on any sevens sheet
+/// but the center one.
+///
+/// Their names are the reason this exists.
+/// [`LatticePos::note_name`](lattice_core::LatticePos::note_name) walks the
+/// chain of fifths with `1 + threes + fives*4 - sevens*2`, and nothing
+/// anywhere adds a septimal mark, so **every sevens step spells exactly like
+/// two fifths down**: `(0,0,1)` and `(-2,0,0)` are both `B♭`, 27 cents apart.
+/// On a three-sheet view each name appears three times at three different
+/// pitches — in the biggest glyph on the node. Off the home sheet the name is
+/// not merely uninformative; it asserts something false.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SevensLabel {
+    /// The same name the home sheet gets, ambiguity and all. What every
+    /// build before this drew, and what a view saved by one keeps.
+    #[default]
+    Name,
+    /// The pitch class in cents under the current tuning, alone. Says what
+    /// the node is and nothing it isn't, at the cost of saying where it is.
+    Cents,
+    /// The shared name, plus the signed cents to the home-sheet node it
+    /// shares that name with — the septimal comma, ±27¢ at just intonation.
+    /// Keeps the letter for orientation and adds precisely the information
+    /// the name refuses to carry. The fifth, third and seventh are all
+    /// tunable, so the number moves: it reads out how far the sevens axis
+    /// sits from the name it inherits.
+    Comma,
+    /// No text at all. The octave band, the marks and the color carry the
+    /// node; text is what the home sheet gets and the sevens layer does
+    /// without.
+    None,
+}

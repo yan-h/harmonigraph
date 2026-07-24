@@ -102,6 +102,12 @@ fn parity_scene() -> Scene {
             outlined: i == 4,
             hovered: i == 1,
             on_home: i % 2 == 0,
+            // The off-sheet half draws small and knocks out, so the
+            // every-draw-path scene exercises both sevens-layer branches
+            // (the scaled billboard and the gutter's extra alpha) as well.
+            scale: if i % 2 == 0 { 1.0 } else { 0.55 },
+            gutter: if i % 2 == 0 { 0.0 } else { 0.12 },
+            comma: if i % 2 == 0 { 0.0 } else { -27.26 },
             cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass,
             // and one claiming both slots at once (the split mark).
@@ -134,6 +140,10 @@ fn parity_scene() -> Scene {
         nodes,
         camera: lattice_scene::Camera::default(),
         time: 1.25,
+        // The ground the sevens knockout clears to; the half of this
+        // scene's nodes that carry a gutter exercise it.
+        background: lattice_scene::skin::panel_color(),
+        sevens_soft: 0.24,
         node_radius: 0.34,
         outer_style: Default::default(),
         mark_unlinked: 1.0,
@@ -317,16 +327,25 @@ fn offscreen_composite_matches_direct_draw() {
         create_pipelines(&device, SHADER_SRC, format, &res.bind_group_layout, false);
     let pane = res.panes.get(&7).expect("prepare created the pane");
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
+        // The grid sits at the home sheet's depth, so it is drawn INSIDE the
+        // node run, at `grid_at` — mirror that here or the two paths differ
+        // by draw order rather than by the thing under test.
+        let nodes = |pass: &mut wgpu::RenderPass<'static>, range: std::ops::Range<u32>| {
+            if !range.is_empty() {
+                pass.set_pipeline(&node_pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.draw(0..4, range);
+            }
+        };
+        nodes(pass, 0..pane.grid_at);
         if pane.edge_count > 0 {
             pass.set_pipeline(&edge_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
             pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
             pass.draw(0..4, 0..pane.edge_count);
         }
-        pass.set_pipeline(&node_pipeline);
-        pass.set_bind_group(0, &pane.bind_group, &[]);
-        pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-        pass.draw(0..4, 0..pane.instance_count);
+        nodes(pass, pane.grid_at..pane.instance_count);
     });
 
     let composite = readback(&device, &queue, &composite_tex, SIZE);
@@ -381,6 +400,9 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         outlined: false,
         hovered: false,
         on_home: true,
+        scale: 1.0,
+        gutter: 0.0,
+        comma: 0.0,
         cents: 0.0,
         melody_slots,
         bass_slots,
@@ -672,3 +694,58 @@ fn bloom_adds_light_over_the_plain_composite() {
 
 
 
+
+/// A sheet in FRONT of the home sheet is drawn over it; a sheet BEHIND it
+/// is drawn under. Both directions matter, and only one of them is obvious:
+/// forcing the home sheet to the bottom (so an off-sheet note could never be
+/// hidden by it) inverts the far half of the axis, and since the knockout
+/// gutter clears whatever was drawn before it, the sheet behind then takes a
+/// bite out of the home sheet in front of it.
+#[test]
+fn sheets_draw_back_to_front_along_the_sevens_axis() {
+    use lattice_scene::{Camera, FrameParams, Projection, ViewConfig};
+
+    let view = ViewConfig {
+        extent_threes: 1,
+        extent_fives: 1,
+        extent_sevens: 2,
+        ..ViewConfig::default()
+    };
+    for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic]
+    {
+        let scene = lattice_scene::derive_scene(
+            &lattice_core::NoteTracker::new(),
+            &lattice_core::Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            // Orbited, deliberately: this is the case a plain depth sort
+            // gets wrong, because two nodes on one sheet then sit at
+            // different depths and the sheets interleave.
+            Camera { projection, ..Camera::default() },
+            None,
+            0.0,
+        );
+        let call = LatticeCallback::from_scene(
+            &scene,
+            egui::vec2(800.0, 600.0),
+            wgpu::TextureFormat::Bgra8Unorm,
+            0,
+            // No stats slot: this is about draw ORDER, not about timing.
+            None,
+        );
+        // World z IS the sevens axis (see lattice_to_world), so the draw
+        // order must run from the most negative sheet to the most positive
+        // — and it has to hold under EVERY projection, not only the face-on
+        // one. When it doesn't, the sheets interleave, the grid lands in
+        // the wrong place in the order, and the home sheet's clearings have
+        // nothing drawn before them left to clear.
+        let depths: Vec<f32> = call.instances.iter().map(|i| i.world_pos[2]).collect();
+        assert!(depths.len() > 1, "the window has to hold several sheets");
+        for pair in depths.windows(2) {
+            assert!(
+                pair[1] >= pair[0] - 1e-6,
+                "{projection:?}: a sheet behind is drawn after one in front: {pair:?}"
+            );
+        }
+    }
+}

@@ -5,6 +5,7 @@
 use crate::skin;
 use crate::style::{
     CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
+    SevensLabel,
 };
 use crate::trail::TrailMark;
 use lattice_core::{coords, LatticePos};
@@ -29,6 +30,73 @@ pub struct ViewConfig {
     pub center_fives: i32,
     #[serde(default)]
     pub center_sevens: i32,
+    // ---- The sevens layer ------------------------------------------------
+    // How the sheets other than the home one draw. Everything here is inert
+    // while `extent_sevens` is 0, which is where a fresh view starts.
+    //
+    // The problem all three settings answer: the 5-limit sheet wants its
+    // pitch classes as large as they will go, and at the default spacing a
+    // node's visible edge already reaches 0.376 of the way to its neighbor.
+    // Turning depth on asks the same rectangle to hold three times the
+    // nodes. Something has to give, and it must not be the home sheet — that
+    // is the picture.
+    /// How much smaller a node draws for each step it sits off the home
+    /// sheet: the factor is `sevens_size^|sevens - center_sevens|`. 1 keeps
+    /// every sheet the same size, which is what every build before this drew.
+    ///
+    /// Smaller in BOTH directions, deliberately, even though a positive
+    /// sevens step is the one nearer the camera — this is not perspective.
+    /// Size here says *how far from the home sheet*, because that is the
+    /// thing worth reading: the home sheet is the ground the music is heard
+    /// against, so it stays the largest thing on screen whichever way the
+    /// sevens axis runs.
+    #[serde(default = "default_sevens_size")]
+    pub sevens_size: f32,
+    /// Width of the dark gutter a node clears around itself, in quad UV
+    /// units — the units a FULL-SIZE node uses, so the gap comes out the
+    /// same width on screen whatever size the node it belongs to draws at.
+    /// (The shader divides by the node's size factor to get there.) A gap
+    /// that shrank with its node read as a property of the note rather than
+    /// of the layer it sits on. 0 draws none.
+    ///
+    /// This is what lets the sevens layer OVERLAP the home sheet instead of
+    /// needing room of its own: the node punches its own footprint out of
+    /// whatever it crosses and sits in the hole, so a small node stays
+    /// legible over a large one. It costs no layout space at all, which is
+    /// the whole point — the alternative is shrinking the 5-limit sheet to
+    /// open up clearance, and the 5-limit sheet is what you came to look at.
+    ///
+    /// It clears to the GROUND the pass is composited over, which the shell
+    /// hands in (see [`Scene::background`](crate::Scene::background)). With
+    /// no color of its own a premultiplied layer knocks out to black, and
+    /// black is several shades darker than this skin's panel, so the
+    /// clearing announced itself as a plate sitting on the picture rather
+    /// than disappearing into the ground.
+    ///
+    /// It fades rather than ending at a rim, over a band twice this wide —
+    /// a hard circle cutting across a lit ring reads as a bite taken out of
+    /// it. And its STRENGTH is the note's own envelope (applied in the
+    /// shader, against the same activation that paints the node), so a
+    /// clearing fades out exactly as its note does while holding its width;
+    /// a node that sounds nothing clears nothing at all.
+    #[serde(default)]
+    pub sevens_gutter: f32,
+    /// How wide the clearing's fade is, same units — and deliberately NOT
+    /// derived from the reach above. The two used to be one number (the
+    /// fade was twice the reach), so widening the gap also blurred it and
+    /// there was no way to ask for a wide crisp one or a narrow soft one.
+    ///
+    /// The clearing is solid out to `reach - fade` past the node's rim and
+    /// gone by `reach`, so the reach is exactly where it ends whatever the
+    /// fade does. Floored at the node's own rim: a fade wider than the
+    /// reach would otherwise start eating into the node's own footprint,
+    /// which is the one part that must always be cleared.
+    #[serde(default = "default_sevens_gutter_soft")]
+    pub sevens_gutter_soft: f32,
+    /// What text an off-sheet node's label carries (see [`SevensLabel`]).
+    /// Only meaningful while `show_labels` is on.
+    #[serde(default = "default_sevens_label")]
+    pub sevens_label: SevensLabel,
     /// Outer octave layer style. The alias keeps pre-rename blobs (field
     /// `octave_style`) loading; the default covers even older blobs.
     #[serde(default, alias = "octave_style")]
@@ -299,6 +367,25 @@ fn default_core_radius() -> f32 {
     0.46
 }
 
+/// Every sheet the same size — what a blob predating the sevens layer's own
+/// settings was drawn with. (`sevens_gutter` takes the plain `0` default for
+/// the same reason: no gutter existed to draw.)
+fn default_sevens_size() -> f32 {
+    1.0
+}
+
+/// The fade a blob predating this key was drawn with, near enough: it was
+/// pinned to twice the reach, and the reach it shipped with was 0.12.
+fn default_sevens_gutter_soft() -> f32 {
+    0.24
+}
+
+/// The home sheet's own name, which every earlier build drew off the home
+/// sheet too — ambiguity and all.
+fn default_sevens_label() -> SevensLabel {
+    SevensLabel::Name
+}
+
 /// The classic solid orb — the identity end of the solidity axis.
 fn default_core_solidity() -> f32 {
     1.0
@@ -446,15 +533,36 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            // A tall window of fifths and a wide band of thirds; sevenths
-            // start collapsed to the single home sheet (extent 0), so the
-            // lattice opens flat and depth is opted into.
+            // A tall window of fifths and a wide band of thirds, and one
+            // sevens sheet either side of the home one. Depth used to start
+            // collapsed (extent 0) because a second sheet at full size made
+            // the picture unreadable — nothing said which sheet a node was
+            // on and an off-sheet label landed on top of its neighbours.
+            // The sevens layer settings below are the answer to that, and
+            // they only do anything when there is depth to draw, so opening
+            // flat now hides the feature rather than protecting anyone from
+            // it.
             extent_threes: 10,
             extent_fives: 6,
-            extent_sevens: 0,
+            extent_sevens: 1,
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
+            // A sevens sheet reads as an annotation on the home sheet, not
+            // as a rival to it: each step off it draws at a bit over half
+            // size, and clears a gutter wide enough to sit legibly on top of
+            // whatever it crosses rather than needing clearance of its own.
+            // Its label drops the name — which is the SAME name the node two
+            // fifths down wears (see SevensLabel) — for the letter plus the
+            // signed comma to that namesake.
+            sevens_size: 0.55,
+            // Reach and fade equal, which puts the clearing at full strength
+            // exactly to the node's rim and gone a quarter of a node-width
+            // past it — the shape the pair reproduced back when the fade was
+            // pinned to twice the reach.
+            sevens_gutter: 0.24,
+            sevens_gutter_soft: 0.24,
+            sevens_label: SevensLabel::Comma,
             outer_style: OuterStyle::Slices,
             show_labels: true,
             show_cents: true,

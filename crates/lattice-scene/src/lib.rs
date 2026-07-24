@@ -33,6 +33,7 @@ pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
     CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
+    SevensLabel,
 };
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
@@ -90,6 +91,26 @@ pub struct NodeInstance {
     /// On the home (center sevens) sheet. Home nodes keep a blank
     /// placeholder ring while idle; off-sheet nodes draw nothing.
     pub on_home: bool,
+    /// Billboard size, as a factor of the scene's `node_radius` (see
+    /// [`ViewConfig::sevens_size`]): 1 on the home sheet, smaller with every
+    /// step off it. Scales the whole node uniformly — the quad and its uv
+    /// together — so every layer inside keeps its proportions and only the
+    /// node's size on screen changes.
+    pub scale: f32,
+    /// Width of the knockout gutter this node clears around itself, in quad
+    /// UV units (see [`ViewConfig::sevens_gutter`]). 0 on the home sheet,
+    /// and whenever the gutter is off.
+    pub gutter: f32,
+    /// Signed cents from the home-sheet node this one SHARES A NAME with:
+    /// `(threes - 2*(sevens - center), fives, center)`, which is the
+    /// position the letter walk makes spell identically. The septimal comma
+    /// — ±27¢ per step at just intonation, but it moves with the tuning.
+    /// 0 on the home sheet.
+    ///
+    /// Derived here rather than at the label because the namesake can be
+    /// outside the displayed window entirely, so the UI has no node to read
+    /// it off; the tuning is right here and answers for any position.
+    pub comma: f32,
     /// The node's pitch class in cents under the current tuning, for the
     /// in-lattice cents readout.
     pub cents: f32,
@@ -221,6 +242,24 @@ pub struct Scene {
     /// each node's own `trail`.
     pub trail_mark: TrailMark,
     pub trail_strength: f32,
+    /// How wide the sevens knockout's fade is, in the uv of a full-size
+    /// node (see [`ViewConfig::sevens_gutter_soft`]). View-wide, unlike the
+    /// per-node reach, which the envelope and the node's own rim both bear
+    /// on. Already clamped.
+    pub sevens_soft: f32,
+    /// The ground the lattice is drawn onto: the pane fill this pass gets
+    /// composited over, which is the skin's `panel` (what `egui_dock`'s
+    /// `tab_body.bg_fill` paints under every pane).
+    ///
+    /// Only the sevens knockout reads it, and it is the difference between
+    /// a hole and a blob. The pass blends premultiplied, so a gutter with no
+    /// color of its own knocks out to BLACK — and black is several shades
+    /// darker than this skin's panel, so the cleared disc sat on the picture
+    /// as an obviously darker plate instead of disappearing into the ground
+    /// wherever it crossed nothing. Handing the ground in means the gutter
+    /// is invisible over empty lattice and only shows as a clearing where it
+    /// actually crosses something.
+    pub background: Vec4,
     /// Color of the idle node markers (see [`ViewConfig::grid_color`]):
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.

@@ -9,11 +9,12 @@
 //! controls. Kept as a file because the two halves have nothing to say to each
 //! other beyond sharing a tab.
 
-use crate::widgets::{button_row, button_row_wrapped, ValueBar};
+use crate::widgets::{button_row, button_row_wrapped, choice_row, ValueBar};
 use crate::{CameraPreset, SharedState};
 use super::normalize_deg;
 use lattice_scene::Camera;
 use lattice_scene::Projection;
+use lattice_scene::SevensLabel;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
 /// extents/center. Drawn into the Tuning tab, under its own section heading.
@@ -171,4 +172,72 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             *extent = value as i32;
         }
     }
+
+    sevens_layer_controls(ui, state);
+}
+
+/// How the sheets other than the home one draw. Every control here is inert
+/// with the sevenths extent at 0 (a flat lattice has only the home sheet), so
+/// the whole group disables itself rather than pretending otherwise.
+///
+/// What they are all for: the 5-limit sheet wants its pitch classes as large
+/// as they will go, and turning depth on asks the same rectangle to hold
+/// three or five times the nodes. The way out is not to shrink the home sheet
+/// — that is the picture — but to let the sevens layer sit ON it, smaller and
+/// clearing its own gutter.
+fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
+    ui.add_enabled_ui(state.view.extent_sevens != 0, |ui| {
+        ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sevenths size")
+            .show(ui)
+            .on_hover_text(
+                "How much smaller a node draws for each step off the home \
+                 sheet. Smaller BOTH ways -- this is distance from the home \
+                 sheet, not depth toward you -- so the home sheet stays the \
+                 largest thing on screen. 1 draws every sheet alike",
+            );
+        ValueBar::new(&mut state.view.sevens_gutter, 0.0..=0.5, "Sevenths gutter")
+            .show(ui)
+            .on_hover_text(
+                "The dark gap a node clears around itself, so a sheet reads \
+                 over the ones behind it instead of needing room of its own. \
+                 Measured past the node's own edge, and the same width on \
+                 screen whatever size the node draws at. 0 draws none and \
+                 the sheets simply overlap",
+            );
+        ValueBar::new(&mut state.view.sevens_gutter_soft, 0.0..=0.5, "Sevenths gutter fade")
+            .show(ui)
+            .on_hover_text(
+                "How gradually the gap ends, independent of how wide it is. \
+                 0 is a hard edge; past the gutter's own width it softens \
+                 outward rather than eating into the node",
+            );
+        choice_row(
+            ui,
+            "Sevenths label",
+            &mut state.view.sevens_label,
+            &[
+                (
+                    SevensLabel::Comma,
+                    "Comma",
+                    "The name, plus the signed cents to the home-sheet note \
+                     that wears the same name -- the septimal comma, which \
+                     moves as you retune",
+                ),
+                (
+                    SevensLabel::Cents,
+                    "Cents",
+                    "The pitch class alone, in cents. Says what the node is \
+                     and nothing it isn't",
+                ),
+                (
+                    SevensLabel::Name,
+                    "Name",
+                    "The note name, as the home sheet gets. Note that it is \
+                     the SAME name the node two fifths down wears: the \
+                     spelling carries no sevenths information at all",
+                ),
+                (SevensLabel::None, "None", "No text off the home sheet"),
+            ],
+        );
+    });
 }

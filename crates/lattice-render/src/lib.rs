@@ -152,9 +152,18 @@ struct Uniforms {
     /// one — safe per the note on `misc4`.
     misc5: [f32; 4],
     /// x: trail mark style (0 off, 1 lift, 2 ring, 3 tint); y: trail
-    /// strength 0..1; z/w unused. Both feed the idle-marker branch alone
-    /// (see `TrailMark`); misc5 is full, so the trail starts its own slot.
+    /// strength 0..1 — both feed the idle-marker branch alone (see
+    /// `TrailMark`); misc5 was full, so the trail started its own slot.
+    /// z: the sevens knockout's fade width, in the uv of a full-size node
+    /// (`Scene::sevens_soft`); w unused.
     misc6: [f32; 4],
+    /// The ground the lattice is drawn onto — the pane fill this pass gets
+    /// composited over — as the sevens knockout's target color. Without it
+    /// the gutter can only knock out to black, which on this skin is
+    /// several shades DARKER than the pane and so reads as a blob sitting
+    /// on the picture rather than as a hole through it. See
+    /// `Scene::background`.
+    background: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -201,6 +210,10 @@ struct GpuInstance {
     /// `NodeInstance::trail`). Reaches only the shader's idle-marker
     /// branch — a memory must never read as a sounding note.
     visited: f32,
+    /// The sevens layer, packed: x = billboard size factor (1 on the home
+    /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
+    /// See `NodeInstance::scale` / `::gutter`.
+    sevens: [f32; 2],
 }
 
 impl GpuInstance {
@@ -210,7 +223,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
             5 => Float32, 6 => Float32, 7 => Uint32x2,
-            8 => Float32x4, 9 => Float32x4, 10 => Float32
+            8 => Float32x4, 9 => Float32x4, 10 => Float32, 11 => Float32x2
         ],
     };
 }
@@ -295,6 +308,8 @@ pub fn lattice_paint_callback(
 /// Per-frame, per-pane draw data, computed on the UI thread.
 struct LatticeCallback {
     instances: Vec<GpuInstance>,
+    /// Index into `instances` where the grid is drawn (see `from_scene`).
+    grid_at: u32,
     edges: Vec<GpuEdge>,
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
@@ -333,19 +348,59 @@ impl LatticeCallback {
         // does have a depth attachment, but its test is `Always` (see
         // create_scene_pipeline), so alpha blending still relies on draw
         // order — exactly as it did before the offscreen pass existed.
+        //
+        // Sheets back to front FIRST, then painter's order within a sheet.
+        // That is still just back-to-front — world z IS the sevens axis, and
+        // the first key is only its depth — but it stays EXACT when the
+        // camera is orbited, where two nodes on one sheet have different
+        // depths and a plain depth sort interleaves the sheets. Interleaving
+        // is not a cosmetic problem: it puts the grid in the wrong place in
+        // the order and leaves the home sheet's clearings with almost
+        // nothing drawn before them to clear, so the knockout quietly did
+        // nothing under perspective and orthographic while working under
+        // cabinet (where every home node shares one depth and the two sorts
+        // agree).
+        //
+        // Do not reorder the sheets on top of this. Forcing the home sheet
+        // to the bottom (so off-sheet notes could never be hidden by it)
+        // inverts the far half of the axis: the sheet BEHIND home then draws
+        // last, and its clearing takes a bite out of the home sheet in front
+        // of it. Grouping by distance from home does the same thing more
+        // thoroughly. Depth is what the reader is being shown; it is what
+        // the order has to follow.
+        //
+        // The `forward.z` factor is what keeps it honest if the view is
+        // orbited right around past the sheets: which way along z is "away"
+        // is the camera's business, not an assumption.
         let eye = camera.eye();
         let forward = (camera.target - eye).normalize_or_zero();
-        let mut order: Vec<(f32, &lattice_scene::NodeInstance)> = scene
+        let sheet_depth = |n: &lattice_scene::NodeInstance| n.world_pos.z * forward.z;
+        let mut order: Vec<(f32, f32, &lattice_scene::NodeInstance)> = scene
             .nodes
             .iter()
-            .map(|n| ((n.world_pos - eye).dot(forward), n))
+            .map(|n| (sheet_depth(n), (n.world_pos - eye).dot(forward), n))
             .collect();
-        order.sort_by(|a, b| b.0.total_cmp(&a.0));
+        order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
-        let instances = order
-            .into_iter()
-            .map(|(_, n)| GpuInstance {
-                world_pos: n.world_pos.to_array(),
+        // The grid belongs to the home sheet — that is the only sheet that
+        // draws one — so its place in the order is between the sheets behind
+        // it and the home sheet itself. Under it, as it used to be, a node
+        // on a sheet BEHIND the home one punches its clearing through the
+        // home grid, putting a hole in the layer that is supposed to be
+        // hiding it.
+        //
+        // The home sheet then draws after the grid, so a home node's
+        // clearing cuts the grid lines as well as the sheets behind — the
+        // node sits in a clean gap in the lattice rather than on top of it.
+        // (An earlier cut drew the home clearings in a pass of their own
+        // ahead of the grid to spare the lines; the lines are wanted cut.)
+        //
+        // World z is measured from the home sheet, so its whole run sits at
+        // sheet depth 0 — behind it is positive, in front negative. Sorting
+        // by that above is what makes the home sheet one contiguous run,
+        // under every projection rather than only the face-on one.
+        let to_gpu = |n: &lattice_scene::NodeInstance, gutter: f32| GpuInstance {
+            world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
                 params: [
                     n.activation,
@@ -361,8 +416,17 @@ impl LatticeCallback {
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
                 visited: n.trail,
-            })
-            .collect();
+                sevens: [n.scale, gutter],
+        };
+
+        let split = order
+            .iter()
+            .position(|&(plane, _, _)| plane <= 0.0)
+            .unwrap_or(order.len());
+        let mut instances = Vec::with_capacity(order.len());
+        instances.extend(order.iter().map(|(_, _, n)| to_gpu(n, n.gutter)));
+        // Where the grid is drawn inside that run.
+        let grid_at = split as u32;
 
         // The grid draws under the nodes.
         let edges = scene
@@ -378,6 +442,7 @@ impl LatticeCallback {
 
         LatticeCallback {
             instances,
+            grid_at,
             edges,
             uniforms: Uniforms {
                 view_proj: view_proj.to_cols_array(),
@@ -418,9 +483,10 @@ impl LatticeCallback {
                 misc6: [
                     scene.trail_mark.shader_index() as f32,
                     scene.trail_strength,
-                    0.0,
+                    scene.sevens_soft,
                     0.0,
                 ],
+                background: scene.background.to_array(),
             },
             target_format,
             pane_id,
@@ -698,6 +764,11 @@ struct PaneBuffers {
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
     instance_count: u32,
+    /// Where the grid is drawn inside the node run: instances before this
+    /// are the sheets behind the home one plus the home sheet's own
+    /// clearings, and must land under the grid; the rest go over it. See
+    /// `LatticeCallback::from_scene`.
+    grid_at: u32,
     edge_buffer: wgpu::Buffer,
     edge_capacity: usize,
     edge_count: u32,
@@ -1144,6 +1215,7 @@ impl LatticeResources {
                 ),
                 edge_capacity: INITIAL_EDGE_CAPACITY,
                 edge_count: 0,
+                grid_at: 0,
                 offscreen: None,
             }
         });
@@ -1272,6 +1344,7 @@ impl CallbackTrait for LatticeCallback {
             );
         }
         pane.instance_count = self.instances.len() as u32;
+        pane.grid_at = self.grid_at.min(pane.instance_count);
         if !self.instances.is_empty() {
             queue.write_buffer(
                 &pane.instance_buffer,
@@ -1337,17 +1410,32 @@ impl CallbackTrait for LatticeCallback {
                 multiview_mask: None,
             });
 
-            // Edges draw under the nodes so discs own the joints.
+            // The grid sits at the home sheet's own depth, so it goes
+            // between the sheets behind it and the home sheet itself —
+            // NOT under everything. Under everything, a node on a sheet
+            // behind the home one punches its clearing through the home
+            // grid, which puts a hole in the layer it is supposed to be
+            // hidden by. `grid_at` is where that seam falls; the home
+            // sheet's own clearings are the tail of the first run, ahead of
+            // the grid, so they can hide the sheets behind without eating
+            // the grid they sit on.
+            let nodes = |pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>| {
+                if range.is_empty() {
+                    return;
+                }
+                pass.set_pipeline(&resources.pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.draw(0..4, range);
+            };
+            nodes(&mut pass, 0..pane.grid_at);
             if pane.edge_count > 0 {
                 pass.set_pipeline(&resources.edge_pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
                 pass.draw(0..4, 0..pane.edge_count);
             }
-            pass.set_pipeline(&resources.pipeline);
-            pass.set_bind_group(0, &pane.bind_group, &[]);
-            pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-            pass.draw(0..4, 0..pane.instance_count);
+            nodes(&mut pass, pane.grid_at..pane.instance_count);
             drop(pass);
 
             // Skipped entirely at strength 0: the composite multiplies the

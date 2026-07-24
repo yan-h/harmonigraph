@@ -1019,6 +1019,18 @@ pub struct SharedState {
     /// Surface format of the shell's swapchain; the lattice render pipeline
     /// must match it.
     pub target_format: TextureFormat,
+    /// The color the lattice pane is painted ONTO, which only the sevens
+    /// knockout reads (see [`lattice_scene::Scene::background`]). Defaults
+    /// to the skin's panel, which is what `egui_dock` fills a tab body with
+    /// — right for the plugin and the standalone harness.
+    ///
+    /// A shell that composes its panes differently MUST set this: the
+    /// offline renderer clears to its layout's own background and draws the
+    /// panes over that, several shades darker than the panel, and a
+    /// knockout clearing to the wrong ground shows up as a disc that is
+    /// visibly too light. Exported video is the one place this is hardest
+    /// to notice and most expensive to get wrong.
+    pub background: glam::Vec4,
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
@@ -1220,6 +1232,7 @@ impl SharedState {
             hovered: None,
             console: Console::default(),
             target_format,
+            background: lattice_scene::skin::panel_color(),
             learn_active: false,
             last_learned_classes: None,
             camera_presets: Vec::new(),
@@ -1669,3 +1682,12 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
 
 #[cfg(test)]
 mod tests;
+
+impl SharedState {
+    /// Tell the state what ground the lattice is being composited over (see
+    /// the `background` field). Takes sRGB bytes, the form every shell
+    /// already has its background color in, so no shell needs glam to say it.
+    pub fn set_background(&mut self, rgb: (u8, u8, u8)) {
+        self.background = lattice_scene::skin::ground_color(rgb);
+    }
+}
