@@ -194,10 +194,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             "Stroke width of a note's outline. Notes are hollow, so the \
              spectrogram shows through them; lattice bloom adds a glow.",
         );
-    ValueBar::new(&mut cfg.roll_grid_seconds, 0.0..=10.0, "Grid (s)")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text("Seconds between time gridlines; 0 draws none");
     choice_row(
         ui,
         "Color",

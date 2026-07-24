@@ -57,25 +57,7 @@ pub(super) fn draw_roll(
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
     // the whole take laid out statically (offline playhead mode).
     let time = TimeAxis::new(state, split, now);
-    let window = time.window();
     let oldest = time.oldest();
-
-    // Time gridlines first, so notes sit on top of them.
-    if cfg.roll_grid_seconds > 0.0 {
-        let step = cfg.roll_grid_seconds as f64;
-        let mut t = step;
-        // Cap the count as well as the span: a tiny step on a long window
-        // would otherwise ask for thousands of hairlines.
-        let mut drawn = 0;
-        while t <= window && drawn < 400 {
-            // Absolute-time lines across the whole take, or `now`-relative
-            // lines receding into the past, per mode.
-            let d = if time.whole_song() { time.depth_of(oldest + t) } else { time.depth_of(now - t) };
-            painter.line_segment(axes.across_pitch(d), egui::Stroke::new(1.0, theme::surface_faint()));
-            t += step;
-            drawn += 1;
-        }
-    }
 
     let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
     let ribbon_px = 2.0 * half * axes.pitch_len();

@@ -378,9 +378,6 @@ pub struct SpectrumConfig {
     /// Scale a note's opacity by its velocity.
     #[serde(default = "default_true")]
     pub roll_velocity_alpha: bool,
-    /// Seconds between the roll's time gridlines; 0 draws none.
-    #[serde(default = "default_roll_grid_seconds")]
-    pub roll_grid_seconds: f32,
     /// Draw the line where the roll meets the spectrum ("now").
     #[serde(default = "default_true")]
     pub roll_now_line: bool,
@@ -502,10 +499,6 @@ fn default_roll_color() -> RollColor {
     RollColor::Channel
 }
 
-fn default_roll_grid_seconds() -> f32 {
-    1.0
-}
-
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
@@ -535,7 +528,6 @@ impl Default for SpectrumConfig {
             roll_outline_width: default_roll_outline_width(),
             roll_color: default_roll_color(),
             roll_velocity_alpha: true,
-            roll_grid_seconds: default_roll_grid_seconds(),
             roll_now_line: true,
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
