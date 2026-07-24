@@ -57,8 +57,17 @@ fn fs_blit(in: BlitOut) -> @location(0) vec4<f32> {
 // Luminance soft knee: keep what glows, drop the faint idle grid so the
 // whole background doesn't haze. Values are premultiplied, so unlit
 // (transparent) texels are already black and fall out naturally.
-const BLOOM_THRESHOLD: f32 = 0.35;
-const BLOOM_KNEE: f32 = 0.25;
+//
+// The band runs THRESHOLD-KNEE .. THRESHOLD+KNEE. Its FOOT is what excludes
+// the idle grid and stays where it was (0.10); the CEILING is raised from
+// 0.60 to 0.80, which is what this variant is about. A sounding note peaks
+// around 0.8, so at the old ceiling it sat on a plateau: fully bloomed until
+// its release had already taken a quarter of its brightness, then the whole
+// halo collapsing over the middle of the fade — bright, bright, bright, gone.
+// A ceiling at the top of the note's own range puts it on the ramp from the
+// first moment, so the halo leaves at the same rate the note does.
+const BLOOM_THRESHOLD: f32 = 0.45;
+const BLOOM_KNEE: f32 = 0.35;
 
 @fragment
 fn fs_bright(in: BlitOut) -> @location(0) vec4<f32> {
