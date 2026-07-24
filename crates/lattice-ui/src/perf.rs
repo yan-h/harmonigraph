@@ -100,9 +100,11 @@ pub struct PerfStats {
     /// Shell-clock time of that latch.
     last_readout: f64,
     /// GPU milliseconds for the lattice passes, smoothed and held like the
-    /// rest. 0 while the platform won't say — see [`SharedState::gpu_ms`].
+    /// rest. See [`GpuTime`] for the three states this can be in.
     gpu_ms: f32,
     shown_gpu_ms: f32,
+    /// Whether the device ever said it could measure GPU time at all.
+    gpu_supported: bool,
     /// This frame's workload (voice counts, visible nodes, render scale,
     /// whether it was animating).
     workload: Workload,
@@ -120,6 +122,7 @@ impl Default for PerfStats {
             shown_cpu_ms: 0.0,
             gpu_ms: 0.0,
             shown_gpu_ms: 0.0,
+            gpu_supported: true,
             last_readout: f64::NEG_INFINITY,
             workload: Workload::default(),
         }
@@ -151,11 +154,13 @@ impl PerfStats {
             self.frame_dt += (dt - self.frame_dt) * alpha;
         }
         self.cpu_ms += (cpu_ms - self.cpu_ms) * alpha;
-        // Only once a reading exists: easing up from 0 would show the GPU
-        // "warming up" over the first second of every session, and on a
-        // platform that never reports it would sit at a fake 0.0 instead of
-        // saying nothing.
-        if gpu_ms > 0.0 {
+        // Three states, not two: a real reading, "the device can't", and
+        // "none has landed yet". Collapsing the last two into one "n/a" made
+        // a wiring bug and an unsupported GPU look identical, which is
+        // exactly the question the row exists to answer.
+        if gpu_ms.to_bits() == lattice_render::GPU_TIME_UNSUPPORTED {
+            self.gpu_supported = false;
+        } else if gpu_ms > 0.0 {
             self.gpu_ms = if self.gpu_ms > 0.0 {
                 self.gpu_ms + (gpu_ms - self.gpu_ms) * alpha
             } else {
@@ -282,10 +287,12 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
                     row(
                         ui,
                         "gpu",
-                        if perf.shown_gpu_ms > 0.0 {
+                        if !perf.gpu_supported {
+                            "n/a (no timestamps)".to_owned()
+                        } else if perf.shown_gpu_ms > 0.0 {
                             format!("{:.1} ms", perf.shown_gpu_ms)
                         } else {
-                            "n/a".to_owned()
+                            "measuring...".to_owned()
                         },
                     );
                     row(ui, "memory", memory);

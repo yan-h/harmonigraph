@@ -518,6 +518,11 @@ enum TimerState {
 /// Two timestamps, 8 bytes each.
 const TIMER_BYTES: u64 = 16;
 
+/// Sentinel published in place of a measurement when the device didn't grant
+/// timestamp queries. A NaN bit pattern, so it can never collide with a real
+/// millisecond reading; 0 keeps its own meaning of "none has landed yet".
+pub const GPU_TIME_UNSUPPORTED: u32 = 0x7fc0_0001;
+
 impl GpuTimer {
     /// Build the query set and buffers, or `None` when the device can't.
     fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
@@ -1126,10 +1131,20 @@ impl CallbackTrait for LatticeCallback {
         // Advance the GPU timer's readback cycle first: a result that landed
         // is published now, and the cycle returns to Idle so this frame can be
         // the next one sampled.
-        if let Some(timer) = resources.timer.as_mut() {
-            if let (Some(ms), Some(out)) = (timer.poll(device), &self.gpu_ms) {
-                out.store(ms.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        match (resources.timer.as_mut(), &self.gpu_ms) {
+            (Some(timer), out) => {
+                if let (Some(ms), Some(out)) = (timer.poll(device), out) {
+                    out.store(ms.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                }
             }
+            // No timer at all: the device refused the feature. Say so, rather
+            // than leaving the readout on the same "nothing yet" it shows
+            // while a first measurement is still in flight — those are very
+            // different answers and the overlay could not tell them apart.
+            (None, Some(out)) => {
+                out.store(GPU_TIME_UNSUPPORTED, std::sync::atomic::Ordering::Relaxed);
+            }
+            (None, None) => {}
         }
 
         // Dev builds: pick up edits to the .wgsl on disk. A broken edit is
