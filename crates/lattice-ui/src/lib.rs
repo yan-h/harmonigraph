@@ -358,7 +358,9 @@ pub struct SpectrumConfig {
     #[serde(default = "default_true")]
     pub show_roll: bool,
     /// Share of the pane's depth given to the roll (the rest is the
-    /// spectrum). 0 hides it; 1 gives the whole pane to the roll.
+    /// spectrum). 0 hides it; 1 gives the whole pane to the roll. Set by
+    /// dragging the divider in the Spectral pane itself
+    /// (`panes::spectral::drag_split`) — there is no bar for it.
     #[serde(default = "default_roll_fraction")]
     pub roll_fraction: f32,
     /// Seconds of history the roll's depth spans.

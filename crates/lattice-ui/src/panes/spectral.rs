@@ -169,13 +169,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          Time runs away from the spectrum, so a note leaving the roll meets \
          the peak it is making.",
     );
-    ValueBar::new(&mut cfg.roll_fraction, 0.0..=1.0, "Roll share")
-        .show(ui)
-        .on_hover_text(
-            "How much of the pane's depth the roll takes from the spectrum. \
-             The divider is also draggable in the Spectral pane itself — \
-             same setting, either way.",
-        );
     ValueBar::new(&mut cfg.roll_seconds, 1.0..=120.0, "Span (s)")
         .eased(true)
         .decimals(1)
@@ -441,9 +434,11 @@ const SPLIT_GRAB_HALF: f32 = 6.0;
 /// making them separate
 /// panes would put that shared calibration across a pane boundary (and dock
 /// panes detach, which this divider must not). Instead the handle drags
-/// [`roll_fraction`](crate::SpectrumConfig::roll_fraction), the very field the
-/// Analyzer tab's "Roll share" bar writes: one value, so the two always agree
-/// and the drag persists with the rest of the UI state.
+/// [`roll_fraction`](crate::SpectrumConfig::roll_fraction) directly, so the
+/// drag persists with the rest of the UI state. It is the only way to set the
+/// split: the Analyzer tab used to carry a "Roll share" bar for the same
+/// field, which the divider made redundant — dragging the boundary you can
+/// see beats aiming a number at it.
 ///
 /// Returns the handle's response so the caller can paint its highlight last,
 /// over the plots. `surface` keeps the docked pane and the Video preview from
