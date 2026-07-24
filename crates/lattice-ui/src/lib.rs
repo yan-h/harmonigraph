@@ -318,11 +318,30 @@ pub struct SpectrumConfig {
     pub peak_hold: bool,
     /// MIDI-derived bars at each voice's actual pitch.
     pub show_voice_bars: bool,
-    /// Displayed octave range, in Bitwig octave numbers (C-1..C9 = full
-    /// axis). The analyzer always covers the full axis; this only zooms
-    /// the view.
-    pub low_octave: i32,
-    pub high_octave: i32,
+    /// Displayed pitch range, as (fractional) MIDI note numbers. The
+    /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
+    /// (~16 Hz to ~16.7 kHz); this only zooms the view.
+    ///
+    /// MIDI rather than Hz because the axis is linear in MIDI note, which
+    /// makes this both the number the pane wants and — since a semitone is a
+    /// constant frequency RATIO — a logarithmic frequency scale. The control
+    /// drags it linearly and reads it out in Hz.
+    #[serde(default = "default_low_midi")]
+    pub low_midi: f32,
+    #[serde(default = "default_high_midi")]
+    pub high_midi: f32,
+    /// Migration only. The range used to be a pair of Bitwig octave numbers,
+    /// so it could only land on C boundaries; `migrate_legacy` folds an older
+    /// blob's pair into `low_midi`/`high_midi` and nothing writes them again.
+    ///
+    /// A sentinel rather than `Option`, because the old blobs wrote a bare
+    /// `low_octave: 1` and RON only reads that into an `Option` if it is
+    /// spelled `Some(1)` — the field would never populate, and the failed
+    /// parse would take the whole persist down with it.
+    #[serde(default = "no_legacy_octave", skip_serializing, alias = "low_octave")]
+    legacy_low_octave: i32,
+    #[serde(default = "no_legacy_octave", skip_serializing, alias = "high_octave")]
+    legacy_high_octave: i32,
 
     // ---- Piano roll -------------------------------------------------
     // The played-note timeline (lattice-core's NoteRoll) drawn over the
@@ -394,6 +413,48 @@ fn default_spectrogram_opacity() -> f32 {
     0.85
 }
 
+/// The default pitch range is the analyzer's whole axis — the zoom starts
+/// showing everything there is.
+fn default_low_midi() -> f32 {
+    lattice_core::spectrum::SPECTRUM_MIN_MIDI
+}
+
+fn default_high_midi() -> f32 {
+    lattice_core::spectrum::SPECTRUM_MAX_MIDI
+}
+
+/// "This blob had no octave-numbered range", out of the domain the old
+/// control could produce (-1..=9).
+fn no_legacy_octave() -> i32 {
+    i32::MIN
+}
+
+impl SpectrumConfig {
+    /// Fold an older blob's octave-numbered pitch range into the continuous
+    /// one. A pre-Hz blob carries no `low_midi`, so serde would hand it the
+    /// full-axis default and silently throw away the zoom the user had set.
+    fn migrate_legacy(&mut self) {
+        let (low, high) = (self.legacy_low_octave, self.legacy_high_octave);
+        (self.legacy_low_octave, self.legacy_high_octave) =
+            (no_legacy_octave(), no_legacy_octave());
+        if low == no_legacy_octave() || high == no_legacy_octave() {
+            return;
+        }
+        let midi = |octave: i32| {
+            (lattice_core::notes::octave_start_midi(octave) as f32)
+                .clamp(default_low_midi(), default_high_midi())
+        };
+        // Guard the pair's own invariant (the old control kept high strictly
+        // above low) so a hand-edited blob can't produce an inverted axis.
+        self.low_midi = midi(low);
+        self.high_midi = midi(high).max(self.low_midi + PITCH_RANGE_MIN_SPAN);
+    }
+}
+
+/// Closest the two ends of the pitch range may come: one octave, which is
+/// what the octave-pair control guaranteed before it went continuous.
+pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 12.0;
+
 fn default_true() -> bool {
     true
 }
@@ -450,8 +511,10 @@ impl Default for SpectrumConfig {
             labels: SpectrumLabels::Notes,
             peak_hold: false,
             show_voice_bars: true,
-            low_octave: -1,
-            high_octave: 9,
+            low_midi: default_low_midi(),
+            high_midi: default_high_midi(),
+            legacy_low_octave: no_legacy_octave(),
+            legacy_high_octave: no_legacy_octave(),
             show_roll: true,
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
@@ -905,6 +968,9 @@ impl SharedState {
             self.view.migrate_legacy();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
+            // Same job for the pitch range, which used to be a pair of
+            // octave numbers.
+            self.spectrum_config.migrate_legacy();
             self.render_config = persist.render;
         }
     }

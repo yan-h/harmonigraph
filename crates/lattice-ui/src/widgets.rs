@@ -1,6 +1,8 @@
 //! Custom controls. `ValueBar` is the workhorse: a flat, DAW-style
 //! parameter bar (drag anywhere to set, double-click to type a value)
 //! that replaces egui's rail-and-knob `Slider` + separate `DragValue`.
+//! `RangeBar` is its two-handle sibling, for a pair of values that bound a
+//! span rather than one value on a scale.
 
 use std::ops::RangeInclusive;
 
@@ -363,6 +365,191 @@ impl<'a> ValueBar<'a> {
     }
 }
 
+/// How near a handle the pointer has to start for the drag to take that
+/// handle rather than the span between them.
+const GRAB_PX: f32 = 8.0;
+/// Width of a [`RangeBar`] handle grip.
+const HANDLE_W: f32 = 3.0;
+
+/// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
+/// drag-start, and remembered for the gesture — otherwise dragging one end
+/// past the other would hand the drag to whichever handle is nearest now.
+/// (`Default` is derived only to satisfy egui's `remove_temp` bound; the
+/// value is always written by drag-start before anything reads it.)
+#[derive(Clone, Copy, Default)]
+enum Grab {
+    #[default]
+    Low,
+    High,
+    /// The whole span, carrying the pointer's offset from the low end so the
+    /// range slides with the pointer instead of snapping its start to it.
+    Span(f32),
+}
+
+impl Grab {
+    /// Where the pair ends up when this grab is dragged to value `v`. Pure,
+    /// so the invariants that actually matter — the ends never cross, the
+    /// span never closes past `min_span`, and a slid span keeps its width
+    /// while staying inside the range — are testable without a pointer.
+    fn apply(self, v: f32, (lo, hi): (f32, f32), (min, max): (f32, f32), min_span: f32) -> (f32, f32) {
+        match self {
+            Grab::Low => (v.clamp(min, (hi - min_span).max(min)), hi),
+            Grab::High => (lo, v.clamp((lo + min_span).min(max), max)),
+            // Fixed width, so the far end stops the near one: pinning `lo`
+            // inside `min..=max - width` keeps both in range.
+            Grab::Span(offset) => {
+                let width = hi - lo;
+                let lo = (v - offset).clamp(min, (max - width).max(min));
+                (lo, lo + width)
+            }
+        }
+    }
+}
+
+/// A two-handle [`ValueBar`]: one control for the pair of values that bound a
+/// range. Drag either end to move it, drag between them to slide the whole
+/// span at a fixed width, double-click to reset to the full range.
+///
+/// Positions are linear in the value, and that is the whole trick behind the
+/// pitch-range control: its values are MIDI note numbers, and a scale linear
+/// in MIDI note is by definition logarithmic in frequency. So the caller gets
+/// a log-frequency control for free, and `display` formats each end however
+/// suits it — the pitch range drags semitones and reads out Hz.
+///
+/// Double-click resets rather than opening text entry (ValueBar's use of the
+/// gesture): a bar with two ends has no single value to type into it.
+pub struct RangeBar<'a> {
+    low: &'a mut f32,
+    high: &'a mut f32,
+    range: RangeInclusive<f32>,
+    label: &'a str,
+    /// Closest the two ends may come, in value units — the range can be
+    /// narrowed but never collapsed.
+    min_span: f32,
+    display: fn(f32) -> String,
+}
+
+impl<'a> RangeBar<'a> {
+    pub fn new(
+        low: &'a mut f32,
+        high: &'a mut f32,
+        range: RangeInclusive<f32>,
+        label: &'a str,
+    ) -> Self {
+        RangeBar { low, high, range, label, min_span: 0.0, display: |v| format!("{v:.2}") }
+    }
+
+    pub fn min_span(mut self, span: f32) -> Self {
+        self.min_span = span;
+        self
+    }
+
+    /// How each end reads out (the bar itself never interprets the value).
+    pub fn display(mut self, display: fn(f32) -> String) -> Self {
+        self.display = display;
+        self
+    }
+
+    pub fn show(self, ui: &mut Ui) -> Response {
+        let width = ui.available_width();
+        let (rect, mut response) =
+            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::click_and_drag());
+        let (min, max) = (*self.range.start(), *self.range.end());
+        let x_of = |v: f32| rect.left() + rect.width() * ((v - min) / (max - min)).clamp(0.0, 1.0);
+        let value_at = |x: f32| {
+            min + ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) * (max - min)
+        };
+
+        // ---- Interaction ----------------------------------------------------
+        let grab_id = response.id.with("grab");
+        if response.double_clicked() {
+            *self.low = min;
+            *self.high = max;
+            response.mark_changed();
+        } else if response.drag_started() {
+            if let Some(p) = response.interact_pointer_pos() {
+                let (dl, dh) = ((p.x - x_of(*self.low)).abs(), (p.x - x_of(*self.high)).abs());
+                let v = value_at(p.x);
+                let grab = if dl.min(dh) <= GRAB_PX {
+                    if dl <= dh { Grab::Low } else { Grab::High }
+                } else if v > *self.low && v < *self.high {
+                    Grab::Span(v - *self.low)
+                } else if v <= *self.low {
+                    Grab::Low
+                } else {
+                    Grab::High
+                };
+                ui.data_mut(|d| d.insert_temp(grab_id, grab));
+            }
+        }
+        if response.dragged() {
+            if let (Some(p), Some(grab)) =
+                (response.interact_pointer_pos(), ui.data(|d| d.get_temp::<Grab>(grab_id)))
+            {
+                let (lo, hi) =
+                    grab.apply(value_at(p.x), (*self.low, *self.high), (min, max), self.min_span);
+                if lo != *self.low || hi != *self.high {
+                    (*self.low, *self.high) = (lo, hi);
+                    response.mark_changed();
+                }
+            }
+        }
+        if response.drag_stopped() {
+            ui.data_mut(|d| d.remove_temp::<Grab>(grab_id));
+        }
+
+        // ---- Paint ----------------------------------------------------------
+        let radius = CornerRadius::same(BAR_RADIUS);
+        let painter = ui.painter();
+        painter.rect_filled(rect, radius, theme::well());
+
+        let fill_color = if response.dragged() {
+            theme::accent_fill_drag()
+        } else if response.hovered() {
+            theme::accent_fill_hover()
+        } else {
+            theme::accent_fill()
+        };
+        let (lx, hx) = (x_of(*self.low), x_of(*self.high));
+        let mut span = rect;
+        span.min.x = lx;
+        span.max.x = hx;
+        painter.rect_filled(span, radius, fill_color);
+
+        // The grips. Without them the bar is one filled region and nothing
+        // says the ends are the thing to take hold of. Kept fully inside the
+        // track so an end parked at its limit still shows a whole grip.
+        let half = HANDLE_W * 0.5;
+        for x in [lx, hx] {
+            let x = x.clamp(rect.left() + half, rect.right() - half);
+            let grip = egui::Rect::from_min_max(
+                egui::pos2(x - half, rect.top() + 2.0),
+                egui::pos2(x + half, rect.bottom() - 2.0),
+            );
+            painter.rect_filled(grip, CornerRadius::same(1), theme::text());
+        }
+
+        let text_color =
+            if response.hovered() || response.dragged() { theme::text() } else { theme::text_dim() };
+        painter.text(
+            rect.left_center() + Vec2::new(8.0, 0.0),
+            Align2::LEFT_CENTER,
+            self.label,
+            TextStyle::Body.resolve(ui.style()),
+            text_color,
+        );
+        painter.text(
+            rect.right_center() - Vec2::new(8.0, 0.0),
+            Align2::RIGHT_CENTER,
+            format!("{} – {}", (self.display)(*self.low), (self.display)(*self.high)),
+            TextStyle::Monospace.resolve(ui.style()),
+            theme::text(),
+        );
+
+        response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+    }
+}
+
 /// A horizontal row sized up front to framed-button height.
 ///
 /// Plain `ui.horizontal*` starts its row at `interact_size.y`, which is
@@ -421,6 +608,46 @@ fn button_row_impl<R>(ui: &mut Ui, wrap: bool, add: impl FnOnce(&mut Ui) -> R) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The analyzer's axis, the range bar's real caller.
+    const AXIS: (f32, f32) = (12.0, 132.0);
+    const OCTAVE: f32 = 12.0;
+
+    /// Dragging an end past its partner stops at the minimum span instead of
+    /// crossing it — otherwise the pitch axis inverts and every pitch on it
+    /// maps backwards.
+    #[test]
+    fn a_dragged_end_stops_at_the_minimum_span() {
+        let (lo, hi) = Grab::Low.apply(200.0, (24.0, 60.0), AXIS, OCTAVE);
+        assert_eq!((lo, hi), (48.0, 60.0), "low stops one octave below high");
+        let (lo, hi) = Grab::High.apply(-200.0, (24.0, 60.0), AXIS, OCTAVE);
+        assert_eq!((lo, hi), (24.0, 36.0), "high stops one octave above low");
+    }
+
+    /// Either end can still reach its own limit — clamping the pair must not
+    /// cost you the full axis.
+    #[test]
+    fn the_ends_still_reach_the_limits() {
+        assert_eq!(Grab::Low.apply(-200.0, (24.0, 60.0), AXIS, OCTAVE).0, AXIS.0);
+        assert_eq!(Grab::High.apply(200.0, (24.0, 60.0), AXIS, OCTAVE).1, AXIS.1);
+    }
+
+    /// Sliding the span keeps its width and stops at the ends rather than
+    /// squashing against them.
+    #[test]
+    fn a_slid_span_keeps_its_width() {
+        let start = (24.0, 60.0);
+        let width = start.1 - start.0;
+        // Grabbed 6 semitones in from the low end, dragged well past the top.
+        let (lo, hi) = Grab::Span(6.0).apply(500.0, start, AXIS, OCTAVE);
+        assert_eq!(hi, AXIS.1, "slides until the leading end hits the limit");
+        assert_eq!(hi - lo, width, "and keeps its width there");
+        let (lo, hi) = Grab::Span(6.0).apply(-500.0, start, AXIS, OCTAVE);
+        assert_eq!(lo, AXIS.0);
+        assert_eq!(hi - lo, width);
+        // Mid-range it simply follows the pointer, offset and all.
+        assert_eq!(Grab::Span(6.0).apply(70.0, start, AXIS, OCTAVE), (64.0, 100.0));
+    }
 
     fn round_trips(range: RangeInclusive<f32>, eased: bool) {
         let mut value = 0.0;

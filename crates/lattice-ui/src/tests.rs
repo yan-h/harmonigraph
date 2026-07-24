@@ -464,7 +464,7 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.show_audio = true;
     state.spectrum_config.floor_db = -48.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
-    state.spectrum_config.low_octave = 1;
+    state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
     state.spectrum_config.spectrogram_opacity = 0.5;
@@ -477,12 +477,36 @@ fn spectrum_config_round_trips_through_persist() {
     assert!(restored.spectrum_config.show_audio);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
-    assert_eq!(restored.spectrum_config.low_octave, 1);
+    // A range off the C boundaries survives, which the octave pair could not
+    // have expressed at all.
+    assert_eq!(restored.spectrum_config.low_midi, 40.5);
     assert!(restored.spectrum_config.show_spectrogram);
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
     assert_eq!(restored.spectrum_config.spectrogram_smoothing, 0.6);
     assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
+}
+
+/// The pitch range used to be a pair of Bitwig octave numbers. A blob from
+/// then carries `low_octave`/`high_octave` and no `low_midi`, so without the
+/// fold serde hands it the full-axis default and the zoom the user set is
+/// silently gone.
+#[test]
+fn an_octave_numbered_pitch_range_migrates_to_midi() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.low_midi = 40.5;
+    state.spectrum_config.high_midi = 100.0;
+    // C1..C5 in Bitwig numbering — MIDI 36..84.
+    let old = state
+        .save_persist()
+        .replace("low_midi:40.5", "low_octave:1")
+        .replace("high_midi:100.0", "high_octave:5");
+    assert!(old.contains("low_octave:1"), "the replacement must have hit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&old);
+    assert_eq!(restored.spectrum_config.low_midi, 36.0);
+    assert_eq!(restored.spectrum_config.high_midi, 84.0);
 }
 
 /// Every blob saved before the spectrogram existed is missing the field, and

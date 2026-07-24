@@ -8,12 +8,33 @@
 //! way is up. The roll's drawing lives next door in [`super::roll`].
 
 use super::visibility_floor;
-use crate::widgets::{button_row, choice_row, ValueBar};
+use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
 use super::{nearest_visible_node, scene_color, section, KEY_NAMES};
-use lattice_core::notes::{display_octave_of, octave_start_midi};
+use lattice_core::notes::display_octave_of;
 use egui::Sense;
 use lattice_scene::channel_color;
+
+/// The lowest C at or above `midi`, as a MIDI note. Where the octave
+/// gridlines start: since the pitch range went continuous it can begin
+/// anywhere, and stepping twelves from the range's own start would scatter
+/// the "C" lines across whatever pitch the zoom happens to begin on.
+fn first_c_at_or_above(midi: f32) -> i32 {
+    (midi / 12.0).ceil() as i32 * 12
+}
+
+/// A MIDI note as the frequency an analyzer would label it: whole hertz down
+/// low, kHz to one decimal above 1000. Three or four significant figures is
+/// all a range readout can use — "16744 Hz" is noise where "16.7k" is a
+/// number you can read at a glance while dragging.
+fn hz_readout(midi: f32) -> String {
+    let hz = lattice_core::spectrum::midi_to_hz(midi);
+    if hz >= 1000.0 {
+        format!("{:.1}k", hz / 1000.0)
+    } else {
+        format!("{hz:.0}")
+    }
+}
 
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
@@ -106,17 +127,24 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     // ---- Pitch axis -----------------------------------------------------
     section(ui, "Pitch axis");
-    // Octave zoom (Bitwig numbering; C-1..C9 is the full analyzer range).
-    let mut low = cfg.low_octave as f32;
-    if ValueBar::new(&mut low, -1.0..=8.0, "Low octave").integer().show(ui).changed() {
-        cfg.low_octave = low as i32;
-        cfg.high_octave = cfg.high_octave.max(cfg.low_octave + 1);
-    }
-    let mut high = cfg.high_octave as f32;
-    if ValueBar::new(&mut high, 0.0..=9.0, "High octave").integer().show(ui).changed() {
-        cfg.high_octave = high as i32;
-        cfg.low_octave = cfg.low_octave.min(cfg.high_octave - 1);
-    }
+    // One control for both ends, because the two ends are one thing: the
+    // window onto the analyzer's axis. Dragged in MIDI note (which is what
+    // makes it a log-frequency zoom) and read out in Hz.
+    RangeBar::new(
+        &mut cfg.low_midi,
+        &mut cfg.high_midi,
+        lattice_core::spectrum::SPECTRUM_MIN_MIDI..=lattice_core::spectrum::SPECTRUM_MAX_MIDI,
+        "Pitch range",
+    )
+    .min_span(crate::PITCH_RANGE_MIN_SPAN)
+    .display(hz_readout)
+    .show(ui)
+    .on_hover_text(
+        "The slice of the spectrum on show. Drag either end to move it, drag \
+         between them to slide the whole range, double-click for the full \
+         axis. The scale is logarithmic — equal distances are equal musical \
+         intervals — so an octave is the same width wherever it sits.",
+    );
     choice_row(
         ui,
         "Labels",
@@ -528,10 +556,14 @@ pub(crate) fn spectral_pane(
     let axes = Axes::new(rect, &cfg);
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal room and every note draws at
-    // its actual pitch. The displayed range is the Analyzer tab's octave
-    // zoom; the Bitwig octave<->MIDI convention lives in lattice-core.
-    let min_midi = octave_start_midi(cfg.low_octave) as f32;
-    let max_midi = octave_start_midi(cfg.high_octave) as f32;
+    // its actual pitch. The displayed range is the Analyzer tab's pitch
+    // range, which is free to start anywhere — it is not snapped to C.
+    let min_midi = cfg.low_midi;
+    // Never trust the pair to be ordered. A zero or negative span divides by
+    // zero in PitchScale and paints NaN geometry, which egui panics on — and
+    // a panic here takes the plugin's editor down inside the host. The range
+    // bar can't produce one; a hand-edited state blob can.
+    let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
     let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
 
     // Offline playhead render: the whole take laid out statically with a
@@ -582,7 +614,7 @@ pub(crate) fn spectral_pane(
     let mut axis_labels: Vec<(f32, String)> = Vec::new();
     match cfg.labels {
         SpectrumLabels::Notes => {
-            let mut c = min_midi as i32;
+            let mut c = first_c_at_or_above(min_midi);
             while c <= max_midi as i32 {
                 let t = scale.t_of(c as f32);
                 gridline(t);
@@ -938,6 +970,62 @@ mod tests {
                     assert!(shapes > 0, "{orientation:?} drew nothing");
                 }
             }
+        }
+    }
+
+    /// A C gridline has to land on a C. The range used to be a pair of octave
+    /// numbers, so its start WAS a C and stepping twelves from it worked; now
+    /// it can start anywhere.
+    #[test]
+    fn c_gridlines_land_on_cs_wherever_the_range_starts() {
+        assert_eq!(first_c_at_or_above(48.0), 48, "a range already on a C keeps it");
+        assert_eq!(first_c_at_or_above(40.5), 48);
+        assert_eq!(first_c_at_or_above(47.99), 48);
+        assert_eq!(first_c_at_or_above(lattice_core::spectrum::SPECTRUM_MIN_MIDI), 12);
+    }
+
+    /// The settings pane, whose pitch-range bar derives rects from a PAIR of
+    /// values — the shape of thing that folds to zero area and panics egui.
+    /// Painted at both the widest and the narrowest range it allows.
+    #[test]
+    fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
+        let axis =
+            (lattice_core::spectrum::SPECTRUM_MIN_MIDI, lattice_core::spectrum::SPECTRUM_MAX_MIDI);
+        for (low, high) in [axis, (40.5, 40.5 + crate::PITCH_RANGE_MIN_SPAN), (axis.0, axis.0)] {
+            let mut state =
+                SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.low_midi = low;
+            state.spectrum_config.high_midi = high;
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 700.0));
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| spectrum_settings_pane(ui, &mut state),
+            );
+            assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
+        }
+    }
+
+    /// A state blob carrying a collapsed or inverted pitch range must not
+    /// take the editor down with it.
+    #[test]
+    fn a_degenerate_pitch_range_still_paints() {
+        for (low, high) in [(60.0, 60.0), (90.0, 30.0)] {
+            let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.low_midi = low;
+            state.spectrum_config.high_midi = high;
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                    spectral_pane(&mut child, &mut state, 100.0, 1.0, 0);
+                },
+            );
+            assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
         }
     }
 
