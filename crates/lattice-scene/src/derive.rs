@@ -225,15 +225,23 @@ pub fn derive_scene(
             // sevens term two fifths at a time lands on the same name.
             let namesake =
                 LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
-            // The gutter rides the SOUNDING envelope, not merely being off
-            // the home sheet. It exists to keep a sounding off-sheet note
-            // legible over what it crosses; a node that draws nothing —
-            // silent, or carrying only a faint trail mark — punching a
-            // full-size hole in the home sheet is a hole with no note in
-            // it, and a lattice full of them at that. Fading it out with
-            // the note also means the hole closes as the note releases
-            // rather than snapping shut.
-            let gutter = sevens_gutter * activation;
+            // The WIDTH of the gutter, which is a constant of the view. Its
+            // STRENGTH is the note's own envelope, applied in the shader
+            // against the same `activation` it paints the node with, so the
+            // clearing fades out exactly as the note it belongs to does.
+            //
+            // Those are deliberately not the same knob. Scaling the width by
+            // the envelope instead — which is what this line used to do —
+            // leaves the clearing FULLY opaque for the whole release and
+            // only narrows its soft edge, so the hole hangs around at full
+            // strength and then vanishes the instant the voice is pruned.
+            //
+            // Zeroed while nothing sounds so a silent node punches nothing:
+            // a node drawing only a faint trail mark, or nothing at all,
+            // clearing a full-size hole in the home sheet is a hole with no
+            // note in it — and, since every position matching the pitch
+            // class lights, a lattice full of them.
+            let gutter = if activation > 0.0 { sevens_gutter } else { 0.0 };
             (scale, gutter, wrapped_cents(node_pc, tuning.pitch_class(namesake)))
         };
         nodes.push(NodeInstance {

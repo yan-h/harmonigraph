@@ -1505,6 +1505,51 @@ fn the_gutter_belongs_to_sounding_off_sheet_nodes_only() {
 }
 
 #[test]
+fn a_releasing_note_keeps_its_gutters_width() {
+    // `gutter` is the clearing's WIDTH, and it must not follow the
+    // envelope: the shader fades the clearing's STRENGTH by the same
+    // `activation` it paints the node with, and doing both would shrink
+    // the hole as it faded.
+    //
+    // The regression this pins is the other way round, and much worse.
+    // Scaling the width alone (the first cut) leaves the clearing fully
+    // opaque for the entire release and merely hardens its soft edge — so
+    // the hole sits there at full strength while its note fades away under
+    // it, then disappears the instant the voice is pruned. It reads as a
+    // pop, which is exactly what it is.
+    let view = ViewConfig {
+        extent_sevens: 1,
+        sevens_gutter: 0.2,
+        ..ViewConfig::default()
+    };
+    let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
+    let tuning = Tuning::default();
+    let mut tracker = held(60);
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: NoteEventKind::Off,
+    });
+
+    let off_sheet = |now: f64| {
+        let scene = scene_of(&tracker, &tuning, &view, &frame, now);
+        *scene
+            .nodes
+            .iter()
+            .find(|n| n.activation > 0.0 && n.lattice_pos.sevens != 0)
+            .expect("a lit off-sheet node")
+    };
+    // A quarter and three quarters of the way through the release: the note
+    // is measurably dimmer, and the clearing is exactly as wide.
+    let early = off_sheet(0.25);
+    let late = off_sheet(0.75);
+    assert!(late.activation < early.activation, "the note really is fading");
+    assert_eq!(early.gutter, 0.2);
+    assert_eq!(late.gutter, 0.2, "the clearing holds its width through the fade");
+}
+
+#[test]
 fn the_comma_measures_the_node_against_its_own_namesake() {
     // `note_name` walks the fifths with `threes + fives*4 - sevens*2` and
     // adds no septimal mark, so a sevens step spells exactly like two

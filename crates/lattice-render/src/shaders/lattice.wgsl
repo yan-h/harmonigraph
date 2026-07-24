@@ -1018,7 +1018,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let rings = select(0.0, u.misc5.z + u.misc5.w, u.misc5.w > 0.0);
         let solid = u.misc3.z + rings;
         let fade = min(solid + in.gutter * 2.0, QUAD_MARGIN - 0.05);
-        gutter_cov = 1.0 - smoothstep(min(solid, fade - 0.001), fade, d);
+        // Scaled by the note's OWN envelope, the same one `presence` paints
+        // the node with, so the clearing fades out with the note instead of
+        // outliving it. The width above stays put while it does: a hole
+        // that shrinks as it fades reads as the node retreating, and a hole
+        // that holds full strength to the last frame (which is what scaling
+        // the width alone did) vanishes with an audible pop.
+        gutter_cov = (1.0 - smoothstep(min(solid, fade - 0.001), fade, d)) * activation;
     }
     let final_alpha = over_idle + gutter_cov * (1.0 - over_idle);
     if final_alpha < 0.01 {
