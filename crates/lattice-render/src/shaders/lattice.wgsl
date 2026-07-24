@@ -884,7 +884,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     glow = glow * core_on;
 
-    let brightness = level_floor(activation);
+    // A releasing note dims to BLACK, not to the dimmest-visible floor.
+    //
+    // `activation` is 1.0 for as long as a note is held, so this term only
+    // ever shapes a fade. Running it through level_floor kept a fading note's
+    // colour at 35% of full however far the envelope had fallen, which left
+    // the alpha to do all the fading: the note held its colour, thinned out,
+    // and then was simply gone. Dimming the colour with the envelope spends
+    // the brightness across the whole release instead, and what is left at
+    // the end is little enough that losing it is not an event.
+    //
+    // The octave glyphs below keep the floor: their `level` is a per-octave
+    // reading that is quiet without being on its way out, which is the case
+    // the convention was written for.
+    let brightness = activation;
     // Every sounding octave's color, blended by angle — each hue laid in
     // its dot's direction (see octave_glow_color). This is the node's
     // multi-color fill: Steady shows it directly on the disc (so a chord's
