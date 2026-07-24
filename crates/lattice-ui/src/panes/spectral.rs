@@ -697,10 +697,29 @@ pub(crate) fn spectral_pane(
         let frame = state.frame_params;
         if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
             // Only the buckets inside the pitch range.
-            let visible: Vec<(f32, f32, f32, f32)> = (0..levels.len())
-                .filter_map(|i| {
-                    let midi = SPECTRUM_MIN_MIDI + (i as f32 + 0.5) / BINS_PER_SEMITONE as f32;
-                    scale.contains(midi).then(|| (midi, scale.t_of(midi), levels[i], peaks[i]))
+            // One slab per pitch PIXEL, each taking the loudest bucket that
+            // falls in it — not one slab per bucket. The axis holds thousands
+            // of buckets and the pane a few hundred pixels, so per-bucket
+            // meant thousands of shapes a frame stacked on top of each other,
+            // which was survivable only while most buckets were zero. MAX
+            // rather than an average so a thin partial still reads full
+            // height instead of being diluted by its quiet neighbours.
+            let bucket_at = |midi: f32| {
+                (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as isize)
+                    .clamp(0, levels.len() as isize - 1) as usize
+            };
+            let cols = (axes.pitch_len().round() as usize).clamp(2, 4096);
+            let visible: Vec<(f32, f32, f32, f32)> = (0..cols)
+                .map(|c| {
+                    let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
+                    let (b0, b1) = (bucket_at(edge(c)), bucket_at(edge(c + 1)));
+                    let (mut level, mut peak) = (0.0f32, 0.0f32);
+                    for b in b0..=b1.max(b0) {
+                        level = level.max(levels[b]);
+                        peak = peak.max(peaks[b]);
+                    }
+                    let t = (c as f32 + 0.5) / cols as f32;
+                    (scale.min_midi + t * scale.span, t, level, peak)
                 })
                 .collect();
 
@@ -724,7 +743,7 @@ pub(crate) fn spectral_pane(
             // curve. Each slab is one bucket in its own palette color, opaque
             // enough to read as a solid fill; densely packed, their tops make
             // the shape's edge (no separate line to fray).
-            let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
+            let slab = axes.pitch_len() / cols as f32 + 0.5;
             for &(midi, t, level, _) in &visible {
                 let d = d_of(level, midi);
                 if d * axes.depth_len() > 0.5 {
