@@ -1285,9 +1285,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
-    let dt = ui.input(|i| i.stable_dt);
     state.perf.record(
-        dt,
         cpu_ms,
         now,
         perf::Workload {

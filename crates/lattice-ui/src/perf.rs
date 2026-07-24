@@ -8,10 +8,17 @@
 //! `root_ui` entirely, so nothing in this module ever runs on its
 //! (deterministic) draw path — no wall-clock read reaches a recorded frame.
 
-/// How quickly the smoothed readouts chase the latest sample. egui already
-/// smooths `stable_dt`; this steadies the display a touch more so the numbers
-/// are readable rather than flickering every frame.
-const SMOOTH: f32 = 0.1;
+/// Time constant of the smoothed readouts, in seconds: how long they take to
+/// chase most of the way to a new level.
+///
+/// Expressed as a duration rather than a per-frame fraction on purpose. A
+/// fixed fraction settles in a fixed number of FRAMES, so the same constant
+/// steadies the numbers at 30 fps and lets them flicker at 144 — the readout
+/// got twitchier the faster the plugin ran, which is backwards.
+const SMOOTH_TAU: f32 = 0.4;
+
+/// Granularity of the millisecond readouts. See [`ms_readout`].
+const MS_STEP: f32 = 0.5;
 
 /// Seconds between memory reads. RSS moves slowly and the read is a syscall,
 /// so once a second is plenty and keeps it off the per-frame path.
@@ -73,6 +80,9 @@ pub struct PerfStats {
     rss_bytes: u64,
     /// Shell-clock time of the last memory read, to throttle it.
     last_mem_read: f64,
+    /// Shell-clock time of the previous frame, for measuring the interval.
+    /// `None` before the first one.
+    last_frame: Option<f64>,
     /// This frame's workload (voice counts, visible nodes, render scale,
     /// whether it was animating).
     workload: Workload,
@@ -85,20 +95,37 @@ impl Default for PerfStats {
             cpu_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
+            last_frame: None,
             workload: Workload::default(),
         }
     }
 }
 
 impl PerfStats {
-    /// Fold this frame's measurements in. `dt` is egui's stable frame time,
-    /// `cpu_ms` the measured dock-build time, `now` the shell clock (for
-    /// throttling the memory read).
-    pub(crate) fn record(&mut self, dt: f32, cpu_ms: f32, now: f64, workload: Workload) {
+    /// Fold this frame's measurements in. `cpu_ms` is the measured dock-build
+    /// time and `now` the shell clock, which doubles as the frame timestamp.
+    ///
+    /// The interval is measured here rather than taken from egui's
+    /// `stable_dt`, which is only a measured delta when the PREVIOUS pass
+    /// asked for an *immediate* repaint; otherwise egui hands back
+    /// `RawInput::predicted_dt`, and egui-baseview never sets that, so it
+    /// stays at egui's 1/60 default forever. Uncapped that went unnoticed —
+    /// every frame asks for an immediate repaint, so every reading was real.
+    /// Under a frame-rate cap the request is a delayed one, so the readout
+    /// blended a hardcoded 60 with the true rate and reported ~45 fps for a
+    /// perfectly steady 30.
+    pub(crate) fn record(&mut self, cpu_ms: f32, now: f64, workload: Workload) {
+        let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
+        self.last_frame = Some(now);
+        // Convert the time constant into this frame's blend factor, so the
+        // readouts settle over SMOOTH_TAU seconds whatever the frame rate.
+        // A frame long enough to make this exceed 1 simply lands on the new
+        // value, which is what a stall should look like.
+        let alpha = (1.0 - (-dt / SMOOTH_TAU).exp()).clamp(0.0, 1.0);
         if dt > 0.0 {
-            self.frame_dt += (dt - self.frame_dt) * SMOOTH;
+            self.frame_dt += (dt - self.frame_dt) * alpha;
         }
-        self.cpu_ms += (cpu_ms - self.cpu_ms) * SMOOTH;
+        self.cpu_ms += (cpu_ms - self.cpu_ms) * alpha;
         self.workload = workload;
         if now - self.last_mem_read >= MEM_INTERVAL {
             let sample = rss_bytes();
@@ -145,6 +172,17 @@ fn memory_readout(rss_bytes: u64) -> String {
     } else {
         format!("{rounded} MB")
     }
+}
+
+/// A millisecond reading, quantized to [`MS_STEP`].
+///
+/// Same reasoning as [`memory_readout`]: this answers "is a frame costing me
+/// much?", and no answer to that needs the hundredth of a millisecond. Left
+/// unquantized, the trailing digits changed on every frame and the number got
+/// squinted at rather than read — the smoothing steadies the value, this
+/// steadies the digits.
+fn ms_readout(ms: f32) -> String {
+    format!("{:.1} ms", (ms / MS_STEP).round() * MS_STEP)
 }
 
 /// Draw the overlay in the top-left corner of `area` (the whole editor rect).
@@ -199,8 +237,8 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
                         );
                         ui.label(egui::RichText::new(state).color(dim).font(mono.clone()));
                     });
-                    row(ui, "frame", format!("{:.1} ms", perf.frame_dt * 1000.0));
-                    row(ui, "ui cpu", format!("{:.1} ms", perf.cpu_ms));
+                    row(ui, "frame", ms_readout(perf.frame_dt * 1000.0));
+                    row(ui, "ui cpu", ms_readout(perf.cpu_ms));
                     row(ui, "memory", memory);
                     row(
                         ui,
@@ -272,9 +310,12 @@ mod tests {
         let mut perf = PerfStats::default();
         // Seeded at a plausible 60 Hz so early frames don't read as absurd.
         assert!((perf.fps() - 60.0).abs() < 1.0);
-        // Feed a steady 30 Hz; the EMA should chase it down.
-        for _ in 0..500 {
-            perf.record(1.0 / 30.0, 2.0, 0.0, Workload { animating: true, ..Default::default() });
+        // Feed a steady 30 Hz on the shell clock; the EMA should chase it
+        // down. The interval is derived from `now`, so the clock must advance
+        // — that IS the measurement.
+        for i in 1..=500 {
+            let now = i as f64 / 30.0;
+            perf.record(2.0, now, Workload { animating: true, ..Default::default() });
         }
         assert!((perf.fps() - 30.0).abs() < 0.5, "fps = {}", perf.fps());
     }
@@ -283,7 +324,6 @@ mod tests {
     fn records_workload_and_reads_memory() {
         let mut perf = PerfStats::default();
         perf.record(
-            1.0 / 60.0,
             1.5,
             1.0,
             Workload {
@@ -331,7 +371,7 @@ mod tests {
         // Force a read whose sample is whatever the platform reports; what is
         // under test is that the stored value MOVES but does not teleport.
         let before = perf.rss_bytes;
-        perf.record(1.0 / 60.0, 1.0, MEM_INTERVAL, Workload::default());
+        perf.record(1.0, MEM_INTERVAL, Workload::default());
         let after = perf.rss_bytes as f64;
         let sample = super::rss_bytes() as f64;
         if sample > 0.0 && (sample - before as f64).abs() > 1.0 {
@@ -345,14 +385,47 @@ mod tests {
     #[test]
     fn memory_read_is_throttled_to_one_per_interval() {
         let mut perf = PerfStats::default();
-        perf.record(1.0 / 60.0, 1.0, 10.0, Workload::default());
+        perf.record(1.0, 10.0, Workload::default());
         let first = perf.last_mem_read;
         assert_eq!(first, 10.0);
         // A read less than MEM_INTERVAL later must not refresh the timestamp.
-        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
+        perf.record(1.0, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
         assert_eq!(perf.last_mem_read, first, "read again too soon");
         // Past the interval, it refreshes.
-        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL, Workload::default());
+        perf.record(1.0, 10.0 + MEM_INTERVAL, Workload::default());
         assert_eq!(perf.last_mem_read, 10.0 + MEM_INTERVAL);
+    }
+
+    /// The readouts must settle over the same DURATION at any frame rate.
+    /// A per-frame blend factor settles in a fixed number of FRAMES instead,
+    /// so one constant steadied 30 fps while letting 144 fps flicker.
+    #[test]
+    fn smoothing_settles_over_the_same_time_at_any_rate() {
+        let settle_after_one_tau = |rate: f64| {
+            let mut perf = PerfStats::default();
+            // Seed the clock so every measured step is a full 1/rate.
+            perf.record(0.0, 0.0, Workload::default());
+            let frames = (rate * SMOOTH_TAU as f64).round() as usize;
+            for i in 1..=frames {
+                perf.record(10.0, i as f64 / rate, Workload::default());
+            }
+            perf.cpu_ms
+        };
+        // One time constant is ~63% of the way to the new level, whatever
+        // the frame rate.
+        for rate in [30.0, 60.0, 144.0] {
+            let settled = settle_after_one_tau(rate);
+            assert!((settled - 6.32).abs() < 0.2, "{rate} fps settled to {settled}");
+        }
+    }
+
+    /// The hundredth of a millisecond is noise, and digits that never hold
+    /// still get squinted at rather than read.
+    #[test]
+    fn the_millisecond_readouts_step_rather_than_churning() {
+        for ms in [2.4, 2.5, 2.6, 2.7] {
+            assert_eq!(ms_readout(ms), "2.5 ms", "{ms}");
+        }
+        assert_eq!(ms_readout(2.8), "3.0 ms", "and it does step");
     }
 }
