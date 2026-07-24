@@ -64,7 +64,7 @@ fn pipelines_build_against_a_headless_device() {
         LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
 }
 
-fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(crate) fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -169,7 +169,7 @@ fn parity_scene() -> Scene {
 
 /// Render into a fresh texture cleared to `clear`, handing the pass to
 /// `draw`, and return the texture for readback.
-fn render_to_texture(
+pub(crate) fn render_to_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     size: [u32; 2],
@@ -218,7 +218,7 @@ fn render_to_texture(
     texture
 }
 
-fn readback(
+pub(crate) fn readback(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
