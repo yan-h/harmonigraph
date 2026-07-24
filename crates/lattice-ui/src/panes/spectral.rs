@@ -171,7 +171,11 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     );
     ValueBar::new(&mut cfg.roll_fraction, 0.0..=1.0, "Roll share")
         .show(ui)
-        .on_hover_text("How much of the pane's depth the roll takes from the spectrum");
+        .on_hover_text(
+            "How much of the pane's depth the roll takes from the spectrum. \
+             The divider is also draggable in the Spectral pane itself — \
+             same setting, either way.",
+        );
     ValueBar::new(&mut cfg.roll_seconds, 1.0..=120.0, "Span (s)")
         .eased(true)
         .decimals(1)
@@ -370,6 +374,28 @@ impl Axes {
         }
     }
 
+    /// The depth fraction under a screen position — the inverse of the
+    /// depth half of [`at`](Self::at). Unclamped. Depth grows the same way
+    /// on screen in both orientations (rightward / downward), so unlike
+    /// [`pitch_at`](Self::pitch_at) neither case flips.
+    fn depth_at(&self, pos: egui::Pos2) -> f32 {
+        if self.time_vertical {
+            (pos.y - self.rect.top()) / self.rect.height().max(1.0)
+        } else {
+            (pos.x - self.rect.left()) / self.rect.width().max(1.0)
+        }
+    }
+
+    /// A grab band `half` pixels either side of depth `d`, spanning the
+    /// pitch axis — the splitter's hit area. Kept inside the pane, so the
+    /// handle stays grabbable when the split is pushed all the way to an
+    /// edge.
+    fn depth_band(&self, d: f32, half: f32) -> egui::Rect {
+        let band = egui::Rect::from_two_pos(self.at(0.0, d), self.at(1.0, d))
+            .expand2(self.dir_depth().abs() * half);
+        band.intersect(self.rect)
+    }
+
     /// Anchor and alignment for a text label at `(p, d)`, offset `along`
     /// pixels up the pitch axis and `into` pixels up the depth axis, and
     /// growing in those same directions. One helper covers both
@@ -404,6 +430,51 @@ fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
     } else {
         1.0
     }
+}
+
+/// Half-width of the divider's grab band, in points. Wider than the hairline
+/// it drags: the band is invisible until the pointer is inside it, so it has
+/// to forgive an aim that is a few points off the line.
+const SPLIT_GRAB_HALF: f32 = 6.0;
+
+/// The spectrum/far-region divider, draggable where it is drawn.
+///
+/// Deliberately NOT a dock separator: the spectrum, spectrogram and roll are
+/// one pane on purpose — the spectrum's baseline sits ON this line and the
+/// roll's notes arrive at it, which is how you see they are sounding — so
+/// making them separate
+/// panes would put that shared calibration across a pane boundary (and dock
+/// panes detach, which this divider must not). Instead the handle drags
+/// [`roll_fraction`](crate::SpectrumConfig::roll_fraction), the very field the
+/// Analyzer tab's "Roll share" bar writes: one value, so the two always agree
+/// and the drag persists with the rest of the UI state.
+///
+/// Returns the handle's response so the caller can paint its highlight last,
+/// over the plots. `surface` keeps the docked pane and the Video preview from
+/// sharing one interaction id.
+fn drag_split(
+    ui: &mut egui::Ui,
+    axes: &Axes,
+    state: &mut SharedState,
+    surface: usize,
+) -> egui::Response {
+    let band = axes.depth_band(spectrum_share(&state.spectrum_config), SPLIT_GRAB_HALF);
+    let response = ui
+        .interact(band, egui::Id::new(("spectral-split", surface)), Sense::drag())
+        .on_hover_cursor(if axes.time_vertical {
+            egui::CursorIcon::ResizeVertical
+        } else {
+            egui::CursorIcon::ResizeHorizontal
+        });
+    if let Some(pointer) = response.dragged().then(|| response.interact_pointer_pos()).flatten() {
+        // Track the pointer absolutely rather than accumulating deltas: pushed
+        // against either limit, an accumulated split drifts out of sync and
+        // stops following the cursor on the way back. The band is a few pixels
+        // wide, so grabbing it off-center snaps imperceptibly. Depth runs away
+        // from the spectrum, so the roll gets what is left.
+        state.spectrum_config.roll_fraction = (1.0 - axes.depth_at(pointer)).clamp(0.0, 1.0);
+    }
+    response
 }
 
 /// Where a pitch sits on the pane's axis: the pitch range, as a mapping.
@@ -574,6 +645,15 @@ pub(crate) fn spectral_pane(
     // the live curve and voice bars via their `split > 0` guards — leaving the
     // spectrogram, roll, and playhead.
     let whole_song = state.whole_song.is_some();
+    // The divider is grabbable whenever the far region is turned ON, even
+    // where it has been dragged shut (`roll_fraction` 0 or 1) — otherwise
+    // shutting it would be one-way. Whole-song has no divider: the spectrum
+    // isn't drawn at all there.
+    let divider = (!whole_song && (cfg.show_roll || cfg.show_spectrogram))
+        .then(|| drag_split(ui, &axes, state, surface));
+    // Re-snapshot: a drag just wrote `roll_fraction`, and the split below has
+    // to be this frame's, not the one from before the drag.
+    let cfg = state.spectrum_config;
     let split = if whole_song { 0.0 } else { spectrum_share(&cfg) };
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
     // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
@@ -861,9 +941,29 @@ pub(crate) fn spectral_pane(
         );
     }
 
+    // The divider, over the plots so it stays findable against a loud
+    // spectrogram. Nothing at rest — the roll's now-line already marks where
+    // it is, and the offline render (which has no pointer) must keep emitting
+    // exactly the shapes it always did.
+    if let Some(divider) = &divider {
+        let lit = if divider.dragged() {
+            Some(theme::accent())
+        } else if divider.hovered() {
+            Some(theme::accent_edge())
+        } else {
+            None
+        };
+        if let Some(color) = lit {
+            painter.line_segment(axes.across_pitch(split), egui::Stroke::new(2.0, color));
+        }
+    }
+
     // Hovering here highlights the matching lattice node (if in view) and
-    // reads out the pitch under the cursor.
-    if let Some(pointer) = response.hover_pos() {
+    // reads out the pitch under the cursor. Gated on contains_pointer (pure
+    // geometry) rather than hovered(): the divider sits on top of the pane,
+    // and hovered() would blank the readout every time the pointer crossed it.
+    let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
+    if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
         // Cents from C, measured from MIDI 0 (which IS a C) rather than from
         // the range's own start: the range used to be a pair of octave numbers
@@ -969,6 +1069,121 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The divider drag reads the pointer through this inverse, so it has to
+    /// agree with `at` in either orientation — a sign flip would send the
+    /// handle the wrong way.
+    #[test]
+    fn depth_at_inverts_at_whichever_way_the_axes_run() {
+        for rect in [WIDE, TALL] {
+            for orientation in [
+                SpectralOrientation::Auto,
+                SpectralOrientation::Horizontal,
+                SpectralOrientation::Vertical,
+            ] {
+                let a = axes(rect, orientation);
+                for step in 0..=10 {
+                    let d = step as f32 / 10.0;
+                    // Any pitch: the inverse reads the depth axis only.
+                    let back = a.depth_at(a.at(0.37, d));
+                    assert!((back - d).abs() < 1e-4, "{orientation:?}: {d} -> {back}");
+                }
+            }
+        }
+    }
+
+    /// The grab band straddles the divider, stays inside the pane (so a
+    /// divider dragged flat against an edge is still grabbable), and spans
+    /// the pitch axis.
+    #[test]
+    fn the_split_band_straddles_the_divider_and_stays_inside_the_pane() {
+        for rect in [WIDE, TALL] {
+            for orientation in [SpectralOrientation::Horizontal, SpectralOrientation::Vertical] {
+                let a = axes(rect, orientation);
+                for split in [0.0, 0.5, 1.0] {
+                    let band = a.depth_band(split, SPLIT_GRAB_HALF);
+                    assert!(rect.contains_rect(band), "{orientation:?} @{split}: {band:?}");
+                    assert!(band.contains(a.at(0.5, split)), "{orientation:?} @{split}: off-line");
+                    // Thin across depth, full width across pitch.
+                    let (thin, wide_) = if a.time_vertical {
+                        (band.height(), band.width())
+                    } else {
+                        (band.width(), band.height())
+                    };
+                    assert!(thin <= 2.0 * SPLIT_GRAB_HALF, "{orientation:?}: band too thick");
+                    assert_eq!(wide_, a.pitch_len(), "{orientation:?}: band must span pitch");
+                }
+            }
+        }
+    }
+
+    /// Dragging the divider away from the spectrum GROWS the spectrum's
+    /// share, in either orientation, by the distance dragged — the whole
+    /// point of the handle, and the one thing an axis sign error breaks.
+    #[test]
+    fn dragging_the_divider_moves_the_split_with_the_pointer() {
+        for (rect, orientation, drag) in [
+            (WIDE, SpectralOrientation::Horizontal, egui::vec2(30.0, 0.0)),
+            (TALL, SpectralOrientation::Vertical, egui::vec2(0.0, 30.0)),
+        ] {
+            let a = axes(rect, orientation);
+            let before = 0.5;
+            let after = drag_divider(rect, orientation, before, drag);
+            // Depth runs away from the spectrum, so +30 px of depth takes
+            // 30/depth_len off the roll's share.
+            let expected = before - 30.0 / a.depth_len();
+            assert!(
+                (after - expected).abs() < 0.02,
+                "{orientation:?}: {before} -> {after}, wanted ~{expected}",
+            );
+        }
+    }
+
+    /// And back the other way, into the spectrum: the roll grows.
+    #[test]
+    fn dragging_the_divider_into_the_spectrum_grows_the_roll() {
+        let drag = egui::vec2(-30.0, 0.0);
+        let after = drag_divider(WIDE, SpectralOrientation::Horizontal, 0.5, drag);
+        assert!(after > 0.55, "roll share should have grown, got {after}");
+    }
+
+    /// Press on the divider, drag by `delta`, and return the resulting
+    /// `roll_fraction`. Three frames: egui needs the widget to exist before
+    /// the press, and a drag only registers once the pointer has moved while
+    /// held.
+    fn drag_divider(
+        rect: egui::Rect,
+        orientation: SpectralOrientation,
+        roll_fraction: f32,
+        delta: egui::Vec2,
+    ) -> f32 {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = orientation;
+        state.spectrum_config.roll_fraction = roll_fraction;
+        state.spectrum_config.show_roll = true;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let grab = axes(rect, orientation).at(0.5, 1.0 - roll_fraction);
+        let frame = |events: Vec<egui::Event>, state: &mut SharedState| {
+            let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                spectral_pane(&mut child, state, 100.0, 1.0, 0);
+            });
+        };
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(grab)], &mut state);
+        frame(vec![egui::Event::PointerMoved(grab), press(grab, true)], &mut state);
+        frame(vec![egui::Event::PointerMoved(grab + delta)], &mut state);
+        frame(vec![press(grab + delta, false)], &mut state);
+        state.spectrum_config.roll_fraction
     }
 
     /// A gridline label at the now edge of a wide (Across) pane sits just

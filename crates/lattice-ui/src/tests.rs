@@ -833,3 +833,67 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         );
     }
 }
+
+/// Drag the Spectral pane's spectrum/spectrogram divider through the REAL
+/// dock — `root_ui`, egui_dock, the tab body's ScrollArea and all.
+///
+/// The pane's own tests drive `spectral_pane` into a bare child Ui, which
+/// skips every layer the dock puts between the pointer and the handle. Any
+/// of those could swallow the drag (the ScrollArea registers a drag-sensing
+/// background widget of its own), and the failure would look exactly like
+/// "dragging doesn't work" — silent, with the handle still lighting up on
+/// hover. So the assertion is that the split actually MOVED.
+#[test]
+fn the_spectral_divider_drags_through_the_dock() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t));
+    };
+    // Two warm-ups: egui resolves the top widget at the pointer from the
+    // previous pass, so the handle has to exist before the press.
+    frame(&mut state, vec![]);
+    frame(&mut state, vec![]);
+
+    // Ask egui where the handle actually landed rather than deriving the
+    // dock's arithmetic here, which would just re-encode the layout.
+    let handle = egui::Id::new(("spectral-split", 0usize));
+    let band = ctx.read_response(handle).expect("the split handle never registered").rect;
+    let grab = band.center();
+    let before = state.spectrum_config.roll_fraction;
+
+    // Across (the default orientation) puts the divider upright, so the drag
+    // that moves it runs along x — pushing it away from the spectrum.
+    let press = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
+    assert!(
+        ctx.read_response(handle).is_some_and(|r| r.hovered()),
+        "the handle should light up under the pointer",
+    );
+    frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    let target = grab + egui::vec2(40.0, 0.0);
+    frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    assert!(ctx.read_response(handle).is_some_and(|r| r.dragged()), "the handle should be dragged");
+    frame(&mut state, vec![press(target, false)]);
+
+    let after = state.spectrum_config.roll_fraction;
+    assert!(
+        after < before - 0.1,
+        "the split should have moved with the pointer ({before} -> {after})",
+    );
+}
