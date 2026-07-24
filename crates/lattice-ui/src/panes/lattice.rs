@@ -53,7 +53,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         };
     }
 
-    let scene = derive_scene(
+    let mut scene = derive_scene(
         &state.tracker,
         &state.tuning,
         &state.view,
@@ -62,6 +62,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         state.hovered,
         now,
     );
+    // The ground the sevens knockout clears to. Only the shell knows what
+    // this pass is composited over -- the dock's tab body here, the render
+    // layout's own background offline -- so it is carried on SharedState
+    // rather than assumed by the scene.
+    scene.background = state.background;
 
     // Picking updates the *shared* hover state, one frame behind the scene
     // it was derived from (imperceptible, standard for immediate mode).

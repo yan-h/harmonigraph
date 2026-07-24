@@ -242,6 +242,19 @@ pub struct Scene {
     /// each node's own `trail`.
     pub trail_mark: TrailMark,
     pub trail_strength: f32,
+    /// The ground the lattice is drawn onto: the pane fill this pass gets
+    /// composited over, which is the skin's `panel` (what `egui_dock`'s
+    /// `tab_body.bg_fill` paints under every pane).
+    ///
+    /// Only the sevens knockout reads it, and it is the difference between
+    /// a hole and a blob. The pass blends premultiplied, so a gutter with no
+    /// color of its own knocks out to BLACK — and black is several shades
+    /// darker than this skin's panel, so the cleared disc sat on the picture
+    /// as an obviously darker plate instead of disappearing into the ground
+    /// wherever it crossed nothing. Handing the ground in means the gutter
+    /// is invisible over empty lattice and only shows as a clearing where it
+    /// actually crosses something.
+    pub background: Vec4,
     /// Color of the idle node markers (see [`ViewConfig::grid_color`]):
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.

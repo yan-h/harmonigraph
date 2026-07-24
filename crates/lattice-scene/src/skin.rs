@@ -99,3 +99,26 @@ static ACTIVE: OnceLock<Skin> = OnceLock::new();
 pub fn active_skin() -> &'static Skin {
     ACTIVE.get_or_init(Skin::default)
 }
+
+/// An sRGB byte triple as the opaque RGBA vector the renderer wants.
+///
+/// A straight divide by 255, deliberately, not a gamma decode: the shader's
+/// colors are sRGB-encoded 0..1 throughout (the offscreen target is a plain
+/// `Unorm` format, so nothing converts on the way through), which is the
+/// same arithmetic `lattice-ui::theme` does to reach an egui `Color32`.
+/// Shells use this to hand the scene the ground they composite it over.
+pub fn ground_color(rgb: (u8, u8, u8)) -> Vec4 {
+    Vec4::new(
+        f32::from(rgb.0) / 255.0,
+        f32::from(rgb.1) / 255.0,
+        f32::from(rgb.2) / 255.0,
+        1.0,
+    )
+}
+
+/// The active skin's `panel`: the ground `egui_dock` paints under every tab
+/// body, and so the default ground for a pane drawn inside the dock.
+pub fn panel_color() -> Vec4 {
+    let [r, g, b] = active_skin().panel;
+    ground_color((r, g, b))
+}

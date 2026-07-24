@@ -60,6 +60,11 @@ struct Uniforms {
     // sounding note, and confining it to the idle layer is what guarantees
     // that rather than merely intending it.
     misc6: vec4<f32>,
+    // The ground the lattice is painted onto (the pane fill this pass is
+    // composited over). Only the sevens knockout reads it: without it the
+    // gutter can knock out only to black, which is darker than the pane and
+    // reads as a plate sitting ON the picture rather than a hole THROUGH it.
+    background: vec4<f32>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -984,32 +989,43 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // The knockout gutter (off-sheet nodes only; in.gutter is 0 on the home
     // sheet). This is what lets the sevens layer overlap the home sheet
     // instead of needing clearance of its own: the node clears its own
-    // footprint, plus the gutter, out of whatever was drawn before it, and
-    // sits in the hole.
+    // footprint out of whatever was drawn before it and sits in the hole.
     //
-    // It is pure ALPHA with no color of its own, which knocks out to BLACK:
-    // the pass blends premultiplied, so raising alpha while adding no rgb
-    // leaves `dst * (1 - a)` plus nothing — an opaque black disc where the
-    // gutter is solid. That is the right hole on this skin, whose ground is
-    // near-black by design, and the reason the shader needs no uniform
-    // telling it what it is erasing onto. Compositing the gutter UNDER the
-    // node's own paint is what `over_idle + g * (1 - over_idle)` says: the
-    // node keeps its color, and only the empty part of its quad goes dark.
+    // TWO things make it read as a hole rather than a dark blob stuck on the
+    // picture, and it needs both:
+    //
+    //  - It clears to the GROUND (u.background), not to black. With no color
+    //    of its own a premultiplied layer knocks out to black, and black is
+    //    several shades darker than this skin's panel, so the cleared disc
+    //    announced itself everywhere — including over empty lattice, where
+    //    it should be invisible. Against the real ground it disappears
+    //    wherever it crosses nothing.
+    //  - It FADES rather than ending at a rim. A hard circle cutting across
+    //    a lit ring reads as a bite taken out of it; a gradient reads as the
+    //    small node sitting in front. The clearing is solid across the
+    //    node's own footprint and eases off over a band twice the gutter
+    //    width, which is what the setting really buys.
+    //
+    // Compositing it UNDER the node's own paint is what the `(1 - over_idle)`
+    // terms say: the node keeps its color exactly, and the ground only fills
+    // the part of its quad the node itself leaves empty.
     var gutter_cov = 0.0;
     if in.gutter > 0.0 {
-        // Out to the node's own outermost feature — the melody ring when
-        // the rings are on, the band's outer edge otherwise — and then the
-        // gutter beyond that. Capped inside the quad so it ends as a circle
-        // rather than being clipped square at the billboard's corners.
+        // Solid out to the node's own outermost feature — the melody ring
+        // when the rings are on, the band's outer edge otherwise — then the
+        // falloff. Capped inside the quad so the tail finishes as a circle
+        // instead of being clipped square at the billboard's corners.
         let rings = select(0.0, u.misc5.z + u.misc5.w, u.misc5.w > 0.0);
-        let rim = min(u.misc3.z + rings + in.gutter, QUAD_MARGIN - 0.05);
-        gutter_cov = 1.0 - smoothstep(rim - max(aa, 0.02) * 2.0, rim, d);
+        let solid = u.misc3.z + rings;
+        let fade = min(solid + in.gutter * 2.0, QUAD_MARGIN - 0.05);
+        gutter_cov = 1.0 - smoothstep(min(solid, fade - 0.001), fade, d);
     }
     let final_alpha = over_idle + gutter_cov * (1.0 - over_idle);
     if final_alpha < 0.01 {
         discard;
     }
-    return vec4<f32>(final_rgb, final_alpha);
+    let with_ground = final_rgb + u.background.rgb * gutter_cov * (1.0 - over_idle);
+    return vec4<f32>(with_ground, final_alpha);
 }
 
 // ---- Chord edges & grid lines ----------------------------------------------

@@ -155,6 +155,13 @@ struct Uniforms {
     /// strength 0..1; z/w unused. Both feed the idle-marker branch alone
     /// (see `TrailMark`); misc5 is full, so the trail starts its own slot.
     misc6: [f32; 4],
+    /// The ground the lattice is drawn onto — the pane fill this pass gets
+    /// composited over — as the sevens knockout's target color. Without it
+    /// the gutter can only knock out to black, which on this skin is
+    /// several shades DARKER than the pane and so reads as a blob sitting
+    /// on the picture rather than as a hole through it. See
+    /// `Scene::background`.
+    background: [f32; 4],
 }
 
 // The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
@@ -411,6 +418,7 @@ impl LatticeCallback {
                     0.0,
                     0.0,
                 ],
+                background: scene.background.to_array(),
             },
             target_format,
             pane_id,

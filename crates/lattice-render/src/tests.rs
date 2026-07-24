@@ -140,6 +140,9 @@ fn parity_scene() -> Scene {
         nodes,
         camera: lattice_scene::Camera::default(),
         time: 1.25,
+        // The ground the sevens knockout clears to; the half of this
+        // scene's nodes that carry a gutter exercise it.
+        background: lattice_scene::skin::panel_color(),
         node_radius: 0.34,
         outer_style: Default::default(),
         mark_unlinked: 1.0,

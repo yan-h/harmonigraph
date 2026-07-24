@@ -1552,3 +1552,36 @@ fn the_comma_takes_the_short_way_round_the_octave() {
         );
     }
 }
+
+#[test]
+fn the_knockout_clears_to_the_ground_not_to_black() {
+    // The gutter has no color of its own, so a premultiplied layer would
+    // knock out to BLACK — and this skin's panel is several shades lighter
+    // than black, which is exactly what made the cleared disc read as a
+    // dark plate sitting on the picture instead of a hole through it. The
+    // scene therefore carries the ground, and it must be the panel the
+    // dock paints under every pane, not zero.
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &ViewConfig::default(),
+        &FrameParams::default(),
+        0.0,
+    );
+    let panel = crate::skin::active_skin().panel;
+    assert_eq!(scene.background, crate::skin::ground_color((panel[0], panel[1], panel[2])));
+    assert!(scene.background.truncate().length() > 0.0, "not black");
+    assert_eq!(scene.background.w, 1.0, "opaque, or it would not cover");
+}
+
+#[test]
+fn ground_color_keeps_srgb_bytes_as_they_are() {
+    // A straight divide by 255, NOT a gamma decode: every color the shader
+    // handles is sRGB-encoded 0..1 (the offscreen target is a plain Unorm
+    // format), so decoding here would clear the gutter to a ground far
+    // darker than the pane it is supposed to disappear into.
+    let c = crate::skin::ground_color((24, 25, 29));
+    assert!((c.x - 24.0 / 255.0).abs() < 1e-6);
+    assert!((c.y - 25.0 / 255.0).abs() < 1e-6);
+    assert!((c.z - 29.0 / 255.0).abs() < 1e-6);
+}

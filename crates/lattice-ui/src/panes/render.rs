@@ -240,7 +240,7 @@ fn preview_lattice(
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
-    let scene = derive_scene(
+    let mut scene = derive_scene(
         &state.tracker,
         &state.tuning,
         &state.view,
@@ -248,6 +248,13 @@ fn preview_lattice(
         state.camera,
         None,
         now,
+    );
+    // The preview is a picture of the RENDER, so its knockouts clear to the
+    // render layout's background rather than to the panel this preview
+    // happens to sit on — the same color `lattice-offline` will clear to.
+    scene.background = lattice_scene::skin::ground_color(
+        Layout::split(state.render_config.frame.stacked, state.render_config.frame.split)
+            .background,
     );
     ui.painter().add(lattice_paint_callback(rect, &scene, state.target_format, PREVIEW_PANE_ID));
     // Node names/cents, exactly as the Lattice pane and the render draw them —
