@@ -444,11 +444,23 @@ const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
 
 /// How much faster than the display to run the frame timer when uncapped.
 ///
-/// The timer is a plain run-loop timer with no relation to vsync, so pacing
-/// it exactly AT the refresh rate lets ordinary jitter miss refreshes and
-/// judder. Sampling a little faster means every refresh has a fresh frame
-/// waiting. (This is why baseview's stock 15 ms is not 16.67.)
-const DISPLAY_OVERSAMPLE: f64 = 1.1;
+/// The timer is a plain run-loop timer with no relation to vsync, so a frame
+/// is ready when it is ready and the display asks when it asks. Miss the
+/// question and you don't lose a little time, you lose a whole refresh — 144
+/// becomes 72 for that frame. Averaged over a second that reads as an
+/// unsteady 70-100, which is exactly what a 1.1x margin produced: 6.31 ms of
+/// timer against 6.94 ms of refresh leaves 9% for jitter and work spikes to
+/// eat, and they do.
+///
+/// 2x is deliberately generous. The extra ticks are not wasted frames: the
+/// surface presents with vsync, so a tick that arrives with the swapchain
+/// full simply blocks until a slot frees, and the display rate throttles the
+/// timer rather than the other way round. Oversampling buys the margin;
+/// vsync spends it.
+///
+/// The real fix is to stop guessing and drive frames from the display itself
+/// (`CVDisplayLink`), which is a much larger change to the vendored baseview.
+const DISPLAY_OVERSAMPLE: f64 = 2.0;
 
 /// The interval the window's frame timer should run at.
 ///
@@ -800,10 +812,14 @@ mod tests {
     }
 
     #[test]
-    fn uncapped_follows_the_display_a_shade_faster() {
+    fn uncapped_runs_ahead_of_the_display() {
         let interval = target_frame_interval(None, Some(144.0));
         assert!((interval - 1.0 / (144.0 * DISPLAY_OVERSAMPLE)).abs() < 1e-12, "got {interval}");
-        assert!(interval < 1.0 / 144.0, "must oversample, not match, the refresh rate");
+        assert!(
+            interval < 1.0 / 144.0,
+            "must oversample, not match, the refresh rate — matching it leaves no margin \
+             for jitter, and a missed refresh costs a whole frame",
+        );
     }
 
     #[test]
@@ -823,13 +839,20 @@ mod tests {
         assert!((interval - 1.0 / 30.0).abs() < 1e-12, "got {interval}");
     }
 
+    /// Nothing may talk the timer into spinning the run loop.
+    const MIN_SANE_INTERVAL: f64 = 1.0 / 1000.0;
+
     #[test]
     fn nonsense_caps_and_rates_do_not_produce_a_runaway_timer() {
         // A hand-edited persist blob or a lying screen must not talk the
         // timer into spinning; every one of these falls back to a sane rate.
+        // The invariant is "fall back to what the display asks for", not any
+        // particular number — spelled against the uncapped result so that
+        // retuning DISPLAY_OVERSAMPLE can't quietly turn this into a tautology.
         for bad_cap in [0.0, -1.0, f32::NAN] {
             let interval = target_frame_interval(Some(bad_cap), Some(60.0));
-            assert!(interval >= 1.0 / 66.0, "cap {bad_cap} gave {interval}");
+            assert_eq!(interval, target_frame_interval(None, Some(60.0)), "cap {bad_cap}");
+            assert!(interval >= MIN_SANE_INTERVAL, "cap {bad_cap} gave {interval}");
         }
         for bad_hz in [0.0, -60.0, f64::NAN] {
             let interval = target_frame_interval(None, Some(bad_hz));
