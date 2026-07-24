@@ -5,7 +5,7 @@
 //! time along, so what you hear and what you played read against each other.
 //!
 //! It's a layer under the roll, not a pane. The heatmap is built into a small
-//! image — one pixel per (time slab, pitch bin) — uploaded as a texture and
+//! image — one pixel per (time slab, pitch pixel) — uploaded as a texture and
 //! sampled with bilinear filtering, so it reads as one smooth, filled image
 //! rather than a mesh of flat cells (which looked blocky) or interpolated
 //! triangles (which floated and creased). Geometry still comes from
@@ -44,10 +44,20 @@ const JITTER_SLABS: i64 = 1;
 /// single bilinear-filtered quad — smooth in both axes, and opaque (silence is
 /// the ramp's dark end, not transparent) so the plane is a filled image rather
 /// than bright patches floating on the background.
-/// One visible spectrogram row: the source spectrum bucket, its center MIDI
-/// pitch, and that pitch's fraction `t` up the pitch axis.
+/// One row of the heatmap image: the source buckets it draws from (`idx`
+/// covers `idx..end`), its center MIDI pitch, and that pitch's fraction `t` up
+/// the pitch axis.
+///
+/// A row is a PIXEL of the pitch axis, not a bucket. Zoomed in, several rows
+/// share one bucket — that is the resolution the analyzer has, and asking for
+/// more of it is what the bucket count is for. Zoomed out, a row takes the max
+/// over the buckets that fall in it: the axis holds thousands of buckets and
+/// the pane a few hundred pixels, so one row per bucket would build an image
+/// far taller than the screen (and, at 32 buckets per semitone, taller than
+/// the GPU will allocate) only for the sampler to throw the detail away.
 struct Bin {
     idx: usize,
+    end: usize,
     midi: f32,
     t: f32,
 }
@@ -86,16 +96,36 @@ pub(super) fn draw_spectrogram(
     let window = time.window();
     let oldest = time.oldest();
 
-    // The visible buckets (idx, center MIDI, center pitch fraction), one image
-    // row each, low pitch first. A bucket of slack on each side lets the
-    // filtering carry the visible range cleanly to its edges.
+    // The image's rows: one per pixel of the pitch axis, never more buckets
+    // than the axis holds and never a taller image than the GPU will take. A
+    // row's pitch span maps back to a run of source buckets, which it reduces
+    // by MAX when it covers several (a peak must not be lost to averaging) and
+    // simply repeats when it covers less than one. A bucket of slack on each
+    // side lets the filtering carry the visible range cleanly to its edges.
     let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
     let margin = (bin_semis / scale.span).min(0.5);
-    let bins: Vec<Bin> = (0..SPECTRUM_BINS)
-        .filter_map(|idx| {
-            let midi = SPECTRUM_MIN_MIDI + (idx as f32 + 0.5) * bin_semis;
-            let t = scale.t_of(midi);
-            (t > -margin && t < 1.0 + margin).then_some(Bin { idx, midi, t })
+    let bucket_of = |t: f32| {
+        let midi = scale.min_midi + t * scale.span;
+        (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).floor() as isize)
+            .clamp(0, SPECTRUM_BINS as isize - 1) as usize
+    };
+    let max_rows = painter.ctx().input(|i| i.max_texture_side).max(64);
+    let rows = (axes.pitch_len().round() as usize).clamp(2, max_rows);
+    let bins: Vec<Bin> = (0..rows)
+        .map(|r| {
+            // The row's own slice of the visible pitch range, widened by the
+            // margin so the edge rows reach past the range like the buckets did.
+            let span = 1.0 + 2.0 * margin;
+            let t0 = -margin + span * r as f32 / rows as f32;
+            let t1 = -margin + span * (r + 1) as f32 / rows as f32;
+            let (idx, last) = (bucket_of(t0), bucket_of(t1));
+            let t = 0.5 * (t0 + t1);
+            Bin {
+                idx,
+                end: (last + 1).max(idx + 1).min(SPECTRUM_BINS),
+                midi: scale.min_midi + t * scale.span,
+                t,
+            }
         })
         .collect();
     if bins.len() < 2 {
@@ -115,7 +145,7 @@ pub(super) fn draw_spectrogram(
     // gaps there stretch the edge columns into flat streaks (short spans).
     const MIN_BUCKET: f64 = 0.08;
     let bucket = (window / target_cols as f64).max(MIN_BUCKET);
-    let bin_idx: Vec<usize> = bins.iter().map(|b| b.idx).collect();
+    let bin_idx: Vec<(usize, usize)> = bins.iter().map(|b| (b.idx, b.end)).collect();
     let (centers, mut power) = match whole {
         Some(ws) => aggregate_rows(ws.columns.iter(), &bin_idx, bucket),
         None => {
@@ -204,8 +234,13 @@ pub(super) fn draw_spectrogram(
 }
 
 /// Group `columns` (oldest first) into time-slabs of `bucket` seconds, taking
-/// the element-wise MAX over the bins in `bin_idx` within each slab. Returns
-/// each slab's center time and a flat row-major power grid (`rows * nb`).
+/// the MAX over each slab AND over each output row's run of source buckets
+/// (`bin_idx` gives the `start..end` a row draws from). Returns each slab's
+/// center time and a flat row-major power grid (`rows * nb`).
+///
+/// MAX on both axes for the same reason: a spectrogram cell answers "was there
+/// anything here", and averaging a bright thin partial with its silent
+/// neighbours answers "not much".
 ///
 /// The slab a column lands in is `floor(time / bucket)` — a function of
 /// absolute time alone, so it doesn't move as columns scroll off the far end
@@ -214,7 +249,7 @@ pub(super) fn draw_spectrogram(
 /// slowly-scrolling slab instead of blinking in and out with the sampling.
 fn aggregate_rows<'a>(
     columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
-    bin_idx: &[usize],
+    bin_idx: &[(usize, usize)],
     bucket: f64,
 ) -> (Vec<f64>, Vec<f32>) {
     let nb = bin_idx.len();
@@ -261,11 +296,14 @@ fn aggregate_rows<'a>(
             }
         }
         let base = power.len() - nb;
-        for (k, &idx) in bin_idx.iter().enumerate() {
-            let p = col.power[idx];
-            if p > power[base + k] {
-                power[base + k] = p;
+        for (k, &(from, to)) in bin_idx.iter().enumerate() {
+            let mut p = power[base + k];
+            for src in from..to {
+                if col.power[src] > p {
+                    p = col.power[src];
+                }
             }
+            power[base + k] = p;
         }
     }
     (centers, power)
@@ -397,7 +435,7 @@ mod tests {
             col(0.02, &[(5, 1.0)]), // the short note
             col(0.04, &[(5, 0.002)]),
         ];
-        let (centers, power) = aggregate_rows(cols.iter(), &[5], 1.0);
+        let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 1.0);
         assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
         assert_eq!(power[0], 1.0, "the short note's peak survives");
     }
@@ -414,7 +452,7 @@ mod tests {
         // Two columns a second apart, in quarter-second slabs: four slabs of
         // silence between them.
         let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[5], 0.25);
+        let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 0.25);
         assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
         assert_eq!(power[0], 1.0, "the column before the gap");
         assert_eq!(&power[1..4], [0.0, 0.0, 0.0], "the gap reads as silence, not as a smear");
@@ -433,7 +471,7 @@ mod tests {
     fn a_single_missed_slab_holds_instead_of_going_black() {
         // Columns half a second apart in quarter-second slabs: one slab empty.
         let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[5], 0.25);
+        let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 0.25);
         assert_eq!(centers.len(), 3, "the empty slab still gets its row");
         assert_eq!(power[1], 1.0, "and holds the column before it");
         assert_eq!(power[2], 0.5);
@@ -445,7 +483,7 @@ mod tests {
     #[test]
     fn columns_going_back_in_time_still_get_a_row() {
         let cols = [col(10.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
-        let (centers, power) = aggregate_rows(cols.iter(), &[5], 0.25);
+        let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 0.25);
         assert_eq!(centers.len(), 2);
         assert_eq!(power[1], 0.5, "the rewound column landed in its own row");
     }
@@ -456,9 +494,9 @@ mod tests {
         // are present — otherwise scrolling would shift it and it would shimmer.
         // A note at t=2.6 sits in slab floor(2.6)=2.
         let with_old = [col(0.1, &[(0, 0.1)]), col(2.6, &[(0, 0.5)])];
-        let (c_full, _) = aggregate_rows(with_old.iter(), &[0], 1.0);
+        let (c_full, _) = aggregate_rows(with_old.iter(), &[(0, 1)], 1.0);
         let just_note = [col(2.6, &[(0, 0.5)])];
-        let (c_scrolled, _) = aggregate_rows(just_note.iter(), &[0], 1.0);
+        let (c_scrolled, _) = aggregate_rows(just_note.iter(), &[(0, 1)], 1.0);
         assert!(c_full.contains(&2.5), "slab center is 2.5 with old columns");
         assert!(c_scrolled.contains(&2.5), "and still 2.5 after they scroll off");
     }
@@ -471,9 +509,9 @@ mod tests {
         let frame = FrameParams::default();
         let w = 2;
         let bins = [
-            Bin { idx: 10, midi: 40.0, t: 0.1 },
-            Bin { idx: 11, midi: 41.0, t: 0.2 },
-            Bin { idx: 12, midi: 42.0, t: 0.3 },
+            Bin { idx: 10, end: 11, midi: 40.0, t: 0.1 },
+            Bin { idx: 11, end: 12, midi: 41.0, t: 0.2 },
+            Bin { idx: 12, end: 13, midi: 42.0, t: 0.3 },
         ];
         let mut power = vec![0.0f32; w * bins.len()]; // row-major [slab][bin]
         power[bins.len() + 2] = 1.0; // slab 1, bin 2 loud

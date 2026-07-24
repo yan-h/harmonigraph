@@ -509,6 +509,35 @@ fn an_octave_numbered_pitch_range_migrates_to_midi() {
     assert_eq!(restored.spectrum_config.high_midi, 84.0);
 }
 
+/// A range saved while the axis ran MIDI 12..132 (16 Hz to 16.7 kHz) starts
+/// below the 20 Hz floor the axis has now. Drawing it would leave a band with
+/// no buckets behind it, so loading fits the range to the axis that exists —
+/// and only where it has to: 132 is still a pitch this axis covers.
+#[test]
+fn a_pitch_range_off_the_current_axis_is_pulled_back_onto_it() {
+    use lattice_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+    let restore = |low: &str, high: &str| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 72.0;
+        let saved = state
+            .save_persist()
+            .replace("low_midi:60.0", &format!("low_midi:{low}"))
+            .replace("high_midi:72.0", &format!("high_midi:{high}"));
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        (restored.spectrum_config.low_midi, restored.spectrum_config.high_midi)
+    };
+
+    let (low, high) = restore("12.0", "132.0");
+    assert_eq!(low, SPECTRUM_MIN_MIDI, "below the floor, so pulled up to it");
+    assert_eq!(high, 132.0, "inside the axis, so left exactly where it was");
+
+    // A hand-edited blob can reach past the ceiling too.
+    let (_, high) = restore("40.0", "200.0");
+    assert_eq!(high, SPECTRUM_MAX_MIDI);
+}
+
 /// Every blob saved before the spectrogram existed is missing the field, and
 /// plain `#[serde(default)]` answers `false` for it — so the feature arrived
 /// switched off for every existing project while a fresh install got it on.

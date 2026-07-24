@@ -1028,8 +1028,8 @@ mod tests {
     #[test]
     fn the_hz_readout_carries_its_unit() {
         assert_eq!(hz_readout(69.0), "440 Hz", "A440, the one value worth checking by hand");
-        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MIN_MIDI), "16 Hz");
-        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MAX_MIDI), "16.7 kHz");
+        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MIN_MIDI), "20 Hz");
+        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MAX_MIDI), "20.0 kHz");
         // The switch is at 1000 Hz exactly, not somewhere near it.
         let khz = lattice_core::spectrum::hz_to_midi(1000.0);
         assert_eq!(hz_readout(khz), "1.0 kHz");
@@ -1044,7 +1044,8 @@ mod tests {
         assert_eq!(first_c_at_or_above(48.0), 48, "a range already on a C keeps it");
         assert_eq!(first_c_at_or_above(40.5), 48);
         assert_eq!(first_c_at_or_above(47.99), 48);
-        assert_eq!(first_c_at_or_above(lattice_core::spectrum::SPECTRUM_MIN_MIDI), 12);
+        // The axis floor is 20 Hz, which is not a C — the first C above it is MIDI 24.
+        assert_eq!(first_c_at_or_above(lattice_core::spectrum::SPECTRUM_MIN_MIDI), 24);
     }
 
     /// The settings pane, whose pitch-range bar derives rects from a PAIR of

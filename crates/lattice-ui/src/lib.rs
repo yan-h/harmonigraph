@@ -437,17 +437,20 @@ impl SpectrumConfig {
         let (low, high) = (self.legacy_low_octave, self.legacy_high_octave);
         (self.legacy_low_octave, self.legacy_high_octave) =
             (no_legacy_octave(), no_legacy_octave());
-        if low == no_legacy_octave() || high == no_legacy_octave() {
-            return;
+        if low != no_legacy_octave() && high != no_legacy_octave() {
+            let midi = |octave: i32| lattice_core::notes::octave_start_midi(octave) as f32;
+            self.low_midi = midi(low);
+            self.high_midi = midi(high);
         }
-        let midi = |octave: i32| {
-            (lattice_core::notes::octave_start_midi(octave) as f32)
-                .clamp(default_low_midi(), default_high_midi())
-        };
-        // Guard the pair's own invariant (the old control kept high strictly
-        // above low) so a hand-edited blob can't produce an inverted axis.
-        self.low_midi = midi(low);
-        self.high_midi = midi(high).max(self.low_midi + PITCH_RANGE_MIN_SPAN);
+        // Then fit whatever came out to the axis the analyzer actually covers.
+        // Every source of this pair can be off it: an octave pair reaches C-1
+        // and C9, a blob written while the axis ran 16 Hz to 16.7 kHz carries
+        // its old ends, and a hand-edited one can say anything. A range past
+        // the axis draws a band with no buckets behind it; an inverted one
+        // divides by zero in PitchScale.
+        let (floor, ceil) = (default_low_midi(), default_high_midi());
+        self.low_midi = self.low_midi.clamp(floor, ceil - PITCH_RANGE_MIN_SPAN);
+        self.high_midi = self.high_midi.clamp(self.low_midi + PITCH_RANGE_MIN_SPAN, ceil);
     }
 }
 

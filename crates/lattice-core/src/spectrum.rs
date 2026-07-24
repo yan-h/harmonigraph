@@ -10,22 +10,33 @@
 //! no dependencies); at 8192 points a few times per second it is nowhere
 //! near a bottleneck.
 
-/// The spectrum's pitch axis: MIDI notes [MIN, MAX), which is C-1..C9 in
-/// Bitwig's octave convention (middle C = C3) — ten octaves, ~16 Hz to
-/// ~16.7 kHz, the tonally useful slice of the audible range. The axis is
-/// linear in MIDI pitch, i.e. logarithmic in frequency, so every octave
-/// gets equal width.
-pub const SPECTRUM_MIN_MIDI: f32 = 12.0;
-pub const SPECTRUM_MAX_MIDI: f32 = 132.0;
-/// Axis resolution: 8 buckets per semitone (12.5 cents). Fine enough that a
-/// partial wandering under vibrato/chorus/beating slides between buckets
-/// smoothly instead of staircasing across coarse ones — the parabolic peak
-/// refinement already resolves pitch well below a bucket, so the extra rows
-/// carry real detail rather than interpolation. (The lowest octave stays
-/// coarse regardless: there the FFT bin is wider than a bucket.)
-pub const BINS_PER_SEMITONE: usize = 8;
+/// The spectrum's pitch axis: MIDI notes [MIN, MAX), which is 20 Hz to
+/// 20 kHz — the audible band, as every analyzer states it. The axis is linear
+/// in MIDI pitch, i.e. logarithmic in frequency, so every octave gets equal
+/// width.
+///
+/// Deliberately NOT whole octaves from a C. It used to be MIDI 12..132, ten
+/// octaves C to C, which made the C gridlines land on the axis ends — tidy,
+/// but it stopped at 16.7 kHz and left the top third of an octave of the
+/// audible band unanalyzed. There is no C anywhere near 20 kHz (the next one
+/// is 44 kHz), so covering the band means giving that tidiness up.
+pub const SPECTRUM_MIN_MIDI: f32 = 15.486_82; // 20 Hz
+pub const SPECTRUM_MAX_MIDI: f32 = 135.076_23; // 20 kHz
+/// Axis resolution: 32 buckets per semitone (3.125 cents).
+///
+/// This is what sets how sharply a partial can be drawn, and it is the only
+/// thing that does. The analyzer is peak-based: it finds each local maximum,
+/// refines its position parabolically to well under an FFT bin, then splits
+/// its power across the two nearest buckets — so a partial is always two
+/// buckets wide and never wider. At the old 8 per semitone that was a 25-cent
+/// floor, which reads as a fat blob the moment you zoom the pitch range in to
+/// an octave or two. At 32 it is 6.25 cents.
+pub const BINS_PER_SEMITONE: usize = 32;
+/// Enough buckets to cover the axis, plus slack: the span is not a whole
+/// number of semitones, and `pitch_spectrum` writes to `b0 + 1`, so the top
+/// partial needs a bucket above the one it lands in or it would be dropped.
 pub const SPECTRUM_BINS: usize =
-    (SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) as usize * BINS_PER_SEMITONE;
+    ((SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize + 2;
 
 /// Normalized magnitude below which a spectral peak is treated as noise
 /// and skipped entirely.
