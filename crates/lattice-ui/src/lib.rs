@@ -945,13 +945,15 @@ impl AudioSpectrum {
     /// Derived from a memory budget rather than written as a column count, so
     /// the FFT rate can move without silently changing the footprint. The
     /// trade it makes explicit: at a fixed budget, a faster rate buys
-    /// smoothness at the newest edge and pays for it in REACH — at 50 Hz this
-    /// is ~87 s of history where 20 Hz gave ~200 s. Only the live preview is
-    /// bounded this way; an offline render precomputes the whole take.
+    /// smoothness at the newest edge and pays for it in REACH. The budget was
+    /// raised alongside the move to 50 Hz to keep ~3.5 minutes of history —
+    /// more than the 20 Hz build reached — rather than let the rate quietly
+    /// shorten it. Only the live preview is bounded this way; an offline
+    /// render precomputes the whole take.
     ///
     /// At a very long span the heatmap therefore covers the most recent
     /// stretch while the note roll still spans the whole window.
-    const HISTORY_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+    const HISTORY_BUDGET_BYTES: usize = 160 * 1024 * 1024;
     const HISTORY_MAX: usize =
         Self::HISTORY_BUDGET_BYTES / (lattice_core::spectrum::SPECTRUM_BINS * 4);
 
