@@ -355,9 +355,12 @@ fn the_picture_panes_do_not_scroll() {
     for tab in [panes::Tab::Lattice, panes::Tab::Spectral] {
         assert_eq!(viewer.scroll_bars(&tab), [false, false], "{tab:?} is scrollable");
     }
-    // Settings panes are lists and must stay reachable in a short column.
+    // Settings panes are lists and must stay reachable in a short column, but
+    // VERTICALLY only: a both-axes area gives the body unbounded width, and the
+    // panes that fill the space then never report vertical overflow, so the
+    // wheel can't scroll them. Horizontal off; vertical on.
     for tab in [panes::Tab::Tuning, panes::Tab::Analyzer, panes::Tab::Panel] {
-        assert_eq!(viewer.scroll_bars(&tab), [true, true], "{tab:?} cannot scroll");
+        assert_eq!(viewer.scroll_bars(&tab), [false, true], "{tab:?} cannot scroll vertically");
     }
 }
 
