@@ -253,15 +253,20 @@ impl GpuEdge {
 /// Build the egui shape that renders `scene` into `rect`. `pane_id` must be
 /// unique per lattice view shown in the same frame (each gets its own GPU
 /// buffers; the pipeline is shared).
+/// `gpu_ms` receives the GPU time of this pane's passes, in milliseconds, as
+/// f32 bits — a few frames late (see [`GpuTimer`]) and only where the device
+/// granted timestamp queries. Pass `None` for panes whose cost isn't the one
+/// being reported, so a second lattice on screen can't overwrite the reading.
 pub fn lattice_paint_callback(
     rect: egui::Rect,
     scene: &Scene,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
+    gpu_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        LatticeCallback::from_scene(scene, rect.size(), target_format, pane_id),
+        LatticeCallback::from_scene(scene, rect.size(), target_format, pane_id, gpu_ms),
     )
 }
 
@@ -278,6 +283,8 @@ struct LatticeCallback {
     size_points: [f32; 2],
     /// From the scene (a view setting), clamped to [`RENDER_SCALE_RANGE`].
     render_scale: f32,
+    /// Where to publish this pane's GPU time; see [`lattice_paint_callback`].
+    gpu_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
 }
 
 /// One pass of the bloom chain: the pipeline to run, its bind group, and the
@@ -290,6 +297,7 @@ impl LatticeCallback {
         size_points: egui::Vec2,
         target_format: wgpu::TextureFormat,
         pane_id: u64,
+        gpu_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
     ) -> Self {
         let aspect = size_points.x / size_points.y.max(1.0);
         let render_scale = scene
@@ -396,6 +404,7 @@ impl LatticeCallback {
             pane_id,
             size_points: [size_points.x, size_points.y],
             render_scale,
+            gpu_ms,
         }
     }
 
@@ -464,8 +473,147 @@ struct LatticeResources {
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
+    /// GPU-side timing of the lattice passes. `None` when the device didn't
+    /// grant timestamp queries — plenty of GPUs (and the offline renderer,
+    /// which never asks for the feature) don't, and the readout says so
+    /// rather than pretending.
+    timer: Option<GpuTimer>,
     #[cfg(feature = "hot-reload")]
     watcher: ShaderWatcher,
+}
+
+/// Wall-clock time the GPU spends on one pane's lattice passes, read back
+/// with timestamp queries.
+///
+/// Deliberately a lagging measurement. The queries resolve into a buffer that
+/// must be MAPPED to be read, mapping can only be requested once the encoder
+/// is submitted (egui-wgpu owns the submit, one `prepare` later), and the map
+/// completes whenever the driver gets to it. Blocking on any of that would
+/// stall the very pipeline being measured, and the reading would then describe
+/// a frame that was slow *because* it was timed. So it runs as a three-step
+/// cycle and publishes a result a few frames old. For "is the GPU the
+/// bottleneck", stale and honest beats fresh and self-inflicted.
+struct GpuTimer {
+    set: wgpu::QuerySet,
+    /// `resolve_query_set` destination. Not mappable, hence the copy.
+    resolve: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    /// Nanoseconds per timestamp tick.
+    period: f32,
+    state: TimerState,
+    /// Set by the map callback, which the driver may run on another thread.
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum TimerState {
+    /// Nothing in flight; the next frame may record.
+    Idle,
+    /// Queries sit in an encoder that has not been submitted yet.
+    Recorded,
+    /// Submitted, and the staging buffer has been asked to map.
+    Mapping,
+}
+
+/// Two timestamps, 8 bytes each.
+const TIMER_BYTES: u64 = 16;
+
+impl GpuTimer {
+    /// Build the query set and buffers, or `None` when the device can't.
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
+        // Bracketing the passes from the ENCODER needs the inside-encoders
+        // feature. The plain timestamp feature alone only permits writes at
+        // pass boundaries, which would mean threading them through two
+        // separate pass descriptors for the same measurement.
+        let needed =
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        if !device.features().contains(needed) {
+            return None;
+        }
+        Some(GpuTimer {
+            set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("lattice_gpu_timer"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 2,
+            }),
+            resolve: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lattice_gpu_timer_resolve"),
+                size: TIMER_BYTES,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            staging: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lattice_gpu_timer_staging"),
+                size: TIMER_BYTES,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            period: queue.get_timestamp_period(),
+            state: TimerState::Idle,
+            ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
+    }
+
+    /// Advance the readback cycle, returning a measurement in milliseconds on
+    /// the frame one finally lands.
+    fn poll(&mut self, device: &wgpu::Device) -> Option<f32> {
+        use std::sync::atomic::Ordering;
+        match self.state {
+            TimerState::Idle => None,
+            TimerState::Recorded => {
+                // The encoder holding those queries has been submitted by now
+                // (egui-wgpu submits between prepares), so the map can be
+                // asked for.
+                let ready = self.ready.clone();
+                self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+                    if result.is_ok() {
+                        ready.store(true, Ordering::Release);
+                    }
+                });
+                // Poll, never Wait: a stall here would be the measurement
+                // interfering with what it measures.
+                let _ = device.poll(wgpu::PollType::Poll);
+                self.state = TimerState::Mapping;
+                None
+            }
+            TimerState::Mapping => {
+                let _ = device.poll(wgpu::PollType::Poll);
+                if !self.ready.swap(false, Ordering::Acquire) {
+                    return None;
+                }
+                let ms = {
+                    let view = self.staging.slice(..).get_mapped_range();
+                    let ticks: &[u64] = bytemuck::cast_slice(&view);
+                    // Saturating: both timestamps come off the same queue and
+                    // should be ordered, but an out-of-order pair must not
+                    // wrap into an astronomical reading.
+                    let delta = ticks[1].saturating_sub(ticks[0]) as f64;
+                    (delta * self.period as f64 / 1.0e6) as f32
+                };
+                self.staging.unmap();
+                self.state = TimerState::Idle;
+                Some(ms)
+            }
+        }
+    }
+
+    /// Whether this frame should be timed — false while a readback is still
+    /// in flight, so the query set is never overwritten mid-cycle.
+    fn arming(&self) -> bool {
+        self.state == TimerState::Idle
+    }
+
+    fn begin(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.write_timestamp(&self.set, 0);
+    }
+
+    /// Close the bracket and stage the result for the next frame to map.
+    fn end(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.write_timestamp(&self.set, 1);
+        encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, TIMER_BYTES);
+        self.state = TimerState::Recorded;
+    }
 }
 
 struct PaneBuffers {
@@ -767,7 +915,11 @@ fn create_post_pipeline(
 }
 
 impl LatticeResources {
-    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_bind_group_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -859,6 +1011,7 @@ impl LatticeResources {
             sampler,
             target_format,
             panes: HashMap::new(),
+            timer: GpuTimer::new(device, queue),
             #[cfg(feature = "hot-reload")]
             watcher: ShaderWatcher::new(),
         }
@@ -964,11 +1117,20 @@ impl CallbackTrait for LatticeCallback {
             .get::<LatticeResources>()
             .is_none_or(|r| r.target_format != self.target_format);
         if recreate {
-            callback_resources.insert(LatticeResources::new(device, self.target_format));
+            callback_resources.insert(LatticeResources::new(device, queue, self.target_format));
         }
         let resources: &mut LatticeResources = callback_resources
             .get_mut()
             .expect("inserted above when missing");
+
+        // Advance the GPU timer's readback cycle first: a result that landed
+        // is published now, and the cycle returns to Idle so this frame can be
+        // the next one sampled.
+        if let Some(timer) = resources.timer.as_mut() {
+            if let (Some(ms), Some(out)) = (timer.poll(device), &self.gpu_ms) {
+                out.store(ms.to_bits(), std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         // Dev builds: pick up edits to the .wgsl on disk. A broken edit is
         // rejected with a message; the previous pipeline keeps rendering.
@@ -1049,6 +1211,16 @@ impl CallbackTrait for LatticeCallback {
             .get(&self.pane_id)
             .expect("created by pane_buffers above");
         if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| pane.instance_count > 0) {
+            // Bracket the scene pass and the bloom chain together: what the
+            // overlay wants is the cost of drawing THE LATTICE, which is both.
+            // Skipped while a readback is still in flight, so the query set is
+            // never overwritten mid-cycle.
+            let timing = resources.timer.as_ref().is_some_and(GpuTimer::arming);
+            if timing {
+                if let Some(timer) = resources.timer.as_ref() {
+                    timer.begin(egui_encoder);
+                }
+            }
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lattice_scene_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1094,6 +1266,12 @@ impl CallbackTrait for LatticeCallback {
             // read as zero anyway.
             if self.uniforms.misc2[3] > 0.0 {
                 self.run_bloom_chain(egui_encoder, resources, offscreen);
+            }
+
+            if timing {
+                if let Some(timer) = resources.timer.as_mut() {
+                    timer.end(egui_encoder);
+                }
             }
         }
 

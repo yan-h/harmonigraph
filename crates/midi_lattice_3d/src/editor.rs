@@ -413,6 +413,32 @@ fn frame(
     }
 }
 
+/// The wgpu setup, which is `GraphicsConfig::default()` plus a request for
+/// timestamp queries so the performance overlay can report GPU time.
+///
+/// Requested only where the adapter already advertises them, because
+/// `request_device` FAILS on an unsupported feature — asking unconditionally
+/// would trade a missing readout for a plugin that won't open. Where they
+/// aren't granted the overlay simply says "n/a", as it already does for
+/// memory on platforms that won't report it.
+fn graphics_config() -> GraphicsConfig {
+    use egui_baseview::WgpuSetup;
+    use lattice_render::wgpu;
+
+    let mut config = GraphicsConfig::default();
+    if let WgpuSetup::CreateNew(setup) = &mut config.wgpu_options.wgpu_setup {
+        let base = setup.device_descriptor.clone();
+        setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
+            let mut descriptor = base(adapter);
+            let wanted = wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+            descriptor.required_features |= adapter.features() & wanted;
+            descriptor
+        });
+    }
+    config
+}
+
 /// Seconds between frame-timer ticks when the display won't say how fast it
 /// can go. Matches baseview's own default (~67 Hz).
 const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
@@ -570,7 +596,7 @@ impl Editor for LatticeEditor {
                         .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
                         .unwrap_or(WindowScalePolicy::SystemScaleFactor),
                 )
-                .with_graphics_config(GraphicsConfig::default()),
+                .with_graphics_config(graphics_config()),
             WindowState {
                 shared: self.shared.clone(),
                 params: self.params.clone(),

@@ -249,7 +249,15 @@ fn preview_lattice(
         None,
         now,
     );
-    ui.painter().add(lattice_paint_callback(rect, &scene, state.target_format, PREVIEW_PANE_ID));
+    // No GPU-time slot: the Video pane's preview is a second lattice on
+    // screen, and reporting its cost as THE lattice cost would be wrong.
+    ui.painter().add(lattice_paint_callback(
+        rect,
+        &scene,
+        state.target_format,
+        PREVIEW_PANE_ID,
+        None,
+    ));
     // Node names/cents, exactly as the Lattice pane and the render draw them —
     // scaled down so they read at render size in the shrunken preview. Clipped
     // to the lattice rect: a node near the frame edge would otherwise paint its

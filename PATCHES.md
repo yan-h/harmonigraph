@@ -138,11 +138,17 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   requested in a pass and any zero-delay `request_repaint` (input event,
   hover animation, a host draining MIDI) also forces the next pass to zero —
   so a cap built on it evaporates exactly when the UI is busy.
+- **Patch 7** (2 lines, `src/renderer.rs` + `src/lib.rs`): re-export
+  `WgpuSetup` alongside `GraphicsConfig`. `WgpuConfiguration` was already
+  public, but its `wgpu_setup` field cannot be matched without the enum, so
+  there was no way to reach the `device_descriptor` hook and request an extra
+  device feature (we ask for timestamp queries, for the overlay's GPU-time
+  row). Pure re-export; no behaviour change.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
-  staged-upload flush, the repaint-deadline fix, and the frame-timer
-  plumbing.
+  staged-upload flush, the repaint-deadline fix, the frame-timer
+  plumbing, and the `WgpuSetup` re-export.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

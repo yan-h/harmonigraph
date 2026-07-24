@@ -1073,6 +1073,19 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
     dock: DockState<panes::Tab>,
+    /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
+    /// by the render callback and read by the performance overlay. 0 means no
+    /// reading — the device didn't grant timestamp queries, or none has landed
+    /// yet.
+    ///
+    /// An atomic rather than a return value because the measurement crosses a
+    /// boundary the call stack doesn't: it is produced inside egui-wgpu's
+    /// paint callback, several frames after the frame that asked for it. Same
+    /// shape the plugin already uses to publish its sample rate.
+    ///
+    /// Runtime-only, never persisted, and never read by the offline renderer —
+    /// which also never asks for the feature, so it has no timer to begin with.
+    pub(crate) gpu_ms: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -1173,6 +1186,7 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
+            gpu_ms: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             fps_cap: None,
             perf: PerfStats::default(),
         }
@@ -1378,6 +1392,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // reaches root_ui, so nothing here touches a recorded frame.
     state.perf.record(
         cpu_ms,
+        f32::from_bits(state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed)),
         now,
         perf::Workload {
             active_voices: state.tracker.voices().count(),

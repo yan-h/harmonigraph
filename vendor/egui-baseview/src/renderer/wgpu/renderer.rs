@@ -15,7 +15,7 @@ use egui_wgpu::{
     },
 };
 
-pub use egui_wgpu::WgpuConfiguration;
+pub use egui_wgpu::{WgpuConfiguration, WgpuSetup};
 
 #[derive(Debug, Clone)]
 pub struct GraphicsConfig {
