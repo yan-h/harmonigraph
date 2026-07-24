@@ -382,18 +382,12 @@ pub struct SpectrumConfig {
     /// Corner rounding of an unbent note, as a fraction of half its width.
     #[serde(default = "default_roll_rounding")]
     pub roll_rounding: f32,
-    /// Overall roll opacity.
-    #[serde(default = "default_roll_opacity")]
-    pub roll_opacity: f32,
     /// Stroke width of a note's outline, in pixels (notes are drawn as hollow
     /// outlines so the spectrogram shows through them).
     #[serde(default = "default_roll_outline_width")]
     pub roll_outline_width: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
-    /// Scale a note's opacity by its velocity.
-    #[serde(default = "default_true")]
-    pub roll_velocity_alpha: bool,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
@@ -517,10 +511,6 @@ fn default_roll_rounding() -> f32 {
     0.5
 }
 
-fn default_roll_opacity() -> f32 {
-    0.9
-}
-
 fn default_roll_outline_width() -> f32 {
     1.5
 }
@@ -562,10 +552,8 @@ impl Default for SpectrumConfig {
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
             roll_rounding: default_roll_rounding(),
-            roll_opacity: default_roll_opacity(),
             roll_outline_width: default_roll_outline_width(),
             roll_color: default_roll_color(),
-            roll_velocity_alpha: true,
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),

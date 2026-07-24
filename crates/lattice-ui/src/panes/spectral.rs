@@ -202,7 +202,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ValueBar::new(&mut cfg.roll_rounding, 0.0..=1.0, "Rounding")
         .show(ui)
         .on_hover_text("Corner rounding of an unbent note (bent notes stay angular)");
-    ValueBar::new(&mut cfg.roll_opacity, 0.05..=1.0, "Opacity").show(ui);
     ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
         .show(ui)
         .on_hover_text(
@@ -219,8 +218,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (RollColor::Accent, "Accent", "One flat color; the lattice leads"),
         ],
     );
-    ui.checkbox(&mut cfg.roll_velocity_alpha, "Velocity opacity")
-        .on_hover_text("Quiet notes draw fainter");
     button_row(ui, |ui| {
         if ui
             .button("Clear roll")

@@ -122,7 +122,6 @@ pub(super) fn draw_roll(
 
     let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
     let ribbon_px = 2.0 * half * axes.pitch_len();
-    let opacity = cfg.roll_opacity.clamp(0.0, 1.0);
 
     // Draw in a stable order (the live notes come out of a HashMap, whose
     // iteration order varies per run): with translucent glows the paint order
@@ -165,13 +164,11 @@ pub(super) fn draw_roll(
             let (d0, d1) = (time.depth_of(t0), time.depth_of(t1));
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
-            let mut alpha = opacity;
-            if cfg.roll_velocity_alpha {
-                alpha *= super::visibility_floor(note.velocity);
-            }
-            if alpha <= 0.004 {
-                continue;
-            }
+            // Notes always draw fully opaque — the ribbon is a hollow outline
+            // over the spectrogram, so it does not need to be dimmed to let the
+            // heatmap through, and a released note fades on the lattice's fade,
+            // not here.
+            let alpha = 1.0;
             let pitch = (p0 + p1) * 0.5;
             let width = cfg.roll_outline_width.clamp(0.5, 8.0);
             let body = |a: f32| note_color(note, cfg, state, pitch, a);
@@ -356,8 +353,6 @@ mod tests {
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
-        state.spectrum_config.roll_opacity = 1.0;
-        state.spectrum_config.roll_velocity_alpha = false;
         state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_thickness = 2.0;
         state.spectrum_config.keyline = keyline;
