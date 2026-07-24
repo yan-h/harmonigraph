@@ -907,8 +907,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
-                slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
-
+                // Exactly the color that pitch lights everywhere else — the
+                // core disc, the piano roll — so the octave ring reads as the
+                // same note. It used to be mixed 30% toward white, which left
+                // the indicators (blues most of all) visibly lighter than the
+                // note's own color.
+                slot_rgb = pitch_lut_color(pitch);
             }
             if cov > glyph {
                 glyph = cov;
