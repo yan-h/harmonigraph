@@ -97,6 +97,7 @@ pub struct Queue<'a> {
     tick_ms: f32,
     render_ms: f32,
     upload_ms: f32,
+    texture_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
 }
@@ -115,6 +116,7 @@ impl<'a> Queue<'a> {
         tick_ms: f32,
         render_ms: f32,
         upload_ms: f32,
+        texture_ms: f32,
         encode_ms: f32,
         submit_ms: f32,
     ) -> Self {
@@ -133,9 +135,15 @@ impl<'a> Queue<'a> {
             tick_ms,
             render_ms,
             upload_ms,
+            texture_ms,
             encode_ms,
             submit_ms,
         }
+    }
+
+    /// Of the uploads, the TEXTURE half.
+    pub fn texture_ms(&self) -> f32 {
+        self.texture_ms
     }
 
     /// The renderer's stages, in milliseconds: uploads (which is also where
@@ -296,6 +304,7 @@ where
     /// The renderer half of it, and its stages.
     render_ms: f32,
     upload_ms: f32,
+    texture_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
 }
@@ -381,6 +390,7 @@ where
             0.0,
             0.0,
             0.0,
+            0.0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -436,6 +446,7 @@ where
             tick_ms: 0.0,
             render_ms: 0.0,
             upload_ms: 0.0,
+            texture_ms: 0.0,
             encode_ms: 0.0,
             submit_ms: 0.0,
         }
@@ -556,6 +567,7 @@ where
             self.tick_ms,
             self.render_ms,
             self.upload_ms,
+            self.texture_ms,
             self.encode_ms,
             self.submit_ms,
         );
@@ -658,6 +670,7 @@ where
             self.egui_gpu_ms = self.renderer.last_gpu_ms();
             self.acquire_ms = self.renderer.last_acquire_ms();
             self.upload_ms = self.renderer.last_upload_ms();
+            self.texture_ms = self.renderer.last_texture_ms();
             self.encode_ms = self.renderer.last_encode_ms();
             self.submit_ms = self.renderer.last_submit_ms();
         } else if let Some(candidate) = now.checked_add(repaint_delay) {

@@ -209,6 +209,9 @@ pub struct Renderer {
     /// Texture and buffer uploads, which is also where paint callbacks
     /// `prepare`; encoding egui's draw calls; and finish + submit + present.
     last_upload_ms: f32,
+    /// Of that, the texture uploads alone — the rest is buffer uploads and,
+    /// with them, the paint callbacks' `prepare`.
+    last_texture_ms: f32,
     last_encode_ms: f32,
     last_submit_ms: f32,
     /// How long the last frame spent turning egui's shapes into triangles.
@@ -249,6 +252,7 @@ impl Renderer {
             last_gpu_ms: 0.0,
             last_acquire_ms: 0.0,
             last_upload_ms: 0.0,
+            last_texture_ms: 0.0,
             last_encode_ms: 0.0,
             last_submit_ms: 0.0,
             last_tess_ms: 0.0,
@@ -279,6 +283,12 @@ impl Renderer {
     /// finish + submit + present.
     pub fn last_upload_ms(&self) -> f32 {
         self.last_upload_ms
+    }
+
+    /// Of the uploads, the TEXTURE half. `last_upload_ms` minus this is the
+    /// buffer half, which is also where paint callbacks `prepare`.
+    pub fn last_texture_ms(&self) -> f32 {
+        self.last_texture_ms
     }
 
     pub fn last_encode_ms(&self) -> f32 {
@@ -409,6 +419,7 @@ impl Renderer {
 
         let user_cmd_bufs = {
             let mut renderer = self.render_state.renderer.write();
+            let tex_start = std::time::Instant::now();
             for (id, image_delta) in &full_output.textures_delta.set {
                 // NOTE: `update_buffers` is also where egui-wgpu runs paint
             // callbacks' `prepare`, so the lattice's buffer writes — and the
@@ -421,6 +432,8 @@ impl Renderer {
                     image_delta,
                 );
             }
+
+            self.last_texture_ms = tex_start.elapsed().as_secs_f32() * 1000.0;
 
             renderer.update_buffers(
                 &self.render_state.device,

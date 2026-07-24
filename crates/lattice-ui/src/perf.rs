@@ -75,6 +75,8 @@ pub struct FrameCosts {
     /// The renderer's stages: uploads (including paint callbacks' `prepare`),
     /// encoding egui's draw calls, and finish + submit + present.
     pub upload_ms: f32,
+    /// Of the uploads, the texture half.
+    pub texture_ms: f32,
     pub encode_ms: f32,
     pub submit_ms: f32,
 }
@@ -129,6 +131,7 @@ pub struct PerfStats {
     tick_ms: f32,
     render_ms: f32,
     upload_ms: f32,
+    texture_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
@@ -153,6 +156,7 @@ pub struct PerfStats {
     shown_tick_ms: f32,
     shown_render_ms: f32,
     shown_upload_ms: f32,
+    shown_texture_ms: f32,
     shown_encode_ms: f32,
     shown_submit_ms: f32,
     /// Shell-clock time of that latch.
@@ -182,6 +186,7 @@ impl Default for PerfStats {
             tick_ms: 0.0,
             render_ms: 0.0,
             upload_ms: 0.0,
+            texture_ms: 0.0,
             encode_ms: 0.0,
             submit_ms: 0.0,
             rss_bytes: 0,
@@ -196,6 +201,7 @@ impl Default for PerfStats {
             shown_tick_ms: 0.0,
             shown_render_ms: 0.0,
             shown_upload_ms: 0.0,
+            shown_texture_ms: 0.0,
             shown_encode_ms: 0.0,
             shown_submit_ms: 0.0,
             gpu_ms: 0.0,
@@ -232,6 +238,7 @@ impl PerfStats {
             tick_ms,
             render_ms,
             upload_ms,
+            texture_ms,
             encode_ms,
             submit_ms,
         } = costs;
@@ -253,6 +260,7 @@ impl PerfStats {
         self.tick_ms += (tick_ms - self.tick_ms) * alpha;
         self.render_ms += (render_ms - self.render_ms) * alpha;
         self.upload_ms += (upload_ms - self.upload_ms) * alpha;
+        self.texture_ms += (texture_ms - self.texture_ms) * alpha;
         self.encode_ms += (encode_ms - self.encode_ms) * alpha;
         self.submit_ms += (submit_ms - self.submit_ms) * alpha;
         // Three states, not two: a real reading, "the device can't", and
@@ -288,6 +296,7 @@ impl PerfStats {
             self.shown_tick_ms = self.tick_ms;
             self.shown_render_ms = self.render_ms;
             self.shown_upload_ms = self.upload_ms;
+            self.shown_texture_ms = self.texture_ms;
             self.shown_encode_ms = self.encode_ms;
             self.shown_submit_ms = self.submit_ms;
             self.shown_gpu_ms = self.gpu_ms;
@@ -377,7 +386,7 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "measuring...".to_owned()
     };
-    let rows: [(&str, String); 15] = [
+    let rows: [(&str, String); 16] = [
         ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
         ("tick", format!("{:.1} ms", perf.shown_tick_ms)),
         // The egui half is what `tick` leaves over, shown rather than left to
@@ -385,7 +394,14 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
         ("egui", format!("{:.1} ms", (perf.shown_tick_ms - perf.shown_render_ms).max(0.0))),
         // The renderer half, broken out — its parts are shown instead of its
         // total, since the total is what sent us looking in here.
-        ("upload", format!("{:.1} ms", perf.shown_upload_ms)),
+        // Split, because they fail for unrelated reasons: textures are the
+        // spectrogram's doing, buffers are vertex volume plus the lattice's
+        // own `prepare`.
+        ("tex up", format!("{:.1} ms", perf.shown_texture_ms)),
+        (
+            "buf up",
+            format!("{:.1} ms", (perf.shown_upload_ms - perf.shown_texture_ms).max(0.0)),
+        ),
         ("encode", format!("{:.1} ms", perf.shown_encode_ms)),
         ("submit", format!("{:.1} ms", perf.shown_submit_ms)),
         ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
@@ -727,6 +743,7 @@ mod tests {
                 tick_ms: 7.0,
                 render_ms: 8.0,
                 upload_ms: 9.0,
+                texture_ms: 8.5,
                 encode_ms: 10.0,
                 submit_ms: 11.0,
             },
