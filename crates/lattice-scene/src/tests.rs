@@ -1644,3 +1644,94 @@ fn ground_color_keeps_srgb_bytes_as_they_are() {
     assert!((c.y - 25.0 / 255.0).abs() < 1e-6);
     assert!((c.z - 29.0 / 255.0).abs() < 1e-6);
 }
+
+/// A sevens link is a tether for a note with nothing under it. Once there
+/// is a sounding note beneath to hang from, the chain has done its job —
+/// the two are already connected, visibly, by being one site a step apart.
+#[test]
+fn a_chain_stops_at_the_first_sounding_note_under_it() {
+    let view = ViewConfig {
+        extent_threes: 0,
+        extent_fives: 0,
+        extent_sevens: 2,
+        ..ViewConfig::default()
+    };
+    // 12-TET default: a sevens step is 1000¢, so (0,0,1) is MIDI 70's
+    // pitch class and (0,0,2) is MIDI 68's. The home node is C.
+    let chain = |notes: &[u8]| -> Vec<f32> {
+        let mut tracker = NoteTracker::new();
+        for &note in notes {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let scene =
+            scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        // The two links of the upward column, low end first.
+        let mut links: Vec<&EdgeInstance> = scene
+            .grid
+            .iter()
+            .filter(|e| (e.b.z - e.a.z).abs() > 0.25 && e.a.z >= -0.01)
+            .collect();
+        links.sort_by(|a, b| a.a.z.total_cmp(&b.a.z));
+        // An unlit sevens link is not merely faint, it is never shipped:
+        // off-sheet lines have no idle strength, so derive_grid drops the
+        // instance entirely. Presence IS the assertion.
+        links.iter().map(|e| e.a.z).collect()
+    };
+
+    // Floating: only the top of the column sounds, so the whole chain
+    // draws — that note has nothing else to hang from.
+    let floating = chain(&[68]);
+    assert_eq!(floating.len(), 2, "both links: {floating:?}");
+
+    // Anchored one step down: the note at sheet 1 sounds too, so the link
+    // between 1 and 2 is redundant and goes. The link from home up to the
+    // sounding sheet-1 note stays — nothing is sounding under THAT.
+    let anchored = chain(&[68, 70]);
+    assert_eq!(anchored.len(), 1, "only home->1 survives: {anchored:?}");
+    // Endpoints are inset from the node centers, so this is "starts on the
+    // home sheet" rather than "starts at exactly zero".
+    assert!(anchored[0] < 0.5, "and it is the one rising from home: {anchored:?}");
+
+    // Anchored on the home sheet itself: nothing in the column needs a
+    // tether at all, so no link is drawn.
+    let grounded = chain(&[68, 60]);
+    assert!(grounded.is_empty(), "{grounded:?}");
+}
+
+#[test]
+fn a_lit_chain_keeps_the_lattices_own_color() {
+    // The chain is structure, not a note: it says WHERE a note hangs from,
+    // and the note's own color is already on the node at each end. Taking
+    // the note's hue made it read as a third sounding thing strung between
+    // two others.
+    let view = ViewConfig {
+        extent_threes: 0,
+        extent_fives: 0,
+        extent_sevens: 1,
+        ..ViewConfig::default()
+    };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 70,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    let scene =
+        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    let lit: Vec<&EdgeInstance> = scene
+        .grid
+        .iter()
+        .filter(|e| (e.b.z - e.a.z).abs() > 0.25 && e.strength > 0.5)
+        .collect();
+    assert!(!lit.is_empty(), "the chain has to be lit for this to mean anything");
+    let base = Vec4::from_array(view.grid_color);
+    for link in lit {
+        assert_eq!(link.color, base, "a lit link keeps the grid color");
+    }
+}

@@ -357,10 +357,16 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 /// sheet draws an idle grid.
 ///
 /// The one thing that lights is a dashed sevens-axis link, as the chain
-/// from a sounding off-sheet note down to the home sheet — so a note on
-/// another sheet hangs from something visible instead of floating. That is
-/// about ONE note's depth, not a relationship between two: in-plane lines
-/// no longer brighten because the notes at both ends happen to sound.
+/// from a FLOATING sounding off-sheet note down to the home sheet — so a
+/// note on another sheet hangs from something visible instead of floating.
+/// That is about ONE note's depth, not a relationship between two: in-plane
+/// lines no longer brighten because the notes at both ends happen to sound.
+///
+/// A chain runs only through silence, and stops at the first sounding note
+/// under it: a note already sitting over a sounding one is connected to it
+/// visibly, by being the same site a step apart, and the line would only
+/// say so twice. Lit or not, a link keeps the lattice's own color — it says
+/// where a note hangs from, not what the note is.
 pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
     let base = Vec4::from_array(view.grid_color);
@@ -415,26 +421,42 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
             // depth link from an in-sheet line, not a style choice.
             let dashed = along_sevens || view.grid_dashed;
 
-            // A sevens link lights as part of the chain from any sounding
-            // node beyond it (away from the home sheet) down to the home
-            // sheet, so an off-sheet note always hangs from a visible chain
-            // even while the notes under it are silent. Nothing else
-            // lights.
+            // A sevens link lights as part of the chain hanging a sounding
+            // off-sheet note from something visible: it runs from that note
+            // down toward the home sheet — and only through SILENCE. The
+            // moment there is a sounding note under it to hang from, the
+            // chain has done its job and stops.
+            //
+            // Drawing it anyway is what made a 7-limit note sitting over a
+            // sounding one wear a dash it did not need: the two are already
+            // connected, visibly, by being the same site one step apart, and
+            // the line only says it a second time. It is the FLOATING note —
+            // nothing sounding beneath it anywhere down the column — that
+            // has no anchor without one.
             let mut lit = 0.0f32;
-            let mut lit_color = Vec4::ZERO;
             if along_sevens {
-                let (lo, hi) = if p.sevens >= view.center_sevens {
-                    (p.sevens + 1, view.center_sevens + view.extent_sevens)
-                } else {
-                    (view.center_sevens - view.extent_sevens, p.sevens)
+                let level = |s: i32| {
+                    node_at(LatticePos::new(p.threes, p.fives, s))
+                        .map_or(0.0, |n| n.activation)
                 };
-                for s in lo..=hi {
-                    if let Some(n) = node_at(LatticePos::new(p.threes, p.fives, s)) {
-                        if n.activation > lit {
-                            lit = n.activation;
-                            lit_color = n.color;
-                        }
-                    }
+                // `p` is the link's lower index; which of its ends is the
+                // one nearer home flips with the side of the axis, and so
+                // does which direction "beyond" runs.
+                let (beyond, toward_home) = if p.sevens >= view.center_sevens {
+                    (
+                        p.sevens + 1..=view.center_sevens + view.extent_sevens,
+                        view.center_sevens..=p.sevens,
+                    )
+                } else {
+                    (
+                        view.center_sevens - view.extent_sevens..=p.sevens,
+                        p.sevens + 1..=view.center_sevens,
+                    )
+                };
+                // Inclusive of the link's own near end: a note directly on
+                // top of a sounding one needs no line at all.
+                if !toward_home.into_iter().any(|s| level(s) > 0.0) {
+                    lit = beyond.into_iter().map(level).fold(0.0f32, f32::max);
                 }
             }
 
@@ -451,7 +473,13 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
             grid.push(EdgeInstance {
                 a: node.world_pos + dir * inset * node.scale,
                 b: neighbor.world_pos - dir * inset * neighbor.scale,
-                color: base.lerp(lit_color, lit),
+                // The lattice's own color, always. A lit link is the same
+                // structural line as an unlit one, merely brighter — it
+                // says WHERE a note hangs from, not what the note is, and
+                // the note's color is already on the node at each end.
+                // Taking the note's hue made the chain read as a third
+                // sounding thing strung between two others.
+                color: base,
                 strength: idle + (GRID_LIT_OPACITY - idle) * lit,
                 dashed,
             });
