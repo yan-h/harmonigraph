@@ -381,6 +381,9 @@ const HANDLE_W: f32 = 6.0;
 /// ValueBar filled to 100% — nothing about it says there is anything to take
 /// hold of.
 const HANDLE_INSET: f32 = HANDLE_W * 0.5 + 1.0;
+/// Breathing room between a handle and its readout, and between a readout and
+/// the bar's edge.
+const TEXT_GAP: f32 = 5.0;
 
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
 /// drag-start, and remembered for the gesture — otherwise dragging one end
@@ -452,11 +455,15 @@ impl Grab {
 ///
 /// Double-click resets rather than opening text entry (ValueBar's use of the
 /// gesture): a bar with two ends has no single value to type into it.
+///
+/// Unlabeled, unlike ValueBar. Each end reads out beside its own handle, which
+/// is the only place a range's numbers mean anything — and a name across the
+/// middle as well left three text runs competing in a 20pt row. The section
+/// heading above the control does the naming.
 pub struct RangeBar<'a> {
     low: &'a mut f32,
     high: &'a mut f32,
     range: RangeInclusive<f32>,
-    label: &'a str,
     /// Closest the two ends may come, in value units — the range can be
     /// narrowed but never collapsed.
     min_span: f32,
@@ -464,13 +471,8 @@ pub struct RangeBar<'a> {
 }
 
 impl<'a> RangeBar<'a> {
-    pub fn new(
-        low: &'a mut f32,
-        high: &'a mut f32,
-        range: RangeInclusive<f32>,
-        label: &'a str,
-    ) -> Self {
-        RangeBar { low, high, range, label, min_span: 0.0, display: |v| format!("{v:.2}") }
+    pub fn new(low: &'a mut f32, high: &'a mut f32, range: RangeInclusive<f32>) -> Self {
+        RangeBar { low, high, range, min_span: 0.0, display: |v| format!("{v:.2}") }
     }
 
     pub fn min_span(mut self, span: f32) -> Self {
@@ -556,22 +558,37 @@ impl<'a> RangeBar<'a> {
         span.max.x = hx;
         painter.rect_filled(span, radius, fill_color);
 
-        let text_color =
-            if response.hovered() || response.dragged() { theme::text() } else { theme::text_dim() };
-        painter.text(
-            rect.left_center() + Vec2::new(8.0, 0.0),
-            Align2::LEFT_CENTER,
-            self.label,
-            TextStyle::Body.resolve(ui.style()),
-            text_color,
-        );
-        painter.text(
-            rect.right_center() - Vec2::new(HANDLE_INSET + 6.0, 0.0),
-            Align2::RIGHT_CENTER,
-            format!("{} – {}", (self.display)(*self.low), (self.display)(*self.high)),
-            TextStyle::Monospace.resolve(ui.style()),
-            theme::text(),
-        );
+        // Each end's value beside its own handle. First choice is the empty
+        // track outside the span, where a number sits on flat black and reads
+        // cleanly; when the span has grown too close to that edge to leave
+        // room, it moves inside instead, over the fill. (At the full range
+        // there is no empty track at all, so both go inside.)
+        let font = TextStyle::Monospace.resolve(ui.style());
+        let half = HANDLE_W * 0.5;
+        let reach = half + TEXT_GAP;
+        for (x, value, outward) in
+            [(lx, *self.low, -1.0f32), (hx, *self.high, 1.0f32)]
+        {
+            let galley = painter.layout_no_wrap((self.display)(value), font.clone(), theme::text());
+            let w = galley.size().x;
+            // Outside: the edge nearest the bar's own end. Inside: the other
+            // side of the handle. Both are expressed as the text's LEFT edge.
+            let outside = if outward < 0.0 { x - reach - w } else { x + reach };
+            let inside = if outward < 0.0 { x + reach } else { x - reach - w };
+            let fits = if outward < 0.0 {
+                outside >= rect.left() + TEXT_GAP
+            } else {
+                outside + w <= rect.right() - TEXT_GAP
+            };
+            let left = if fits { outside } else { inside };
+            // Never let a readout escape the bar, however cramped the row.
+            let left = left.clamp(
+                rect.left() + TEXT_GAP,
+                (rect.right() - TEXT_GAP - w).max(rect.left() + TEXT_GAP),
+            );
+            let y = rect.center().y - galley.size().y * 0.5;
+            painter.galley(egui::pos2(left, y), galley, theme::text());
+        }
 
         // The handles go on top of everything, text included: they are the
         // part you operate, and a readout digit sliding under one is a better
@@ -660,9 +677,8 @@ mod tests {
     const AXIS: (f32, f32) = (12.0, 132.0);
     const OCTAVE: f32 = 12.0;
 
-    /// Paint one range bar across a 300pt row and return the filled rects it
-    /// emitted, in order.
-    fn paint_range_bar(low: f32, high: f32) -> Vec<(egui::Rect, egui::Color32)> {
+    /// Paint one range bar across a 300pt row and return what it emitted.
+    fn paint_range_bar(low: f32, high: f32) -> Vec<egui::Shape> {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
@@ -670,20 +686,48 @@ mod tests {
         let out = ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
-                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, "Pitch range")
-                    .min_span(OCTAVE)
-                    .show(ui);
+                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1).min_span(OCTAVE).show(ui);
             },
         );
-        out.shapes
+        out.shapes.into_iter().map(|s| s.shape).collect()
+    }
+
+    /// The filled rects, in paint order.
+    fn filled_rects(shapes: &[egui::Shape]) -> Vec<(egui::Rect, egui::Color32)> {
+        shapes
             .iter()
-            .filter_map(|s| match &s.shape {
+            .filter_map(|s| match s {
                 egui::Shape::Rect(r) if r.fill != egui::Color32::TRANSPARENT => {
                     Some((r.rect, r.fill))
                 }
                 _ => None,
             })
             .collect()
+    }
+
+    /// The text runs and the boxes they occupy, in paint order.
+    fn text_boxes(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String)> {
+        shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) => Some((
+                    egui::Rect::from_min_size(t.pos, t.galley.size()),
+                    t.galley.text().to_owned(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The two handles, left to right.
+    fn handles(shapes: &[egui::Shape]) -> Vec<egui::Rect> {
+        let mut hs: Vec<_> = filled_rects(shapes)
+            .into_iter()
+            .filter(|(r, fill)| *fill == theme::text() && r.width() <= HANDLE_W + 0.01)
+            .map(|(r, _)| r)
+            .collect();
+        hs.sort_by(|a, b| a.left().total_cmp(&b.left()));
+        hs
     }
 
     /// The second bug this widget shipped with, and the harder one to see: at
@@ -694,13 +738,9 @@ mod tests {
     #[test]
     fn the_handles_read_as_handles_even_at_the_limits() {
         for (low, high) in [(AXIS.0, AXIS.1), (AXIS.0, AXIS.0 + OCTAVE), (60.0, 72.0)] {
-            let rects = paint_range_bar(low, high);
-            let bar = rects[0].0;
-            let handles: Vec<_> = rects
-                .iter()
-                .filter(|(r, fill)| *fill == theme::text() && r.width() <= HANDLE_W + 0.01)
-                .map(|(r, _)| *r)
-                .collect();
+            let shapes = paint_range_bar(low, high);
+            let bar = filled_rects(&shapes)[0].0;
+            let handles = handles(&shapes);
             assert_eq!(handles.len(), 2, "{low}..{high} did not paint two handles");
             for h in handles {
                 assert!(
@@ -710,6 +750,36 @@ mod tests {
                 );
                 assert!(h.width() >= 4.0, "a handle thinner than this vanishes into the fill");
             }
+        }
+    }
+
+    /// Each end's number belongs to its own handle, and nothing else is
+    /// written on the bar — one label plus a joined "low – high" readout put
+    /// three text runs in a 20pt row, none of them attached to the thing they
+    /// described.
+    #[test]
+    fn each_end_reads_out_beside_its_own_handle() {
+        // Mid-axis, so there is empty track on both sides to sit in.
+        let shapes = paint_range_bar(60.0, 72.0);
+        let (texts, handles) = (text_boxes(&shapes), handles(&shapes));
+        assert_eq!(texts.len(), 2, "only the two values, no label");
+        assert_eq!(texts[0].1, "60.00");
+        assert_eq!(texts[1].1, "72.00");
+        assert!(texts[0].0.right() <= handles[0].left(), "low value sits outside its handle");
+        assert!(texts[1].0.left() >= handles[1].right(), "high value sits outside its handle");
+    }
+
+    /// At the full range there is no empty track left to write in, so each
+    /// readout moves to the inner side of its handle rather than off the bar.
+    #[test]
+    fn the_readouts_move_inside_when_the_span_leaves_no_room() {
+        let shapes = paint_range_bar(AXIS.0, AXIS.1);
+        let (texts, handles) = (text_boxes(&shapes), handles(&shapes));
+        let bar = filled_rects(&shapes)[0].0;
+        assert!(texts[0].0.left() >= handles[0].right(), "low value moved inside the span");
+        assert!(texts[1].0.right() <= handles[1].left(), "high value moved inside the span");
+        for (t, _) in &texts {
+            assert!(t.left() >= bar.left() && t.right() <= bar.right(), "readout left the bar");
         }
     }
 

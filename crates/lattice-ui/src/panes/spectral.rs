@@ -134,7 +134,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         &mut cfg.low_midi,
         &mut cfg.high_midi,
         lattice_core::spectrum::SPECTRUM_MIN_MIDI..=lattice_core::spectrum::SPECTRUM_MAX_MIDI,
-        "Pitch range",
     )
     .min_span(crate::PITCH_RANGE_MIN_SPAN)
     .display(hz_readout)
