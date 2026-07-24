@@ -141,26 +141,24 @@ pub enum SpectrogramColor {
     Mono,
     /// Black → deep red → orange → yellow → white. The familiar "heat"
     /// spectrogram; reads loudest as hottest.
+    ///
+    /// The aliases absorb palettes that used to exist — Pitch, which tinted
+    /// each cell with the lattice's own low-to-high pitch color, and Paper,
+    /// an inverted ramp for light backgrounds. Without them a blob still
+    /// naming one wouldn't just lose its palette: the parse would fail and
+    /// drop the WHOLE persist, layout and camera with it.
     #[default]
+    #[serde(alias = "Pitch", alias = "Paper")]
     Heat,
     /// Black → navy → blue → cyan → white. Cool counterpart to Heat.
     Ice,
     /// Black → violet → teal → green → yellow. A perceptually even ramp
     /// (viridis-like) where every step reads as an equal change.
     Aurora,
-    /// Each cell takes the lattice's own low-to-high pitch color, dimmed by
-    /// intensity — so the spectrogram speaks the same color language as the
-    /// nodes and the Pitch-colored roll.
-    Pitch,
     /// Black → indigo → magenta → orange → cream. Warmer than [`Self::Aurora`]
     /// and evenly stepped like it, where Heat spends most of its range in the
     /// reds.
     Magma,
-    /// White → blue-gray → near-black: the ramp inverted, for a light
-    /// background. The only one that reads on a white page, and the only one
-    /// where silence is the BRIGHT end — worth knowing before the roll is
-    /// drawn over it.
-    Paper,
 }
 
 /// What counts as "the take is done", and so when a video gets rendered.
@@ -446,20 +444,6 @@ pub struct SpectrumConfig {
     /// quiet partials just above it.
     #[serde(default = "default_one")]
     pub spectrogram_gamma: f32,
-    /// Smoothing across the PITCH axis, in semitones (0 = off).
-    ///
-    /// A constant width in semitones rather than in Hz, because the axis is
-    /// logarithmic: one setting then means the same musical interval at every
-    /// pitch, which is what "smooth this spectrum" means for music.
-    ///
-    /// Applied to the analysis as it is produced, so it costs one pass per
-    /// FFT (20 Hz) rather than one per frame, and both the curve and the
-    /// heatmap get it. The consequence is that it is NOT retroactive:
-    /// spectrogram history already recorded keeps the smoothing it was
-    /// captured with, exactly as it keeps the FFT window it was captured
-    /// with.
-    #[serde(default)]
-    pub pitch_smoothing: f32,
 }
 
 fn default_spectrogram_floor_db() -> f32 {
@@ -617,7 +601,6 @@ impl Default for SpectrumConfig {
             spectrogram_floor_db: default_spectrogram_floor_db(),
             spectrogram_ceiling_db: default_ceiling_db(),
             spectrogram_gamma: default_one(),
-            pitch_smoothing: 0.0,
         }
     }
 }
@@ -625,47 +608,6 @@ impl Default for SpectrumConfig {
 /// One power value per pitch-spectrum bucket, the array the analyzer fills
 /// and the pane draws. See [`lattice_core::spectrum::SPECTRUM_BINS`].
 type SpectrumBuckets = [f32; lattice_core::spectrum::SPECTRUM_BINS];
-
-/// Average each bucket with its neighbors over `semitones` of the pitch axis.
-/// A no-op at 0, or whenever the width rounds to less than one bucket.
-///
-/// A box blur, run off a copy in `scratch` so every output reads the ORIGINAL
-/// neighborhood — smoothing in place would feed already-smoothed values back
-/// in and smear asymmetrically up the axis. The window is symmetric and
-/// clipped at the ends, so the extremes average over what is actually there
-/// rather than fading into assumed silence.
-fn smooth_across_pitch(bins: &mut SpectrumBuckets, scratch: &mut Vec<f32>, semitones: f32) {
-    // Spelled out rather than as a negated `>`: a NaN width out of a
-    // hand-edited blob must fall through to "off", not into the radius maths.
-    if !semitones.is_finite() || semitones <= 0.0 {
-        return;
-    }
-    let bins_per_semitone = lattice_core::spectrum::BINS_PER_SEMITONE as f32;
-    let radius = (semitones * bins_per_semitone * 0.5).round() as usize;
-    if radius == 0 {
-        return;
-    }
-    scratch.clear();
-    scratch.extend_from_slice(bins);
-    // Running sum in f64: an f32 accumulator drifts noticeably across a few
-    // thousand add/subtract steps, and the drift would read as a slow tilt.
-    let n = scratch.len();
-    let mut sum: f64 = 0.0;
-    let (mut lo, mut hi) = (0usize, 0usize);
-    for (i, out) in bins.iter_mut().enumerate() {
-        let want_lo = i.saturating_sub(radius);
-        let want_hi = (i + radius + 1).min(n);
-        while hi < want_hi {
-            sum += scratch[hi] as f64;
-            hi += 1;
-        }
-        while lo < want_lo {
-            sum -= scratch[lo] as f64;
-            lo += 1;
-        }
-        *out = (sum / (hi - lo) as f64) as f32;
-    }
-}
 
 /// Audio-derived pitch spectrum shown in the Spectral pane. The shell
 /// feeds mono samples every frame from wherever its audio comes from
@@ -683,9 +625,6 @@ pub struct AudioSpectrum {
     /// When samples last arrived; the curve hides once the source stops
     /// (closed input bus, switched-off synth) rather than freezing.
     last_samples: Option<f64>,
-    /// Reused working buffer for [`smooth_across_pitch`], so the pitch-axis
-    /// blur doesn't allocate a copy of the spectrum on every FFT.
-    pitch_scratch: Vec<f32>,
     /// Timestamped raw spectra, one per FFT, for the spectrogram — oldest
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
     /// Bounded by age and count (see [`AudioSpectrum::push_history`]).
@@ -908,7 +847,6 @@ impl Default for AudioSpectrum {
             peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             last_fft: None,
             last_samples: None,
-            pitch_scratch: Vec::new(),
             history: VecDeque::new(),
             spectrogram_tex: [None, None],
             spectrogram_cache: [None, None],
@@ -968,11 +906,7 @@ impl AudioSpectrum {
             return None;
         }
         if self.last_fft.is_none_or(|t| now - t >= Self::FFT_INTERVAL) {
-            if let Some(mut fresh) = self.analyzer.pitch_spectrum() {
-                // Widen each bucket across the pitch axis before anything
-                // reads it, so the curve and the spectrogram agree — and so
-                // it costs one pass per FFT rather than one per frame.
-                smooth_across_pitch(&mut fresh, &mut self.pitch_scratch, config.pitch_smoothing);
+            if let Some(fresh) = self.analyzer.pitch_spectrum() {
                 let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
                 let dt = self.last_fft.map_or(Self::FFT_INTERVAL, |t| now - t);
                 let decay = 0.5f32.powf((dt / Self::PEAK_HALF_LIFE) as f32);

@@ -1068,42 +1068,6 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
 }
 
 #[test]
-fn pitch_blur_widens_a_spike_without_moving_or_losing_it() {
-    use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
-    let mut bins = [0.0f32; SPECTRUM_BINS];
-    let peak = SPECTRUM_BINS / 2;
-    bins[peak] = 1.0;
-    let mut scratch = Vec::new();
-
-    let before: f32 = bins.iter().sum();
-    smooth_across_pitch(&mut bins, &mut scratch, 1.0);
-
-    // Energy is redistributed, not created or destroyed.
-    let after: f32 = bins.iter().sum();
-    assert!((after - before).abs() < 1e-3, "{before} -> {after}");
-    // The spike spread into its neighbors...
-    assert!(bins[peak] < 1.0, "the peak should have spread");
-    assert!(bins[peak + 1] > 0.0 && bins[peak - 1] > 0.0, "neighbors should have lit up");
-    // ...symmetrically, so nothing slid up or down the axis.
-    assert!((bins[peak - 1] - bins[peak + 1]).abs() < 1e-6, "the blur must not smear one way");
-    // And it stayed within the requested width.
-    let radius = BINS_PER_SEMITONE / 2;
-    assert_eq!(bins[peak + radius + 2], 0.0, "spread further than asked");
-}
-
-#[test]
-fn pitch_blur_is_a_no_op_when_off_or_below_one_bucket() {
-    use lattice_core::spectrum::SPECTRUM_BINS;
-    let mut scratch = Vec::new();
-    for width in [0.0, -1.0, 0.01] {
-        let mut bins = [0.0f32; SPECTRUM_BINS];
-        bins[100] = 1.0;
-        smooth_across_pitch(&mut bins, &mut scratch, width);
-        assert_eq!(bins[100], 1.0, "width {width} should have changed nothing");
-    }
-}
-
-#[test]
 fn the_heatmap_follows_the_curve_until_given_its_own_range() {
     use crate::panes::spectral::{loudness, spectrogram_level};
     let mut cfg = SpectrumConfig::default();
@@ -1141,5 +1105,31 @@ fn heatmap_contrast_bends_the_level_without_clipping_it() {
         cfg.spectrogram_gamma = gamma;
         assert_eq!(spectrogram_level(&cfg, 0.0, midi), 0.0, "silence moved at gamma {gamma}");
         assert_eq!(spectrogram_level(&cfg, 1e9, midi), 1.0, "full scale moved at gamma {gamma}");
+    }
+}
+
+/// Palettes that no longer exist must still PARSE. Serde aliases fold them
+/// onto the default; without them the failed parse would drop the whole
+/// persist — layout, camera and every view setting with it — not just the
+/// palette. Injected as strings, since the enum can no longer name them.
+#[test]
+fn removed_spectrogram_palettes_load_as_heat() {
+    for removed in ["Pitch", "Paper"] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
+        state.view.extent_sevens = 3;
+        let saved = state
+            .save_persist()
+            .replace("spectrogram_color:Aurora", &format!("spectrogram_color:{removed}"));
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(
+            restored.spectrum_config.spectrogram_color,
+            crate::SpectrogramColor::Heat,
+            "{removed} should fold onto the default",
+        );
+        assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
     }
 }

@@ -123,18 +123,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)
         .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
-    ValueBar::new(&mut cfg.pitch_smoothing, 0.0..=2.0, "Pitch blur")
-        .decimals(2)
-        .show(ui)
-        .on_hover_text(
-            "Average each bucket with its neighbors across the PITCH axis, in \
-             semitones — the analyzer's own resolution stays, this just widens \
-             what each point shows. Tames the comb of partials into readable \
-             bands. Measured in semitones, so it means the same interval at \
-             every pitch. Applies to the curve and the heatmap alike; already \
-             recorded spectrogram history keeps the setting it was captured \
-             with.",
-        );
     // Tilt: conventional stepped reference slopes. Snap stray persisted
     // values (e.g. from the short-lived continuous bar) onto a step.
     if !crate::TILT_STEPS.contains(&cfg.tilt) {
@@ -262,9 +250,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (SpectrogramColor::Heat, "Heat", "Black-red-orange-yellow-white"),
             (SpectrogramColor::Ice, "Ice", "Black-blue-cyan-white"),
             (SpectrogramColor::Aurora, "Aurora", "Violet-teal-green-yellow (even ramp)"),
-            (SpectrogramColor::Pitch, "Pitch", "The lattice's own low-to-high pitch colors"),
             (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),
-            (SpectrogramColor::Paper, "Paper", "Inverted, for a light background"),
         ],
     );
     ValueBar::new(&mut cfg.spectrogram_opacity, 0.05..=1.0, "Opacity")
@@ -836,7 +822,6 @@ pub(crate) fn spectral_pane(
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
     if cfg.show_audio && split > 0.0 {
-        let frame = state.frame_params;
         if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each taking the loudest bucket that
@@ -870,12 +855,7 @@ pub(crate) fn spectral_pane(
             // flat accent. `tint` keeps the palette's hue/brightness and only
             // sets opacity (gamma_multiply would darken it toward black).
             let hue = |power: f32, midi: f32| {
-                super::spectrogram::cell_color(
-                    cfg.spectrogram_color,
-                    loudness(&cfg, power, midi),
-                    midi,
-                    &frame,
-                )
+                super::spectrogram::cell_color(cfg.spectrogram_color, loudness(&cfg, power, midi))
             };
             let tint = |c: egui::Color32, a: u8| {
                 egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
@@ -912,12 +892,7 @@ pub(crate) fn spectral_pane(
             if cfg.peak_hold {
                 // The one remaining line: a decaying trace of recent maxima,
                 // in the palette's loud color.
-                let loud = super::spectrogram::cell_color(
-                    cfg.spectrogram_color,
-                    1.0,
-                    (min_midi + max_midi) * 0.5,
-                    &frame,
-                );
+                let loud = super::spectrogram::cell_color(cfg.spectrogram_color, 1.0);
                 let pts: Vec<egui::Pos2> =
                     visible.iter().map(|&(m, t, _, pk)| axes.at(t, sd(d_of(pk, m)))).collect();
                 painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 150))));

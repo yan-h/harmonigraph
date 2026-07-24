@@ -15,10 +15,9 @@
 
 use egui::Color32;
 use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
-use lattice_scene::{channel_color, FrameParams};
+use lattice_scene::FrameParams;
 
 use super::spectral::{spectrogram_level, Axes, PitchScale, TimeAxis};
-use super::PITCH_RAMP_CHANNEL;
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
 /// Bin power at or below this is treated as flat silence — skips the `log10`
@@ -314,7 +313,6 @@ pub(super) fn draw_spectrogram(
                     style,
                     capacity,
                     &cfg,
-                    &frame,
                     &bins,
                     &power,
                     (centers[0] / bucket).floor() as i64,
@@ -331,7 +329,7 @@ pub(super) fn draw_spectrogram(
                 spectrum.spectrogram_ring[surface] = None;
                 smooth_time(&mut power, w, h, cfg.spectrogram_smoothing);
                 // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
-                let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
+                let pixels = fill_pixels(&cfg, w, &bins, &power);
                 let image = egui::ColorImage::new([w, h], pixels);
                 let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
                 match &mut spectrum.spectrogram_tex[surface] {
@@ -697,7 +695,6 @@ fn write_ring(
     style: RingStyle,
     capacity: usize,
     cfg: &SpectrumConfig,
-    frame: &FrameParams,
     bins: &[Bin],
     power: &[f32],
     first_key: i64,
@@ -751,7 +748,7 @@ fn write_ring(
     let start = ring.written_through.max(first_key);
     for key in start..=last_key {
         let i = (key - first_key) as usize;
-        let column = fill_column(cfg, frame, bins, &power[i * h..(i + 1) * h]);
+        let column = fill_column(cfg, bins, &power[i * h..(i + 1) * h]);
         let image = egui::ColorImage::new([1, h], column);
         let x = ring.x_of(key);
         tex.set_partial([x, 0], image.clone(), opts);
@@ -771,7 +768,7 @@ fn write_ring(
     for (key, slab) in
         [(first_key - 1, 0usize), (last_key + 1, last_i)]
     {
-        let column = fill_column(cfg, frame, bins, &power[slab * h..(slab + 1) * h]);
+        let column = fill_column(cfg, bins, &power[slab * h..(slab + 1) * h]);
         let image = egui::ColorImage::new([1, h], column);
         let x = ring.x_of(key);
         tex.set_partial([x, 0], image.clone(), opts);
@@ -787,17 +784,12 @@ fn write_ring(
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
 /// [`fill_pixels`] would put in that column, for a build that writes columns
 /// one at a time.
-fn fill_column(
-    cfg: &SpectrumConfig,
-    frame: &FrameParams,
-    bins: &[Bin],
-    slab: &[f32],
-) -> Vec<Color32> {
+fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[f32]) -> Vec<Color32> {
     bins.iter()
         .zip(slab)
         .map(|(bin, &p)| {
             let level = if p <= NEAR_ZERO { 0.0 } else { spectrogram_level(cfg, p, bin.midi) };
-            cell_color(cfg.spectrogram_color, level, bin.midi, frame)
+            cell_color(cfg.spectrogram_color, level)
         })
         .collect()
 }
@@ -808,7 +800,6 @@ fn fill_column(
 /// the plane is filled rather than see-through.
 fn fill_pixels(
     cfg: &SpectrumConfig,
-    frame: &FrameParams,
     w: usize,
     bins: &[Bin],
     power: &[f32],
@@ -820,7 +811,7 @@ fn fill_pixels(
         for (y, bin) in bins.iter().enumerate() {
             let p = power[base + y];
             let level = if p <= NEAR_ZERO { 0.0 } else { spectrogram_level(cfg, p, bin.midi) };
-            pixels[y * w + x] = cell_color(cfg.spectrogram_color, level, bin.midi, frame);
+            pixels[y * w + x] = cell_color(cfg.spectrogram_color, level);
         }
     }
     pixels
@@ -831,7 +822,7 @@ fn fill_pixels(
 /// down in `spectral_pane`), so silence recedes while energy stands out — the
 /// overall opacity is applied once, as the quad's tint. Shared with the spectrum
 /// curve so the two read in the same scheme.
-pub(super) fn cell_color(kind: SpectrogramColor, level: f32, midi: f32, frame: &FrameParams) -> Color32 {
+pub(super) fn cell_color(kind: SpectrogramColor, level: f32) -> Color32 {
     let t = level.clamp(0.0, 1.0);
     let rgb = match kind {
         SpectrogramColor::Mono => ramp(t, &[[0, 0, 0], [255, 255, 255]]),
@@ -851,22 +842,6 @@ pub(super) fn cell_color(kind: SpectrogramColor, level: f32, midi: f32, frame: &
             t,
             &[[0, 0, 0], [40, 15, 85], [140, 30, 110], [230, 90, 60], [255, 225, 190]],
         ),
-        // Inverted, so silence is the page and energy is the ink.
-        SpectrogramColor::Paper => ramp(
-            t,
-            &[[255, 255, 255], [190, 200, 215], [110, 125, 150], [45, 55, 75], [10, 10, 15]],
-        ),
-        SpectrogramColor::Pitch => {
-            // The lattice's own pitch color, scaled toward black by loudness so
-            // quiet cells stay dark while keeping their hue.
-            let c = channel_color(PITCH_RAMP_CHANNEL, midi, frame.darkest_pitch, frame.brightest_pitch);
-            let s = t.sqrt(); // lift the low end a touch so faint pitches still show
-            [
-                (c.x.clamp(0.0, 1.0) * s * 255.0) as u8,
-                (c.y.clamp(0.0, 1.0) * s * 255.0) as u8,
-                (c.z.clamp(0.0, 1.0) * s * 255.0) as u8,
-            ]
-        }
     };
     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
@@ -984,7 +959,6 @@ mod tests {
         // Two slabs, three bins. Put a loud value in slab x=1, bin y=2 and
         // check it lands at pixel [y*w + x] and nowhere else is bright.
         let cfg = SpectrumConfig::default();
-        let frame = FrameParams::default();
         let w = 2;
         let bins = [
             Bin { idx: 10, end: 11, midi: 40.0, t: 0.1 },
@@ -993,7 +967,7 @@ mod tests {
         ];
         let mut power = vec![0.0f32; w * bins.len()]; // row-major [slab][bin]
         power[bins.len() + 2] = 1.0; // slab 1, bin 2 loud
-        let px = fill_pixels(&cfg, &frame, w, &bins, &power);
+        let px = fill_pixels(&cfg, w, &bins, &power);
         let lum = |c: Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
         let loud = px[2 * w + 1]; // y=2, x=1
         assert!(lum(loud) > 0, "the loud cell should carry color");
@@ -1007,9 +981,8 @@ mod tests {
 
     #[test]
     fn cells_are_opaque_and_run_dark_to_bright() {
-        let frame = FrameParams::default();
-        let quiet = cell_color(SpectrogramColor::Heat, 0.0, 60.0, &frame);
-        let loud = cell_color(SpectrogramColor::Heat, 1.0, 60.0, &frame);
+        let quiet = cell_color(SpectrogramColor::Heat, 0.0);
+        let loud = cell_color(SpectrogramColor::Heat, 1.0);
         // Opaque throughout (opacity is applied as the quad tint, not here).
         assert_eq!(quiet.a(), 255);
         assert_eq!(loud.a(), 255);
@@ -1136,7 +1109,6 @@ mod tests {
     #[test]
     fn one_column_matches_the_whole_image_build() {
         let cfg = SpectrumConfig::default();
-        let frame = FrameParams::default();
         let bins = [
             Bin { idx: 0, end: 1, midi: 40.0, t: 0.0 },
             Bin { idx: 1, end: 2, midi: 52.0, t: 0.5 },
@@ -1147,9 +1119,9 @@ mod tests {
         let power = [1e-3, 0.0, 1e-6, 4e-2, 1e-5, 0.0];
         let w = power.len() / h;
 
-        let whole = fill_pixels(&cfg, &frame, w, &bins, &power);
+        let whole = fill_pixels(&cfg, w, &bins, &power);
         for slab in 0..w {
-            let column = fill_column(&cfg, &frame, &bins, &power[slab * h..(slab + 1) * h]);
+            let column = fill_column(&cfg, &bins, &power[slab * h..(slab + 1) * h]);
             for (y, pixel) in column.iter().enumerate() {
                 assert_eq!(*pixel, whole[y * w + slab], "slab {slab}, bin {y}");
             }
