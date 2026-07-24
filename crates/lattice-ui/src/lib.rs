@@ -309,7 +309,11 @@ pub struct SpectrumConfig {
     /// flat; -4.5 flattens typical musical material. The display lifts
     /// treble by the magnitude, pivoting at 1 kHz — there is no
     /// bass-emphasizing direction, matching convention.
-    #[serde(default)]
+    ///
+    /// `default_tilt`, not `default`, so a blob saved before the field
+    /// existed loads with the slope a fresh install gets rather than the
+    /// raw-power 0 a bare f32 default would hand it.
+    #[serde(default = "default_tilt")]
     pub tilt: f32,
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
@@ -503,6 +507,13 @@ fn default_roll_color() -> RollColor {
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
 
+/// The slope that flattens typical musical material — what the analyzer is
+/// looked at through nearly all the time, so it is where it starts. Raw
+/// power (0) buries everything above a couple of kHz.
+fn default_tilt() -> f32 {
+    -4.5
+}
+
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
@@ -511,7 +522,7 @@ impl Default for SpectrumConfig {
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             smoothing: 0.55,
-            tilt: 0.0,
+            tilt: default_tilt(),
             labels: SpectrumLabels::Notes,
             peak_hold: false,
             keyline: default_keyline(),
