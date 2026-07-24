@@ -170,11 +170,23 @@ pub(super) fn draw_roll(
                 let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
                 let rounding = egui::CornerRadius::same(radius.min(127.0) as u8);
                 for &(w, color) in &passes {
-                    painter.rect_stroke(
-                        rect,
-                        rounding,
-                        egui::Stroke::new(w, color),
-                        egui::StrokeKind::Middle,
+                    // NOT snapped to whole pixels, which egui does to rects by
+                    // default (TessellationOptions::round_rects_to_pixels) to
+                    // keep static chrome crisp. These rects scroll: snapping
+                    // holds a note still until it has drifted a whole pixel and
+                    // then jumps it, so the roll advanced in steps while the
+                    // spectrogram — a mesh, never snapped — slid smoothly
+                    // underneath, and the notes read as jittering against it.
+                    // Sub-pixel placement costs a little edge softness and buys
+                    // motion that matches.
+                    painter.add(
+                        egui::epaint::RectShape::stroke(
+                            rect,
+                            rounding,
+                            egui::Stroke::new(w, color),
+                            egui::StrokeKind::Middle,
+                        )
+                        .with_round_to_pixels(false),
                     );
                 }
             } else {
@@ -270,6 +282,51 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Note rects opt OUT of egui's pixel snapping, which is on by default
+    /// for rects so that static chrome stays crisp. These scroll: snapping
+    /// holds a note still until it has drifted a whole pixel and then jumps
+    /// it, while the spectrogram — a mesh, never snapped — slides smoothly
+    /// underneath. The notes read as jittering against it.
+    #[test]
+    fn note_rects_are_not_snapped_to_whole_pixels() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        // Zoomed in enough that the ribbon is a rect rather than a bare
+        // spine — the thin branch has no rect to snap.
+        state.spectrum_config.low_midi = 55.0;
+        state.spectrum_config.high_midi = 67.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+            },
+        );
+        let stroked: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => Some(r.round_to_pixels),
+                _ => None,
+            })
+            .collect();
+        assert!(!stroked.is_empty(), "the note drew no ribbon to check");
+        assert!(
+            stroked.iter().all(|&r| r == Some(false)),
+            "a scrolling note rect is still pixel-snapped: {stroked:?}",
+        );
     }
 
     /// The ribbons lie over the spectrogram, whose cells run the whole ramp
