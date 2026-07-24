@@ -92,6 +92,7 @@ pub struct Queue<'a> {
     frame_interval: &'a mut Option<f64>,
     display_max_fps: Option<f64>,
     tess_ms: f32,
+    egui_gpu_ms: f32,
 }
 
 impl<'a> Queue<'a> {
@@ -103,6 +104,7 @@ impl<'a> Queue<'a> {
         frame_interval: &'a mut Option<f64>,
         display_max_fps: Option<f64>,
         tess_ms: f32,
+        egui_gpu_ms: f32,
     ) -> Self {
         Self {
             bg_color,
@@ -114,7 +116,18 @@ impl<'a> Queue<'a> {
             frame_interval,
             display_max_fps,
             tess_ms,
+            egui_gpu_ms,
         }
+    }
+
+    /// Milliseconds the GPU spent on egui's own render pass a few frames ago,
+    /// or 0 where the device can't measure it.
+    ///
+    /// This is the 2D UI — dock, panels, text, the spectrogram quad, every
+    /// roll ribbon. A wgpu paint callback's own passes are not in it, so a
+    /// lattice timer and this one measure disjoint halves of the frame.
+    pub fn egui_gpu_ms(&self) -> f32 {
+        self.egui_gpu_ms
     }
 
     /// Milliseconds the PREVIOUS frame spent tessellating egui's shapes.
@@ -215,6 +228,9 @@ where
     /// ever be handed the last one. One frame stale, like every other
     /// after-the-fact measurement here.
     tess_ms: f32,
+    /// Likewise for egui's own render pass, which lags further still — the
+    /// timestamps have to come back from the GPU.
+    egui_gpu_ms: f32,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -291,6 +307,7 @@ where
             &mut frame_interval,
             window.display_max_fps(),
             0.0,
+            0.0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -341,6 +358,7 @@ where
             repaint_after: Some(start_time),
             key_capture,
             tess_ms: 0.0,
+            egui_gpu_ms: 0.0,
         }
     }
 
@@ -449,6 +467,7 @@ where
             &mut frame_interval,
             window.display_max_fps(),
             self.tess_ms,
+            self.egui_gpu_ms,
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
@@ -539,6 +558,7 @@ where
             self.repaint_after =
                 if presented { now.checked_add(repaint_delay) } else { Some(now) };
             self.tess_ms = self.renderer.last_tess_ms();
+            self.egui_gpu_ms = self.renderer.last_gpu_ms();
         } else if let Some(candidate) = now.checked_add(repaint_delay) {
             // Keep the EARLIEST pending deadline rather than overwriting it.
             //

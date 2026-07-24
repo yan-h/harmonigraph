@@ -10,6 +10,7 @@ use egui_wgpu::{
     RenderState, RendererOptions, ScreenDescriptor, WgpuError,
     wgpu::{
         Color, CommandEncoderDescriptor, Extent3d, RenderPassColorAttachment, RenderPassDescriptor,
+        RenderPassTimestampWrites,
         Surface, SurfaceConfiguration, TextureDescriptor, TextureDimension, TextureUsages,
         TextureView, TextureViewDescriptor,
     },
@@ -45,12 +46,164 @@ impl Default for GraphicsConfig {
     }
 }
 
+/// Two timestamps, 8 bytes each.
+const EGUI_TIMER_BYTES: u64 = 16;
+
+/// GPU time of egui's own render pass.
+///
+/// Both samples are BEGINNING-of-pass writes. Metal advertises and grants
+/// `TIMESTAMP_QUERY_INSIDE_ENCODERS` and end-of-pass writes, then records ZERO
+/// for both, silently — only a pass's opening sample comes back real. So the
+/// bracket is egui's pass opening and the opening of a 1x1 no-op pass placed
+/// after it.
+///
+/// The readback is a three-step cycle (record, map once the encoder is
+/// submitted, read when the driver is done) and every poll is `Poll`, never
+/// `Wait`: blocking for the number would stall the pipeline being measured.
+/// The published value is a few frames old, which for "where is the frame
+/// going" costs nothing.
+struct EguiGpuTimer {
+    set: egui_wgpu::wgpu::QuerySet,
+    resolve: egui_wgpu::wgpu::Buffer,
+    staging: egui_wgpu::wgpu::Buffer,
+    /// 1x1 target for the trailing pass that carries the closing sample.
+    tail: TextureView,
+    period: f32,
+    state: EguiTimerState,
+    ready: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum EguiTimerState {
+    Idle,
+    Recorded,
+    Mapping,
+}
+
+impl EguiGpuTimer {
+    fn new(device: &egui_wgpu::wgpu::Device, queue: &egui_wgpu::wgpu::Queue) -> Option<Self> {
+        use egui_wgpu::wgpu;
+        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            return None;
+        }
+        Some(EguiGpuTimer {
+            set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("egui_gpu_timer"),
+                ty: wgpu::QueryType::Timestamp,
+                count: 2,
+            }),
+            resolve: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("egui_gpu_timer_resolve"),
+                size: EGUI_TIMER_BYTES,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            staging: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("egui_gpu_timer_staging"),
+                size: EGUI_TIMER_BYTES,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            tail: device
+                .create_texture(&TextureDescriptor {
+                    label: Some("egui_gpu_timer_tail"),
+                    size: Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&TextureViewDescriptor::default()),
+            period: queue.get_timestamp_period(),
+            state: EguiTimerState::Idle,
+            ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
+    }
+
+    fn arming(&self) -> bool {
+        self.state == EguiTimerState::Idle
+    }
+
+    fn poll(&mut self, device: &egui_wgpu::wgpu::Device) -> Option<f32> {
+        use egui_wgpu::wgpu;
+        use std::sync::atomic::Ordering;
+        match self.state {
+            EguiTimerState::Idle => None,
+            EguiTimerState::Recorded => {
+                let ready = self.ready.clone();
+                self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+                    if result.is_ok() {
+                        ready.store(true, Ordering::Release);
+                    }
+                });
+                let _ = device.poll(wgpu::PollType::Poll);
+                self.state = EguiTimerState::Mapping;
+                None
+            }
+            EguiTimerState::Mapping => {
+                let _ = device.poll(wgpu::PollType::Poll);
+                if !self.ready.swap(false, Ordering::Acquire) {
+                    return None;
+                }
+                let ms = {
+                    // Read by hand rather than casting: this crate has no
+                    // bytemuck, and it is two little-endian u64s.
+                    let view = self.staging.slice(..).get_mapped_range();
+                    let at = |i: usize| {
+                        u64::from_le_bytes(view[i * 8..i * 8 + 8].try_into().unwrap_or_default())
+                    };
+                    // Saturating: both come off the same queue and should be
+                    // ordered, but an out-of-order pair must not wrap.
+                    let delta = at(1).saturating_sub(at(0)) as f64;
+                    (delta * self.period as f64 / 1.0e6) as f32
+                };
+                self.staging.unmap();
+                self.state = EguiTimerState::Idle;
+                Some(ms)
+            }
+        }
+    }
+
+    /// Close the bracket with a 1x1 no-op pass and stage the result.
+    fn close(&mut self, encoder: &mut egui_wgpu::wgpu::CommandEncoder) {
+        use egui_wgpu::wgpu;
+        encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("egui_gpu_timer_tail_pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &self.tail,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: Some(RenderPassTimestampWrites {
+                query_set: &self.set,
+                beginning_of_pass_write_index: Some(1),
+                end_of_pass_write_index: None,
+            }),
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, EGUI_TIMER_BYTES);
+        self.state = EguiTimerState::Recorded;
+    }
+}
+
 pub struct Renderer {
     render_state: Arc<RenderState>,
     surface: Surface<'static>,
     config: GraphicsConfig,
     msaa_texture_view: Option<TextureView>,
     msaa_samples: u32,
+    /// GPU time of egui's own render pass, and the queries behind it.
+    gpu_timer: Option<EguiGpuTimer>,
+    last_gpu_ms: f32,
     /// How long the last frame spent turning egui's shapes into triangles.
     ///
     /// Tessellation is neither the app's own per-frame work (it runs after the
@@ -77,16 +230,28 @@ impl Renderer {
             config.renderer_options,
         ))?);
 
+        let gpu_timer = EguiGpuTimer::new(&state.device, &state.queue);
+
         Ok(Self {
             render_state: state,
             surface,
             config,
             msaa_texture_view: None,
             msaa_samples,
+            gpu_timer,
+            last_gpu_ms: 0.0,
             last_tess_ms: 0.0,
             width: 0,
             height: 0,
         })
+    }
+
+    /// Milliseconds the GPU spent on egui's own render pass, a few frames ago,
+    /// or 0 where the device can't measure it. This is the 2D UI — dock,
+    /// panels, text, the spectrogram quad, every roll ribbon — and is NOT
+    /// covered by the lattice's own timer, which brackets only its passes.
+    pub fn last_gpu_ms(&self) -> f32 {
+        self.last_gpu_ms
     }
 
     /// Milliseconds the last frame spent in [`egui::Context::tessellate`].
@@ -178,6 +343,15 @@ impl Renderer {
             width: canvas_width,
             height: canvas_height,
         } = physical_size;
+
+        // Advance last frame's readback before anything else: its encoder has
+        // been submitted by now, so the map can be asked for and a landed
+        // result published.
+        if let Some(timer) = self.gpu_timer.as_mut() {
+            if let Some(ms) = timer.poll(&self.render_state.device) {
+                self.last_gpu_ms = ms;
+            }
+        }
 
         let shapes = std::mem::take(&mut full_output.shapes);
 
@@ -275,6 +449,9 @@ impl Renderer {
             return false;
         };
 
+        // Skipped while a readback is still in flight, so the query set is
+        // never overwritten mid-cycle.
+        let timing = self.gpu_timer.as_ref().is_some_and(EguiGpuTimer::arming);
         {
             let renderer = self.render_state.renderer.read();
             let frame_view = output_frame
@@ -304,7 +481,11 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timing.then(|| RenderPassTimestampWrites {
+                    query_set: &self.gpu_timer.as_ref().expect("timing implies a timer").set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: None,
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -317,6 +498,12 @@ impl Renderer {
                 &clipped_primitives,
                 &screen_descriptor,
             );
+        }
+
+        if timing {
+            if let Some(timer) = self.gpu_timer.as_mut() {
+                timer.close(&mut encoder);
+            }
         }
 
         {

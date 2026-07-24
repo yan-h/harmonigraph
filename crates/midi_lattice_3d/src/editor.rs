@@ -405,6 +405,7 @@ fn frame(
     // Last frame's tessellation cost, which the shell measures and the UI
     // cannot: it happens after `root_ui` returns.
     shared.ui.tess_ms = queue.tess_ms();
+    shared.ui.egui_gpu_ms = queue.egui_gpu_ms();
     lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
     // Pace the window AFTER the UI has run, so a cap picked this frame takes

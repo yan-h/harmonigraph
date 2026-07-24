@@ -1095,6 +1095,13 @@ pub struct SharedState {
     /// shapes, and this covers turning those shapes into triangles afterwards.
     /// A cost can be entirely in one and invisible in the other.
     pub tess_ms: f32,
+    /// Milliseconds the GPU spent on egui's own render pass last frame, or 0
+    /// where the shell doesn't measure it. Set by the shell before `root_ui`.
+    ///
+    /// Disjoint from [`Self::gpu_ms`], which brackets only the lattice's own
+    /// passes: between them they cover the frame's GPU work, and the two were
+    /// separated because the lattice turned out to be the cheap half.
+    pub egui_gpu_ms: f32,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -1199,6 +1206,7 @@ impl SharedState {
                 lattice_render::GPU_TIME_PENDING,
             )),
             tess_ms: 0.0,
+            egui_gpu_ms: 0.0,
             fps_cap: None,
             perf: PerfStats::default(),
         }
@@ -1405,6 +1413,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     state.perf.record(
         cpu_ms,
         state.tess_ms,
+        state.egui_gpu_ms,
         f32::from_bits(state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed)),
         now,
         perf::Workload {
