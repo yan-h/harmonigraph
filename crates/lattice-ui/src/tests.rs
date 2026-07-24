@@ -1013,3 +1013,113 @@ fn the_spectral_divider_drags_through_the_dock() {
         "the split should have moved with the pointer ({before} -> {after})",
     );
 }
+
+/// Drive the REAL dock (root_ui, egui_dock, the tab body's ScrollArea and
+/// all) with a wheel over `tab`'s body, and answer how far its content moved.
+/// Negative = the content moved up, i.e. the pane scrolled down.
+///
+/// Tracks NAMED texts rather than a bounding box: egui culls whatever scrolls
+/// out of the clip rect and the custom bars paint past it, so every
+/// position-of-the-ink metric reports movement that isn't there (and misses
+/// movement that is). The y of a string drawn in both frames cannot lie.
+fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // The settings leaf opens on Tuning; every other settings pane is a tab
+    // behind it.
+    let path = state.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
+    state.dock.set_active_tab(path).expect("selecting the tab");
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
+    // The top-right leaf (right of the 0.72 split, above the 0.55 one), from
+    // under its tab bar down. Only shapes clipped to this are the pane's.
+    let body = egui::Rect::from_min_max(
+        egui::pos2(700.0, 20.0),
+        egui::pos2(1000.0, screen_h * 0.55 + 2.0),
+    );
+    let texts = |out: &egui::FullOutput| {
+        let mut map = std::collections::HashMap::new();
+        for cs in &out.shapes {
+            if cs.clip_rect.min.x < body.min.x
+                || cs.clip_rect.min.y < body.min.y
+                || cs.clip_rect.max.y > body.max.y
+            {
+                continue;
+            }
+            if let egui::Shape::Text(t) = &cs.shape {
+                map.entry(t.galley.text().to_owned()).or_insert(t.pos.y);
+            }
+        }
+        map
+    };
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        texts(&ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t)))
+    };
+    // egui resolves the widget under the pointer from the previous pass, so
+    // the pointer has to be there for a frame before the wheel arrives.
+    frame(&mut state, vec![egui::Event::PointerMoved(egui::pos2(860.0, screen_h * 0.22))]);
+    let before = frame(&mut state, vec![]);
+    frame(
+        &mut state,
+        vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -3.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    // The wheel arrives smoothed over several frames.
+    let mut after = before.clone();
+    for _ in 0..20 {
+        after = frame(&mut state, vec![]);
+    }
+    let mut deltas: Vec<f32> = before
+        .iter()
+        .filter_map(|(text, y)| after.get(text).map(|moved| moved - y))
+        .collect();
+    assert!(!deltas.is_empty(), "{tab:?} drew no text to measure");
+    deltas.sort_by(f32::total_cmp);
+    deltas[deltas.len() / 2]
+}
+
+/// Every settings pane scrolls to the wheel once its content is taller than
+/// the pane. The dock hands some of them its own `ScrollArea` and others build
+/// their own; from the wheel's side that must not be visible.
+#[test]
+fn every_settings_pane_scrolls_when_its_content_overflows() {
+    // A short window, so that every one of them overflows — including Panel,
+    // the shortest list of the set.
+    for tab in [
+        panes::Tab::Tuning,
+        panes::Tab::Nodes,
+        panes::Tab::Scene,
+        panes::Tab::Analyzer,
+        panes::Tab::Video,
+        panes::Tab::Panel,
+    ] {
+        let moved = wheel_over_settings_pane(tab, 300.0);
+        assert!(moved < -8.0, "{tab:?} did not scroll to the wheel (content moved {moved})");
+    }
+}
+
+/// The Video pane scrolls at a workable size, rather than swallowing the slack
+/// with its preview.
+///
+/// It was the one settings pane the wheel did nothing in, at every size a
+/// person would actually use. The preview took `available_size()`, so the
+/// pane's content measured *exactly* the pane however short the pane got —
+/// the dock's `ScrollArea` never saw anything sticking out to scroll, and the
+/// preview shrank towards a sliver instead of the controls staying reachable.
+#[test]
+fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
+    let moved = wheel_over_settings_pane(panes::Tab::Video, 600.0);
+    assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
+}
