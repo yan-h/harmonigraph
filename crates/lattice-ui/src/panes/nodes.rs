@@ -5,7 +5,7 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{choice_row, ValueBar};
+use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
 use lattice_scene::{HighlightExtremes, NodeStyle, OuterStyle, ViewConfig};
 
@@ -85,15 +85,19 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     {
         view.outer_style = if show { OuterStyle::Slices } else { OuterStyle::Off };
     }
-    // If the band bars cross, the scene keeps outer ahead of inner
-    // rather than collapsing.
     ui.add_enabled_ui(show, |ui| {
-        ValueBar::new(&mut view.outer_inner, 0.0..=0.9, "Band inner")
+        // Inner and outer radius are one control: the band is the ring between
+        // them. Drag either edge, or drag between to slide the ring at a fixed
+        // width; the min span keeps it from collapsing.
+        ui.label("Band");
+        RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
+            .min_span(0.05)
             .show(ui)
-            .on_hover_text("Octave band's inner radius; 0 reaches the center");
-        ValueBar::new(&mut view.outer_outer, 0.2..=1.0, "Band outer")
-            .show(ui)
-            .on_hover_text("Octave band's outer radius");
+            .on_hover_text(
+                "The octave band's inner and outer radius. Inner 0 reaches the \
+                 node center (pie wedges); drag between the handles to move the \
+                 whole ring in or out.",
+            );
         ValueBar::new(&mut view.outer_solidity, 0.0..=1.0, "Solidity")
             .show(ui)
             .on_hover_text(
