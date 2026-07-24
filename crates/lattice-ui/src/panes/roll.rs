@@ -33,11 +33,17 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// the ribbon it wraps is fat or a hairline.
 pub(super) const BORDER_PX: f32 = 1.0;
 
-/// How thick the white glow line outside the black outline is. Thinner than
-/// the border on purpose: it is a bright highlight riding the note's outer
-/// edge, not a second outline of its own. Also a fixed width — see
-/// [`BORDER_PX`].
-pub(super) const KEYLINE_PX: f32 = 0.6;
+/// How thick the white glow line outside the black outline is — a bright
+/// highlight riding the note's outer edge. A fixed width, like [`BORDER_PX`].
+///
+/// A full logical pixel, not less, and that floor is deliberate: the glow is
+/// the brightest thing on a note, and a *bright* sub-pixel line shimmers as it
+/// scrolls, its peak intensity wobbling with every sub-pixel step across the
+/// grid (worst on a Hi-DPI display, where a 0.6px line is barely over one
+/// physical pixel). At a full pixel the coverage stays put and the highlight
+/// holds still. The wider black outline and the note's own outline are already
+/// past this floor, which is why the glow was the one seen to flicker.
+pub(super) const KEYLINE_PX: f32 = 1.0;
 
 /// The roll's glow reads this much brighter than the raw Edge fraction, so a
 /// modest Edge setting still lands a crisp highlight over a bright spectrogram.
@@ -554,12 +560,13 @@ mod tests {
     }
 
     /// The black outline is solid (opaque at the note's opacity) and the white
-    /// glow is thin and bright: reading outward, color, a crisp black line, then
-    /// a punchy highlight. The glow reads stronger than the raw Edge fraction —
-    /// that boost is the "more intense" ask — and its line is thinner than the
-    /// black it rides.
+    /// glow is bright and grid-stable: reading outward, color, a crisp black
+    /// line, then a punchy highlight. The glow reads stronger than the raw Edge
+    /// fraction — that boost is the "more intense" ask — and it is a full
+    /// logical pixel wide, so a bright line does not shimmer as the note
+    /// scrolls across the pixel grid.
     #[test]
-    fn the_black_outline_is_solid_and_the_glow_is_thin_and_bright() {
+    fn the_black_outline_is_solid_and_the_glow_is_bright_and_grid_stable() {
         // A modest Edge, below the point where the boosted glow clips to full,
         // so "brighter than the fraction" is a real comparison.
         let edge = 0.3;
@@ -575,10 +582,16 @@ mod tests {
             "the glow ({}) is no brighter than the Edge fraction {edge}",
             glow.color.a(),
         );
-        // Small: the glow line is thinner than the black outline it rides.
+        // Grid-stable: a full logical pixel, so a bright moving line holds its
+        // peak instead of twinkling. It never reads bolder than the outline.
         assert!(
-            glow.width < black.width,
-            "the glow ({}) is not thinner than the black outline ({})",
+            glow.width >= 1.0 - 1e-3,
+            "the glow ({}) is sub-pixel and will shimmer when scrolling",
+            glow.width,
+        );
+        assert!(
+            glow.width <= black.width + 1e-3,
+            "the glow ({}) is bolder than the black outline ({})",
             glow.width,
             black.width,
         );
