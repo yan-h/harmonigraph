@@ -5,7 +5,7 @@ use super::{display_note_name, learn_pulse, visibility_floor};
 use crate::{theme, SharedState};
 use egui::Sense;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{derive_scene, Camera, Projection, TrailMark};
+use lattice_scene::{derive_scene, Camera, Projection, SevensLabel, TrailMark};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -53,7 +53,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         };
     }
 
-    let scene = derive_scene(
+    let mut scene = derive_scene(
         &state.tracker,
         &state.tuning,
         &state.view,
@@ -62,6 +62,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         state.hovered,
         now,
     );
+    // The ground the sevens knockout clears to. Only the shell knows what
+    // this pass is composited over -- the dock's tab body here, the render
+    // layout's own background offline -- so it is carried on SharedState
+    // rather than assumed by the scene.
+    scene.background = state.background;
 
     // Picking updates the *shared* hover state, one frame behind the scene
     // it was derived from (imperceptible, standard for immediate mode).
@@ -170,16 +175,58 @@ pub(super) fn draw_node_labels(
         };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         let outline = theme::well().gamma_multiply(strength);
-        let name = display_note_name(node.lattice_pos, view.meantone);
-        let name_bottom = draw_stacked_name(
-            ui.painter(),
-            center,
-            name,
-            theme::text().gamma_multiply(strength),
-            outline,
-            scale,
-        );
-        if view.show_cents {
+        // Off-sheet nodes draw at their own size (ViewConfig::sevens_size),
+        // and their text goes with them — a full-size label on a half-size
+        // node reads as a label with a node attached. Floored so the
+        // smallest sheet is still legible rather than merely present.
+        let scale = scale * node.scale.max(0.6);
+        // What an off-sheet node says, and whether it says anything: its
+        // NAME is shared with the node two fifths down and is the same
+        // string on every sheet, so it is the one thing not worth the
+        // biggest glyph on the node. See SevensLabel.
+        let sevens = if node.on_home { SevensLabel::Name } else { view.sevens_label };
+        let name_bottom = match sevens {
+            SevensLabel::None => 0.0,
+            SevensLabel::Cents => draw_plain_name(
+                ui.painter(),
+                center,
+                &format!("{:.0}", node.cents),
+                theme::text().gamma_multiply(strength),
+                outline,
+                scale,
+            ),
+            SevensLabel::Name | SevensLabel::Comma => {
+                let name = display_note_name(node.lattice_pos, view.meantone);
+                let bottom = draw_stacked_name(
+                    ui.painter(),
+                    center,
+                    name,
+                    theme::text().gamma_multiply(strength),
+                    outline,
+                    scale,
+                );
+                if sevens == SevensLabel::Comma {
+                    // The signed distance to the home-sheet node wearing
+                    // this very name — the septimal comma, and the only
+                    // part of the label that differs between sheets.
+                    draw_plain_name(
+                        ui.painter(),
+                        center + egui::vec2(0.0, bottom + CENTS_GAP * scale),
+                        &format!("{:+.0}", node.comma),
+                        theme::armed().gamma_multiply(strength),
+                        outline,
+                        scale * 0.72,
+                    ) + bottom
+                        + CENTS_GAP * scale
+                } else {
+                    bottom
+                }
+            }
+        };
+        // The cents line is the home sheet's business: off the home sheet
+        // the scheme above has already chosen what number (if any) belongs
+        // under the name, and stacking a second one would bury the node.
+        if view.show_cents && (node.on_home || sevens == SevensLabel::Name) {
             let text = format!("{:.2}", node.cents);
             let font = egui::FontId::monospace(CENTS_SIZE * scale);
             // Hang the readout off the name's INK, not its galley box: a
@@ -292,6 +339,35 @@ pub(crate) fn draw_stacked_name(
         bottom = bottom.max(direction * rise + ink_below(text, &mark_font, size));
     }
     bottom
+}
+
+/// One line of centered label text, measured like [`draw_stacked_name`] so
+/// the two can be stacked against each other: returns how far its ink reaches
+/// below `anchor.y`. Used for the label lines that are numbers rather than
+/// note names — an off-sheet node's cents, and its comma (see
+/// [`SevensLabel`](lattice_scene::SevensLabel)).
+fn draw_plain_name(
+    painter: &egui::Painter,
+    anchor: egui::Pos2,
+    text: &str,
+    color: egui::Color32,
+    outline: egui::Color32,
+    scale: f32,
+) -> f32 {
+    let font = egui::FontId::monospace(NAME_SIZE * scale);
+    let size = painter
+        .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
+        .size();
+    outlined_text(
+        painter,
+        anchor,
+        egui::Align2::CENTER_CENTER,
+        text.to_owned(),
+        font.clone(),
+        color,
+        outline,
+    );
+    painter_ink(painter, text, &font).max.y - size.y / 2.0
 }
 
 /// The box the glyphs of `text` actually cover, relative to the galley's own

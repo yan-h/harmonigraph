@@ -113,6 +113,12 @@ pub fn render(
         settings.layout.background.1,
         settings.layout.background.2,
     );
+    // The same color as the scene's knockout ground. Offline clears to the
+    // layout's background and paints the panes over it, rather than onto the
+    // dock's panel — so without this the sevens gutter would clear to a
+    // panel-colored disc several shades too light, and only in exported
+    // video, which is the worst place to find out.
+    state.set_background(settings.layout.background);
 
     let frames = settings.frame_count();
     let step = 1.0 / settings.fps;

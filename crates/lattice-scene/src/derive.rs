@@ -112,6 +112,15 @@ pub fn derive_scene(
     let center = view.center();
     let node_idle = idle_color(view);
     let live_extremes = held_extremes(tracker, view.highlight_extremes);
+    // Sanitized once, outside the node loop. Capped at 1: this axis makes
+    // off-sheet nodes SMALLER, never larger, so the home sheet stays the
+    // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
+    // keeps a sheet from collapsing to an invisible speck at extent 4.
+    let sevens_size = view.sevens_size.clamp(0.15, 1.0);
+    // Bounded well inside the billboard: the quad reaches QUAD_MARGIN (1.6)
+    // in uv, and the gutter has to finish inside it or it would be clipped
+    // square instead of ending as a circle.
+    let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
 
     // Each voice's color, computed once here rather than re-running the
     // LCH->sRGB conversion on every node the voice matches. It depends only on
@@ -200,6 +209,51 @@ pub fn derive_scene(
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
         let world_pos = lattice_to_world(centered, view.spacing);
+
+        // The sevens layer: how far off the home sheet this node sits
+        // decides how small it draws and whether it carries a comma.
+        // Distance, not signed depth — the home sheet is the ground, and a
+        // sheet in front of it is no more the subject than one behind (see
+        // `ViewConfig::sevens_size`).
+        let sheets = centered.sevens.unsigned_abs();
+        let (scale, comma) = if sheets == 0 {
+            (1.0, 0.0)
+        } else {
+            // The node this one shares a spelling with, on the home sheet:
+            // the letter walk uses `threes - 2*sevens`, so undoing the
+            // sevens term two fifths at a time lands on the same name.
+            let namesake =
+                LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
+            (
+                sevens_size.powi(sheets as i32),
+                wrapped_cents(node_pc, tuning.pitch_class(namesake)),
+            )
+        };
+        // EVERY sounding node clears what is behind it, the home sheet
+        // included. Leaving the home sheet out is what let the sheets
+        // behind it show straight through the gaps in a home node's body —
+        // the core is small and soft and the octave band is a thin annulus,
+        // so "drawn over" covers very little — and neither sheet then read
+        // as being in front of the other.
+        //
+        // The home sheet's clearing cuts the grid lines as well as the
+        // sheets behind it — a sounding node sits in a clean gap in the
+        // lattice rather than on top of it. Nothing to clear at all when
+        // the window holds no depth.
+        //
+        // The WIDTH is a constant of the view; the STRENGTH is the note's
+        // envelope, applied in the shader against the same `activation` it
+        // paints the node with, so a clearing fades out exactly as its note
+        // does. Scaling the width by the envelope instead leaves the
+        // clearing fully opaque for the whole release and only narrows its
+        // soft edge, so the hole hangs around at full strength and then
+        // vanishes the instant the voice is pruned.
+        let gutter = if activation > 0.0 && view.extent_sevens != 0 {
+            sevens_gutter
+        } else {
+            0.0
+        };
+
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
@@ -210,6 +264,9 @@ pub fn derive_scene(
             outlined,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
+            scale,
+            gutter,
+            comma,
             cents: node_pc.to_cents(),
             melody_slots: melody.slots,
             bass_slots: bass.slots,
@@ -268,11 +325,27 @@ pub fn derive_scene(
         trail_strength: view.trail_strength.clamp(0.0, 1.0),
         mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
         mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
+        sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
+        background: crate::skin::panel_color(),
         pitch_lut: pitch_ramp_lut(),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
+    }
+}
+
+/// Signed cents from `to` to `from`, folded into ±600 — the short way round
+/// the octave. Pitch classes wrap, so the raw difference between a node and
+/// its namesake can come out an octave off and read as a 1173-cent "comma".
+fn wrapped_cents(from: lattice_core::PitchClass, to: lattice_core::PitchClass) -> f32 {
+    let d = from.to_cents() - to.to_cents();
+    if d > 600.0 {
+        d - 1200.0
+    } else if d < -600.0 {
+        d + 1200.0
+    } else {
+        d
     }
 }
 
@@ -285,10 +358,16 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 /// sheet draws an idle grid.
 ///
 /// The one thing that lights is a dashed sevens-axis link, as the chain
-/// from a sounding off-sheet note down to the home sheet — so a note on
-/// another sheet hangs from something visible instead of floating. That is
-/// about ONE note's depth, not a relationship between two: in-plane lines
-/// no longer brighten because the notes at both ends happen to sound.
+/// from a FLOATING sounding off-sheet note down to the home sheet — so a
+/// note on another sheet hangs from something visible instead of floating.
+/// That is about ONE note's depth, not a relationship between two: in-plane
+/// lines no longer brighten because the notes at both ends happen to sound.
+///
+/// A chain runs only through silence, and stops at the first sounding note
+/// under it: a note already sitting over a sounding one is connected to it
+/// visibly, by being the same site a step apart, and the line would only
+/// say so twice. Lit or not, a link keeps the lattice's own color — it says
+/// where a note hangs from, not what the note is.
 pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
     let base = Vec4::from_array(view.grid_color);
@@ -343,26 +422,42 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
             // depth link from an in-sheet line, not a style choice.
             let dashed = along_sevens || view.grid_dashed;
 
-            // A sevens link lights as part of the chain from any sounding
-            // node beyond it (away from the home sheet) down to the home
-            // sheet, so an off-sheet note always hangs from a visible chain
-            // even while the notes under it are silent. Nothing else
-            // lights.
+            // A sevens link lights as part of the chain hanging a sounding
+            // off-sheet note from something visible: it runs from that note
+            // down toward the home sheet — and only through SILENCE. The
+            // moment there is a sounding note under it to hang from, the
+            // chain has done its job and stops.
+            //
+            // Drawing it anyway is what made a 7-limit note sitting over a
+            // sounding one wear a dash it did not need: the two are already
+            // connected, visibly, by being the same site one step apart, and
+            // the line only says it a second time. It is the FLOATING note —
+            // nothing sounding beneath it anywhere down the column — that
+            // has no anchor without one.
             let mut lit = 0.0f32;
-            let mut lit_color = Vec4::ZERO;
             if along_sevens {
-                let (lo, hi) = if p.sevens >= view.center_sevens {
-                    (p.sevens + 1, view.center_sevens + view.extent_sevens)
-                } else {
-                    (view.center_sevens - view.extent_sevens, p.sevens)
+                let level = |s: i32| {
+                    node_at(LatticePos::new(p.threes, p.fives, s))
+                        .map_or(0.0, |n| n.activation)
                 };
-                for s in lo..=hi {
-                    if let Some(n) = node_at(LatticePos::new(p.threes, p.fives, s)) {
-                        if n.activation > lit {
-                            lit = n.activation;
-                            lit_color = n.color;
-                        }
-                    }
+                // `p` is the link's lower index; which of its ends is the
+                // one nearer home flips with the side of the axis, and so
+                // does which direction "beyond" runs.
+                let (beyond, toward_home) = if p.sevens >= view.center_sevens {
+                    (
+                        p.sevens + 1..=view.center_sevens + view.extent_sevens,
+                        view.center_sevens..=p.sevens,
+                    )
+                } else {
+                    (
+                        view.center_sevens - view.extent_sevens..=p.sevens,
+                        p.sevens + 1..=view.center_sevens,
+                    )
+                };
+                // Inclusive of the link's own near end: a note directly on
+                // top of a sounding one needs no line at all.
+                if !toward_home.into_iter().any(|s| level(s) > 0.0) {
+                    lit = beyond.into_iter().map(level).fold(0.0f32, f32::max);
                 }
             }
 
@@ -371,11 +466,21 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
             if idle <= 0.0 && lit <= 0.0 {
                 continue;
             }
+            // Inset each end by ITS OWN node's size: a sevens chain runs
+            // between sheets that draw at different sizes, and one inset for
+            // both ends would leave the small end ringed by a gap far wider
+            // than the node it clears.
             let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
             grid.push(EdgeInstance {
-                a: node.world_pos + dir * inset,
-                b: neighbor.world_pos - dir * inset,
-                color: base.lerp(lit_color, lit),
+                a: node.world_pos + dir * inset * node.scale,
+                b: neighbor.world_pos - dir * inset * neighbor.scale,
+                // The lattice's own color, always. A lit link is the same
+                // structural line as an unlit one, merely brighter — it
+                // says WHERE a note hangs from, not what the note is, and
+                // the note's color is already on the node at each end.
+                // Taking the note's hue made the chain read as a third
+                // sounding thing strung between two others.
+                color: base,
                 strength: idle + (GRID_LIT_OPACITY - idle) * lit,
                 dashed,
             });

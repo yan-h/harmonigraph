@@ -1412,3 +1412,326 @@ fn clearing_the_history_wipes_every_mark() {
         .iter()
         .all(|n| n.trail == 0.0));
 }
+
+/// A tracker with one note held from time 0.
+fn held(note: u8) -> NoteTracker {
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    tracker
+}
+
+fn node_at(scene: &Scene, pos: LatticePos) -> &NodeInstance {
+    scene.nodes.iter().find(|n| n.lattice_pos == pos).unwrap()
+}
+
+#[test]
+fn off_sheet_nodes_shrink_away_from_the_home_sheet_both_ways() {
+    // Size says DISTANCE from the home sheet, not depth toward the eye: a
+    // sheet in front shrinks exactly as much as one behind. The home sheet
+    // is the ground the music is read against and stays full size.
+    let view = ViewConfig {
+        extent_sevens: 2,
+        sevens_size: 0.5,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(node_at(&scene, LatticePos::new(0, 0, 0)).scale, 1.0);
+    for sevens in [-1, 1] {
+        assert_eq!(node_at(&scene, LatticePos::new(0, 0, sevens)).scale, 0.5);
+    }
+    for sevens in [-2, 2] {
+        assert_eq!(node_at(&scene, LatticePos::new(0, 0, sevens)).scale, 0.25);
+    }
+}
+
+#[test]
+fn sevens_size_never_enlarges_and_never_vanishes() {
+    // The axis only ever makes off-sheet nodes SMALLER (a value above 1
+    // would put the sevens layer in front of the picture it annotates), and
+    // never small enough to disappear at the far extents.
+    let scene_with = |size: f32| {
+        let view = ViewConfig { extent_sevens: 4, sevens_size: size, ..ViewConfig::default() };
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &FrameParams::default(), 0.0)
+    };
+    let huge = scene_with(4.0);
+    assert_eq!(node_at(&huge, LatticePos::new(0, 0, 4)).scale, 1.0, "clamped to no growth");
+    let tiny = scene_with(0.0);
+    assert!(
+        node_at(&tiny, LatticePos::new(0, 0, 4)).scale > 0.0001,
+        "the farthest sheet still draws something"
+    );
+}
+
+#[test]
+fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
+    // The knockout is not an off-sheet ornament, it is how one sheet hides
+    // another — so the home sheet needs one too, or the sheets behind it
+    // show straight through the gaps in a home node's body (a small soft
+    // core and a thin gapped annulus cover very little) and neither sheet
+    // reads as being in front. Which layer the clearing is DRAWN in differs
+    // — the home sheet's goes ahead of the grid, see the renderer — but
+    // that is not this layer's business.
+    let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..ViewConfig::default() };
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+
+    // C sounds, so every node whose pitch class is C lights — on the home
+    // sheet and off it. All of them clear; the silent ones do not.
+    let mut lit_home = 0;
+    let mut lit_off = 0;
+    for node in &scene.nodes {
+        if node.activation > 0.0 {
+            assert_eq!(node.gutter, 0.2, "a sounding node clears, wherever it is");
+            if node.on_home {
+                lit_home += 1;
+            } else {
+                lit_off += 1;
+            }
+        } else {
+            assert_eq!(node.gutter, 0.0, "a silent node punches nothing");
+        }
+    }
+    assert!(lit_home > 0 && lit_off > 0, "the case needs both kinds lit");
+}
+
+#[test]
+fn a_flat_lattice_has_nothing_to_clear() {
+    // With the sevenths extent at 0 there is only the home sheet, so there
+    // is nothing behind anything and no reason to punch a hole in the grid
+    // — which is what a clearing with nothing under it would amount to.
+    // This is the out-of-the-box case, so it has to cost nothing.
+    let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..ViewConfig::default() };
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "something is lit");
+    for node in &scene.nodes {
+        assert_eq!(node.gutter, 0.0);
+    }
+}
+
+#[test]
+fn a_releasing_note_keeps_its_gutters_width() {
+    // `gutter` is the clearing's WIDTH, and it must not follow the
+    // envelope: the shader fades the clearing's STRENGTH by the same
+    // `activation` it paints the node with, and doing both would shrink
+    // the hole as it faded.
+    //
+    // The regression this pins is the other way round, and much worse.
+    // Scaling the width alone (the first cut) leaves the clearing fully
+    // opaque for the entire release and merely hardens its soft edge — so
+    // the hole sits there at full strength while its note fades away under
+    // it, then disappears the instant the voice is pruned. It reads as a
+    // pop, which is exactly what it is.
+    let view = ViewConfig {
+        extent_sevens: 1,
+        sevens_gutter: 0.2,
+        ..ViewConfig::default()
+    };
+    let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
+    let tuning = Tuning::default();
+    let mut tracker = held(60);
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: NoteEventKind::Off,
+    });
+
+    let off_sheet = |now: f64| {
+        let scene = scene_of(&tracker, &tuning, &view, &frame, now);
+        *scene
+            .nodes
+            .iter()
+            .find(|n| n.activation > 0.0 && n.lattice_pos.sevens != 0)
+            .expect("a lit off-sheet node")
+    };
+    // A quarter and three quarters of the way through the release: the note
+    // is measurably dimmer, and the clearing is exactly as wide.
+    let early = off_sheet(0.25);
+    let late = off_sheet(0.75);
+    assert!(late.activation < early.activation, "the note really is fading");
+    assert_eq!(early.gutter, 0.2);
+    assert_eq!(late.gutter, 0.2, "the clearing holds its width through the fade");
+}
+
+#[test]
+fn the_comma_measures_the_node_against_its_own_namesake() {
+    // `note_name` walks the fifths with `threes + fives*4 - sevens*2` and
+    // adds no septimal mark, so a sevens step spells exactly like two
+    // fifths down. The comma is the distance to THAT node — the septimal
+    // comma, 64/63, ~27 cents at just intonation.
+    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
+    let tuning = Tuning::just();
+    let scene =
+        scene_of(&NoteTracker::new(), &tuning, &view, &FrameParams::default(), 0.0);
+
+    let seventh = LatticePos::new(0, 0, 1);
+    let namesake = LatticePos::new(-2, 0, 0);
+    // The premise: the two really do carry the same name.
+    assert_eq!(seventh.note_name().to_string(), namesake.note_name().to_string());
+    let comma = node_at(&scene, seventh).comma;
+    assert!(
+        (comma - -27.26).abs() < 0.05,
+        "7/4 sits a septimal comma below 16/9, got {comma}"
+    );
+    // The other direction is the same distance the other way, and the home
+    // sheet has no namesake to measure against.
+    let below = node_at(&scene, LatticePos::new(0, 0, -1)).comma;
+    assert!((below - 27.26).abs() < 0.05, "got {below}");
+    assert_eq!(node_at(&scene, LatticePos::ORIGIN).comma, 0.0);
+}
+
+#[test]
+fn the_comma_takes_the_short_way_round_the_octave() {
+    // Pitch classes wrap, so a raw subtraction can come out an octave off
+    // and report a 1173-cent "comma". Two sevens steps land far enough
+    // round the circle to catch it.
+    let view = ViewConfig { extent_sevens: 3, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::just(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    for sevens in [-3, -2, -1, 1, 2, 3] {
+        let comma = node_at(&scene, LatticePos::new(0, 0, sevens)).comma;
+        assert!(
+            comma.abs() <= 600.0,
+            "sevens {sevens}: comma {comma} is the long way round"
+        );
+    }
+}
+
+#[test]
+fn the_knockout_clears_to_the_ground_not_to_black() {
+    // The gutter has no color of its own, so a premultiplied layer would
+    // knock out to BLACK — and this skin's panel is several shades lighter
+    // than black, which is exactly what made the cleared disc read as a
+    // dark plate sitting on the picture instead of a hole through it. The
+    // scene therefore carries the ground, and it must be the panel the
+    // dock paints under every pane, not zero.
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &ViewConfig::default(),
+        &FrameParams::default(),
+        0.0,
+    );
+    let panel = crate::skin::active_skin().panel;
+    assert_eq!(scene.background, crate::skin::ground_color((panel[0], panel[1], panel[2])));
+    assert!(scene.background.truncate().length() > 0.0, "not black");
+    assert_eq!(scene.background.w, 1.0, "opaque, or it would not cover");
+}
+
+#[test]
+fn ground_color_keeps_srgb_bytes_as_they_are() {
+    // A straight divide by 255, NOT a gamma decode: every color the shader
+    // handles is sRGB-encoded 0..1 (the offscreen target is a plain Unorm
+    // format), so decoding here would clear the gutter to a ground far
+    // darker than the pane it is supposed to disappear into.
+    let c = crate::skin::ground_color((24, 25, 29));
+    assert!((c.x - 24.0 / 255.0).abs() < 1e-6);
+    assert!((c.y - 25.0 / 255.0).abs() < 1e-6);
+    assert!((c.z - 29.0 / 255.0).abs() < 1e-6);
+}
+
+/// A sevens link is a tether for a note with nothing under it. Once there
+/// is a sounding note beneath to hang from, the chain has done its job —
+/// the two are already connected, visibly, by being one site a step apart.
+#[test]
+fn a_chain_stops_at_the_first_sounding_note_under_it() {
+    let view = ViewConfig {
+        extent_threes: 0,
+        extent_fives: 0,
+        extent_sevens: 2,
+        ..ViewConfig::default()
+    };
+    // 12-TET default: a sevens step is 1000¢, so (0,0,1) is MIDI 70's
+    // pitch class and (0,0,2) is MIDI 68's. The home node is C.
+    let chain = |notes: &[u8]| -> Vec<f32> {
+        let mut tracker = NoteTracker::new();
+        for &note in notes {
+            tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let scene =
+            scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+        // The two links of the upward column, low end first.
+        let mut links: Vec<&EdgeInstance> = scene
+            .grid
+            .iter()
+            .filter(|e| (e.b.z - e.a.z).abs() > 0.25 && e.a.z >= -0.01)
+            .collect();
+        links.sort_by(|a, b| a.a.z.total_cmp(&b.a.z));
+        // An unlit sevens link is not merely faint, it is never shipped:
+        // off-sheet lines have no idle strength, so derive_grid drops the
+        // instance entirely. Presence IS the assertion.
+        links.iter().map(|e| e.a.z).collect()
+    };
+
+    // Floating: only the top of the column sounds, so the whole chain
+    // draws — that note has nothing else to hang from.
+    let floating = chain(&[68]);
+    assert_eq!(floating.len(), 2, "both links: {floating:?}");
+
+    // Anchored one step down: the note at sheet 1 sounds too, so the link
+    // between 1 and 2 is redundant and goes. The link from home up to the
+    // sounding sheet-1 note stays — nothing is sounding under THAT.
+    let anchored = chain(&[68, 70]);
+    assert_eq!(anchored.len(), 1, "only home->1 survives: {anchored:?}");
+    // Endpoints are inset from the node centers, so this is "starts on the
+    // home sheet" rather than "starts at exactly zero".
+    assert!(anchored[0] < 0.5, "and it is the one rising from home: {anchored:?}");
+
+    // Anchored on the home sheet itself: nothing in the column needs a
+    // tether at all, so no link is drawn.
+    let grounded = chain(&[68, 60]);
+    assert!(grounded.is_empty(), "{grounded:?}");
+}
+
+#[test]
+fn a_lit_chain_keeps_the_lattices_own_color() {
+    // The chain is structure, not a note: it says WHERE a note hangs from,
+    // and the note's own color is already on the node at each end. Taking
+    // the note's hue made it read as a third sounding thing strung between
+    // two others.
+    let view = ViewConfig {
+        extent_threes: 0,
+        extent_fives: 0,
+        extent_sevens: 1,
+        ..ViewConfig::default()
+    };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 70,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    let scene =
+        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    let lit: Vec<&EdgeInstance> = scene
+        .grid
+        .iter()
+        .filter(|e| (e.b.z - e.a.z).abs() > 0.25 && e.strength > 0.5)
+        .collect();
+    assert!(!lit.is_empty(), "the chain has to be lit for this to mean anything");
+    let base = Vec4::from_array(view.grid_color);
+    for link in lit {
+        assert_eq!(link.color, base, "a lit link keeps the grid color");
+    }
+}
