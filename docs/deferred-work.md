@@ -130,10 +130,34 @@ live/baked split is by RELEASE time, not merely by window position.
 to call mid-frame, or whether to drive `epaint::Tessellator` directly. The roll
 draws no text, so either way there is no font-atlas plumbing to arrange.
 
+**Measured afterwards — read this before building it.** Tessellation is NOT
+the binding cost. With the frame broken down (`tess`, `buf up`, `verts` in the
+performance overlay) the roll turned out to cost ~0.5 ms of tessellation and
+**4-5 ms of vertex upload**: 20k vertices idle, 100k+ with notes on screen,
+arriving in only ~20 primitives — so the batching is fine and the volume is
+the problem. egui re-uploads every vertex every frame, immediate-mode, and
+`Shape::Mesh` is no exception.
+
+**Baking into cached meshes therefore saves the 0.5 ms and none of the 4-5.**
+It is the right idea in the wrong place. What would actually pay is owning the
+buffers: draw the roll through a wgpu paint callback like the lattice does,
+with persistent vertex buffers updated incrementally, so scrolled content is
+uploaded once rather than every frame. The baking design below is the geometry
+half of that job and is worth keeping for it — the chunking, the absolute-time
+keys, the far-edge trap are all still correct — but on its own it fixes the
+smaller number.
+
+Cheaper first steps that attack the volume directly: skip the two bloom bands
+on ribbons too small to show them (a note is 5 stroked rounded rects with
+bloom on, 3 without, 1 with the keyline off too), and note that
+`roll_rounding` at 0 removes the corner arcs, which are most of a rect's
+vertices.
+
 **Value / effort.** Medium-high effort, comparable to the spectrogram ring.
-Payoff is large and structural: roll tessellation becomes O(notes arriving)
-instead of O(notes visible), `roll_seconds` stops being a performance setting,
-and dense passages stop costing frames. Strictly better than the geometric-LOD
+Payoff as originally scoped is now known to be small: roll tessellation
+becomes O(notes arriving) instead of O(notes visible), `roll_seconds` stops being a
+performance setting for tessellation — but not for upload, which is the cost
+that matters. Strictly better than the geometric-LOD
 alternative (skip bands on tiny ribbons), which trades a little appearance for
 a bounded cost and would be subsumed by this. **There is a 5x lever available
 without any code in the meantime:** Bloom off takes a note from five stroked
