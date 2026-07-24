@@ -101,12 +101,7 @@ impl BaseviewView {
             let ns_filenames_pboard_type = unsafe { NSFilenamesPboardType };
             view.view.registerForDraggedTypes(&NSArray::from_slice(&[ns_filenames_pboard_type]));
 
-            let timer_view = Weak::new(view.view);
-            view.frame_timer.set(TimerHandle::new(0.015, move || {
-                if let Some(view) = timer_view.load() {
-                    Self::trigger_frame(view.inner_ref());
-                }
-            }));
+            Self::arm_frame_timer(view.view, options.frame_interval);
 
             let notifier_view = Weak::new(view.view);
             let observer = NotificationCenterObserver::register_window_key_change(move |n| {
@@ -202,6 +197,21 @@ impl BaseviewView {
 
         handler.on_event(&mut this.into(), event);
         Self::send_deferred_events(this, handler.as_mut());
+    }
+
+    /// (Re)arm the frame timer at `interval` seconds.
+    ///
+    /// Storing the new handle drops the old one, whose `Drop` removes it from
+    /// the run loop — so this replaces the cadence rather than stacking a
+    /// second timer on top of it, and is safe to call from inside a frame.
+    pub(crate) fn arm_frame_timer(view: &View<Self>, interval: f64) {
+        let interval = interval.clamp(crate::MIN_FRAME_INTERVAL, crate::MAX_FRAME_INTERVAL);
+        let timer_view = Weak::new(view);
+        view.inner_ref().frame_timer.set(TimerHandle::new(interval, move || {
+            if let Some(view) = timer_view.load() {
+                Self::trigger_frame(view.inner_ref());
+            }
+        }));
     }
 
     fn trigger_frame(this: ViewRef<Self>) {
@@ -421,6 +431,39 @@ impl ViewImpl for BaseviewView {
     }
 
     fn scroll_wheel(this: ViewRef<Self>, event: &NSEvent) {
+        // Report where the wheel happened before reporting the wheel itself.
+        //
+        // `scrollWheel:` carries a location but no CursorMoved, and consumers
+        // route a wheel by where they last saw the pointer — egui hands it to
+        // whatever its stored pointer position is over. That position can be
+        // absent or stale, because `mouseMoved:` only arrives through the
+        // tracking area (`ActiveInActiveApp`) and `mouseExited:` clears it: a
+        // window opened with the cursor already inside it, or one whose app was
+        // not frontmost while the cursor moved in, has never been told where the
+        // pointer is. The wheel then did nothing at all, or landed on whatever
+        // was under the LAST known position — scrolling one pane while the
+        // cursor sat over another.
+        //
+        // The event's own location is always right, so send it first and the
+        // wheel is applied where the cursor actually is. Gated on the location
+        // being inside the view so inertial scrolling that outlives the pointer
+        // leaving cannot resurrect it.
+        let point = this.view.convertPoint_fromView(event.locationInWindow(), None);
+        let bounds = this.view.bounds();
+        let inside = point.x >= bounds.origin.x
+            && point.y >= bounds.origin.y
+            && point.x <= bounds.origin.x + bounds.size.width
+            && point.y <= bounds.origin.y + bounds.size.height;
+        if inside {
+            Self::trigger_event(
+                this,
+                Event::Mouse(MouseEvent::CursorMoved {
+                    position: Point { x: point.x, y: point.y },
+                    modifiers: make_modifiers(event.modifierFlags()),
+                }),
+            );
+        }
+
         let x = event.scrollingDeltaX() as f32;
         let y = event.scrollingDeltaY() as f32;
 

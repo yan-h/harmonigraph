@@ -96,6 +96,10 @@ pub struct EditorShared {
     audio_buf: Vec<f32>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
+    /// The frame interval currently armed on the window, so an unchanged
+    /// cadence doesn't rebuild the run-loop timer every frame. `None` until
+    /// the first frame sets one.
+    frame_interval: Option<f64>,
     /// Param key currently inside a begin_set/end_set automation gesture.
     gesture: std::cell::Cell<Option<lattice_ui::params::ParamKey>>,
     /// Take recording, driven from the Video pane's toggle.
@@ -132,6 +136,7 @@ impl EditorShared {
             drain_buf: Vec::new(),
             audio_buf: Vec::new(),
             last_frame: None,
+            frame_interval: None,
             gesture: std::cell::Cell::new(None),
             take,
             take_events,
@@ -372,6 +377,12 @@ fn frame(
     egui_state: &EguiState,
     context: &dyn GuiContext,
 ) {
+    // Everything the shell does before the UI runs: draining the MIDI and
+    // audio rings and reconciling the take. Timed separately because `ui cpu`
+    // starts at the dock build, so this whole stretch — which scales with the
+    // number of events arriving, i.e. exactly with how hard you are playing —
+    // sits outside every other CPU reading.
+    let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
 
     // One lock for the whole frame. Uncontended by design: the audio
@@ -397,7 +408,95 @@ fn frame(
         setter: &setter,
         gesture: &shared.gesture,
     };
+    // Last frame's costs that the shell measures and the UI cannot: they
+    // happen after `root_ui` returns.
+    shared.ui.tess_ms = queue.tess_ms();
+    shared.ui.egui_gpu_ms = queue.egui_gpu_ms();
+    shared.ui.acquire_ms = queue.acquire_ms();
+    shared.ui.tick_ms = queue.tick_ms();
+    shared.ui.render_ms = queue.render_ms();
+    shared.ui.upload_ms = queue.upload_ms();
+    shared.ui.texture_ms = queue.texture_ms();
+    shared.ui.prims = queue.prims();
+    shared.ui.verts = queue.verts();
+    shared.ui.encode_ms = queue.encode_ms();
+    shared.ui.submit_ms = queue.submit_ms();
+    shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
     lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
+
+    // Pace the window AFTER the UI has run, so a cap picked this frame takes
+    // effect on the next tick rather than the one after it.
+    let target = target_frame_interval(shared.ui.fps_cap, queue.display_max_fps());
+    if shared.frame_interval != Some(target) {
+        shared.frame_interval = Some(target);
+        queue.set_frame_interval(target);
+    }
+}
+
+/// The wgpu setup, which is `GraphicsConfig::default()` plus a request for
+/// timestamp queries so the performance overlay can report GPU time.
+///
+/// Requested only where the adapter already advertises them, because
+/// `request_device` FAILS on an unsupported feature — asking unconditionally
+/// would trade a missing readout for a plugin that won't open. Where they
+/// aren't granted the overlay simply says "n/a", as it already does for
+/// memory on platforms that won't report it.
+fn graphics_config() -> GraphicsConfig {
+    use egui_baseview::WgpuSetup;
+    use lattice_render::wgpu;
+
+    let mut config = GraphicsConfig::default();
+    if let WgpuSetup::CreateNew(setup) = &mut config.wgpu_options.wgpu_setup {
+        let base = setup.device_descriptor.clone();
+        setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
+            let mut descriptor = base(adapter);
+            descriptor.required_features |=
+                adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+            descriptor
+        });
+    }
+    config
+}
+
+/// Seconds between frame-timer ticks when the display won't say how fast it
+/// can go. Matches baseview's own default (~67 Hz).
+const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
+
+/// How much faster than the display to run the frame timer when uncapped.
+///
+/// The timer is a plain run-loop timer with no relation to vsync, so a frame
+/// is ready when it is ready and the display asks when it asks. Miss the
+/// question and you don't lose a little time, you lose a whole refresh — 144
+/// becomes 72 for that frame. Averaged over a second that reads as an
+/// unsteady 70-100, which is exactly what a 1.1x margin produced: 6.31 ms of
+/// timer against 6.94 ms of refresh leaves 9% for jitter and work spikes to
+/// eat, and they do.
+///
+/// 2x is deliberately generous. The extra ticks are not wasted frames: the
+/// surface presents with vsync, so a tick that arrives with the swapchain
+/// full simply blocks until a slot frees, and the display rate throttles the
+/// timer rather than the other way round. Oversampling buys the margin;
+/// vsync spends it.
+///
+/// The real fix is to stop guessing and drive frames from the display itself
+/// (`CVDisplayLink`), which is a much larger change to the vendored baseview.
+const DISPLAY_OVERSAMPLE: f64 = 2.0;
+
+/// The interval the window's frame timer should run at.
+///
+/// Two bounds, whichever is slower: the user's cap, and what the display can
+/// actually present. A cap above the refresh rate buys nothing but wasted
+/// frames, and a display faster than the cap is exactly what the cap is for.
+fn target_frame_interval(fps_cap: Option<f32>, display_max_fps: Option<f64>) -> f64 {
+    let from_display = match display_max_fps {
+        Some(hz) if hz.is_finite() && hz > 0.0 => 1.0 / (hz * DISPLAY_OVERSAMPLE),
+        _ => FALLBACK_FRAME_INTERVAL,
+    };
+    match fps_cap {
+        // Longer interval = slower rate, so `max` picks the binding bound.
+        Some(fps) if fps.is_finite() && fps > 0.0 => (1.0 / fps as f64).max(from_display),
+        _ => from_display,
+    }
 }
 
 pub fn create(
@@ -528,7 +627,7 @@ impl Editor for LatticeEditor {
                         .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
                         .unwrap_or(WindowScalePolicy::SystemScaleFactor),
                 )
-                .with_graphics_config(GraphicsConfig::default()),
+                .with_graphics_config(graphics_config()),
             WindowState {
                 shared: self.shared.clone(),
                 params: self.params.clone(),
@@ -639,7 +738,10 @@ impl Drop for LatticeEditorHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClockMapper, EditorShared};
+    use super::{
+        target_frame_interval, ClockMapper, EditorShared, DISPLAY_OVERSAMPLE,
+        FALLBACK_FRAME_INTERVAL,
+    };
     use lattice_core::notes::{NoteEvent, NoteEventKind};
 
     #[test]
@@ -719,5 +821,62 @@ mod tests {
         let mapped = clock.map(101.0, 9.0);
         // Offset moved only 5% of the way toward the new candidate.
         assert!((mapped - (101.0 - 93.0 + 0.005)).abs() < 1e-9, "got {mapped}");
+    }
+
+    #[test]
+    fn a_cap_sets_the_interval_it_names() {
+        // 30 fps on a 144 Hz display: the cap binds, exactly, with no
+        // rounding to whatever the timer used to tick at.
+        let interval = target_frame_interval(Some(30.0), Some(144.0));
+        assert!((interval - 1.0 / 30.0).abs() < 1e-12, "got {interval}");
+    }
+
+    #[test]
+    fn uncapped_runs_ahead_of_the_display() {
+        let interval = target_frame_interval(None, Some(144.0));
+        assert!((interval - 1.0 / (144.0 * DISPLAY_OVERSAMPLE)).abs() < 1e-12, "got {interval}");
+        assert!(
+            interval < 1.0 / 144.0,
+            "must oversample, not match, the refresh rate — matching it leaves no margin \
+             for jitter, and a missed refresh costs a whole frame",
+        );
+    }
+
+    #[test]
+    fn the_slower_of_cap_and_display_wins() {
+        // A cap above what the display can show buys nothing: pacing follows
+        // the 60 Hz panel, not the 144 the user asked to be allowed.
+        let interval = target_frame_interval(Some(144.0), Some(60.0));
+        let from_display = 1.0 / (60.0 * DISPLAY_OVERSAMPLE);
+        assert!((interval - from_display).abs() < 1e-12, "got {interval}");
+    }
+
+    #[test]
+    fn an_unknown_display_falls_back_rather_than_racing() {
+        assert_eq!(target_frame_interval(None, None), FALLBACK_FRAME_INTERVAL);
+        // A cap still binds when the display is unknown.
+        let interval = target_frame_interval(Some(30.0), None);
+        assert!((interval - 1.0 / 30.0).abs() < 1e-12, "got {interval}");
+    }
+
+    /// Nothing may talk the timer into spinning the run loop.
+    const MIN_SANE_INTERVAL: f64 = 1.0 / 1000.0;
+
+    #[test]
+    fn nonsense_caps_and_rates_do_not_produce_a_runaway_timer() {
+        // A hand-edited persist blob or a lying screen must not talk the
+        // timer into spinning; every one of these falls back to a sane rate.
+        // The invariant is "fall back to what the display asks for", not any
+        // particular number — spelled against the uncapped result so that
+        // retuning DISPLAY_OVERSAMPLE can't quietly turn this into a tautology.
+        for bad_cap in [0.0, -1.0, f32::NAN] {
+            let interval = target_frame_interval(Some(bad_cap), Some(60.0));
+            assert_eq!(interval, target_frame_interval(None, Some(60.0)), "cap {bad_cap}");
+            assert!(interval >= MIN_SANE_INTERVAL, "cap {bad_cap} gave {interval}");
+        }
+        for bad_hz in [0.0, -60.0, f64::NAN] {
+            let interval = target_frame_interval(None, Some(bad_hz));
+            assert_eq!(interval, FALLBACK_FRAME_INTERVAL, "hz {bad_hz}");
+        }
     }
 }

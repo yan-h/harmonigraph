@@ -141,17 +141,24 @@ pub enum SpectrogramColor {
     Mono,
     /// Black → deep red → orange → yellow → white. The familiar "heat"
     /// spectrogram; reads loudest as hottest.
+    ///
+    /// The aliases absorb palettes that used to exist — Pitch, which tinted
+    /// each cell with the lattice's own low-to-high pitch color, and Paper,
+    /// an inverted ramp for light backgrounds. Without them a blob still
+    /// naming one wouldn't just lose its palette: the parse would fail and
+    /// drop the WHOLE persist, layout and camera with it.
     #[default]
+    #[serde(alias = "Pitch", alias = "Paper")]
     Heat,
     /// Black → navy → blue → cyan → white. Cool counterpart to Heat.
     Ice,
     /// Black → violet → teal → green → yellow. A perceptually even ramp
     /// (viridis-like) where every step reads as an equal change.
     Aurora,
-    /// Each cell takes the lattice's own low-to-high pitch color, dimmed by
-    /// intensity — so the spectrogram speaks the same color language as the
-    /// nodes and the Pitch-colored roll.
-    Pitch,
+    /// Black → indigo → magenta → orange → cream. Warmer than [`Self::Aurora`]
+    /// and evenly stepped like it, where Heat spends most of its range in the
+    /// reds.
+    Magma,
 }
 
 /// What counts as "the take is done", and so when a video gets rendered.
@@ -408,11 +415,38 @@ pub struct SpectrumConfig {
     /// `show_roll`.)
     #[serde(default = "default_spectrogram_opacity")]
     pub spectrogram_opacity: f32,
-    /// Temporal smoothing of the heatmap, 0 = off. Blends each time column
-    /// with its neighbors (symmetric, so no directional smear) to average out
-    /// fast beating/chorus wobble, at the cost of some time-sharpness.
+    /// Give the heatmap its own dB window instead of sharing the curve's.
+    ///
+    /// Off — the default, and what the heatmap always did — means it reads
+    /// `floor_db`/`ceiling_db` like the curve. They answer different
+    /// questions, though: the curve wants a range that keeps peaks on the
+    /// pane, the heatmap one that separates quiet detail from the background,
+    /// and those rarely coincide. `serde(default)` is false, so an existing
+    /// blob keeps the shared behaviour it was saved with.
     #[serde(default)]
-    pub spectrogram_smoothing: f32,
+    pub spectrogram_own_range: bool,
+    /// The heatmap's own dB window, used only while `spectrogram_own_range`.
+    #[serde(default = "default_spectrogram_floor_db")]
+    pub spectrogram_floor_db: f32,
+    #[serde(default = "default_ceiling_db")]
+    pub spectrogram_ceiling_db: f32,
+    /// Contrast curve on the heatmap's 0..1 level: 1 is linear, below 1 lifts
+    /// quiet detail toward the bright end, above 1 pushes it into the dark.
+    ///
+    /// Separate from the dB window on purpose. Moving the floor DISCARDS
+    /// everything under it; gamma keeps the whole range and only changes how
+    /// it is spread, so background hiss can be pushed down without losing the
+    /// quiet partials just above it.
+    #[serde(default = "default_one")]
+    pub spectrogram_gamma: f32,
+}
+
+fn default_spectrogram_floor_db() -> f32 {
+    -60.0
+}
+
+fn default_one() -> f32 {
+    1.0
 }
 
 fn default_spectrogram_opacity() -> f32 {
@@ -557,7 +591,10 @@ impl Default for SpectrumConfig {
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
-            spectrogram_smoothing: 0.0,
+            spectrogram_own_range: false,
+            spectrogram_floor_db: default_spectrogram_floor_db(),
+            spectrogram_ceiling_db: default_ceiling_db(),
+            spectrogram_gamma: default_one(),
         }
     }
 }
@@ -603,6 +640,12 @@ pub struct AudioSpectrum {
     /// whole window. Self-heals on layout change / clear (it rebuilds), so it
     /// needs no explicit reset. See `panes::spectrogram::SpectrogramAgg`.
     spectrogram_agg: [Option<crate::panes::spectrogram::SpectrogramAgg>; 2],
+    /// Ring bookkeeping for the matching [`Self::spectrogram_tex`]: which
+    /// slabs its columns currently hold, so a new one can be written on its
+    /// own instead of repainting the whole heatmap. `None` whenever the
+    /// texture was built the full-width way (offline whole-song, or with
+    /// temporal smoothing on).
+    spectrogram_ring: [Option<crate::panes::spectrogram::SpectrogramRing>; 2],
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -648,6 +691,13 @@ pub(crate) struct SpectrogramCache {
     tex_span: f64,
     t0: f32,
     tn: f32,
+    /// Texel x of the first visible slab, and the texture's full width.
+    ///
+    /// A full-width build puts the visible slabs at 0 and is `tex_w` wide, so
+    /// these fall out of the mapping; the ring parks them at a rotating offset
+    /// inside a wider texture, and the quad's `u` needs to know where.
+    x0: f32,
+    tex_w: f32,
 }
 
 impl SpectrogramKey {
@@ -682,8 +732,17 @@ impl SpectrogramKey {
 }
 
 impl SpectrogramCache {
-    pub(crate) fn new(key: SpectrogramKey, t_origin: f64, tex_span: f64, t0: f32, tn: f32) -> Self {
-        SpectrogramCache { key, t_origin, tex_span, t0, tn }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        key: SpectrogramKey,
+        t_origin: f64,
+        tex_span: f64,
+        t0: f32,
+        tn: f32,
+        x0: f32,
+        tex_w: f32,
+    ) -> Self {
+        SpectrogramCache { key, t_origin, tex_span, t0, tn, x0, tex_w }
     }
 
     /// Whether a freshly computed key matches this cached build's — i.e. the
@@ -692,9 +751,16 @@ impl SpectrogramCache {
         &self.key == key
     }
 
-    /// The scalars the scrolling quad needs: `(t_origin, tex_span, t0, tn)`.
-    pub(crate) fn geometry(&self) -> (f64, f64, f32, f32) {
-        (self.t_origin, self.tex_span, self.t0, self.tn)
+    /// The scalars the scrolling quad needs.
+    pub(crate) fn geometry(&self) -> crate::panes::spectrogram::TexLayout {
+        crate::panes::spectrogram::TexLayout {
+            t_origin: self.t_origin,
+            tex_span: self.tex_span,
+            t0: self.t0,
+            tn: self.tn,
+            x0: self.x0,
+            tex_w: self.tex_w,
+        }
     }
 }
 
@@ -779,6 +845,7 @@ impl Default for AudioSpectrum {
             spectrogram_tex: [None, None],
             spectrogram_cache: [None, None],
             spectrogram_agg: [None, None],
+            spectrogram_ring: [None, None],
         }
     }
 }
@@ -792,10 +859,21 @@ impl AudioSpectrum {
         // The cached builds validate those textures; drop them together so a
         // stale key can never point at a released (or newly reuploaded) slot.
         self.spectrogram_cache = [None, None];
+        // Same again for the ring: it records which slabs the RELEASED
+        // texture's columns held. Kept across a context change it would write
+        // one fresh column into a brand new texture and call the other
+        // thousands valid — a heatmap of uninitialized memory.
+        self.spectrogram_ring = [None, None];
     }
 
-    /// Seconds between FFTs (20 Hz refresh).
-    const FFT_INTERVAL: f64 = 0.05;
+    /// Seconds between FFTs (50 Hz refresh).
+    ///
+    /// Raised from 50 ms once the heatmap stopped repainting itself for every
+    /// column (see `write_ring`): the cost of a column is now O(pitch pixels)
+    /// rather than O(pitch pixels x slabs), so the rate buys smoothness at the
+    /// newest edge almost for free. What it does still cost is REACH — see
+    /// [`Self::HISTORY_MAX`], which bounds the ring by memory, not by time.
+    const FFT_INTERVAL: f64 = 0.02;
     /// How long after the last samples the curve keeps drawing.
     const HOLD_SECONDS: f64 = 0.5;
     /// Peak-hold half-life in seconds.
@@ -861,10 +939,23 @@ impl AudioSpectrum {
     /// retained even at the maximum span.
     const HISTORY_MAX_SECONDS: f64 = 610.0;
     /// Backstop on the column count regardless of timing, and the real memory
-    /// bound — each column is a whole spectrum. At the FFT rate this is ~200 s,
-    /// so at a very long span the heatmap covers the most recent stretch while
-    /// the note roll still spans the whole window.
-    const HISTORY_MAX: usize = 4000;
+    /// bound — each column is a whole spectrum, so this is what decides how
+    /// much the plugin sits on.
+    ///
+    /// Derived from a memory budget rather than written as a column count, so
+    /// the FFT rate can move without silently changing the footprint. The
+    /// trade it makes explicit: at a fixed budget, a faster rate buys
+    /// smoothness at the newest edge and pays for it in REACH. The budget was
+    /// raised alongside the move to 50 Hz to keep ~3.5 minutes of history —
+    /// more than the 20 Hz build reached — rather than let the rate quietly
+    /// shorten it. Only the live preview is bounded this way; an offline
+    /// render precomputes the whole take.
+    ///
+    /// At a very long span the heatmap therefore covers the most recent
+    /// stretch while the note roll still spans the whole window.
+    const HISTORY_BUDGET_BYTES: usize = 160 * 1024 * 1024;
+    const HISTORY_MAX: usize =
+        Self::HISTORY_BUDGET_BYTES / (lattice_core::spectrum::SPECTRUM_BINS * 4);
 
     /// Append one raw spectrum to the ring, trimming anything past the
     /// backstop (`HISTORY_MAX_SECONDS` of age or `HISTORY_MAX` columns).
@@ -994,6 +1085,88 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
     dock: DockState<panes::Tab>,
+    /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
+    /// by the render callback and read by the performance overlay. 0 means no
+    /// reading — the device didn't grant timestamp queries, or none has landed
+    /// yet.
+    ///
+    /// An atomic rather than a return value because the measurement crosses a
+    /// boundary the call stack doesn't: it is produced inside egui-wgpu's
+    /// paint callback, several frames after the frame that asked for it. Same
+    /// shape the plugin already uses to publish its sample rate.
+    ///
+    /// Runtime-only, never persisted, and never read by the offline renderer —
+    /// which also never asks for the feature, so it has no timer to begin with.
+    pub(crate) lattice_stats: std::sync::Arc<lattice_render::LatticeStats>,
+    /// Milliseconds the shell spent tessellating egui's shapes last frame,
+    /// or 0 where the shell doesn't measure it (the standalone's eframe loop
+    /// isn't ours to instrument). Set by the shell before `root_ui`.
+    ///
+    /// Its own field rather than part of the frame's CPU time because it is
+    /// not the same work: `ui cpu` covers building the UI, which only APPENDS
+    /// shapes, and this covers turning those shapes into triangles afterwards.
+    /// A cost can be entirely in one and invisible in the other.
+    pub tess_ms: f32,
+    /// Milliseconds the GPU spent on egui's own render pass last frame, or 0
+    /// where the shell doesn't measure it. Set by the shell before `root_ui`.
+    ///
+    /// Disjoint from [`Self::gpu_ms`], which brackets only the lattice's own
+    /// passes: between them they cover the frame's GPU work, and the two were
+    /// separated because the lattice turned out to be the cheap half.
+    pub egui_gpu_ms: f32,
+    /// Milliseconds the shell spent on its own per-frame work before the UI
+    /// ran — draining the event rings and reconciling the take — or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// Separate from the frame's CPU time because that starts at the dock
+    /// build: this stretch scales with events ARRIVING rather than with what
+    /// is drawn, and there was no reading it could show up in.
+    pub shell_ms: f32,
+    /// Milliseconds the previous frame blocked acquiring the surface — the
+    /// vsync wait. Large here with every cost small means the frame is early,
+    /// not slow.
+    pub acquire_ms: f32,
+    /// Milliseconds the previous frame callback took end to end, or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// The other readings are stages of it. This is the total, and against the
+    /// interval between frames it answers what no stage can: whether a long
+    /// frame was SLOW, or just late being asked for.
+    pub tick_ms: f32,
+    /// Milliseconds of that callback spent inside the renderer. `tick_ms`
+    /// minus this is the egui half — the UI closure plus egui's own
+    /// end-of-pass work — so the two bracket the whole frame between them.
+    pub render_ms: f32,
+    /// The renderer's stages. `upload_ms` also covers paint callbacks'
+    /// `prepare`, so the lattice's own buffer writes are inside it.
+    pub upload_ms: f32,
+    /// Of the uploads, the TEXTURE half — the rest is buffer uploads, and
+    /// with them the paint callbacks' `prepare`.
+    pub texture_ms: f32,
+    /// How many primitives and vertices the previous frame uploaded — the
+    /// volume behind the upload cost, rather than another duration.
+    pub prims: u32,
+    pub verts: u32,
+    pub encode_ms: f32,
+    pub submit_ms: f32,
+    /// Upper bound on how often the UI is drawn, in frames per second;
+    /// `None` leaves it uncapped (as fast as the display can present).
+    /// Persisted.
+    ///
+    /// Read by the shells to pace themselves, and by [`root_ui`] only to
+    /// schedule repaints — never by any drawing code. The offline renderer
+    /// steps its own clock and never reaches `root_ui`, so a recorded frame
+    /// cannot depend on this and the determinism test stays honest.
+    ///
+    /// The repaint request alone cannot enforce this, and shells must not
+    /// rely on it: egui takes the SMALLEST delay any caller asks for in a
+    /// pass, and a zero-delay `request_repaint` (an input event, a hover
+    /// animation, the plugin's own MIDI-drain repaint) additionally forces
+    /// the following pass to zero. A cap expressed that way evaporates
+    /// exactly when the UI is busy — the case it exists for. The plugin
+    /// therefore drives its window's frame timer from this value, which is a
+    /// hard bound because a frame that is never asked for is never drawn.
+    pub fps_cap: Option<f32>,
     /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
     /// Runtime-only; filled and drawn by [`root_ui`], never by the offline
     /// renderer (so recorded frames stay deterministic).
@@ -1077,6 +1250,26 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
+            lattice_stats: {
+                let stats = lattice_render::LatticeStats::default();
+                stats
+                    .gpu_ms
+                    .store(lattice_render::GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
+                std::sync::Arc::new(stats)
+            },
+            tess_ms: 0.0,
+            egui_gpu_ms: 0.0,
+            shell_ms: 0.0,
+            acquire_ms: 0.0,
+            tick_ms: 0.0,
+            render_ms: 0.0,
+            upload_ms: 0.0,
+            texture_ms: 0.0,
+            prims: 0,
+            verts: 0,
+            encode_ms: 0.0,
+            submit_ms: 0.0,
+            fps_cap: None,
             perf: PerfStats::default(),
         }
     }
@@ -1106,6 +1299,7 @@ impl SharedState {
             camera_presets: self.camera_presets.clone(),
             spectrum: self.spectrum_config,
             render: self.render_config.clone(),
+            fps_cap: self.fps_cap,
         })
         .unwrap_or_default()
     }
@@ -1151,6 +1345,7 @@ impl SharedState {
             // octave numbers.
             self.spectrum_config.migrate_legacy();
             self.render_config = persist.render;
+            self.fps_cap = persist.fps_cap;
         }
     }
 }
@@ -1183,6 +1378,9 @@ struct UiPersist {
     spectrum: SpectrumConfig,
     #[serde(default)]
     render: RenderConfig,
+    /// serde(default) keeps pre-cap blobs loadable (as uncapped).
+    #[serde(default)]
+    fps_cap: Option<f32>,
 }
 
 /// Parse just the render frame out of a persisted UI-state blob — so the
@@ -1260,7 +1458,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         || roll_scrolling(state, now)
         || state.spectrum.is_flowing(now);
     if animating {
-        ui.ctx().request_repaint();
+        // Uncapped means "as fast as the shell offers"; a cap turns that into
+        // a minimum spacing between repaints. Only the request changes — the
+        // frame that does get drawn is identical either way.
+        match frame_interval(state.fps_cap) {
+            Some(interval) => ui.ctx().request_repaint_after(interval),
+            None => ui.ctx().request_repaint(),
+        }
     } else {
         ui.ctx().request_repaint_after(IDLE_REPAINT_INTERVAL);
     }
@@ -1268,10 +1472,31 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
-    let dt = ui.input(|i| i.stable_dt);
     state.perf.record(
-        dt,
-        cpu_ms,
+        perf::FrameCosts {
+            shell_ms: state.shell_ms,
+            cpu_ms,
+            tess_ms: state.tess_ms,
+            egui_gpu_ms: state.egui_gpu_ms,
+            lattice_gpu_ms: f32::from_bits(
+                state.lattice_stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            prepare_ms: f32::from_bits(
+                state.lattice_stats.prepare_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            poll_ms: f32::from_bits(
+                state.lattice_stats.poll_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            acquire_ms: state.acquire_ms,
+            tick_ms: state.tick_ms,
+            render_ms: state.render_ms,
+            upload_ms: state.upload_ms,
+            texture_ms: state.texture_ms,
+            prims: state.prims,
+            verts: state.verts,
+            encode_ms: state.encode_ms,
+            submit_ms: state.submit_ms,
+        },
         now,
         perf::Workload {
             active_voices: state.tracker.voices().count(),
@@ -1282,8 +1507,36 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         },
     );
     if state.view.show_perf {
-        perf::draw_overlay(ui.ctx(), ui.max_rect(), &state.perf);
+        perf::draw_overlay(
+            ui.ctx(),
+            perf_overlay_area(state, ui.max_rect()),
+            &state.perf,
+            state.view.show_perf_detail,
+        );
     }
+}
+
+/// Where the performance overlay hangs its top-right corner: the Spectral
+/// pane's body, so the HUD sits over the spectrogram rather than over the
+/// lattice, which is the picture being watched.
+///
+/// Falls back to `editor` (the whole window) whenever that pane is not on
+/// screen — another tab selected in its leaf, or the leaf collapsed — so the
+/// overlay never strands itself on a pane nobody can see.
+fn perf_overlay_area(state: &SharedState, editor: egui::Rect) -> egui::Rect {
+    let Some(path) = state.dock.find_tab(&panes::Tab::Spectral) else {
+        return editor;
+    };
+    let egui_dock::Node::Leaf(leaf) = &state.dock[path.surface][path.node] else {
+        return editor;
+    };
+    // `viewport` is the tab BODY; the picture panes drop their margin, so it
+    // is exactly the drawn surface. `Rect::NOTHING` until the dock has laid
+    // out once (a first frame, or a freshly loaded layout).
+    if leaf.collapsed || leaf.active != path.tab || !leaf.viewport.is_positive() {
+        return editor;
+    }
+    leaf.viewport
 }
 
 /// Everything that must happen once per frame before any pane draws:
@@ -1348,6 +1601,23 @@ pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f6
 /// Repaint cadence while nothing animates: newly arriving MIDI shows up
 /// within one poll even without an input event.
 const IDLE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// The minimum spacing between repaints implied by a frame-rate cap, or
+/// `None` when uncapped.
+///
+/// A cap that isn't a positive, finite rate is treated as uncapped rather
+/// than turned into a zero or absurd interval. The control cannot produce
+/// one, but a hand-edited persisted blob can, and "no cap" is the safe
+/// reading of a nonsense value — a zero interval would merely be the
+/// uncapped behaviour with extra steps, while a huge one would freeze the UI.
+fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
+    match fps_cap {
+        Some(fps) if fps.is_finite() && fps > 0.0 => {
+            Some(std::time::Duration::from_secs_f32(1.0 / fps))
+        }
+        _ => None,
+    }
+}
 
 /// Whether the piano roll still has something moving across it: its window
 /// reaches back to a note that was sounding. Goes quiet once the last note

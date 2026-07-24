@@ -95,6 +95,34 @@ impl<'a> Window<'a> {
         self.window.set_mouse_cursor(cursor);
     }
 
+    /// Re-arm the frame timer at `interval` seconds, changing how often
+    /// `on_frame` runs from here on.
+    ///
+    /// This is the only hard bound on the frame rate: a handler that asks to
+    /// be repainted more often simply isn't asked. The interval is clamped to
+    /// [`MIN_FRAME_INTERVAL`]..=[`MAX_FRAME_INTERVAL`], so a nonsense value
+    /// cannot spin the run loop or stall the window outright.
+    ///
+    /// macOS only; a no-op elsewhere, where frames are driven differently.
+    pub fn set_frame_interval(&mut self, interval: f64) {
+        #[cfg(target_os = "macos")]
+        self.window.set_frame_interval(interval);
+        #[cfg(not(target_os = "macos"))]
+        let _ = interval;
+    }
+
+    /// The highest refresh rate, in Hz, that the display showing this window
+    /// can present at — the rate above which painting is wasted work.
+    ///
+    /// `None` when the platform won't say (every non-macOS backend, or a
+    /// window not on a screen yet).
+    pub fn display_max_fps(&self) -> Option<f64> {
+        #[cfg(target_os = "macos")]
+        return self.window.display_max_fps();
+        #[cfg(not(target_os = "macos"))]
+        return None;
+    }
+
     pub fn has_focus(&mut self) -> bool {
         self.window.has_focus()
     }

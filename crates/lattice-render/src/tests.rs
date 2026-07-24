@@ -57,11 +57,11 @@ fn octave_packing_matches_the_documented_layout() {
 /// at first paint inside a host.
 #[test]
 fn pipelines_build_against_a_headless_device() {
-    let Some((device, _queue)) = headless_device() else {
+    let Some((device, queue)) = headless_device() else {
         return;
     };
     let _resources =
-        LatticeResources::new(&device, wgpu::TextureFormat::Bgra8Unorm);
+        LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
 }
 
 fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -284,6 +284,7 @@ fn offscreen_composite_matches_direct_draw() {
         egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
         format,
         7,
+        None,
     );
 
     // prepare(): uploads buffers and renders the offscreen scene pass.
@@ -438,7 +439,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
         pixels_per_point: 1.0,
     };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id);
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -576,7 +577,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         pixels_per_point: 1.0,
     };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id);
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -651,7 +652,7 @@ fn bloom_adds_light_over_the_plain_composite() {
         pixels_per_point: 1.0,
     };
     let mut total = |scene: &Scene, pane_id: u64| -> u64 {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id);
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -729,6 +730,8 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             egui::vec2(800.0, 600.0),
             wgpu::TextureFormat::Bgra8Unorm,
             0,
+            // No stats slot: this is about draw ORDER, not about timing.
+            None,
         );
         // World z IS the sevens axis (see lattice_to_world), so the draw
         // order must run from the most negative sheet to the most positive
