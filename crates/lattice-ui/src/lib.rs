@@ -707,6 +707,12 @@ pub struct AudioSpectrum {
     /// whole window. Self-heals on layout change / clear (it rebuilds), so it
     /// needs no explicit reset. See `panes::spectrogram::SpectrogramAgg`.
     spectrogram_agg: [Option<crate::panes::spectrogram::SpectrogramAgg>; 2],
+    /// Ring bookkeeping for the matching [`Self::spectrogram_tex`]: which
+    /// slabs its columns currently hold, so a new one can be written on its
+    /// own instead of repainting the whole heatmap. `None` whenever the
+    /// texture was built the full-width way (offline whole-song, or with
+    /// temporal smoothing on).
+    spectrogram_ring: [Option<crate::panes::spectrogram::SpectrogramRing>; 2],
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -752,6 +758,13 @@ pub(crate) struct SpectrogramCache {
     tex_span: f64,
     t0: f32,
     tn: f32,
+    /// Texel x of the first visible slab, and the texture's full width.
+    ///
+    /// A full-width build puts the visible slabs at 0 and is `tex_w` wide, so
+    /// these fall out of the mapping; the ring parks them at a rotating offset
+    /// inside a wider texture, and the quad's `u` needs to know where.
+    x0: f32,
+    tex_w: f32,
 }
 
 impl SpectrogramKey {
@@ -786,8 +799,17 @@ impl SpectrogramKey {
 }
 
 impl SpectrogramCache {
-    pub(crate) fn new(key: SpectrogramKey, t_origin: f64, tex_span: f64, t0: f32, tn: f32) -> Self {
-        SpectrogramCache { key, t_origin, tex_span, t0, tn }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        key: SpectrogramKey,
+        t_origin: f64,
+        tex_span: f64,
+        t0: f32,
+        tn: f32,
+        x0: f32,
+        tex_w: f32,
+    ) -> Self {
+        SpectrogramCache { key, t_origin, tex_span, t0, tn, x0, tex_w }
     }
 
     /// Whether a freshly computed key matches this cached build's — i.e. the
@@ -796,9 +818,16 @@ impl SpectrogramCache {
         &self.key == key
     }
 
-    /// The scalars the scrolling quad needs: `(t_origin, tex_span, t0, tn)`.
-    pub(crate) fn geometry(&self) -> (f64, f64, f32, f32) {
-        (self.t_origin, self.tex_span, self.t0, self.tn)
+    /// The scalars the scrolling quad needs.
+    pub(crate) fn geometry(&self) -> crate::panes::spectrogram::TexLayout {
+        crate::panes::spectrogram::TexLayout {
+            t_origin: self.t_origin,
+            tex_span: self.tex_span,
+            t0: self.t0,
+            tn: self.tn,
+            x0: self.x0,
+            tex_w: self.tex_w,
+        }
     }
 }
 
@@ -884,6 +913,7 @@ impl Default for AudioSpectrum {
             spectrogram_tex: [None, None],
             spectrogram_cache: [None, None],
             spectrogram_agg: [None, None],
+            spectrogram_ring: [None, None],
         }
     }
 }
@@ -897,6 +927,11 @@ impl AudioSpectrum {
         // The cached builds validate those textures; drop them together so a
         // stale key can never point at a released (or newly reuploaded) slot.
         self.spectrogram_cache = [None, None];
+        // Same again for the ring: it records which slabs the RELEASED
+        // texture's columns held. Kept across a context change it would write
+        // one fresh column into a brand new texture and call the other
+        // thousands valid — a heatmap of uninitialized memory.
+        self.spectrogram_ring = [None, None];
     }
 
     /// Seconds between FFTs (20 Hz refresh).

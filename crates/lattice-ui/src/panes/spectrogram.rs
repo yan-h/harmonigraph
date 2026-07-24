@@ -62,6 +62,75 @@ struct Bin {
     t: f32,
 }
 
+/// Where the visible slabs sit in the uploaded texture, and what pitch range
+/// its rows cover — everything the quad's `u`/`v` need.
+///
+/// One shape for both builds. A full-width build parks the visible slabs at
+/// `x0 = 0` in a texture exactly `tex_w = w` wide, where the mapping collapses
+/// to the plain `(t - t_origin) / tex_span`; the ring parks them at a rotating
+/// offset inside a wider texture. Keeping one formula means the scrolling quad
+/// has no idea which built it.
+#[derive(Clone, Copy)]
+pub(crate) struct TexLayout {
+    /// Absolute time at the left edge of the first visible slab.
+    pub(crate) t_origin: f64,
+    /// Seconds the visible slabs span.
+    pub(crate) tex_span: f64,
+    /// Pitch-axis fraction of the first and last row.
+    pub(crate) t0: f32,
+    pub(crate) tn: f32,
+    /// Texel x of the first visible slab, and the texture's full width.
+    pub(crate) x0: f32,
+    pub(crate) tex_w: f32,
+}
+
+/// Which slabs the uploaded texture's columns currently hold.
+///
+/// The heatmap's columns are indexed by SLAB KEY — `floor(time / bucket)`, a
+/// function of absolute time alone (see [`SlabGrid::fold`]) — so a column keeps
+/// its identity as the window scrolls past it. That is what lets a new column
+/// be written on its own: everything older is already correct where it sits,
+/// and only the newest slab (still accumulating its MAX) plus any slab that
+/// just appeared need repainting.
+///
+/// **Every column is written twice**, `capacity` texels apart in a texture
+/// `2 * capacity` wide. A ring read as a ring wraps, and a wrapped run needs
+/// two quads with a seam between them that bilinear filtering then blends
+/// across. Written twice, any run of at most `capacity` slabs is contiguous
+/// somewhere in the texture, so the existing single quad still works and the
+/// seam cannot be sampled. The cost is a second `set_partial` of one column —
+/// still O(rows), against O(rows × slabs) for the repaint it replaces.
+pub(crate) struct SpectrogramRing {
+    /// Slabs held; the texture is twice this wide.
+    capacity: usize,
+    /// Everything that decides a pixel's colour, or which buckets a row reads.
+    /// A change to any of it invalidates every column at once.
+    style: RingStyle,
+    /// Newest slab key written, and the oldest still valid.
+    written_through: i64,
+    oldest_valid: i64,
+}
+
+/// The part of [`crate::SpectrogramKey`] that outlives a scroll: everything
+/// except which columns are in the window. Two builds sharing a `RingStyle`
+/// can share columns; anything else has to start over.
+#[derive(Clone, PartialEq)]
+struct RingStyle {
+    rows: usize,
+    bucket_bits: u64,
+    scale_min_bits: u32,
+    scale_span_bits: u32,
+    cfg: SpectrumConfig,
+    frame: FrameParams,
+}
+
+impl SpectrogramRing {
+    /// Texel x of a slab key. The `+ capacity` twin is written by the caller.
+    fn x_of(&self, key: i64) -> usize {
+        key.rem_euclid(self.capacity as i64) as usize
+    }
+}
+
 pub(super) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -148,8 +217,8 @@ pub(super) fn draw_spectrogram(
         _ => None,
     };
 
-    let (t_origin, tex_span, t0, tn) = match reused {
-        Some(geometry) => geometry,
+    let layout = match reused {
+        Some(layout) => layout,
         None => {
             // The image's rows: one per pixel of the pitch axis, never more
             // buckets than the axis holds and never a taller image than the GPU
@@ -205,9 +274,6 @@ pub(super) fn draw_spectrogram(
             if w < 2 {
                 return;
             }
-            // Optional temporal smoothing: average out fast beating/chorus wobble.
-            smooth_time(&mut power, w, h, cfg.spectrogram_smoothing);
-
             // The image covers absolute time `[t_origin, t_origin + w*bucket]` —
             // the oldest slab's start to the newest slab's end. Its texel
             // centers sit at the slab centers, so `u = (t - t_origin) / span`
@@ -219,17 +285,63 @@ pub(super) fn draw_spectrogram(
                 return;
             }
 
-            // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
-            let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
-            let image = egui::ColorImage::new([w, h], pixels);
-            let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-            match &mut spectrum.spectrogram_tex[surface] {
-                Some(handle) => handle.set(image, opts),
-                slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
-            }
-            spectrum.spectrogram_cache[surface] =
-                Some(crate::SpectrogramCache::new(key, t_origin, tex_span, t0, tn));
-            (t_origin, tex_span, t0, tn)
+            // Temporal smoothing runs an EMA forward AND backward across every
+            // column, so one new column changes all of them — and the pass is
+            // O(slabs x rows) in its own right. There is nothing left for a
+            // ring to save, so that case (and the offline whole-song build,
+            // whose column set is fixed and cached after the first frame)
+            // takes the full-width path.
+            let ring_able = whole.is_none() && cfg.spectrogram_smoothing <= 0.0;
+            let layout = if ring_able {
+                let style = RingStyle {
+                    rows: h,
+                    bucket_bits: bucket.to_bits(),
+                    scale_min_bits: scale.min_midi.to_bits(),
+                    scale_span_bits: scale.span.to_bits(),
+                    cfg,
+                    frame,
+                };
+                // Sized off the WINDOW, not off how much history has arrived:
+                // a capacity that grew with the column count would change on
+                // almost every frame and rebuild the very thing it caches.
+                let capacity = ((window / bucket).ceil() as usize + 2).max(w);
+                write_ring(
+                    painter.ctx(),
+                    spectrum,
+                    surface,
+                    style,
+                    capacity,
+                    &cfg,
+                    &frame,
+                    &bins,
+                    &power,
+                    (centers[0] / bucket).floor() as i64,
+                    w,
+                );
+                let ring = spectrum.spectrogram_ring[surface].as_ref();
+                let x0 = ring.map_or(0.0, |r| r.x_of((centers[0] / bucket).floor() as i64) as f32);
+                let tex_w = ring.map_or(w as f32, |r| (r.capacity * 2) as f32);
+                TexLayout { t_origin, tex_span, t0, tn, x0, tex_w }
+            } else {
+                // The full-width build owns the whole texture, so any ring
+                // bookkeeping describing it is now a lie about which slabs its
+                // columns hold.
+                spectrum.spectrogram_ring[surface] = None;
+                smooth_time(&mut power, w, h, cfg.spectrogram_smoothing);
+                // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
+                let pixels = fill_pixels(&cfg, &frame, w, &bins, &power);
+                let image = egui::ColorImage::new([w, h], pixels);
+                let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
+                match &mut spectrum.spectrogram_tex[surface] {
+                    Some(handle) => handle.set(image, opts),
+                    slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
+                }
+                TexLayout { t_origin, tex_span, t0, tn, x0: 0.0, tex_w: w as f32 }
+            };
+            spectrum.spectrogram_cache[surface] = Some(crate::SpectrogramCache::new(
+                key, t_origin, tex_span, t0, tn, layout.x0, layout.tex_w,
+            ));
+            layout
         }
     };
 
@@ -244,8 +356,24 @@ pub(super) fn draw_spectrogram(
     // to the bin rows. UVs run past 0..1 in the thin slivers with no data (the
     // sub-slab at `now`, the bit beyond the oldest slab); ClampToEdge fills
     // those from the edge column so the plane stays whole.
-    let u_at = |d: f32| ((time.time_at(d) - t_origin) / tex_span) as f32;
-    let v_at = |p: f32| (p - t0) / (tn - t0);
+    // Slabs occupy texels `x0 .. x0 + visible` of a `tex_w`-wide texture; for a
+    // full-width build that is the whole thing and this collapses to the plain
+    // `(t - t_origin) / tex_span`.
+    //
+    // Clamped to the first and last visible texel CENTER, which is what the
+    // sampler's ClampToEdge used to do for free. It no longer can: the slivers
+    // with no data (the sub-slab at `now`, the bit past the oldest slab) run
+    // past the visible run but land INSIDE the ring texture, where the
+    // neighbouring texel is a column from a whole window ago rather than the
+    // edge. Clamping here keeps those slivers filled from the edge column.
+    let visible = (layout.tex_span / bucket) as f32;
+    let (u_lo, u_hi) =
+        ((layout.x0 + 0.5) / layout.tex_w, (layout.x0 + visible - 0.5) / layout.tex_w);
+    let u_at = |d: f32| {
+        let slabs = ((time.time_at(d) - layout.t_origin) / bucket) as f32;
+        ((layout.x0 + slabs) / layout.tex_w).clamp(u_lo, u_hi)
+    };
+    let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
     let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
     let vert =
         |p: f32, d: f32| egui::epaint::Vertex { pos: axes.at(p, d), uv: egui::pos2(u_at(d), v_at(p)), color: tint };
@@ -266,11 +394,11 @@ pub(super) fn draw_spectrogram(
     let (d_near, d_far) = if time.whole_song() {
         // The whole take is present from the first frame, so the strip fills the
         // region edge to edge; only the playhead moves.
-        (time.depth_of(t_origin), time.depth_of(t_origin + tex_span))
+        (time.depth_of(layout.t_origin), time.depth_of(layout.t_origin + layout.tex_span))
     } else {
         const FRESH: f64 = 0.12;
         let near = if now - newest <= FRESH { split } else { time.depth_of(newest) };
-        (near, time.depth_of(t_origin))
+        (near, time.depth_of(layout.t_origin))
     };
 
     // One quad over pitch [0,1] x depth [d_near, d_far]; GPU bilinear-samples it.
@@ -540,6 +668,106 @@ fn smooth_time(power: &mut [f32], rows: usize, nb: usize, smoothing: f32) {
             power[i + k] += (1.0 - a) * (power[next + k] - power[i + k]);
         }
     }
+}
+
+/// Bring the ring's texture up to date for the visible slabs, allocating or
+/// restarting it when it cannot be carried forward.
+///
+/// Only two columns can ever be stale: the newest slab, which is still
+/// accumulating its MAX as columns fold in, and any slab that appeared since
+/// the last call. Everything older already sits at the right texel with the
+/// right pixels — that is the whole point of keying columns by absolute time.
+#[allow(clippy::too_many_arguments)]
+fn write_ring(
+    ctx: &egui::Context,
+    spectrum: &mut crate::AudioSpectrum,
+    surface: usize,
+    style: RingStyle,
+    capacity: usize,
+    cfg: &SpectrumConfig,
+    frame: &FrameParams,
+    bins: &[Bin],
+    power: &[f32],
+    first_key: i64,
+    visible: usize,
+) {
+    let h = bins.len();
+    let tex_w = capacity * 2;
+    let last_key = first_key + visible as i64 - 1;
+    let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
+
+    // Carry the ring forward only when it describes THIS texture, in this
+    // style, and still holds columns the visible run continues from. A gap
+    // (the window jumped, history was cleared) would leave never-written
+    // texels between the old columns and the new ones.
+    let usable = match (&spectrum.spectrogram_ring[surface], &spectrum.spectrogram_tex[surface]) {
+        (Some(ring), Some(_)) => {
+            ring.capacity == capacity
+                && ring.style == style
+                && first_key >= ring.oldest_valid
+                && first_key <= ring.written_through + 1
+        }
+        _ => false,
+    };
+
+    if !usable {
+        // A fresh texture starts black, so a column never written reads as
+        // silence rather than as whatever the allocation happened to contain.
+        let blank = egui::ColorImage::new([tex_w, h], vec![Color32::BLACK; tex_w * h]);
+        match &mut spectrum.spectrogram_tex[surface] {
+            Some(handle) => handle.set(blank, opts),
+            slot => *slot = Some(ctx.load_texture("spectrogram", blank, opts)),
+        }
+        spectrum.spectrogram_ring[surface] = Some(SpectrogramRing {
+            capacity,
+            style,
+            // Nothing written yet: the loop below then paints every visible
+            // slab rather than trusting a column that was never uploaded.
+            written_through: first_key - 1,
+            oldest_valid: first_key,
+        });
+    }
+
+    let (Some(ring), Some(tex)) =
+        (&mut spectrum.spectrogram_ring[surface], &mut spectrum.spectrogram_tex[surface])
+    else {
+        return;
+    };
+
+    // Start at the last column written, not past it: that slab was uploaded
+    // mid-accumulation and may have gained energy since.
+    let start = ring.written_through.max(first_key);
+    for key in start..=last_key {
+        let i = (key - first_key) as usize;
+        let column = fill_column(cfg, frame, bins, &power[i * h..(i + 1) * h]);
+        let image = egui::ColorImage::new([1, h], column);
+        let x = ring.x_of(key);
+        tex.set_partial([x, 0], image.clone(), opts);
+        // The twin, `capacity` texels along, is what keeps any run of at most
+        // `capacity` slabs contiguous — see [`SpectrogramRing`].
+        tex.set_partial([x + capacity, 0], image, opts);
+    }
+    ring.written_through = last_key;
+    // Anything older than a full lap has been overwritten by the columns above.
+    ring.oldest_valid = ring.oldest_valid.max(last_key - capacity as i64 + 1);
+}
+
+/// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
+/// [`fill_pixels`] would put in that column, for a build that writes columns
+/// one at a time.
+fn fill_column(
+    cfg: &SpectrumConfig,
+    frame: &FrameParams,
+    bins: &[Bin],
+    slab: &[f32],
+) -> Vec<Color32> {
+    bins.iter()
+        .zip(slab)
+        .map(|(bin, &p)| {
+            let level = if p <= NEAR_ZERO { 0.0 } else { spectrogram_level(cfg, p, bin.midi) };
+            cell_color(cfg.spectrogram_color, level, bin.midi, frame)
+        })
+        .collect()
 }
 
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
@@ -867,5 +1095,93 @@ mod tests {
         let mut frame2 = frame;
         frame2.brightest_pitch += 1.0;
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame2));
+    }
+
+    /// A column written on its own must be pixel-for-pixel what the
+    /// whole-image build would have put in that column. If these two ever
+    /// disagree, the heatmap changes appearance the moment temporal smoothing
+    /// is switched on or off, since that is what picks between them.
+    #[test]
+    fn one_column_matches_the_whole_image_build() {
+        let cfg = SpectrumConfig::default();
+        let frame = FrameParams::default();
+        let bins = [
+            Bin { idx: 0, end: 1, midi: 40.0, t: 0.0 },
+            Bin { idx: 1, end: 2, midi: 52.0, t: 0.5 },
+            Bin { idx: 2, end: 3, midi: 64.0, t: 1.0 },
+        ];
+        let h = bins.len();
+        // Two slabs of three bins, slab-major: [slab][bin].
+        let power = [1e-3, 0.0, 1e-6, 4e-2, 1e-5, 0.0];
+        let w = power.len() / h;
+
+        let whole = fill_pixels(&cfg, &frame, w, &bins, &power);
+        for slab in 0..w {
+            let column = fill_column(&cfg, &frame, &bins, &power[slab * h..(slab + 1) * h]);
+            for (y, pixel) in column.iter().enumerate() {
+                assert_eq!(*pixel, whole[y * w + slab], "slab {slab}, bin {y}");
+            }
+        }
+    }
+
+    /// Columns are placed by absolute slab key, and every one is written twice
+    /// so a run never straddles the wrap. Any `capacity` consecutive keys must
+    /// therefore land on `capacity` consecutive texels somewhere in the
+    /// double-width texture.
+    #[test]
+    fn a_full_window_is_contiguous_wherever_it_starts() {
+        let capacity = 8;
+        let ring = SpectrogramRing {
+            capacity,
+            style: RingStyle {
+                rows: 3,
+                bucket_bits: 0.1f64.to_bits(),
+                scale_min_bits: 40.0f32.to_bits(),
+                scale_span_bits: 48.0f32.to_bits(),
+                cfg: SpectrumConfig::default(),
+                frame: FrameParams::default(),
+            },
+            written_through: 0,
+            oldest_valid: 0,
+        };
+        // Start the run at every phase of the ring, including ones that wrap.
+        for first in -3i64..20 {
+            let x0 = ring.x_of(first);
+            for step in 0..capacity as i64 {
+                let key = first + step;
+                // The twin at `+ capacity` is what makes this hold across the
+                // wrap; without it `x_of` alone would jump back to 0.
+                let placed = ring.x_of(key);
+                let contiguous = x0 + step as usize;
+                assert!(
+                    placed == contiguous || placed + capacity == contiguous,
+                    "key {key} at texel {placed} is not {contiguous} (run from {first})",
+                );
+                assert!(contiguous < capacity * 2, "run ran off the texture");
+            }
+        }
+    }
+
+    /// Negative slab keys happen: the shell clock starts at zero and the
+    /// window reaches back before it. A plain `%` would hand back a negative
+    /// texel and panic on the upload.
+    #[test]
+    fn slab_keys_before_zero_still_land_inside_the_texture() {
+        let ring = SpectrogramRing {
+            capacity: 8,
+            style: RingStyle {
+                rows: 3,
+                bucket_bits: 0.1f64.to_bits(),
+                scale_min_bits: 40.0f32.to_bits(),
+                scale_span_bits: 48.0f32.to_bits(),
+                cfg: SpectrumConfig::default(),
+                frame: FrameParams::default(),
+            },
+            written_through: 0,
+            oldest_valid: 0,
+        };
+        for key in -20i64..0 {
+            assert!(ring.x_of(key) < 8, "key {key} fell outside the ring");
+        }
     }
 }
