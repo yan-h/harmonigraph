@@ -72,6 +72,11 @@ pub struct FrameCosts {
     pub tick_ms: f32,
     /// Of that, the renderer half. The difference is the egui half.
     pub render_ms: f32,
+    /// The renderer's stages: uploads (including paint callbacks' `prepare`),
+    /// encoding egui's draw calls, and finish + submit + present.
+    pub upload_ms: f32,
+    pub encode_ms: f32,
+    pub submit_ms: f32,
 }
 
 /// One interactive frame's workload: what the overlay reports as the load
@@ -123,6 +128,9 @@ pub struct PerfStats {
     acquire_ms: f32,
     tick_ms: f32,
     render_ms: f32,
+    upload_ms: f32,
+    encode_ms: f32,
+    submit_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it). Smoothed for the same reason the
     /// frame numbers are: this is read as a number, not watched as a trace,
@@ -144,6 +152,9 @@ pub struct PerfStats {
     shown_acquire_ms: f32,
     shown_tick_ms: f32,
     shown_render_ms: f32,
+    shown_upload_ms: f32,
+    shown_encode_ms: f32,
+    shown_submit_ms: f32,
     /// Shell-clock time of that latch.
     last_readout: f64,
     /// GPU milliseconds for the lattice passes, smoothed and held like the
@@ -170,6 +181,9 @@ impl Default for PerfStats {
             acquire_ms: 0.0,
             tick_ms: 0.0,
             render_ms: 0.0,
+            upload_ms: 0.0,
+            encode_ms: 0.0,
+            submit_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -181,6 +195,9 @@ impl Default for PerfStats {
             shown_acquire_ms: 0.0,
             shown_tick_ms: 0.0,
             shown_render_ms: 0.0,
+            shown_upload_ms: 0.0,
+            shown_encode_ms: 0.0,
+            shown_submit_ms: 0.0,
             gpu_ms: 0.0,
             shown_gpu_ms: 0.0,
             gpu_supported: true,
@@ -214,6 +231,9 @@ impl PerfStats {
             acquire_ms,
             tick_ms,
             render_ms,
+            upload_ms,
+            encode_ms,
+            submit_ms,
         } = costs;
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
@@ -232,6 +252,9 @@ impl PerfStats {
         self.acquire_ms += (acquire_ms - self.acquire_ms) * alpha;
         self.tick_ms += (tick_ms - self.tick_ms) * alpha;
         self.render_ms += (render_ms - self.render_ms) * alpha;
+        self.upload_ms += (upload_ms - self.upload_ms) * alpha;
+        self.encode_ms += (encode_ms - self.encode_ms) * alpha;
+        self.submit_ms += (submit_ms - self.submit_ms) * alpha;
         // Three states, not two: a real reading, "the device can't", and
         // "none has landed yet". Collapsing the last two into one "n/a" made
         // a wiring bug and an unsupported GPU look identical, which is
@@ -264,6 +287,9 @@ impl PerfStats {
             self.shown_acquire_ms = self.acquire_ms;
             self.shown_tick_ms = self.tick_ms;
             self.shown_render_ms = self.render_ms;
+            self.shown_upload_ms = self.upload_ms;
+            self.shown_encode_ms = self.encode_ms;
+            self.shown_submit_ms = self.submit_ms;
             self.shown_gpu_ms = self.gpu_ms;
             self.last_readout = now;
         }
@@ -351,13 +377,17 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "measuring...".to_owned()
     };
-    let rows: [(&str, String); 13] = [
+    let rows: [(&str, String); 15] = [
         ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
         ("tick", format!("{:.1} ms", perf.shown_tick_ms)),
         // The egui half is what `tick` leaves over, shown rather than left to
         // be worked out — the gap is the whole point of these two rows.
         ("egui", format!("{:.1} ms", (perf.shown_tick_ms - perf.shown_render_ms).max(0.0))),
-        ("render", format!("{:.1} ms", perf.shown_render_ms)),
+        // The renderer half, broken out — its parts are shown instead of its
+        // total, since the total is what sent us looking in here.
+        ("upload", format!("{:.1} ms", perf.shown_upload_ms)),
+        ("encode", format!("{:.1} ms", perf.shown_encode_ms)),
+        ("submit", format!("{:.1} ms", perf.shown_submit_ms)),
         ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
         ("ui cpu", format!("{:.1} ms", perf.shown_cpu_ms)),
         ("tess", format!("{:.1} ms", perf.shown_tess_ms)),
@@ -696,6 +726,9 @@ mod tests {
                 acquire_ms: 6.0,
                 tick_ms: 7.0,
                 render_ms: 8.0,
+                upload_ms: 9.0,
+                encode_ms: 10.0,
+                submit_ms: 11.0,
             },
             1.0,
             Workload { animating: true, ..Default::default() },

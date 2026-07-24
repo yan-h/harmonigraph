@@ -96,6 +96,9 @@ pub struct Queue<'a> {
     acquire_ms: f32,
     tick_ms: f32,
     render_ms: f32,
+    upload_ms: f32,
+    encode_ms: f32,
+    submit_ms: f32,
 }
 
 impl<'a> Queue<'a> {
@@ -111,6 +114,9 @@ impl<'a> Queue<'a> {
         acquire_ms: f32,
         tick_ms: f32,
         render_ms: f32,
+        upload_ms: f32,
+        encode_ms: f32,
+        submit_ms: f32,
     ) -> Self {
         Self {
             bg_color,
@@ -126,7 +132,25 @@ impl<'a> Queue<'a> {
             acquire_ms,
             tick_ms,
             render_ms,
+            upload_ms,
+            encode_ms,
+            submit_ms,
         }
+    }
+
+    /// The renderer's stages, in milliseconds: uploads (which is also where
+    /// paint callbacks `prepare`), encoding egui's draw calls, and
+    /// finish + submit + present.
+    pub fn upload_ms(&self) -> f32 {
+        self.upload_ms
+    }
+
+    pub fn encode_ms(&self) -> f32 {
+        self.encode_ms
+    }
+
+    pub fn submit_ms(&self) -> f32 {
+        self.submit_ms
     }
 
     /// Milliseconds the previous frame spent inside the renderer: tessellate,
@@ -269,8 +293,11 @@ where
     acquire_ms: f32,
     /// The whole previous callback, end to end.
     tick_ms: f32,
-    /// The renderer half of it.
+    /// The renderer half of it, and its stages.
     render_ms: f32,
+    upload_ms: f32,
+    encode_ms: f32,
+    submit_ms: f32,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -351,6 +378,9 @@ where
             0.0,
             0.0,
             0.0,
+            0.0,
+            0.0,
+            0.0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -405,6 +435,9 @@ where
             acquire_ms: 0.0,
             tick_ms: 0.0,
             render_ms: 0.0,
+            upload_ms: 0.0,
+            encode_ms: 0.0,
+            submit_ms: 0.0,
         }
     }
 
@@ -522,6 +555,9 @@ where
             self.acquire_ms,
             self.tick_ms,
             self.render_ms,
+            self.upload_ms,
+            self.encode_ms,
+            self.submit_ms,
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
@@ -621,6 +657,9 @@ where
             self.tess_ms = self.renderer.last_tess_ms();
             self.egui_gpu_ms = self.renderer.last_gpu_ms();
             self.acquire_ms = self.renderer.last_acquire_ms();
+            self.upload_ms = self.renderer.last_upload_ms();
+            self.encode_ms = self.renderer.last_encode_ms();
+            self.submit_ms = self.renderer.last_submit_ms();
         } else if let Some(candidate) = now.checked_add(repaint_delay) {
             // Keep the EARLIEST pending deadline rather than overwriting it.
             //

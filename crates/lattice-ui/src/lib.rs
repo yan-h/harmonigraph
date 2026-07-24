@@ -1125,6 +1125,11 @@ pub struct SharedState {
     /// minus this is the egui half — the UI closure plus egui's own
     /// end-of-pass work — so the two bracket the whole frame between them.
     pub render_ms: f32,
+    /// The renderer's stages. `upload_ms` also covers paint callbacks'
+    /// `prepare`, so the lattice's own buffer writes are inside it.
+    pub upload_ms: f32,
+    pub encode_ms: f32,
+    pub submit_ms: f32,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -1234,6 +1239,9 @@ impl SharedState {
             acquire_ms: 0.0,
             tick_ms: 0.0,
             render_ms: 0.0,
+            upload_ms: 0.0,
+            encode_ms: 0.0,
+            submit_ms: 0.0,
             fps_cap: None,
             perf: PerfStats::default(),
         }
@@ -1449,6 +1457,9 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             acquire_ms: state.acquire_ms,
             tick_ms: state.tick_ms,
             render_ms: state.render_ms,
+            upload_ms: state.upload_ms,
+            encode_ms: state.encode_ms,
+            submit_ms: state.submit_ms,
         },
         now,
         perf::Workload {

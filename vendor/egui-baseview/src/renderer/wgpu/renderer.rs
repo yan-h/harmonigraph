@@ -206,6 +206,11 @@ pub struct Renderer {
     last_gpu_ms: f32,
     /// How long the last frame blocked acquiring the surface.
     last_acquire_ms: f32,
+    /// Texture and buffer uploads, which is also where paint callbacks
+    /// `prepare`; encoding egui's draw calls; and finish + submit + present.
+    last_upload_ms: f32,
+    last_encode_ms: f32,
+    last_submit_ms: f32,
     /// How long the last frame spent turning egui's shapes into triangles.
     ///
     /// Tessellation is neither the app's own per-frame work (it runs after the
@@ -243,6 +248,9 @@ impl Renderer {
             gpu_timer,
             last_gpu_ms: 0.0,
             last_acquire_ms: 0.0,
+            last_upload_ms: 0.0,
+            last_encode_ms: 0.0,
+            last_submit_ms: 0.0,
             last_tess_ms: 0.0,
             width: 0,
             height: 0,
@@ -264,6 +272,21 @@ impl Renderer {
     /// slow" and "we are early" — and it appears in no cost measurement.
     pub fn last_acquire_ms(&self) -> f32 {
         self.last_acquire_ms
+    }
+
+    /// The renderer's remaining stages, in milliseconds: uploads (including
+    /// paint callbacks' `prepare`), encoding egui's draw calls, and
+    /// finish + submit + present.
+    pub fn last_upload_ms(&self) -> f32 {
+        self.last_upload_ms
+    }
+
+    pub fn last_encode_ms(&self) -> f32 {
+        self.last_encode_ms
+    }
+
+    pub fn last_submit_ms(&self) -> f32 {
+        self.last_submit_ms
     }
 
     /// Milliseconds the last frame spent in [`egui::Context::tessellate`].
@@ -370,6 +393,7 @@ impl Renderer {
         let tess_start = std::time::Instant::now();
         let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
         self.last_tess_ms = tess_start.elapsed().as_secs_f32() * 1000.0;
+        let upload_start = std::time::Instant::now();
 
         let mut encoder =
             self.render_state
@@ -386,7 +410,11 @@ impl Renderer {
         let user_cmd_bufs = {
             let mut renderer = self.render_state.renderer.write();
             for (id, image_delta) in &full_output.textures_delta.set {
-                renderer.update_texture(
+                // NOTE: `update_buffers` is also where egui-wgpu runs paint
+            // callbacks' `prepare`, so the lattice's buffer writes — and the
+            // GPU timer's `device.poll` — are inside this reading too. A
+            // measurement that pays for itself has to be visible somewhere.
+            renderer.update_texture(
                     &self.render_state.device,
                     &self.render_state.queue,
                     *id,
@@ -411,6 +439,8 @@ impl Renderer {
         }
 
         let mut recreate_surface = false;
+        self.last_upload_ms = upload_start.elapsed().as_secs_f32() * 1000.0;
+
         // Timed because this is where a vsync-throttled frame WAITS. With a
         // Fifo surface, acquiring blocks until the display frees a slot, and
         // that wait is neither CPU work nor GPU work — it shows up in no other
@@ -484,6 +514,7 @@ impl Renderer {
                 (&frame_view, None)
             };
 
+            let encode_start = std::time::Instant::now();
             let render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("egui_render"),
                 color_attachments: &[Some(RenderPassColorAttachment {
@@ -518,6 +549,7 @@ impl Renderer {
                 &clipped_primitives,
                 &screen_descriptor,
             );
+            self.last_encode_ms = encode_start.elapsed().as_secs_f32() * 1000.0;
         }
 
         if timing {
@@ -533,6 +565,7 @@ impl Renderer {
             }
         }
 
+        let submit_start = std::time::Instant::now();
         let encoded = encoder.finish();
 
         self.render_state
@@ -540,6 +573,7 @@ impl Renderer {
             .submit(user_cmd_bufs.into_iter().chain([encoded]));
 
         output_frame.present();
+        self.last_submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
         true
     }
 }
