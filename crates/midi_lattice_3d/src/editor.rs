@@ -96,6 +96,10 @@ pub struct EditorShared {
     audio_buf: Vec<f32>,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
+    /// The frame interval currently armed on the window, so an unchanged
+    /// cadence doesn't rebuild the run-loop timer every frame. `None` until
+    /// the first frame sets one.
+    frame_interval: Option<f64>,
     /// Param key currently inside a begin_set/end_set automation gesture.
     gesture: std::cell::Cell<Option<lattice_ui::params::ParamKey>>,
     /// Take recording, driven from the Video pane's toggle.
@@ -132,6 +136,7 @@ impl EditorShared {
             drain_buf: Vec::new(),
             audio_buf: Vec::new(),
             last_frame: None,
+            frame_interval: None,
             gesture: std::cell::Cell::new(None),
             take,
             take_events,
@@ -398,6 +403,43 @@ fn frame(
         gesture: &shared.gesture,
     };
     lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
+
+    // Pace the window AFTER the UI has run, so a cap picked this frame takes
+    // effect on the next tick rather than the one after it.
+    let target = target_frame_interval(shared.ui.fps_cap, queue.display_max_fps());
+    if shared.frame_interval != Some(target) {
+        shared.frame_interval = Some(target);
+        queue.set_frame_interval(target);
+    }
+}
+
+/// Seconds between frame-timer ticks when the display won't say how fast it
+/// can go. Matches baseview's own default (~67 Hz).
+const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
+
+/// How much faster than the display to run the frame timer when uncapped.
+///
+/// The timer is a plain run-loop timer with no relation to vsync, so pacing
+/// it exactly AT the refresh rate lets ordinary jitter miss refreshes and
+/// judder. Sampling a little faster means every refresh has a fresh frame
+/// waiting. (This is why baseview's stock 15 ms is not 16.67.)
+const DISPLAY_OVERSAMPLE: f64 = 1.1;
+
+/// The interval the window's frame timer should run at.
+///
+/// Two bounds, whichever is slower: the user's cap, and what the display can
+/// actually present. A cap above the refresh rate buys nothing but wasted
+/// frames, and a display faster than the cap is exactly what the cap is for.
+fn target_frame_interval(fps_cap: Option<f32>, display_max_fps: Option<f64>) -> f64 {
+    let from_display = match display_max_fps {
+        Some(hz) if hz.is_finite() && hz > 0.0 => 1.0 / (hz * DISPLAY_OVERSAMPLE),
+        _ => FALLBACK_FRAME_INTERVAL,
+    };
+    match fps_cap {
+        // Longer interval = slower rate, so `max` picks the binding bound.
+        Some(fps) if fps.is_finite() && fps > 0.0 => (1.0 / fps as f64).max(from_display),
+        _ => from_display,
+    }
 }
 
 pub fn create(
@@ -639,7 +681,10 @@ impl Drop for LatticeEditorHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClockMapper, EditorShared};
+    use super::{
+        target_frame_interval, ClockMapper, EditorShared, DISPLAY_OVERSAMPLE,
+        FALLBACK_FRAME_INTERVAL,
+    };
     use lattice_core::notes::{NoteEvent, NoteEventKind};
 
     #[test]
@@ -719,5 +764,51 @@ mod tests {
         let mapped = clock.map(101.0, 9.0);
         // Offset moved only 5% of the way toward the new candidate.
         assert!((mapped - (101.0 - 93.0 + 0.005)).abs() < 1e-9, "got {mapped}");
+    }
+
+    #[test]
+    fn a_cap_sets_the_interval_it_names() {
+        // 30 fps on a 144 Hz display: the cap binds, exactly, with no
+        // rounding to whatever the timer used to tick at.
+        let interval = target_frame_interval(Some(30.0), Some(144.0));
+        assert!((interval - 1.0 / 30.0).abs() < 1e-12, "got {interval}");
+    }
+
+    #[test]
+    fn uncapped_follows_the_display_a_shade_faster() {
+        let interval = target_frame_interval(None, Some(144.0));
+        assert!((interval - 1.0 / (144.0 * DISPLAY_OVERSAMPLE)).abs() < 1e-12, "got {interval}");
+        assert!(interval < 1.0 / 144.0, "must oversample, not match, the refresh rate");
+    }
+
+    #[test]
+    fn the_slower_of_cap_and_display_wins() {
+        // A cap above what the display can show buys nothing: pacing follows
+        // the 60 Hz panel, not the 144 the user asked to be allowed.
+        let interval = target_frame_interval(Some(144.0), Some(60.0));
+        let from_display = 1.0 / (60.0 * DISPLAY_OVERSAMPLE);
+        assert!((interval - from_display).abs() < 1e-12, "got {interval}");
+    }
+
+    #[test]
+    fn an_unknown_display_falls_back_rather_than_racing() {
+        assert_eq!(target_frame_interval(None, None), FALLBACK_FRAME_INTERVAL);
+        // A cap still binds when the display is unknown.
+        let interval = target_frame_interval(Some(30.0), None);
+        assert!((interval - 1.0 / 30.0).abs() < 1e-12, "got {interval}");
+    }
+
+    #[test]
+    fn nonsense_caps_and_rates_do_not_produce_a_runaway_timer() {
+        // A hand-edited persist blob or a lying screen must not talk the
+        // timer into spinning; every one of these falls back to a sane rate.
+        for bad_cap in [0.0, -1.0, f32::NAN] {
+            let interval = target_frame_interval(Some(bad_cap), Some(60.0));
+            assert!(interval >= 1.0 / 66.0, "cap {bad_cap} gave {interval}");
+        }
+        for bad_hz in [0.0, -60.0, f64::NAN] {
+            let interval = target_frame_interval(None, Some(bad_hz));
+            assert_eq!(interval, FALLBACK_FRAME_INTERVAL, "hz {bad_hz}");
+        }
     }
 }

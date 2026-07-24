@@ -27,6 +27,14 @@ pub struct WindowOpenOptions {
     /// The dpi scaling policy
     pub scale: WindowScalePolicy,
 
+    /// Seconds between frame-timer ticks — the window's upper bound on how
+    /// often `on_frame` can run.
+    ///
+    /// macOS only; other backends drive frames their own way and ignore it.
+    /// Can be changed while the window is open with
+    /// [`crate::Window::set_frame_interval`].
+    pub frame_interval: f64,
+
     /// If provided, then an OpenGL context will be created for this window. You'll be able to
     /// access this context through [crate::Window::gl_context].
     ///
@@ -59,6 +67,12 @@ impl WindowOpenOptions {
         self
     }
 
+    #[inline]
+    pub fn with_frame_interval(mut self, frame_interval: f64) -> Self {
+        self.frame_interval = frame_interval;
+        self
+    }
+
     #[cfg(feature = "opengl")]
     #[inline]
     pub fn with_gl_config(mut self, gl_config: impl Into<Option<GlConfig>>) -> Self {
@@ -73,6 +87,7 @@ impl Default for WindowOpenOptions {
             title: String::from("baseview window"),
             size: Size { width: 500.0, height: 400.0 },
             scale: WindowScalePolicy::default(),
+            frame_interval: crate::DEFAULT_FRAME_INTERVAL,
             #[cfg(feature = "opengl")]
             gl_config: None,
         }

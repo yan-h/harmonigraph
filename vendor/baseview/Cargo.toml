@@ -111,6 +111,7 @@ features = [
     "NSPasteboard",
     "NSResponder",
     "NSRunningApplication",
+    "NSScreen",
     "NSTrackingArea",
     "NSView",
     "NSWindow",

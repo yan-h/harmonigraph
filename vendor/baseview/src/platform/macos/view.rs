@@ -101,12 +101,7 @@ impl BaseviewView {
             let ns_filenames_pboard_type = unsafe { NSFilenamesPboardType };
             view.view.registerForDraggedTypes(&NSArray::from_slice(&[ns_filenames_pboard_type]));
 
-            let timer_view = Weak::new(view.view);
-            view.frame_timer.set(TimerHandle::new(0.015, move || {
-                if let Some(view) = timer_view.load() {
-                    Self::trigger_frame(view.inner_ref());
-                }
-            }));
+            Self::arm_frame_timer(view.view, options.frame_interval);
 
             let notifier_view = Weak::new(view.view);
             let observer = NotificationCenterObserver::register_window_key_change(move |n| {
@@ -202,6 +197,21 @@ impl BaseviewView {
 
         handler.on_event(&mut this.into(), event);
         Self::send_deferred_events(this, handler.as_mut());
+    }
+
+    /// (Re)arm the frame timer at `interval` seconds.
+    ///
+    /// Storing the new handle drops the old one, whose `Drop` removes it from
+    /// the run loop — so this replaces the cadence rather than stacking a
+    /// second timer on top of it, and is safe to call from inside a frame.
+    pub(crate) fn arm_frame_timer(view: &View<Self>, interval: f64) {
+        let interval = interval.clamp(crate::MIN_FRAME_INTERVAL, crate::MAX_FRAME_INTERVAL);
+        let timer_view = Weak::new(view);
+        view.inner_ref().frame_timer.set(TimerHandle::new(interval, move || {
+            if let Some(view) = timer_view.load() {
+                Self::trigger_frame(view.inner_ref());
+            }
+        }));
     }
 
     fn trigger_frame(this: ViewRef<Self>) {

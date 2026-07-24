@@ -31,6 +31,11 @@ pub struct EguiWindowSettings {
     pub scale_policy: WindowScalePolicy,
 
     pub graphics: GraphicsConfig,
+
+    /// Seconds between frame-timer ticks the window opens with. See
+    /// [`baseview::WindowOpenOptions::frame_interval`]; change it later
+    /// through [`Queue::set_frame_interval`].
+    pub frame_interval: f64,
 }
 
 impl EguiWindowSettings {
@@ -57,6 +62,11 @@ impl EguiWindowSettings {
         self.graphics = config;
         self
     }
+
+    pub fn with_frame_interval(mut self, frame_interval: f64) -> Self {
+        self.frame_interval = frame_interval;
+        self
+    }
 }
 
 impl Default for EguiWindowSettings {
@@ -69,6 +79,7 @@ impl Default for EguiWindowSettings {
             },
             scale_policy: WindowScalePolicy::default(),
             graphics: GraphicsConfig::default(),
+            frame_interval: baseview::DEFAULT_FRAME_INTERVAL,
         }
     }
 }
@@ -78,6 +89,8 @@ pub struct Queue<'a> {
     close_requested: &'a mut bool,
     physical_size: &'a mut PhySize,
     key_capture: &'a mut KeyCapture,
+    frame_interval: &'a mut Option<f64>,
+    display_max_fps: Option<f64>,
 }
 
 impl<'a> Queue<'a> {
@@ -86,6 +99,8 @@ impl<'a> Queue<'a> {
         close_requested: &'a mut bool,
         physical_size: &'a mut PhySize,
         key_capture: &'a mut KeyCapture,
+        frame_interval: &'a mut Option<f64>,
+        display_max_fps: Option<f64>,
     ) -> Self {
         Self {
             bg_color,
@@ -94,7 +109,29 @@ impl<'a> Queue<'a> {
             close_requested,
             physical_size,
             key_capture,
+            frame_interval,
+            display_max_fps,
         }
+    }
+
+    /// The highest refresh rate the display showing this window can present
+    /// at, in Hz, or `None` where the platform won't say.
+    ///
+    /// Re-read every frame, so it follows the window to another monitor
+    /// rather than being fixed at whatever it was when the window opened.
+    pub fn display_max_fps(&self) -> Option<f64> {
+        self.display_max_fps
+    }
+
+    /// Re-arm the window's frame timer at `interval` seconds, bounding how
+    /// often the app is asked to draw from here on.
+    ///
+    /// Applied once the frame returns (the window isn't reachable from
+    /// inside), so calling it repeatedly within one frame keeps only the last
+    /// value. Cheap to call every frame with an unchanged interval — the
+    /// caller-side comparison is left to the app, which knows what it set.
+    pub fn set_frame_interval(&mut self, interval: f64) {
+        *self.frame_interval = Some(interval);
     }
 
     /// Set the background color.
@@ -228,13 +265,19 @@ where
         let mut close_requested = false;
         let old_physical_size = physical_size;
         let mut key_capture = KeyCapture::default();
+        let mut frame_interval = None;
         let mut queue = Queue::new(
             &mut bg_color,
             &mut close_requested,
             &mut physical_size,
             &mut key_capture,
+            &mut frame_interval,
+            window.display_max_fps(),
         );
         (build)(&egui_ctx, &mut queue, &mut state);
+        if let Some(interval) = frame_interval {
+            window.set_frame_interval(interval);
+        }
 
         if physical_size != old_physical_size {
             // `physical_size` is in physical pixels, but `Window::resize()`
@@ -310,6 +353,7 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
+                frame_interval: settings.frame_interval,
                 #[cfg(feature = "opengl")]
                 gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
@@ -339,6 +383,7 @@ where
                 title: settings.title.clone(),
                 size: settings.logical_size,
                 scale: settings.scale_policy,
+                frame_interval: settings.frame_interval,
                 #[cfg(feature = "opengl")]
                 gl_config: Some(settings.graphics.gl_config.clone()),
                 ..Default::default()
@@ -376,16 +421,27 @@ where
 
         //let mut repaint_requested = false;
         let old_physical_size = self.physical_size;
+        let mut frame_interval = None;
         let mut queue = Queue::new(
             &mut self.bg_color,
             &mut self.close_requested,
             &mut self.physical_size,
             &mut self.key_capture,
+            &mut frame_interval,
+            window.display_max_fps(),
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
             (self.user_update)(ui, &mut queue, state)
         });
+
+        // Re-arming replaces the timer that is currently firing this very
+        // callback. Its `Drop` only unregisters it from the run loop, which is
+        // documented as safe from within a timer callback, and the closure is
+        // owned by the timer rather than borrowed from here.
+        if let Some(interval) = frame_interval {
+            window.set_frame_interval(interval);
+        }
 
         if self.close_requested {
             window.close();

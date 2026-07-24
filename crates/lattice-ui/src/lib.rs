@@ -982,22 +982,23 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
     dock: DockState<panes::Tab>,
-    /// Upper bound on how often the UI asks to be repainted while something
-    /// is animating, in frames per second; `None` leaves it uncapped (repaint
-    /// every frame the shell offers). Persisted.
+    /// Upper bound on how often the UI is drawn, in frames per second;
+    /// `None` leaves it uncapped (as fast as the display can present).
+    /// Persisted.
     ///
-    /// A *request*, not a guarantee, and deliberately so — it is read only by
-    /// [`root_ui`]'s repaint scheduling, never by any drawing code. The
-    /// offline renderer steps its own clock and never reaches `root_ui`, so a
-    /// recorded frame cannot depend on this and the determinism test stays
-    /// honest.
+    /// Read by the shells to pace themselves, and by [`root_ui`] only to
+    /// schedule repaints — never by any drawing code. The offline renderer
+    /// steps its own clock and never reaches `root_ui`, so a recorded frame
+    /// cannot depend on this and the determinism test stays honest.
     ///
-    /// What you actually get is quantized by how often the shell polls the
-    /// UI, since a repaint can only land on one of those ticks. The plugin
-    /// shell polls on a fixed ~15 ms timer, so its achievable rates are
-    /// 67/33/22/17..., and a cap at or above 67 is simply inactive. The
-    /// standalone runs on eframe, which schedules a real wakeup and hits the
-    /// requested rate directly.
+    /// The repaint request alone cannot enforce this, and shells must not
+    /// rely on it: egui takes the SMALLEST delay any caller asks for in a
+    /// pass, and a zero-delay `request_repaint` (an input event, a hover
+    /// animation, the plugin's own MIDI-drain repaint) additionally forces
+    /// the following pass to zero. A cap expressed that way evaporates
+    /// exactly when the UI is busy — the case it exists for. The plugin
+    /// therefore drives its window's frame timer from this value, which is a
+    /// hard bound because a frame that is never asked for is never drawn.
     pub fps_cap: Option<f32>,
     /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
     /// Runtime-only; filled and drawn by [`root_ui`], never by the offline
