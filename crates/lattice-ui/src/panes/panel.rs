@@ -9,15 +9,26 @@ use crate::SharedState;
 
 /// Render quality/cost, then the workspace layout.
 pub(super) fn panel_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    // Performance: the quality dial and the meter to judge it by. Render
-    // scale trades GPU for crisper glyph edges; the overlay shows what that
-    // (and everything else) costs.
+    // Performance: the cost dial and the meter to judge it by. Render scale is
+    // presented as GPU cost rather than as a look setting, because that is what
+    // it is: the renderer pins the two things that decide how the lattice LOOKS
+    // to the native screen size — the bloom chain is sized off `px_size(1.0)`,
+    // and `aa_width` converts its 2px soft band from screen pixels into render
+    // pixels — so all the scale can move is resolved detail. Down is the
+    // direction that earns its keep (0.5 = a quarter of the lattice's pixels
+    // for a near-identical picture); up has little left to sharpen, since every
+    // edge is already soft-banded before the extra samples see it. Described as
+    // "higher supersamples" it read as a quality knob that did nothing.
     ui.heading("Performance");
     ValueBar::new(&mut state.view.render_scale, 0.5..=2.0, "Render scale")
         .show(ui)
         .on_hover_text(
-            "Lattice render resolution: 1.0 = native, higher supersamples, \
-             lower renders coarse and upscales",
+            "How many pixels the lattice is drawn at: 1.0 = native, 0.5 = a \
+             quarter as many. A cost dial, not a look dial — edge softness and \
+             the glow are pinned to screen size, so turning it down buys back \
+             GPU for very little picture, and turning it up costs a lot for \
+             slightly finer detail. Turn it down if the plugin is working the \
+             machine hard.",
         );
     ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
         "A corner HUD with frame rate, the GUI's CPU time per frame, \
