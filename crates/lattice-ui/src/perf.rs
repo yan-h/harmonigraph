@@ -337,7 +337,7 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
         ("ui cpu", format!("{:.1} ms", perf.shown_cpu_ms)),
         ("tess", format!("{:.1} ms", perf.shown_tess_ms)),
         ("ui gpu", format!("{:.1} ms", perf.shown_egui_gpu_ms)),
-        ("lattice gpu", gpu),
+        ("3d gpu", gpu),
         ("wait", format!("{:.1} ms", perf.shown_acquire_ms)),
         ("memory", memory_readout(perf.rss_bytes)),
         ("voices", format!("{} held · {fading} fading", perf.workload.held_voices)),
@@ -369,22 +369,33 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
         ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), color))
     };
 
-    // One column for the labels so the values line up. The font is
-    // monospaced, so a fixed character count is a fixed width.
-    let label_width = layout("       ", &mono, dim).rect.width();
+    // Two columns, both measured rather than assumed: labels left-aligned in
+    // the first, values RIGHT-aligned in the second so the units line up.
+    //
+    // The label column used to be a hardcoded seven characters, which was
+    // fine until a row was called "lattice gpu" — eleven characters, and the
+    // value column started underneath it. Sizing from the widest label
+    // actually present cannot drift out of step with the rows again.
+    const COL_GAP: f32 = 10.0;
     let head_fps = layout(&format!("{fps:.0} fps"), &head_font, health);
     let head_state = layout(state, &mono, dim);
+    let labels: Vec<_> = rows.iter().map(|(l, _)| layout(l, &mono, dim)).collect();
+    let values: Vec<_> = rows.iter().map(|(_, v)| layout(v, &mono, bright)).collect();
+    let widest = |gs: &[std::sync::Arc<egui::Galley>]| {
+        gs.iter().map(|g| g.rect.width()).fold(0.0f32, f32::max)
+    };
+    let (label_col, value_col) = (widest(&labels), widest(&values));
 
     let mut lines: Vec<Vec<(f32, std::sync::Arc<egui::Galley>)>> = Vec::new();
     lines.push(vec![
         (0.0, head_fps.clone()),
         (head_fps.rect.width() + 4.0, head_state),
     ]);
-    for (label, value) in &rows {
-        lines.push(vec![
-            (0.0, layout(label, &mono, dim)),
-            (label_width, layout(value, &mono, bright)),
-        ]);
+    for (label, value) in labels.into_iter().zip(values) {
+        // Right-aligned inside the value column, so "4.2 ms" and "12.5 ms"
+        // end on the same edge and can be read down the list.
+        let x = label_col + COL_GAP + (value_col - value.rect.width());
+        lines.push(vec![(0.0, label), (x, value)]);
     }
 
     const ROW_GAP: f32 = 1.0;
@@ -634,5 +645,64 @@ mod tests {
         }
         let from_row = 1000.0 / (perf.shown_frame_dt * 1000.0);
         assert!((perf.fps() - from_row).abs() < 1e-3, "{} vs {from_row}", perf.fps());
+    }
+
+    /// Labels and values must not collide, whatever the rows are called.
+    ///
+    /// The label column was a hardcoded seven characters until a row named
+    /// "lattice gpu" arrived and the values started printing on top of it.
+    /// Driving the assertion off the SAME `rows` the overlay builds means a
+    /// future row long enough to break the layout fails here instead.
+    #[test]
+    fn the_value_column_clears_the_longest_label() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx); // real metrics, not egui's fallback
+        let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+        let mut perf = PerfStats::default();
+        // A reading in every row, so none of them lays out as a short
+        // placeholder and hides the widest case.
+        perf.record(
+            FrameCosts {
+                shell_ms: 1.0,
+                cpu_ms: 2.0,
+                tess_ms: 3.0,
+                egui_gpu_ms: 4.0,
+                lattice_gpu_ms: 5.0,
+                acquire_ms: 6.0,
+            },
+            1.0,
+            Workload { animating: true, ..Default::default() },
+        );
+
+        let output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(area), ..Default::default() },
+            |ui| draw_overlay(ui.ctx(), area, &perf),
+        );
+        let mut texts: Vec<(egui::Rect, String)> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some((
+                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    text.galley.text().to_owned(),
+                )),
+                _ => None,
+            })
+            .collect();
+        texts.sort_by(|a, b| a.0.top().total_cmp(&b.0.top()));
+        assert!(texts.len() > 8, "expected a row per reading, got {}", texts.len());
+
+        // Within each row (same top), nothing may start before the previous
+        // piece ends.
+        for pair in texts.windows(2) {
+            let ((a, at), (b, bt)) = (&pair[0], &pair[1]);
+            if (a.top() - b.top()).abs() > 0.5 {
+                continue; // different rows
+            }
+            assert!(
+                b.left() >= a.right(),
+                "{at:?} and {bt:?} overlap: {a:?} then {b:?}",
+            );
+        }
     }
 }
