@@ -73,3 +73,68 @@ the shader) and where they visually overlap, then a pick of which to cut.
   table, so this stays as-is. The constant is the knob if a mismatch ever
   panics on an exotic host.
 - **Alternate skins / live re-skinning**: parked by choice.
+
+## Baking settled piano-roll notes into cached meshes
+
+**State.** `draw_roll` (`crates/lattice-ui/src/panes/roll.rs`) re-derives every
+visible note from scratch each frame. A note is drawn as up to **five stroked,
+anti-aliased rounded rects** — two bloom bands (gated on
+`view.bloom_strength`), a keyline pair, and the core (~`roll.rs:210-273`) —
+and `alpha` is pinned at `1.0` by design (`roll.rs:175`), so a note eleven
+seconds old costs exactly what a fresh one does. Cost is therefore linear in
+notes-on-screen, which is `roll_seconds` wide (12 s default).
+
+Measured with the overlay's `tess` row: ~4 ms of tessellation while spamming
+notes, against a 6.94 ms refresh at 144 Hz, with `ui cpu` at ~2 ms and lattice
+GPU at ~0.2 ms. Tessellation is the dominant frame cost, and it scales
+one-for-one with roll note count (confirmed by sweeping the Span control) and
+jumps again with Bloom on.
+
+**The work.** The roll is a scrolling timeline of immutable content — the same
+structure the spectrogram heatmap has, and the same fix applies (see
+`SpectrogramRing`, `panes/spectrogram.rs`). Tessellate settled notes ONCE into
+`Mesh`es chunked by absolute time, then per frame replay the chunks and
+translate them. Held notes and anything near the window edge keep drawing live.
+
+Two load-bearing assumptions, both verified:
+
+- `Shape::Mesh(Arc<Mesh>)` — replaying a baked chunk is a refcount bump, not a
+  copy of its vertices.
+- `depth_of(t) = split + frac(t) * depth_span` is LINEAR in time
+  (`panes/spectral.rs:614`), so scrolling a baked chunk is an exact
+  screen-space translation along the depth axis, not an approximation that
+  drifts. The translation vector is `axes.at(0.0, dd) - axes.at(0.0, 0.0)`,
+  independent of pitch and depth because `Axes::at` is affine.
+
+Chunk keys from absolute time (`floor(note.start / CHUNK)`), exactly as the
+spectrogram keys slabs, so the offline renderer stays deterministic.
+
+**The catch.** Two, both found by reading rather than by building:
+
+1. **Notes are truncated at the far edge.** `let (t0, t1) = (t0.max(oldest),
+   t1.max(oldest));` (`roll.rs:164`) rewrites a crossing note's geometry every
+   frame while it exits, so it is NOT immutable there. A chunk must be retired
+   before its notes reach that edge and its notes handed back to live drawing.
+   This is the same trap that shipped as visible jitter in the spectrogram
+   ring's first cut, where the sampler's ClampToEdge was quietly doing work the
+   ring couldn't. Budget real care for the edge, and verify by watching notes
+   leave the far end.
+2. **`draw_roll` takes `&SharedState`, not `&mut`.** A cache needs mutable
+   access, which ripples through `draw_pane` and into the offline renderer's
+   path — mechanical, but it touches determinism-tested code.
+
+Also: held notes' final segment ends at `now` (`note.segments(now)`), so the
+live/baked split is by RELEASE time, not merely by window position.
+
+**Open question to settle first.** Whether `egui::Context::tessellate` is safe
+to call mid-frame, or whether to drive `epaint::Tessellator` directly. The roll
+draws no text, so either way there is no font-atlas plumbing to arrange.
+
+**Value / effort.** Medium-high effort, comparable to the spectrogram ring.
+Payoff is large and structural: roll tessellation becomes O(notes arriving)
+instead of O(notes visible), `roll_seconds` stops being a performance setting,
+and dense passages stop costing frames. Strictly better than the geometric-LOD
+alternative (skip bands on tiny ribbons), which trades a little appearance for
+a bounded cost and would be subsumed by this. **There is a 5x lever available
+without any code in the meantime:** Bloom off takes a note from five stroked
+rects to three, Keyline off takes it to one.
