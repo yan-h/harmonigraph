@@ -92,7 +92,25 @@ pub(super) fn draw_roll(
         Some(ws) => &ws.roll,
         None => state.tracker.roll(),
     };
-    let mut notes: Vec<&RollNote> = roll.notes().collect();
+    // Cull to the visible window BEFORE sorting: the roll can remember
+    // thousands of notes while only a handful are on screen, and sorting the
+    // survivors alone (rather than every remembered note) keeps the same
+    // deterministic paint order for far less work.
+    //   - Entirely past the window's far end, or
+    //   - entirely off the octave zoom (both endpoints outside and on the
+    //     same side, so a note that merely crosses an edge still draws its
+    //     visible part).
+    let mut notes: Vec<&RollNote> = roll
+        .notes()
+        .filter(|note| {
+            if note.stop(now) < oldest {
+                return false;
+            }
+            let (a, b) = (note.start_pitch(), note.end_pitch());
+            let (lo, hi) = (a.min(b), a.max(b));
+            hi >= scale.min_midi - cfg.roll_thickness && lo <= scale.max_midi + cfg.roll_thickness
+        })
+        .collect();
     notes.sort_unstable_by(|a, b| {
         a.start
             .total_cmp(&b.start)
@@ -100,20 +118,6 @@ pub(super) fn draw_roll(
             .then(a.note.cmp(&b.note))
     });
     for note in notes {
-        // Entirely past the window's far end, or entirely off the octave
-        // zoom (both endpoints outside and on the same side, so a note
-        // that merely crosses the edge still draws its visible part).
-        if note.stop(now) < oldest {
-            continue;
-        }
-        let (lo, hi) = {
-            let (a, b) = (note.start_pitch(), note.end_pitch());
-            (a.min(b), a.max(b))
-        };
-        if hi < scale.min_midi - cfg.roll_thickness || lo > scale.max_midi + cfg.roll_thickness {
-            continue;
-        }
-
         for ((t0, p0), (t1, p1)) in note.segments(now) {
             let (t0, t1) = (t0.max(oldest), t1.max(oldest));
             if t1 < oldest {
@@ -139,25 +143,32 @@ pub(super) fn draw_roll(
             let g = state.view.bloom_strength.clamp(0.0, 2.0);
             let body = |a: f32| note_color(note, cfg, state, pitch, a);
             // (stroke width, color) per pass, painted in order; the crisp
-            // outline is last and on top.
-            let mut passes: Vec<(f32, Color32)> = Vec::with_capacity(4);
+            // outline is last and on top. At most four passes (two glow, one
+            // keyline, one crisp), so a stack array avoids a heap allocation
+            // per segment per frame.
+            let mut passes: [(f32, Color32); 4] = [(0.0, Color32::TRANSPARENT); 4];
+            let mut np = 0;
             if g > 0.0 {
                 // The glow passes brighten, toward the bloom halo.
-                passes.push((width + g * 3.0, brighten(body(alpha * 0.12 * g))));
-                passes.push((width + g * 1.5, brighten(body(alpha * 0.20 * g))));
+                passes[np] = (width + g * 3.0, brighten(body(alpha * 0.12 * g)));
+                passes[np + 1] = (width + g * 1.5, brighten(body(alpha * 0.20 * g)));
+                np += 2;
             }
             // A thin light keyline just outside the outline, at the strength
             // the Edge setting asks for. See `keyline`.
             if let Some(edge) = keyline(cfg, alpha) {
-                passes.push((width + 2.0 * KEYLINE_PX, edge));
+                passes[np] = (width + 2.0 * KEYLINE_PX, edge);
+                np += 1;
             }
             // The crisp outline is the note's TRUE color, so it matches the
             // same note on the lattice.
-            passes.push((width, body(alpha)));
+            passes[np] = (width, body(alpha));
+            np += 1;
+            let passes = &passes[..np];
 
             if ribbon_px < MIN_RIBBON_PX {
                 // Too thin to bound: the note IS its spine.
-                for &(w, color) in &passes {
+                for &(w, color) in passes {
                     painter.line_segment(
                         [axes.at(a0, d0), axes.at(a1, d1)],
                         egui::Stroke::new(w.max(MIN_RIBBON_PX), color),
@@ -169,7 +180,7 @@ pub(super) fn draw_roll(
                 let rect = egui::Rect::from_two_pos(axes.at(a0 - half, d0), axes.at(a1 + half, d1));
                 let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
                 let rounding = egui::CornerRadius::same(radius.min(127.0) as u8);
-                for &(w, color) in &passes {
+                for &(w, color) in passes {
                     // NOT snapped to whole pixels, which egui does to rects by
                     // default (TessellationOptions::round_rects_to_pixels) to
                     // keep static chrome crisp. These rects scroll: snapping
@@ -198,7 +209,7 @@ pub(super) fn draw_roll(
                     axes.at(a1 + half, d1),
                     axes.at(a1 - half, d1),
                 ];
-                for &(w, color) in &passes {
+                for &(w, color) in passes {
                     painter.add(egui::Shape::convex_polygon(
                         quad.clone(),
                         Color32::TRANSPARENT,
