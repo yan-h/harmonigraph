@@ -485,6 +485,30 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
 }
 
+/// Every blob saved before the spectrogram existed is missing the field, and
+/// plain `#[serde(default)]` answers `false` for it — so the feature arrived
+/// switched off for every existing project while a fresh install got it on.
+/// The two have to agree.
+#[test]
+fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.show_spectrogram = false;
+    let saved = state.save_persist();
+    let old = saved.replace("show_spectrogram:false,", "");
+    assert_ne!(old, saved, "the field must have been there to strip");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&old);
+    assert!(
+        restored.spectrum_config.show_spectrogram,
+        "a missing field must fall back to the struct's own default, not bool::default()"
+    );
+    // An explicit `false` is a choice, not an absence, and still round-trips.
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    assert!(!restored.spectrum_config.show_spectrogram);
+}
+
 #[test]
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];

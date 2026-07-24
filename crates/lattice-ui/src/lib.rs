@@ -369,7 +369,11 @@ pub struct SpectrumConfig {
     // roll's depth region on the roll's own time axis — so each column of
     // spectral energy lines up with the notes that made it.
     /// Draw the spectrogram heatmap (over the roll's time window).
-    #[serde(default)]
+    /// `default_true`, not `default`, or every state blob saved before this
+    /// field existed loads with the spectrogram off — contradicting the
+    /// struct's own default, which is what a fresh install gets. A blob that
+    /// really did turn it off carries `false` and still round-trips.
+    #[serde(default = "default_true")]
     pub show_spectrogram: bool,
     /// The heatmap's color ramp.
     #[serde(default)]
