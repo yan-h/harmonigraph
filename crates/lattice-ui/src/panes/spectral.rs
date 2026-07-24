@@ -24,15 +24,16 @@ fn first_c_at_or_above(midi: f32) -> i32 {
 }
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
-/// low, kHz to one decimal above 1000. Three or four significant figures is
-/// all a range readout can use — "16744 Hz" is noise where "16.7k" is a
-/// number you can read at a glance while dragging.
+/// low, kHz to one decimal above 1000, each carrying its unit so the number
+/// says what it is. Three or four significant figures is all a range readout
+/// can use — "16744 Hz" is noise where "16.7 kHz" is a number you can read at
+/// a glance while dragging.
 fn hz_readout(midi: f32) -> String {
     let hz = lattice_core::spectrum::midi_to_hz(midi);
     if hz >= 1000.0 {
-        format!("{:.1}k", hz / 1000.0)
+        format!("{:.1} kHz", hz / 1000.0)
     } else {
-        format!("{hz:.0}")
+        format!("{hz:.0} Hz")
     }
 }
 
@@ -798,14 +799,20 @@ pub(crate) fn spectral_pane(
     // voice bars: a label only earns its place if you can read which pitch a
     // lane is, and a loud slab would otherwise bury it. The gridlines
     // themselves stay underneath (drawn above) as pitch lanes.
+    // Haloed exactly like the lattice's node labels, and for the same reason:
+    // whatever is behind them is a picture, not a background. A pitch label
+    // over a bright spectrogram slab, or over the spectrum's own fill, has no
+    // contrast to rely on at all.
     for (p, label) in axis_labels {
         let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
-        painter.text(
+        super::lattice::outlined_text(
+            &painter,
             pos,
             align,
             label,
             egui::FontId::monospace(10.0 * label_scale),
             theme::text_dim(),
+            theme::well(),
         );
     }
 
@@ -823,7 +830,8 @@ pub(crate) fn spectral_pane(
         );
         let nearest = midi.round();
         let (pos, align) = axes.text_anchor(scale.t_of(midi), 1.0, 6.0, -2.0);
-        painter.text(
+        super::lattice::outlined_text(
+            &painter,
             pos,
             align,
             format!(
@@ -835,6 +843,7 @@ pub(crate) fn spectral_pane(
             ),
             egui::FontId::monospace(10.5 * label_scale),
             theme::text(),
+            theme::well(),
         );
     }
 }
@@ -966,10 +975,46 @@ mod tests {
             ] {
                 for roll_fraction in [0.0, 0.55, 1.0] {
                     let shapes = paint(rect, orientation, roll_fraction);
-                    assert!(shapes > 0, "{orientation:?} drew nothing");
+                    assert!(!shapes.is_empty(), "{orientation:?} drew nothing");
                 }
             }
         }
+    }
+
+    /// The axis labels are haloed like the lattice's node names. What sits
+    /// behind them is a picture — a bright spectrogram slab, the spectrum's
+    /// own fill — so plain text has no contrast to rely on, and a label you
+    /// can't read doesn't say which pitch a lane is.
+    #[test]
+    fn the_axis_labels_are_haloed() {
+        let shapes = paint(WIDE, SpectralOrientation::Horizontal, 0.55);
+        let mut runs: std::collections::HashMap<String, usize> = Default::default();
+        for shape in &shapes {
+            if let egui::Shape::Text(t) = shape {
+                *runs.entry(t.galley.text().to_owned()).or_default() += 1;
+            }
+        }
+        assert!(!runs.is_empty(), "the pane drew no labels at all");
+        for (label, stamps) in runs {
+            assert!(
+                stamps > 1,
+                "{label:?} was drawn once, so it carries no halo — bare text over the \
+                 spectrogram is what this guards against",
+            );
+        }
+    }
+
+    /// The readout names its own unit, and switches to kHz where an analyzer
+    /// axis does.
+    #[test]
+    fn the_hz_readout_carries_its_unit() {
+        assert_eq!(hz_readout(69.0), "440 Hz", "A440, the one value worth checking by hand");
+        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MIN_MIDI), "16 Hz");
+        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MAX_MIDI), "16.7 kHz");
+        // The switch is at 1000 Hz exactly, not somewhere near it.
+        let khz = lattice_core::spectrum::hz_to_midi(1000.0);
+        assert_eq!(hz_readout(khz), "1.0 kHz");
+        assert!(hz_readout(khz - 0.1).ends_with(" Hz"));
     }
 
     /// A C gridline has to land on a C. The range used to be a pair of octave
@@ -1030,7 +1075,11 @@ mod tests {
 
     /// Run one frame of the Spectral pane into `rect` and count the shapes
     /// it emitted.
-    fn paint(rect: egui::Rect, orientation: SpectralOrientation, roll_fraction: f32) -> usize {
+    fn paint(
+        rect: egui::Rect,
+        orientation: SpectralOrientation,
+        roll_fraction: f32,
+    ) -> Vec<egui::Shape> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = orientation;
         state.spectrum_config.roll_fraction = roll_fraction;
@@ -1087,6 +1136,6 @@ mod tests {
                 spectral_pane(&mut child, &mut state, now, 1.0, 0);
             },
         );
-        output.shapes.len()
+        output.shapes.into_iter().map(|s| s.shape).collect()
     }
 }

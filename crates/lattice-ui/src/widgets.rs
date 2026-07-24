@@ -592,22 +592,17 @@ impl<'a> RangeBar<'a> {
 
         // The handles go on top of everything, text included: they are the
         // part you operate, and a readout digit sliding under one is a better
-        // outcome than a handle disappearing behind a digit. Each is a light
-        // thumb outlined in the track color, so it stands out against the
-        // filled span AND the empty track — at the full range both handles sit
-        // over fill, at a narrow range both sit against empty track.
+        // outcome than a handle disappearing behind a digit. A flat light
+        // thumb, no outline — a 1px dark stroke inside a 6px rounded rect
+        // lands on fractional pixels and reads as a ragged edge, and the thumb
+        // has plenty of contrast against both the filled span and the empty
+        // track without one.
         for x in [lx, hx] {
             let grip = egui::Rect::from_center_size(
                 egui::pos2(x, rect.center().y),
                 Vec2::new(HANDLE_W, rect.height() - 3.0),
             );
             painter.rect_filled(grip, CornerRadius::same(2), theme::text());
-            painter.rect_stroke(
-                grip,
-                CornerRadius::same(2),
-                egui::Stroke::new(1.0, theme::well()),
-                egui::StrokeKind::Inside,
-            );
         }
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
