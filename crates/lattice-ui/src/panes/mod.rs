@@ -107,7 +107,11 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Nodes => "Nodes".into(),
             Tab::Scene => "Scene".into(),
             Tab::Console => "Console".into(),
-            Tab::Spectral => "Spectral".into(),
+            // Deliberately the same name as the settings tab below: the
+            // display and the settings for it are one feature, and they sit in
+            // different docks, so the pair reads as "the analyzer, and its
+            // knobs" rather than as two things to tell apart.
+            Tab::Spectral => "Analyzer".into(),
             Tab::Analyzer => "Analyzer".into(),
             Tab::Notes => "Notes".into(),
             Tab::Video => "Video".into(),
