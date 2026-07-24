@@ -40,9 +40,25 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   the egui-baseview patch below, this fixes the outdated ghost image that
   stayed on screen after tabbing away from the host and back, until the
   window was clicked. macOS only; other platforms never emit the event.
+- **Patch 4** (`src/lib.rs`, `src/window_open_options.rs`, `src/window.rs`,
+  `src/platform/macos/{view,window}.rs`, `Cargo.toml`): make the frame timer
+  configurable and re-armable, and report the display's refresh rate. The
+  interval was the hardcoded `0.015` at the `TimerHandle::new` call site, so
+  the window could never run faster than ~67 Hz — invisible on a 60 Hz panel,
+  a hard ceiling on a 120/144 Hz one. Now `WindowOpenOptions::frame_interval`
+  sets it at open and `Window::set_frame_interval` re-arms it live (storing
+  the new `TimerHandle` drops the old, whose `Drop` unregisters it, so the
+  cadence is replaced rather than stacked). `Window::display_max_fps` exposes
+  `NSScreen::maximumFramesPerSecond` — needs the `NSScreen` feature on
+  `objc2-app-kit` — so a caller can pace to the actual panel instead of
+  guessing, and re-reading it per frame means the window follows a drag to
+  another monitor. Intervals are clamped to `MIN_FRAME_INTERVAL`
+  ..=`MAX_FRAME_INTERVAL` so a bad value can neither spin the run loop nor
+  stall the window. macOS only; `set_frame_interval` is a no-op elsewhere and
+  `display_max_fps` returns `None`.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
-  re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, and
-  the occlusion-event patch.
+  re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the
+  occlusion-event patch, and the configurable frame timer.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
   baseview-based plugin. baseview and nice-plug are both RustAudio projects,
   so the fix would land in exactly the stack this plugin uses.
@@ -90,10 +106,49 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   hidden, which is expected — but pending writes drain and `maintain` runs
   every tick, so memory stays flat). Root-caused from a 26 GB balloon while
   tabbed away from Bitwig.
+- **Patch 5** (1 site, `src/window.rs` `on_frame`): make delayed repaints
+  actually come due. The repaint deadline was recomputed as
+  `now + repaint_delay` on *every* tick that painted nothing, and egui
+  rebuilds `repaint_delay` from scratch each pass (reset to `MAX` in
+  `begin_pass_repaint_logic`, then the min of that pass's requests) while the
+  UI closure runs on every tick, painting or not. So a steady
+  `request_repaint_after(N)` re-based the deadline on each tick, and for any
+  N longer than the tick interval (~15 ms, the macOS frame timer) `now` never
+  caught up: the deadline receded forever and the window painted nothing
+  until an input event or a texture upload forced it. Every delayed repaint
+  was silently dead — the idle poll included, which went unnoticed because
+  the plugin shell requests a repaint whenever it drains MIDI, and an idle
+  window has nothing to show anyway. Fix: keep the EARLIEST pending deadline
+  rather than overwriting it, and schedule the next one from the instant a
+  frame actually painted instead of leaving it unset (clearing it to `None`
+  cost a whole tick, so every capped interval ran one tick long). Found while
+  adding the Panel pane's frame-rate cap, which is built on exactly this
+  mechanism and did nothing at all without the fix.
+- **Patch 6** (`src/window.rs`): plumb the frame timer through, so the app
+  can pace its own window. `EguiWindowSettings::frame_interval` sets the
+  opening cadence; `Queue::set_frame_interval` changes it from inside a
+  frame (applied after the frame returns, where the `Window` is reachable —
+  the same deferred shape `resize` already uses), and
+  `Queue::display_max_fps` passes baseview's reading through.
+  Re-arming from `on_frame` replaces the very timer whose callback is
+  running; that is safe because the handle's `Drop` only unregisters it from
+  the run loop and the closure is owned by the timer, not borrowed from the
+  frame. This is what makes a frame-rate cap enforceable: egui's
+  `request_repaint_after` cannot do it, since egui keeps the SMALLEST delay
+  requested in a pass and any zero-delay `request_repaint` (input event,
+  hover animation, a host draining MIDI) also forces the next pass to zero —
+  so a cap built on it evaporates exactly when the UI is busy.
+- **Patch 7** (2 lines, `src/renderer.rs` + `src/lib.rs`): re-export
+  `WgpuSetup` alongside `GraphicsConfig`. `WgpuConfiguration` was already
+  public, but its `wgpu_setup` field cannot be matched without the enum, so
+  there was no way to reach the `device_descriptor` hook and request an extra
+  device feature (we ask for timestamp queries, for the overlay's GPU-time
+  row). Pure re-export; no behaviour change.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
-  texture-delta forced render, the occlusion/skipped-present patch, and the
-  staged-upload flush.
+  texture-delta forced render, the occlusion/skipped-present patch, the
+  staged-upload flush, the repaint-deadline fix, the frame-timer
+  plumbing, and the `WgpuSetup` re-export.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

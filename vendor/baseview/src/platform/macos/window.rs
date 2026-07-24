@@ -173,6 +173,23 @@ impl<'a> Window<'a> {
         }
     }
 
+    pub fn set_frame_interval(&self, interval: f64) {
+        if self.inner.state.closed.get() {
+            return;
+        }
+        BaseviewView::arm_frame_timer(self.view, interval);
+    }
+
+    pub fn display_max_fps(&self) -> Option<f64> {
+        let screen = self.view.window()?.screen()?;
+        // 0 would mean "no answer"; treat it as one rather than handing back
+        // a rate nothing can be derived from.
+        match screen.maximumFramesPerSecond() {
+            fps if fps > 0 => Some(fps as f64),
+            _ => None,
+        }
+    }
+
     #[cfg(feature = "opengl")]
     pub fn gl_context(&self) -> Option<&GlContext> {
         self.inner.gl_context.get()

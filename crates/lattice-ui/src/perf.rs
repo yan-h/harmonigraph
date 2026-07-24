@@ -8,10 +8,27 @@
 //! `root_ui` entirely, so nothing in this module ever runs on its
 //! (deterministic) draw path — no wall-clock read reaches a recorded frame.
 
-/// How quickly the smoothed readouts chase the latest sample. egui already
-/// smooths `stable_dt`; this steadies the display a touch more so the numbers
-/// are readable rather than flickering every frame.
-const SMOOTH: f32 = 0.1;
+/// Time constant of the smoothed readouts, in seconds: how long they take to
+/// chase most of the way to a new level.
+///
+/// Expressed as a duration rather than a per-frame fraction on purpose. A
+/// fixed fraction settles in a fixed number of FRAMES, so the same constant
+/// steadies the numbers at 30 fps and lets them flicker at 144 — the readout
+/// got twitchier the faster the plugin ran, which is backwards.
+const SMOOTH_TAU: f32 = 0.4;
+
+/// How often the frame numbers on screen are allowed to change.
+///
+/// The smoothed values keep updating every frame; the overlay reads a copy
+/// latched this often, so the digits hold still long enough to be read.
+///
+/// This rather than rounding the values to a coarse step. Rounding trades one
+/// kind of churn for a worse one: a value sitting near a step boundary flips
+/// between two readings that are a whole step apart, which catches the eye
+/// harder than the wobble it replaced — and the resolution is gone for good,
+/// which at a 2 ms frame cost means throwing away a quarter of the number.
+/// Holding the display keeps every digit and simply stops it flickering.
+const READOUT_INTERVAL: f64 = 0.25;
 
 /// Seconds between memory reads. RSS moves slowly and the read is a syscall,
 /// so once a second is plenty and keeps it off the per-frame path.
@@ -65,6 +82,8 @@ pub struct PerfStats {
     /// building the dock and its panes on this thread. Not GPU time — the 3D
     /// draw is submitted to wgpu and finishes off-thread (see `draw_overlay`).
     cpu_ms: f32,
+    /// Smoothed milliseconds spent turning shapes into triangles.
+    tess_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it). Smoothed for the same reason the
     /// frame numbers are: this is read as a number, not watched as a trace,
@@ -73,6 +92,24 @@ pub struct PerfStats {
     rss_bytes: u64,
     /// Shell-clock time of the last memory read, to throttle it.
     last_mem_read: f64,
+    /// Shell-clock time of the previous frame, for measuring the interval.
+    /// `None` before the first one.
+    last_frame: Option<f64>,
+    /// What the overlay actually prints: `frame_dt` and `cpu_ms` as they
+    /// stood at the last latch, held between them (see [`READOUT_INTERVAL`]).
+    shown_frame_dt: f32,
+    shown_cpu_ms: f32,
+    shown_tess_ms: f32,
+    /// Shell-clock time of that latch.
+    last_readout: f64,
+    /// GPU milliseconds for the lattice passes, smoothed and held like the
+    /// rest. See [`GpuTime`] for the three states this can be in.
+    gpu_ms: f32,
+    shown_gpu_ms: f32,
+    /// Whether the device ever said it could measure GPU time at all.
+    gpu_supported: bool,
+    /// Whether a measurement has actually come back.
+    have_gpu: bool,
     /// This frame's workload (voice counts, visible nodes, render scale,
     /// whether it was animating).
     workload: Workload,
@@ -83,22 +120,86 @@ impl Default for PerfStats {
         PerfStats {
             frame_dt: 1.0 / 60.0,
             cpu_ms: 0.0,
+            tess_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
+            last_frame: None,
+            shown_frame_dt: 1.0 / 60.0,
+            shown_cpu_ms: 0.0,
+            shown_tess_ms: 0.0,
+            gpu_ms: 0.0,
+            shown_gpu_ms: 0.0,
+            gpu_supported: true,
+            have_gpu: false,
+            last_readout: f64::NEG_INFINITY,
             workload: Workload::default(),
         }
     }
 }
 
 impl PerfStats {
-    /// Fold this frame's measurements in. `dt` is egui's stable frame time,
-    /// `cpu_ms` the measured dock-build time, `now` the shell clock (for
-    /// throttling the memory read).
-    pub(crate) fn record(&mut self, dt: f32, cpu_ms: f32, now: f64, workload: Workload) {
+    /// Fold this frame's measurements in. `cpu_ms` is the measured dock-build
+    /// time and `now` the shell clock, which doubles as the frame timestamp.
+    ///
+    /// The interval is measured here rather than taken from egui's
+    /// `stable_dt`, which is only a measured delta when the PREVIOUS pass
+    /// asked for an *immediate* repaint; otherwise egui hands back
+    /// `RawInput::predicted_dt`, and egui-baseview never sets that, so it
+    /// stays at egui's 1/60 default forever. Uncapped that went unnoticed —
+    /// every frame asks for an immediate repaint, so every reading was real.
+    /// Under a frame-rate cap the request is a delayed one, so the readout
+    /// blended a hardcoded 60 with the true rate and reported ~45 fps for a
+    /// perfectly steady 30.
+    pub(crate) fn record(
+        &mut self,
+        cpu_ms: f32,
+        tess_ms: f32,
+        gpu_ms: f32,
+        now: f64,
+        workload: Workload,
+    ) {
+        let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
+        self.last_frame = Some(now);
+        // Convert the time constant into this frame's blend factor, so the
+        // readouts settle over SMOOTH_TAU seconds whatever the frame rate.
+        // A frame long enough to make this exceed 1 simply lands on the new
+        // value, which is what a stall should look like.
+        let alpha = (1.0 - (-dt / SMOOTH_TAU).exp()).clamp(0.0, 1.0);
         if dt > 0.0 {
-            self.frame_dt += (dt - self.frame_dt) * SMOOTH;
+            self.frame_dt += (dt - self.frame_dt) * alpha;
         }
-        self.cpu_ms += (cpu_ms - self.cpu_ms) * SMOOTH;
+        self.cpu_ms += (cpu_ms - self.cpu_ms) * alpha;
+        self.tess_ms += (tess_ms - self.tess_ms) * alpha;
+        // Three states, not two: a real reading, "the device can't", and
+        // "none has landed yet". Collapsing the last two into one "n/a" made
+        // a wiring bug and an unsupported GPU look identical, which is
+        // exactly the question the row exists to answer.
+        match gpu_ms.to_bits() {
+            lattice_render::GPU_TIME_UNSUPPORTED => self.gpu_supported = false,
+            // Still waiting for the first readback; leave the row saying so.
+            lattice_render::GPU_TIME_PENDING => {}
+            // Anything else is a real reading, INCLUDING 0.0 — seeded rather
+            // than eased up from nothing, so the GPU doesn't appear to warm
+            // up over the first second of every session.
+            _ => {
+                self.have_gpu = true;
+                self.gpu_ms = if self.have_gpu && self.gpu_ms > 0.0 {
+                    self.gpu_ms + (gpu_ms - self.gpu_ms) * alpha
+                } else {
+                    gpu_ms
+                };
+            }
+        }
+        // Latch what the overlay prints. Seeded on the first frame rather
+        // than eased up from the defaults, so the HUD opens showing the real
+        // numbers instead of a quarter second of placeholder.
+        if now - self.last_readout >= READOUT_INTERVAL {
+            self.shown_frame_dt = self.frame_dt;
+            self.shown_cpu_ms = self.cpu_ms;
+            self.shown_tess_ms = self.tess_ms;
+            self.shown_gpu_ms = self.gpu_ms;
+            self.last_readout = now;
+        }
         self.workload = workload;
         if now - self.last_mem_read >= MEM_INTERVAL {
             let sample = rss_bytes();
@@ -115,9 +216,12 @@ impl PerfStats {
         }
     }
 
+    /// The frame rate as printed: derived from the held frame time, so the
+    /// headline number holds still with the rows under it rather than
+    /// counting off every frame on its own.
     fn fps(&self) -> f32 {
-        if self.frame_dt > 0.0 {
-            1.0 / self.frame_dt
+        if self.shown_frame_dt > 0.0 {
+            1.0 / self.shown_frame_dt
         } else {
             0.0
         }
@@ -170,64 +274,111 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     let dim = egui::Color32::from_gray(0x9A);
     let bright = egui::Color32::from_gray(0xE6);
     let mono = egui::FontId::monospace(11.0);
-    // Right-pad labels to one column so the values line up.
-    let row = |ui: &mut egui::Ui, label: &str, value: String| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.label(egui::RichText::new(format!("{label:<7}")).color(dim).font(mono.clone()));
-            ui.label(egui::RichText::new(value).color(bright).font(mono.clone()));
-        });
+    let head_font = egui::FontId::monospace(12.0);
+
+    let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
+    let gpu = if !perf.gpu_supported {
+        "n/a (no timestamps)".to_owned()
+    } else if perf.have_gpu {
+        format!("{:.1} ms", perf.shown_gpu_ms)
+    } else {
+        "measuring...".to_owned()
+    };
+    let rows: [(&str, String); 7] = [
+        ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
+        ("ui cpu", format!("{:.1} ms", perf.shown_cpu_ms)),
+        ("tess", format!("{:.1} ms", perf.shown_tess_ms)),
+        ("gpu", gpu),
+        ("memory", memory_readout(perf.rss_bytes)),
+        ("voices", format!("{} held · {fading} fading", perf.workload.held_voices)),
+        (
+            "nodes",
+            format!(
+                "{}  ·  {:.2}× scale",
+                perf.workload.visible_nodes, perf.workload.render_scale
+            ),
+        ),
+    ];
+
+    // Painted straight onto a foreground layer rather than assembled from
+    // widgets inside an Area.
+    //
+    // The Area was already `interactable(false)`, which is enough to keep it
+    // out of `layer_id_at` — but every `ui.label` inside it still registered a
+    // widget rect, and those win the pointer regardless. The result was a dead
+    // zone the size of the HUD in the corner of the lattice: no scroll-to-zoom
+    // and no drag-to-orbit under it, whenever the overlay was on, which is by
+    // default. A readout that changes the thing it is measuring is worse than
+    // no readout. Nothing below allocates a widget, so nothing can take the
+    // pointer.
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("perf_overlay"),
+    ));
+    let layout = |text: &str, font: &egui::FontId, color: egui::Color32| {
+        ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), color))
     };
 
-    let memory = memory_readout(perf.rss_bytes);
-    let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
+    // One column for the labels so the values line up. The font is
+    // monospaced, so a fixed character count is a fixed width.
+    let label_width = layout("       ", &mono, dim).rect.width();
+    let head_fps = layout(&format!("{fps:.0} fps"), &head_font, health);
+    let head_state = layout(state, &mono, dim);
 
-    // Anchored rather than placed: the overlay's width depends on the numbers
-    // in it (a four-digit memory readout is wider than a three-), and only the
-    // anchor knows the laid-out size in time to keep the RIGHT edge fixed.
-    // `constrain_to` is what makes the anchor measure from `area` instead of
-    // the whole window, and doubles as a clamp on a pane too small to hold it.
-    egui::Area::new(egui::Id::new("perf_overlay"))
-        .order(egui::Order::Foreground)
-        .constrain_to(area)
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-OVERLAY_INSET, OVERLAY_INSET))
-        .interactable(false)
-        .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(egui::Color32::from_black_alpha(0xC0))
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .corner_radius(egui::CornerRadius::same(4))
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.label(
-                            egui::RichText::new(format!("{fps:.0} fps"))
-                                .color(health)
-                                .font(egui::FontId::monospace(12.0))
-                                .strong(),
-                        );
-                        ui.label(egui::RichText::new(state).color(dim).font(mono.clone()));
-                    });
-                    row(ui, "frame", format!("{:.1} ms", perf.frame_dt * 1000.0));
-                    row(ui, "ui cpu", format!("{:.1} ms", perf.cpu_ms));
-                    row(ui, "memory", memory);
-                    row(
-                        ui,
-                        "voices",
-                        format!("{} held · {fading} fading", perf.workload.held_voices),
-                    );
-                    row(
-                        ui,
-                        "nodes",
-                        format!(
-                            "{}  ·  {:.2}× scale",
-                            perf.workload.visible_nodes, perf.workload.render_scale
-                        ),
-                    );
-                });
-        });
+    let mut lines: Vec<Vec<(f32, std::sync::Arc<egui::Galley>)>> = Vec::new();
+    lines.push(vec![
+        (0.0, head_fps.clone()),
+        (head_fps.rect.width() + 4.0, head_state),
+    ]);
+    for (label, value) in &rows {
+        lines.push(vec![
+            (0.0, layout(label, &mono, dim)),
+            (label_width, layout(value, &mono, bright)),
+        ]);
+    }
+
+    const ROW_GAP: f32 = 1.0;
+    let width = lines
+        .iter()
+        .map(|parts| parts.iter().map(|(x, g)| x + g.rect.width()).fold(0.0f32, f32::max))
+        .fold(0.0f32, f32::max);
+    let height = lines
+        .iter()
+        .map(|parts| parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max))
+        .sum::<f32>()
+        + ROW_GAP * lines.len().saturating_sub(1) as f32;
+
+    let margin = egui::vec2(8.0, 6.0);
+    // Top-RIGHT of `area`, and clamped to it so a pane too narrow to hold the
+    // overlay shows its left edge rather than pushing the numbers off screen.
+    //
+    // Placed outright rather than anchored. Anchoring existed because a
+    // widget-built overlay only learns its own width after laying out, and the
+    // right edge has to stay put as the numbers change width underneath it.
+    // Measuring the galleys up front settles the size before anything is
+    // drawn, so the position is simply known.
+    let size = egui::vec2(width, height) + margin * 2.0;
+    let origin = egui::pos2(
+        (area.right() - OVERLAY_INSET - size.x).max(area.left()),
+        area.top() + OVERLAY_INSET,
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_size(origin, size),
+        4.0,
+        egui::Color32::from_black_alpha(0xC0),
+    );
+
+    let mut y = origin.y + margin.y;
+    for parts in lines {
+        let row_height =
+            parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max);
+        for (dx, galley) in parts {
+            painter.galley(egui::pos2(origin.x + margin.x + dx, y), galley, bright);
+        }
+        y += row_height + ROW_GAP;
+    }
 }
+
 
 /// Resident set size of THIS process in bytes, or 0 when the platform can't
 /// report it. Called about once a second (see [`MEM_INTERVAL`]).
@@ -282,9 +433,12 @@ mod tests {
         let mut perf = PerfStats::default();
         // Seeded at a plausible 60 Hz so early frames don't read as absurd.
         assert!((perf.fps() - 60.0).abs() < 1.0);
-        // Feed a steady 30 Hz; the EMA should chase it down.
-        for _ in 0..500 {
-            perf.record(1.0 / 30.0, 2.0, 0.0, Workload { animating: true, ..Default::default() });
+        // Feed a steady 30 Hz on the shell clock; the EMA should chase it
+        // down. The interval is derived from `now`, so the clock must advance
+        // — that IS the measurement.
+        for i in 1..=500 {
+            let now = i as f64 / 30.0;
+            perf.record(2.0, 0.0, 0.0, now, Workload { animating: true, ..Default::default() });
         }
         assert!((perf.fps() - 30.0).abs() < 0.5, "fps = {}", perf.fps());
     }
@@ -293,8 +447,9 @@ mod tests {
     fn records_workload_and_reads_memory() {
         let mut perf = PerfStats::default();
         perf.record(
-            1.0 / 60.0,
             1.5,
+            0.0,
+            0.0,
             1.0,
             Workload {
                 active_voices: 5,
@@ -341,7 +496,7 @@ mod tests {
         // Force a read whose sample is whatever the platform reports; what is
         // under test is that the stored value MOVES but does not teleport.
         let before = perf.rss_bytes;
-        perf.record(1.0 / 60.0, 1.0, MEM_INTERVAL, Workload::default());
+        perf.record(1.0, 0.0, 0.0, MEM_INTERVAL, Workload::default());
         let after = perf.rss_bytes as f64;
         let sample = super::rss_bytes() as f64;
         if sample > 0.0 && (sample - before as f64).abs() > 1.0 {
@@ -355,14 +510,81 @@ mod tests {
     #[test]
     fn memory_read_is_throttled_to_one_per_interval() {
         let mut perf = PerfStats::default();
-        perf.record(1.0 / 60.0, 1.0, 10.0, Workload::default());
+        perf.record(1.0, 0.0, 0.0, 10.0, Workload::default());
         let first = perf.last_mem_read;
         assert_eq!(first, 10.0);
         // A read less than MEM_INTERVAL later must not refresh the timestamp.
-        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
+        perf.record(1.0, 0.0, 0.0, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
         assert_eq!(perf.last_mem_read, first, "read again too soon");
         // Past the interval, it refreshes.
-        perf.record(1.0 / 60.0, 1.0, 10.0 + MEM_INTERVAL, Workload::default());
+        perf.record(1.0, 0.0, 0.0, 10.0 + MEM_INTERVAL, Workload::default());
         assert_eq!(perf.last_mem_read, 10.0 + MEM_INTERVAL);
+    }
+
+    /// The readouts must settle over the same DURATION at any frame rate.
+    /// A per-frame blend factor settles in a fixed number of FRAMES instead,
+    /// so one constant steadied 30 fps while letting 144 fps flicker.
+    #[test]
+    fn smoothing_settles_over_the_same_time_at_any_rate() {
+        let settle_after_one_tau = |rate: f64| {
+            let mut perf = PerfStats::default();
+            // Seed the clock so every measured step is a full 1/rate.
+            perf.record(0.0, 0.0, 0.0, 0.0, Workload::default());
+            let frames = (rate * SMOOTH_TAU as f64).round() as usize;
+            for i in 1..=frames {
+                perf.record(10.0, 0.0, 0.0, i as f64 / rate, Workload::default());
+            }
+            perf.cpu_ms
+        };
+        // One time constant is ~63% of the way to the new level, whatever
+        // the frame rate.
+        for rate in [30.0, 60.0, 144.0] {
+            let settled = settle_after_one_tau(rate);
+            assert!((settled - 6.32).abs() < 0.2, "{rate} fps settled to {settled}");
+        }
+    }
+
+    /// Digits that never hold still get squinted at rather than read. The
+    /// values keep tracking every frame; what the overlay PRINTS is latched,
+    /// so it changes a few times a second instead of 144.
+    #[test]
+    fn the_printed_numbers_hold_between_latches() {
+        let mut perf = PerfStats::default();
+        perf.record(2.0, 0.0, 0.0, 0.0, Workload::default());
+        let shown = perf.shown_cpu_ms;
+
+        // Frames well inside the interval: the live value moves, the printed
+        // one does not.
+        for i in 1..=10 {
+            perf.record(20.0, 0.0, 0.0, i as f64 * READOUT_INTERVAL / 20.0, Workload::default());
+        }
+        assert!(perf.cpu_ms > shown, "the live value should have moved");
+        assert_eq!(perf.shown_cpu_ms, shown, "the printed value must hold");
+
+        // Past the interval it catches up.
+        perf.record(20.0, 0.0, 0.0, READOUT_INTERVAL, Workload::default());
+        assert_eq!(perf.shown_cpu_ms, perf.cpu_ms, "and then it latches");
+    }
+
+    /// Latching must not cost resolution: a reading a tenth of a millisecond
+    /// away from another has to print differently. (Rounding to a coarse step
+    /// was the alternative, and this is the property it gave up.)
+    #[test]
+    fn latching_keeps_the_tenths() {
+        let readout = |ms: f32| format!("{ms:.1} ms");
+        assert_ne!(readout(2.7), readout(2.8));
+        assert_eq!(readout(2.75), "2.8 ms");
+    }
+
+    /// The headline rate is derived from the SAME held frame time as the row
+    /// below it, so the two can never disagree on screen.
+    #[test]
+    fn fps_is_read_off_the_held_frame_time() {
+        let mut perf = PerfStats::default();
+        for i in 1..=200 {
+            perf.record(1.0, 0.0, 0.0, i as f64 / 120.0, Workload::default());
+        }
+        let from_row = 1000.0 / (perf.shown_frame_dt * 1000.0);
+        assert!((perf.fps() - from_row).abs() < 1e-3, "{} vs {from_row}", perf.fps());
     }
 }

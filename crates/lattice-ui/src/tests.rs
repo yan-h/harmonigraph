@@ -572,7 +572,7 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
     state.spectrum_config.spectrogram_opacity = 0.5;
-    state.spectrum_config.spectrogram_smoothing = 0.6;
+    state.spectrum_config.spectrogram_gamma = 1.6;
     state.spectrum_config.roll_outline_width = 2.5;
     let saved = state.save_persist();
 
@@ -588,7 +588,7 @@ fn spectrum_config_round_trips_through_persist() {
     assert!(restored.spectrum_config.show_spectrogram);
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
-    assert_eq!(restored.spectrum_config.spectrogram_smoothing, 0.6);
+    assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
     assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
 }
 
@@ -1014,6 +1014,126 @@ fn the_spectral_divider_drags_through_the_dock() {
     );
 }
 
+#[test]
+fn frame_interval_converts_a_cap_to_a_spacing() {
+    assert_eq!(frame_interval(None), None, "uncapped asks for no spacing");
+    assert_eq!(
+        frame_interval(Some(30.0)),
+        Some(std::time::Duration::from_secs_f32(1.0 / 30.0)),
+    );
+    assert_eq!(
+        frame_interval(Some(144.0)),
+        Some(std::time::Duration::from_secs_f32(1.0 / 144.0)),
+    );
+}
+
+#[test]
+fn nonsense_caps_read_as_uncapped() {
+    // The control cannot produce these, but a hand-edited persist blob can.
+    // Uncapped is the safe reading: a zero interval is the uncapped
+    // behaviour with extra steps, and a huge one would freeze the UI.
+    for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(frame_interval(Some(bad)), None, "{bad} should read as uncapped");
+    }
+}
+
+#[test]
+fn persist_round_trips_the_frame_rate_cap() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Not one of the button values, so it proves the number round-trips
+    // rather than being re-derived from a default.
+    state.fps_cap = Some(45.0);
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&state.save_persist());
+    assert_eq!(restored.fps_cap, Some(45.0));
+}
+
+#[test]
+fn pre_cap_persist_blobs_load_as_uncapped() {
+    // The cap was added after these blobs were written; dropping the field
+    // must not fail the parse, which would silently discard the WHOLE
+    // persist (layout, camera, every view setting) rather than one setting.
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.fps_cap = Some(30.0);
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+    let stripped = saved.replace(",fps_cap:Some(30.0)", "");
+    assert_ne!(stripped, saved, "the field removal must have hit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&stripped);
+    assert_eq!(restored.fps_cap, None, "a missing cap reads as uncapped");
+    assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
+}
+
+#[test]
+fn the_heatmap_follows_the_curve_until_given_its_own_range() {
+    use crate::panes::spectral::{loudness, spectrogram_level};
+    let mut cfg = SpectrumConfig::default();
+    let (power, midi) = (1e-4, 60.0);
+
+    // Shared by default — the behaviour every existing persist blob expects.
+    assert_eq!(spectrogram_level(&cfg, power, midi), loudness(&cfg, power, midi));
+
+    // Switched on, the heatmap reads its OWN window and stops tracking the
+    // curve's: moving the curve's floor must no longer move the heatmap.
+    cfg.spectrogram_own_range = true;
+    let own = spectrogram_level(&cfg, power, midi);
+    cfg.floor_db = -20.0;
+    assert_eq!(spectrogram_level(&cfg, power, midi), own, "the heatmap tracked the curve");
+    assert_ne!(loudness(&cfg, power, midi), own, "the curve should have moved");
+}
+
+#[test]
+fn heatmap_contrast_bends_the_level_without_clipping_it() {
+    use crate::panes::spectral::spectrogram_level;
+    let mut cfg = SpectrumConfig::default();
+    // A power that lands mid-range, so there is room to bend either way.
+    let (power, midi) = (1e-4, 60.0);
+    let straight = spectrogram_level(&cfg, power, midi);
+    assert!(straight > 0.01 && straight < 0.99, "need a mid-scale level, got {straight}");
+
+    cfg.spectrogram_gamma = 0.5;
+    let lifted = spectrogram_level(&cfg, power, midi);
+    cfg.spectrogram_gamma = 2.5;
+    let crushed = spectrogram_level(&cfg, power, midi);
+    assert!(lifted > straight, "gamma below 1 should lift ({straight} -> {lifted})");
+    assert!(crushed < straight, "gamma above 1 should crush ({straight} -> {crushed})");
+    // The ends are fixed points: contrast redistributes, it never clips.
+    for gamma in [0.3, 1.0, 3.0] {
+        cfg.spectrogram_gamma = gamma;
+        assert_eq!(spectrogram_level(&cfg, 0.0, midi), 0.0, "silence moved at gamma {gamma}");
+        assert_eq!(spectrogram_level(&cfg, 1e9, midi), 1.0, "full scale moved at gamma {gamma}");
+    }
+}
+
+/// Palettes that no longer exist must still PARSE. Serde aliases fold them
+/// onto the default; without them the failed parse would drop the whole
+/// persist — layout, camera and every view setting with it — not just the
+/// palette. Injected as strings, since the enum can no longer name them.
+#[test]
+fn removed_spectrogram_palettes_load_as_heat() {
+    for removed in ["Pitch", "Paper"] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
+        state.view.extent_sevens = 3;
+        let saved = state
+            .save_persist()
+            .replace("spectrogram_color:Aurora", &format!("spectrogram_color:{removed}"));
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(
+            restored.spectrum_config.spectrogram_color,
+            crate::SpectrogramColor::Heat,
+            "{removed} should fold onto the default",
+        );
+        assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
+    }
+}
+
 /// Drive the REAL dock (root_ui, egui_dock, the tab body's ScrollArea and
 /// all) with a wheel over `tab`'s body, and answer how far its content moved.
 /// Negative = the content moved up, i.e. the pane scrolled down.
@@ -1140,22 +1260,47 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
             time: Some(t),
             ..Default::default()
         };
-        let _ = ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t));
+        ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t))
     };
     // A frame first: the dock only knows where its panes are once it has laid
     // them out, and before that the overlay has nothing to hang off.
     frame(&mut state);
-    frame(&mut state);
+    let output = frame(&mut state);
 
     let area = perf_overlay_area(&state, screen);
     assert_ne!(area, screen, "the overlay should have found the analyzer pane");
 
-    // ...and the HUD really lands in that pane's top-right corner, which is
-    // the anchor's job, not the rect's.
-    let hud = ctx
-        .memory(|m| m.area_rect(egui::Id::new("perf_overlay")))
-        .expect("the overlay should be drawn (show_perf is on by default)");
+    // ...and the HUD really lands in that pane's top-right corner.
+    //
+    // Found by its painted text rather than by `Memory::area_rect`: the HUD is
+    // no longer an Area. It used to be, and every label inside it registered a
+    // widget rect that took the pointer from whatever was underneath — a dead
+    // zone the size of the readout. It is painted straight onto a foreground
+    // layer now, so there is no area to look up, and the thing worth asserting
+    // was never the Area anyway: it is where the numbers land.
+    assert!(
+        output.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Text(text) if text.galley.text().contains("fps")
+        )),
+        "the overlay should be drawn (show_perf is on by default)",
+    );
+    // The backing plate, which is the HUD's actual extent — the rows inside it
+    // are left-aligned, so no single string reveals where the box sits.
+    let plate = egui::Color32::from_black_alpha(0xC0);
+    let hud = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
+            _ => None,
+        })
+        .expect("the overlay should paint its backing plate");
     assert!(area.contains_rect(hud), "the HUD should sit inside the analyzer pane: {hud:?}");
+    assert!(
+        (hud.right() - (area.right() - 8.0)).abs() < 1.0,
+        "the HUD should hug the pane's RIGHT edge: {hud:?} in {area:?}",
+    );
     assert!(
         (hud.right() - area.right()).abs() < 12.0 && (hud.top() - area.top()).abs() < 12.0,
         "the HUD should hug the pane's top-RIGHT corner: {hud:?} in {area:?}",
