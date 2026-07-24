@@ -342,15 +342,10 @@ impl Axes {
         [self.at(p, 0.0), self.at(p, 1.0)]
     }
 
-    /// A line clean across the pitch axis at depth `d` — the shape of
-    /// the roll's time gridlines and its "now" line.
+    /// A line clean across the pitch axis at depth `d` — the shape of the
+    /// roll's "now" line and the divider.
     pub fn across_pitch(&self, d: f32) -> [egui::Pos2; 2] {
         [self.at(0.0, d), self.at(1.0, d)]
-    }
-
-    /// The rectangle spanning pitch `p0..p1` over the whole depth axis.
-    pub fn band(&self, p0: f32, p1: f32) -> egui::Rect {
-        egui::Rect::from_two_pos(self.at(p0, 0.0), self.at(p1, 1.0))
     }
 
     /// The pitch fraction under a screen position — the inverse of the
@@ -595,9 +590,11 @@ impl TimeAxis {
 /// bars hang from: a note crosses that one line out of the roll and into
 /// the spectrum peak it is making.
 ///
-/// Hover sync goes both ways: the lattice-hovered pitch class shows as a
-/// band here, and hovering a pitch here highlights the matching lattice
-/// node (if one is in view).
+/// Hovering a pitch here highlights the matching lattice node (if one is in
+/// view) and reads the pitch out. Nothing comes back the other way: a band
+/// used to light up here for the lattice-hovered pitch class, in every
+/// octave, and a stripe across the whole picture was too loud an answer to
+/// a pointer resting somewhere else.
 pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
@@ -712,21 +709,6 @@ pub(crate) fn spectral_pane(
                     if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
                 axis_labels.push((t, label));
             }
-        }
-    }
-
-    // Cross-pane highlight: the pitch class hovered in ANY pane shows as
-    // a tolerance-wide band in every octave.
-    if let Some(pos) = state.hovered {
-        let semis = state.tuning.pitch_class(pos).to_cents() / 100.0;
-        // At least 1.5 px wide however tight the tolerance is.
-        let half = (state.tuning.tolerance_cents() / 100.0 / scale.span)
-            .max(1.5 / axes.pitch_len().max(1.0));
-        let mut midi = min_midi + semis;
-        while midi < max_midi {
-            let t = scale.t_of(midi);
-            painter.rect_filled(axes.band(t - half, t + half), 0.0, theme::accent_fill());
-            midi += 12.0;
         }
     }
 
@@ -1468,8 +1450,6 @@ mod tests {
         state.tracker.handle_event(on(99.0, 67));
         let now = 100.0;
         state.tracker.prune(now, 1.0);
-        // Something for the hover band to draw, too.
-        state.hovered = Some(lattice_core::LatticePos { threes: 0, fives: 0, sevens: 0 });
 
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
