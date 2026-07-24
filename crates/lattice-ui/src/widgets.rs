@@ -366,8 +366,14 @@ impl<'a> ValueBar<'a> {
 }
 
 /// How near a handle the pointer has to start for the drag to take that
-/// handle rather than the span between them.
-const GRAB_PX: f32 = 8.0;
+/// handle rather than the span between them. Generous on purpose: grabbing
+/// the span when you meant an end is the easy mistake, and the expensive one
+/// — it moves BOTH values instead of the one you were aiming at.
+const GRAB_PX: f32 = 14.0;
+/// Ceiling on that reach, as a share of the span from each side, so the two
+/// handles can never claim the whole of a narrow range and leave nothing to
+/// slide.
+const HANDLE_REACH_SHARE: f32 = 0.35;
 /// Width of a [`RangeBar`] handle grip.
 const HANDLE_W: f32 = 6.0;
 /// How far the value track is inset from the bar's ends, so a handle parked
@@ -395,9 +401,15 @@ enum Grab {
     #[default]
     Low,
     High,
-    /// The whole span, carrying the pointer's offset from the low end so the
-    /// range slides with the pointer instead of snapping its start to it.
-    Span(f32),
+    /// The whole span: `offset` is how far along it the pointer took hold,
+    /// `width` how wide it was at that moment.
+    ///
+    /// Both are fixed for the whole gesture, and the span branch of `apply`
+    /// reads neither end back. That is what makes squishing stable: deriving
+    /// the width from the CURRENT pair instead would re-measure an already
+    /// squished span every frame and shrink it further while the pointer sat
+    /// perfectly still.
+    Span { offset: f32, width: f32 },
 }
 
 impl Grab {
@@ -411,16 +423,19 @@ impl Grab {
     /// that only panned from the middle would be dead exactly where everyone
     /// first meets it. When there's no room to pan, a middle drag takes the
     /// nearer end instead.
-    fn at(v: f32, (lo, hi): (f32, f32), (min, max): (f32, f32), near: f32) -> Grab {
+    fn at(v: f32, (lo, hi): (f32, f32), _range: (f32, f32), near: f32) -> Grab {
+        // A handle's reach cannot eat the whole span, or a narrow range would
+        // have no middle left to grab and could never be slid along the axis.
+        let near = near.min((hi - lo) * HANDLE_REACH_SHARE);
         let (dl, dh) = ((v - lo).abs(), (v - hi).abs());
-        let nearest = if dl <= dh { Grab::Low } else { Grab::High };
-        let room_to_pan = (max - min) - (hi - lo) > f32::EPSILON;
         if dl.min(dh) <= near {
-            nearest
-        } else if v > lo && v < hi && room_to_pan {
-            Grab::Span(v - lo)
+            if dl <= dh { Grab::Low } else { Grab::High }
+        } else if v > lo && v < hi {
+            Grab::Span { offset: v - lo, width: hi - lo }
+        } else if dl <= dh {
+            Grab::Low
         } else {
-            nearest
+            Grab::High
         }
     }
 
@@ -432,12 +447,22 @@ impl Grab {
         match self {
             Grab::Low => (v.clamp(min, (hi - min_span).max(min)), hi),
             Grab::High => (lo, v.clamp((lo + min_span).min(max), max)),
-            // Fixed width, so the far end stops the near one: pinning `lo`
-            // inside `min..=max - width` keeps both in range.
-            Grab::Span(offset) => {
-                let width = hi - lo;
-                let lo = (v - offset).clamp(min, (max - width).max(min));
-                (lo, lo + width)
+            // Where the pointer wants the span, wall behavior aside. Running
+            // past a wall pins the leading edge there and lets the trailing
+            // edge carry on following the pointer, so the range squishes
+            // against the end rather than refusing to move — down to
+            // `min_span`. It springs back out on the way home, because this
+            // reads only the gesture's own offset and width, never the
+            // squished pair it produced.
+            Grab::Span { offset, width } => {
+                let (want_lo, want_hi) = (v - offset, v - offset + width);
+                if want_lo < min {
+                    (min, want_hi.clamp(min + min_span, max))
+                } else if want_hi > max {
+                    (want_lo.clamp(min, max - min_span), max)
+                } else {
+                    (want_lo, want_hi)
+                }
             }
         }
     }
@@ -502,6 +527,7 @@ impl<'a> RangeBar<'a> {
 
         // ---- Interaction ----------------------------------------------------
         let grab_id = response.id.with("grab");
+        let near = GRAB_PX / track.width().max(1.0) * (max - min);
         if response.double_clicked() {
             *self.low = min;
             *self.high = max;
@@ -523,7 +549,6 @@ impl<'a> RangeBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        let near = GRAB_PX / track.width().max(1.0) * (max - min);
                         let grab = Grab::at(v, (*self.low, *self.high), (min, max), near);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
@@ -605,7 +630,17 @@ impl<'a> RangeBar<'a> {
             painter.rect_filled(grip, CornerRadius::same(2), theme::text());
         }
 
-        response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        // The cursor says which of the two gestures a press would start, so the
+        // difference is visible BEFORE committing to a drag: an end resizes,
+        // the middle picks the whole range up and slides it.
+        let aimed_at = response
+            .hover_pos()
+            .map(|p| Grab::at(value_at(p.x), (*self.low, *self.high), (min, max), near));
+        match aimed_at {
+            Some(Grab::Span { .. }) => response.on_hover_cursor(egui::CursorIcon::Grab),
+            Some(_) => response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal),
+            None => response,
+        }
     }
 }
 
@@ -779,35 +814,48 @@ mod tests {
     }
 
     /// The bug this widget shipped with: the pitch range's default IS the
-    /// full axis, a span that fills the range has nowhere to slide, so
-    /// panning it moved nothing — and a drag anywhere but the outermost few
-    /// pixels panned. The bar was dead exactly where you first meet it.
+    /// full axis, and a span that fills the range had nowhere to slide, so
+    /// panning it moved nothing — while a drag anywhere but the outermost few
+    /// pixels panned. The bar was dead exactly where you first meet it. Now a
+    /// span drag squishes at the wall, so it always does something.
     #[test]
     fn a_range_filling_the_axis_still_drags_from_the_middle() {
         let full = (AXIS.0, AXIS.1);
         for v in [20.0, 60.0, 90.0, 125.0] {
             let grab = Grab::at(v, full, AXIS, 1.0);
-            assert!(
-                !matches!(grab, Grab::Span(_)),
-                "dragging at {v} panned a span that cannot pan"
-            );
-            let (lo, hi) = grab.apply(v, full, AXIS, OCTAVE);
-            assert!((lo, hi) != full, "dragging at {v} moved nothing");
+            let moved = grab.apply(v - 10.0, full, AXIS, OCTAVE);
+            assert!(moved != full, "dragging at {v} moved nothing");
         }
     }
 
-    /// With room to slide, a middle drag still pans — and takes the pointer's
-    /// offset with it rather than snapping the low end to the pointer.
+    /// A middle drag takes the whole span, with the pointer's offset into it,
+    /// rather than snapping an end to the pointer.
     #[test]
-    fn a_middle_drag_pans_when_the_span_has_room() {
-        assert!(matches!(Grab::at(40.0, (24.0, 60.0), AXIS, 1.0), Grab::Span(off) if off == 16.0));
+    fn a_middle_drag_takes_the_whole_span() {
+        assert!(matches!(
+            Grab::at(40.0, (24.0, 60.0), AXIS, 1.0),
+            Grab::Span { offset, width } if offset == 16.0 && width == 36.0
+        ));
     }
 
-    /// Near an end, that end wins even when the span could pan.
+    /// Near an end, that end wins over the span — with a reach generous
+    /// enough that aiming at a handle and hitting the span is hard, since
+    /// that mistake moves both values instead of the one you aimed at.
     #[test]
     fn a_drag_near_an_end_takes_that_end() {
         assert!(matches!(Grab::at(25.0, (24.0, 60.0), AXIS, 2.0), Grab::Low));
         assert!(matches!(Grab::at(59.0, (24.0, 60.0), AXIS, 2.0), Grab::High));
+        // Well inside the span, but still nearer the end than the reach.
+        assert!(matches!(Grab::at(31.0, (24.0, 60.0), AXIS, 8.0), Grab::Low));
+    }
+
+    /// The reach still cannot swallow a narrow span whole, or a zoomed-in
+    /// range would have no middle left to slide along the axis.
+    #[test]
+    fn the_handle_reach_leaves_a_narrow_span_pannable() {
+        let narrow = (60.0, 60.0 + OCTAVE);
+        let middle = 60.0 + OCTAVE / 2.0;
+        assert!(matches!(Grab::at(middle, narrow, AXIS, 1_000.0), Grab::Span { .. }));
     }
 
     /// Dragging an end past its partner stops at the minimum span instead of
@@ -829,21 +877,52 @@ mod tests {
         assert_eq!(Grab::High.apply(200.0, (24.0, 60.0), AXIS, OCTAVE).1, AXIS.1);
     }
 
-    /// Sliding the span keeps its width and stops at the ends rather than
-    /// squashing against them.
+    /// Mid-axis, a slid span just follows the pointer at its grabbed offset,
+    /// keeping its width.
     #[test]
-    fn a_slid_span_keeps_its_width() {
-        let start = (24.0, 60.0);
-        let width = start.1 - start.0;
-        // Grabbed 6 semitones in from the low end, dragged well past the top.
-        let (lo, hi) = Grab::Span(6.0).apply(500.0, start, AXIS, OCTAVE);
-        assert_eq!(hi, AXIS.1, "slides until the leading end hits the limit");
-        assert_eq!(hi - lo, width, "and keeps its width there");
-        let (lo, hi) = Grab::Span(6.0).apply(-500.0, start, AXIS, OCTAVE);
-        assert_eq!(lo, AXIS.0);
-        assert_eq!(hi - lo, width);
-        // Mid-range it simply follows the pointer, offset and all.
-        assert_eq!(Grab::Span(6.0).apply(70.0, start, AXIS, OCTAVE), (64.0, 100.0));
+    fn a_slid_span_follows_the_pointer_at_its_grabbed_offset() {
+        let grab = Grab::Span { offset: 6.0, width: 36.0 };
+        assert_eq!(grab.apply(70.0, (24.0, 60.0), AXIS, OCTAVE), (64.0, 100.0));
+    }
+
+    /// Slid into an end, the span squishes against it: the leading edge pins
+    /// and the trailing edge carries on with the pointer, down to the minimum
+    /// span. Stopping dead at the wall instead made a drag feel jammed.
+    #[test]
+    fn a_slid_span_squishes_against_the_end_it_meets() {
+        // Grabbed dead center of 30..90.
+        let grab = Grab::Span { offset: 30.0, width: 60.0 };
+        let start = (30.0, 90.0);
+
+        let (lo, hi) = grab.apply(40.0, start, AXIS, OCTAVE);
+        assert_eq!(lo, AXIS.0, "the leading edge pins to the floor");
+        assert_eq!(hi, 70.0, "the trailing edge keeps following the pointer");
+
+        assert_eq!(
+            grab.apply(-500.0, start, AXIS, OCTAVE),
+            (AXIS.0, AXIS.0 + OCTAVE),
+            "squishing bottoms out at the minimum span, not at nothing",
+        );
+        assert_eq!(
+            grab.apply(500.0, start, AXIS, OCTAVE),
+            (AXIS.1 - OCTAVE, AXIS.1),
+            "and the same against the ceiling",
+        );
+    }
+
+    /// Squishing reads only the width the gesture began with, never the
+    /// squished pair it just produced. Re-measuring would shrink the span
+    /// again every frame while the pointer sat perfectly still — and would
+    /// make the squish a one-way trip instead of springing back when you drag
+    /// away from the wall.
+    #[test]
+    fn squishing_is_stable_and_reversible_within_the_gesture() {
+        let grab = Grab::Span { offset: 30.0, width: 60.0 };
+        let squished = (AXIS.0, AXIS.0 + OCTAVE);
+        // Same pointer, already-squished input: the answer must not creep.
+        assert_eq!(grab.apply(-500.0, squished, AXIS, OCTAVE), squished);
+        // Back to where it was grabbed: the original width comes back.
+        assert_eq!(grab.apply(60.0, squished, AXIS, OCTAVE), (30.0, 90.0));
     }
 
     fn round_trips(range: RangeInclusive<f32>, eased: bool) {

@@ -178,14 +178,6 @@ pub(super) fn draw_roll(
         }
     }
 
-    // The present moment, where the roll hands over to the spectrum. In
-    // whole-song mode the pane sweeps a playhead instead, so skip it.
-    if cfg.roll_now_line && !time.whole_song() {
-        painter.line_segment(
-            axes.across_pitch(split),
-            egui::Stroke::new(1.0, theme::hairline()),
-        );
-    }
 }
 
 /// The color of a note at `pitch`, per the Color setting.

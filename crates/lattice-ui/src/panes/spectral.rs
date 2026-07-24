@@ -141,9 +141,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     .show(ui)
     .on_hover_text(
         "The slice of the spectrum on show. Drag either end to move it, drag \
-         between them to slide the whole range, double-click for the full \
-         axis. The scale is logarithmic — equal distances are equal musical \
-         intervals — so an octave is the same width wherever it sits.",
+         between them to slide the whole range (it squishes when it meets an \
+         end), double-click for the full axis. The scale is logarithmic — \
+         equal distances are equal musical intervals — so an octave is the \
+         same width wherever it sits.",
     );
     choice_row(
         ui,
@@ -795,6 +796,20 @@ pub(crate) fn spectral_pane(
         }
     }
 
+    // The now-line, where the roll hands over to the spectrum — drawn here,
+    // after both things it divides, rather than at the end of the roll where
+    // it used to be. It marks the boundary between two pictures, so it has to
+    // sit ON them: from inside the roll it went down before the spectrum curve
+    // and the curve's fill painted over it, and the spectrogram's quad reaches
+    // the same line from the other side. Either one eating into it left a
+    // divider that flickered with the music instead of holding still.
+    //
+    // Whole-song mode sweeps a playhead across a static layout instead, and
+    // draws its own mark above.
+    if cfg.roll_now_line && !whole_song && split < 1.0 && split > 0.0 {
+        painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
+    }
+
     // Axis labels last, riding on top of the spectrogram, spectrum, and
     // voice bars: a label only earns its place if you can read which pitch a
     // lane is, and a loud slab would otherwise bury it. The gridlines
@@ -820,9 +835,13 @@ pub(crate) fn spectral_pane(
     // reads out the pitch under the cursor.
     if let Some(pointer) = response.hover_pos() {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
-        // The axis starts on a C, so cents-from-C is just the fractional
-        // octave position.
-        let pc_cents = (midi - min_midi).rem_euclid(12.0) * 100.0;
+        // Cents from C, measured from MIDI 0 (which IS a C) rather than from
+        // the range's own start: the range used to be a pair of octave numbers
+        // and so always began on a C, but it is continuous now and generally
+        // does not. Measuring from it offset every hovered pitch class by
+        // wherever the zoom happened to start, so hovering the spectrum lit up
+        // the wrong lattice node.
+        let pc_cents = midi.rem_euclid(12.0) * 100.0;
         state.hovered = nearest_visible_node(
             &state.view,
             &state.tuning,

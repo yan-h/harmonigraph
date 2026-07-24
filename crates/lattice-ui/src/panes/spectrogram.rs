@@ -25,6 +25,17 @@ use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 /// in the intensity map for the many empty buckets, without changing the look.
 const NEAR_ZERO: f32 = 1e-9;
 
+/// A run of empty slabs this short is sampling jitter rather than a stall in
+/// the analyzer, and holds the previous column instead of reading as silence.
+///
+/// The analyzer produces a column roughly every 50 ms and the narrowest slab
+/// is 80 ms, so the two are within a factor of two of each other: one long
+/// frame is all it takes to leave a slab with nothing in it. A real stall —
+/// switching the FFT window empties the ring for a window's worth of samples,
+/// 341 ms at 48 kHz on Precise — is many slabs wide and genuinely was silence
+/// as far as the analyzer is concerned.
+const JITTER_SLABS: i64 = 1;
+
 /// Draw the spectrogram across the roll's depth region (`split..1`), sharing
 /// the roll's `depth_of` time mapping so its columns register with the notes.
 ///
@@ -212,10 +223,42 @@ fn aggregate_rows<'a>(
     let mut cur_key: Option<i64> = None;
     for col in columns {
         let key = (col.time / bucket).floor() as i64;
-        if Some(key) != cur_key {
-            cur_key = Some(key);
-            centers.push((key as f64 + 0.5) * bucket);
-            power.resize(power.len() + nb, 0.0);
+        match cur_key {
+            Some(k) if k == key => {}
+            // A slab with no columns in it STILL gets a row, so the grid stays
+            // one row per slab of elapsed time. The texture's time axis is
+            // uniform — `u_at` maps time linearly across `w * bucket` — so
+            // skipping an empty slab makes the rows either side of it
+            // neighbouring texels, and the quad then stretches that pair over
+            // the whole silent stretch: one flat color as wide as the silence.
+            // Analysis stalls do happen (switching the FFT window empties the
+            // ring for a window's worth of samples), and that band was the
+            // result. Silence is what the analyzer actually had.
+            Some(k) if key > k => {
+                let empty = key - k - 1;
+                for slot in (k + 1)..key {
+                    centers.push((slot as f64 + 0.5) * bucket);
+                    if empty <= JITTER_SLABS {
+                        // Hold the previous column: at this width one empty
+                        // slab is just a long frame, and painting it black
+                        // would leave a stripe of false silence scrolling
+                        // across the display for the rest of the window.
+                        power.extend_from_within(power.len() - nb..);
+                    } else {
+                        power.resize(power.len() + nb, 0.0);
+                    }
+                }
+                centers.push((key as f64 + 0.5) * bucket);
+                power.resize(power.len() + nb, 0.0);
+                cur_key = Some(key);
+            }
+            // First column, or time running backwards (a transport jump):
+            // start a fresh row rather than trying to fill a negative gap.
+            _ => {
+                cur_key = Some(key);
+                centers.push((key as f64 + 0.5) * bucket);
+                power.resize(power.len() + nb, 0.0);
+            }
         }
         let base = power.len() - nb;
         for (k, &idx) in bin_idx.iter().enumerate() {
@@ -357,6 +400,54 @@ mod tests {
         let (centers, power) = aggregate_rows(cols.iter(), &[5], 1.0);
         assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
         assert_eq!(power[0], 1.0, "the short note's peak survives");
+    }
+
+    /// A stall in the analyzer leaves a hole in the column stream — switching
+    /// the FFT window empties its ring for a whole window's worth of samples,
+    /// and nothing is measured until it refills. Every slab of elapsed time
+    /// still needs its row: the texture's time axis is uniform, so without
+    /// them the columns either side of the hole become neighbouring texels and
+    /// the quad stretches that pair across the entire silent stretch — a band
+    /// of one flat color, exactly as wide as the stall.
+    #[test]
+    fn a_gap_in_the_columns_keeps_a_row_for_every_silent_slab() {
+        // Two columns a second apart, in quarter-second slabs: four slabs of
+        // silence between them.
+        let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
+        let (centers, power) = aggregate_rows(cols.iter(), &[5], 0.25);
+        assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
+        assert_eq!(power[0], 1.0, "the column before the gap");
+        assert_eq!(&power[1..4], [0.0, 0.0, 0.0], "the gap reads as silence, not as a smear");
+        assert_eq!(power[4], 0.5, "the column after it");
+        // Evenly spaced centers are exactly what the texture mapping assumes.
+        for pair in centers.windows(2) {
+            assert!((pair[1] - pair[0] - 0.25).abs() < 1e-9, "slabs must stay uniform: {centers:?}");
+        }
+    }
+
+    /// One missed slab is a long frame, not a stall, and holds the previous
+    /// column. Painting it black would mean every stutter left a stripe of
+    /// false silence scrolling across the display for the rest of the window
+    /// — trading a rare artifact for a routine one.
+    #[test]
+    fn a_single_missed_slab_holds_instead_of_going_black() {
+        // Columns half a second apart in quarter-second slabs: one slab empty.
+        let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
+        let (centers, power) = aggregate_rows(cols.iter(), &[5], 0.25);
+        assert_eq!(centers.len(), 3, "the empty slab still gets its row");
+        assert_eq!(power[1], 1.0, "and holds the column before it");
+        assert_eq!(power[2], 0.5);
+    }
+
+    /// Time running backwards (a transport jump) starts a fresh row rather
+    /// than trying to fill a negative gap — which would be an enormous loop,
+    /// or a silent no-row.
+    #[test]
+    fn columns_going_back_in_time_still_get_a_row() {
+        let cols = [col(10.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
+        let (centers, power) = aggregate_rows(cols.iter(), &[5], 0.25);
+        assert_eq!(centers.len(), 2);
+        assert_eq!(power[1], 0.5, "the rewound column landed in its own row");
     }
 
     #[test]
