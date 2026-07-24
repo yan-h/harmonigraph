@@ -28,11 +28,22 @@ fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
     )
 }
 
+/// How far the pitch gradient is nudged toward white. The octave indicators
+/// always carried this lift (a 30%-toward-white mix in the shader); baking it
+/// into the ramp itself puts the core disc and the piano roll — which sample
+/// the same ramp — at the same lightness, so a note reads as one color across
+/// all three instead of the indicators sitting a shade lighter.
+const NOTE_LIGHTEN: f32 = 0.30;
+
 /// The pitch-gradient LCH ramp as a function of normalized height `t`
-/// (0..1). Shared by the node disc color and the octave glyphs' 
+/// (0..1). Shared by the node disc color and the octave glyphs'
 /// per-dot tint, so a dot is the same color as the disc that pitch lights.
+///
+/// The ramp is defined already lightened (see [`NOTE_LIGHTEN`]); everything
+/// that samples it inherits the lift, so nothing downstream has to add its own.
 fn pitch_ramp_lch(t: f64) -> Vec4 {
-    lch(t * 80.0, 85.0 - t * 60.0, (-100.0 + t * 190.0).rem_euclid(360.0))
+    let base = lch(t * 80.0, 85.0 - t * 60.0, (-100.0 + t * 190.0).rem_euclid(360.0));
+    base.lerp(Vec4::new(1.0, 1.0, 1.0, base.w), NOTE_LIGHTEN)
 }
 
 /// The pitch ramp sampled into [`PITCH_LUT_N`] colors evenly spaced over the
