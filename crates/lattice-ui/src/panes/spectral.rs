@@ -123,6 +123,18 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ValueBar::new(&mut cfg.smoothing, 0.0..=0.9, "Smoothing")
         .show(ui)
         .on_hover_text("Display inertia: 0 reacts instantly, 0.9 glides");
+    ValueBar::new(&mut cfg.pitch_smoothing, 0.0..=2.0, "Pitch blur")
+        .decimals(2)
+        .show(ui)
+        .on_hover_text(
+            "Average each bucket with its neighbors across the PITCH axis, in \
+             semitones — the analyzer's own resolution stays, this just widens \
+             what each point shows. Tames the comb of partials into readable \
+             bands. Measured in semitones, so it means the same interval at \
+             every pitch. Applies to the curve and the heatmap alike; already \
+             recorded spectrogram history keeps the setting it was captured \
+             with.",
+        );
     // Tilt: conventional stepped reference slopes. Snap stray persisted
     // values (e.g. from the short-lived continuous bar) onto a step.
     if !crate::TILT_STEPS.contains(&cfg.tilt) {
@@ -251,6 +263,8 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (SpectrogramColor::Ice, "Ice", "Black-blue-cyan-white"),
             (SpectrogramColor::Aurora, "Aurora", "Violet-teal-green-yellow (even ramp)"),
             (SpectrogramColor::Pitch, "Pitch", "The lattice's own low-to-high pitch colors"),
+            (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),
+            (SpectrogramColor::Paper, "Paper", "Inverted, for a light background"),
         ],
     );
     ValueBar::new(&mut cfg.spectrogram_opacity, 0.05..=1.0, "Opacity")
@@ -262,6 +276,29 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             "Average each column with its neighbors in time: 0 is off, higher \
              smooths fast beating/chorus/reverb wobble, softening onsets a little",
         );
+    ValueBar::new(&mut cfg.spectrogram_gamma, 0.3..=3.0, "Contrast")
+        .decimals(2)
+        .show(ui)
+        .on_hover_text(
+            "Curve on the heatmap's brightness: 1.0 is straight, below lifts \
+             quiet detail toward the bright end, above pushes it into the \
+             dark. Unlike the Floor, this keeps everything and only changes \
+             how it's spread — so hiss can be pushed down without losing the \
+             quiet partials just above it.",
+        );
+    ui.checkbox(&mut cfg.spectrogram_own_range, "Own level range").on_hover_text(
+        "Give the heatmap its own Floor and Ceiling instead of sharing the \
+         Spectrum's. The curve wants a range that keeps peaks on the pane, \
+         the heatmap one that lifts quiet detail off the background — they \
+         rarely agree.",
+    );
+    if cfg.spectrogram_own_range {
+        RangeBar::new(&mut cfg.spectrogram_floor_db, &mut cfg.spectrogram_ceiling_db, -120.0..=0.0)
+            .display(|db| format!("{db:.0} dB"))
+            .min_span(crate::LEVEL_RANGE_MIN_SPAN)
+            .show(ui)
+            .on_hover_text("The heatmap's own dB window: silence at the low end, brightest at the high");
+    }
     button_row(ui, |ui| {
         if ui
             .button("Clear spectrogram")
@@ -287,7 +324,7 @@ const TILT_PIVOT_MIDI: f32 = 83.213_1;
 /// its slope above the 1 kHz pivot. The spectrum curve's height and the
 /// spectrogram's cell intensity both read from this, so the two always agree
 /// on what "loud" means for a given bucket.
-pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
+pub(crate) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
     let db = 10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     // Never trust the pair to be ordered or apart, exactly as the pitch range
     // is not trusted: the bar can't produce a collapsed one, a hand-edited
@@ -295,6 +332,34 @@ pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f3
     // takes the editor — and with it the host — down.
     let ceiling = cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
     ((db - cfg.floor_db) / (ceiling - cfg.floor_db)).clamp(0.0, 1.0)
+}
+
+/// [`loudness`] as the SPECTROGRAM sees it: its own dB window when it has been
+/// given one, then its contrast curve.
+///
+/// Split from the curve's mapping because the two are read differently. The
+/// curve is read as a shape against a baseline, so its range wants to keep
+/// peaks on the pane; the heatmap is read as a picture, so its range wants to
+/// lift quiet partials clear of the background. Sharing one range meant
+/// tuning either one spoiled the other.
+pub(crate) fn spectrogram_level(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
+    let level = if cfg.spectrogram_own_range {
+        let db = 10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+        // Same guard as `loudness`: a collapsed pair out of a hand-edited blob
+        // would divide by a zero span and paint NaN geometry.
+        let floor = cfg.spectrogram_floor_db;
+        let ceiling = cfg.spectrogram_ceiling_db.max(floor + crate::LEVEL_RANGE_MIN_SPAN);
+        ((db - floor) / (ceiling - floor)).clamp(0.0, 1.0)
+    } else {
+        loudness(cfg, power, midi)
+    };
+    // powf(1.0) is not free and gamma sits at 1 unless touched, so skip it.
+    let gamma = cfg.spectrogram_gamma;
+    if gamma > 0.0 && (gamma - 1.0).abs() > 1e-3 {
+        level.powf(gamma)
+    } else {
+        level
+    }
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.

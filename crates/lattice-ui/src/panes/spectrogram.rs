@@ -17,7 +17,7 @@ use egui::Color32;
 use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 use lattice_scene::{channel_color, FrameParams};
 
-use super::spectral::{loudness, Axes, PitchScale, TimeAxis};
+use super::spectral::{spectrogram_level, Axes, PitchScale, TimeAxis};
 use super::PITCH_RAMP_CHANNEL;
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
@@ -559,7 +559,7 @@ fn fill_pixels(
         let base = x * h;
         for (y, bin) in bins.iter().enumerate() {
             let p = power[base + y];
-            let level = if p <= NEAR_ZERO { 0.0 } else { loudness(cfg, p, bin.midi) };
+            let level = if p <= NEAR_ZERO { 0.0 } else { spectrogram_level(cfg, p, bin.midi) };
             pixels[y * w + x] = cell_color(cfg.spectrogram_color, level, bin.midi, frame);
         }
     }
@@ -586,6 +586,15 @@ pub(super) fn cell_color(kind: SpectrogramColor, level: f32, midi: f32, frame: &
         SpectrogramColor::Aurora => ramp(
             t,
             &[[0, 0, 0], [50, 10, 90], [30, 90, 120], [40, 170, 100], [230, 230, 60]],
+        ),
+        SpectrogramColor::Magma => ramp(
+            t,
+            &[[0, 0, 0], [40, 15, 85], [140, 30, 110], [230, 90, 60], [255, 225, 190]],
+        ),
+        // Inverted, so silence is the page and energy is the ink.
+        SpectrogramColor::Paper => ramp(
+            t,
+            &[[255, 255, 255], [190, 200, 215], [110, 125, 150], [45, 55, 75], [10, 10, 15]],
         ),
         SpectrogramColor::Pitch => {
             // The lattice's own pitch color, scaled toward black by loudness so

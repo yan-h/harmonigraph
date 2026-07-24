@@ -1066,3 +1066,80 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     assert_eq!(restored.fps_cap, None, "a missing cap reads as uncapped");
     assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
 }
+
+#[test]
+fn pitch_blur_widens_a_spike_without_moving_or_losing_it() {
+    use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
+    let mut bins = [0.0f32; SPECTRUM_BINS];
+    let peak = SPECTRUM_BINS / 2;
+    bins[peak] = 1.0;
+    let mut scratch = Vec::new();
+
+    let before: f32 = bins.iter().sum();
+    smooth_across_pitch(&mut bins, &mut scratch, 1.0);
+
+    // Energy is redistributed, not created or destroyed.
+    let after: f32 = bins.iter().sum();
+    assert!((after - before).abs() < 1e-3, "{before} -> {after}");
+    // The spike spread into its neighbors...
+    assert!(bins[peak] < 1.0, "the peak should have spread");
+    assert!(bins[peak + 1] > 0.0 && bins[peak - 1] > 0.0, "neighbors should have lit up");
+    // ...symmetrically, so nothing slid up or down the axis.
+    assert!((bins[peak - 1] - bins[peak + 1]).abs() < 1e-6, "the blur must not smear one way");
+    // And it stayed within the requested width.
+    let radius = BINS_PER_SEMITONE / 2;
+    assert_eq!(bins[peak + radius + 2], 0.0, "spread further than asked");
+}
+
+#[test]
+fn pitch_blur_is_a_no_op_when_off_or_below_one_bucket() {
+    use lattice_core::spectrum::SPECTRUM_BINS;
+    let mut scratch = Vec::new();
+    for width in [0.0, -1.0, 0.01] {
+        let mut bins = [0.0f32; SPECTRUM_BINS];
+        bins[100] = 1.0;
+        smooth_across_pitch(&mut bins, &mut scratch, width);
+        assert_eq!(bins[100], 1.0, "width {width} should have changed nothing");
+    }
+}
+
+#[test]
+fn the_heatmap_follows_the_curve_until_given_its_own_range() {
+    use crate::panes::spectral::{loudness, spectrogram_level};
+    let mut cfg = SpectrumConfig::default();
+    let (power, midi) = (1e-4, 60.0);
+
+    // Shared by default — the behaviour every existing persist blob expects.
+    assert_eq!(spectrogram_level(&cfg, power, midi), loudness(&cfg, power, midi));
+
+    // Switched on, the heatmap reads its OWN window and stops tracking the
+    // curve's: moving the curve's floor must no longer move the heatmap.
+    cfg.spectrogram_own_range = true;
+    let own = spectrogram_level(&cfg, power, midi);
+    cfg.floor_db = -20.0;
+    assert_eq!(spectrogram_level(&cfg, power, midi), own, "the heatmap tracked the curve");
+    assert_ne!(loudness(&cfg, power, midi), own, "the curve should have moved");
+}
+
+#[test]
+fn heatmap_contrast_bends_the_level_without_clipping_it() {
+    use crate::panes::spectral::spectrogram_level;
+    let mut cfg = SpectrumConfig::default();
+    // A power that lands mid-range, so there is room to bend either way.
+    let (power, midi) = (1e-4, 60.0);
+    let straight = spectrogram_level(&cfg, power, midi);
+    assert!(straight > 0.01 && straight < 0.99, "need a mid-scale level, got {straight}");
+
+    cfg.spectrogram_gamma = 0.5;
+    let lifted = spectrogram_level(&cfg, power, midi);
+    cfg.spectrogram_gamma = 2.5;
+    let crushed = spectrogram_level(&cfg, power, midi);
+    assert!(lifted > straight, "gamma below 1 should lift ({straight} -> {lifted})");
+    assert!(crushed < straight, "gamma above 1 should crush ({straight} -> {crushed})");
+    // The ends are fixed points: contrast redistributes, it never clips.
+    for gamma in [0.3, 1.0, 3.0] {
+        cfg.spectrogram_gamma = gamma;
+        assert_eq!(spectrogram_level(&cfg, 0.0, midi), 0.0, "silence moved at gamma {gamma}");
+        assert_eq!(spectrogram_level(&cfg, 1e9, midi), 1.0, "full scale moved at gamma {gamma}");
+    }
+}
