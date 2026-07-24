@@ -369,7 +369,18 @@ impl<'a> ValueBar<'a> {
 /// handle rather than the span between them.
 const GRAB_PX: f32 = 8.0;
 /// Width of a [`RangeBar`] handle grip.
-const HANDLE_W: f32 = 3.0;
+const HANDLE_W: f32 = 6.0;
+/// How far the value track is inset from the bar's ends, so a handle parked
+/// at either limit still sits fully inside the bar with track visible past
+/// it.
+///
+/// Without this the bar has no visible affordance in the state it starts
+/// life in: the pitch range defaults to the FULL axis, which puts both
+/// handles flush against the ends, under the corner rounding, where they
+/// read as the bar's own border. The control then looks exactly like a
+/// ValueBar filled to 100% — nothing about it says there is anything to take
+/// hold of.
+const HANDLE_INSET: f32 = HANDLE_W * 0.5 + 1.0;
 
 /// Which part of a [`RangeBar`] a drag took hold of. Decided once, at
 /// drag-start, and remembered for the gesture — otherwise dragging one end
@@ -478,9 +489,13 @@ impl<'a> RangeBar<'a> {
         let (rect, mut response) =
             ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::click_and_drag());
         let (min, max) = (*self.range.start(), *self.range.end());
-        let x_of = |v: f32| rect.left() + rect.width() * ((v - min) / (max - min)).clamp(0.0, 1.0);
+        // Values live on an inset track, so both limits are positions a handle
+        // can sit AT rather than edges it merges into. See HANDLE_INSET.
+        let track = rect.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let x_of =
+            |v: f32| track.left() + track.width() * ((v - min) / (max - min)).clamp(0.0, 1.0);
         let value_at = |x: f32| {
-            min + ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0) * (max - min)
+            min + ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * (max - min)
         };
 
         // ---- Interaction ----------------------------------------------------
@@ -506,7 +521,7 @@ impl<'a> RangeBar<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        let near = GRAB_PX / rect.width().max(1.0) * (max - min);
+                        let near = GRAB_PX / track.width().max(1.0) * (max - min);
                         let grab = Grab::at(v, (*self.low, *self.high), (min, max), near);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
@@ -541,19 +556,6 @@ impl<'a> RangeBar<'a> {
         span.max.x = hx;
         painter.rect_filled(span, radius, fill_color);
 
-        // The grips. Without them the bar is one filled region and nothing
-        // says the ends are the thing to take hold of. Kept fully inside the
-        // track so an end parked at its limit still shows a whole grip.
-        let half = HANDLE_W * 0.5;
-        for x in [lx, hx] {
-            let x = x.clamp(rect.left() + half, rect.right() - half);
-            let grip = egui::Rect::from_min_max(
-                egui::pos2(x - half, rect.top() + 2.0),
-                egui::pos2(x + half, rect.bottom() - 2.0),
-            );
-            painter.rect_filled(grip, CornerRadius::same(1), theme::text());
-        }
-
         let text_color =
             if response.hovered() || response.dragged() { theme::text() } else { theme::text_dim() };
         painter.text(
@@ -564,12 +566,32 @@ impl<'a> RangeBar<'a> {
             text_color,
         );
         painter.text(
-            rect.right_center() - Vec2::new(8.0, 0.0),
+            rect.right_center() - Vec2::new(HANDLE_INSET + 6.0, 0.0),
             Align2::RIGHT_CENTER,
             format!("{} – {}", (self.display)(*self.low), (self.display)(*self.high)),
             TextStyle::Monospace.resolve(ui.style()),
             theme::text(),
         );
+
+        // The handles go on top of everything, text included: they are the
+        // part you operate, and a readout digit sliding under one is a better
+        // outcome than a handle disappearing behind a digit. Each is a light
+        // thumb outlined in the track color, so it stands out against the
+        // filled span AND the empty track — at the full range both handles sit
+        // over fill, at a narrow range both sit against empty track.
+        for x in [lx, hx] {
+            let grip = egui::Rect::from_center_size(
+                egui::pos2(x, rect.center().y),
+                Vec2::new(HANDLE_W, rect.height() - 3.0),
+            );
+            painter.rect_filled(grip, CornerRadius::same(2), theme::text());
+            painter.rect_stroke(
+                grip,
+                CornerRadius::same(2),
+                egui::Stroke::new(1.0, theme::well()),
+                egui::StrokeKind::Inside,
+            );
+        }
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
@@ -637,6 +659,59 @@ mod tests {
     /// The analyzer's axis, the range bar's real caller.
     const AXIS: (f32, f32) = (12.0, 132.0);
     const OCTAVE: f32 = 12.0;
+
+    /// Paint one range bar across a 300pt row and return the filled rects it
+    /// emitted, in order.
+    fn paint_range_bar(low: f32, high: f32) -> Vec<(egui::Rect, egui::Color32)> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
+        let (mut lo, mut hi) = (low, high);
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, "Pitch range")
+                    .min_span(OCTAVE)
+                    .show(ui);
+            },
+        );
+        out.shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.fill != egui::Color32::TRANSPARENT => {
+                    Some((r.rect, r.fill))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The second bug this widget shipped with, and the harder one to see: at
+    /// the full range — which is the pitch axis's DEFAULT — both handles sat
+    /// flush against the bar's ends, 3px wide, under the corner rounding. The
+    /// control was then pixel-identical to a ValueBar filled to 100%: nothing
+    /// on screen said it had ends to grab, so it read as "not there at all".
+    #[test]
+    fn the_handles_read_as_handles_even_at_the_limits() {
+        for (low, high) in [(AXIS.0, AXIS.1), (AXIS.0, AXIS.0 + OCTAVE), (60.0, 72.0)] {
+            let rects = paint_range_bar(low, high);
+            let bar = rects[0].0;
+            let handles: Vec<_> = rects
+                .iter()
+                .filter(|(r, fill)| *fill == theme::text() && r.width() <= HANDLE_W + 0.01)
+                .map(|(r, _)| *r)
+                .collect();
+            assert_eq!(handles.len(), 2, "{low}..{high} did not paint two handles");
+            for h in handles {
+                assert!(
+                    h.left() > bar.left() && h.right() < bar.right(),
+                    "{low}..{high}: handle {h:?} is flush with the bar's edge, where it \
+                     reads as the border rather than as something to grab",
+                );
+                assert!(h.width() >= 4.0, "a handle thinner than this vanishes into the fill");
+            }
+        }
+    }
 
     /// The bug this widget shipped with: the pitch range's default IS the
     /// full axis, a span that fills the range has nowhere to slide, so
