@@ -26,8 +26,24 @@ use crate::{theme, RollColor, SharedState};
 /// width, where a filled polygon disappears).
 const MIN_RIBBON_PX: f32 = 1.5;
 
+/// How far the keyline stands proud of the note's outline on each side.
+pub(super) const KEYLINE_PX: f32 = 1.0;
+
+/// The light edge drawn around a note's outline and along the spectrum's
+/// profile, at `cfg.keyline` strength — `None` when the setting is off.
+///
+/// Both sit over the spectrogram, whose ramps run from black to near-white,
+/// so either can end up almost exactly the brightness of what is behind it and
+/// lose its shape entirely. A light rim gives them an edge to be seen by
+/// whatever they cross. It is a setting because how much is right depends
+/// entirely on the palette and opacity in play.
+pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
+    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
+    (strength > 0.004).then(|| Color32::WHITE.gamma_multiply(strength))
+}
+
 /// Draw every remembered note that falls inside the pane's time window and
-/// octave zoom. `split` is the depth fraction the roll starts at; `now` is
+/// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
 pub(super) fn draw_roll(
     painter: &egui::Painter,
@@ -121,27 +137,30 @@ pub(super) fn draw_roll(
             // one — a couple of wider, fainter passes of the stroke under the
             // crisp one; more bloom widens and brightens the halo.
             let g = state.view.bloom_strength.clamp(0.0, 2.0);
-            // (stroke width, alpha fraction) per pass; the crisp outline is last.
-            let mut passes: Vec<(f32, f32)> = Vec::with_capacity(3);
+            let body = |a: f32| note_color(note, cfg, state, pitch, a);
+            // (stroke width, color) per pass, painted in order; the crisp
+            // outline is last and on top.
+            let mut passes: Vec<(f32, Color32)> = Vec::with_capacity(4);
             if g > 0.0 {
-                passes.push((width + g * 3.0, 0.12 * g));
-                passes.push((width + g * 1.5, 0.20 * g));
+                // The glow passes brighten, toward the bloom halo.
+                passes.push((width + g * 3.0, brighten(body(alpha * 0.12 * g))));
+                passes.push((width + g * 1.5, brighten(body(alpha * 0.20 * g))));
             }
-            passes.push((width, 1.0));
-            // The crisp outline (af == 1) is the note's TRUE color, so it
-            // matches the same note on the lattice; only the fainter glow
-            // passes brighten, toward the bloom halo.
-            let stroke_color = |af: f32| {
-                let c = note_color(note, cfg, state, pitch, alpha * af);
-                if af >= 1.0 { c } else { brighten(c) }
-            };
+            // A thin light keyline just outside the outline, at the strength
+            // the Edge setting asks for. See `keyline`.
+            if let Some(edge) = keyline(cfg, alpha) {
+                passes.push((width + 2.0 * KEYLINE_PX, edge));
+            }
+            // The crisp outline is the note's TRUE color, so it matches the
+            // same note on the lattice.
+            passes.push((width, body(alpha)));
 
             if ribbon_px < MIN_RIBBON_PX {
                 // Too thin to bound: the note IS its spine.
-                for &(w, af) in &passes {
+                for &(w, color) in &passes {
                     painter.line_segment(
                         [axes.at(a0, d0), axes.at(a1, d1)],
-                        egui::Stroke::new(w.max(MIN_RIBBON_PX), stroke_color(af)),
+                        egui::Stroke::new(w.max(MIN_RIBBON_PX), color),
                     );
                 }
             } else if p0 == p1 {
@@ -150,12 +169,24 @@ pub(super) fn draw_roll(
                 let rect = egui::Rect::from_two_pos(axes.at(a0 - half, d0), axes.at(a1 + half, d1));
                 let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
                 let rounding = egui::CornerRadius::same(radius.min(127.0) as u8);
-                for &(w, af) in &passes {
-                    painter.rect_stroke(
-                        rect,
-                        rounding,
-                        egui::Stroke::new(w, stroke_color(af)),
-                        egui::StrokeKind::Middle,
+                for &(w, color) in &passes {
+                    // NOT snapped to whole pixels, which egui does to rects by
+                    // default (TessellationOptions::round_rects_to_pixels) to
+                    // keep static chrome crisp. These rects scroll: snapping
+                    // holds a note still until it has drifted a whole pixel and
+                    // then jumps it, so the roll advanced in steps while the
+                    // spectrogram — a mesh, never snapped — slid smoothly
+                    // underneath, and the notes read as jittering against it.
+                    // Sub-pixel placement costs a little edge softness and buys
+                    // motion that matches.
+                    painter.add(
+                        egui::epaint::RectShape::stroke(
+                            rect,
+                            rounding,
+                            egui::Stroke::new(w, color),
+                            egui::StrokeKind::Middle,
+                        )
+                        .with_round_to_pixels(false),
                     );
                 }
             } else {
@@ -167,25 +198,17 @@ pub(super) fn draw_roll(
                     axes.at(a1 + half, d1),
                     axes.at(a1 - half, d1),
                 ];
-                for &(w, af) in &passes {
+                for &(w, color) in &passes {
                     painter.add(egui::Shape::convex_polygon(
                         quad.clone(),
-                        egui::Color32::TRANSPARENT,
-                        egui::Stroke::new(w, stroke_color(af)),
+                        Color32::TRANSPARENT,
+                        egui::Stroke::new(w, color),
                     ));
                 }
             }
         }
     }
 
-    // The present moment, where the roll hands over to the spectrum. In
-    // whole-song mode the pane sweeps a playhead instead, so skip it.
-    if cfg.roll_now_line && !time.whole_song() {
-        painter.line_segment(
-            axes.across_pitch(split),
-            egui::Stroke::new(1.0, theme::hairline()),
-        );
-    }
 }
 
 /// The color of a note at `pitch`, per the Color setting.
@@ -214,4 +237,122 @@ fn note_color(
 fn brighten(color: Color32) -> Color32 {
     let lift = |v: u8| v.saturating_add((255 - v) / 2);
     Color32::from_rgba_unmultiplied(lift(color.r()), lift(color.g()), lift(color.b()), color.a())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SharedState, SpectralOrientation};
+    use lattice_core::{NoteEvent, NoteEventKind};
+
+    /// Paint one held note at the given Edge strength and report every rect
+    /// the roll emitted, as (stroke width, stroke color, fill).
+    fn ribbon(keyline: f32) -> Vec<(f32, Color32, Color32)> {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.low_midi = 55.0;
+        state.spectrum_config.high_midi = 67.0;
+        state.spectrum_config.roll_opacity = 1.0;
+        state.spectrum_config.roll_velocity_alpha = false;
+        state.spectrum_config.roll_outline_width = 2.0;
+        state.spectrum_config.roll_thickness = 2.0;
+        state.spectrum_config.keyline = keyline;
+        state.view.bloom_strength = 0.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+            },
+        );
+        out.shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Rect(r) => Some((r.stroke.width, r.stroke.color, r.fill)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Note rects opt OUT of egui's pixel snapping, which is on by default
+    /// for rects so that static chrome stays crisp. These scroll: snapping
+    /// holds a note still until it has drifted a whole pixel and then jumps
+    /// it, while the spectrogram — a mesh, never snapped — slides smoothly
+    /// underneath. The notes read as jittering against it.
+    #[test]
+    fn note_rects_are_not_snapped_to_whole_pixels() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        // Zoomed in enough that the ribbon is a rect rather than a bare
+        // spine — the thin branch has no rect to snap.
+        state.spectrum_config.low_midi = 55.0;
+        state.spectrum_config.high_midi = 67.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+            },
+        );
+        let stroked: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => Some(r.round_to_pixels),
+                _ => None,
+            })
+            .collect();
+        assert!(!stroked.is_empty(), "the note drew no ribbon to check");
+        assert!(
+            stroked.iter().all(|&r| r == Some(false)),
+            "a scrolling note rect is still pixel-snapped: {stroked:?}",
+        );
+    }
+
+    /// The ribbons lie over the spectrogram, whose cells run the whole ramp
+    /// from black to near-white, so a note's own color is sometimes almost
+    /// exactly what is behind it. The Edge setting puts a light keyline under
+    /// each outline, wider on both sides, to be seen by.
+    #[test]
+    fn the_edge_setting_puts_a_keyline_under_each_outline() {
+        let outline = 2.0;
+        let rects = ribbon(0.5);
+        let key = rects.iter().position(|&(w, c, _)| {
+            (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01
+                && c == Color32::WHITE.gamma_multiply(0.5)
+        });
+        let crisp = rects.iter().position(|&(w, _, _)| (w - outline).abs() < 0.01);
+        let (Some(key), Some(crisp)) = (key, crisp) else {
+            panic!("expected a keyline and a crisp outline, got {rects:?}");
+        };
+        assert!(key < crisp, "the keyline paints over the outline it should sit under");
+
+        // And nothing at all at zero, rather than a hairline that can't be
+        // turned off.
+        let none = ribbon(0.0);
+        assert!(
+            !none.iter().any(|&(w, _, _)| (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01),
+            "Edge 0 still drew a keyline: {none:?}",
+        );
+    }
 }

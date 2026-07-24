@@ -464,7 +464,7 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.show_audio = true;
     state.spectrum_config.floor_db = -48.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
-    state.spectrum_config.low_octave = 1;
+    state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
     state.spectrum_config.spectrogram_opacity = 0.5;
@@ -477,12 +477,89 @@ fn spectrum_config_round_trips_through_persist() {
     assert!(restored.spectrum_config.show_audio);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
-    assert_eq!(restored.spectrum_config.low_octave, 1);
+    // A range off the C boundaries survives, which the octave pair could not
+    // have expressed at all.
+    assert_eq!(restored.spectrum_config.low_midi, 40.5);
     assert!(restored.spectrum_config.show_spectrogram);
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
     assert_eq!(restored.spectrum_config.spectrogram_smoothing, 0.6);
     assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
+}
+
+/// The pitch range used to be a pair of Bitwig octave numbers. A blob from
+/// then carries `low_octave`/`high_octave` and no `low_midi`, so without the
+/// fold serde hands it the full-axis default and the zoom the user set is
+/// silently gone.
+#[test]
+fn an_octave_numbered_pitch_range_migrates_to_midi() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.low_midi = 40.5;
+    state.spectrum_config.high_midi = 100.0;
+    // C1..C5 in Bitwig numbering — MIDI 36..84.
+    let old = state
+        .save_persist()
+        .replace("low_midi:40.5", "low_octave:1")
+        .replace("high_midi:100.0", "high_octave:5");
+    assert!(old.contains("low_octave:1"), "the replacement must have hit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&old);
+    assert_eq!(restored.spectrum_config.low_midi, 36.0);
+    assert_eq!(restored.spectrum_config.high_midi, 84.0);
+}
+
+/// A range saved while the axis ran MIDI 12..132 (16 Hz to 16.7 kHz) starts
+/// below the 20 Hz floor the axis has now. Drawing it would leave a band with
+/// no buckets behind it, so loading fits the range to the axis that exists —
+/// and only where it has to: 132 is still a pitch this axis covers.
+#[test]
+fn a_pitch_range_off_the_current_axis_is_pulled_back_onto_it() {
+    use lattice_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+    let restore = |low: &str, high: &str| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 72.0;
+        let saved = state
+            .save_persist()
+            .replace("low_midi:60.0", &format!("low_midi:{low}"))
+            .replace("high_midi:72.0", &format!("high_midi:{high}"));
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        (restored.spectrum_config.low_midi, restored.spectrum_config.high_midi)
+    };
+
+    let (low, high) = restore("12.0", "132.0");
+    assert_eq!(low, SPECTRUM_MIN_MIDI, "below the floor, so pulled up to it");
+    assert_eq!(high, 132.0, "inside the axis, so left exactly where it was");
+
+    // A hand-edited blob can reach past the ceiling too.
+    let (_, high) = restore("40.0", "200.0");
+    assert_eq!(high, SPECTRUM_MAX_MIDI);
+}
+
+/// Every blob saved before the spectrogram existed is missing the field, and
+/// plain `#[serde(default)]` answers `false` for it — so the feature arrived
+/// switched off for every existing project while a fresh install got it on.
+/// The two have to agree.
+#[test]
+fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.show_spectrogram = false;
+    let saved = state.save_persist();
+    let old = saved.replace("show_spectrogram:false,", "");
+    assert_ne!(old, saved, "the field must have been there to strip");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&old);
+    assert!(
+        restored.spectrum_config.show_spectrogram,
+        "a missing field must fall back to the struct's own default, not bool::default()"
+    );
+    // An explicit `false` is a choice, not an absence, and still round-trips.
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    assert!(!restored.spectrum_config.show_spectrogram);
 }
 
 #[test]

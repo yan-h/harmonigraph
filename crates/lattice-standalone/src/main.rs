@@ -33,6 +33,10 @@ fn main() -> eframe::Result {
                 .as_ref()
                 .expect("eframe was built with the wgpu backend");
             let mut app = App::new(render_state.target_format);
+            // A no-op here — this state is built alongside the context it will
+            // use — but every shell owes it on context creation, and the day
+            // this harness gains a second window it would stop being one.
+            app.state.release_context_resources();
             // Restore dock layout / camera / view settings from eframe's
             // storage (mirrors the plugin's persist blob).
             if let Some(serialized) =

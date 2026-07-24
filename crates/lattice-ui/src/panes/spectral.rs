@@ -7,13 +7,33 @@
 //! together when its orientation changes and no element has to know which
 //! way is up. The roll's drawing lives next door in [`super::roll`].
 
-use super::visibility_floor;
-use crate::widgets::{button_row, choice_row, ValueBar};
+use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
-use super::{nearest_visible_node, scene_color, section, KEY_NAMES};
-use lattice_core::notes::{display_octave_of, octave_start_midi};
+use super::{nearest_visible_node, section, KEY_NAMES};
+use lattice_core::notes::display_octave_of;
 use egui::Sense;
-use lattice_scene::channel_color;
+
+/// The lowest C at or above `midi`, as a MIDI note. Where the octave
+/// gridlines start: since the pitch range went continuous it can begin
+/// anywhere, and stepping twelves from the range's own start would scatter
+/// the "C" lines across whatever pitch the zoom happens to begin on.
+fn first_c_at_or_above(midi: f32) -> i32 {
+    (midi / 12.0).ceil() as i32 * 12
+}
+
+/// A MIDI note as the frequency an analyzer would label it: whole hertz down
+/// low, kHz to one decimal above 1000, each carrying its unit so the number
+/// says what it is. Three or four significant figures is all a range readout
+/// can use — "16744 Hz" is noise where "16.7 kHz" is a number you can read at
+/// a glance while dragging.
+fn hz_readout(midi: f32) -> String {
+    let hz = lattice_core::spectrum::midi_to_hz(midi);
+    if hz >= 1000.0 {
+        format!("{:.1} kHz", hz / 1000.0)
+    } else {
+        format!("{hz:.0} Hz")
+    }
+}
 
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
@@ -101,22 +121,33 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     ui.checkbox(&mut cfg.peak_hold, "Peak hold")
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
-    ui.checkbox(&mut cfg.show_voice_bars, "Voice bars")
-        .on_hover_text("MIDI-derived bars at each voice's actual pitch");
+    ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Edge").show(ui).on_hover_text(
+        "A light rim along the spectrum's profile and around each note \
+         ribbon. Both sit over the spectrogram, whose colors run from black \
+         to near-white, so either can end up the same brightness as what is \
+         behind it and lose its shape. 0 draws none.",
+    );
 
     // ---- Pitch axis -----------------------------------------------------
     section(ui, "Pitch axis");
-    // Octave zoom (Bitwig numbering; C-1..C9 is the full analyzer range).
-    let mut low = cfg.low_octave as f32;
-    if ValueBar::new(&mut low, -1.0..=8.0, "Low octave").integer().show(ui).changed() {
-        cfg.low_octave = low as i32;
-        cfg.high_octave = cfg.high_octave.max(cfg.low_octave + 1);
-    }
-    let mut high = cfg.high_octave as f32;
-    if ValueBar::new(&mut high, 0.0..=9.0, "High octave").integer().show(ui).changed() {
-        cfg.high_octave = high as i32;
-        cfg.low_octave = cfg.low_octave.min(cfg.high_octave - 1);
-    }
+    // One control for both ends, because the two ends are one thing: the
+    // window onto the analyzer's axis. Dragged in MIDI note (which is what
+    // makes it a log-frequency zoom) and read out in Hz.
+    RangeBar::new(
+        &mut cfg.low_midi,
+        &mut cfg.high_midi,
+        lattice_core::spectrum::SPECTRUM_MIN_MIDI..=lattice_core::spectrum::SPECTRUM_MAX_MIDI,
+    )
+    .min_span(crate::PITCH_RANGE_MIN_SPAN)
+    .display(hz_readout)
+    .show(ui)
+    .on_hover_text(
+        "The slice of the spectrum on show. Drag either end to move it, drag \
+         between them to slide the whole range (it squishes when it meets an \
+         end), double-click for the full axis. The scale is logarithmic — \
+         equal distances are equal musical intervals — so an octave is the \
+         same width wherever it sits.",
+    );
     choice_row(
         ui,
         "Labels",
@@ -231,10 +262,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     });
 }
 
-/// Depth budget for both plots, as a fraction of the *spectrum's share* of
-/// the depth axis: a full-scale (0 dB) sine and a full-velocity held voice
-/// both top out here. The two MUST agree, or the voice bars stop being
-/// comparable with the spectrum curve they are drawn over.
+/// Depth budget for the spectrum curve, as a fraction of the *spectrum's
+/// share* of the depth axis: a full-scale (0 dB) sine tops out here, leaving
+/// the last stretch as headroom so a loud partial doesn't run into the pane's
+/// edge.
 const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
@@ -255,7 +286,7 @@ pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f3
 /// Two axes, both running `0..1`:
 ///
 /// - **pitch** runs across the pane's SHORT side; 0 is the low end of the
-///   octave zoom.
+///   pitch range.
 /// - **depth** is the time axis, running along the LONG side; 0 is the
 ///   spectrum's outer edge, `split` the now-line (where the spectrum joins
 ///   the spectrogram), and 1 the far edge (the roll's oldest notes).
@@ -409,8 +440,9 @@ const SPLIT_GRAB_HALF: f32 = 6.0;
 /// The spectrum/far-region divider, draggable where it is drawn.
 ///
 /// Deliberately NOT a dock separator: the spectrum, spectrogram and roll are
-/// one pane on purpose — the spectrum's baseline sits ON this line, the voice
-/// bars hang from it, and the roll's now-line IS it — so making them separate
+/// one pane on purpose — the spectrum's baseline sits ON this line and the
+/// roll's notes arrive at it, which is how you see they are sounding — so
+/// making them separate
 /// panes would put that shared calibration across a pane boundary (and dock
 /// panes detach, which this divider must not). Instead the handle drags
 /// [`roll_fraction`](crate::SpectrumConfig::roll_fraction), the very field the
@@ -445,7 +477,7 @@ fn drag_split(
     response
 }
 
-/// Where a pitch sits on the pane's axis: the octave zoom, as a mapping.
+/// Where a pitch sits on the pane's axis: the pitch range, as a mapping.
 #[derive(Clone, Copy)]
 pub(super) struct PitchScale {
     pub min_midi: f32,
@@ -598,10 +630,14 @@ pub(crate) fn spectral_pane(
     let axes = Axes::new(rect, &cfg);
     // The axis: absolute pitch, linear in MIDI note = logarithmic in
     // frequency, so every octave gets equal room and every note draws at
-    // its actual pitch. The displayed range is the Analyzer tab's octave
-    // zoom; the Bitwig octave<->MIDI convention lives in lattice-core.
-    let min_midi = octave_start_midi(cfg.low_octave) as f32;
-    let max_midi = octave_start_midi(cfg.high_octave) as f32;
+    // its actual pitch. The displayed range is the Analyzer tab's pitch
+    // range, which is free to start anywhere — it is not snapped to C.
+    let min_midi = cfg.low_midi;
+    // Never trust the pair to be ordered. A zero or negative span divides by
+    // zero in PitchScale and paints NaN geometry, which egui panics on — and
+    // a panic here takes the plugin's editor down inside the host. The range
+    // bar can't produce one; a hand-edited state blob can.
+    let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
     let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
 
     // Offline playhead render: the whole take laid out statically with a
@@ -661,7 +697,7 @@ pub(crate) fn spectral_pane(
     let mut axis_labels: Vec<(f32, String)> = Vec::new();
     match cfg.labels {
         SpectrumLabels::Notes => {
-            let mut c = min_midi as i32;
+            let mut c = first_c_at_or_above(min_midi);
             while c <= max_midi as i32 {
                 let t = scale.t_of(c as f32);
                 gridline(t);
@@ -717,13 +753,8 @@ pub(crate) fn spectral_pane(
     // background); the roll's ribbons sit over it, and the live spectrum
     // curve over everything. Turning the ribbons off (`show_roll`) with the
     // spectrogram on leaves the heatmap alone.
-    if split < 1.0 {
-        if cfg.show_spectrogram {
-            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
-        }
-        if cfg.show_roll {
-            super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
-        }
+    if split < 1.0 && cfg.show_spectrogram {
+        super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
     }
 
     // The playhead: in whole-song mode, the one moving mark sweeping across the
@@ -742,11 +773,30 @@ pub(crate) fn spectral_pane(
     if cfg.show_audio && split > 0.0 {
         let frame = state.frame_params;
         if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
-            // Only the buckets inside the octave zoom.
-            let visible: Vec<(f32, f32, f32, f32)> = (0..levels.len())
-                .filter_map(|i| {
-                    let midi = SPECTRUM_MIN_MIDI + (i as f32 + 0.5) / BINS_PER_SEMITONE as f32;
-                    scale.contains(midi).then(|| (midi, scale.t_of(midi), levels[i], peaks[i]))
+            // Only the buckets inside the pitch range.
+            // One slab per pitch PIXEL, each taking the loudest bucket that
+            // falls in it — not one slab per bucket. The axis holds thousands
+            // of buckets and the pane a few hundred pixels, so per-bucket
+            // meant thousands of shapes a frame stacked on top of each other,
+            // which was survivable only while most buckets were zero. MAX
+            // rather than an average so a thin partial still reads full
+            // height instead of being diluted by its quiet neighbours.
+            let bucket_at = |midi: f32| {
+                (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as isize)
+                    .clamp(0, levels.len() as isize - 1) as usize
+            };
+            let cols = (axes.pitch_len().round() as usize).clamp(2, 4096);
+            let visible: Vec<(f32, f32, f32, f32)> = (0..cols)
+                .map(|c| {
+                    let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
+                    let (b0, b1) = (bucket_at(edge(c)), bucket_at(edge(c + 1)));
+                    let (mut level, mut peak) = (0.0f32, 0.0f32);
+                    for b in b0..=b1.max(b0) {
+                        level = level.max(levels[b]);
+                        peak = peak.max(peaks[b]);
+                    }
+                    let t = (c as f32 + 0.5) / cols as f32;
+                    (scale.min_midi + t * scale.span, t, level, peak)
                 })
                 .collect();
 
@@ -770,7 +820,7 @@ pub(crate) fn spectral_pane(
             // curve. Each slab is one bucket in its own palette color, opaque
             // enough to read as a solid fill; densely packed, their tops make
             // the shape's edge (no separate line to fray).
-            let slab = (axes.pitch_len() / (scale.span * BINS_PER_SEMITONE as f32)) + 0.5;
+            let slab = axes.pitch_len() / cols as f32 + 0.5;
             for &(midi, t, level, _) in &visible {
                 let d = d_of(level, midi);
                 if d * axes.depth_len() > 0.5 {
@@ -779,6 +829,20 @@ pub(crate) fn spectral_pane(
                         egui::Stroke::new(slab, tint(hue(level, midi), 210)),
                     );
                 }
+            }
+
+            // ...and a light rim along their tops, the same edge the note
+            // ribbons carry. The spectrum's own colors come from the
+            // spectrogram's palette, so where the curve is quiet it is drawn
+            // in that palette's dark end — against the pane's dark background,
+            // with no edge, the shape simply stops existing. Follows the
+            // profile the slabs make rather than being a separate curve.
+            if let Some(edge) = super::roll::keyline(&cfg, 1.0) {
+                let top: Vec<egui::Pos2> = visible
+                    .iter()
+                    .map(|&(midi, t, level, _)| axes.at(t, sd(d_of(level, midi))))
+                    .collect();
+                painter.add(egui::Shape::line(top, egui::Stroke::new(1.0, edge)));
             }
             if cfg.peak_hold {
                 // The one remaining line: a decaying trace of recent maxima,
@@ -796,64 +860,84 @@ pub(crate) fn spectral_pane(
         }
     }
 
-    // Voice bars at the voice's ACTUAL pitch (per-note tuning and MPE
-    // bends slide the bar): length follows the same envelope as the
-    // lattice glow, weighted by velocity; color matches the node color.
-    // They hang from the roll's "now" edge back INTO the spectrum: the
-    // audio spectrum's fundamental rises from the baseline at the same
-    // pitch, so a baseline-up bar would sit exactly on the peak it should
-    // be compared against. Hanging bars point at the peak instead of
-    // hiding it — and they start where the roll's live notes end, so a
-    // note's ribbon and its bar read as one continuous mark.
-    if cfg.show_voice_bars && split > 0.0 {
-        // Stable order: held voices iterate a HashMap, and overlapping opaque
-        // bars paint order-dependently — the offline render must match between
-        // runs.
-        let mut voices: Vec<&lattice_core::Voice> = state.tracker.voices().collect();
+    // Notes sounding at a pitch the visible lattice has no node for, flagged
+    // as a red band down the spectrum at that pitch. The lattice shows nothing
+    // for such a note by definition, so this pane is where you would otherwise
+    // never learn one was playing — and the band says it in the spectrum's own
+    // territory, where there is room for it, instead of recoloring the note
+    // and costing you the one thing the ribbon's color is for. Same
+    // `nearest_visible_node` match the Notes pane and the lattice use.
+    if split > 0.0 && !whole_song {
+        let mut voices: Vec<&lattice_core::Voice> = state
+            .tracker
+            .voices()
+            .filter(|v| {
+                nearest_visible_node(&state.view, &state.tuning, v.pitch_class).is_none()
+            })
+            .collect();
+        // Stable order: voices iterate a HashMap and translucent bands
+        // accumulate where they overlap, so the offline render must not
+        // depend on it.
         voices.sort_unstable_by(|a, b| {
             a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
         });
+        let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
         for voice in voices {
-            let activation = voice.activation(now, state.frame_params.fade_time);
-            if activation <= 0.0 || !scale.contains(voice.pitch) {
+            let strength = voice.activation(now, state.frame_params.fade_time);
+            if strength <= 0.0 || !scale.contains(voice.pitch) {
                 continue;
             }
             let t = scale.t_of(voice.pitch);
-            let depth =
-                split * PLOT_HEIGHT_FRACTION * activation * visibility_floor(voice.velocity);
-            let c = channel_color(
-                voice.channel,
-                voice.pitch,
-                state.frame_params.darkest_pitch,
-                state.frame_params.brightest_pitch,
+            let band = egui::Rect::from_two_pos(
+                axes.at(t - half, 0.0),
+                axes.at(t + half, split),
             );
-            let color = scene_color(c, 1.0);
-            let ends = [axes.at(t, split), axes.at(t, split - depth)];
-            // A note sounding off the visible lattice lights up no node, so
-            // pulse an accent halo behind its bar: the Spectral pane is where
-            // you'd otherwise miss that a pitch you can't see is playing. Same
-            // match the lattice uses, so "off-lattice" agrees with the view.
-            if nearest_visible_node(&state.view, &state.tuning, voice.pitch_class).is_none() {
-                let pulse = 0.5 + 0.5 * (now * std::f64::consts::TAU * 1.6).sin() as f32;
-                let halo = theme::accent().gamma_multiply(0.35 + 0.5 * pulse);
-                painter.line_segment(ends, egui::Stroke::new(3.0 + 4.0 * pulse, halo));
-            }
-            painter.line_segment(ends, egui::Stroke::new(3.0, color));
+            painter.rect_filled(band, 0.0, theme::warning_text().gamma_multiply(0.3 * strength));
         }
+    }
+
+    // The now-line, where the roll hands over to the spectrum — drawn here,
+    // after both things it divides, rather than at the end of the roll where
+    // it used to be. It marks the boundary between two pictures, so it has to
+    // sit ON them: from inside the roll it went down before the spectrum curve
+    // and the curve's fill painted over it, and the spectrogram's quad reaches
+    // the same line from the other side. Either one eating into it left a
+    // divider that flickered with the music instead of holding still.
+    //
+    // Whole-song mode sweeps a playhead across a static layout instead, and
+    // draws its own mark above.
+    if cfg.roll_now_line && !whole_song && split < 1.0 && split > 0.0 {
+        painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
+    }
+
+    // The roll goes on last, over the line it arrives at. A sounding note
+    // reaching the boundary and painting across it IS the mark that it is
+    // sounding — nothing else has to be drawn to say so, and nothing drawn
+    // separately could sit against a rounded ribbon end as exactly as the
+    // ribbon does. (Its ribbons occupy the far side of the split and the
+    // spectrum the near side, so this only changes what happens ON the line.)
+    if split < 1.0 && cfg.show_roll {
+        super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
     }
 
     // Axis labels last, riding on top of the spectrogram, spectrum, and
     // voice bars: a label only earns its place if you can read which pitch a
     // lane is, and a loud slab would otherwise bury it. The gridlines
     // themselves stay underneath (drawn above) as pitch lanes.
+    // Haloed exactly like the lattice's node labels, and for the same reason:
+    // whatever is behind them is a picture, not a background. A pitch label
+    // over a bright spectrogram slab, or over the spectrum's own fill, has no
+    // contrast to rely on at all.
     for (p, label) in axis_labels {
         let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
-        painter.text(
+        super::lattice::outlined_text(
+            &painter,
             pos,
             align,
             label,
             egui::FontId::monospace(10.0 * label_scale),
             theme::text_dim(),
+            theme::well(),
         );
     }
 
@@ -881,9 +965,13 @@ pub(crate) fn spectral_pane(
     let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
     if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
-        // The axis starts on a C, so cents-from-C is just the fractional
-        // octave position.
-        let pc_cents = (midi - min_midi).rem_euclid(12.0) * 100.0;
+        // Cents from C, measured from MIDI 0 (which IS a C) rather than from
+        // the range's own start: the range used to be a pair of octave numbers
+        // and so always began on a C, but it is continuous now and generally
+        // does not. Measuring from it offset every hovered pitch class by
+        // wherever the zoom happened to start, so hovering the spectrum lit up
+        // the wrong lattice node.
+        let pc_cents = midi.rem_euclid(12.0) * 100.0;
         state.hovered = nearest_visible_node(
             &state.view,
             &state.tuning,
@@ -891,7 +979,8 @@ pub(crate) fn spectral_pane(
         );
         let nearest = midi.round();
         let (pos, align) = axes.text_anchor(scale.t_of(midi), 1.0, 6.0, -2.0);
-        painter.text(
+        super::lattice::outlined_text(
+            &painter,
             pos,
             align,
             format!(
@@ -903,6 +992,7 @@ pub(crate) fn spectral_pane(
             ),
             egui::FontId::monospace(10.5 * label_scale),
             theme::text(),
+            theme::well(),
         );
     }
 }
@@ -1136,7 +1226,7 @@ mod tests {
     }
 
     /// The whole pane, painted in every orientation with a roll that has
-    /// held notes, bent notes, notes off the octave zoom and notes older
+    /// held notes, bent notes, notes off the pitch range and notes older
     /// than the window. Geometry this fiddly is easy to make degenerate
     /// (zero-area quads, NaN from a zero span), and egui panics on those.
     #[test]
@@ -1149,15 +1239,201 @@ mod tests {
             ] {
                 for roll_fraction in [0.0, 0.55, 1.0] {
                     let shapes = paint(rect, orientation, roll_fraction);
-                    assert!(shapes > 0, "{orientation:?} drew nothing");
+                    assert!(!shapes.is_empty(), "{orientation:?} drew nothing");
                 }
             }
         }
     }
 
+    /// A sounding note is marked by its own ribbon crossing the now-line, so
+    /// the roll has to be painted after the line rather than before it. Every
+    /// separate mark drawn for the job sat wrong against a rounded ribbon end;
+    /// the ribbon cannot.
+    #[test]
+    fn the_roll_paints_over_the_now_line() {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.roll_now_line = true;
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 72.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 69,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(&mut child, &mut state, 0.1, 1.0, 0);
+            },
+        );
+        // The now-line is the one hairline-colored segment clean across the
+        // pitch axis; the note is drawn as a rounded outline (or, when thin, a
+        // segment) and must come after it.
+        let hairline = out.shapes.iter().position(|s| {
+            matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
+                if stroke.color == theme::hairline())
+        });
+        let note = out.shapes.iter().rposition(|s| {
+            matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.width > 0.0)
+        });
+        let (Some(hairline), Some(note)) = (hairline, note) else {
+            panic!("expected both a now-line and a note ribbon in the frame");
+        };
+        assert!(note > hairline, "the note paints under the line it arrives at");
+    }
+
+    /// A note sounding where the visible lattice has no node is flagged by a
+    /// band down the spectrum at its pitch — the lattice shows nothing for
+    /// such a note by definition, so this pane is the only place you can learn
+    /// one is playing. Put in the spectrum's territory rather than on the
+    /// note, whose color is already saying which voice it is.
+    #[test]
+    fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
+        let bands = |tuning_offset: f32| {
+            let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+            state.spectrum_config.low_midi = 55.0;
+            state.spectrum_config.high_midi = 67.0;
+            state.tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+            if tuning_offset != 0.0 {
+                state.tracker.handle_event(NoteEvent {
+                    time: 0.0,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteEventKind::Tuning { semitones: tuning_offset },
+                });
+            }
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+            let out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                    spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+                },
+            );
+            let want = theme::warning_text().gamma_multiply(0.3);
+            out.shapes
+                .into_iter()
+                .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want))
+                .count()
+        };
+        assert_eq!(bands(0.0), 0, "a plain C has a node, so nothing to flag");
+        assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
+    }
+
+    /// The axis labels are haloed like the lattice's node names. What sits
+    /// behind them is a picture — a bright spectrogram slab, the spectrum's
+    /// own fill — so plain text has no contrast to rely on, and a label you
+    /// can't read doesn't say which pitch a lane is.
+    #[test]
+    fn the_axis_labels_are_haloed() {
+        let shapes = paint(WIDE, SpectralOrientation::Horizontal, 0.55);
+        let mut runs: std::collections::HashMap<String, usize> = Default::default();
+        for shape in &shapes {
+            if let egui::Shape::Text(t) = shape {
+                *runs.entry(t.galley.text().to_owned()).or_default() += 1;
+            }
+        }
+        assert!(!runs.is_empty(), "the pane drew no labels at all");
+        for (label, stamps) in runs {
+            assert!(
+                stamps > 1,
+                "{label:?} was drawn once, so it carries no halo — bare text over the \
+                 spectrogram is what this guards against",
+            );
+        }
+    }
+
+    /// The readout names its own unit, and switches to kHz where an analyzer
+    /// axis does.
+    #[test]
+    fn the_hz_readout_carries_its_unit() {
+        assert_eq!(hz_readout(69.0), "440 Hz", "A440, the one value worth checking by hand");
+        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MIN_MIDI), "20 Hz");
+        assert_eq!(hz_readout(lattice_core::spectrum::SPECTRUM_MAX_MIDI), "20.0 kHz");
+        // The switch is at 1000 Hz exactly, not somewhere near it.
+        let khz = lattice_core::spectrum::hz_to_midi(1000.0);
+        assert_eq!(hz_readout(khz), "1.0 kHz");
+        assert!(hz_readout(khz - 0.1).ends_with(" Hz"));
+    }
+
+    /// A C gridline has to land on a C. The range used to be a pair of octave
+    /// numbers, so its start WAS a C and stepping twelves from it worked; now
+    /// it can start anywhere.
+    #[test]
+    fn c_gridlines_land_on_cs_wherever_the_range_starts() {
+        assert_eq!(first_c_at_or_above(48.0), 48, "a range already on a C keeps it");
+        assert_eq!(first_c_at_or_above(40.5), 48);
+        assert_eq!(first_c_at_or_above(47.99), 48);
+        // The axis floor is 20 Hz, which is not a C — the first C above it is MIDI 24.
+        assert_eq!(first_c_at_or_above(lattice_core::spectrum::SPECTRUM_MIN_MIDI), 24);
+    }
+
+    /// The settings pane, whose pitch-range bar derives rects from a PAIR of
+    /// values — the shape of thing that folds to zero area and panics egui.
+    /// Painted at both the widest and the narrowest range it allows.
+    #[test]
+    fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
+        let axis =
+            (lattice_core::spectrum::SPECTRUM_MIN_MIDI, lattice_core::spectrum::SPECTRUM_MAX_MIDI);
+        for (low, high) in [axis, (40.5, 40.5 + crate::PITCH_RANGE_MIN_SPAN), (axis.0, axis.0)] {
+            let mut state =
+                SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.low_midi = low;
+            state.spectrum_config.high_midi = high;
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(320.0, 700.0));
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| spectrum_settings_pane(ui, &mut state),
+            );
+            assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
+        }
+    }
+
+    /// A state blob carrying a collapsed or inverted pitch range must not
+    /// take the editor down with it.
+    #[test]
+    fn a_degenerate_pitch_range_still_paints() {
+        for (low, high) in [(60.0, 60.0), (90.0, 30.0)] {
+            let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.low_midi = low;
+            state.spectrum_config.high_midi = high;
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                    spectral_pane(&mut child, &mut state, 100.0, 1.0, 0);
+                },
+            );
+            assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
+        }
+    }
+
     /// Run one frame of the Spectral pane into `rect` and count the shapes
     /// it emitted.
-    fn paint(rect: egui::Rect, orientation: SpectralOrientation, roll_fraction: f32) -> usize {
+    fn paint(
+        rect: egui::Rect,
+        orientation: SpectralOrientation,
+        roll_fraction: f32,
+    ) -> Vec<egui::Shape> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = orientation;
         state.spectrum_config.roll_fraction = roll_fraction;
@@ -1184,7 +1460,7 @@ mod tests {
         };
         let off = |time, note| NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off };
         // Long past the window; inside it; bent across it; off the top of
-        // the octave zoom; and one still held at `now`.
+        // the pitch range; and one still held at `now`.
         state.tracker.handle_event(on(0.0, 60));
         state.tracker.handle_event(off(1.0, 60));
         state.tracker.handle_event(on(95.0, 62));
@@ -1214,6 +1490,6 @@ mod tests {
                 spectral_pane(&mut child, &mut state, now, 1.0, 0);
             },
         );
-        output.shapes.len()
+        output.shapes.into_iter().map(|s| s.shape).collect()
     }
 }

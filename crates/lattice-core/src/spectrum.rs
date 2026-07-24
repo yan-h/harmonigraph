@@ -10,26 +10,31 @@
 //! no dependencies); at 8192 points a few times per second it is nowhere
 //! near a bottleneck.
 
-/// The spectrum's pitch axis: MIDI notes [MIN, MAX), which is C-1..C9 in
-/// Bitwig's octave convention (middle C = C3) — ten octaves, ~16 Hz to
-/// ~16.7 kHz, the tonally useful slice of the audible range. The axis is
-/// linear in MIDI pitch, i.e. logarithmic in frequency, so every octave
-/// gets equal width.
-pub const SPECTRUM_MIN_MIDI: f32 = 12.0;
-pub const SPECTRUM_MAX_MIDI: f32 = 132.0;
-/// Axis resolution: 8 buckets per semitone (12.5 cents). Fine enough that a
-/// partial wandering under vibrato/chorus/beating slides between buckets
-/// smoothly instead of staircasing across coarse ones — the parabolic peak
-/// refinement already resolves pitch well below a bucket, so the extra rows
-/// carry real detail rather than interpolation. (The lowest octave stays
-/// coarse regardless: there the FFT bin is wider than a bucket.)
-pub const BINS_PER_SEMITONE: usize = 8;
+/// The spectrum's pitch axis: MIDI notes [MIN, MAX), which is 20 Hz to
+/// 20 kHz — the audible band, as every analyzer states it. The axis is linear
+/// in MIDI pitch, i.e. logarithmic in frequency, so every octave gets equal
+/// width.
+///
+/// Deliberately NOT whole octaves from a C. It used to be MIDI 12..132, ten
+/// octaves C to C, which made the C gridlines land on the axis ends — tidy,
+/// but it stopped at 16.7 kHz and left the top third of an octave of the
+/// audible band unanalyzed. There is no C anywhere near 20 kHz (the next one
+/// is 44 kHz), so covering the band means giving that tidiness up.
+pub const SPECTRUM_MIN_MIDI: f32 = 15.486_82; // 20 Hz
+pub const SPECTRUM_MAX_MIDI: f32 = 135.076_23; // 20 kHz
+/// Axis resolution: 32 buckets per semitone (3.125 cents).
+///
+/// The grid the magnitude spectrum is resampled onto. It is finer than the
+/// FFT resolves anywhere below ~3.2 kHz, which is deliberate: the extra rows
+/// cost almost nothing and they let the axis be zoomed right in without the
+/// grid itself becoming the thing you see. What the FFT can actually
+/// distinguish is set by the window length, not by this.
+pub const BINS_PER_SEMITONE: usize = 32;
+/// Enough buckets to cover the axis, plus slack: the span is not a whole
+/// number of semitones, and `pitch_spectrum` writes to `b0 + 1`, so the top
+/// partial needs a bucket above the one it lands in or it would be dropped.
 pub const SPECTRUM_BINS: usize =
-    (SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) as usize * BINS_PER_SEMITONE;
-
-/// Normalized magnitude below which a spectral peak is treated as noise
-/// and skipped entirely.
-const PEAK_FLOOR: f32 = 1e-4;
+    ((SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32) as usize + 2;
 
 /// Frequency of a (fractional) MIDI pitch at A440.
 pub fn midi_to_hz(midi: f32) -> f32 {
@@ -43,7 +48,7 @@ pub fn hz_to_midi(hz: f32) -> f32 {
 
 /// Default analysis window length in samples (~0.17 s at 48 kHz — steady
 /// enough for a meter, short enough to follow chord changes). At the axis
-/// floor (~16 Hz) one FFT bin spans several semitones, so the lowest
+/// floor (20 Hz) one FFT bin spans several semitones, so the lowest
 /// octave reads coarse; that is inherent to the window length, not a bug.
 /// [`SpectrumAnalyzer::set_fft_size`] trades response time against bass
 /// precision at runtime.
@@ -133,14 +138,32 @@ impl SpectrumAnalyzer {
     /// The current power spectrum over the MIDI-pitch axis, or None until
     /// a full window has been seen.
     ///
-    /// Bucket values are absolute power: a full-scale sine contributes
-    /// ~1.0 at its pitch regardless of window position or sample rate,
-    /// so successive frames are comparable and the display can apply a
-    /// fixed mapping. Only local spectral peaks are deposited — each
-    /// contributes its main lobe's power at its parabolically refined
-    /// frequency, split linearly between the two nearest buckets. (Using
-    /// every bin instead would smear each note across the width its
-    /// skirt bins span: at C4 one FFT bin is ~38 cents wide.)
+    /// Bucket values are absolute power: a full-scale sine reads ~1.0 at
+    /// its pitch, so successive frames are comparable and the display can
+    /// apply a fixed mapping.
+    ///
+    /// Every bucket is filled — this resamples the whole magnitude
+    /// spectrum onto the log-pitch axis, rather than depositing only the
+    /// peaks. A bucket wider than the FFT's bin spacing takes the loudest
+    /// bin inside it; a narrower one (which is most of the axis: buckets
+    /// and bins are equal width around 3.2 kHz, and below that the bucket
+    /// is finer) interpolates between the two bins either side. MAX and
+    /// not a sum, so the level a bucket reports doesn't grow with how many
+    /// bins happen to fall in it and 0 dB keeps meaning a full-scale sine
+    /// at every pitch.
+    ///
+    /// This replaced a peak-only fill, which deposited each local maximum
+    /// at a parabolically refined frequency across the two nearest
+    /// buckets. That drew every partial as a thin, exactly-placed line —
+    /// but a spectrum is not only its partials. Broadband sound has no
+    /// peaks to find, so noise, breath and cymbals came out as flickering
+    /// speckle; there was no noise floor to read dynamics against, no
+    /// spectral envelope, and quiet content vanished at a hard threshold
+    /// instead of fading. The cost of the change is width: a partial is
+    /// now as wide as the window's main lobe, which at C4 spans about a
+    /// semitone, where before it was two buckets wide wherever it sat.
+    /// The refinement had been hiding how little the FFT actually
+    /// resolves down low; this shows it.
     pub fn pitch_spectrum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
         if self.filled < self.fft_size {
             return None;
@@ -160,49 +183,38 @@ impl SpectrumAnalyzer {
         let norm = 2.0 / window_sum;
 
         let bin_hz = self.sample_rate / self.fft_size as f32;
-        // Analyze the overlap of the pitch axis and what the FFT resolves
-        // (skip DC and the first bin; stay clear of Nyquist).
-        let lo = (midi_to_hz(SPECTRUM_MIN_MIDI) / bin_hz).ceil().max(2.0) as usize;
-        let hi = ((midi_to_hz(SPECTRUM_MAX_MIDI) / bin_hz) as usize).min(self.fft_size / 2 - 2);
-
         let mag = |k: usize| (self.re[k] * self.re[k] + self.im[k] * self.im[k]).sqrt();
+        // Usable bins: skip DC and bin 1 (where the window's own leakage
+        // dominates) and stay clear of Nyquist. Anything the axis asks for
+        // outside this reads as nothing, which is the truth — a 4096-point
+        // window at 48 kHz cannot see 20 Hz at all.
+        let (first, last) = (2usize, self.fft_size / 2 - 2);
+        let half_bucket = 0.5 / BINS_PER_SEMITONE as f32;
 
         let mut buckets = [0.0f32; SPECTRUM_BINS];
-        for k in lo..=hi {
-            let m = mag(k);
-            let (prev, next) = (mag(k - 1), mag(k + 1));
-            // Peaks only; `>=` on one side so an exactly-between-bins tone
-            // (two equal center bins) still registers once.
-            if !(m > prev && m >= next) || m * norm < PEAK_FLOOR {
-                continue;
-            }
-            // Parabolic refinement on log magnitude: sub-bin pitch from
-            // the peak and its two neighbors.
-            let mut bin = k as f32;
-            if prev > 0.0 && next > 0.0 {
-                let (a, b, c) = (prev.ln(), m.ln(), next.ln());
-                let denom = a - 2.0 * b + c;
-                if denom.abs() > f32::EPSILON {
-                    bin += (0.5 * (a - c) / denom).clamp(-0.5, 0.5);
+        for (b, out) in buckets.iter_mut().enumerate() {
+            let midi = SPECTRUM_MIN_MIDI + (b as f32 + 0.5) / BINS_PER_SEMITONE as f32;
+            // The bucket's own frequency band, in bins.
+            let x0 = midi_to_hz(midi - half_bucket) / bin_hz;
+            let x1 = midi_to_hz(midi + half_bucket) / bin_hz;
+            let (k0, k1) = (x0.ceil(), x1.floor());
+            let m = if k1 >= k0 && k0 >= first as f32 && k1 <= last as f32 {
+                // Wider than the bin spacing: the loudest bin it contains.
+                let (k0, k1) = (k0 as usize, k1 as usize);
+                (k0..=k1).fold(0.0f32, |acc, k| acc.max(mag(k)))
+            } else {
+                // Narrower: read the spectrum between the two bins either
+                // side of the bucket's center, so the log axis comes out
+                // smooth instead of combed where it outruns the FFT.
+                let x = midi_to_hz(midi) / bin_hz;
+                let k = x.floor();
+                if k < first as f32 || k + 1.0 > last as f32 {
+                    continue;
                 }
-            }
-            let freq = bin * bin_hz;
-            let midi = hz_to_midi(freq);
-
-            // Linear split across the two nearest buckets; partials
-            // outside the axis are dropped, not wrapped.
-            let pos = (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32;
-            if !(0.0..(SPECTRUM_BINS - 1) as f32).contains(&pos) {
-                continue;
-            }
-            let base = pos.floor();
-            let frac = pos - base;
-            let b0 = base as usize;
-            // The whole main lobe's power, not just the center bin's, so
-            // the reading stays level as a tone drifts between bins.
-            let power = (prev * prev + m * m + next * next) * norm * norm;
-            buckets[b0] += power * (1.0 - frac);
-            buckets[b0 + 1] += power * frac;
+                let (k, frac) = (k as usize, x - k);
+                mag(k) * (1.0 - frac) + mag(k + 1) * frac
+            };
+            *out = (m * norm) * (m * norm);
         }
         Some(buckets)
     }
@@ -300,12 +312,15 @@ mod tests {
             "peak at bucket {peak}, expected A4 (bucket {})",
             bucket_of_midi(69.0)
         );
-        // Absolute calibration: amplitude 0.8 -> power ~0.64 at the peak
-        // (split across at most two buckets, windowing spreads a little).
-        let total: f32 = buckets.iter().sum();
+        // Absolute calibration, which the whole display scale rests on:
+        // amplitude 0.8 reads as power ~0.64 (that is 0 dB for a full-scale
+        // sine) in the bucket at its pitch. Checked at the PEAK, not as a
+        // total: a dense spectrum samples a continuous curve onto a grid
+        // finer than the FFT resolves, so summing it is meaningless.
         assert!(
-            (0.3..=1.0).contains(&total),
-            "sine power should land near 0.64, got total {total}"
+            (0.5..=0.8).contains(&buckets[peak]),
+            "amplitude 0.8 should read ~0.64 at its pitch, got {}",
+            buckets[peak]
         );
     }
 
@@ -324,12 +339,12 @@ mod tests {
         };
         assert!(near(c) > floor * 20.0, "C4 peak missing");
         assert!(near(e) > floor * 20.0, "E4 peak missing");
-        // And nothing comparable elsewhere.
-        let stray = (0..SPECTRUM_BINS)
-            .filter(|&b| dist(b, c) > 3 && dist(b, e) > 3)
-            .map(|b| buckets[b])
-            .fold(0.0f32, f32::max);
-        assert!(stray < near(c) * 0.2, "stray energy {stray}");
+        // And the gap between them is a valley, not a third note. A dense
+        // spectrum has skirts either side of every partial, so the test is
+        // that the midpoint sits well below both peaks — not that it is
+        // empty, which only a peak-picking analyzer could promise.
+        let mid = buckets[(c + e) / 2];
+        assert!(mid < near(c) * 0.2, "C4 and E4 are not separated: midpoint {mid}");
     }
 
     #[test]
@@ -349,12 +364,19 @@ mod tests {
 
     #[test]
     fn out_of_range_partials_are_dropped_not_wrapped() {
-        // ~12.5 Hz sits below the axis floor (C-1 ~ 16.35 Hz); it must not
-        // alias to some in-range bucket. (An inaudible test tone, but the
-        // guard matters for subsonic rumble in real material.)
+        // ~12.5 Hz sits below the axis floor (20 Hz); it must not alias to
+        // some in-range bucket. (An inaudible test tone, but the guard
+        // matters for subsonic rumble in real material.)
+        //
+        // Its skirt DOES reach the bottom of the axis, and honestly so — a
+        // dense spectrum draws what the FFT saw, and the window's leakage
+        // from a loud subsonic tone genuinely lands there. What must not
+        // happen is a peak somewhere else, which is what wrapping would look
+        // like: the axis above the very bottom stays quiet.
         let buckets = analyze(&[(12.5, 0.8)], 48_000.0);
-        let total: f32 = buckets.iter().sum();
-        assert!(total < 0.05, "sub-axis energy leaked in: {total}");
+        let above = bucket_of_midi(SPECTRUM_MIN_MIDI + 12.0);
+        let stray = buckets[above..].iter().fold(0.0f32, |a, &b| a.max(b));
+        assert!(stray < 0.01, "sub-axis energy appeared an octave up: {stray}");
     }
 
     #[test]

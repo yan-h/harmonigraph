@@ -304,8 +304,9 @@ fn painter_ink(painter: &egui::Painter, text: &str, font: &egui::FontId) -> egui
         .mesh_bounds
 }
 
-/// Text drawn over the 3D view, haloed so it stays readable whatever
-/// ends up behind it (bright nodes, edges, glow). The outline color
+/// Text drawn over a busy picture, haloed so it stays readable whatever
+/// ends up behind it (bright nodes, edges, glow; the Spectral pane's axis
+/// labels use it over the spectrogram). The outline color
 /// should be the skin's recessed surface (`theme::well`), which
 /// contrasts with its text color by construction.
 ///
@@ -314,7 +315,7 @@ fn painter_ink(painter: &egui::Painter, text: &str, font: &egui::FontId) -> egui
 /// sample sits at the same radius, snapped to whole physical pixels —
 /// mixed cardinal/diagonal offsets and sub-pixel radii both read as a
 /// lumpy outline on high-DPI displays.
-fn outlined_text(
+pub(super) fn outlined_text(
     painter: &egui::Painter,
     anchor: egui::Pos2,
     align: egui::Align2,

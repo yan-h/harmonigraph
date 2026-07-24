@@ -34,6 +34,11 @@ const PREVIEW_PANE_ID: u64 = 1;
 /// swamp a small preview.
 const RENDER_POINTS_ACROSS: f32 = 1280.0;
 
+/// Points of breathing room between the render frame and the pane edge, so
+/// the frame's boundary chrome always has somewhere to sit outside the
+/// picture. See [`frame_chrome`].
+const FRAME_CHROME_PAD: f32 = 8.0;
+
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -49,7 +54,11 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     }
     let (outer, _) = ui.allocate_exact_size(avail, Sense::hover());
     let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
-    let box_rect = letterbox(outer, aspect);
+    // Inset before letterboxing: `letterbox` fits the box exactly on one axis,
+    // so without this the frame's boundary chrome would have nowhere to go on
+    // two sides. Shrinks on a small preview rather than eating it.
+    let pad = FRAME_CHROME_PAD.min(avail.min_elem() * 0.15);
+    let box_rect = letterbox(outer.shrink(pad), aspect);
     // How far the preview shrinks the render frame — labels scale by this so
     // they read at the size they will in the render, not at full point size.
     let label_scale = box_rect.width() / RENDER_POINTS_ACROSS;
@@ -63,42 +72,37 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     // color the offline renderer shows in its margins and inter-pane gaps — so
     // the box is exactly the pixels the video will contain. Before this the
     // padding and the pane fills were both `well()`, and you couldn't tell
-    // where the frame ended. A hairline edge keeps the boundary crisp even
-    // when a pane fills the box edge to edge.
+    // where the frame ended.
     let bg = layout.background;
     ui.painter().rect_filled(outer, 0.0, theme::panel());
     ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
-    ui.painter().rect_stroke(
-        box_rect,
-        0,
-        egui::Stroke::new(1.0, theme::accent_edge()),
-        egui::StrokeKind::Inside,
-    );
+    frame_chrome(ui, box_rect, pad);
 
-    let mut spectral_rect = None;
-    for (pane, rect) in layout.resolve(box_rect.size()) {
+    // The "Playhead" render variant lays the whole take's spectrogram out with
+    // a sweeping playhead, from audio the live preview doesn't have. Rather
+    // than show the live scrolling spectrogram and quietly mislead, leave the
+    // spectral region empty and say so.
+    let placements = layout.resolve(box_rect.size());
+    let placeholder = state.render_config.playhead;
+    for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
+            Pane::Spectral if placeholder => playhead_placeholder(ui, rect),
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
                 // Directly, so the preview's shrink scales its text too — the
                 // one fixed-size thing draw_pane can't carry. Texture slot 1, so
                 // its spectrogram doesn't clobber the docked pane's (slot 0).
                 super::spectral::spectral_pane(&mut child, state, now, label_scale, 1);
-                spectral_rect = Some(rect);
             }
             Pane::Lattice => preview_lattice(ui, rect, state, now, label_scale),
         }
     }
 
-    // The "Playhead" render variant lays the whole take's spectrogram out with
-    // a sweeping playhead; the live preview shows the live scrolling
-    // spectrogram and can't reproduce it, so badge the spectral region to flag
-    // that the render's spectrogram will differ from what's on screen here.
-    // Indicator only, per the backlog.
-    if state.render_config.playhead {
-        playhead_badge(ui, spectral_rect.unwrap_or(box_rect));
-    }
+    // The seam between panes, exactly as the render bakes it.
+    let translated: Vec<_> =
+        placements.iter().map(|(p, r)| (*p, r.translate(box_rect.min.to_vec2()))).collect();
+    layout.paint_dividers(ui.painter(), &translated);
 }
 
 /// Aspect ratio, arrangement, and split — editing the persisted `RenderFrame`.
@@ -127,8 +131,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// Which spectrogram the render bakes: the live scrolling window (exactly what
 /// the preview shows), or the whole take laid out at once with a sweeping
 /// playhead. Sets `RenderConfig.playhead`, which lattice-offline reads. The
-/// live preview can't lay the whole take out, so a Playhead choice is only
-/// flagged there, by `playhead_badge`.
+/// live preview can't lay the whole take out, so a Playhead choice leaves the
+/// preview's spectral region blank — see `playhead_placeholder`.
 fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Spectrogram");
     let playhead = &mut state.render_config.playhead;
@@ -138,27 +142,79 @@ fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             .on_hover_text("Bake the live scrolling spectrogram, exactly as previewed here");
         ui.selectable_value(playhead, true, "Playhead").on_hover_text(
             "Lay the whole take's spectrogram out at once with a sweeping playhead. \
-             Needs recorded audio. The live preview can't reproduce it, so it only \
-             flags the choice.",
+             Needs recorded audio. The live preview has neither, so it leaves that \
+             region of the frame blank.",
         );
     });
 }
 
-/// A small "Playhead" pill in the corner of the preview's spectral region,
-/// shown when the whole-song playhead render variant is selected — the live
-/// preview renders the live spectrogram, so this tells you the render's
-/// spectrogram will differ from what's on screen.
-fn playhead_badge(ui: &egui::Ui, rect: egui::Rect) {
-    if rect.width() < 70.0 || rect.height() < 24.0 {
+/// The marks that say "this rectangle is the video frame", drawn entirely
+/// OUTSIDE the box so not one pixel of them lands in the picture: a hairline
+/// tracing the boundary, plus crop ticks stepping out from the corners the way
+/// every camera and layout tool marks a frame.
+///
+/// This replaced a 1px accent stroke drawn INSIDE the box. It was the color
+/// the UI uses for selection and it sat on the outermost row of render pixels,
+/// so it read as a blue border in the shot rather than as the edge of it.
+fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
+    let p = ui.painter();
+    p.rect_stroke(
+        box_rect,
+        0,
+        egui::Stroke::new(1.0, theme::hairline()),
+        egui::StrokeKind::Outside,
+    );
+    // One step further out than the hairline, and only when the inset left
+    // room for them.
+    let out = pad * 0.5;
+    if out < 3.0 {
         return;
     }
+    let len = (box_rect.size().min_elem() * 0.05).clamp(4.0, 14.0);
+    let stroke = egui::Stroke::new(1.0, theme::text_dim());
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        let corner = egui::pos2(
+            if sx < 0.0 { box_rect.left() } else { box_rect.right() },
+            if sy < 0.0 { box_rect.top() } else { box_rect.bottom() },
+        );
+        let o = corner + egui::vec2(sx * out, sy * out);
+        p.line_segment([o, o - egui::vec2(sx * len, 0.0)], stroke);
+        p.line_segment([o, o - egui::vec2(0.0, sy * len)], stroke);
+    }
+}
+
+/// The preview's spectral region when the whole-song playhead variant is
+/// selected: deliberately blank, with a label saying why.
+///
+/// That render lays the take's whole spectrogram out at once from recorded
+/// audio and sweeps a playhead across it. The live preview has neither the
+/// audio nor the layout, so anything it drew here would be a different picture
+/// from the render — better to show nothing and name it. (It used to draw the
+/// live scrolling spectrogram under a small "Playhead" pill in the corner,
+/// which read as an odd label stuck on an otherwise trustworthy preview.)
+fn playhead_placeholder(ui: &egui::Ui, rect: egui::Rect) {
     let p = ui.painter_at(rect);
-    let font = egui::FontId::proportional(11.0);
-    let galley = p.layout_no_wrap("Playhead".to_owned(), font, theme::accent());
-    let pad = egui::vec2(5.0, 2.5);
-    let pill = egui::Rect::from_min_size(rect.left_top() + egui::vec2(6.0, 6.0), galley.size() + pad * 2.0);
-    p.rect_filled(pill, 3.0, theme::panel());
-    p.galley(pill.min + pad, galley, theme::accent());
+    // The pane's own background, so the region still reads as the spectral
+    // pane sitting there empty rather than as a hole in the frame.
+    p.rect_filled(rect, 0.0, theme::well());
+    if rect.width() < 90.0 || rect.height() < 30.0 {
+        return;
+    }
+    let text = |s: &str, size: f32, color| {
+        p.layout(s.to_owned(), egui::FontId::proportional(size), color, rect.width() - 16.0)
+    };
+    let title = text("Playhead render", 14.0, theme::accent());
+    let sub = (rect.height() > 56.0)
+        .then(|| text("the whole take, laid out at render time", 11.0, theme::text_dim()));
+    let gap = if sub.is_some() { 4.0 } else { 0.0 };
+    let total = title.size().y + gap + sub.as_ref().map_or(0.0, |g| g.size().y);
+    let mut y = rect.center().y - total * 0.5;
+    for galley in [Some(title), sub].into_iter().flatten() {
+        let x = rect.center().x - galley.size().x * 0.5;
+        let height = galley.size().y;
+        p.galley(egui::pos2(x, y), galley, theme::text_dim());
+        y += height + gap;
+    }
 }
 
 /// The largest sub-rect of `outer` with the given width:height aspect, centered

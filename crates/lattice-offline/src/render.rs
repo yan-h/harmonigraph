@@ -149,6 +149,9 @@ pub fn render(
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(*rect));
                     draw_pane(&mut child, *pane, &mut state, now);
                 }
+                // Last, over the gaps the panes left: the seam that keeps the
+                // lattice and the spectral pane from reading as one field.
+                settings.layout.paint_dividers(ui.painter(), &placements);
             },
         );
 

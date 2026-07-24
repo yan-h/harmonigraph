@@ -85,7 +85,7 @@ pub enum SpectrumLabels {
 ///
 /// The pane is written once against an abstract (pitch, depth) plane and
 /// mapped onto the screen at draw time, so every element — gridlines,
-/// spectrum curve, voice bars, piano roll — turns together.
+/// spectrum curve, piano roll — turns together.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectralOrientation {
     /// Follow the pane's shape: time runs along the LONG side (so a
@@ -316,13 +316,34 @@ pub struct SpectrumConfig {
     pub labels: SpectrumLabels,
     /// Keep a slowly decaying outline at each bucket's recent maximum.
     pub peak_hold: bool,
-    /// MIDI-derived bars at each voice's actual pitch.
-    pub show_voice_bars: bool,
-    /// Displayed octave range, in Bitwig octave numbers (C-1..C9 = full
-    /// axis). The analyzer always covers the full axis; this only zooms
-    /// the view.
-    pub low_octave: i32,
-    pub high_octave: i32,
+    /// Strength of the light edge drawn along the spectrum's profile and
+    /// around each note ribbon, 0 = none. See `panes::roll::keyline`.
+    #[serde(default = "default_keyline")]
+    pub keyline: f32,
+    /// Displayed pitch range, as (fractional) MIDI note numbers. The
+    /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
+    /// (~16 Hz to ~16.7 kHz); this only zooms the view.
+    ///
+    /// MIDI rather than Hz because the axis is linear in MIDI note, which
+    /// makes this both the number the pane wants and — since a semitone is a
+    /// constant frequency RATIO — a logarithmic frequency scale. The control
+    /// drags it linearly and reads it out in Hz.
+    #[serde(default = "default_low_midi")]
+    pub low_midi: f32,
+    #[serde(default = "default_high_midi")]
+    pub high_midi: f32,
+    /// Migration only. The range used to be a pair of Bitwig octave numbers,
+    /// so it could only land on C boundaries; `migrate_legacy` folds an older
+    /// blob's pair into `low_midi`/`high_midi` and nothing writes them again.
+    ///
+    /// A sentinel rather than `Option`, because the old blobs wrote a bare
+    /// `low_octave: 1` and RON only reads that into an `Option` if it is
+    /// spelled `Some(1)` — the field would never populate, and the failed
+    /// parse would take the whole persist down with it.
+    #[serde(default = "no_legacy_octave", skip_serializing, alias = "low_octave")]
+    legacy_low_octave: i32,
+    #[serde(default = "no_legacy_octave", skip_serializing, alias = "high_octave")]
+    legacy_high_octave: i32,
 
     // ---- Piano roll -------------------------------------------------
     // The played-note timeline (lattice-core's NoteRoll) drawn over the
@@ -369,7 +390,11 @@ pub struct SpectrumConfig {
     // roll's depth region on the roll's own time axis — so each column of
     // spectral energy lines up with the notes that made it.
     /// Draw the spectrogram heatmap (over the roll's time window).
-    #[serde(default)]
+    /// `default_true`, not `default`, or every state blob saved before this
+    /// field existed loads with the spectrogram off — contradicting the
+    /// struct's own default, which is what a fresh install gets. A blob that
+    /// really did turn it off carries `false` and still round-trips.
+    #[serde(default = "default_true")]
     pub show_spectrogram: bool,
     /// The heatmap's color ramp.
     #[serde(default)]
@@ -389,6 +414,57 @@ pub struct SpectrumConfig {
 fn default_spectrogram_opacity() -> f32 {
     0.85
 }
+
+/// Enough of an edge to hold a shape against a bright spectrogram cell,
+/// little enough that it doesn't read as a second outline of its own.
+fn default_keyline() -> f32 {
+    0.3
+}
+
+/// The default pitch range is the analyzer's whole axis — the zoom starts
+/// showing everything there is.
+fn default_low_midi() -> f32 {
+    lattice_core::spectrum::SPECTRUM_MIN_MIDI
+}
+
+fn default_high_midi() -> f32 {
+    lattice_core::spectrum::SPECTRUM_MAX_MIDI
+}
+
+/// "This blob had no octave-numbered range", out of the domain the old
+/// control could produce (-1..=9).
+fn no_legacy_octave() -> i32 {
+    i32::MIN
+}
+
+impl SpectrumConfig {
+    /// Fold an older blob's octave-numbered pitch range into the continuous
+    /// one. A pre-Hz blob carries no `low_midi`, so serde would hand it the
+    /// full-axis default and silently throw away the zoom the user had set.
+    fn migrate_legacy(&mut self) {
+        let (low, high) = (self.legacy_low_octave, self.legacy_high_octave);
+        (self.legacy_low_octave, self.legacy_high_octave) =
+            (no_legacy_octave(), no_legacy_octave());
+        if low != no_legacy_octave() && high != no_legacy_octave() {
+            let midi = |octave: i32| lattice_core::notes::octave_start_midi(octave) as f32;
+            self.low_midi = midi(low);
+            self.high_midi = midi(high);
+        }
+        // Then fit whatever came out to the axis the analyzer actually covers.
+        // Every source of this pair can be off it: an octave pair reaches C-1
+        // and C9, a blob written while the axis ran 16 Hz to 16.7 kHz carries
+        // its old ends, and a hand-edited one can say anything. A range past
+        // the axis draws a band with no buckets behind it; an inverted one
+        // divides by zero in PitchScale.
+        let (floor, ceil) = (default_low_midi(), default_high_midi());
+        self.low_midi = self.low_midi.clamp(floor, ceil - PITCH_RANGE_MIN_SPAN);
+        self.high_midi = self.high_midi.clamp(self.low_midi + PITCH_RANGE_MIN_SPAN, ceil);
+    }
+}
+
+/// Closest the two ends of the pitch range may come: one octave, which is
+/// what the octave-pair control guaranteed before it went continuous.
+pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 12.0;
 
 fn default_true() -> bool {
     true
@@ -445,9 +521,11 @@ impl Default for SpectrumConfig {
             tilt: 0.0,
             labels: SpectrumLabels::Notes,
             peak_hold: false,
-            show_voice_bars: true,
-            low_octave: -1,
-            high_octave: 9,
+            keyline: default_keyline(),
+            low_midi: default_low_midi(),
+            high_midi: default_high_midi(),
+            legacy_low_octave: no_legacy_octave(),
+            legacy_high_octave: no_legacy_octave(),
             show_roll: true,
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
@@ -591,6 +669,13 @@ impl Default for AudioSpectrum {
 }
 
 impl AudioSpectrum {
+    /// Forget the spectrogram textures, so the next draw uploads fresh ones
+    /// into whatever context is current. See
+    /// [`SharedState::release_context_resources`].
+    fn release_textures(&mut self) {
+        self.spectrogram_tex = [None, None];
+    }
+
     /// Seconds between FFTs (20 Hz refresh).
     const FFT_INTERVAL: f64 = 0.05;
     /// How long after the last samples the curve keeps drawing.
@@ -881,6 +966,21 @@ impl SharedState {
 
     /// Restore state saved by [`save_persist`]. Unknown/corrupt input is
     /// ignored (fresh defaults win over a broken restore).
+    /// Drop everything that belongs to a particular egui context. Shells MUST
+    /// call this whenever they build one.
+    ///
+    /// The plugin's editor creates a brand new `Context` every time its window
+    /// opens, while this state lives on across them — so a `TextureHandle`
+    /// taken from the previous one survives into the new window looking
+    /// perfectly valid. It isn't: `set` on it reaches a context nobody is
+    /// drawing any more, and its id names a texture the new renderer never
+    /// allocated. The spectrogram simply vanished after hiding and re-showing
+    /// the window, and stayed gone, because nothing ever asked for a fresh
+    /// handle.
+    pub fn release_context_resources(&mut self) {
+        self.spectrum.release_textures();
+    }
+
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
             // A pre-reorg (version 0) layout names the old tabs and is missing
@@ -901,6 +1001,9 @@ impl SharedState {
             self.view.migrate_legacy();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
+            // Same job for the pitch range, which used to be a pair of
+            // octave numbers.
+            self.spectrum_config.migrate_legacy();
             self.render_config = persist.render;
         }
     }
