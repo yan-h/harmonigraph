@@ -384,6 +384,20 @@ fn memory_readout(rss_bytes: u64) -> String {
     }
 }
 
+/// Which build this binary IS: `<branch> @<short sha>`, stamped at compile
+/// time by `build.rs` (`worktree-` stripped, so it is exactly what
+/// `./load-plugin.sh <branch>` takes).
+///
+/// Bitwig loads one bundle and every session builds into its own worktree, so
+/// two builds are indistinguishable from inside the DAW — and swapping the
+/// slot is a step that can silently not have happened (no rescan, a build that
+/// landed in a different worktree, the wrong branch named). The overlay saying
+/// it in the picture is the one check that a reload cannot fool.
+///
+/// Names the last COMMIT, not the working tree — see `build.rs` for why there
+/// is no dirty marker.
+pub const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
+
 /// Points between the overlay and the corner it sits in.
 const OVERLAY_INSET: f32 = 8.0;
 
@@ -529,6 +543,24 @@ pub(crate) fn draw_overlay(
         let x = label_col + COL_GAP + (value_col - value.rect.width());
         lines.push(vec![(0.0, label), (x, value)]);
     }
+    // Which build this is — the answer to "did the swap take?", which is a
+    // question you have before you trust any number above it.
+    //
+    // Its OWN line rather than a row in the grid above: the tag is identity,
+    // not a measurement, and a long branch name in the value column would
+    // widen BOTH columns for every row. And WRAPPED to the width the grid
+    // already needs, so it cannot widen the HUD either — the overlay has to
+    // fit inside the analyzer pane, which is not always wide, and a branch
+    // name is arbitrarily long. A long one costs a second line, where there is
+    // room to spare.
+    let grid_width = lines
+        .iter()
+        .map(|parts| parts.iter().map(|(x, g)| x + g.rect.width()).fold(0.0f32, f32::max))
+        .fold(0.0f32, f32::max);
+    let tag = ctx.fonts_mut(|f| {
+        f.layout(format!("build  {BUILD_TAG}"), mono.clone(), dim, grid_width)
+    });
+    lines.push(vec![(0.0, tag)]);
 
     const ROW_GAP: f32 = 1.0;
     let width = lines

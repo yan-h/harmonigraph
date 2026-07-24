@@ -1480,6 +1480,33 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         (hud.right() - area.right()).abs() < 12.0 && (hud.top() - area.top()).abs() < 12.0,
         "the HUD should hug the pane's top-RIGHT corner: {hud:?} in {area:?}",
     );
+    // The build tag, which is why the HUD is worth looking at before any of
+    // its numbers: Bitwig loads ONE bundle and every session builds into its
+    // own worktree, so "am I even looking at the build I just loaded?" has a
+    // wrong answer available. Asserted as painted TEXT, because a tag that is
+    // computed and not drawn would verify nothing.
+    //
+    // Wrapping means the tag can span two galleys, so this looks for the
+    // branch name rather than the whole line.
+    let branch = perf::BUILD_TAG.split(" @").next().unwrap_or(perf::BUILD_TAG);
+    assert!(
+        output.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Text(text) if text.galley.text().contains(branch)
+        )),
+        "the overlay should name the build it is ({}), so a reload can be checked",
+        perf::BUILD_TAG,
+    );
+    // ...and naming it must not have pushed the HUD out of its pane. The tag
+    // is a branch name, so it is arbitrarily long; `draw_overlay` wraps it to
+    // the width the numbers already need. Without that, a long enough branch
+    // silently widens the HUD past the pane — which the assertion above on
+    // `contains_rect` catches, but only on a branch that happens to be long.
+    assert!(
+        hud.width() < area.width(),
+        "the build tag must wrap, not widen the HUD: {hud:?} in {area:?}",
+    );
+
     assert!(screen.contains_rect(area), "the analyzer pane is inside the editor");
     // Right of the lattice and left of the settings column: the Spectral pane
     // as `default_dock` places it.
