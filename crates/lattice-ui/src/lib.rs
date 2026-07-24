@@ -910,11 +910,11 @@ fn default_dock() -> DockState<panes::Tab> {
         NodeIndex::root(),
         0.72,
         vec![
-            // Reading outward from the picture: harmony, then how it's framed,
-            // how a note is drawn, the scene around it, the analyzer, video
-            // export, and the plugin's own render/layout knobs last.
+            // Reading outward from the picture: what the lattice is (its
+            // tuning, and how it's framed), then how a note is drawn, the
+            // scene around it, the analyzer, video export, and the plugin's
+            // own render/layout knobs last.
             panes::Tab::Tuning,
-            panes::Tab::Frame,
             panes::Tab::Nodes,
             panes::Tab::Scene,
             panes::Tab::Analyzer,
@@ -1043,9 +1043,13 @@ impl SharedState {
 }
 
 /// The current [`UiPersist`] layout version. Bumped when the `Tab` set changes
-/// shape (rename/split/add) so `load_persist` can refresh a stale dock instead
-/// of stranding the user with missing tabs.
-const UI_PERSIST_VERSION: u32 = 1;
+/// shape (rename/split/add/merge) so `load_persist` can refresh a stale dock
+/// instead of stranding the user with missing tabs.
+///
+/// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
+/// they now name the same variant — without the refresh the dock would open
+/// with the merged pane in it twice.
+const UI_PERSIST_VERSION: u32 = 2;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.

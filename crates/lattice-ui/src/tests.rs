@@ -134,12 +134,12 @@ fn pre_rename_octave_style_and_slice_band_fields_still_load() {
 #[test]
 fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
     // The settings tabs were renamed and split (View -> Frame, Appearance ->
-    // Nodes + Scene, Spectrum -> Analyzer, Render -> Video, plus a new Panel)
-    // and the persist blob gained a version. An old blob names the old tabs
-    // and has no version. Two things must hold: the `Tab` aliases keep it
-    // PARSING (a failed parse silently drops camera/view/spectrum with it),
-    // and the absent version refreshes the stale dock so the split-out Scene
-    // and Panel tabs aren't stranded off-layout.
+    // Nodes + Scene, Spectrum -> Analyzer, Render -> Video, plus a new Panel),
+    // Frame was later merged back into Tuning, and the persist blob gained a
+    // version. An old blob names the old tabs and has no version. Two things
+    // must hold: the `Tab` aliases keep it PARSING (a failed parse silently
+    // drops camera/view/spectrum with it), and the absent version refreshes
+    // the stale dock so no tab is stranded off-layout or listed twice.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.camera.yaw = 1.23;
     state.view.extent_sevens = 3;
@@ -147,13 +147,18 @@ fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
     // (serde reads it back as 0) and rename the tabs to their old spellings,
     // which only the aliases can still resolve. The capitalized tab tokens
     // don't occur elsewhere in the blob, so these replacements are surgical.
+    // The version is spelled from the constant so the next bump doesn't
+    // quietly turn the strip into a no-op and leave this testing nothing.
     let saved = state
         .save_persist()
-        .replacen("version:1,", "", 1)
-        .replace("Frame", "View")
+        .replacen(&format!("version:{UI_PERSIST_VERSION},"), "", 1)
+        // Tuning is where the old View/Frame tab ended up, so its old name is
+        // the one that exercises those aliases.
+        .replace("Tuning", "View")
         .replace("Nodes", "Appearance")
         .replace("Analyzer", "Spectrum")
         .replace("Video", "Render");
+    assert!(!saved.contains("version:"), "the version strip missed");
     assert_ne!(saved, state.save_persist(), "the rewrite must have hit");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -168,6 +173,38 @@ fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
         ron::to_string(&default_dock()).unwrap(),
         "a pre-versioning layout resets to the current default dock"
     );
+}
+
+/// A version-1 layout lists Tuning AND Frame, and the merge made both spell
+/// the same variant. Loaded as-is that dock opens with the merged pane in it
+/// twice — two tabs, same name, same contents — so the version bump has to
+/// refresh it. The settings in the blob must still survive that.
+#[test]
+fn a_pre_merge_layout_does_not_open_the_merged_tab_twice() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 0.77;
+    state.spectrum_config.floor_db = -42.0;
+    // Synthesize the version-1 blob: same layout, but with the Frame tab still
+    // sitting next to Tuning where it used to be.
+    let saved = state
+        .save_persist()
+        .replacen(&format!("version:{UI_PERSIST_VERSION},"), "version:1,", 1)
+        .replacen("Tuning,", "Tuning,Frame,", 1);
+    assert!(saved.contains("Frame"), "the synthetic v1 layout must name Frame");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    // Parsed: `Frame` still resolves (onto Tuning), so nothing was dropped.
+    assert_eq!(restored.camera.yaw, 0.77, "settings survive the pre-merge layout");
+    assert_eq!(restored.spectrum_config.floor_db, -42.0);
+    // And the duplicate is gone rather than carried into the dock.
+    let dock = ron::to_string(&restored.dock).unwrap();
+    assert_eq!(
+        dock,
+        ron::to_string(&default_dock()).unwrap(),
+        "a pre-merge layout resets to the current default dock",
+    );
+    assert_eq!(dock.matches("Tuning").count(), 1, "the merged tab is docked twice");
 }
 
 #[test]

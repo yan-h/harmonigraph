@@ -2,13 +2,14 @@
 //! a body function in the matching submodule; it immediately participates
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
-//! The lattice's settings read outward from the picture: [`frame`] is how
-//! it's framed, [`nodes`] is how a played note is drawn, [`scene`] is
+//! The lattice's settings read outward from the picture: [`tuning`] is how it
+//! is tuned and — via [`frame`], which draws the second half of that same tab
+//! — how it is framed; [`nodes`] is how a played note is drawn, [`scene`] is
 //! everything around the notes, and [`panel`] is the plugin's own render/
-//! layout knobs. Alongside are [`tuning`], the [`spectral`] display and its
-//! analyzer settings, [`render`] (the Video tab), and [`notes`] (Console +
-//! Notes). This file holds the `Tab` enum, the `TabViewer` that dispatches
-//! to them, and the small helpers more than one pane needs.
+//! layout knobs. Alongside are the [`spectral`] display and its analyzer
+//! settings, [`render`] (the Video tab), and [`notes`] (Console + Notes).
+//! This file holds the `Tab` enum, the `TabViewer` that dispatches to them,
+//! and the small helpers more than one pane needs.
 
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::ValueBar;
@@ -33,7 +34,6 @@ pub mod spectral;
 pub mod spectrogram;
 pub mod tuning;
 
-use frame::frame_pane;
 use lattice::lattice_pane;
 use nodes::nodes_pane;
 use notes::{console_pane, notes_pane};
@@ -65,10 +65,13 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
+    /// The lattice itself: how it is tuned, and how it is framed. The framing
+    /// half was a tab of its own — "Frame", and "View" before that — until the
+    /// two short panes were merged; both spellings alias here so an older
+    /// layout still parses (the dock arrangement itself is refreshed by the
+    /// `UiPersist` version bump that came with the merge).
+    #[serde(alias = "Frame", alias = "View")]
     Tuning,
-    /// Camera framing and the lattice window. Was "View".
-    #[serde(alias = "View")]
-    Frame,
     /// How a sounding note is drawn (was the first half of "Appearance").
     #[serde(alias = "Appearance")]
     Nodes,
@@ -103,7 +106,6 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => "Lattice".into(),
             Tab::Tuning => "Tuning".into(),
-            Tab::Frame => "Frame".into(),
             Tab::Nodes => "Nodes".into(),
             Tab::Scene => "Scene".into(),
             Tab::Console => "Console".into(),
@@ -123,7 +125,6 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::Frame => frame_pane(ui, self.state),
             Tab::Nodes => nodes_pane(ui, self.state, self.params),
             Tab::Scene => scene_pane(ui, self.state),
             Tab::Console => console_pane(ui, self.state),
