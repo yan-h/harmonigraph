@@ -147,8 +147,12 @@ fn memory_readout(rss_bytes: u64) -> String {
     }
 }
 
-/// Draw the overlay in the top-left corner of `area` (the whole editor rect).
-/// A floating, non-interactive panel so it never steals clicks from the view
+/// Points between the overlay and the corner it sits in.
+const OVERLAY_INSET: f32 = 8.0;
+
+/// Draw the overlay in the top-right corner of `area` — the analyzer pane when
+/// it is on screen, the whole editor otherwise (see `perf_overlay_area`). A
+/// floating, non-interactive panel so it never steals clicks from the view
 /// under it.
 pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfStats) {
     let fps = perf.fps();
@@ -178,9 +182,15 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     let memory = memory_readout(perf.rss_bytes);
     let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
 
+    // Anchored rather than placed: the overlay's width depends on the numbers
+    // in it (a four-digit memory readout is wider than a three-), and only the
+    // anchor knows the laid-out size in time to keep the RIGHT edge fixed.
+    // `constrain_to` is what makes the anchor measure from `area` instead of
+    // the whole window, and doubles as a clamp on a pane too small to hold it.
     egui::Area::new(egui::Id::new("perf_overlay"))
         .order(egui::Order::Foreground)
-        .fixed_pos(area.left_top() + egui::vec2(8.0, 8.0))
+        .constrain_to(area)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-OVERLAY_INSET, OVERLAY_INSET))
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::NONE

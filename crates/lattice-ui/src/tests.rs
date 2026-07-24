@@ -1123,3 +1123,59 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
     let moved = wheel_over_settings_pane(panes::Tab::Video, 600.0);
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
+
+/// The performance overlay hangs off the analyzer pane, and falls back to the
+/// whole editor when that pane isn't the one on screen.
+#[test]
+fn the_perf_overlay_follows_the_analyzer_pane() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState| {
+        t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(t),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t));
+    };
+    // A frame first: the dock only knows where its panes are once it has laid
+    // them out, and before that the overlay has nothing to hang off.
+    frame(&mut state);
+    frame(&mut state);
+
+    let area = perf_overlay_area(&state, screen);
+    assert_ne!(area, screen, "the overlay should have found the analyzer pane");
+
+    // ...and the HUD really lands in that pane's top-right corner, which is
+    // the anchor's job, not the rect's.
+    let hud = ctx
+        .memory(|m| m.area_rect(egui::Id::new("perf_overlay")))
+        .expect("the overlay should be drawn (show_perf is on by default)");
+    assert!(area.contains_rect(hud), "the HUD should sit inside the analyzer pane: {hud:?}");
+    assert!(
+        (hud.right() - area.right()).abs() < 12.0 && (hud.top() - area.top()).abs() < 12.0,
+        "the HUD should hug the pane's top-RIGHT corner: {hud:?} in {area:?}",
+    );
+    assert!(screen.contains_rect(area), "the analyzer pane is inside the editor");
+    // Right of the lattice and left of the settings column: the Spectral pane
+    // as `default_dock` places it.
+    assert!(area.left() > screen.left(), "the analyzer pane is not the left edge");
+    assert!(area.right() < screen.right(), "the settings column is right of it");
+
+    // Its leaf holds Spectral alone, so collapsing it is what takes it off
+    // screen; the overlay then falls back to the whole editor.
+    let path = state.dock.find_tab(&panes::Tab::Spectral).expect("Spectral is docked");
+    let egui_dock::Node::Leaf(leaf) = &mut state.dock[path.surface][path.node] else {
+        panic!("Spectral should live in a leaf");
+    };
+    leaf.collapsed = true;
+    assert_eq!(
+        perf_overlay_area(&state, screen),
+        screen,
+        "a collapsed analyzer pane should hand the overlay back to the editor",
+    );
+}

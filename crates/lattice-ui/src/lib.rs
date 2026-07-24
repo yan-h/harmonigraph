@@ -1269,8 +1269,31 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         },
     );
     if state.view.show_perf {
-        perf::draw_overlay(ui.ctx(), ui.max_rect(), &state.perf);
+        perf::draw_overlay(ui.ctx(), perf_overlay_area(state, ui.max_rect()), &state.perf);
     }
+}
+
+/// Where the performance overlay hangs its top-right corner: the Spectral
+/// pane's body, so the HUD sits over the spectrogram rather than over the
+/// lattice, which is the picture being watched.
+///
+/// Falls back to `editor` (the whole window) whenever that pane is not on
+/// screen — another tab selected in its leaf, or the leaf collapsed — so the
+/// overlay never strands itself on a pane nobody can see.
+fn perf_overlay_area(state: &SharedState, editor: egui::Rect) -> egui::Rect {
+    let Some(path) = state.dock.find_tab(&panes::Tab::Spectral) else {
+        return editor;
+    };
+    let egui_dock::Node::Leaf(leaf) = &state.dock[path.surface][path.node] else {
+        return editor;
+    };
+    // `viewport` is the tab BODY; the picture panes drop their margin, so it
+    // is exactly the drawn surface. `Rect::NOTHING` until the dock has laid
+    // out once (a first frame, or a freshly loaded layout).
+    if leaf.collapsed || leaf.active != path.tab || !leaf.viewport.is_positive() {
+        return editor;
+    }
+    leaf.viewport
 }
 
 /// Everything that must happen once per frame before any pane draws:
