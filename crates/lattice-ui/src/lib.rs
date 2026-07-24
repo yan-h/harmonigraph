@@ -598,6 +598,11 @@ pub struct AudioSpectrum {
     /// -> color -> upload) is skipped and only the scrolling quad is redrawn.
     /// See [`SpectrogramKey`]. Runtime-only, parallel to the textures.
     spectrogram_cache: [Option<SpectrogramCache>; 2],
+    /// Live-only incremental aggregator per surface: keeps the slab grid across
+    /// frames so a rebuild folds only new columns instead of rescanning the
+    /// whole window. Self-heals on layout change / clear (it rebuilds), so it
+    /// needs no explicit reset. See `panes::spectrogram::SpectrogramAgg`.
+    spectrogram_agg: [Option<crate::panes::spectrogram::SpectrogramAgg>; 2],
 }
 
 /// One column of the spectrogram: the raw power spectrum at a moment, on the
@@ -773,6 +778,7 @@ impl Default for AudioSpectrum {
             history: VecDeque::new(),
             spectrogram_tex: [None, None],
             spectrogram_cache: [None, None],
+            spectrogram_agg: [None, None],
         }
     }
 }
