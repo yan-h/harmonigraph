@@ -123,8 +123,13 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     ui.checkbox(&mut cfg.peak_hold, "Peak hold")
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
-    ui.checkbox(&mut cfg.show_voice_bars, "Voice bars")
-        .on_hover_text("MIDI-derived bars at each voice's actual pitch");
+    // The field is still `show_voice_bars` so existing state keeps loading;
+    // what it draws stopped being bars.
+    ui.checkbox(&mut cfg.show_voice_bars, "Sounding notes").on_hover_text(
+        "Light up the now-line where each sounding note meets it, across the \
+         width that note's ribbon covers — its actual pitch, so per-note \
+         tuning and MPE bends slide the mark",
+    );
 
     // ---- Pitch axis -----------------------------------------------------
     section(ui, "Pitch axis");
@@ -256,11 +261,15 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     });
 }
 
-/// Depth budget for both plots, as a fraction of the *spectrum's share* of
-/// the depth axis: a full-scale (0 dB) sine and a full-velocity held voice
-/// both top out here. The two MUST agree, or the voice bars stop being
-/// comparable with the spectrum curve they are drawn over.
+/// Depth budget for the spectrum curve, as a fraction of the *spectrum's
+/// share* of the depth axis: a full-scale (0 dB) sine tops out here, leaving
+/// the last stretch as headroom so a loud partial doesn't run into the pane's
+/// edge.
 const PLOT_HEIGHT_FRACTION: f32 = 0.85;
+
+/// Thickness of a sounding note's mark on the now-line, in points. Enough to
+/// read as laid ON the hairline rather than as part of it.
+const NOTE_MARK_PX: f32 = 3.0;
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
@@ -769,52 +778,6 @@ pub(crate) fn spectral_pane(
         }
     }
 
-    // Voice bars at the voice's ACTUAL pitch (per-note tuning and MPE
-    // bends slide the bar): length follows the same envelope as the
-    // lattice glow, weighted by velocity; color matches the node color.
-    // They hang from the roll's "now" edge back INTO the spectrum: the
-    // audio spectrum's fundamental rises from the baseline at the same
-    // pitch, so a baseline-up bar would sit exactly on the peak it should
-    // be compared against. Hanging bars point at the peak instead of
-    // hiding it — and they start where the roll's live notes end, so a
-    // note's ribbon and its bar read as one continuous mark.
-    if cfg.show_voice_bars && split > 0.0 {
-        // Stable order: held voices iterate a HashMap, and overlapping opaque
-        // bars paint order-dependently — the offline render must match between
-        // runs.
-        let mut voices: Vec<&lattice_core::Voice> = state.tracker.voices().collect();
-        voices.sort_unstable_by(|a, b| {
-            a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
-        });
-        for voice in voices {
-            let activation = voice.activation(now, state.frame_params.fade_time);
-            if activation <= 0.0 || !scale.contains(voice.pitch) {
-                continue;
-            }
-            let t = scale.t_of(voice.pitch);
-            let depth =
-                split * PLOT_HEIGHT_FRACTION * activation * visibility_floor(voice.velocity);
-            let c = channel_color(
-                voice.channel,
-                voice.pitch,
-                state.frame_params.darkest_pitch,
-                state.frame_params.brightest_pitch,
-            );
-            let color = scene_color(c, 1.0);
-            let ends = [axes.at(t, split), axes.at(t, split - depth)];
-            // A note sounding off the visible lattice lights up no node, so
-            // pulse an accent halo behind its bar: the Spectral pane is where
-            // you'd otherwise miss that a pitch you can't see is playing. Same
-            // match the lattice uses, so "off-lattice" agrees with the view.
-            if nearest_visible_node(&state.view, &state.tuning, voice.pitch_class).is_none() {
-                let pulse = 0.5 + 0.5 * (now * std::f64::consts::TAU * 1.6).sin() as f32;
-                let halo = theme::accent().gamma_multiply(0.35 + 0.5 * pulse);
-                painter.line_segment(ends, egui::Stroke::new(3.0 + 4.0 * pulse, halo));
-            }
-            painter.line_segment(ends, egui::Stroke::new(3.0, color));
-        }
-    }
-
     // The now-line, where the roll hands over to the spectrum — drawn here,
     // after both things it divides, rather than at the end of the roll where
     // it used to be. It marks the boundary between two pictures, so it has to
@@ -827,6 +790,56 @@ pub(crate) fn spectral_pane(
     // draws its own mark above.
     if cfg.roll_now_line && !whole_song && split < 1.0 && split > 0.0 {
         painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
+    }
+
+    // Which notes are sounding, marked ON that line instead of as bars
+    // standing in the spectrum. Each mark spans exactly the width its roll
+    // ribbon covers, so the ribbon arriving at the line and the mark under it
+    // are one object seen from two sides — the note reaches the line, and the
+    // line lights up where it lands.
+    //
+    // The bars this replaces hung from the line back into the spectrum,
+    // pointing at the peak they were meant to be compared with. That worked
+    // while the spectrum was a handful of thin peaks on black; now that every
+    // bucket is filled they crossed the picture instead of annotating it.
+    if cfg.show_voice_bars && split > 0.0 {
+        let base = if joined { split } else { 0.0 };
+        let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
+        // Stable order: held voices iterate a HashMap, and overlapping marks
+        // paint order-dependently — the offline render must match between runs.
+        let mut voices: Vec<&lattice_core::Voice> = state.tracker.voices().collect();
+        voices.sort_unstable_by(|a, b| {
+            a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
+        });
+        for voice in voices {
+            // The same envelope the lattice glow and the old bars used, spent
+            // on opacity rather than on length: the mark's length now says
+            // which pitches the note covers, so it cannot also say how loud.
+            let strength = voice.activation(now, state.frame_params.fade_time)
+                * visibility_floor(voice.velocity);
+            if strength <= 0.0 || !scale.contains(voice.pitch) {
+                continue;
+            }
+            let t = scale.t_of(voice.pitch);
+            let ends = [axes.at(t - half, base), axes.at(t + half, base)];
+            let c = channel_color(
+                voice.channel,
+                voice.pitch,
+                state.frame_params.darkest_pitch,
+                state.frame_params.brightest_pitch,
+            );
+            // A note sounding off the visible lattice lights up no node, so
+            // pulse an accent halo behind its mark: the Spectral pane is where
+            // you'd otherwise miss that a pitch you can't see is playing. Same
+            // match the lattice uses, so "off-lattice" agrees with the view.
+            if nearest_visible_node(&state.view, &state.tuning, voice.pitch_class).is_none() {
+                let pulse = 0.5 + 0.5 * (now * std::f64::consts::TAU * 1.6).sin() as f32;
+                let halo = theme::accent().gamma_multiply((0.35 + 0.5 * pulse) * strength);
+                painter.line_segment(ends, egui::Stroke::new(NOTE_MARK_PX + 4.0 * pulse, halo));
+            }
+            painter
+                .line_segment(ends, egui::Stroke::new(NOTE_MARK_PX, scene_color(c, strength)));
+        }
     }
 
     // Axis labels last, riding on top of the spectrogram, spectrum, and
@@ -1017,6 +1030,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A sounding note lights the now-line where its ribbon arrives: a mark
+    /// lying ALONG the line, spanning exactly the ribbon's width. It used to
+    /// be a bar standing out of the line into the spectrum, which crossed the
+    /// picture it was meant to be read against once every bucket was filled.
+    #[test]
+    fn a_sounding_note_marks_the_now_line_across_its_ribbon_width() {
+        let marks = |thickness: f32| {
+            let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+            state.spectrum_config.show_voice_bars = true;
+            state.spectrum_config.roll_thickness = thickness;
+            state.tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note: 69,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+            let out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                    spectral_pane(&mut child, &mut state, 0.1, 1.0, 0);
+                },
+            );
+            out.shapes
+                .into_iter()
+                .filter_map(|s| match s.shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if (stroke.width - NOTE_MARK_PX).abs() < 0.01 =>
+                    {
+                        Some(points)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let one = marks(2.0);
+        assert_eq!(one.len(), 1, "one held note, one mark");
+        let [a, b] = one[0];
+        // Across: time runs horizontally, so a mark lying along the pitch axis
+        // shares its depth — the same x at both ends.
+        assert!((a.x - b.x).abs() < 0.01, "the mark stands out of the line: {a:?} {b:?}");
+        assert!((a.y - b.y).abs() > 0.5, "the mark has no width");
+
+        // Width tracks the ribbon it belongs to.
+        let [c, d] = marks(4.0)[0];
+        let (thin, thick) = ((a.y - b.y).abs(), (c.y - d.y).abs());
+        assert!((thick - 2.0 * thin).abs() < 0.5, "{thin} -> {thick} is not double");
     }
 
     /// The axis labels are haloed like the lattice's node names. What sits
