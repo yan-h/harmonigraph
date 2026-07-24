@@ -424,8 +424,8 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
         ),
         // Inside `buf up`: the lattice's own callback, and inside THAT the
         // cost of taking the GPU measurement.
-        ("prepare", format!("{:.1} ms", perf.shown_prepare_ms)),
-        ("gpu poll", format!("{:.1} ms", perf.shown_poll_ms)),
+        ("prep", format!("{:.1} ms", perf.shown_prepare_ms)),
+        ("poll", format!("{:.1} ms", perf.shown_poll_ms)),
         ("encode", format!("{:.1} ms", perf.shown_encode_ms)),
         ("submit", format!("{:.1} ms", perf.shown_submit_ms)),
         ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
