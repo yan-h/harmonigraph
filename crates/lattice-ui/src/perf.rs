@@ -17,8 +17,18 @@
 /// got twitchier the faster the plugin ran, which is backwards.
 const SMOOTH_TAU: f32 = 0.4;
 
-/// Granularity of the millisecond readouts. See [`ms_readout`].
-const MS_STEP: f32 = 0.5;
+/// How often the frame numbers on screen are allowed to change.
+///
+/// The smoothed values keep updating every frame; the overlay reads a copy
+/// latched this often, so the digits hold still long enough to be read.
+///
+/// This rather than rounding the values to a coarse step. Rounding trades one
+/// kind of churn for a worse one: a value sitting near a step boundary flips
+/// between two readings that are a whole step apart, which catches the eye
+/// harder than the wobble it replaced — and the resolution is gone for good,
+/// which at a 2 ms frame cost means throwing away a quarter of the number.
+/// Holding the display keeps every digit and simply stops it flickering.
+const READOUT_INTERVAL: f64 = 0.25;
 
 /// Seconds between memory reads. RSS moves slowly and the read is a syscall,
 /// so once a second is plenty and keeps it off the per-frame path.
@@ -83,6 +93,12 @@ pub struct PerfStats {
     /// Shell-clock time of the previous frame, for measuring the interval.
     /// `None` before the first one.
     last_frame: Option<f64>,
+    /// What the overlay actually prints: `frame_dt` and `cpu_ms` as they
+    /// stood at the last latch, held between them (see [`READOUT_INTERVAL`]).
+    shown_frame_dt: f32,
+    shown_cpu_ms: f32,
+    /// Shell-clock time of that latch.
+    last_readout: f64,
     /// This frame's workload (voice counts, visible nodes, render scale,
     /// whether it was animating).
     workload: Workload,
@@ -96,6 +112,9 @@ impl Default for PerfStats {
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
+            shown_frame_dt: 1.0 / 60.0,
+            shown_cpu_ms: 0.0,
+            last_readout: f64::NEG_INFINITY,
             workload: Workload::default(),
         }
     }
@@ -126,6 +145,14 @@ impl PerfStats {
             self.frame_dt += (dt - self.frame_dt) * alpha;
         }
         self.cpu_ms += (cpu_ms - self.cpu_ms) * alpha;
+        // Latch what the overlay prints. Seeded on the first frame rather
+        // than eased up from the defaults, so the HUD opens showing the real
+        // numbers instead of a quarter second of placeholder.
+        if now - self.last_readout >= READOUT_INTERVAL {
+            self.shown_frame_dt = self.frame_dt;
+            self.shown_cpu_ms = self.cpu_ms;
+            self.last_readout = now;
+        }
         self.workload = workload;
         if now - self.last_mem_read >= MEM_INTERVAL {
             let sample = rss_bytes();
@@ -142,9 +169,12 @@ impl PerfStats {
         }
     }
 
+    /// The frame rate as printed: derived from the held frame time, so the
+    /// headline number holds still with the rows under it rather than
+    /// counting off every frame on its own.
     fn fps(&self) -> f32 {
-        if self.frame_dt > 0.0 {
-            1.0 / self.frame_dt
+        if self.shown_frame_dt > 0.0 {
+            1.0 / self.shown_frame_dt
         } else {
             0.0
         }
@@ -172,17 +202,6 @@ fn memory_readout(rss_bytes: u64) -> String {
     } else {
         format!("{rounded} MB")
     }
-}
-
-/// A millisecond reading, quantized to [`MS_STEP`].
-///
-/// Same reasoning as [`memory_readout`]: this answers "is a frame costing me
-/// much?", and no answer to that needs the hundredth of a millisecond. Left
-/// unquantized, the trailing digits changed on every frame and the number got
-/// squinted at rather than read — the smoothing steadies the value, this
-/// steadies the digits.
-fn ms_readout(ms: f32) -> String {
-    format!("{:.1} ms", (ms / MS_STEP).round() * MS_STEP)
 }
 
 /// Draw the overlay in the top-left corner of `area` (the whole editor rect).
@@ -237,8 +256,8 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
                         );
                         ui.label(egui::RichText::new(state).color(dim).font(mono.clone()));
                     });
-                    row(ui, "frame", ms_readout(perf.frame_dt * 1000.0));
-                    row(ui, "ui cpu", ms_readout(perf.cpu_ms));
+                    row(ui, "frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0));
+                    row(ui, "ui cpu", format!("{:.1} ms", perf.shown_cpu_ms));
                     row(ui, "memory", memory);
                     row(
                         ui,
@@ -419,13 +438,47 @@ mod tests {
         }
     }
 
-    /// The hundredth of a millisecond is noise, and digits that never hold
-    /// still get squinted at rather than read.
+    /// Digits that never hold still get squinted at rather than read. The
+    /// values keep tracking every frame; what the overlay PRINTS is latched,
+    /// so it changes a few times a second instead of 144.
     #[test]
-    fn the_millisecond_readouts_step_rather_than_churning() {
-        for ms in [2.4, 2.5, 2.6, 2.7] {
-            assert_eq!(ms_readout(ms), "2.5 ms", "{ms}");
+    fn the_printed_numbers_hold_between_latches() {
+        let mut perf = PerfStats::default();
+        perf.record(2.0, 0.0, Workload::default());
+        let shown = perf.shown_cpu_ms;
+
+        // Frames well inside the interval: the live value moves, the printed
+        // one does not.
+        for i in 1..=10 {
+            perf.record(20.0, i as f64 * READOUT_INTERVAL / 20.0, Workload::default());
         }
-        assert_eq!(ms_readout(2.8), "3.0 ms", "and it does step");
+        assert!(perf.cpu_ms > shown, "the live value should have moved");
+        assert_eq!(perf.shown_cpu_ms, shown, "the printed value must hold");
+
+        // Past the interval it catches up.
+        perf.record(20.0, READOUT_INTERVAL, Workload::default());
+        assert_eq!(perf.shown_cpu_ms, perf.cpu_ms, "and then it latches");
+    }
+
+    /// Latching must not cost resolution: a reading a tenth of a millisecond
+    /// away from another has to print differently. (Rounding to a coarse step
+    /// was the alternative, and this is the property it gave up.)
+    #[test]
+    fn latching_keeps_the_tenths() {
+        let readout = |ms: f32| format!("{ms:.1} ms");
+        assert_ne!(readout(2.7), readout(2.8));
+        assert_eq!(readout(2.75), "2.8 ms");
+    }
+
+    /// The headline rate is derived from the SAME held frame time as the row
+    /// below it, so the two can never disagree on screen.
+    #[test]
+    fn fps_is_read_off_the_held_frame_time() {
+        let mut perf = PerfStats::default();
+        for i in 1..=200 {
+            perf.record(1.0, i as f64 / 120.0, Workload::default());
+        }
+        let from_row = 1000.0 / (perf.shown_frame_dt * 1000.0);
+        assert!((perf.fps() - from_row).abs() < 1e-3, "{} vs {from_row}", perf.fps());
     }
 }
