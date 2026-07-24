@@ -446,7 +446,7 @@ impl Default for ViewConfig {
             outer_style: OuterStyle::Slices,
             show_labels: true,
             show_cents: true,
-            node_style: NodeStyle::Checker,
+            node_style: NodeStyle::Steady,
             core_style: CoreStyle::default(),
             // A small, soft core inside a wide octave band with its silent
             // slots ghosted in: the pitch class reads as a compact center
