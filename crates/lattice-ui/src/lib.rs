@@ -1102,6 +1102,18 @@ pub struct SharedState {
     /// passes: between them they cover the frame's GPU work, and the two were
     /// separated because the lattice turned out to be the cheap half.
     pub egui_gpu_ms: f32,
+    /// Milliseconds the shell spent on its own per-frame work before the UI
+    /// ran — draining the event rings and reconciling the take — or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// Separate from the frame's CPU time because that starts at the dock
+    /// build: this stretch scales with events ARRIVING rather than with what
+    /// is drawn, and there was no reading it could show up in.
+    pub shell_ms: f32,
+    /// Milliseconds the previous frame blocked acquiring the surface — the
+    /// vsync wait. Large here with every cost small means the frame is early,
+    /// not slow.
+    pub acquire_ms: f32,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -1207,6 +1219,8 @@ impl SharedState {
             )),
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
+            shell_ms: 0.0,
+            acquire_ms: 0.0,
             fps_cap: None,
             perf: PerfStats::default(),
         }
@@ -1411,10 +1425,16 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
     state.perf.record(
-        cpu_ms,
-        state.tess_ms,
-        state.egui_gpu_ms,
-        f32::from_bits(state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed)),
+        perf::FrameCosts {
+            shell_ms: state.shell_ms,
+            cpu_ms,
+            tess_ms: state.tess_ms,
+            egui_gpu_ms: state.egui_gpu_ms,
+            lattice_gpu_ms: f32::from_bits(
+                state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            acquire_ms: state.acquire_ms,
+        },
         now,
         perf::Workload {
             active_voices: state.tracker.voices().count(),

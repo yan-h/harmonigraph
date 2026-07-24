@@ -43,6 +43,31 @@ const MEM_SMOOTH: f64 = 0.3;
 /// Granularity of the memory readout, in MB. See [`memory_readout`].
 const MEM_STEP_MB: u64 = 10;
 
+/// One frame's measured costs, in milliseconds — every stage of it that
+/// anything can see.
+///
+/// A struct rather than eight arguments because the list kept growing: each
+/// time a cost turned out to be hiding between two existing readings, closing
+/// that gap meant another parameter. Named fields also stop a caller
+/// transposing two of them, which is a silent wrong answer rather than a
+/// compile error.
+#[derive(Clone, Copy, Default)]
+pub struct FrameCosts {
+    /// Shell work before the UI ran: draining the event rings.
+    pub shell_ms: f32,
+    /// Building the UI — the dock and its panes.
+    pub cpu_ms: f32,
+    /// Turning the resulting shapes into triangles.
+    pub tess_ms: f32,
+    /// GPU time for egui's own pass: everything 2D.
+    pub egui_gpu_ms: f32,
+    /// GPU time for the lattice's passes: the 3D scene and its bloom chain.
+    /// Carries the `GPU_TIME_UNSUPPORTED` / `PENDING` sentinels.
+    pub lattice_gpu_ms: f32,
+    /// Blocked acquiring the surface — the vsync wait, which is not work.
+    pub acquire_ms: f32,
+}
+
 /// One interactive frame's workload: what the overlay reports as the load
 /// driving the frame rate and CPU cost. Built by the shell each frame and
 /// folded in via [`PerfStats::record`].
@@ -87,6 +112,9 @@ pub struct PerfStats {
     /// Smoothed GPU milliseconds for egui's own render pass — the 2D UI, which
     /// the lattice's timer does not cover.
     egui_gpu_ms: f32,
+    /// Smoothed shell work before the UI, and the surface wait after it.
+    shell_ms: f32,
+    acquire_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it). Smoothed for the same reason the
     /// frame numbers are: this is read as a number, not watched as a trace,
@@ -104,6 +132,8 @@ pub struct PerfStats {
     shown_cpu_ms: f32,
     shown_tess_ms: f32,
     shown_egui_gpu_ms: f32,
+    shown_shell_ms: f32,
+    shown_acquire_ms: f32,
     /// Shell-clock time of that latch.
     last_readout: f64,
     /// GPU milliseconds for the lattice passes, smoothed and held like the
@@ -126,6 +156,8 @@ impl Default for PerfStats {
             cpu_ms: 0.0,
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
+            shell_ms: 0.0,
+            acquire_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -133,6 +165,8 @@ impl Default for PerfStats {
             shown_cpu_ms: 0.0,
             shown_tess_ms: 0.0,
             shown_egui_gpu_ms: 0.0,
+            shown_shell_ms: 0.0,
+            shown_acquire_ms: 0.0,
             gpu_ms: 0.0,
             shown_gpu_ms: 0.0,
             gpu_supported: true,
@@ -156,15 +190,15 @@ impl PerfStats {
     /// Under a frame-rate cap the request is a delayed one, so the readout
     /// blended a hardcoded 60 with the true rate and reported ~45 fps for a
     /// perfectly steady 30.
-    pub(crate) fn record(
-        &mut self,
-        cpu_ms: f32,
-        tess_ms: f32,
-        egui_gpu_ms: f32,
-        gpu_ms: f32,
-        now: f64,
-        workload: Workload,
-    ) {
+    pub(crate) fn record(&mut self, costs: FrameCosts, now: f64, workload: Workload) {
+        let FrameCosts {
+            shell_ms,
+            cpu_ms,
+            tess_ms,
+            egui_gpu_ms,
+            lattice_gpu_ms: gpu_ms,
+            acquire_ms,
+        } = costs;
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
         // Convert the time constant into this frame's blend factor, so the
@@ -178,6 +212,8 @@ impl PerfStats {
         self.cpu_ms += (cpu_ms - self.cpu_ms) * alpha;
         self.tess_ms += (tess_ms - self.tess_ms) * alpha;
         self.egui_gpu_ms += (egui_gpu_ms - self.egui_gpu_ms) * alpha;
+        self.shell_ms += (shell_ms - self.shell_ms) * alpha;
+        self.acquire_ms += (acquire_ms - self.acquire_ms) * alpha;
         // Three states, not two: a real reading, "the device can't", and
         // "none has landed yet". Collapsing the last two into one "n/a" made
         // a wiring bug and an unsupported GPU look identical, which is
@@ -206,6 +242,8 @@ impl PerfStats {
             self.shown_cpu_ms = self.cpu_ms;
             self.shown_tess_ms = self.tess_ms;
             self.shown_egui_gpu_ms = self.egui_gpu_ms;
+            self.shown_shell_ms = self.shell_ms;
+            self.shown_acquire_ms = self.acquire_ms;
             self.shown_gpu_ms = self.gpu_ms;
             self.last_readout = now;
         }
@@ -293,12 +331,14 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "measuring...".to_owned()
     };
-    let rows: [(&str, String); 8] = [
+    let rows: [(&str, String); 10] = [
         ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
+        ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
         ("ui cpu", format!("{:.1} ms", perf.shown_cpu_ms)),
         ("tess", format!("{:.1} ms", perf.shown_tess_ms)),
         ("ui gpu", format!("{:.1} ms", perf.shown_egui_gpu_ms)),
         ("lattice gpu", gpu),
+        ("wait", format!("{:.1} ms", perf.shown_acquire_ms)),
         ("memory", memory_readout(perf.rss_bytes)),
         ("voices", format!("{} held · {fading} fading", perf.workload.held_voices)),
         (
@@ -448,7 +488,7 @@ mod tests {
         // — that IS the measurement.
         for i in 1..=500 {
             let now = i as f64 / 30.0;
-            perf.record(2.0, 0.0, 0.0, 0.0, now, Workload { animating: true, ..Default::default() });
+            perf.record(FrameCosts { cpu_ms: 2.0, ..Default::default() }, now, Workload { animating: true, ..Default::default() });
         }
         assert!((perf.fps() - 30.0).abs() < 0.5, "fps = {}", perf.fps());
     }
@@ -457,10 +497,7 @@ mod tests {
     fn records_workload_and_reads_memory() {
         let mut perf = PerfStats::default();
         perf.record(
-            1.5,
-            0.0,
-            0.0,
-            0.0,
+            FrameCosts { cpu_ms: 1.5, ..Default::default() },
             1.0,
             Workload {
                 active_voices: 5,
@@ -507,7 +544,7 @@ mod tests {
         // Force a read whose sample is whatever the platform reports; what is
         // under test is that the stored value MOVES but does not teleport.
         let before = perf.rss_bytes;
-        perf.record(1.0, 0.0, 0.0, 0.0, MEM_INTERVAL, Workload::default());
+        perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, MEM_INTERVAL, Workload::default());
         let after = perf.rss_bytes as f64;
         let sample = super::rss_bytes() as f64;
         if sample > 0.0 && (sample - before as f64).abs() > 1.0 {
@@ -521,14 +558,14 @@ mod tests {
     #[test]
     fn memory_read_is_throttled_to_one_per_interval() {
         let mut perf = PerfStats::default();
-        perf.record(1.0, 0.0, 0.0, 0.0, 10.0, Workload::default());
+        perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, 10.0, Workload::default());
         let first = perf.last_mem_read;
         assert_eq!(first, 10.0);
         // A read less than MEM_INTERVAL later must not refresh the timestamp.
-        perf.record(1.0, 0.0, 0.0, 0.0, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
+        perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, 10.0 + MEM_INTERVAL / 2.0, Workload::default());
         assert_eq!(perf.last_mem_read, first, "read again too soon");
         // Past the interval, it refreshes.
-        perf.record(1.0, 0.0, 0.0, 0.0, 10.0 + MEM_INTERVAL, Workload::default());
+        perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, 10.0 + MEM_INTERVAL, Workload::default());
         assert_eq!(perf.last_mem_read, 10.0 + MEM_INTERVAL);
     }
 
@@ -540,10 +577,10 @@ mod tests {
         let settle_after_one_tau = |rate: f64| {
             let mut perf = PerfStats::default();
             // Seed the clock so every measured step is a full 1/rate.
-            perf.record(0.0, 0.0, 0.0, 0.0, 0.0, Workload::default());
+            perf.record(FrameCosts { cpu_ms: 0.0, ..Default::default() }, 0.0, Workload::default());
             let frames = (rate * SMOOTH_TAU as f64).round() as usize;
             for i in 1..=frames {
-                perf.record(10.0, 0.0, 0.0, 0.0, i as f64 / rate, Workload::default());
+                perf.record(FrameCosts { cpu_ms: 10.0, ..Default::default() }, i as f64 / rate, Workload::default());
             }
             perf.cpu_ms
         };
@@ -561,19 +598,19 @@ mod tests {
     #[test]
     fn the_printed_numbers_hold_between_latches() {
         let mut perf = PerfStats::default();
-        perf.record(2.0, 0.0, 0.0, 0.0, 0.0, Workload::default());
+        perf.record(FrameCosts { cpu_ms: 2.0, ..Default::default() }, 0.0, Workload::default());
         let shown = perf.shown_cpu_ms;
 
         // Frames well inside the interval: the live value moves, the printed
         // one does not.
         for i in 1..=10 {
-            perf.record(20.0, 0.0, 0.0, 0.0, i as f64 * READOUT_INTERVAL / 20.0, Workload::default());
+            perf.record(FrameCosts { cpu_ms: 20.0, ..Default::default() }, i as f64 * READOUT_INTERVAL / 20.0, Workload::default());
         }
         assert!(perf.cpu_ms > shown, "the live value should have moved");
         assert_eq!(perf.shown_cpu_ms, shown, "the printed value must hold");
 
         // Past the interval it catches up.
-        perf.record(20.0, 0.0, 0.0, 0.0, READOUT_INTERVAL, Workload::default());
+        perf.record(FrameCosts { cpu_ms: 20.0, ..Default::default() }, READOUT_INTERVAL, Workload::default());
         assert_eq!(perf.shown_cpu_ms, perf.cpu_ms, "and then it latches");
     }
 
@@ -593,7 +630,7 @@ mod tests {
     fn fps_is_read_off_the_held_frame_time() {
         let mut perf = PerfStats::default();
         for i in 1..=200 {
-            perf.record(1.0, 0.0, 0.0, 0.0, i as f64 / 120.0, Workload::default());
+            perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, i as f64 / 120.0, Workload::default());
         }
         let from_row = 1000.0 / (perf.shown_frame_dt * 1000.0);
         assert!((perf.fps() - from_row).abs() < 1e-3, "{} vs {from_row}", perf.fps());

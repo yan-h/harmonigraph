@@ -93,6 +93,7 @@ pub struct Queue<'a> {
     display_max_fps: Option<f64>,
     tess_ms: f32,
     egui_gpu_ms: f32,
+    acquire_ms: f32,
 }
 
 impl<'a> Queue<'a> {
@@ -105,6 +106,7 @@ impl<'a> Queue<'a> {
         display_max_fps: Option<f64>,
         tess_ms: f32,
         egui_gpu_ms: f32,
+        acquire_ms: f32,
     ) -> Self {
         Self {
             bg_color,
@@ -117,7 +119,16 @@ impl<'a> Queue<'a> {
             display_max_fps,
             tess_ms,
             egui_gpu_ms,
+            acquire_ms,
         }
+    }
+
+    /// Milliseconds the previous frame blocked waiting for the surface.
+    ///
+    /// Large here with every cost row small means the frame is not slow, it is
+    /// early — the display, not the work, is setting the pace.
+    pub fn acquire_ms(&self) -> f32 {
+        self.acquire_ms
     }
 
     /// Milliseconds the GPU spent on egui's own render pass a few frames ago,
@@ -231,6 +242,8 @@ where
     /// Likewise for egui's own render pass, which lags further still — the
     /// timestamps have to come back from the GPU.
     egui_gpu_ms: f32,
+    /// Likewise for the surface wait.
+    acquire_ms: f32,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -308,6 +321,7 @@ where
             window.display_max_fps(),
             0.0,
             0.0,
+            0.0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -359,6 +373,7 @@ where
             key_capture,
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
+            acquire_ms: 0.0,
         }
     }
 
@@ -468,6 +483,7 @@ where
             window.display_max_fps(),
             self.tess_ms,
             self.egui_gpu_ms,
+            self.acquire_ms,
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
@@ -559,6 +575,7 @@ where
                 if presented { now.checked_add(repaint_delay) } else { Some(now) };
             self.tess_ms = self.renderer.last_tess_ms();
             self.egui_gpu_ms = self.renderer.last_gpu_ms();
+            self.acquire_ms = self.renderer.last_acquire_ms();
         } else if let Some(candidate) = now.checked_add(repaint_delay) {
             // Keep the EARLIEST pending deadline rather than overwriting it.
             //

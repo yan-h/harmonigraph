@@ -377,6 +377,12 @@ fn frame(
     egui_state: &EguiState,
     context: &dyn GuiContext,
 ) {
+    // Everything the shell does before the UI runs: draining the MIDI and
+    // audio rings and reconciling the take. Timed separately because `ui cpu`
+    // starts at the dock build, so this whole stretch — which scales with the
+    // number of events arriving, i.e. exactly with how hard you are playing —
+    // sits outside every other CPU reading.
+    let shell_start = Instant::now();
     let setter = ParamSetter::new(context);
 
     // One lock for the whole frame. Uncontended by design: the audio
@@ -402,10 +408,12 @@ fn frame(
         setter: &setter,
         gesture: &shared.gesture,
     };
-    // Last frame's tessellation cost, which the shell measures and the UI
-    // cannot: it happens after `root_ui` returns.
+    // Last frame's costs that the shell measures and the UI cannot: they
+    // happen after `root_ui` returns.
     shared.ui.tess_ms = queue.tess_ms();
     shared.ui.egui_gpu_ms = queue.egui_gpu_ms();
+    shared.ui.acquire_ms = queue.acquire_ms();
+    shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
     lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
     // Pace the window AFTER the UI has run, so a cap picked this frame takes

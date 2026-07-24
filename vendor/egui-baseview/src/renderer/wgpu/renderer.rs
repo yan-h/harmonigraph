@@ -204,6 +204,8 @@ pub struct Renderer {
     /// GPU time of egui's own render pass, and the queries behind it.
     gpu_timer: Option<EguiGpuTimer>,
     last_gpu_ms: f32,
+    /// How long the last frame blocked acquiring the surface.
+    last_acquire_ms: f32,
     /// How long the last frame spent turning egui's shapes into triangles.
     ///
     /// Tessellation is neither the app's own per-frame work (it runs after the
@@ -240,6 +242,7 @@ impl Renderer {
             msaa_samples,
             gpu_timer,
             last_gpu_ms: 0.0,
+            last_acquire_ms: 0.0,
             last_tess_ms: 0.0,
             width: 0,
             height: 0,
@@ -252,6 +255,15 @@ impl Renderer {
     /// covered by the lattice's own timer, which brackets only its passes.
     pub fn last_gpu_ms(&self) -> f32 {
         self.last_gpu_ms
+    }
+
+    /// Milliseconds the last frame spent blocked in `get_current_texture`.
+    ///
+    /// On a vsync-throttled surface this is where a frame that is ready too
+    /// early waits for the display, so it is the difference between "we are
+    /// slow" and "we are early" — and it appears in no cost measurement.
+    pub fn last_acquire_ms(&self) -> f32 {
+        self.last_acquire_ms
     }
 
     /// Milliseconds the last frame spent in [`egui::Context::tessellate`].
@@ -399,7 +411,15 @@ impl Renderer {
         }
 
         let mut recreate_surface = false;
-        let output_frame = match self.surface.get_current_texture() {
+        // Timed because this is where a vsync-throttled frame WAITS. With a
+        // Fifo surface, acquiring blocks until the display frees a slot, and
+        // that wait is neither CPU work nor GPU work — it shows up in no other
+        // reading, so a frame can be idle here while every cost row looks
+        // cheap.
+        let acquire_start = std::time::Instant::now();
+        let acquired = self.surface.get_current_texture();
+        self.last_acquire_ms = acquire_start.elapsed().as_secs_f32() * 1000.0;
+        let output_frame = match acquired {
             wgpu::CurrentSurfaceTexture::Success(texture) => Some(texture),
             wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
                 // Flush this frame's staged uploads before bailing. The
