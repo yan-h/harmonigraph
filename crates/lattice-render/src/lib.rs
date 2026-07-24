@@ -330,14 +330,30 @@ impl LatticeCallback {
         // in front of it. Grouping by distance from home instead of by
         // depth does the same thing more thoroughly. Depth is what the
         // reader is being shown; it is what the order has to follow.
+        // Sheets back to front FIRST, then painter's order within a sheet.
+        // That is still just back-to-front — world z IS the sevens axis, and
+        // the first key is only its depth — but it stays EXACT when the
+        // camera is orbited, where two nodes on one sheet have different
+        // depths and a plain depth sort interleaves the sheets. Interleaving
+        // is not a cosmetic problem: it puts the grid in the wrong place in
+        // the order and leaves the home sheet's clearings with almost
+        // nothing drawn before them to clear, so the knockout quietly did
+        // nothing under perspective and orthographic while working under
+        // cabinet (where every home node shares one depth and the two sorts
+        // agree).
+        //
+        // The `forward.z` factor is what keeps it honest if the view is
+        // orbited right around past the sheets: which way along z is "away"
+        // is the camera's business, not an assumption.
         let eye = camera.eye();
         let forward = (camera.target - eye).normalize_or_zero();
-        let mut order: Vec<(f32, &lattice_scene::NodeInstance)> = scene
+        let sheet_depth = |n: &lattice_scene::NodeInstance| n.world_pos.z * forward.z;
+        let mut order: Vec<(f32, f32, &lattice_scene::NodeInstance)> = scene
             .nodes
             .iter()
-            .map(|n| ((n.world_pos - eye).dot(forward), n))
+            .map(|n| (sheet_depth(n), (n.world_pos - eye).dot(forward), n))
             .collect();
-        order.sort_by(|a, b| b.0.total_cmp(&a.0));
+        order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
         // The home sheet's clearings go in a pass of their OWN, before the
         // grid; everything else clears from where it is drawn.
@@ -353,9 +369,14 @@ impl LatticeCallback {
         // ahead of the grid, marked by a NEGATIVE width — the shader paints
         // nothing for those and only clears (see `gutter_coverage`).
         //
-        // Nodes are already depth-sorted, and every home node shares one
-        // depth, so the home sheet is one contiguous run starting here.
-        let split = order.iter().position(|(_, n)| n.on_home).unwrap_or(order.len());
+        // World z is measured from the home sheet, so its whole run sits at
+        // sheet depth 0 — behind it is positive, in front negative. Sorting
+        // by that above is what makes the home sheet one contiguous run,
+        // under every projection rather than only the face-on one.
+        let split = order
+            .iter()
+            .position(|&(plane, _, _)| plane <= 0.0)
+            .unwrap_or(order.len());
         let to_gpu = |n: &lattice_scene::NodeInstance, gutter: f32| GpuInstance {
                 world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
@@ -378,13 +399,13 @@ impl LatticeCallback {
 
         let mut instances = Vec::with_capacity(order.len() + split);
         // Behind the home sheet: these clear only what is further back.
-        instances.extend(order[..split].iter().map(|(_, n)| to_gpu(n, n.gutter)));
+        instances.extend(order[..split].iter().map(|(_, _, n)| to_gpu(n, n.gutter)));
         // The home sheet's clearings, paint withheld.
         instances.extend(
             order[split..]
                 .iter()
-                .filter(|(_, n)| n.on_home && n.gutter > 0.0)
-                .map(|(_, n)| to_gpu(n, -n.gutter)),
+                .filter(|(_, _, n)| n.on_home && n.gutter > 0.0)
+                .map(|(_, _, n)| to_gpu(n, -n.gutter)),
         );
         let grid_at = instances.len() as u32;
         // The home sheet's paint (its clearing is already spent above) and
@@ -393,7 +414,7 @@ impl LatticeCallback {
         instances.extend(
             order[split..]
                 .iter()
-                .map(|(_, n)| to_gpu(n, if n.on_home { 0.0 } else { n.gutter })),
+                .map(|(_, _, n)| to_gpu(n, if n.on_home { 0.0 } else { n.gutter })),
         );
 
         // The grid draws under the nodes.

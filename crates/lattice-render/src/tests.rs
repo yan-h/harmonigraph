@@ -325,16 +325,25 @@ fn offscreen_composite_matches_direct_draw() {
         create_pipelines(&device, SHADER_SRC, format, &res.bind_group_layout, false);
     let pane = res.panes.get(&7).expect("prepare created the pane");
     let direct_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
+        // The grid sits at the home sheet's depth, so it is drawn INSIDE the
+        // node run, at `grid_at` — mirror that here or the two paths differ
+        // by draw order rather than by the thing under test.
+        let nodes = |pass: &mut wgpu::RenderPass<'static>, range: std::ops::Range<u32>| {
+            if !range.is_empty() {
+                pass.set_pipeline(&node_pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.draw(0..4, range);
+            }
+        };
+        nodes(pass, 0..pane.grid_at);
         if pane.edge_count > 0 {
             pass.set_pipeline(&edge_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
             pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
             pass.draw(0..4, 0..pane.edge_count);
         }
-        pass.set_pipeline(&node_pipeline);
-        pass.set_bind_group(0, &pane.bind_group, &[]);
-        pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-        pass.draw(0..4, 0..pane.instance_count);
+        nodes(pass, pane.grid_at..pane.instance_count);
     });
 
     let composite = readback(&device, &queue, &composite_tex, SIZE);
@@ -707,11 +716,10 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             &lattice_core::Tuning::default(),
             &view,
             &FrameParams::default(),
-            // Facing the sheets head-on. Cabinet is always this way; the
-            // other two are orbited by default, and an orbited camera sorts
-            // by a depth that mixes all three axes — correctly, but then
-            // world z is no longer the key and there is nothing to assert.
-            Camera { projection, yaw: 0.0, pitch: 0.0, ..Camera::default() },
+            // Orbited, deliberately: this is the case a plain depth sort
+            // gets wrong, because two nodes on one sheet then sit at
+            // different depths and the sheets interleave.
+            Camera { projection, ..Camera::default() },
             None,
             0.0,
         );
@@ -721,9 +729,12 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             wgpu::TextureFormat::Bgra8Unorm,
             0,
         );
-        // World z IS the sevens axis (see lattice_to_world), so with the
-        // camera down that axis the draw order must run from the most
-        // negative sheet to the most positive.
+        // World z IS the sevens axis (see lattice_to_world), so the draw
+        // order must run from the most negative sheet to the most positive
+        // — and it has to hold under EVERY projection, not only the face-on
+        // one. When it doesn't, the sheets interleave, the grid lands in
+        // the wrong place in the order, and the home sheet's clearings have
+        // nothing drawn before them left to clear.
         let depths: Vec<f32> = call.instances.iter().map(|i| i.world_pos[2]).collect();
         assert!(depths.len() > 1, "the window has to hold several sheets");
         for pair in depths.windows(2) {
