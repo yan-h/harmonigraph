@@ -7,13 +7,11 @@
 //! together when its orientation changes and no element has to know which
 //! way is up. The roll's drawing lives next door in [`super::roll`].
 
-use super::visibility_floor;
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
-use super::{nearest_visible_node, scene_color, section, KEY_NAMES};
+use super::{nearest_visible_node, section, KEY_NAMES};
 use lattice_core::notes::display_octave_of;
 use egui::Sense;
-use lattice_scene::channel_color;
 
 /// The lowest C at or above `midi`, as a MIDI note. Where the octave
 /// gridlines start: since the pitch range went continuous it can begin
@@ -123,13 +121,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     ui.checkbox(&mut cfg.peak_hold, "Peak hold")
         .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
-    // The field is still `show_voice_bars` so existing state keeps loading;
-    // what it draws stopped being bars.
-    ui.checkbox(&mut cfg.show_voice_bars, "Sounding notes").on_hover_text(
-        "Light up the now-line where each sounding note meets it, across the \
-         width that note's ribbon covers — its actual pitch, so per-note \
-         tuning and MPE bends slide the mark",
-    );
 
     // ---- Pitch axis -----------------------------------------------------
     section(ui, "Pitch axis");
@@ -266,10 +257,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 /// the last stretch as headroom so a loud partial doesn't run into the pane's
 /// edge.
 const PLOT_HEIGHT_FRACTION: f32 = 0.85;
-
-/// Thickness of a sounding note's mark on the now-line, in points. Enough to
-/// read as laid ON the hairline rather than as part of it.
-const NOTE_MARK_PX: f32 = 3.0;
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
@@ -680,13 +667,8 @@ pub(crate) fn spectral_pane(
     // background); the roll's ribbons sit over it, and the live spectrum
     // curve over everything. Turning the ribbons off (`show_roll`) with the
     // spectrogram on leaves the heatmap alone.
-    if split < 1.0 {
-        if cfg.show_spectrogram {
-            super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
-        }
-        if cfg.show_roll {
-            super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
-        }
+    if split < 1.0 && cfg.show_spectrogram {
+        super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
     }
 
     // The playhead: in whole-song mode, the one moving mark sweeping across the
@@ -792,77 +774,14 @@ pub(crate) fn spectral_pane(
         painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
     }
 
-    // Which notes are sounding, marked ON that line instead of as bars
-    // standing in the spectrum: the ribbon arriving at the line and the mark
-    // under it are one object seen from two sides.
-    //
-    // Which means the mark has to match the ribbon's SILHOUETTE, not just its
-    // nominal width. A ribbon is a rounded rectangle (roll.rs), so its
-    // rounding pulls the outline in at the ends: where it meets the line it is
-    // only as wide as its flat middle, and a mark drawn across the full width
-    // overhangs it at both ends. The mark takes that flat span and rounds its
-    // own ends, so at any rounding the two shapes agree — up to full rounding,
-    // where the ribbon ends in a semicircle touching the line and the mark
-    // becomes the dot at its tip.
-    //
-    // The bars this replaces hung from the line back into the spectrum,
-    // pointing at the peak they were meant to be compared with. That worked
-    // while the spectrum was a handful of thin peaks on black; now that every
-    // bucket is filled they crossed the picture instead of annotating it.
-    if cfg.show_voice_bars && split > 0.0 {
-        let base = if joined { split } else { 0.0 };
-        let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
-        // Stable order: held voices iterate a HashMap, and overlapping marks
-        // paint order-dependently — the offline render must match between runs.
-        let mut voices: Vec<&lattice_core::Voice> = state.tracker.voices().collect();
-        voices.sort_unstable_by(|a, b| {
-            a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
-        });
-        for voice in voices {
-            // The same envelope the lattice glow and the old bars used, spent
-            // on opacity rather than on length: the mark's length now says
-            // which pitches the note covers, so it cannot also say how loud.
-            let strength = voice.activation(now, state.frame_params.fade_time)
-                * visibility_floor(voice.velocity);
-            if strength <= 0.0 || !scale.contains(voice.pitch) {
-                continue;
-            }
-            let t = scale.t_of(voice.pitch);
-            // The ribbon's own geometry, by the same arithmetic roll.rs uses.
-            let ribbon_px = 2.0 * half * axes.pitch_len();
-            let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
-            let flat = (ribbon_px - 2.0 * radius).max(NOTE_MARK_PX);
-            let (half_t, deep) = (
-                0.5 * flat / axes.pitch_len().max(1.0),
-                0.5 * NOTE_MARK_PX / axes.depth_len().max(1.0),
-            );
-            let mark = |grow: f32| {
-                egui::Rect::from_two_pos(
-                    axes.at(t - half_t, base - deep * grow),
-                    axes.at(t + half_t, base + deep * grow),
-                )
-            };
-            // Round ends, so the mark reads as a cap on the ribbon rather than
-            // a tick cutting across it. egui clamps the radius to half the
-            // short side, which is what makes this a capsule.
-            let capsule = egui::CornerRadius::same(NOTE_MARK_PX as u8);
-            let c = channel_color(
-                voice.channel,
-                voice.pitch,
-                state.frame_params.darkest_pitch,
-                state.frame_params.brightest_pitch,
-            );
-            // A note sounding off the visible lattice lights up no node, so
-            // pulse an accent halo behind its mark: the Spectral pane is where
-            // you'd otherwise miss that a pitch you can't see is playing. Same
-            // match the lattice uses, so "off-lattice" agrees with the view.
-            if nearest_visible_node(&state.view, &state.tuning, voice.pitch_class).is_none() {
-                let pulse = 0.5 + 0.5 * (now * std::f64::consts::TAU * 1.6).sin() as f32;
-                let halo = theme::accent().gamma_multiply((0.35 + 0.5 * pulse) * strength);
-                painter.rect_filled(mark(1.0 + 2.0 * pulse), capsule, halo);
-            }
-            painter.rect_filled(mark(1.0), capsule, scene_color(c, strength));
-        }
+    // The roll goes on last, over the line it arrives at. A sounding note
+    // reaching the boundary and painting across it IS the mark that it is
+    // sounding — nothing else has to be drawn to say so, and nothing drawn
+    // separately could sit against a rounded ribbon end as exactly as the
+    // ribbon does. (Its ribbons occupy the far side of the split and the
+    // spectrum the near side, so this only changes what happens ON the line.)
+    if split < 1.0 && cfg.show_roll {
+        super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
     }
 
     // Axis labels last, riding on top of the spectrogram, spectrum, and
@@ -1055,76 +974,47 @@ mod tests {
         }
     }
 
-    /// A sounding note lights the now-line where its ribbon arrives: a mark
-    /// lying ALONG the line, not a bar standing out of it into the spectrum,
-    /// and matching the ribbon's silhouette — a rounded ribbon meets the line
-    /// only across its flat middle, so a mark drawn across the full width
-    /// would overhang it at both ends.
+    /// A sounding note is marked by its own ribbon crossing the now-line, so
+    /// the roll has to be painted after the line rather than before it. Every
+    /// separate mark drawn for the job sat wrong against a rounded ribbon end;
+    /// the ribbon cannot.
     #[test]
-    fn a_sounding_note_marks_the_now_line_across_its_ribbon_width() {
-        // Zoomed to an octave, so a 2-semitone ribbon is worth some pixels.
-        let marks = |thickness: f32, rounding: f32| {
-            let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
-            state.spectrum_config.orientation = SpectralOrientation::Horizontal;
-            state.spectrum_config.show_voice_bars = true;
-            state.spectrum_config.roll_thickness = thickness;
-            state.spectrum_config.roll_rounding = rounding;
-            state.spectrum_config.low_midi = 60.0;
-            state.spectrum_config.high_midi = 72.0;
-            state.tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note: 69,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
-            let ctx = egui::Context::default();
-            crate::theme::apply_theme(&ctx);
-            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-            let out = ctx.run_ui(
-                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-                |ui| {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, 0.1, 1.0, 0);
-                },
-            );
-            // Across: depth runs horizontally, so the mark is exactly
-            // NOTE_MARK_PX wide and as tall as the span it covers. (The
-            // off-lattice halo is the same shape grown by its pulse, so the
-            // exact width picks out the mark itself.)
-            out.shapes
-                .into_iter()
-                .filter_map(|s| match s.shape {
-                    egui::Shape::Rect(r) if (r.rect.width() - NOTE_MARK_PX).abs() < 0.05 => {
-                        Some(r.rect)
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
+    fn the_roll_paints_over_the_now_line() {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.roll_now_line = true;
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 72.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 69,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(&mut child, &mut state, 0.1, 1.0, 0);
+            },
+        );
+        // The now-line is the one hairline-colored segment clean across the
+        // pitch axis; the note is drawn as a rounded outline (or, when thin, a
+        // segment) and must come after it.
+        let hairline = out.shapes.iter().position(|s| {
+            matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
+                if stroke.color == theme::hairline())
+        });
+        let note = out.shapes.iter().rposition(|s| {
+            matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.width > 0.0)
+        });
+        let (Some(hairline), Some(note)) = (hairline, note) else {
+            panic!("expected both a now-line and a note ribbon in the frame");
         };
-
-        let square = marks(2.0, 0.0);
-        assert_eq!(square.len(), 1, "one held note, one mark");
-        assert!(square[0].height() > square[0].width(), "the mark stands out of the line");
-
-        // Unrounded, the mark takes the ribbon's whole width, and doubling the
-        // ribbon doubles the mark.
-        let wide = marks(4.0, 0.0);
-        assert!(
-            (wide[0].height() - 2.0 * square[0].height()).abs() < 0.5,
-            "{} -> {} is not double",
-            square[0].height(),
-            wide[0].height()
-        );
-
-        // Rounded, it shrinks to the flat part of the ribbon's end — the
-        // rounding is what the ribbon gives up at the line.
-        let rounded = marks(2.0, 0.5);
-        assert!(
-            rounded[0].height() < square[0].height(),
-            "rounding did not pull the mark in: {} vs {}",
-            rounded[0].height(),
-            square[0].height()
-        );
+        assert!(note > hairline, "the note paints under the line it arrives at");
     }
 
     /// The axis labels are haloed like the lattice's node names. What sits

@@ -85,7 +85,7 @@ pub enum SpectrumLabels {
 ///
 /// The pane is written once against an abstract (pitch, depth) plane and
 /// mapped onto the screen at draw time, so every element — gridlines,
-/// spectrum curve, voice bars, piano roll — turns together.
+/// spectrum curve, piano roll — turns together.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectralOrientation {
     /// Follow the pane's shape: time runs along the LONG side (so a
@@ -316,8 +316,6 @@ pub struct SpectrumConfig {
     pub labels: SpectrumLabels,
     /// Keep a slowly decaying outline at each bucket's recent maximum.
     pub peak_hold: bool,
-    /// MIDI-derived bars at each voice's actual pitch.
-    pub show_voice_bars: bool,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
     /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
     /// (~16 Hz to ~16.7 kHz); this only zooms the view.
@@ -513,7 +511,6 @@ impl Default for SpectrumConfig {
             tilt: 0.0,
             labels: SpectrumLabels::Notes,
             peak_hold: false,
-            show_voice_bars: true,
             low_midi: default_low_midi(),
             high_midi: default_high_midi(),
             legacy_low_octave: no_legacy_octave(),
