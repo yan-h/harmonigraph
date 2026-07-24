@@ -387,6 +387,29 @@ enum Grab {
 }
 
 impl Grab {
+    /// What a drag starting at value `v` takes hold of: an end if the pointer
+    /// is within `near` of one, otherwise the span between them, otherwise
+    /// (again) the nearer end.
+    ///
+    /// That last fallback is the whole reason this is a function. A span that
+    /// already fills the range has nowhere to slide, so panning it does
+    /// nothing at all — and the range's default IS the full axis, so a bar
+    /// that only panned from the middle would be dead exactly where everyone
+    /// first meets it. When there's no room to pan, a middle drag takes the
+    /// nearer end instead.
+    fn at(v: f32, (lo, hi): (f32, f32), (min, max): (f32, f32), near: f32) -> Grab {
+        let (dl, dh) = ((v - lo).abs(), (v - hi).abs());
+        let nearest = if dl <= dh { Grab::Low } else { Grab::High };
+        let room_to_pan = (max - min) - (hi - lo) > f32::EPSILON;
+        if dl.min(dh) <= near {
+            nearest
+        } else if v > lo && v < hi && room_to_pan {
+            Grab::Span(v - lo)
+        } else {
+            nearest
+        }
+    }
+
     /// Where the pair ends up when this grab is dragged to value `v`. Pure,
     /// so the invariants that actually matter — the ends never cross, the
     /// span never closes past `min_span`, and a slid span keeps its width
@@ -466,28 +489,30 @@ impl<'a> RangeBar<'a> {
             *self.low = min;
             *self.high = max;
             response.mark_changed();
-        } else if response.drag_started() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let (dl, dh) = ((p.x - x_of(*self.low)).abs(), (p.x - x_of(*self.high)).abs());
-                let v = value_at(p.x);
-                let grab = if dl.min(dh) <= GRAB_PX {
-                    if dl <= dh { Grab::Low } else { Grab::High }
-                } else if v > *self.low && v < *self.high {
-                    Grab::Span(v - *self.low)
-                } else if v <= *self.low {
-                    Grab::Low
-                } else {
-                    Grab::High
-                };
-                ui.data_mut(|d| d.insert_temp(grab_id, grab));
-            }
         }
         if response.dragged() {
-            if let (Some(p), Some(grab)) =
-                (response.interact_pointer_pos(), ui.data(|d| d.get_temp::<Grab>(grab_id)))
-            {
-                let (lo, hi) =
-                    grab.apply(value_at(p.x), (*self.low, *self.high), (min, max), self.min_span);
+            if let Some(p) = response.interact_pointer_pos() {
+                let v = value_at(p.x);
+                // Decided on the first frame of the gesture and remembered for
+                // the rest of it, so dragging one end past the other doesn't
+                // hand the drag to whichever handle is nearest now. Decided
+                // HERE rather than under `drag_started` so a gesture whose
+                // start frame was missed still does something.
+                // Read and write are separate statements on purpose: nesting a
+                // `data_mut` inside a `data` closure takes the context lock
+                // twice, and nothing here is worth risking that on a path only
+                // a real pointer reaches.
+                let stored = ui.data(|d| d.get_temp::<Grab>(grab_id));
+                let grab = match stored {
+                    Some(grab) => grab,
+                    None => {
+                        let near = GRAB_PX / rect.width().max(1.0) * (max - min);
+                        let grab = Grab::at(v, (*self.low, *self.high), (min, max), near);
+                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
+                        grab
+                    }
+                };
+                let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
                 if lo != *self.low || hi != *self.high {
                     (*self.low, *self.high) = (lo, hi);
                     response.mark_changed();
@@ -612,6 +637,38 @@ mod tests {
     /// The analyzer's axis, the range bar's real caller.
     const AXIS: (f32, f32) = (12.0, 132.0);
     const OCTAVE: f32 = 12.0;
+
+    /// The bug this widget shipped with: the pitch range's default IS the
+    /// full axis, a span that fills the range has nowhere to slide, so
+    /// panning it moved nothing — and a drag anywhere but the outermost few
+    /// pixels panned. The bar was dead exactly where you first meet it.
+    #[test]
+    fn a_range_filling_the_axis_still_drags_from_the_middle() {
+        let full = (AXIS.0, AXIS.1);
+        for v in [20.0, 60.0, 90.0, 125.0] {
+            let grab = Grab::at(v, full, AXIS, 1.0);
+            assert!(
+                !matches!(grab, Grab::Span(_)),
+                "dragging at {v} panned a span that cannot pan"
+            );
+            let (lo, hi) = grab.apply(v, full, AXIS, OCTAVE);
+            assert!((lo, hi) != full, "dragging at {v} moved nothing");
+        }
+    }
+
+    /// With room to slide, a middle drag still pans — and takes the pointer's
+    /// offset with it rather than snapping the low end to the pointer.
+    #[test]
+    fn a_middle_drag_pans_when_the_span_has_room() {
+        assert!(matches!(Grab::at(40.0, (24.0, 60.0), AXIS, 1.0), Grab::Span(off) if off == 16.0));
+    }
+
+    /// Near an end, that end wins even when the span could pan.
+    #[test]
+    fn a_drag_near_an_end_takes_that_end() {
+        assert!(matches!(Grab::at(25.0, (24.0, 60.0), AXIS, 2.0), Grab::Low));
+        assert!(matches!(Grab::at(59.0, (24.0, 60.0), AXIS, 2.0), Grab::High));
+    }
 
     /// Dragging an end past its partner stops at the minimum span instead of
     /// crossing it — otherwise the pitch axis inverts and every pitch on it
