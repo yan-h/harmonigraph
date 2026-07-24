@@ -304,7 +304,9 @@ pub(super) fn draw_spectrogram(
                 // Sized off the WINDOW, not off how much history has arrived:
                 // a capacity that grew with the column count would change on
                 // almost every frame and rebuild the very thing it caches.
-                let capacity = ((window / bucket).ceil() as usize + 2).max(w);
+                // +2 so a guard column fits on each side of the visible run
+                // without overwriting a column the run still needs.
+                let capacity = ((window / bucket).ceil() as usize + 2).max(w + 2);
                 write_ring(
                     painter.ctx(),
                     spectrum,
@@ -360,19 +362,16 @@ pub(super) fn draw_spectrogram(
     // full-width build that is the whole thing and this collapses to the plain
     // `(t - t_origin) / tex_span`.
     //
-    // Clamped to the first and last visible texel CENTER, which is what the
-    // sampler's ClampToEdge used to do for free. It no longer can: the slivers
-    // with no data (the sub-slab at `now`, the bit past the oldest slab) run
-    // past the visible run but land INSIDE the ring texture, where the
-    // neighbouring texel is a column from a whole window ago rather than the
-    // edge. Clamping here keeps those slivers filled from the edge column.
-    let visible = (layout.tex_span / bucket) as f32;
-    let (u_lo, u_hi) =
-        ((layout.x0 + 0.5) / layout.tex_w, (layout.x0 + visible - 0.5) / layout.tex_w);
-    let u_at = |d: f32| {
-        let slabs = ((time.time_at(d) - layout.t_origin) / bucket) as f32;
-        ((layout.x0 + slabs) / layout.tex_w).clamp(u_lo, u_hi)
-    };
+    // Deliberately NOT clamped. `u` has to stay a straight function of time —
+    // that continuity is what makes the image track the notes and killed the
+    // per-slab stutter, because these are VERTEX UVs and the fragment scale is
+    // interpolated between them. Pinning one end to the edge texel freezes it
+    // for part of every slab and slides it for the rest, which shows up as the
+    // whole heatmap twitching once per slab. The data-less slivers are handled
+    // where they belong, in the data: `write_ring` keeps a duplicate of each
+    // edge column just outside the run, which is what ClampToEdge did for free
+    // before the texture became a ring.
+    let u_at = |d: f32| u_of(&layout, time.time_at(d), bucket);
     let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
     let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
     let vert =
@@ -670,6 +669,19 @@ fn smooth_time(power: &mut [f32], rows: usize, nb: usize, smoothing: f32) {
     }
 }
 
+/// Texture `u` for an absolute time.
+///
+/// A straight line in `t`, with no clamping, and it must stay that way: these
+/// are vertex UVs, so the scale every fragment samples at is interpolated
+/// between the quad's corners. Bending or pinning either end changes the whole
+/// image's scale, and doing it for only part of each slab — which is what
+/// clamping to the edge texel does, since `now` crosses the last texel center
+/// mid-slab — makes the heatmap twitch once per slab.
+fn u_of(layout: &TexLayout, t: f64, bucket: f64) -> f32 {
+    let slabs = ((t - layout.t_origin) / bucket) as f32;
+    (layout.x0 + slabs) / layout.tex_w
+}
+
 /// Bring the ring's texture up to date for the visible slabs, allocating or
 /// restarting it when it cannot be carried forward.
 ///
@@ -747,9 +759,29 @@ fn write_ring(
         // `capacity` slabs contiguous — see [`SpectrogramRing`].
         tex.set_partial([x + capacity, 0], image, opts);
     }
+
+    // Duplicate each edge column just outside the run. The quad reaches a
+    // little past the data at both ends — the sub-slab between the newest slab
+    // and `now`, and the bit before the oldest slab's center — and a sampler
+    // set to ClampToEdge only clamps at the TEXTURE edge, which inside a ring
+    // is somewhere else entirely. Without these the slivers would sample a
+    // column from a whole window ago. Half a texel is all the quad overruns,
+    // so one column each side covers it.
+    let last_i = visible - 1;
+    for (key, slab) in
+        [(first_key - 1, 0usize), (last_key + 1, last_i)]
+    {
+        let column = fill_column(cfg, frame, bins, &power[slab * h..(slab + 1) * h]);
+        let image = egui::ColorImage::new([1, h], column);
+        let x = ring.x_of(key);
+        tex.set_partial([x, 0], image.clone(), opts);
+        tex.set_partial([x + capacity, 0], image, opts);
+    }
+
     ring.written_through = last_key;
     // Anything older than a full lap has been overwritten by the columns above.
-    ring.oldest_valid = ring.oldest_valid.max(last_key - capacity as i64 + 1);
+    // The far guard sits one before the run, so it is the oldest texel in use.
+    ring.oldest_valid = ring.oldest_valid.max(last_key - capacity as i64 + 2);
 }
 
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
@@ -1182,6 +1214,40 @@ mod tests {
         };
         for key in -20i64..0 {
             assert!(ring.x_of(key) < 8, "key {key} fell outside the ring");
+        }
+    }
+
+    /// The time -> texture mapping has to be a straight line, including across
+    /// the slab boundary the newest column sits on. Clamping it to the edge
+    /// texel (an early attempt at filling the data-less slivers) pinned it for
+    /// part of every slab and let it slide for the rest, and since these are
+    /// VERTEX UVs that rescaled the whole image once per slab — visible as the
+    /// heatmap jittering. The slivers are filled with guard columns instead.
+    #[test]
+    fn the_time_to_texture_mapping_is_a_straight_line() {
+        let bucket = 0.08;
+        let layout = TexLayout {
+            t_origin: 100.0,
+            tex_span: 8.0 * bucket,
+            t0: 0.0,
+            tn: 1.0,
+            // A run parked mid-ring, as it is for all but one lap in eight.
+            x0: 5.0,
+            tex_w: 16.0,
+        };
+        let step = bucket / 4.0;
+        let at = |i: i32| u_of(&layout, layout.t_origin + i as f64 * step, bucket);
+
+        // Equal steps in time, equal steps in u — everywhere, including past
+        // BOTH ends of the run where the quad reaches for its slivers.
+        let expected = at(1) - at(0);
+        assert!(expected > 0.0, "u must advance with time");
+        for i in -4..40 {
+            let moved = at(i + 1) - at(i);
+            assert!(
+                (moved - expected).abs() < 1e-6,
+                "step {i} bent the mapping: expected {expected}, got {moved}",
+            );
         }
     }
 }
