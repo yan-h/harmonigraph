@@ -745,6 +745,19 @@ fn mark_ring(
     return ring * mark_ring_alpha(slots, cents, uv, rest, aa);
 }
 
+// How much of the destination a node's knockout clears at radius `d`, for
+// a gutter of the given width. Solid out to the node's own outermost
+// feature — the melody ring when the rings are on, the band's outer edge
+// otherwise — and then a falloff over twice the width. Capped inside the
+// quad so the tail finishes as a circle instead of being clipped square at
+// the billboard's corners.
+fn gutter_coverage(d: f32, width: f32) -> f32 {
+    let rings = select(0.0, u.misc5.z + u.misc5.w, u.misc5.w > 0.0);
+    let solid = u.misc3.z + rings;
+    let fade = min(solid + width * 2.0, QUAD_MARGIN - 0.05);
+    return 1.0 - smoothstep(min(solid, fade - 0.001), fade, d);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
@@ -758,6 +771,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // take before any branching), scaled to the softness knob. Shape edges
     // below use this instead of fixed-uv smoothsteps.
     let aa = aa_width(fwidth(in.uv.x));
+
+    // A knockout-ONLY instance: clears, paints nothing. The home sheet
+    // draws its clearings through this, in a pass of its own before the
+    // grid, so that a home node can hide the sheets behind it without its
+    // clearing eating the very grid it sits on (which is drawn at the home
+    // sheet's own depth, between the sheets behind and the sheet itself).
+    // A negative width is the marker — the sign is free, and it keeps the
+    // instance layout identical between the two passes.
+    if in.gutter < 0.0 {
+        let cleared = gutter_coverage(d, -in.gutter) * activation;
+        if cleared < 0.01 {
+            discard;
+        }
+        return vec4<f32>(u.background.rgb * cleared, cleared);
+    }
 
     // Core layer, unified onto ONE solidity axis. The radius (u.misc3.x,
     // quad UV units) sizes it, and a radius of 0 turns it off entirely — no
@@ -1009,22 +1037,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Compositing it UNDER the node's own paint is what the `(1 - over_idle)`
     // terms say: the node keeps its color exactly, and the ground only fills
     // the part of its quad the node itself leaves empty.
+    // Scaled by the note's OWN envelope, the same one `presence` paints the
+    // node with, so the clearing fades out with the note instead of
+    // outliving it. The width stays put while it does: a hole that shrinks
+    // as it fades reads as the node retreating, and a hole that holds full
+    // strength to the last frame (which is what scaling the width alone
+    // did) vanishes with an audible pop.
     var gutter_cov = 0.0;
     if in.gutter > 0.0 {
-        // Solid out to the node's own outermost feature — the melody ring
-        // when the rings are on, the band's outer edge otherwise — then the
-        // falloff. Capped inside the quad so the tail finishes as a circle
-        // instead of being clipped square at the billboard's corners.
-        let rings = select(0.0, u.misc5.z + u.misc5.w, u.misc5.w > 0.0);
-        let solid = u.misc3.z + rings;
-        let fade = min(solid + in.gutter * 2.0, QUAD_MARGIN - 0.05);
-        // Scaled by the note's OWN envelope, the same one `presence` paints
-        // the node with, so the clearing fades out with the note instead of
-        // outliving it. The width above stays put while it does: a hole
-        // that shrinks as it fades reads as the node retreating, and a hole
-        // that holds full strength to the last frame (which is what scaling
-        // the width alone did) vanishes with an audible pop.
-        gutter_cov = (1.0 - smoothstep(min(solid, fade - 0.001), fade, d)) * activation;
+        gutter_cov = gutter_coverage(d, in.gutter) * activation;
     }
     let final_alpha = over_idle + gutter_cov * (1.0 - over_idle);
     if final_alpha < 0.01 {

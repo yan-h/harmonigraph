@@ -211,39 +211,49 @@ pub fn derive_scene(
         let world_pos = lattice_to_world(centered, view.spacing);
 
         // The sevens layer: how far off the home sheet this node sits
-        // decides how small it draws, whether it clears a gutter, and
-        // whether it carries a comma. Distance, not signed depth — the home
-        // sheet is the ground, and a sheet in front of it is no more the
-        // subject than one behind (see `ViewConfig::sevens_size`).
+        // decides how small it draws and whether it carries a comma.
+        // Distance, not signed depth — the home sheet is the ground, and a
+        // sheet in front of it is no more the subject than one behind (see
+        // `ViewConfig::sevens_size`).
         let sheets = centered.sevens.unsigned_abs();
-        let (scale, gutter, comma) = if sheets == 0 {
-            (1.0, 0.0, 0.0)
+        let (scale, comma) = if sheets == 0 {
+            (1.0, 0.0)
         } else {
-            let scale = sevens_size.powi(sheets as i32);
             // The node this one shares a spelling with, on the home sheet:
             // the letter walk uses `threes - 2*sevens`, so undoing the
             // sevens term two fifths at a time lands on the same name.
             let namesake =
                 LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
-            // The WIDTH of the gutter, which is a constant of the view. Its
-            // STRENGTH is the note's own envelope, applied in the shader
-            // against the same `activation` it paints the node with, so the
-            // clearing fades out exactly as the note it belongs to does.
-            //
-            // Those are deliberately not the same knob. Scaling the width by
-            // the envelope instead — which is what this line used to do —
-            // leaves the clearing FULLY opaque for the whole release and
-            // only narrows its soft edge, so the hole hangs around at full
-            // strength and then vanishes the instant the voice is pruned.
-            //
-            // Zeroed while nothing sounds so a silent node punches nothing:
-            // a node drawing only a faint trail mark, or nothing at all,
-            // clearing a full-size hole in the home sheet is a hole with no
-            // note in it — and, since every position matching the pitch
-            // class lights, a lattice full of them.
-            let gutter = if activation > 0.0 { sevens_gutter } else { 0.0 };
-            (scale, gutter, wrapped_cents(node_pc, tuning.pitch_class(namesake)))
+            (
+                sevens_size.powi(sheets as i32),
+                wrapped_cents(node_pc, tuning.pitch_class(namesake)),
+            )
         };
+        // EVERY sounding node clears what is behind it, the home sheet
+        // included. Leaving the home sheet out is what let the sheets
+        // behind it show straight through the gaps in a home node's body —
+        // the core is small and soft and the octave band is a thin annulus,
+        // so "drawn over" covers very little — and neither sheet then read
+        // as being in front of the other.
+        //
+        // The home sheet's clearing is applied in a pass of its own, before
+        // the grid, precisely so it does not eat the grid it sits on; see
+        // `LatticeCallback::from_scene`. Nothing to clear at all when the
+        // window holds no depth.
+        //
+        // The WIDTH is a constant of the view; the STRENGTH is the note's
+        // envelope, applied in the shader against the same `activation` it
+        // paints the node with, so a clearing fades out exactly as its note
+        // does. Scaling the width by the envelope instead leaves the
+        // clearing fully opaque for the whole release and only narrows its
+        // soft edge, so the hole hangs around at full strength and then
+        // vanishes the instant the voice is pruned.
+        let gutter = if activation > 0.0 && view.extent_sevens != 0 {
+            sevens_gutter
+        } else {
+            0.0
+        };
+
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,

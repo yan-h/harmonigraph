@@ -1474,33 +1474,47 @@ fn sevens_size_never_enlarges_and_never_vanishes() {
 }
 
 #[test]
-fn the_gutter_belongs_to_sounding_off_sheet_nodes_only() {
-    // The knockout exists to keep a SOUNDING off-sheet note legible over
-    // what it crosses. A silent node punching a full-size hole in the home
-    // sheet would be a hole with no note in it — and, since every position
-    // matching the pitch class lights, a lattice full of them.
-    let view = ViewConfig {
-        extent_sevens: 1,
-        sevens_gutter: 0.2,
-        ..ViewConfig::default()
-    };
-    let tuning = Tuning::default();
-    let scene = scene_of(&held(60), &tuning, &view, &FrameParams::default(), 0.0);
-    // C sounds, so every node whose pitch class is C is lit — on the home
-    // sheet and off it. Only the off-sheet ones clear a gutter.
-    let lit_off_sheet = scene
-        .nodes
-        .iter()
-        .find(|n| n.activation > 0.0 && n.lattice_pos.sevens != 0)
-        .expect("a lit off-sheet node");
-    assert_eq!(lit_off_sheet.gutter, 0.2);
+fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
+    // The knockout is not an off-sheet ornament, it is how one sheet hides
+    // another — so the home sheet needs one too, or the sheets behind it
+    // show straight through the gaps in a home node's body (a small soft
+    // core and a thin gapped annulus cover very little) and neither sheet
+    // reads as being in front. Which layer the clearing is DRAWN in differs
+    // — the home sheet's goes ahead of the grid, see the renderer — but
+    // that is not this layer's business.
+    let view = ViewConfig { extent_sevens: 1, sevens_gutter: 0.2, ..ViewConfig::default() };
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+
+    // C sounds, so every node whose pitch class is C lights — on the home
+    // sheet and off it. All of them clear; the silent ones do not.
+    let mut lit_home = 0;
+    let mut lit_off = 0;
     for node in &scene.nodes {
-        if node.lattice_pos.sevens == 0 {
-            assert_eq!(node.gutter, 0.0, "the home sheet never knocks out");
-        }
-        if node.activation == 0.0 {
+        if node.activation > 0.0 {
+            assert_eq!(node.gutter, 0.2, "a sounding node clears, wherever it is");
+            if node.on_home {
+                lit_home += 1;
+            } else {
+                lit_off += 1;
+            }
+        } else {
             assert_eq!(node.gutter, 0.0, "a silent node punches nothing");
         }
+    }
+    assert!(lit_home > 0 && lit_off > 0, "the case needs both kinds lit");
+}
+
+#[test]
+fn a_flat_lattice_has_nothing_to_clear() {
+    // With the sevenths extent at 0 there is only the home sheet, so there
+    // is nothing behind anything and no reason to punch a hole in the grid
+    // — which is what a clearing with nothing under it would amount to.
+    // This is the out-of-the-box case, so it has to cost nothing.
+    let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..ViewConfig::default() };
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
+    assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "something is lit");
+    for node in &scene.nodes {
+        assert_eq!(node.gutter, 0.0);
     }
 }
 
