@@ -401,8 +401,10 @@ fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
     }
 }
 
-/// Half-width of the divider's grab band, in pixels.
-const SPLIT_GRAB_HALF: f32 = 4.0;
+/// Half-width of the divider's grab band, in points. Wider than the hairline
+/// it drags: the band is invisible until the pointer is inside it, so it has
+/// to forgive an aim that is a few points off the line.
+const SPLIT_GRAB_HALF: f32 = 6.0;
 
 /// The spectrum/far-region divider, draggable where it is drawn.
 ///
