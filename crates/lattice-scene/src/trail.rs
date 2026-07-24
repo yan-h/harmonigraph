@@ -11,10 +11,11 @@
 //! Two consequences worth stating, because they are what keep it subtle:
 //! - Nothing on a visited node ever brightens or animates. The lattice at
 //!   rest reads exactly as it did, with a little more information in it.
-//! - A visited node OFF the home sheet gets a marker too, where an unvisited
-//!   one draws nothing. An off-sheet idle node is deliberately blank — its
-//!   pitch would be information from nowhere — but the music having gone
-//!   there is precisely what makes it worth marking.
+//! - Only the home sheet carries the marks. The whole history is remembered —
+//!   every note played, wherever it landed — but an off-sheet idle node stays
+//!   blank: a lone mark floating out in the sevens dimension reads as noise,
+//!   not as territory. The memory shows on the home node of the same pitch
+//!   class, which is where the eye is anyway.
 //!
 //! The other half of the feature is the label layer keeping note names and
 //! cents on visited nodes, which needs nothing here beyond
@@ -131,6 +132,14 @@ impl TrailField {
         tuning: &Tuning,
     ) {
         for (node, &node_pc) in nodes.iter_mut().zip(node_pcs) {
+            // Only the home sheet carries trails. The music's whole history is
+            // remembered (every note reaches `self.marks`), but an off-sheet
+            // node is deliberately blank at idle — a lone marker floating out
+            // in the sevens dimension reads as noise, not as territory — so the
+            // memory is shown on the home node of the same pitch class instead.
+            if !node.on_home {
+                continue;
+            }
             for &(pitch_class, level, color) in &self.marks {
                 // `max`, not a sum: two remembered pitches matching one node
                 // under a wide tolerance are the same node visited twice,

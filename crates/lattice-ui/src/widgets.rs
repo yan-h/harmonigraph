@@ -130,11 +130,11 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
         };
         let painter = ui.painter();
         let bg = if response.hovered() { theme::panel() } else { theme::well() };
-        painter.rect_filled(rect, CornerRadius::same(4), bg);
+        painter.rect_filled(rect, CornerRadius::same(theme::CONTROL_RADIUS), bg);
         if response.hovered() {
             painter.rect_stroke(
                 rect,
-                CornerRadius::same(4),
+                CornerRadius::same(theme::CONTROL_RADIUS),
                 egui::Stroke::new(1.0, theme::accent_edge()),
                 egui::StrokeKind::Inside,
             );
@@ -157,9 +157,9 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
 /// Row height of a ValueBar (taller than the theme's interact_size: these
 /// are the primary controls and carry two text runs).
 const BAR_HEIGHT: f32 = 20.0;
-/// Corner rounding, deliberately tighter than theme::WIDGET_RADIUS so the
-/// bars read as a meter, not a button.
-const BAR_RADIUS: u8 = 2;
+/// Corner rounding of the bar track — the shared control radius, so a bar and
+/// a button beside it round the same.
+const BAR_RADIUS: u8 = theme::CONTROL_RADIUS;
 
 pub struct ValueBar<'a> {
     value: &'a mut f32,

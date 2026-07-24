@@ -907,8 +907,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
                 // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
-                slot_rgb = mix(pitch_lut_color(pitch), vec3<f32>(1.0, 1.0, 1.0), 0.30);
-
+                // Exactly the color that pitch lights everywhere else. The LUT
+                // is the pitch ramp, which is defined already lightened
+                // (pitch_ramp_lch / NOTE_LIGHTEN in lattice-scene), and the
+                // core disc and the piano roll sample that same ramp — so all
+                // three read as one color. No separate white mix here anymore.
+                slot_rgb = pitch_lut_color(pitch);
             }
             if cov > glyph {
                 glyph = cov;

@@ -87,7 +87,13 @@ pub fn warning_bg() -> Color32 {
     c(active_skin().warning_bg)
 }
 
-const WIDGET_RADIUS: CornerRadius = CornerRadius::same(5);
+/// The one corner radius every framed control wears — buttons, checkboxes,
+/// the value/range bars, the record button. Shared so they read as one family
+/// instead of each rounding to its own taste. (Pill-shaped things — the toggle
+/// switch, a bar's own handle — are their own shape and don't use it.)
+pub(crate) const CONTROL_RADIUS: u8 = 5;
+
+const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 
 // ---- Fonts -----------------------------------------------------------------
 

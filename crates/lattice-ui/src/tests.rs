@@ -134,12 +134,12 @@ fn pre_rename_octave_style_and_slice_band_fields_still_load() {
 #[test]
 fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
     // The settings tabs were renamed and split (View -> Frame, Appearance ->
-    // Nodes + Scene, Spectrum -> Analyzer, Render -> Video, plus a new Panel)
-    // and the persist blob gained a version. An old blob names the old tabs
-    // and has no version. Two things must hold: the `Tab` aliases keep it
-    // PARSING (a failed parse silently drops camera/view/spectrum with it),
-    // and the absent version refreshes the stale dock so the split-out Scene
-    // and Panel tabs aren't stranded off-layout.
+    // Nodes + Scene, Spectrum -> Analyzer, Render -> Video, plus a new Panel),
+    // Frame was later merged back into Tuning, and the persist blob gained a
+    // version. An old blob names the old tabs and has no version. Two things
+    // must hold: the `Tab` aliases keep it PARSING (a failed parse silently
+    // drops camera/view/spectrum with it), and the absent version refreshes
+    // the stale dock so no tab is stranded off-layout or listed twice.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.camera.yaw = 1.23;
     state.view.extent_sevens = 3;
@@ -147,13 +147,18 @@ fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
     // (serde reads it back as 0) and rename the tabs to their old spellings,
     // which only the aliases can still resolve. The capitalized tab tokens
     // don't occur elsewhere in the blob, so these replacements are surgical.
+    // The version is spelled from the constant so the next bump doesn't
+    // quietly turn the strip into a no-op and leave this testing nothing.
     let saved = state
         .save_persist()
-        .replacen("version:1,", "", 1)
-        .replace("Frame", "View")
+        .replacen(&format!("version:{UI_PERSIST_VERSION},"), "", 1)
+        // Tuning is where the old View/Frame tab ended up, so its old name is
+        // the one that exercises those aliases.
+        .replace("Tuning", "View")
         .replace("Nodes", "Appearance")
         .replace("Analyzer", "Spectrum")
         .replace("Video", "Render");
+    assert!(!saved.contains("version:"), "the version strip missed");
     assert_ne!(saved, state.save_persist(), "the rewrite must have hit");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -168,6 +173,38 @@ fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
         ron::to_string(&default_dock()).unwrap(),
         "a pre-versioning layout resets to the current default dock"
     );
+}
+
+/// A version-1 layout lists Tuning AND Frame, and the merge made both spell
+/// the same variant. Loaded as-is that dock opens with the merged pane in it
+/// twice — two tabs, same name, same contents — so the version bump has to
+/// refresh it. The settings in the blob must still survive that.
+#[test]
+fn a_pre_merge_layout_does_not_open_the_merged_tab_twice() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 0.77;
+    state.spectrum_config.floor_db = -42.0;
+    // Synthesize the version-1 blob: same layout, but with the Frame tab still
+    // sitting next to Tuning where it used to be.
+    let saved = state
+        .save_persist()
+        .replacen(&format!("version:{UI_PERSIST_VERSION},"), "version:1,", 1)
+        .replacen("Tuning,", "Tuning,Frame,", 1);
+    assert!(saved.contains("Frame"), "the synthetic v1 layout must name Frame");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    // Parsed: `Frame` still resolves (onto Tuning), so nothing was dropped.
+    assert_eq!(restored.camera.yaw, 0.77, "settings survive the pre-merge layout");
+    assert_eq!(restored.spectrum_config.floor_db, -42.0);
+    // And the duplicate is gone rather than carried into the dock.
+    let dock = ron::to_string(&restored.dock).unwrap();
+    assert_eq!(
+        dock,
+        ron::to_string(&default_dock()).unwrap(),
+        "a pre-merge layout resets to the current default dock",
+    );
+    assert_eq!(dock.matches("Tuning").count(), 1, "the merged tab is docked twice");
 }
 
 #[test]
@@ -259,6 +296,69 @@ fn corrupt_persist_is_ignored() {
     let default_distance = state.camera.distance;
     state.load_persist("not json at all");
     assert_eq!(state.camera.distance, default_distance);
+}
+
+/// Every tab needs its own id, and the titles cannot supply one: the display
+/// pane and its settings are both called "Analyzer" on purpose. egui_dock's
+/// default `id()` is the title text, and that id keys the tab BODY's `Ui`
+/// (surface + tab id, no node), so a collision made two panes share their
+/// body state — scrolling the settings scrolled the analyzer display.
+#[test]
+fn every_tab_has_its_own_id_even_where_two_share_a_title() {
+    use egui_dock::TabViewer;
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let params = RecordingBackend::default();
+    let tabs = [
+        panes::Tab::Lattice,
+        panes::Tab::Tuning,
+        panes::Tab::Nodes,
+        panes::Tab::Scene,
+        panes::Tab::Console,
+        panes::Tab::Spectral,
+        panes::Tab::Analyzer,
+        panes::Tab::Notes,
+        panes::Tab::Video,
+        panes::Tab::Panel,
+    ];
+    let mut viewer = panes::Viewer { state: &mut state, params: &params, now: 0.0 };
+    let mut title = |mut tab: panes::Tab| viewer.title(&mut tab).text().to_owned();
+
+    // The collision this guards against is real, not hypothetical.
+    assert_eq!(
+        title(panes::Tab::Spectral),
+        title(panes::Tab::Analyzer),
+        "the two Analyzer tabs are meant to share a title",
+    );
+
+    let ids: Vec<egui::Id> = tabs
+        .iter()
+        .map(|&tab| {
+            let mut tab = tab;
+            viewer.id(&mut tab)
+        })
+        .collect();
+    for (i, a) in ids.iter().enumerate() {
+        for (j, b) in ids.iter().enumerate().skip(i + 1) {
+            assert_ne!(a, b, "{:?} and {:?} share a tab id", tabs[i], tabs[j]);
+        }
+    }
+}
+
+/// The picture panes fill their body exactly, so a scroll area around one can
+/// only shift a picture that is meant to sit still.
+#[test]
+fn the_picture_panes_do_not_scroll() {
+    use egui_dock::TabViewer;
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let params = RecordingBackend::default();
+    let viewer = panes::Viewer { state: &mut state, params: &params, now: 0.0 };
+    for tab in [panes::Tab::Lattice, panes::Tab::Spectral] {
+        assert_eq!(viewer.scroll_bars(&tab), [false, false], "{tab:?} is scrollable");
+    }
+    // Settings panes are lists and must stay reachable in a short column.
+    for tab in [panes::Tab::Tuning, panes::Tab::Analyzer, panes::Tab::Panel] {
+        assert_eq!(viewer.scroll_bars(&tab), [true, true], "{tab:?} cannot scroll");
+    }
 }
 
 #[derive(Default)]
@@ -463,6 +563,7 @@ fn spectrum_config_round_trips_through_persist() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.spectrum_config.show_audio = true;
     state.spectrum_config.floor_db = -48.0;
+    state.spectrum_config.ceiling_db = -12.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
     state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
@@ -476,6 +577,7 @@ fn spectrum_config_round_trips_through_persist() {
     restored.load_persist(&saved);
     assert!(restored.spectrum_config.show_audio);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
+    assert_eq!(restored.spectrum_config.ceiling_db, -12.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
     // A range off the C boundaries survives, which the octave pair could not
     // have expressed at all.
@@ -566,20 +668,32 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
 
-    // Age trim: columns older than HISTORY_SECONDS before the newest go.
+    // Age trim tracks the CURRENT window: with a 30 s span, only ~30 s (plus
+    // the margin) of columns are kept, so a short span doesn't sit on a long
+    // history's worth of memory.
+    let window = 30.0f32;
     let mut spec = AudioSpectrum::default();
     for i in 0..300 {
-        spec.push_history(i as f64, bins);
+        spec.push_history(i as f64, bins, window);
     }
-    let cutoff = 299.0 - AudioSpectrum::HISTORY_SECONDS;
+    let cutoff = 299.0 - (f64::from(window) + AudioSpectrum::HISTORY_MARGIN);
     assert!(spec.history().front().unwrap().time >= cutoff, "old columns dropped");
     assert_eq!(spec.history().back().unwrap().time, 299.0, "newest kept");
+
+    // The retention never exceeds the hard cap, however long the window asks
+    // for — the ceiling on both history and memory.
+    let mut spec = AudioSpectrum::default();
+    for i in 0..800 {
+        spec.push_history(i as f64, bins, 100_000.0);
+    }
+    let cutoff = 799.0 - AudioSpectrum::HISTORY_MAX_SECONDS;
+    assert!(spec.history().front().unwrap().time >= cutoff, "capped at HISTORY_MAX_SECONDS");
 
     // Count cap holds even when every column shares one timestamp (so the
     // age trim never fires) — the backstop against an unbounded ring.
     let mut spec = AudioSpectrum::default();
     for _ in 0..(AudioSpectrum::HISTORY_MAX + 50) {
-        spec.push_history(0.0, bins);
+        spec.push_history(0.0, bins, 100_000.0);
     }
     assert!(spec.history().len() <= AudioSpectrum::HISTORY_MAX, "count capped");
 

@@ -299,8 +299,18 @@ pub struct SpectrumConfig {
     #[serde(default = "default_true")]
     pub show_audio: bool,
     pub window: SpectrumWindow,
-    /// Bottom of the dB height scale; a full-scale sine sits at 0 dB.
+    /// Bottom of the dB height scale: what reads as silence. A full-scale
+    /// sine sits at 0 dB.
     pub floor_db: f32,
+    /// Top of the dB height scale: what reads as full height (and as the
+    /// brightest spectrogram cell). 0 dB — a full-scale sine — is where it
+    /// starts and the loudest it goes; pulling it down lifts quiet material
+    /// into the whole picture instead of the bottom of it.
+    ///
+    /// The pair is one control, like the pitch range: the window on the
+    /// spectrum's dynamics, movable at either end.
+    #[serde(default = "default_ceiling_db")]
+    pub ceiling_db: f32,
     /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
     pub smoothing: f32,
     /// Spectral tilt, in the convention analyzers use: the reference
@@ -309,7 +319,11 @@ pub struct SpectrumConfig {
     /// flat; -4.5 flattens typical musical material. The display lifts
     /// treble by the magnitude, pivoting at 1 kHz — there is no
     /// bass-emphasizing direction, matching convention.
-    #[serde(default)]
+    ///
+    /// `default_tilt`, not `default`, so a blob saved before the field
+    /// existed loads with the slope a fresh install gets rather than the
+    /// raw-power 0 a bare f32 default would hand it.
+    #[serde(default = "default_tilt")]
     pub tilt: f32,
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
@@ -354,7 +368,9 @@ pub struct SpectrumConfig {
     #[serde(default = "default_true")]
     pub show_roll: bool,
     /// Share of the pane's depth given to the roll (the rest is the
-    /// spectrum). 0 hides it; 1 gives the whole pane to the roll.
+    /// spectrum). 0 hides it; 1 gives the whole pane to the roll. Set by
+    /// dragging the divider in the Spectral pane itself
+    /// (`panes::spectral::drag_split`) — there is no bar for it.
     #[serde(default = "default_roll_fraction")]
     pub roll_fraction: f32,
     /// Seconds of history the roll's depth spans.
@@ -366,24 +382,12 @@ pub struct SpectrumConfig {
     /// Corner rounding of an unbent note, as a fraction of half its width.
     #[serde(default = "default_roll_rounding")]
     pub roll_rounding: f32,
-    /// Overall roll opacity.
-    #[serde(default = "default_roll_opacity")]
-    pub roll_opacity: f32,
     /// Stroke width of a note's outline, in pixels (notes are drawn as hollow
     /// outlines so the spectrogram shows through them).
     #[serde(default = "default_roll_outline_width")]
     pub roll_outline_width: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
-    /// Scale a note's opacity by its velocity.
-    #[serde(default = "default_true")]
-    pub roll_velocity_alpha: bool,
-    /// Seconds between the roll's time gridlines; 0 draws none.
-    #[serde(default = "default_roll_grid_seconds")]
-    pub roll_grid_seconds: f32,
-    /// Draw the line where the roll meets the spectrum ("now").
-    #[serde(default = "default_true")]
-    pub roll_now_line: bool,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
@@ -466,6 +470,23 @@ impl SpectrumConfig {
 /// what the octave-pair control guaranteed before it went continuous.
 pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 12.0;
 
+/// The level range's domain, in dB. The top is a full-scale sine, the
+/// loudest thing a bucket can hold; the bottom is well under any noise
+/// floor worth looking at.
+pub(crate) const LEVEL_MIN_DB: f32 = -100.0;
+pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
+
+/// Closest the two ends of the level range may come. A window narrower than
+/// this is all edge and no picture — and, unclamped, a collapsed one divides
+/// by zero in `loudness` and paints the NaN geometry egui panics on.
+pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
+
+/// A full-scale sine reads as full height, which is what the pane did before
+/// the ceiling was adjustable at all.
+fn default_ceiling_db() -> f32 {
+    LEVEL_MAX_DB
+}
+
 fn default_true() -> bool {
     true
 }
@@ -490,10 +511,6 @@ fn default_roll_rounding() -> f32 {
     0.5
 }
 
-fn default_roll_opacity() -> f32 {
-    0.9
-}
-
 fn default_roll_outline_width() -> f32 {
     1.5
 }
@@ -502,13 +519,16 @@ fn default_roll_color() -> RollColor {
     RollColor::Channel
 }
 
-fn default_roll_grid_seconds() -> f32 {
-    1.0
-}
-
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
+
+/// The slope that flattens typical musical material — what the analyzer is
+/// looked at through nearly all the time, so it is where it starts. Raw
+/// power (0) buries everything above a couple of kHz.
+fn default_tilt() -> f32 {
+    -4.5
+}
 
 impl Default for SpectrumConfig {
     fn default() -> Self {
@@ -517,8 +537,9 @@ impl Default for SpectrumConfig {
             show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
+            ceiling_db: default_ceiling_db(),
             smoothing: 0.55,
-            tilt: 0.0,
+            tilt: default_tilt(),
             labels: SpectrumLabels::Notes,
             peak_hold: false,
             keyline: default_keyline(),
@@ -531,12 +552,8 @@ impl Default for SpectrumConfig {
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
             roll_rounding: default_roll_rounding(),
-            roll_opacity: default_roll_opacity(),
             roll_outline_width: default_roll_outline_width(),
             roll_color: default_roll_color(),
-            roll_velocity_alpha: true,
-            roll_grid_seconds: default_roll_grid_seconds(),
-            roll_now_line: true,
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
@@ -727,24 +744,37 @@ impl AudioSpectrum {
                     };
                 }
                 // Keep the RAW spectrum for the spectrogram (the smoothed
-                // `display` would smear one column into the next).
-                self.push_history(now, fresh);
+                // `display` would smear one column into the next). Retention
+                // tracks the current window, so a short span doesn't sit on a
+                // long history's worth of memory.
+                self.push_history(now, fresh, config.roll_seconds);
                 self.last_fft = Some(now);
             }
         }
         Some((&self.display, &self.peaks))
     }
 
-    /// The longest roll window (`roll_seconds` max), plus a margin, is the
-    /// most history the spectrogram can ever show; drop older columns.
-    const HISTORY_SECONDS: f64 = 130.0;
-    /// Backstop on the column count regardless of timing.
+    /// Kept past the roll's current window, so a column is ready the instant
+    /// the window reaches back to it.
+    const HISTORY_MARGIN: f64 = 10.0;
+    /// The most history ever kept, whatever the window: the longest span the
+    /// roll offers (`roll_seconds` max) plus the margin. Nothing older is
+    /// retained even at the maximum span.
+    const HISTORY_MAX_SECONDS: f64 = 610.0;
+    /// Backstop on the column count regardless of timing, and the real memory
+    /// bound — each column is a whole spectrum. At the FFT rate this is ~200 s,
+    /// so at a very long span the heatmap covers the most recent stretch while
+    /// the note roll still spans the whole window.
     const HISTORY_MAX: usize = 4000;
 
-    /// Append one raw spectrum to the ring, trimming the far past.
-    fn push_history(&mut self, now: f64, power: SpectrumBuckets) {
+    /// Append one raw spectrum to the ring, trimming anything older than the
+    /// current window needs (`window_seconds` plus a margin, capped) or past
+    /// the column backstop.
+    fn push_history(&mut self, now: f64, power: SpectrumBuckets, window_seconds: f32) {
         self.history.push_back(SpectrogramColumn { time: now, power: Box::new(power) });
-        let oldest_kept = now - Self::HISTORY_SECONDS;
+        let keep =
+            (f64::from(window_seconds) + Self::HISTORY_MARGIN).min(Self::HISTORY_MAX_SECONDS);
+        let oldest_kept = now - keep;
         while self
             .history
             .front()
@@ -877,11 +907,11 @@ fn default_dock() -> DockState<panes::Tab> {
         NodeIndex::root(),
         0.72,
         vec![
-            // Reading outward from the picture: harmony, then how it's framed,
-            // how a note is drawn, the scene around it, the analyzer, video
-            // export, and the plugin's own render/layout knobs last.
+            // Reading outward from the picture: what the lattice is (its
+            // tuning, and how it's framed), then how a note is drawn, the
+            // scene around it, the analyzer, video export, and the plugin's
+            // own render/layout knobs last.
             panes::Tab::Tuning,
-            panes::Tab::Frame,
             panes::Tab::Nodes,
             panes::Tab::Scene,
             panes::Tab::Analyzer,
@@ -1010,9 +1040,13 @@ impl SharedState {
 }
 
 /// The current [`UiPersist`] layout version. Bumped when the `Tab` set changes
-/// shape (rename/split/add) so `load_persist` can refresh a stale dock instead
-/// of stranding the user with missing tabs.
-const UI_PERSIST_VERSION: u32 = 1;
+/// shape (rename/split/add/merge) so `load_persist` can refresh a stale dock
+/// instead of stranding the user with missing tabs.
+///
+/// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
+/// they now name the same variant — without the refresh the dock would open
+/// with the merged pane in it twice.
+const UI_PERSIST_VERSION: u32 = 2;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.

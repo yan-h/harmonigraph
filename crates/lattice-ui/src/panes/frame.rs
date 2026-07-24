@@ -1,7 +1,13 @@
-//! The Frame pane: how you look at the lattice (projection, camera angle,
+//! The Frame controls: how you look at the lattice (projection, camera angle,
 //! saved angles) and how much of it shows (per-axis extents and window
 //! center). Purely what's framed — the note styling lives in [`super::nodes`]
 //! and [`super::scene`], the render/workspace knobs in [`super::panel`].
+//!
+//! Not a pane of its own. These were a "Frame" tab until it and Tuning — both
+//! short, and both about the lattice itself rather than how it is drawn —
+//! became two sections of one tab; [`super::tuning`] draws this below its own
+//! controls. Kept as a file because the two halves have nothing to say to each
+//! other beyond sharing a tab.
 
 use crate::widgets::{button_row, button_row_wrapped, ValueBar};
 use crate::{CameraPreset, SharedState};
@@ -10,8 +16,8 @@ use lattice_scene::Camera;
 use lattice_scene::Projection;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
-/// extents/center.
-pub(super) fn frame_pane(ui: &mut egui::Ui, state: &mut SharedState) {
+/// extents/center. Drawn into the Tuning tab, under its own section heading.
+pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // Projection: perspective converges with depth; orthographic keeps
     // equal intervals at equal screen offsets everywhere (isometric-style
     // reading — depth shows only through the node size cue and occlusion).

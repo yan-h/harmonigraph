@@ -2,16 +2,17 @@
 //! a body function in the matching submodule; it immediately participates
 //! in docking, and gets the shared state (hover, console, tracker) for free.
 //!
-//! The lattice's settings read outward from the picture: [`frame`] is how
-//! it's framed, [`nodes`] is how a played note is drawn, [`scene`] is
+//! The lattice's settings read outward from the picture: [`tuning`] is how it
+//! is tuned and — via [`frame`], which draws the second half of that same tab
+//! — how it is framed; [`nodes`] is how a played note is drawn, [`scene`] is
 //! everything around the notes, and [`panel`] is the plugin's own render/
-//! layout knobs. Alongside are [`tuning`], the [`spectral`] display and its
-//! analyzer settings, [`render`] (the Video tab), and [`notes`] (Console +
-//! Notes). This file holds the `Tab` enum, the `TabViewer` that dispatches
-//! to them, and the small helpers more than one pane needs.
+//! layout knobs. Alongside are the [`spectral`] display and its analyzer
+//! settings, [`render`] (the Video tab), and [`notes`] (Console + Notes).
+//! This file holds the `Tab` enum, the `TabViewer` that dispatches to them,
+//! and the small helpers more than one pane needs.
 
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::ValueBar;
+use crate::widgets::{RangeBar, ValueBar};
 use crate::SharedState;
 
 pub mod frame;
@@ -33,7 +34,6 @@ pub mod spectral;
 pub mod spectrogram;
 pub mod tuning;
 
-use frame::frame_pane;
 use lattice::lattice_pane;
 use nodes::nodes_pane;
 use notes::{console_pane, notes_pane};
@@ -62,13 +62,16 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 /// aliases that unknown variant would fail the whole `UiPersist` parse and
 /// take the dialed-in camera/view/spectrum/render settings down with it. The
 /// dock arrangement itself is refreshed separately (see `UiPersist` version).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
+    /// The lattice itself: how it is tuned, and how it is framed. The framing
+    /// half was a tab of its own — "Frame", and "View" before that — until the
+    /// two short panes were merged; both spellings alias here so an older
+    /// layout still parses (the dock arrangement itself is refreshed by the
+    /// `UiPersist` version bump that came with the merge).
+    #[serde(alias = "Frame", alias = "View")]
     Tuning,
-    /// Camera framing and the lattice window. Was "View".
-    #[serde(alias = "View")]
-    Frame,
     /// How a sounding note is drawn (was the first half of "Appearance").
     #[serde(alias = "Appearance")]
     Nodes,
@@ -103,11 +106,14 @@ impl egui_dock::TabViewer for Viewer<'_> {
         match tab {
             Tab::Lattice => "Lattice".into(),
             Tab::Tuning => "Tuning".into(),
-            Tab::Frame => "Frame".into(),
             Tab::Nodes => "Nodes".into(),
             Tab::Scene => "Scene".into(),
             Tab::Console => "Console".into(),
-            Tab::Spectral => "Spectral".into(),
+            // Deliberately the same name as the settings tab below: the
+            // display and the settings for it are one feature, and they sit in
+            // different docks, so the pair reads as "the analyzer, and its
+            // knobs" rather than as two things to tell apart.
+            Tab::Spectral => "Analyzer".into(),
             Tab::Analyzer => "Analyzer".into(),
             Tab::Notes => "Notes".into(),
             Tab::Video => "Video".into(),
@@ -115,11 +121,33 @@ impl egui_dock::TabViewer for Viewer<'_> {
         }
     }
 
+    /// Identify a tab by its VARIANT, never by its title.
+    ///
+    /// egui_dock's default is `Id::new(title)`, and this dock deliberately has
+    /// two tabs titled "Analyzer" — the display and the settings for it. That
+    /// made them one id, and the id keys the tab BODY's `Ui`
+    /// (`tab_body_id` mixes in the surface but not the node), so the two
+    /// bodies shared their state: egui_dock wraps every body in a
+    /// `ScrollArea`, and scrolling the settings scrolled the display instead.
+    fn id(&mut self, tab: &mut Tab) -> egui::Id {
+        egui::Id::new(("lattice-pane", *tab))
+    }
+
+    /// The picture panes never scroll. Both fill their body exactly — the
+    /// lattice with a wgpu callback, the analyzer with a painter over the
+    /// whole rect — so there is nothing under the edge to reach, and a scroll
+    /// area around them can only shift a picture that is meant to sit still.
+    /// Settings panes keep theirs: they are lists, and a short dock column
+    /// has to be able to reach the end of one.
+    fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
+        let picture = matches!(tab, Tab::Lattice | Tab::Spectral);
+        [!picture, !picture]
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
-            Tab::Frame => frame_pane(ui, self.state),
             Tab::Nodes => nodes_pane(ui, self.state, self.params),
             Tab::Scene => scene_pane(ui, self.state),
             Tab::Console => console_pane(ui, self.state),
@@ -131,15 +159,20 @@ impl egui_dock::TabViewer for Viewer<'_> {
         }
     }
 
-    /// The Spectral display paints its own well-colored plot surface, so
-    /// the default 8px body margin reads as a pointless border around it:
-    /// drop the margin and let the plot fill the whole tab.
+    /// The two picture panes paint their own surface edge to edge — the
+    /// Spectral display its plot well, the Lattice its 3D view — so the
+    /// default 8px body margin reads as a pointless border around a picture
+    /// rather than as breathing room between controls. Drop it and let them
+    /// fill the whole tab.
+    ///
+    /// Settings panes keep the margin: there the padding is what stops the
+    /// bars and labels from running into the pane edge.
     fn tab_style_override(
         &self,
         tab: &Tab,
         global_style: &egui_dock::TabStyle,
     ) -> Option<egui_dock::TabStyle> {
-        matches!(tab, Tab::Spectral).then(|| {
+        matches!(tab, Tab::Spectral | Tab::Lattice).then(|| {
             let mut style = global_style.clone();
             style.tab_body.inner_margin = egui::Margin::ZERO;
             style
@@ -226,6 +259,43 @@ pub(super) fn param_bar(
     }
     if response.drag_stopped() {
         params.end_set(key);
+    }
+    response
+}
+
+/// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
+/// range whose ends are both automatable params (the Nodes pane's color
+/// range). `display` formats each end's readout.
+///
+/// Both params are bracketed for the whole drag and written every changed
+/// frame, so a drag on either handle records as one gesture on each. A
+/// double-click reset arrives as `changed` with no drag, and goes through the
+/// same `set` without a gesture — matching [`param_bar`]'s one-shot path.
+pub(super) fn param_range_bar(
+    ui: &mut egui::Ui,
+    params: &dyn ParamBackend,
+    low_key: ParamKey,
+    high_key: ParamKey,
+    range: std::ops::RangeInclusive<f32>,
+    min_span: f32,
+    display: fn(f32) -> String,
+) -> egui::Response {
+    let (mut low, mut high) = (params.get(low_key), params.get(high_key));
+    let response = RangeBar::new(&mut low, &mut high, range)
+        .min_span(min_span)
+        .display(display)
+        .show(ui);
+    if response.drag_started() {
+        params.begin_set(low_key);
+        params.begin_set(high_key);
+    }
+    if response.changed() {
+        params.set(low_key, low);
+        params.set(high_key, high);
+    }
+    if response.drag_stopped() {
+        params.end_set(low_key);
+        params.end_set(high_key);
     }
     response
 }

@@ -1,7 +1,14 @@
-//! The Tuning pane: the three prime-interval bars, the meantone lock,
-//! and the tuning-learn controls.
+//! The Tuning pane: the three prime-interval bars, the meantone lock, and the
+//! tuning-learn controls — then, under a second heading, the framing controls
+//! from [`super::frame`].
+//!
+//! Two sections in one tab because they are the two halves of one question:
+//! what the lattice IS. Tuning fixes where its nodes sit in pitch, framing
+//! fixes which of them you are looking at and from where. Everything else in
+//! the settings dock is about how what is there gets drawn.
 
 use super::param_bar;
+use super::section;
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, SharedState};
@@ -29,6 +36,7 @@ pub(super) fn tuning_pane(
     params: &dyn ParamBackend,
     now: f64,
 ) {
+    section(ui, "Tuning");
     // Tuning sliders. In meantone mode the major third is locked to four
     // perfect fifths, so its bar is shown read-only at the derived value.
     for &key in &ParamKey::TUNING {
@@ -89,19 +97,16 @@ pub(super) fn tuning_pane(
         }
     });
 
-    ui.separator();
-    // Cross-pane highlight demo: this pane reacts to the lattice hover,
-    // reporting the hovered node's pitch class under the current tuning.
-    match state.hovered {
-        Some(pos) => {
-            let pc = state.tuning.pitch_class(pos);
-            ui.label(format!(
-                "Hovered: ({}, {}, {}) = {}",
-                pos.threes, pos.fives, pos.sevens, pc
-            ));
-        }
-        None => {
-            ui.weak("Hover a node to inspect it");
-        }
+    // When a lattice node is hovered, report its coordinates and pitch class
+    // under the current tuning. Nothing when nothing is hovered — no standing
+    // placeholder line taking up the pane.
+    if let Some(pos) = state.hovered {
+        ui.separator();
+        let pc = state.tuning.pitch_class(pos);
+        ui.label(format!("Hovered: ({}, {}, {}) = {}", pos.threes, pos.fives, pos.sevens, pc));
     }
+
+    // How the lattice is framed: the other half of "what am I looking at".
+    section(ui, "Frame");
+    super::frame::frame_controls(ui, state);
 }

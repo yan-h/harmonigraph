@@ -5,7 +5,7 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{choice_row, ValueBar};
+use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
 use lattice_scene::{HighlightExtremes, NodeStyle, OuterStyle, ViewConfig};
 
@@ -85,15 +85,19 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     {
         view.outer_style = if show { OuterStyle::Slices } else { OuterStyle::Off };
     }
-    // If the band bars cross, the scene keeps outer ahead of inner
-    // rather than collapsing.
     ui.add_enabled_ui(show, |ui| {
-        ValueBar::new(&mut view.outer_inner, 0.0..=0.9, "Band inner")
+        // Inner and outer radius are one control: the band is the ring between
+        // them. Drag either edge, or drag between to slide the ring at a fixed
+        // width; the min span keeps it from collapsing.
+        ui.label("Band");
+        RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
+            .min_span(0.05)
             .show(ui)
-            .on_hover_text("Octave band's inner radius; 0 reaches the center");
-        ValueBar::new(&mut view.outer_outer, 0.2..=1.0, "Band outer")
-            .show(ui)
-            .on_hover_text("Octave band's outer radius");
+            .on_hover_text(
+                "The octave band's inner and outer radius. Inner 0 reaches the \
+                 node center (pie wedges); drag between the handles to move the \
+                 whole ring in or out.",
+            );
         ValueBar::new(&mut view.outer_solidity, 0.0..=1.0, "Solidity")
             .show(ui)
             .on_hover_text(
@@ -175,13 +179,33 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Color: the pitch->color gradient endpoints (MIDI notes) the pitch-colored
-/// channels map through.
+/// A MIDI note as a key name and octave, for the color-range readout — "C1",
+/// "C8" — so the ends read as pitches rather than bare numbers.
+fn pitch_readout(midi: f32) -> String {
+    let n = midi.round() as i32;
+    let name = super::KEY_NAMES[n.rem_euclid(12) as usize];
+    format!("{name}{}", lattice_core::notes::display_octave_of(n))
+}
+
+/// Color: the pitch->color gradient endpoints the pitch-colored channels map
+/// through — the darkest pitch and the brightest, as one two-handle range.
 fn color_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     section(ui, "Color");
-    for &key in &ParamKey::COLOR {
-        param_bar(ui, params, key);
-    }
+    ui.label("Pitch range");
+    super::param_range_bar(
+        ui,
+        params,
+        ParamKey::DarkestPitch,
+        ParamKey::BrightestPitch,
+        0.0..=120.0,
+        crate::PITCH_RANGE_MIN_SPAN,
+        pitch_readout,
+    )
+    .on_hover_text(
+        "The pitch span the color gradient covers: the low end takes the \
+         darkest color, the high end the brightest. Drag either end, or drag \
+         between them to slide the whole range.",
+    );
 }
 
 /// Fade: how long a released note lingers. One time for the whole node —

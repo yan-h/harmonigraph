@@ -246,7 +246,11 @@ pub struct ViewConfig {
     /// Show the performance overlay (a small corner HUD with frame rate, UI
     /// CPU time, memory and workload counts). Interactive shells only — the
     /// offline renderer never draws it, keeping its frames deterministic.
-    #[serde(default)]
+    ///
+    /// `default_true`, matching the struct default, so a fresh install and a
+    /// pre-`show_perf` blob both open with it on. A project that explicitly
+    /// turned it off carries `false` and still round-trips.
+    #[serde(default = "default_true")]
     pub show_perf: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
@@ -446,7 +450,7 @@ impl Default for ViewConfig {
             outer_style: OuterStyle::Slices,
             show_labels: true,
             show_cents: true,
-            node_style: NodeStyle::Checker,
+            node_style: NodeStyle::Steady,
             core_style: CoreStyle::default(),
             // A small, soft core inside a wide octave band with its silent
             // slots ghosted in: the pitch class reads as a compact center
@@ -492,7 +496,7 @@ impl Default for ViewConfig {
             trail_labels: true,
             meantone: false,
             frameless: false,
-            show_perf: false,
+            show_perf: true,
             render_scale: default_render_scale(),
             // A strong halo: the small soft core and the thin octave
             // marks are quiet shapes, and the bloom is what gives them

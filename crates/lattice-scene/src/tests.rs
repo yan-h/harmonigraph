@@ -1352,22 +1352,20 @@ fn a_memory_span_fades_a_pitch_out_and_then_drops_it() {
 }
 
 #[test]
-fn a_visited_off_sheet_node_becomes_visible() {
-    // An unvisited off-sheet node draws nothing, so revealing its pitch
-    // would be information from nowhere. Having been played there is what
-    // answers that — so the marker, hover and label all become available.
+fn an_off_sheet_node_stays_blank_even_after_it_is_played() {
+    // Trails live on the home sheet only. The history remembers the note
+    // wherever it landed, but an off-sheet node stays blank — a lone mark out
+    // in the sevens dimension reads as noise, not as territory. The home node
+    // of the same pitch class carries the memory instead.
     let view = ViewConfig { extent_sevens: 1, ..trail_view(TrailMark::Ring) };
     let tuning = Tuning::default();
     let frame = FrameParams::default();
     let off_sheet = LatticePos::new(0, 0, 1);
-    let node_at = |scene: &Scene| {
-        *scene.nodes.iter().find(|n| n.lattice_pos == off_sheet).unwrap()
+    let node_at = |scene: &Scene, pos: LatticePos| {
+        *scene.nodes.iter().find(|n| n.lattice_pos == pos).unwrap()
     };
 
     let mut tracker = NoteTracker::new();
-    let quiet = node_at(&scene_of(&tracker, &tuning, &view, &frame, 10.0));
-    assert!(!quiet.on_home && !quiet.is_visible(), "blank until played");
-
     // Bend a note onto the sevens node's pitch class (a harmonic seventh
     // above C under the default 12-TET axes).
     tracker.handle_event(NoteEvent {
@@ -1378,9 +1376,21 @@ fn a_visited_off_sheet_node_becomes_visible() {
     });
     tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 70, kind: NoteEventKind::Off });
     tracker.prune(5.0, 1.0);
-    let visited = node_at(&scene_of(&tracker, &tuning, &view, &frame, 10.0));
-    assert!(visited.trail > 0.0);
-    assert!(visited.is_visible(), "a visited off-sheet node can be read");
+
+    let scene = scene_of(&tracker, &tuning, &view, &frame, 10.0);
+    // The off-sheet node is where the note was, but it draws nothing.
+    let off = node_at(&scene, off_sheet);
+    assert!(!off.on_home && off.trail == 0.0 && !off.is_visible(), "off-sheet stays blank");
+    // The memory is not lost — it shows on the home sheet — and it shows there
+    // ONLY: no off-sheet node is ever trailed.
+    assert!(
+        scene.nodes.iter().any(|n| n.on_home && n.trail > 0.0),
+        "the home sheet carries the memory",
+    );
+    assert!(
+        scene.nodes.iter().all(|n| n.trail == 0.0 || n.on_home),
+        "a trail leaked onto an off-sheet node",
+    );
 }
 
 #[test]
