@@ -279,7 +279,7 @@ pub(super) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f3
 /// Two axes, both running `0..1`:
 ///
 /// - **pitch** runs across the pane's SHORT side; 0 is the low end of the
-///   octave zoom.
+///   pitch range.
 /// - **depth** is the time axis, running along the LONG side; 0 is the
 ///   spectrum's outer edge, `split` the now-line (where the spectrum joins
 ///   the spectrogram), and 1 the far edge (the roll's oldest notes).
@@ -403,7 +403,7 @@ fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
     }
 }
 
-/// Where a pitch sits on the pane's axis: the octave zoom, as a mapping.
+/// Where a pitch sits on the pane's axis: the pitch range, as a mapping.
 #[derive(Clone, Copy)]
 pub(super) struct PitchScale {
     pub min_midi: f32,
@@ -695,7 +695,7 @@ pub(crate) fn spectral_pane(
     if cfg.show_audio && split > 0.0 {
         let frame = state.frame_params;
         if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
-            // Only the buckets inside the octave zoom.
+            // Only the buckets inside the pitch range.
             let visible: Vec<(f32, f32, f32, f32)> = (0..levels.len())
                 .filter_map(|i| {
                     let midi = SPECTRUM_MIN_MIDI + (i as f32 + 0.5) / BINS_PER_SEMITONE as f32;
@@ -954,7 +954,7 @@ mod tests {
     }
 
     /// The whole pane, painted in every orientation with a roll that has
-    /// held notes, bent notes, notes off the octave zoom and notes older
+    /// held notes, bent notes, notes off the pitch range and notes older
     /// than the window. Geometry this fiddly is easy to make degenerate
     /// (zero-area quads, NaN from a zero span), and egui panics on those.
     #[test]
@@ -1058,7 +1058,7 @@ mod tests {
         };
         let off = |time, note| NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off };
         // Long past the window; inside it; bent across it; off the top of
-        // the octave zoom; and one still held at `now`.
+        // the pitch range; and one still held at `now`.
         state.tracker.handle_event(on(0.0, 60));
         state.tracker.handle_event(off(1.0, 60));
         state.tracker.handle_event(on(95.0, 62));

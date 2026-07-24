@@ -27,7 +27,7 @@ use crate::{theme, RollColor, SharedState};
 const MIN_RIBBON_PX: f32 = 1.5;
 
 /// Draw every remembered note that falls inside the pane's time window and
-/// octave zoom. `split` is the depth fraction the roll starts at; `now` is
+/// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
 pub(super) fn draw_roll(
     painter: &egui::Painter,
