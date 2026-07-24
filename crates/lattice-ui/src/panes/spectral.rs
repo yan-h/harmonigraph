@@ -256,12 +256,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ValueBar::new(&mut cfg.spectrogram_opacity, 0.05..=1.0, "Opacity")
         .show(ui)
         .on_hover_text("Overall heatmap opacity, so it can sit under the notes");
-    ValueBar::new(&mut cfg.spectrogram_smoothing, 0.0..=0.9, "Smoothing")
-        .show(ui)
-        .on_hover_text(
-            "Average each column with its neighbors in time: 0 is off, higher \
-             smooths fast beating/chorus/reverb wobble, softening onsets a little",
-        );
     ValueBar::new(&mut cfg.spectrogram_gamma, 0.3..=3.0, "Contrast")
         .decimals(2)
         .show(ui)

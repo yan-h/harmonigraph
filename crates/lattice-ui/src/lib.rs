@@ -415,11 +415,6 @@ pub struct SpectrumConfig {
     /// `show_roll`.)
     #[serde(default = "default_spectrogram_opacity")]
     pub spectrogram_opacity: f32,
-    /// Temporal smoothing of the heatmap, 0 = off. Blends each time column
-    /// with its neighbors (symmetric, so no directional smear) to average out
-    /// fast beating/chorus wobble, at the cost of some time-sharpness.
-    #[serde(default)]
-    pub spectrogram_smoothing: f32,
     /// Give the heatmap its own dB window instead of sharing the curve's.
     ///
     /// Off — the default, and what the heatmap always did — means it reads
@@ -596,7 +591,6 @@ impl Default for SpectrumConfig {
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
-            spectrogram_smoothing: 0.0,
             spectrogram_own_range: false,
             spectrogram_floor_db: default_spectrogram_floor_db(),
             spectrogram_ceiling_db: default_ceiling_db(),
@@ -872,8 +866,14 @@ impl AudioSpectrum {
         self.spectrogram_ring = [None, None];
     }
 
-    /// Seconds between FFTs (20 Hz refresh).
-    const FFT_INTERVAL: f64 = 0.05;
+    /// Seconds between FFTs (50 Hz refresh).
+    ///
+    /// Raised from 50 ms once the heatmap stopped repainting itself for every
+    /// column (see `write_ring`): the cost of a column is now O(pitch pixels)
+    /// rather than O(pitch pixels x slabs), so the rate buys smoothness at the
+    /// newest edge almost for free. What it does still cost is REACH — see
+    /// [`Self::HISTORY_MAX`], which bounds the ring by memory, not by time.
+    const FFT_INTERVAL: f64 = 0.02;
     /// How long after the last samples the curve keeps drawing.
     const HOLD_SECONDS: f64 = 0.5;
     /// Peak-hold half-life in seconds.
@@ -939,10 +939,21 @@ impl AudioSpectrum {
     /// retained even at the maximum span.
     const HISTORY_MAX_SECONDS: f64 = 610.0;
     /// Backstop on the column count regardless of timing, and the real memory
-    /// bound — each column is a whole spectrum. At the FFT rate this is ~200 s,
-    /// so at a very long span the heatmap covers the most recent stretch while
-    /// the note roll still spans the whole window.
-    const HISTORY_MAX: usize = 4000;
+    /// bound — each column is a whole spectrum, so this is what decides how
+    /// much the plugin sits on.
+    ///
+    /// Derived from a memory budget rather than written as a column count, so
+    /// the FFT rate can move without silently changing the footprint. The
+    /// trade it makes explicit: at a fixed budget, a faster rate buys
+    /// smoothness at the newest edge and pays for it in REACH — at 50 Hz this
+    /// is ~87 s of history where 20 Hz gave ~200 s. Only the live preview is
+    /// bounded this way; an offline render precomputes the whole take.
+    ///
+    /// At a very long span the heatmap therefore covers the most recent
+    /// stretch while the note roll still spans the whole window.
+    const HISTORY_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+    const HISTORY_MAX: usize =
+        Self::HISTORY_BUDGET_BYTES / (lattice_core::spectrum::SPECTRUM_BINS * 4);
 
     /// Append one raw spectrum to the ring, trimming anything past the
     /// backstop (`HISTORY_MAX_SECONDS` of age or `HISTORY_MAX` columns).

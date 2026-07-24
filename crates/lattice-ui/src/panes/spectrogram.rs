@@ -27,8 +27,8 @@ const NEAR_ZERO: f32 = 1e-9;
 /// A run of empty slabs this short is sampling jitter rather than a stall in
 /// the analyzer, and holds the previous column instead of reading as silence.
 ///
-/// The analyzer produces a column roughly every 50 ms and the narrowest slab
-/// is 80 ms, so the two are within a factor of two of each other: one long
+/// The analyzer produces a column roughly every 20 ms and the narrowest slab
+/// is 32 ms, so the two are within a factor of two of each other: one long
 /// frame is all it takes to leave a slab with nothing in it. A real stall —
 /// switching the FFT window empties the ring for a window's worth of samples,
 /// 341 ms at 48 kHz on Precise — is many slabs wide and genuinely was silence
@@ -173,11 +173,12 @@ pub(super) fn draw_spectrogram(
     // so it needs a higher cap than the live window.
     let col_cap = if whole.is_some() { 4096.0 } else { 512.0 };
     let target_cols = (depth_span * axes.depth_len()).round().clamp(2.0, col_cap) as usize;
-    // Never subdivide finer than the data arrives (~50 ms FFT period, plus a
+    // Never subdivide finer than the data arrives (~20 ms FFT period, plus a
     // little for frame jitter). A shorter bucket leaves empty buckets between
     // columns, and the texture's linear time axis assumes evenly-spaced slabs —
     // gaps there stretch the edge columns into flat streaks (short spans).
-    const MIN_BUCKET: f64 = 0.08;
+    // Tracks AudioSpectrum::FFT_INTERVAL at the same 1.6x ratio it always had.
+    const MIN_BUCKET: f64 = 0.032;
     let bucket = (window / target_cols as f64).max(MIN_BUCKET);
 
     // ---- Data identity -------------------------------------------------------
@@ -256,7 +257,7 @@ pub(super) fn draw_spectrogram(
             // pixel by a FIXED time grid, MAX within each slab (keeps a short
             // note's peak and pins it against the scroll — see `aggregate_rows`).
             let bin_idx: Vec<(usize, usize)> = bins.iter().map(|b| (b.idx, b.end)).collect();
-            let (centers, mut power) = match whole {
+            let (centers, power) = match whole {
                 // Offline whole-song: fixed column set, already cached after the
                 // first frame — a plain batch aggregate.
                 Some(ws) => aggregate_rows(ws.columns.iter(), &bin_idx, bucket),
@@ -284,13 +285,10 @@ pub(super) fn draw_spectrogram(
                 return;
             }
 
-            // Temporal smoothing runs an EMA forward AND backward across every
-            // column, so one new column changes all of them — and the pass is
-            // O(slabs x rows) in its own right. There is nothing left for a
-            // ring to save, so that case (and the offline whole-song build,
-            // whose column set is fixed and cached after the first frame)
-            // takes the full-width path.
-            let ring_able = whole.is_none() && cfg.spectrogram_smoothing <= 0.0;
+            // The offline whole-song build keeps the full-width path: its
+            // column set is fixed and already cached after the first frame, so
+            // there is nothing for a ring to save.
+            let ring_able = whole.is_none();
             let layout = if ring_able {
                 let style = RingStyle {
                     rows: h,
@@ -327,7 +325,6 @@ pub(super) fn draw_spectrogram(
                 // bookkeeping describing it is now a lie about which slabs its
                 // columns hold.
                 spectrum.spectrogram_ring[surface] = None;
-                smooth_time(&mut power, w, h, cfg.spectrogram_smoothing);
                 // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
                 let pixels = fill_pixels(&cfg, w, &bins, &power);
                 let image = egui::ColorImage::new([w, h], pixels);
@@ -643,29 +640,6 @@ impl SpectrogramAgg {
     }
 }
 
-/// Smooth `power` (flat `rows * nb`, row-major over time slabs) along time,
-/// in place. `smoothing` in `0..1` sets the strength: 0 leaves it untouched,
-/// toward 1 blends ever more of each column into its neighbors. Runs an EMA
-/// forward then backward, so the smoothing is symmetric (zero-phase) and a
-/// peak doesn't drift in either time direction.
-fn smooth_time(power: &mut [f32], rows: usize, nb: usize, smoothing: f32) {
-    let a = 1.0 - smoothing.clamp(0.0, 0.95);
-    if a >= 1.0 || rows < 2 {
-        return;
-    }
-    for row in 1..rows {
-        let (i, prev) = (row * nb, (row - 1) * nb);
-        for k in 0..nb {
-            power[i + k] += (1.0 - a) * (power[prev + k] - power[i + k]);
-        }
-    }
-    for row in (0..rows - 1).rev() {
-        let (i, next) = (row * nb, (row + 1) * nb);
-        for k in 0..nb {
-            power[i + k] += (1.0 - a) * (power[next + k] - power[i + k]);
-        }
-    }
-}
 
 /// Texture `u` for an absolute time.
 ///
@@ -992,29 +966,6 @@ mod tests {
         assert!(lum(loud) > lum(quiet));
     }
 
-    #[test]
-    fn smoothing_off_is_a_no_op_and_on_spreads_a_spike_without_drift() {
-        // One bin (nb=1), a spike well inside a long run of slabs so the
-        // forward+backward passes reach a symmetric interior (edge rows aside).
-        let n = 15;
-        let center = 7;
-        let mut base = vec![0.0f32; n];
-        base[center] = 1.0;
-
-        // Off: untouched.
-        let mut p = base.clone();
-        smooth_time(&mut p, n, 1, 0.0);
-        assert_eq!(p, base);
-
-        // On: the spike spreads into both neighbors, the peak drops, and the
-        // two sides match — the forward+backward passes leave no time drift.
-        let mut p = base.clone();
-        smooth_time(&mut p, n, 1, 0.7);
-        assert!(p[center] < 1.0, "peak drops as it spreads");
-        assert!(p[center - 1] > 0.0 && p[center + 1] > 0.0, "reaches both neighbors");
-        assert!((p[center - 1] - p[center + 1]).abs() < 1e-3, "no time-direction drift");
-        assert!(p[center - 1] > p[center - 2], "monotonic falloff away from the peak");
-    }
 
     #[test]
     fn ramp_hits_its_endpoints_and_midpoint() {
@@ -1095,7 +1046,7 @@ mod tests {
         // And the color inputs: a palette/floor/smoothing change (cfg) or a
         // gradient-range change (frame) would recolor every pixel.
         let mut cfg2 = cfg;
-        cfg2.spectrogram_smoothing += 0.1;
+        cfg2.spectrogram_gamma += 0.1;
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg2, frame));
         let mut frame2 = frame;
         frame2.brightest_pitch += 1.0;
