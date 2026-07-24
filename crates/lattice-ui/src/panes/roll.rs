@@ -26,14 +26,17 @@ use crate::{theme, RollColor, SharedState};
 /// width, where a filled polygon disappears).
 const MIN_RIBBON_PX: f32 = 1.5;
 
-/// How thick the solid black outline is, hugging the note's own outline, at
-/// full size. This is the structural rim — the crisp dark line that separates
-/// the note's color from whatever the spectrogram is doing behind it.
+/// How thick the solid black outline is, hugging the note's own outline. This
+/// is the structural rim — the crisp dark line that separates the note's color
+/// from whatever the spectrogram is doing behind it. A fixed pixel width,
+/// independent of the note's own thickness: an outline is an outline whether
+/// the ribbon it wraps is fat or a hairline.
 pub(super) const BORDER_PX: f32 = 1.0;
 
-/// How thick the white glow line outside the black outline is, at full size.
-/// Thinner than the border on purpose: it is a bright highlight riding the
-/// note's outer edge, not a second outline of its own.
+/// How thick the white glow line outside the black outline is. Thinner than
+/// the border on purpose: it is a bright highlight riding the note's outer
+/// edge, not a second outline of its own. Also a fixed width — see
+/// [`BORDER_PX`].
 pub(super) const KEYLINE_PX: f32 = 0.6;
 
 /// The roll's glow reads this much brighter than the raw Edge fraction, so a
@@ -42,20 +45,6 @@ pub(super) const KEYLINE_PX: f32 = 0.6;
 /// is left at the fraction, since it is one line on a filled slab and does not
 /// have a dark backing to be seen against.
 const GLOW_INTENSITY: f32 = 2.0;
-
-/// Ribbon thickness at which the rim reaches its full width; thinner notes
-/// get a proportionally thinner one, down to [`RIM_MIN_SCALE`].
-///
-/// A rim is an edge on something, and an edge has to be smaller than the thing
-/// it edges. The pane is used at pitch ranges where a note is three to seven
-/// pixels thick, and a fixed black outline plus a glow would put more rim than
-/// note around it: the note would read as a black-and-white stripe with a hint
-/// of color in it, which is no better than the flooding it replaced.
-const RIM_FULL_PX: f32 = 10.0;
-
-/// The rim never scales away entirely — a quarter-pixel line still tints, and
-/// the whole point of the rim is the notes that are too thin to see.
-const RIM_MIN_SCALE: f32 = 0.25;
 
 /// How strong the Edge rim is here: the Edge setting scaled by the note's own
 /// opacity, or `None` when there is too little of it to draw. The gate for the
@@ -128,10 +117,6 @@ pub(super) fn draw_roll(
     let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
     let ribbon_px = 2.0 * half * axes.pitch_len();
     let opacity = cfg.roll_opacity.clamp(0.0, 1.0);
-    // See RIM_FULL_PX: the rim shrinks with the ribbon so it stays an edge on
-    // the note rather than becoming most of it.
-    let rim_scale = (ribbon_px / RIM_FULL_PX).clamp(RIM_MIN_SCALE, 1.0);
-    let (keyline_px, border_px) = (KEYLINE_PX * rim_scale, BORDER_PX * rim_scale);
 
     // Draw in a stable order (the live notes come out of a HashMap, whose
     // iteration order varies per run): with translucent glows the paint order
@@ -204,7 +189,7 @@ pub(super) fn draw_roll(
             let mut bands: Vec<(f32, f32, Color32)> = Vec::with_capacity(4);
             let rim = glow(cfg, alpha).zip(border(cfg, alpha));
             // Where the rim ends, so the bloom can start outside it.
-            let rim_px = if rim.is_some() { border_px + keyline_px } else { 0.0 };
+            let rim_px = if rim.is_some() { BORDER_PX + KEYLINE_PX } else { 0.0 };
             // Bloom: a soft halo around the note, driven by the SAME setting as
             // the lattice's bloom so the two panes share the look. egui has no
             // post-process pass like the lattice's wgpu bloom, so approximate
@@ -222,8 +207,8 @@ pub(super) fn draw_roll(
                 // hugging it, then the bright white glow riding the black's
                 // outer edge, then whatever the spectrogram is doing. The black
                 // gives the note a crisp separation; the glow is the highlight.
-                bands.push((border_px, keyline_px, light));
-                bands.push((0.0, border_px, dark));
+                bands.push((BORDER_PX, KEYLINE_PX, light));
+                bands.push((0.0, BORDER_PX, dark));
             }
             // The crisp outline is the note's TRUE color, so it matches the
             // same note on the lattice. It goes on top of everything.
@@ -541,6 +526,31 @@ mod tests {
                 "the rim floods the thin note's interior instead of edging it",
             );
         }
+    }
+
+    /// The rim is a fixed pixel thickness whatever the note's own width — an
+    /// outline should not thin out just because the ribbon it wraps did. The
+    /// black outline and the white glow each draw the same width on a thin note
+    /// as on a thick one.
+    #[test]
+    fn the_rim_is_the_same_thickness_at_any_note_width() {
+        // Same Edge, very different ribbon thickness (wide vs narrow pitch span).
+        let thick = ribbon_with_range(0.5, 12.0);
+        let thin = ribbon_with_range(0.5, 120.0);
+        let (Some(gw_t), Some(bk_t)) = rim_of(&thick) else { panic!("no rim on the thick note") };
+        let (Some(gw_n), Some(bk_n)) = rim_of(&thin) else { panic!("no rim on the thin note") };
+        assert!(
+            (gw_t.width - gw_n.width).abs() < 0.001,
+            "the glow thinned with the note: {} vs {}",
+            gw_t.width,
+            gw_n.width,
+        );
+        assert!(
+            (bk_t.width - bk_n.width).abs() < 0.001,
+            "the black outline thinned with the note: {} vs {}",
+            bk_t.width,
+            bk_n.width,
+        );
     }
 
     /// The black outline is solid (opaque at the note's opacity) and the white
