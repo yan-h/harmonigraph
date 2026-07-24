@@ -1412,3 +1412,143 @@ fn clearing_the_history_wipes_every_mark() {
         .iter()
         .all(|n| n.trail == 0.0));
 }
+
+/// A tracker with one note held from time 0.
+fn held(note: u8) -> NoteTracker {
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    tracker
+}
+
+fn node_at(scene: &Scene, pos: LatticePos) -> &NodeInstance {
+    scene.nodes.iter().find(|n| n.lattice_pos == pos).unwrap()
+}
+
+#[test]
+fn off_sheet_nodes_shrink_away_from_the_home_sheet_both_ways() {
+    // Size says DISTANCE from the home sheet, not depth toward the eye: a
+    // sheet in front shrinks exactly as much as one behind. The home sheet
+    // is the ground the music is read against and stays full size.
+    let view = ViewConfig {
+        extent_sevens: 2,
+        sevens_size: 0.5,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    assert_eq!(node_at(&scene, LatticePos::new(0, 0, 0)).scale, 1.0);
+    for sevens in [-1, 1] {
+        assert_eq!(node_at(&scene, LatticePos::new(0, 0, sevens)).scale, 0.5);
+    }
+    for sevens in [-2, 2] {
+        assert_eq!(node_at(&scene, LatticePos::new(0, 0, sevens)).scale, 0.25);
+    }
+}
+
+#[test]
+fn sevens_size_never_enlarges_and_never_vanishes() {
+    // The axis only ever makes off-sheet nodes SMALLER (a value above 1
+    // would put the sevens layer in front of the picture it annotates), and
+    // never small enough to disappear at the far extents.
+    let scene_with = |size: f32| {
+        let view = ViewConfig { extent_sevens: 4, sevens_size: size, ..ViewConfig::default() };
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &FrameParams::default(), 0.0)
+    };
+    let huge = scene_with(4.0);
+    assert_eq!(node_at(&huge, LatticePos::new(0, 0, 4)).scale, 1.0, "clamped to no growth");
+    let tiny = scene_with(0.0);
+    assert!(
+        node_at(&tiny, LatticePos::new(0, 0, 4)).scale > 0.0001,
+        "the farthest sheet still draws something"
+    );
+}
+
+#[test]
+fn the_gutter_belongs_to_sounding_off_sheet_nodes_only() {
+    // The knockout exists to keep a SOUNDING off-sheet note legible over
+    // what it crosses. A silent node punching a full-size hole in the home
+    // sheet would be a hole with no note in it — and, since every position
+    // matching the pitch class lights, a lattice full of them.
+    let view = ViewConfig {
+        extent_sevens: 1,
+        sevens_gutter: 0.2,
+        ..ViewConfig::default()
+    };
+    let tuning = Tuning::default();
+    let scene = scene_of(&held(60), &tuning, &view, &FrameParams::default(), 0.0);
+    // C sounds, so every node whose pitch class is C is lit — on the home
+    // sheet and off it. Only the off-sheet ones clear a gutter.
+    let lit_off_sheet = scene
+        .nodes
+        .iter()
+        .find(|n| n.activation > 0.0 && n.lattice_pos.sevens != 0)
+        .expect("a lit off-sheet node");
+    assert_eq!(lit_off_sheet.gutter, 0.2);
+    for node in &scene.nodes {
+        if node.lattice_pos.sevens == 0 {
+            assert_eq!(node.gutter, 0.0, "the home sheet never knocks out");
+        }
+        if node.activation == 0.0 {
+            assert_eq!(node.gutter, 0.0, "a silent node punches nothing");
+        }
+    }
+}
+
+#[test]
+fn the_comma_measures_the_node_against_its_own_namesake() {
+    // `note_name` walks the fifths with `threes + fives*4 - sevens*2` and
+    // adds no septimal mark, so a sevens step spells exactly like two
+    // fifths down. The comma is the distance to THAT node — the septimal
+    // comma, 64/63, ~27 cents at just intonation.
+    let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
+    let tuning = Tuning::just();
+    let scene =
+        scene_of(&NoteTracker::new(), &tuning, &view, &FrameParams::default(), 0.0);
+
+    let seventh = LatticePos::new(0, 0, 1);
+    let namesake = LatticePos::new(-2, 0, 0);
+    // The premise: the two really do carry the same name.
+    assert_eq!(seventh.note_name().to_string(), namesake.note_name().to_string());
+    let comma = node_at(&scene, seventh).comma;
+    assert!(
+        (comma - -27.26).abs() < 0.05,
+        "7/4 sits a septimal comma below 16/9, got {comma}"
+    );
+    // The other direction is the same distance the other way, and the home
+    // sheet has no namesake to measure against.
+    let below = node_at(&scene, LatticePos::new(0, 0, -1)).comma;
+    assert!((below - 27.26).abs() < 0.05, "got {below}");
+    assert_eq!(node_at(&scene, LatticePos::ORIGIN).comma, 0.0);
+}
+
+#[test]
+fn the_comma_takes_the_short_way_round_the_octave() {
+    // Pitch classes wrap, so a raw subtraction can come out an octave off
+    // and report a 1173-cent "comma". Two sevens steps land far enough
+    // round the circle to catch it.
+    let view = ViewConfig { extent_sevens: 3, ..ViewConfig::default() };
+    let scene = scene_of(
+        &NoteTracker::new(),
+        &Tuning::just(),
+        &view,
+        &FrameParams::default(),
+        0.0,
+    );
+    for sevens in [-3, -2, -1, 1, 2, 3] {
+        let comma = node_at(&scene, LatticePos::new(0, 0, sevens)).comma;
+        assert!(
+            comma.abs() <= 600.0,
+            "sevens {sevens}: comma {comma} is the long way round"
+        );
+    }
+}

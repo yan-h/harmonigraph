@@ -201,6 +201,10 @@ struct GpuInstance {
     /// `NodeInstance::trail`). Reaches only the shader's idle-marker
     /// branch — a memory must never read as a sounding note.
     visited: f32,
+    /// The sevens layer, packed: x = billboard size factor (1 on the home
+    /// sheet), y = knockout gutter width in uv units (0 on the home sheet).
+    /// See `NodeInstance::scale` / `::gutter`.
+    sevens: [f32; 2],
 }
 
 impl GpuInstance {
@@ -210,7 +214,7 @@ impl GpuInstance {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
             5 => Float32, 6 => Float32, 7 => Uint32x2,
-            8 => Float32x4, 9 => Float32x4, 10 => Float32
+            8 => Float32x4, 9 => Float32x4, 10 => Float32, 11 => Float32x2
         ],
     };
 }
@@ -303,18 +307,33 @@ impl LatticeCallback {
         // does have a depth attachment, but its test is `Always` (see
         // create_scene_pipeline), so alpha blending still relies on draw
         // order — exactly as it did before the offscreen pass existed.
+        //
+        // Under CABINET the home sheet is additionally forced to the bottom,
+        // so every off-sheet node composites over it. Cabinet is a
+        // diagrammatic projection: it faces the fifths/thirds sheet head-on
+        // and shears the sevens axis into a fixed screen arrow, so what
+        // "depth" means there is notation, not distance — a sevens sheet is
+        // an annotation on the home sheet and must not be hidden by it. The
+        // knockout gutter depends on this too: a node can only clear its own
+        // footprint out of what was drawn before it. Perspective and
+        // orthographic are real views of a real arrangement in space, so
+        // they keep occluding physically.
         let eye = camera.eye();
         let forward = (camera.target - eye).normalize_or_zero();
-        let mut order: Vec<(f32, &lattice_scene::NodeInstance)> = scene
+        let layered = camera.projection == lattice_scene::Projection::Cabinet;
+        let mut order: Vec<(u32, f32, &lattice_scene::NodeInstance)> = scene
             .nodes
             .iter()
-            .map(|n| ((n.world_pos - eye).dot(forward), n))
+            .map(|n| {
+                let sheet = if layered { !n.on_home as u32 } else { 0 };
+                (sheet, (n.world_pos - eye).dot(forward), n)
+            })
             .collect();
-        order.sort_by(|a, b| b.0.total_cmp(&a.0));
+        order.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
 
         let instances = order
             .into_iter()
-            .map(|(_, n)| GpuInstance {
+            .map(|(_, _, n)| GpuInstance {
                 world_pos: n.world_pos.to_array(),
                 color: n.color.to_array(),
                 params: [
@@ -331,6 +350,7 @@ impl LatticeCallback {
                 melody_color: n.melody_color.to_array(),
                 bass_color: n.bass_color.to_array(),
                 visited: n.trail,
+                sevens: [n.scale, n.gutter],
             })
             .collect();
 

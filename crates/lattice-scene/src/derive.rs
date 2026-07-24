@@ -112,6 +112,15 @@ pub fn derive_scene(
     let center = view.center();
     let node_idle = idle_color(view);
     let live_extremes = held_extremes(tracker, view.highlight_extremes);
+    // Sanitized once, outside the node loop. Capped at 1: this axis makes
+    // off-sheet nodes SMALLER, never larger, so the home sheet stays the
+    // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
+    // keeps a sheet from collapsing to an invisible speck at extent 4.
+    let sevens_size = view.sevens_size.clamp(0.15, 1.0);
+    // Bounded well inside the billboard: the quad reaches QUAD_MARGIN (1.6)
+    // in uv, and the gutter has to finish inside it or it would be clipped
+    // square instead of ending as a circle.
+    let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
 
     // Each voice's color, computed once here rather than re-running the
     // LCH->sRGB conversion on every node the voice matches. It depends only on
@@ -200,6 +209,33 @@ pub fn derive_scene(
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
         let world_pos = lattice_to_world(centered, view.spacing);
+
+        // The sevens layer: how far off the home sheet this node sits
+        // decides how small it draws, whether it clears a gutter, and
+        // whether it carries a comma. Distance, not signed depth — the home
+        // sheet is the ground, and a sheet in front of it is no more the
+        // subject than one behind (see `ViewConfig::sevens_size`).
+        let sheets = centered.sevens.unsigned_abs();
+        let (scale, gutter, comma) = if sheets == 0 {
+            (1.0, 0.0, 0.0)
+        } else {
+            let scale = sevens_size.powi(sheets as i32);
+            // The node this one shares a spelling with, on the home sheet:
+            // the letter walk uses `threes - 2*sevens`, so undoing the
+            // sevens term two fifths at a time lands on the same name.
+            let namesake =
+                LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
+            // The gutter rides the SOUNDING envelope, not merely being off
+            // the home sheet. It exists to keep a sounding off-sheet note
+            // legible over what it crosses; a node that draws nothing —
+            // silent, or carrying only a faint trail mark — punching a
+            // full-size hole in the home sheet is a hole with no note in
+            // it, and a lattice full of them at that. Fading it out with
+            // the note also means the hole closes as the note releases
+            // rather than snapping shut.
+            let gutter = sevens_gutter * activation;
+            (scale, gutter, wrapped_cents(node_pc, tuning.pitch_class(namesake)))
+        };
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
@@ -210,6 +246,9 @@ pub fn derive_scene(
             outlined,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
+            scale,
+            gutter,
+            comma,
             cents: node_pc.to_cents(),
             melody_slots: melody.slots,
             bass_slots: bass.slots,
@@ -273,6 +312,20 @@ pub fn derive_scene(
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,
         bloom_strength: view.bloom_strength,
+    }
+}
+
+/// Signed cents from `to` to `from`, folded into ±600 — the short way round
+/// the octave. Pitch classes wrap, so the raw difference between a node and
+/// its namesake can come out an octave off and read as a 1173-cent "comma".
+fn wrapped_cents(from: lattice_core::PitchClass, to: lattice_core::PitchClass) -> f32 {
+    let d = from.to_cents() - to.to_cents();
+    if d > 600.0 {
+        d - 1200.0
+    } else if d < -600.0 {
+        d + 1200.0
+    } else {
+        d
     }
 }
 
@@ -371,10 +424,14 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
             if idle <= 0.0 && lit <= 0.0 {
                 continue;
             }
+            // Inset each end by ITS OWN node's size: a sevens chain runs
+            // between sheets that draw at different sizes, and one inset for
+            // both ends would leave the small end ringed by a gap far wider
+            // than the node it clears.
             let dir = (neighbor.world_pos - node.world_pos).normalize_or_zero();
             grid.push(EdgeInstance {
-                a: node.world_pos + dir * inset,
-                b: neighbor.world_pos - dir * inset,
+                a: node.world_pos + dir * inset * node.scale,
+                b: neighbor.world_pos - dir * inset * neighbor.scale,
                 color: base.lerp(lit_color, lit),
                 strength: idle + (GRID_LIT_OPACITY - idle) * lit,
                 dashed,

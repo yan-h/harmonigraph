@@ -112,6 +112,10 @@ struct Instance {
     // How strongly the music is remembered at this node, 0..1 (see
     // NodeInstance::trail). Feeds the idle marker and nothing else.
     @location(10) visited: f32,
+    // The sevens layer: x = billboard size factor (1 on the home sheet,
+    // smaller with every step off it), y = knockout gutter width in uv
+    // units (0 on the home sheet). See ViewConfig::sevens_size / _gutter.
+    @location(11) sevens: vec2<f32>,
 };
 
 struct VsOut {
@@ -127,6 +131,7 @@ struct VsOut {
     @location(8) @interpolate(flat) melody_color: vec4<f32>,
     @location(9) @interpolate(flat) bass_color: vec4<f32>,
     @location(10) @interpolate(flat) visited: f32,
+    @location(11) @interpolate(flat) gutter: f32,
 };
 
 @vertex
@@ -139,13 +144,17 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     );
     let corner = corners[vertex_index];
 
-    // Every node is the same world-space size: notes, hover, and distance
-    // from the camera all leave it alone, so a note changes only brightness
-    // and glow, and depth reads from the projection alone. (The quad is
-    // twice the disc radius to leave room for the glow, plus QUAD_MARGIN
-    // for the outer glyphs' soft edge; uv is scaled to match so content is
-    // unchanged — see QUAD_MARGIN.)
-    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN;
+    // Notes, hover, and distance from the camera all leave a node's size
+    // alone, so a note changes only brightness and glow. The ONE thing that
+    // sizes it is which sevens sheet it sits on (inst.sevens.x, 1 on the
+    // home sheet): the home sheet is the ground the music is read against,
+    // so sheets off it draw smaller — in both directions, since that is
+    // distance from the ground and not depth toward the eye. The uv is
+    // deliberately NOT scaled with it, so every layer inside the node keeps
+    // its proportions and only the node's size on screen changes. (The quad
+    // is twice the disc radius to leave room for the glow, plus QUAD_MARGIN
+    // for the outer glyphs' soft edge — see QUAD_MARGIN.)
+    let radius = u.misc.y * 0.90 * 2.0 * QUAD_MARGIN * inst.sevens.x;
 
     let world = inst.world_pos
         + (u.cam_right.xyz * corner.x + u.cam_up.xyz * corner.y) * radius;
@@ -163,6 +172,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
     out.visited = inst.visited;
+    out.gutter = inst.sevens.y;
     return out;
 }
 
@@ -968,11 +978,37 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // Active over idle, premultiplied: a sounding note draws over its own
     // marker; the marker is unchanged whether or not a note plays.
-    let final_alpha = active_alpha + idle.a * (1.0 - active_alpha);
+    let over_idle = active_alpha + idle.a * (1.0 - active_alpha);
+    let final_rgb = active_rgb + idle.rgb * (1.0 - active_alpha);
+
+    // The knockout gutter (off-sheet nodes only; in.gutter is 0 on the home
+    // sheet). This is what lets the sevens layer overlap the home sheet
+    // instead of needing clearance of its own: the node clears its own
+    // footprint, plus the gutter, out of whatever was drawn before it, and
+    // sits in the hole.
+    //
+    // It is pure ALPHA with no color of its own, which knocks out to BLACK:
+    // the pass blends premultiplied, so raising alpha while adding no rgb
+    // leaves `dst * (1 - a)` plus nothing — an opaque black disc where the
+    // gutter is solid. That is the right hole on this skin, whose ground is
+    // near-black by design, and the reason the shader needs no uniform
+    // telling it what it is erasing onto. Compositing the gutter UNDER the
+    // node's own paint is what `over_idle + g * (1 - over_idle)` says: the
+    // node keeps its color, and only the empty part of its quad goes dark.
+    var gutter_cov = 0.0;
+    if in.gutter > 0.0 {
+        // Out to the node's own outermost feature — the melody ring when
+        // the rings are on, the band's outer edge otherwise — and then the
+        // gutter beyond that. Capped inside the quad so it ends as a circle
+        // rather than being clipped square at the billboard's corners.
+        let rings = select(0.0, u.misc5.z + u.misc5.w, u.misc5.w > 0.0);
+        let rim = min(u.misc3.z + rings + in.gutter, QUAD_MARGIN - 0.05);
+        gutter_cov = 1.0 - smoothstep(rim - max(aa, 0.02) * 2.0, rim, d);
+    }
+    let final_alpha = over_idle + gutter_cov * (1.0 - over_idle);
     if final_alpha < 0.01 {
         discard;
     }
-    let final_rgb = active_rgb + idle.rgb * (1.0 - active_alpha);
     return vec4<f32>(final_rgb, final_alpha);
 }
 

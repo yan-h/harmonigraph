@@ -102,6 +102,12 @@ fn parity_scene() -> Scene {
             outlined: i == 4,
             hovered: i == 1,
             on_home: i % 2 == 0,
+            // The off-sheet half draws small and knocks out, so the
+            // every-draw-path scene exercises both sevens-layer branches
+            // (the scaled billboard and the gutter's extra alpha) as well.
+            scale: if i % 2 == 0 { 1.0 } else { 0.55 },
+            gutter: if i % 2 == 0 { 0.0 } else { 0.12 },
+            comma: if i % 2 == 0 { 0.0 } else { -27.26 },
             cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass,
             // and one claiming both slots at once (the split mark).
@@ -380,6 +386,9 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         outlined: false,
         hovered: false,
         on_home: true,
+        scale: 1.0,
+        gutter: 0.0,
+        comma: 0.0,
         cents: 0.0,
         melody_slots,
         bass_slots,
