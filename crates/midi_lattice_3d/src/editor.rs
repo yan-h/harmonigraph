@@ -413,6 +413,7 @@ fn frame(
     shared.ui.tess_ms = queue.tess_ms();
     shared.ui.egui_gpu_ms = queue.egui_gpu_ms();
     shared.ui.acquire_ms = queue.acquire_ms();
+    shared.ui.tick_ms = queue.tick_ms();
     shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
     lattice_ui::root_ui(ui, &mut shared.ui, &backend, now);
 

@@ -1114,6 +1114,13 @@ pub struct SharedState {
     /// vsync wait. Large here with every cost small means the frame is early,
     /// not slow.
     pub acquire_ms: f32,
+    /// Milliseconds the previous frame callback took end to end, or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// The other readings are stages of it. This is the total, and against the
+    /// interval between frames it answers what no stage can: whether a long
+    /// frame was SLOW, or just late being asked for.
+    pub tick_ms: f32,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -1221,6 +1228,7 @@ impl SharedState {
             egui_gpu_ms: 0.0,
             shell_ms: 0.0,
             acquire_ms: 0.0,
+            tick_ms: 0.0,
             fps_cap: None,
             perf: PerfStats::default(),
         }
@@ -1434,6 +1442,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
                 state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
             ),
             acquire_ms: state.acquire_ms,
+            tick_ms: state.tick_ms,
         },
         now,
         perf::Workload {

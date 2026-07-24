@@ -94,6 +94,7 @@ pub struct Queue<'a> {
     tess_ms: f32,
     egui_gpu_ms: f32,
     acquire_ms: f32,
+    tick_ms: f32,
 }
 
 impl<'a> Queue<'a> {
@@ -107,6 +108,7 @@ impl<'a> Queue<'a> {
         tess_ms: f32,
         egui_gpu_ms: f32,
         acquire_ms: f32,
+        tick_ms: f32,
     ) -> Self {
         Self {
             bg_color,
@@ -120,7 +122,18 @@ impl<'a> Queue<'a> {
             tess_ms,
             egui_gpu_ms,
             acquire_ms,
+            tick_ms,
         }
+    }
+
+    /// Milliseconds the previous frame callback took, end to end.
+    ///
+    /// Every other reading is a STAGE; this is the whole thing, and it is what
+    /// the frame timer has to fit inside its period. Compared against the
+    /// interval between frames it answers the only question the stages cannot:
+    /// whether a long frame was slow, or simply late being asked for.
+    pub fn tick_ms(&self) -> f32 {
+        self.tick_ms
     }
 
     /// Milliseconds the previous frame blocked waiting for the surface.
@@ -244,6 +257,8 @@ where
     egui_gpu_ms: f32,
     /// Likewise for the surface wait.
     acquire_ms: f32,
+    /// The whole previous callback, end to end.
+    tick_ms: f32,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -322,6 +337,7 @@ where
             0.0,
             0.0,
             0.0,
+            0.0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -374,6 +390,7 @@ where
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
             acquire_ms: 0.0,
+            tick_ms: 0.0,
         }
     }
 
@@ -461,6 +478,11 @@ where
     U: 'static + Send,
 {
     fn on_frame(&mut self, window: &mut Window) {
+        // The whole callback, end to end. Every other reading measures a STAGE
+        // of it; this measures the thing the frame timer actually has to fit
+        // inside its period, so `tick` against the interval between ticks
+        // separates "the work is slow" from "we are not being called".
+        let tick_start = Instant::now();
         let Some(state) = &mut self.user_state else {
             return;
         };
@@ -484,6 +506,7 @@ where
             self.tess_ms,
             self.egui_gpu_ms,
             self.acquire_ms,
+            self.tick_ms,
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
@@ -631,6 +654,7 @@ where
                 window.focus();
             }
         }
+        self.tick_ms = tick_start.elapsed().as_secs_f32() * 1000.0;
     }
 
     #[allow(unused_variables)]

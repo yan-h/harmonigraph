@@ -66,6 +66,10 @@ pub struct FrameCosts {
     pub lattice_gpu_ms: f32,
     /// Blocked acquiring the surface — the vsync wait, which is not work.
     pub acquire_ms: f32,
+    /// The whole frame callback, end to end. The other fields are stages of
+    /// it, and they do not have to add up to it: whatever is missing is work
+    /// nothing measures yet.
+    pub tick_ms: f32,
 }
 
 /// One interactive frame's workload: what the overlay reports as the load
@@ -115,6 +119,7 @@ pub struct PerfStats {
     /// Smoothed shell work before the UI, and the surface wait after it.
     shell_ms: f32,
     acquire_ms: f32,
+    tick_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it). Smoothed for the same reason the
     /// frame numbers are: this is read as a number, not watched as a trace,
@@ -134,6 +139,7 @@ pub struct PerfStats {
     shown_egui_gpu_ms: f32,
     shown_shell_ms: f32,
     shown_acquire_ms: f32,
+    shown_tick_ms: f32,
     /// Shell-clock time of that latch.
     last_readout: f64,
     /// GPU milliseconds for the lattice passes, smoothed and held like the
@@ -158,6 +164,7 @@ impl Default for PerfStats {
             egui_gpu_ms: 0.0,
             shell_ms: 0.0,
             acquire_ms: 0.0,
+            tick_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -167,6 +174,7 @@ impl Default for PerfStats {
             shown_egui_gpu_ms: 0.0,
             shown_shell_ms: 0.0,
             shown_acquire_ms: 0.0,
+            shown_tick_ms: 0.0,
             gpu_ms: 0.0,
             shown_gpu_ms: 0.0,
             gpu_supported: true,
@@ -198,6 +206,7 @@ impl PerfStats {
             egui_gpu_ms,
             lattice_gpu_ms: gpu_ms,
             acquire_ms,
+            tick_ms,
         } = costs;
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
@@ -214,6 +223,7 @@ impl PerfStats {
         self.egui_gpu_ms += (egui_gpu_ms - self.egui_gpu_ms) * alpha;
         self.shell_ms += (shell_ms - self.shell_ms) * alpha;
         self.acquire_ms += (acquire_ms - self.acquire_ms) * alpha;
+        self.tick_ms += (tick_ms - self.tick_ms) * alpha;
         // Three states, not two: a real reading, "the device can't", and
         // "none has landed yet". Collapsing the last two into one "n/a" made
         // a wiring bug and an unsupported GPU look identical, which is
@@ -244,6 +254,7 @@ impl PerfStats {
             self.shown_egui_gpu_ms = self.egui_gpu_ms;
             self.shown_shell_ms = self.shell_ms;
             self.shown_acquire_ms = self.acquire_ms;
+            self.shown_tick_ms = self.tick_ms;
             self.shown_gpu_ms = self.gpu_ms;
             self.last_readout = now;
         }
@@ -331,8 +342,9 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "measuring...".to_owned()
     };
-    let rows: [(&str, String); 10] = [
+    let rows: [(&str, String); 11] = [
         ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
+        ("tick", format!("{:.1} ms", perf.shown_tick_ms)),
         ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
         ("ui cpu", format!("{:.1} ms", perf.shown_cpu_ms)),
         ("tess", format!("{:.1} ms", perf.shown_tess_ms)),
@@ -669,6 +681,7 @@ mod tests {
                 egui_gpu_ms: 4.0,
                 lattice_gpu_ms: 5.0,
                 acquire_ms: 6.0,
+                tick_ms: 7.0,
             },
             1.0,
             Workload { animating: true, ..Default::default() },
