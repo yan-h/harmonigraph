@@ -26,11 +26,26 @@ use crate::{theme, RollColor, SharedState};
 /// width, where a filled polygon disappears).
 const MIN_RIBBON_PX: f32 = 1.5;
 
-/// How far the keyline stands proud of the note's outline on each side.
+/// How thick the keyline is, on each side of the note, at full size.
 pub(super) const KEYLINE_PX: f32 = 1.0;
 
-/// How far the dark border stands proud of the keyline, on each side.
+/// How thick the dark border outside the keyline is, at full size.
 pub(super) const BORDER_PX: f32 = 1.0;
+
+/// Ribbon thickness at which the rim reaches its full width; thinner notes
+/// get a proportionally thinner one, down to [`RIM_MIN_SCALE`].
+///
+/// A rim is an edge on something, and an edge has to be smaller than the thing
+/// it edges. The pane is used at pitch ranges where a note is three to seven
+/// pixels thick, and a fixed 1px keyline plus a 1px border would put four
+/// pixels of rim around three pixels of note: the note would read as a
+/// black-and-white stripe with a hint of color in it, which is no better than
+/// the flooding it replaced.
+const RIM_FULL_PX: f32 = 10.0;
+
+/// The rim never scales away entirely — a quarter-pixel line still tints, and
+/// the whole point of the rim is the notes that are too thin to see.
+const RIM_MIN_SCALE: f32 = 0.25;
 
 /// How strong the rim is here: the Edge setting scaled by the note's own
 /// opacity, or `None` when there is too little of it to draw.
@@ -87,6 +102,10 @@ pub(super) fn draw_roll(
     let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
     let ribbon_px = 2.0 * half * axes.pitch_len();
     let opacity = cfg.roll_opacity.clamp(0.0, 1.0);
+    // See RIM_FULL_PX: the rim shrinks with the ribbon so it stays an edge on
+    // the note rather than becoming most of it.
+    let rim_scale = (ribbon_px / RIM_FULL_PX).clamp(RIM_MIN_SCALE, 1.0);
+    let (keyline_px, border_px) = (KEYLINE_PX * rim_scale, BORDER_PX * rim_scale);
 
     // Draw in a stable order (the live notes come out of a HashMap, whose
     // iteration order varies per run): with translucent glows the paint order
@@ -138,89 +157,129 @@ pub(super) fn draw_roll(
             }
             let pitch = (p0 + p1) * 0.5;
             let width = cfg.roll_outline_width.clamp(0.5, 8.0);
-            // The rim the Edge setting asks for — a light keyline, and a dark
-            // border outside that — and how wide the note ends up because of
-            // it. See `keyline` and `border`.
-            let rim = keyline(cfg, alpha).zip(border(cfg, alpha));
-            let rimmed =
-                if rim.is_some() { width + 2.0 * (KEYLINE_PX + BORDER_PX) } else { width };
-            // Bloom: a soft glow around the outline, driven by the SAME setting
-            // as the lattice's bloom so the two panes share the look. egui has
-            // no post-process pass like the lattice's wgpu bloom, so approximate
-            // one — a couple of wider, fainter passes of the stroke under the
-            // crisp one; more bloom widens and brightens the halo.
-            let g = state.view.bloom_strength.clamp(0.0, 2.0);
             let body = |a: f32| note_color(note, cfg, state, pitch, a);
-            // (stroke width, color) per pass, painted in order; the crisp
-            // outline is last and on top.
-            let mut passes: Vec<(f32, Color32)> = Vec::with_capacity(5);
+
+            // Everything around the outline is drawn as a band standing
+            // OUTSIDE it, never as a wider stroke of the same path.
+            //
+            // A centered stroke grows inward exactly as much as outward, and a
+            // note is only a few pixels thick at the pitch ranges this pane is
+            // actually used at. The keyline was a stroke of `width + 2px`, so
+            // it reached ~1.75px inward from BOTH long edges — they met in the
+            // middle, painted the hollow interior white, and painted it twice
+            // where they overlapped. The note stopped reading as a ribbon with
+            // a light edge and read as a translucent white box instead.
+            //
+            // Each band is (standoff from the outline's outer edge, thickness,
+            // color), outermost first. Bands don't overlap, so for the shapes
+            // that can be expanded the order is cosmetic; it matters only in
+            // the hairline branch, where there is no interior to stand outside
+            // of and the bands go under the spine widest-first.
+            let mut bands: Vec<(f32, f32, Color32)> = Vec::with_capacity(4);
+            let rim = keyline(cfg, alpha).zip(border(cfg, alpha));
+            // Where the rim ends, so the glow can start outside it.
+            let rim_px = if rim.is_some() { keyline_px + border_px } else { 0.0 };
+            // Bloom: a soft glow around the note, driven by the SAME setting as
+            // the lattice's bloom so the two panes share the look. egui has no
+            // post-process pass like the lattice's wgpu bloom, so approximate
+            // one — two faint bands outside the rim, the brighter one nested
+            // inside the dimmer, which reads as a falloff. Outside the rim
+            // rather than under it: a halo spills from the whole of what you
+            // can see of the note.
+            let g = state.view.bloom_strength.clamp(0.0, 2.0);
             if g > 0.0 {
-                // Measured from the RIMMED width, not the bare outline: a halo
-                // spills from the whole of what you can see of the note, and
-                // one anchored to the outline alone would be painted over by
-                // the rim instead of surrounding it.
-                passes.push((rimmed + g * 3.0, brighten(body(alpha * 0.12 * g))));
-                passes.push((rimmed + g * 1.5, brighten(body(alpha * 0.20 * g))));
+                bands.push((rim_px, g * 1.5, brighten(body(alpha * 0.12 * g))));
+                bands.push((rim_px, g * 0.75, brighten(body(alpha * 0.20 * g))));
             }
             if let Some((edge, dark)) = rim {
-                // Dark first, so it lands outside the keyline it backs.
-                passes.push((rimmed, dark));
-                passes.push((width + 2.0 * KEYLINE_PX, edge));
+                // Dark outside light: reading outward, a note is color, light,
+                // dark, then whatever the spectrogram is doing.
+                bands.push((keyline_px, border_px, dark));
+                bands.push((0.0, keyline_px, edge));
             }
             // The crisp outline is the note's TRUE color, so it matches the
-            // same note on the lattice.
-            passes.push((width, body(alpha)));
+            // same note on the lattice. It goes on top of everything.
+            let core = body(alpha);
 
             if ribbon_px < MIN_RIBBON_PX {
-                // Too thin to bound: the note IS its spine.
-                for &(w, color) in &passes {
+                // Too thin to bound: the note IS its spine. A line has no
+                // interior to flood, so here a band really is just a wider
+                // stroke underneath — widest first.
+                let spine = [axes.at(a0, d0), axes.at(a1, d1)];
+                let core_w = width.max(MIN_RIBBON_PX);
+                for &(out, thick, color) in &bands {
                     painter.line_segment(
-                        [axes.at(a0, d0), axes.at(a1, d1)],
-                        egui::Stroke::new(w.max(MIN_RIBBON_PX), color),
+                        spine,
+                        egui::Stroke::new(core_w + 2.0 * (out + thick), color),
                     );
                 }
+                painter.line_segment(spine, egui::Stroke::new(core_w, core));
             } else if p0 == p1 {
                 // Unbent: a hollow axis-aligned rectangle (the only shape egui
                 // will round the corners of).
                 let rect = egui::Rect::from_two_pos(axes.at(a0 - half, d0), axes.at(a1 + half, d1));
                 let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
-                let rounding = egui::CornerRadius::same(radius.min(127.0) as u8);
-                for &(w, color) in &passes {
-                    // NOT snapped to whole pixels, which egui does to rects by
-                    // default (TessellationOptions::round_rects_to_pixels) to
-                    // keep static chrome crisp. These rects scroll: snapping
-                    // holds a note still until it has drifted a whole pixel and
-                    // then jumps it, so the roll advanced in steps while the
-                    // spectrogram — a mesh, never snapped — slid smoothly
-                    // underneath, and the notes read as jittering against it.
-                    // Sub-pixel placement costs a little edge softness and buys
-                    // motion that matches.
-                    painter.add(
-                        egui::epaint::RectShape::stroke(
-                            rect,
-                            rounding,
-                            egui::Stroke::new(w, color),
-                            egui::StrokeKind::Middle,
-                        )
-                        .with_round_to_pixels(false),
-                    );
+                // NOT snapped to whole pixels, which egui does to rects by
+                // default (TessellationOptions::round_rects_to_pixels) to keep
+                // static chrome crisp. These rects scroll: snapping holds a
+                // note still until it has drifted a whole pixel and then jumps
+                // it, so the roll advanced in steps while the spectrogram — a
+                // mesh, never snapped — slid smoothly underneath, and the notes
+                // read as jittering against it. Sub-pixel placement costs a
+                // little edge softness and buys motion that matches.
+                let stroked = |rect: egui::Rect, radius: f32, thick: f32, color| {
+                    egui::epaint::RectShape::stroke(
+                        rect,
+                        egui::CornerRadius::same(radius.min(127.0) as u8),
+                        egui::Stroke::new(thick, color),
+                        egui::StrokeKind::Middle,
+                    )
+                    .with_round_to_pixels(false)
+                };
+                for &(out, thick, color) in &bands {
+                    // Grow the RECT by the band's distance and keep the stroke
+                    // thin, rather than growing the stroke on the same rect:
+                    // the shape moves outward, and nothing reaches back inside.
+                    // The corner radius grows with it, or the rim would round
+                    // tighter than the note it wraps.
+                    let e = width * 0.5 + out + thick * 0.5;
+                    painter.add(stroked(rect.expand(e), radius + e, thick, color));
                 }
+                painter.add(stroked(rect, radius, width, core));
             } else {
                 // Bent: a hollow quad following the glide. Wound consistently so
                 // egui's convex-polygon stays valid whichever way the axes run.
-                let quad = vec![
-                    axes.at(a0 - half, d0),
-                    axes.at(a0 + half, d0),
-                    axes.at(a1 + half, d1),
-                    axes.at(a1 - half, d1),
-                ];
-                for &(w, color) in &passes {
+                //
+                // Grown in the (pitch, depth) plane, where the ribbon's own
+                // half-width already lives: `Axes` maps those two onto
+                // perpendicular screen axes, so `e` pixels of standoff is
+                // exactly `e / pitch_len` and `e / depth_len` there, whichever
+                // way round the pane is.
+                let quad = |e: f32| {
+                    let ep = e / axes.pitch_len().max(1.0);
+                    // Away from the other end, so the ends grow outward rather
+                    // than the segment sliding along itself.
+                    let ed = e / axes.depth_len().max(1.0) * (d1 - d0).signum();
+                    vec![
+                        axes.at(a0 - half - ep, d0 - ed),
+                        axes.at(a0 + half + ep, d0 - ed),
+                        axes.at(a1 + half + ep, d1 + ed),
+                        axes.at(a1 - half - ep, d1 + ed),
+                    ]
+                };
+                for &(out, thick, color) in &bands {
+                    let e = width * 0.5 + out + thick * 0.5;
                     painter.add(egui::Shape::convex_polygon(
-                        quad.clone(),
+                        quad(e),
                         Color32::TRANSPARENT,
-                        egui::Stroke::new(w, color),
+                        egui::Stroke::new(thick, color),
                     ));
                 }
+                painter.add(egui::Shape::convex_polygon(
+                    quad(0.0),
+                    Color32::TRANSPARENT,
+                    egui::Stroke::new(width, core),
+                ));
             }
         }
     }
@@ -261,13 +320,23 @@ mod tests {
     use crate::{SharedState, SpectralOrientation};
     use lattice_core::{NoteEvent, NoteEventKind};
 
-    /// Paint one held note at the given Edge strength and report every rect
-    /// the roll emitted, as (stroke width, stroke color, fill).
-    fn ribbon(keyline: f32) -> Vec<(f32, Color32, Color32)> {
+    /// One rect the roll emitted: its stroke width and color, and the
+    /// rectangle the stroke is centered on.
+    struct Ribbon {
+        width: f32,
+        color: Color32,
+        rect: egui::Rect,
+    }
+
+    /// Paint one held note and report every rect the roll emitted. `range` is
+    /// the pitch span in semitones — the pane is 100px across the pitch axis,
+    /// so a wide range makes a thin ribbon, which is where the rim geometry is
+    /// under the most pressure.
+    fn ribbon_with_range(keyline: f32, range: f32) -> Vec<Ribbon> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
-        state.spectrum_config.low_midi = 55.0;
-        state.spectrum_config.high_midi = 67.0;
+        state.spectrum_config.low_midi = 60.0 - range * 0.5;
+        state.spectrum_config.high_midi = 60.0 + range * 0.5;
         state.spectrum_config.roll_opacity = 1.0;
         state.spectrum_config.roll_velocity_alpha = false;
         state.spectrum_config.roll_outline_width = 2.0;
@@ -294,10 +363,18 @@ mod tests {
         out.shapes
             .into_iter()
             .filter_map(|s| match s.shape {
-                egui::Shape::Rect(r) => Some((r.stroke.width, r.stroke.color, r.fill)),
+                egui::Shape::Rect(r) => {
+                    Some(Ribbon { width: r.stroke.width, color: r.stroke.color, rect: r.rect })
+                }
                 _ => None,
             })
             .collect()
+    }
+
+    /// The note is a rect 12 semitones tall (a thick ribbon), so the rim has
+    /// room and the geometry is easy to read.
+    fn ribbon(keyline: f32) -> Vec<Ribbon> {
+        ribbon_with_range(keyline, 12.0)
     }
 
     /// Note rects opt OUT of egui's pixel snapping, which is on by default
@@ -345,58 +422,84 @@ mod tests {
         );
     }
 
-    /// The ribbons lie over the spectrogram, whose cells run the whole ramp
-    /// from black to near-white, so a note's own color is sometimes almost
-    /// exactly what is behind it. The Edge setting puts a light keyline under
-    /// each outline, wider on both sides, to be seen by.
-    #[test]
-    fn the_edge_setting_puts_a_keyline_under_each_outline() {
-        let outline = 2.0;
-        let rects = ribbon(0.5);
-        let key = rects.iter().position(|&(w, c, _)| {
-            (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01
-                && c == Color32::WHITE.gamma_multiply(0.5)
-        });
-        let crisp = rects.iter().position(|&(w, _, _)| (w - outline).abs() < 0.01);
-        let (Some(key), Some(crisp)) = (key, crisp) else {
-            panic!("expected a keyline and a crisp outline, got {rects:?}");
-        };
-        assert!(key < crisp, "the keyline paints over the outline it should sit under");
-
-        // And nothing at all at zero, rather than a hairline that can't be
-        // turned off.
-        let none = ribbon(0.0);
-        assert!(
-            !none.iter().any(|&(w, _, _)| (w - (outline + 2.0 * KEYLINE_PX)).abs() < 0.01),
-            "Edge 0 still drew a keyline: {none:?}",
-        );
+    /// The white keyline and its dark backing, identified by color among the
+    /// rects a lit note drew.
+    fn rim_of(rects: &[Ribbon]) -> (Option<&Ribbon>, Option<&Ribbon>) {
+        let by = |want: Color32| rects.iter().find(|r| r.color == want);
+        (by(Color32::WHITE.gamma_multiply(0.5)), by(Color32::BLACK.gamma_multiply(0.5)))
     }
 
-    /// The keyline is white and the spectrogram's loudest cells are nearly
-    /// white, so on its own it disappears exactly where a note most needs an
-    /// edge. A dark border sits outside it — wider, and painted first — so the
-    /// rim always holds a contrast of its own.
-    #[test]
-    fn a_dark_border_backs_the_keyline() {
-        let outline = 2.0;
-        let rects = ribbon(0.5);
-        let at = |target: f32, color: Color32| {
-            rects.iter().position(|&(w, c, _)| (w - target).abs() < 0.01 && c == color)
-        };
-        let dark = at(outline + 2.0 * (KEYLINE_PX + BORDER_PX), Color32::BLACK.gamma_multiply(0.5));
-        let key = at(outline + 2.0 * KEYLINE_PX, Color32::WHITE.gamma_multiply(0.5));
-        let (Some(dark), Some(key)) = (dark, key) else {
-            panic!("expected a dark border outside the keyline, got {rects:?}");
-        };
-        assert!(dark < key, "the border paints over the keyline it should sit outside");
+    /// The crisp outline: the widest stroke, in the note's own color.
+    fn core_of(rects: &[Ribbon]) -> &Ribbon {
+        rects.iter().max_by(|a, b| a.width.total_cmp(&b.width)).expect("no ribbon drawn")
+    }
 
-        // It is the same setting: Edge 0 draws neither.
-        let none = ribbon(0.0);
+    /// The filled span of a stroked rect: the rectangle it is drawn on, grown
+    /// and shrunk by half the (centered) stroke width. Painted pixels lie
+    /// between `inner` and `outer`.
+    fn outer(r: &Ribbon) -> egui::Rect {
+        r.rect.expand(r.width * 0.5)
+    }
+    fn inner(r: &Ribbon) -> egui::Rect {
+        r.rect.shrink(r.width * 0.5)
+    }
+
+    /// A tolerant `contains`, since the geometry is built from floats.
+    fn encloses(outer: egui::Rect, inner: egui::Rect) -> bool {
+        outer.min.x <= inner.min.x + 0.01
+            && outer.min.y <= inner.min.y + 0.01
+            && outer.max.x >= inner.max.x - 0.01
+            && outer.max.y >= inner.max.y - 0.01
+    }
+
+    /// The Edge setting draws a light keyline and a dark border, in that order
+    /// outward, and BOTH stand entirely outside the note's outline. This is
+    /// the whole fix: they used to be wider strokes of the same rectangle, so
+    /// on a thin note they grew inward and flooded the hollow interior — the
+    /// note read as a translucent white box instead of an edged ribbon. The
+    /// key invariant is that each rim band's INNER (filled) edge still encloses
+    /// the outline's OUTER edge, so no rim pixel lands on the note's interior.
+    #[test]
+    fn the_edge_rim_stands_outside_the_note_never_inside_it() {
+        let rects = ribbon(0.5);
+        let core_outer = outer(core_of(&rects));
+        let (Some(key), Some(dark)) = rim_of(&rects) else {
+            panic!("expected a keyline and a dark border, got {} rects", rects.len());
+        };
+        for (name, band) in [("keyline", key), ("border", dark)] {
+            assert!(
+                encloses(inner(band), core_outer),
+                "the {name} reaches inside the note rather than sitting outside it",
+            );
+        }
+        // Dark outside light.
         assert!(
-            !none
-                .iter()
-                .any(|&(w, _, _)| (w - (outline + 2.0 * (KEYLINE_PX + BORDER_PX))).abs() < 0.01),
-            "Edge 0 still drew a border: {none:?}",
+            encloses(inner(dark), outer(key)),
+            "the border should sit outside the keyline it backs",
+        );
+
+        // Off is off: no rim at all, not a hairline that can't be cleared.
+        let none = ribbon(0.0);
+        let (k, d) = rim_of(&none);
+        assert!(k.is_none() && d.is_none(), "Edge 0 still drew a rim");
+    }
+
+    /// The same invariant at the pitch range where the bug actually bit: the
+    /// whole analyzer axis, where a note is a couple of pixels thick. A
+    /// centered keyline stroke would have painted straight across the interior
+    /// here — `inner(key)` would collapse or invert and stop enclosing the
+    /// outline. Thickness-independent by construction, so it holds regardless.
+    #[test]
+    fn the_rim_does_not_flood_a_thin_note() {
+        // ~120 semitones over 100px: the ribbon is under 2px thick.
+        let rects = ribbon_with_range(0.5, 120.0);
+        let core_outer = outer(core_of(&rects));
+        let (Some(key), _) = rim_of(&rects) else {
+            panic!("a lit note drew no keyline to check");
+        };
+        assert!(
+            encloses(inner(key), core_outer),
+            "the keyline floods the thin note's interior instead of edging it",
         );
     }
 }
