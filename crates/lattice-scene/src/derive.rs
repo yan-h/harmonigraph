@@ -110,14 +110,33 @@ pub fn derive_scene(
     // recompute each node's pitch class to do it.
     let mut node_pcs = Vec::with_capacity(view.visible_count());
     let center = view.center();
+    let node_idle = idle_color(view);
     let live_extremes = held_extremes(tracker, view.highlight_extremes);
+
+    // Each voice's disc color and its whitened mark color, computed once here
+    // rather than re-running the LCH->sRGB conversion on every node the voice
+    // matches (and a second time for its mark). Both depend only on the voice
+    // and the frame's gradient range — never on the node — so this lifts all
+    // the transcendental color math out of the O(nodes × voices) loop below.
+    let voices: Vec<(&lattice_core::Voice, Vec4, Vec4)> = tracker
+        .voices()
+        .map(|voice| {
+            let color = channel_color(
+                voice.channel,
+                voice.pitch,
+                frame.darkest_pitch,
+                frame.brightest_pitch,
+            );
+            (voice, color, color.lerp(Vec4::ONE, MARK_WHITEN))
+        })
+        .collect();
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
 
         let mut activation = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
-        let mut color = idle_color(view);
+        let mut color = node_idle;
         let mut outlined = false;
         let mut seed = 0.0f32;
         let mut melody = Mark::default();
@@ -125,17 +144,12 @@ pub fn derive_scene(
 
         // O(nodes × voices); fine at this scale. If extents grow large,
         // index voices by quantized pitch class instead.
-        for voice in tracker.voices() {
+        for &(voice, voice_color, mark_color) in &voices {
             if tuning.matches(voice.pitch_class, node_pc) {
                 let envelope = voice.activation(now, frame.fade_time);
                 if envelope > activation {
                     activation = envelope;
-                    color = channel_color(
-                        voice.channel,
-                        voice.pitch,
-                        frame.darkest_pitch,
-                        frame.brightest_pitch,
-                    );
+                    color = voice_color;
                     outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
                     seed = (voice.on_time % 256.0) as f32;
                 }
@@ -157,21 +171,15 @@ pub fn derive_scene(
                 let (is_melody, is_bass) = marks(voice, live_extremes);
                 if is_melody || is_bass {
                     // The mark takes the marked note's OWN color, lightened
-                    // so a low note's near-black doesn't vanish. Strongest
-                    // marking voice wins the color; the slots still collect
-                    // every one of them, since a release crossfades two.
-                    let own = channel_color(
-                        voice.channel,
-                        voice.pitch,
-                        frame.darkest_pitch,
-                        frame.brightest_pitch,
-                    )
-                    .lerp(Vec4::ONE, MARK_WHITEN);
+                    // so a low note's near-black doesn't vanish (precomputed
+                    // above). Strongest marking voice wins the color; the
+                    // slots still collect every one of them, since a release
+                    // crossfades two.
                     if is_melody {
-                        melody.add(slot, envelope, own);
+                        melody.add(slot, envelope, mark_color);
                     }
                     if is_bass {
-                        bass.add(slot, envelope, own);
+                        bass.add(slot, envelope, mark_color);
                     }
                 }
             }
@@ -251,7 +259,7 @@ pub fn derive_scene(
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,
         grid_thickness: view.grid_thickness.clamp(0.0, 8.0),
-        node_idle: idle_color(view),
+        node_idle,
         trail_mark: view.trail_mark,
         trail_strength: view.trail_strength.clamp(0.0, 1.0),
         mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
@@ -280,12 +288,32 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<EdgeInstance> {
     let inset = view.spacing * NODE_RADIUS_FACTOR * view.grid_inset.max(0.0);
     let base = Vec4::from_array(view.grid_color);
-    // Presized: this rebuilds every frame, and collect() would otherwise
-    // rehash several times as it grows past its default capacity.
-    let mut index: std::collections::HashMap<LatticePos, &NodeInstance> =
-        std::collections::HashMap::with_capacity(nodes.len());
-    index.extend(nodes.iter().map(|n| (n.lattice_pos, n)));
-    let mut grid = Vec::new();
+    // `nodes` is exactly `view.visible_positions()` in order: a dense
+    // row-major grid (threes outer, fives, sevens inner). So a neighbor's
+    // index is plain offset arithmetic — no per-frame HashMap build and no
+    // hashing per lookup. Returns None for positions outside the window. The
+    // explicit per-axis bounds are what keep an out-of-range delta from
+    // aliasing onto a different node's slot.
+    let min_threes = view.center_threes - view.extent_threes;
+    let min_fives = view.center_fives - view.extent_fives;
+    let min_sevens = view.center_sevens - view.extent_sevens;
+    let span_fives = 2 * view.extent_fives + 1;
+    let span_sevens = 2 * view.extent_sevens + 1;
+    let node_at = |p: LatticePos| -> Option<&NodeInstance> {
+        let (dt, df, ds) = (p.threes - min_threes, p.fives - min_fives, p.sevens - min_sevens);
+        if dt < 0
+            || df < 0
+            || ds < 0
+            || dt > 2 * view.extent_threes
+            || df > 2 * view.extent_fives
+            || ds > 2 * view.extent_sevens
+        {
+            return None;
+        }
+        nodes.get(((dt * span_fives + df) * span_sevens + ds) as usize)
+    };
+    // Upper bound: three +1 axis-steps per node.
+    let mut grid = Vec::with_capacity(nodes.len() * 3);
     for node in nodes {
         let p = node.lattice_pos;
         // +1 steps only, so each undirected pair appears once; positions
@@ -298,7 +326,7 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
         .into_iter()
         .enumerate()
         {
-            let Some(neighbor) = index.get(&step) else {
+            let Some(neighbor) = node_at(step) else {
                 continue;
             };
             let along_sevens = axis == 2;
@@ -325,7 +353,7 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
                     (view.center_sevens - view.extent_sevens, p.sevens)
                 };
                 for s in lo..=hi {
-                    if let Some(n) = index.get(&LatticePos::new(p.threes, p.fives, s)) {
+                    if let Some(n) = node_at(LatticePos::new(p.threes, p.fives, s)) {
                         if n.activation > lit {
                             lit = n.activation;
                             lit_color = n.color;
