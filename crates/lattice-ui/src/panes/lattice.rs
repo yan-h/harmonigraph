@@ -174,6 +174,16 @@ pub(super) fn draw_node_labels(
             sounding.max(recorded).max(reserved)
         };
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
+        // Off the pane: nothing to draw. `project` only rejects what is
+        // behind the camera, so a node off to the side still lands at a
+        // screen position — outside the pane, where the pane's own clip
+        // throws it away. It was being thrown away AFTER laying the text
+        // out and stamping it 33 times per piece, which is most of the
+        // label work in the frame the further in the camera is: zoomed
+        // right in, almost every node is off the pane.
+        if !rect.expand(LABEL_REACH * scale).contains(center) {
+            continue;
+        }
         let outline = theme::well().gamma_multiply(strength);
         // Off-sheet nodes draw at their own size (ViewConfig::sevens_size),
         // and their text goes with them — a full-size label on a half-size
@@ -251,6 +261,13 @@ pub(crate) const NAME_SIZE: f32 = 15.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
 pub(crate) const CENTS_SIZE: f32 = 8.0;
+/// How far a label can reach from the node it belongs to, in points at
+/// scale 1 — the name, its marks, the gap and the cents line under it, with
+/// room to spare. Only used to decide that a label is too far off the pane
+/// to be worth laying out, so it errs generous: too small silently clips a
+/// label at the edge, too large only costs the work this saves.
+pub(crate) const LABEL_REACH: f32 = 48.0;
+
 /// Air between the bottom of the name's glyphs and the top of the cents
 /// readout's. Real pixels of gap, since both ends are measured as ink: the
 /// two are one label, sitting together without crowding.
@@ -416,4 +433,76 @@ pub(super) fn outlined_text(
         }
     }
     painter.galley(pos, galley, color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lattice_core::{NoteEvent, NoteEventKind};
+
+    /// Paint the Lattice pane into `rect` with the camera at `distance`, and
+    /// report every galley the labels emitted.
+    fn label_galleys(rect: egui::Rect, distance: f32) -> Vec<egui::epaint::TextShape> {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.camera.distance = distance;
+        // A chord spread across the lattice, so nodes land all over the pane
+        // and (zoomed in) well outside it.
+        for note in [55u8, 60, 62, 64, 67, 69, 71] {
+            state.tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 900.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                lattice_pane(&mut child, &mut state, 0.05);
+            },
+        );
+        out.shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Text(t) => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A label is laid out only if it can land on the pane.
+    ///
+    /// `Camera::project` only rejects what is behind the camera, so a node
+    /// off to the side still comes back with a screen position — one the
+    /// pane's clip then throws away, but only after the text has been laid
+    /// out and stamped once per halo sample. Zoomed in, that is almost every
+    /// node in the scene, and it was most of the pane's per-frame CPU.
+    #[test]
+    fn a_label_off_the_pane_is_not_laid_out() {
+        let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, 400.0));
+        let wide = label_galleys(rect, 14.0);
+        let zoomed = label_galleys(rect, 2.0);
+        assert!(!wide.is_empty(), "the pane drew no labels at all; the test is vacuous");
+        assert!(
+            zoomed.len() < wide.len(),
+            "zooming in laid out as many labels ({}) as zoomed out ({}), so the \
+             off-pane ones are still being built",
+            zoomed.len(),
+            wide.len(),
+        );
+        // And nothing is laid out far outside the pane, at either zoom: a
+        // label's own reach is the only slack the cull allows.
+        let slack = rect.expand(LABEL_REACH * 2.0);
+        for shape in wide.iter().chain(&zoomed) {
+            assert!(
+                slack.contains(shape.pos),
+                "a label was laid out at {:?}, outside the pane {rect:?}",
+                shape.pos,
+            );
+        }
+    }
 }
