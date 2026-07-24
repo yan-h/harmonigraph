@@ -144,11 +144,25 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   there was no way to reach the `device_descriptor` hook and request an extra
   device feature (we ask for timestamp queries, for the overlay's GPU-time
   row). Pure re-export; no behaviour change.
+- **Patch 8** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`): measure the
+  frame's other two halves and hand them back through `Queue` —
+  `tess_ms` (time in `egui::Context::tessellate`) and `egui_gpu_ms` (GPU time
+  for egui's own render pass, via a timestamp query pair). Both sat in blind
+  spots: tessellation runs after the update closure returns, so it is neither
+  the app's own frame time nor GPU time, and a wgpu paint callback's timer
+  brackets only ITS passes, never the 2D UI around them. A frame cost could
+  live entirely in either and read as zero everywhere. Both samples are
+  BEGINNING-of-pass writes for the reason `lattice-render` found the hard way:
+  Metal grants `TIMESTAMP_QUERY_INSIDE_ENCODERS` and end-of-pass writes, then
+  records zero for both, silently. The closing sample therefore rides a 1x1
+  no-op pass placed after egui's. Readback is a three-step cycle polled with
+  `PollType::Poll`, never `Wait` — blocking for the number would stall the
+  pipeline being measured.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
   staged-upload flush, the repaint-deadline fix, the frame-timer
-  plumbing, and the `WgpuSetup` re-export.
+  plumbing, the `WgpuSetup` re-export, and the tessellation/egui-GPU timers.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

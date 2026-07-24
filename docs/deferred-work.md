@@ -74,7 +74,7 @@ the shader) and where they visually overlap, then a pick of which to cut.
   panics on an exotic host.
 - **Alternate skins / live re-skinning**: parked by choice.
 
-## Baking settled piano-roll notes into cached meshes
+## Baking settled piano-roll notes into cached meshes (SUPERSEDED — see below)
 
 **State.** `draw_roll` (`crates/lattice-ui/src/panes/roll.rs`) re-derives every
 visible note from scratch each frame. A note is drawn as up to **five stroked,
@@ -130,11 +130,97 @@ live/baked split is by RELEASE time, not merely by window position.
 to call mid-frame, or whether to drive `epaint::Tessellator` directly. The roll
 draws no text, so either way there is no font-atlas plumbing to arrange.
 
+**Measured afterwards — read this before building it.** Tessellation is NOT
+the binding cost. With the frame broken down (`tess`, `buf up`, `verts` in the
+performance overlay) the roll turned out to cost ~0.5 ms of tessellation and
+**4-5 ms of vertex upload**: 20k vertices idle, 100k+ with notes on screen,
+arriving in only ~20 primitives — so the batching is fine and the volume is
+the problem. egui re-uploads every vertex every frame, immediate-mode, and
+`Shape::Mesh` is no exception.
+
+**Baking into cached meshes therefore saves the 0.5 ms and none of the 4-5.**
+It is the right idea in the wrong place. What would actually pay is owning the
+buffers: draw the roll through a wgpu paint callback like the lattice does,
+with persistent vertex buffers updated incrementally, so scrolled content is
+uploaded once rather than every frame. The baking design below is the geometry
+half of that job and is worth keeping for it — the chunking, the absolute-time
+keys, the far-edge trap are all still correct — but on its own it fixes the
+smaller number.
+
+Cheaper first steps that attack the volume directly: skip the two bloom bands
+on ribbons too small to show them (a note is 5 stroked rounded rects with
+bloom on, 3 without, 1 with the keyline off too), and note that
+`roll_rounding` at 0 removes the corner arcs, which are most of a rect's
+vertices.
+
 **Value / effort.** Medium-high effort, comparable to the spectrogram ring.
-Payoff is large and structural: roll tessellation becomes O(notes arriving)
-instead of O(notes visible), `roll_seconds` stops being a performance setting,
-and dense passages stop costing frames. Strictly better than the geometric-LOD
+Payoff as originally scoped is now known to be small: roll tessellation
+becomes O(notes arriving) instead of O(notes visible), `roll_seconds` stops being a
+performance setting for tessellation — but not for upload, which is the cost
+that matters. Strictly better than the geometric-LOD
 alternative (skip bands on tiny ribbons), which trades a little appearance for
 a bounded cost and would be subsumed by this. **There is a 5x lever available
 without any code in the meantime:** Bloom off takes a note from five stroked
 rects to three, Keyline off takes it to one.
+
+## Drawing the piano roll through a wgpu callback
+
+**Supersedes the mesh-baking entry above.** Same problem, and measurement moved
+the answer.
+
+**State.** The roll is the frame's dominant cost, and not where it looked. With
+the overlay's breakdown on (Panel > Frame breakdown): tessellation ~0.5 ms,
+vertex UPLOAD 4-5 ms, `verts` running 20k idle to 100k+ with notes on screen,
+in only ~20 primitives. Batching is fine; the volume is the problem. egui is
+immediate-mode and re-uploads every vertex every frame, so geometry that merely
+scrolls is re-sent 144 times a second.
+
+A note is currently three stroked, anti-aliased rounded rects (keyline pair
+plus core — the two bloom bands are gone). Each is ~100-200 vertices once
+corners and the AA ring are subdivided, so a note costs several hundred
+vertices and a busy roll costs six figures.
+
+**The work.** Draw the roll the way the lattice is drawn: a wgpu paint callback
+with its own pipeline and a persistent instance buffer. The win is not caching
+the tessellation — it is not tessellating at all.
+
+**One instanced quad per note**, with a rounded-rect signed distance field in
+the fragment shader. Core, black border and white keyline all fall out of the
+distance as bands, so they cost nothing extra — no second and third shape, no
+corner subdivision, no AA ring. Four vertices per note against several hundred:
+a hundred thousand vertices becomes a few hundred, and the upload stops
+mattering rather than getting cheaper.
+
+Because the geometry is per-note and static once released, the buffer is
+append-and-evict: new notes are written at the head, notes scrolling past the
+window are dropped from the tail, and `now` moves through a uniform rather than
+through the vertices. That is where the superseded entry's thinking still
+applies — absolute-time keys, the far-edge truncation trap — but on a ring of
+INSTANCES, which is far simpler than a ring of meshes.
+
+Draw directly in `CallbackTrait::paint`, which is handed egui's render pass, so
+the roll lands in egui's own draw order between the spectrogram beneath it and
+the labels above. No offscreen target and no compositing — the lattice needs
+those for its bloom chain; the roll needs neither.
+
+**The catch.**
+
+1. **Bent notes are not rects.** A glide draws as a quad following the pitch
+   ramp (`roll.rs`, the `p0 != p1` arm). A rounded-rect SDF does not cover it.
+   Either extend to a parallelogram SDF, or keep the rare bent case on the egui
+   path — it is a small fraction of notes and correctness beats uniformity.
+2. **`Axes` orientation.** The pane rotates and flips; the pipeline needs the
+   same (pitch, depth) -> screen affine the egui path gets from `Axes::at`,
+   passed as a uniform rather than baked into vertices.
+3. **Clipping.** egui clips by scissor rect per primitive; a callback must
+   respect the pane's clip rect itself.
+4. **Offline determinism.** `lattice-offline` renders this pane, and the
+   determinism test compares frames byte for byte. SDF coverage must be a pure
+   function of the uniforms — no wall-clock, no frame counter.
+
+**Value / effort.** High effort, high payoff, and it is the ONLY thing that
+addresses the measured cost: it removes ~4-5 ms of per-frame upload rather
+than the 0.5 ms of tessellation the earlier design targeted. Everything else
+available is a constant factor on the same geometry (Keyline off takes a note
+from three stroked rects to one; `roll_rounding` at 0 removes the corner arcs;
+a shorter Span holds fewer notes).

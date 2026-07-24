@@ -252,6 +252,14 @@ pub struct ViewConfig {
     /// turned it off carries `false` and still round-trips.
     #[serde(default = "default_true")]
     pub show_perf: bool,
+    /// Expand the overlay from the headline numbers into the full per-stage
+    /// breakdown of where a frame goes.
+    ///
+    /// Off by default: the breakdown exists to answer "which stage is eating
+    /// the frame", and once it has, a dozen rows of scaffolding is not what
+    /// you want sitting over the picture. Inert while `show_perf` is off.
+    #[serde(default)]
+    pub show_perf_detail: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -497,6 +505,7 @@ impl Default for ViewConfig {
             meantone: false,
             frameless: false,
             show_perf: true,
+            show_perf_detail: false,
             render_scale: default_render_scale(),
             // A strong halo: the small soft core and the thin octave
             // marks are quiet shapes, and the bloom is what gives them

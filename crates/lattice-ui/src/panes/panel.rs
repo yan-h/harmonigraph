@@ -49,9 +49,17 @@ pub(super) fn panel_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
         "A corner HUD with frame rate, the GUI's CPU time per frame, \
          process memory, and the voice/node workload — to see if the \
-         plugin is working the machine hard. (GPU time isn't measured \
-         directly; the node count and render scale stand in for it.)",
+         plugin is working the machine hard.",
     );
+    if state.view.show_perf {
+        ui.checkbox(&mut state.view.show_perf_detail, "Frame breakdown").on_hover_text(
+            "Expand the overlay into every stage of the frame — the UI pass, \
+             tessellation, uploads, the GPU passes, the wait for the display — \
+             nested under the totals they add up to. For working out WHICH \
+             stage is costing you; the headline numbers are enough to notice \
+             that something is.",
+        );
+    }
 
     // Layout: the pane arrangement itself.
     section(ui, "Layout");

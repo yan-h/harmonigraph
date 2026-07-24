@@ -76,7 +76,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     }
 
     ui.painter()
-        .add(lattice_paint_callback(rect, &scene, state.target_format, 0, Some(state.gpu_ms.clone())));
+        .add(lattice_paint_callback(rect, &scene, state.target_format, 0, Some(state.lattice_stats.clone())));
 
     if state.learn_active {
         draw_learn_overlay(ui, rect, now);

@@ -194,24 +194,18 @@ pub(super) fn draw_roll(
             // order is cosmetic; it matters only in the hairline branch, where
             // there is no interior to stand outside of and the bands go under
             // the spine widest-first.
-            let mut bands: [(f32, f32, Color32); 4] = [(0.0, 0.0, Color32::TRANSPARENT); 4];
+            // The roll's bands used to include two more, approximating the
+            // lattice's bloom from the same `bloom_strength` so the panes
+            // shared a look. They are gone: a note is a hollow outline over
+            // the heatmap, and the halo cost two extra stroked rounded rects
+            // EVERY NOTE, every frame — 40% of the roll's geometry, on the
+            // stage that turned out to dominate the frame (vertex upload; see
+            // the `verts` readout). Bloom is now the lattice's alone, which is
+            // also where it belongs: there it is a real post-process pass, not
+            // four hand-placed bands standing in for one.
+            let mut bands: [(f32, f32, Color32); 2] = [(0.0, 0.0, Color32::TRANSPARENT); 2];
             let mut nb = 0;
             let rim = glow(cfg, alpha).zip(border(cfg, alpha));
-            // Where the rim ends, so the bloom can start outside it.
-            let rim_px = if rim.is_some() { BORDER_PX + KEYLINE_PX } else { 0.0 };
-            // Bloom: a soft halo around the note, driven by the SAME setting as
-            // the lattice's bloom so the two panes share the look. egui has no
-            // post-process pass like the lattice's wgpu bloom, so approximate
-            // one — two faint bands outside the rim, the brighter one nested
-            // inside the dimmer, which reads as a falloff. Outside the rim
-            // rather than under it: a halo spills from the whole of what you
-            // can see of the note.
-            let g = state.view.bloom_strength.clamp(0.0, 2.0);
-            if g > 0.0 {
-                bands[nb] = (rim_px, g * 1.5, brighten(body(alpha * 0.12 * g)));
-                bands[nb + 1] = (rim_px, g * 0.75, brighten(body(alpha * 0.20 * g)));
-                nb += 2;
-            }
             if let Some((light, dark)) = rim {
                 // Reading outward: the note's color, a solid black outline
                 // hugging it, then the bright white glow riding the black's
@@ -332,12 +326,6 @@ fn note_color(
     }
 }
 
-/// The edge/onset variant of a note color: the same hue, lifted toward
-/// white so it reads against the ribbon it sits on.
-fn brighten(color: Color32) -> Color32 {
-    let lift = |v: u8| v.saturating_add((255 - v) / 2);
-    Color32::from_rgba_unmultiplied(lift(color.r()), lift(color.g()), lift(color.b()), color.a())
-}
 
 #[cfg(test)]
 mod tests {

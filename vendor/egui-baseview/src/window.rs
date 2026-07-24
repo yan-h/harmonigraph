@@ -92,6 +92,16 @@ pub struct Queue<'a> {
     frame_interval: &'a mut Option<f64>,
     display_max_fps: Option<f64>,
     tess_ms: f32,
+    egui_gpu_ms: f32,
+    acquire_ms: f32,
+    tick_ms: f32,
+    render_ms: f32,
+    upload_ms: f32,
+    texture_ms: f32,
+    encode_ms: f32,
+    submit_ms: f32,
+    prims: u32,
+    verts: u32,
 }
 
 impl<'a> Queue<'a> {
@@ -103,6 +113,16 @@ impl<'a> Queue<'a> {
         frame_interval: &'a mut Option<f64>,
         display_max_fps: Option<f64>,
         tess_ms: f32,
+        egui_gpu_ms: f32,
+        acquire_ms: f32,
+        tick_ms: f32,
+        render_ms: f32,
+        upload_ms: f32,
+        texture_ms: f32,
+        encode_ms: f32,
+        submit_ms: f32,
+        prims: u32,
+        verts: u32,
     ) -> Self {
         Self {
             bg_color,
@@ -114,7 +134,81 @@ impl<'a> Queue<'a> {
             frame_interval,
             display_max_fps,
             tess_ms,
+            egui_gpu_ms,
+            acquire_ms,
+            tick_ms,
+            render_ms,
+            upload_ms,
+            texture_ms,
+            encode_ms,
+            submit_ms,
+            prims,
+            verts,
         }
+    }
+
+    /// How many primitives and vertices the previous frame uploaded.
+    pub fn prims(&self) -> u32 {
+        self.prims
+    }
+
+    pub fn verts(&self) -> u32 {
+        self.verts
+    }
+
+    /// Of the uploads, the TEXTURE half.
+    pub fn texture_ms(&self) -> f32 {
+        self.texture_ms
+    }
+
+    /// The renderer's stages, in milliseconds: uploads (which is also where
+    /// paint callbacks `prepare`), encoding egui's draw calls, and
+    /// finish + submit + present.
+    pub fn upload_ms(&self) -> f32 {
+        self.upload_ms
+    }
+
+    pub fn encode_ms(&self) -> f32 {
+        self.encode_ms
+    }
+
+    pub fn submit_ms(&self) -> f32 {
+        self.submit_ms
+    }
+
+    /// Milliseconds the previous frame spent inside the renderer: tessellate,
+    /// buffer and texture uploads, encoding egui's pass, acquire, submit and
+    /// present. `tick_ms` minus this is the egui half.
+    pub fn render_ms(&self) -> f32 {
+        self.render_ms
+    }
+
+    /// Milliseconds the previous frame callback took, end to end.
+    ///
+    /// Every other reading is a STAGE; this is the whole thing, and it is what
+    /// the frame timer has to fit inside its period. Compared against the
+    /// interval between frames it answers the only question the stages cannot:
+    /// whether a long frame was slow, or simply late being asked for.
+    pub fn tick_ms(&self) -> f32 {
+        self.tick_ms
+    }
+
+    /// Milliseconds the previous frame blocked waiting for the surface.
+    ///
+    /// Large here with every cost row small means the frame is not slow, it is
+    /// early — the display, not the work, is setting the pace.
+    pub fn acquire_ms(&self) -> f32 {
+        self.acquire_ms
+    }
+
+    /// Milliseconds the GPU spent on egui's own render pass a few frames ago,
+    /// or 0 where the device can't measure it.
+    ///
+    /// This is the 2D UI — dock, panels, text, the spectrogram quad, every
+    /// roll ribbon. A wgpu paint callback's own passes are not in it, so a
+    /// lattice timer and this one measure disjoint halves of the frame.
+    pub fn egui_gpu_ms(&self) -> f32 {
+        self.egui_gpu_ms
     }
 
     /// Milliseconds the PREVIOUS frame spent tessellating egui's shapes.
@@ -215,6 +309,21 @@ where
     /// ever be handed the last one. One frame stale, like every other
     /// after-the-fact measurement here.
     tess_ms: f32,
+    /// Likewise for egui's own render pass, which lags further still — the
+    /// timestamps have to come back from the GPU.
+    egui_gpu_ms: f32,
+    /// Likewise for the surface wait.
+    acquire_ms: f32,
+    /// The whole previous callback, end to end.
+    tick_ms: f32,
+    /// The renderer half of it, and its stages.
+    render_ms: f32,
+    upload_ms: f32,
+    texture_ms: f32,
+    encode_ms: f32,
+    submit_ms: f32,
+    prims: u32,
+    verts: u32,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -291,6 +400,16 @@ where
             &mut frame_interval,
             window.display_max_fps(),
             0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0,
+            0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -341,6 +460,16 @@ where
             repaint_after: Some(start_time),
             key_capture,
             tess_ms: 0.0,
+            egui_gpu_ms: 0.0,
+            acquire_ms: 0.0,
+            tick_ms: 0.0,
+            render_ms: 0.0,
+            upload_ms: 0.0,
+            texture_ms: 0.0,
+            encode_ms: 0.0,
+            prims: 0,
+            verts: 0,
+            submit_ms: 0.0,
         }
     }
 
@@ -428,6 +557,11 @@ where
     U: 'static + Send,
 {
     fn on_frame(&mut self, window: &mut Window) {
+        // The whole callback, end to end. Every other reading measures a STAGE
+        // of it; this measures the thing the frame timer actually has to fit
+        // inside its period, so `tick` against the interval between ticks
+        // separates "the work is slow" from "we are not being called".
+        let tick_start = Instant::now();
         let Some(state) = &mut self.user_state else {
             return;
         };
@@ -449,6 +583,16 @@ where
             &mut frame_interval,
             window.display_max_fps(),
             self.tess_ms,
+            self.egui_gpu_ms,
+            self.acquire_ms,
+            self.tick_ms,
+            self.render_ms,
+            self.upload_ms,
+            self.texture_ms,
+            self.encode_ms,
+            self.submit_ms,
+            self.prims,
+            self.verts,
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
@@ -517,6 +661,11 @@ where
             };
 
         if do_repaint_now {
+            // The renderer half of the callback, whole. `tick` minus this is
+            // the egui half — the UI closure plus egui's own end-of-pass work
+            // — so between them nothing in the frame is unattributed, even
+            // though neither is a single stage.
+            let render_start = Instant::now();
             let presented = self.renderer.render(
                 window,
                 self.bg_color,
@@ -525,6 +674,8 @@ where
                 &mut self.egui_ctx,
                 &mut full_output,
             );
+
+            self.render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
 
             // A skipped present (occluded window, lost/outdated surface)
             // must not consume the repaint request: retry next tick, so
@@ -539,6 +690,14 @@ where
             self.repaint_after =
                 if presented { now.checked_add(repaint_delay) } else { Some(now) };
             self.tess_ms = self.renderer.last_tess_ms();
+            self.egui_gpu_ms = self.renderer.last_gpu_ms();
+            self.acquire_ms = self.renderer.last_acquire_ms();
+            self.upload_ms = self.renderer.last_upload_ms();
+            self.texture_ms = self.renderer.last_texture_ms();
+            self.prims = self.renderer.last_prims();
+            self.verts = self.renderer.last_verts();
+            self.encode_ms = self.renderer.last_encode_ms();
+            self.submit_ms = self.renderer.last_submit_ms();
         } else if let Some(candidate) = now.checked_add(repaint_delay) {
             // Keep the EARLIEST pending deadline rather than overwriting it.
             //
@@ -594,6 +753,7 @@ where
                 window.focus();
             }
         }
+        self.tick_ms = tick_start.elapsed().as_secs_f32() * 1000.0;
     }
 
     #[allow(unused_variables)]

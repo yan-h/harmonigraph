@@ -1085,7 +1085,7 @@ pub struct SharedState {
     ///
     /// Runtime-only, never persisted, and never read by the offline renderer —
     /// which also never asks for the feature, so it has no timer to begin with.
-    pub(crate) gpu_ms: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub(crate) lattice_stats: std::sync::Arc<lattice_render::LatticeStats>,
     /// Milliseconds the shell spent tessellating egui's shapes last frame,
     /// or 0 where the shell doesn't measure it (the standalone's eframe loop
     /// isn't ours to instrument). Set by the shell before `root_ui`.
@@ -1095,6 +1095,48 @@ pub struct SharedState {
     /// shapes, and this covers turning those shapes into triangles afterwards.
     /// A cost can be entirely in one and invisible in the other.
     pub tess_ms: f32,
+    /// Milliseconds the GPU spent on egui's own render pass last frame, or 0
+    /// where the shell doesn't measure it. Set by the shell before `root_ui`.
+    ///
+    /// Disjoint from [`Self::gpu_ms`], which brackets only the lattice's own
+    /// passes: between them they cover the frame's GPU work, and the two were
+    /// separated because the lattice turned out to be the cheap half.
+    pub egui_gpu_ms: f32,
+    /// Milliseconds the shell spent on its own per-frame work before the UI
+    /// ran — draining the event rings and reconciling the take — or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// Separate from the frame's CPU time because that starts at the dock
+    /// build: this stretch scales with events ARRIVING rather than with what
+    /// is drawn, and there was no reading it could show up in.
+    pub shell_ms: f32,
+    /// Milliseconds the previous frame blocked acquiring the surface — the
+    /// vsync wait. Large here with every cost small means the frame is early,
+    /// not slow.
+    pub acquire_ms: f32,
+    /// Milliseconds the previous frame callback took end to end, or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// The other readings are stages of it. This is the total, and against the
+    /// interval between frames it answers what no stage can: whether a long
+    /// frame was SLOW, or just late being asked for.
+    pub tick_ms: f32,
+    /// Milliseconds of that callback spent inside the renderer. `tick_ms`
+    /// minus this is the egui half — the UI closure plus egui's own
+    /// end-of-pass work — so the two bracket the whole frame between them.
+    pub render_ms: f32,
+    /// The renderer's stages. `upload_ms` also covers paint callbacks'
+    /// `prepare`, so the lattice's own buffer writes are inside it.
+    pub upload_ms: f32,
+    /// Of the uploads, the TEXTURE half — the rest is buffer uploads, and
+    /// with them the paint callbacks' `prepare`.
+    pub texture_ms: f32,
+    /// How many primitives and vertices the previous frame uploaded — the
+    /// volume behind the upload cost, rather than another duration.
+    pub prims: u32,
+    pub verts: u32,
+    pub encode_ms: f32,
+    pub submit_ms: f32,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -1195,10 +1237,25 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
-            gpu_ms: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(
-                lattice_render::GPU_TIME_PENDING,
-            )),
+            lattice_stats: {
+                let stats = lattice_render::LatticeStats::default();
+                stats
+                    .gpu_ms
+                    .store(lattice_render::GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
+                std::sync::Arc::new(stats)
+            },
             tess_ms: 0.0,
+            egui_gpu_ms: 0.0,
+            shell_ms: 0.0,
+            acquire_ms: 0.0,
+            tick_ms: 0.0,
+            render_ms: 0.0,
+            upload_ms: 0.0,
+            texture_ms: 0.0,
+            prims: 0,
+            verts: 0,
+            encode_ms: 0.0,
+            submit_ms: 0.0,
             fps_cap: None,
             perf: PerfStats::default(),
         }
@@ -1403,9 +1460,30 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
     state.perf.record(
-        cpu_ms,
-        state.tess_ms,
-        f32::from_bits(state.gpu_ms.load(std::sync::atomic::Ordering::Relaxed)),
+        perf::FrameCosts {
+            shell_ms: state.shell_ms,
+            cpu_ms,
+            tess_ms: state.tess_ms,
+            egui_gpu_ms: state.egui_gpu_ms,
+            lattice_gpu_ms: f32::from_bits(
+                state.lattice_stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            prepare_ms: f32::from_bits(
+                state.lattice_stats.prepare_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            poll_ms: f32::from_bits(
+                state.lattice_stats.poll_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            acquire_ms: state.acquire_ms,
+            tick_ms: state.tick_ms,
+            render_ms: state.render_ms,
+            upload_ms: state.upload_ms,
+            texture_ms: state.texture_ms,
+            prims: state.prims,
+            verts: state.verts,
+            encode_ms: state.encode_ms,
+            submit_ms: state.submit_ms,
+        },
         now,
         perf::Workload {
             active_voices: state.tracker.voices().count(),
@@ -1416,7 +1494,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         },
     );
     if state.view.show_perf {
-        perf::draw_overlay(ui.ctx(), perf_overlay_area(state, ui.max_rect()), &state.perf);
+        perf::draw_overlay(
+            ui.ctx(),
+            perf_overlay_area(state, ui.max_rect()),
+            &state.perf,
+            state.view.show_perf_detail,
+        );
     }
 }
 

@@ -253,20 +253,42 @@ impl GpuEdge {
 /// Build the egui shape that renders `scene` into `rect`. `pane_id` must be
 /// unique per lattice view shown in the same frame (each gets its own GPU
 /// buffers; the pipeline is shared).
-/// `gpu_ms` receives the GPU time of this pane's passes, in milliseconds, as
-/// f32 bits — a few frames late (see [`GpuTimer`]) and only where the device
-/// granted timestamp queries. Pass `None` for panes whose cost isn't the one
-/// being reported, so a second lattice on screen can't overwrite the reading.
+/// Where the lattice callback publishes what it measures about itself.
+///
+/// An atomic bag rather than return values because none of this comes back up
+/// the call stack that asked for it: `prepare` runs inside egui-wgpu, and the
+/// GPU timing arrives several frames after the frame it describes. All three
+/// are f32 bits.
+#[derive(Default)]
+pub struct LatticeStats {
+    /// GPU time of the lattice's passes, carrying the
+    /// [`GPU_TIME_UNSUPPORTED`] / [`GPU_TIME_PENDING`] sentinels.
+    pub gpu_ms: std::sync::atomic::AtomicU32,
+    /// Wall time of the whole `prepare` callback — buffer writes, offscreen
+    /// (re)creation, and the timestamp bookkeeping. egui-wgpu runs this from
+    /// inside `update_buffers`, so it is billed to the frame's upload stage
+    /// and is invisible from outside.
+    pub prepare_ms: std::sync::atomic::AtomicU32,
+    /// Of that, the time in `device.poll` draining the timestamp readback:
+    /// what the GPU measurement costs to take. Kept separate so the
+    /// instrumentation can be caught spending the budget it exists to
+    /// measure.
+    pub poll_ms: std::sync::atomic::AtomicU32,
+}
+
+/// `stats` receives this pane's own measurements. Pass `None` for panes whose
+/// cost isn't the one being reported, so a second lattice on screen can't
+/// overwrite the readings.
 pub fn lattice_paint_callback(
     rect: egui::Rect,
     scene: &Scene,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
-    gpu_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
+    stats: Option<std::sync::Arc<LatticeStats>>,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        LatticeCallback::from_scene(scene, rect.size(), target_format, pane_id, gpu_ms),
+        LatticeCallback::from_scene(scene, rect.size(), target_format, pane_id, stats),
     )
 }
 
@@ -283,8 +305,8 @@ struct LatticeCallback {
     size_points: [f32; 2],
     /// From the scene (a view setting), clamped to [`RENDER_SCALE_RANGE`].
     render_scale: f32,
-    /// Where to publish this pane's GPU time; see [`lattice_paint_callback`].
-    gpu_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
+    /// Where to publish this pane's own measurements.
+    stats: Option<std::sync::Arc<LatticeStats>>,
 }
 
 /// One pass of the bloom chain: the pipeline to run, its bind group, and the
@@ -297,7 +319,7 @@ impl LatticeCallback {
         size_points: egui::Vec2,
         target_format: wgpu::TextureFormat,
         pane_id: u64,
-        gpu_ms: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
+        stats: Option<std::sync::Arc<LatticeStats>>,
     ) -> Self {
         let aspect = size_points.x / size_points.y.max(1.0);
         let render_scale = scene
@@ -404,7 +426,7 @@ impl LatticeCallback {
             pane_id,
             size_points: [size_points.x, size_points.y],
             render_scale,
-            gpu_ms,
+            stats,
         }
     }
 
@@ -1180,10 +1202,12 @@ impl CallbackTrait for LatticeCallback {
         // Advance the GPU timer's readback cycle first: a result that landed
         // is published now, and the cycle returns to Idle so this frame can be
         // the next one sampled.
-        match (resources.timer.as_mut(), &self.gpu_ms) {
+        let prepare_start = std::time::Instant::now();
+        let poll_start = std::time::Instant::now();
+        match (resources.timer.as_mut(), &self.stats) {
             (Some(timer), out) => {
                 if let (Some(ms), Some(out)) = (timer.poll(device), out) {
-                    out.store(ms.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                    out.gpu_ms.store(ms.to_bits(), std::sync::atomic::Ordering::Relaxed);
                 }
             }
             // No timer at all: the device refused the feature. Say so, rather
@@ -1191,10 +1215,11 @@ impl CallbackTrait for LatticeCallback {
             // while a first measurement is still in flight — those are very
             // different answers and the overlay could not tell them apart.
             (None, Some(out)) => {
-                out.store(GPU_TIME_UNSUPPORTED, std::sync::atomic::Ordering::Relaxed);
+                out.gpu_ms.store(GPU_TIME_UNSUPPORTED, std::sync::atomic::Ordering::Relaxed);
             }
             (None, None) => {}
         }
+        let poll_ms = poll_start.elapsed().as_secs_f32() * 1000.0;
 
         // Dev builds: pick up edits to the .wgsl on disk. A broken edit is
         // rejected with a message; the previous pipeline keeps rendering.
@@ -1337,6 +1362,13 @@ impl CallbackTrait for LatticeCallback {
                     timer.close(egui_encoder);
                 }
             }
+        }
+
+        if let Some(stats) = &self.stats {
+            use std::sync::atomic::Ordering::Relaxed;
+            let prepare_ms = prepare_start.elapsed().as_secs_f32() * 1000.0;
+            stats.prepare_ms.store(prepare_ms.to_bits(), Relaxed);
+            stats.poll_ms.store(poll_ms.to_bits(), Relaxed);
         }
 
         Vec::new()
