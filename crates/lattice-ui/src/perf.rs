@@ -77,6 +77,9 @@ pub struct FrameCosts {
     pub upload_ms: f32,
     /// Of the uploads, the texture half.
     pub texture_ms: f32,
+    /// The volume the upload had to move, rather than how long it took.
+    pub prims: u32,
+    pub verts: u32,
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -138,6 +141,8 @@ pub struct PerfStats {
     render_ms: f32,
     upload_ms: f32,
     texture_ms: f32,
+    prims: u32,
+    verts: u32,
     prepare_ms: f32,
     poll_ms: f32,
     encode_ms: f32,
@@ -197,6 +202,8 @@ impl Default for PerfStats {
             render_ms: 0.0,
             upload_ms: 0.0,
             texture_ms: 0.0,
+            prims: 0,
+            verts: 0,
             prepare_ms: 0.0,
             poll_ms: 0.0,
             encode_ms: 0.0,
@@ -253,6 +260,8 @@ impl PerfStats {
             render_ms,
             upload_ms,
             texture_ms,
+            prims,
+            verts,
             prepare_ms,
             poll_ms,
             encode_ms,
@@ -277,6 +286,8 @@ impl PerfStats {
         self.render_ms += (render_ms - self.render_ms) * alpha;
         self.upload_ms += (upload_ms - self.upload_ms) * alpha;
         self.texture_ms += (texture_ms - self.texture_ms) * alpha;
+        self.prims = prims;
+        self.verts = verts;
         self.prepare_ms += (prepare_ms - self.prepare_ms) * alpha;
         self.poll_ms += (poll_ms - self.poll_ms) * alpha;
         self.encode_ms += (encode_ms - self.encode_ms) * alpha;
@@ -406,7 +417,7 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
     } else {
         "measuring...".to_owned()
     };
-    let rows: [(&str, String); 18] = [
+    let rows: [(&str, String); 19] = [
         ("frame", format!("{:.1} ms", perf.shown_frame_dt * 1000.0)),
         ("tick", format!("{:.1} ms", perf.shown_tick_ms)),
         // The egui half is what `tick` leaves over, shown rather than left to
@@ -426,6 +437,10 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
         // cost of taking the GPU measurement.
         ("prep", format!("{:.1} ms", perf.shown_prepare_ms)),
         ("poll", format!("{:.1} ms", perf.shown_poll_ms)),
+        // Not a duration: what the upload was asked to move. Read against
+        // `buf up` these say whether the volume is absurd, or whether it is
+        // being moved in too many pieces.
+        ("verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims)),
         ("encode", format!("{:.1} ms", perf.shown_encode_ms)),
         ("submit", format!("{:.1} ms", perf.shown_submit_ms)),
         ("shell", format!("{:.1} ms", perf.shown_shell_ms)),
@@ -768,6 +783,8 @@ mod tests {
                 render_ms: 8.0,
                 upload_ms: 9.0,
                 texture_ms: 8.5,
+                prims: 0,
+                verts: 0,
                 prepare_ms: 1.0,
                 poll_ms: 0.5,
                 encode_ms: 10.0,

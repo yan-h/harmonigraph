@@ -100,6 +100,8 @@ pub struct Queue<'a> {
     texture_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
+    prims: u32,
+    verts: u32,
 }
 
 impl<'a> Queue<'a> {
@@ -119,6 +121,8 @@ impl<'a> Queue<'a> {
         texture_ms: f32,
         encode_ms: f32,
         submit_ms: f32,
+        prims: u32,
+        verts: u32,
     ) -> Self {
         Self {
             bg_color,
@@ -138,7 +142,18 @@ impl<'a> Queue<'a> {
             texture_ms,
             encode_ms,
             submit_ms,
+            prims,
+            verts,
         }
+    }
+
+    /// How many primitives and vertices the previous frame uploaded.
+    pub fn prims(&self) -> u32 {
+        self.prims
+    }
+
+    pub fn verts(&self) -> u32 {
+        self.verts
     }
 
     /// Of the uploads, the TEXTURE half.
@@ -307,6 +322,8 @@ where
     texture_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
+    prims: u32,
+    verts: u32,
 }
 
 impl<State, U> EguiWindow<State, U>
@@ -391,6 +408,8 @@ where
             0.0,
             0.0,
             0.0,
+            0,
+            0,
         );
         (build)(&egui_ctx, &mut queue, &mut state);
         if let Some(interval) = frame_interval {
@@ -448,6 +467,8 @@ where
             upload_ms: 0.0,
             texture_ms: 0.0,
             encode_ms: 0.0,
+            prims: 0,
+            verts: 0,
             submit_ms: 0.0,
         }
     }
@@ -570,6 +591,8 @@ where
             self.texture_ms,
             self.encode_ms,
             self.submit_ms,
+            self.prims,
+            self.verts,
         );
 
         let mut full_output = self.egui_ctx.run_ui(self.egui_input.take(), |ui| {
@@ -671,6 +694,8 @@ where
             self.acquire_ms = self.renderer.last_acquire_ms();
             self.upload_ms = self.renderer.last_upload_ms();
             self.texture_ms = self.renderer.last_texture_ms();
+            self.prims = self.renderer.last_prims();
+            self.verts = self.renderer.last_verts();
             self.encode_ms = self.renderer.last_encode_ms();
             self.submit_ms = self.renderer.last_submit_ms();
         } else if let Some(candidate) = now.checked_add(repaint_delay) {

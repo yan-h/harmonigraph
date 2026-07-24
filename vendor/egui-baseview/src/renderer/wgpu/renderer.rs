@@ -212,6 +212,9 @@ pub struct Renderer {
     /// Of that, the texture uploads alone — the rest is buffer uploads and,
     /// with them, the paint callbacks' `prepare`.
     last_texture_ms: f32,
+    /// Primitives and vertices handed to the upload this frame.
+    last_prims: u32,
+    last_verts: u32,
     last_encode_ms: f32,
     last_submit_ms: f32,
     /// How long the last frame spent turning egui's shapes into triangles.
@@ -253,6 +256,8 @@ impl Renderer {
             last_acquire_ms: 0.0,
             last_upload_ms: 0.0,
             last_texture_ms: 0.0,
+            last_prims: 0,
+            last_verts: 0,
             last_encode_ms: 0.0,
             last_submit_ms: 0.0,
             last_tess_ms: 0.0,
@@ -283,6 +288,15 @@ impl Renderer {
     /// finish + submit + present.
     pub fn last_upload_ms(&self) -> f32 {
         self.last_upload_ms
+    }
+
+    /// How many primitives and vertices the last upload had to move.
+    pub fn last_prims(&self) -> u32 {
+        self.last_prims
+    }
+
+    pub fn last_verts(&self) -> u32 {
+        self.last_verts
     }
 
     /// Of the uploads, the TEXTURE half. `last_upload_ms` minus this is the
@@ -403,6 +417,21 @@ impl Renderer {
         let tess_start = std::time::Instant::now();
         let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
         self.last_tess_ms = tess_start.elapsed().as_secs_f32() * 1000.0;
+        // What the upload is actually being asked to move. A memcpy of the
+        // vertices tessellation produced should cost a fraction of producing
+        // them, so if the upload dominates, either the volume is absurd or it
+        // is being done in very many small writes — egui-wgpu writes per
+        // primitive, and primitives only merge while the texture and clip
+        // rect hold still.
+        self.last_prims = clipped_primitives.len() as u32;
+        self.last_verts = clipped_primitives
+            .iter()
+            .map(|p| match &p.primitive {
+                egui::epaint::Primitive::Mesh(mesh) => mesh.vertices.len() as u32,
+                egui::epaint::Primitive::Callback(_) => 0,
+            })
+            .sum();
+
         let upload_start = std::time::Instant::now();
 
         let mut encoder =
