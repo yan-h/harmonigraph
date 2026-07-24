@@ -251,8 +251,12 @@ fn memory_readout(rss_bytes: u64) -> String {
     }
 }
 
-/// Draw the overlay in the top-left corner of `area` (the whole editor rect).
-/// A floating, non-interactive panel so it never steals clicks from the view
+/// Points between the overlay and the corner it sits in.
+const OVERLAY_INSET: f32 = 8.0;
+
+/// Draw the overlay in the top-right corner of `area` — the analyzer pane when
+/// it is on screen, the whole editor otherwise (see `perf_overlay_area`). A
+/// floating, non-interactive panel so it never steals clicks from the view
 /// under it.
 pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfStats) {
     let fps = perf.fps();
@@ -345,9 +349,21 @@ pub(crate) fn draw_overlay(ctx: &egui::Context, area: egui::Rect, perf: &PerfSta
         + ROW_GAP * lines.len().saturating_sub(1) as f32;
 
     let margin = egui::vec2(8.0, 6.0);
-    let origin = area.left_top() + egui::vec2(8.0, 8.0);
+    // Top-RIGHT of `area`, and clamped to it so a pane too narrow to hold the
+    // overlay shows its left edge rather than pushing the numbers off screen.
+    //
+    // Placed outright rather than anchored. Anchoring existed because a
+    // widget-built overlay only learns its own width after laying out, and the
+    // right edge has to stay put as the numbers change width underneath it.
+    // Measuring the galleys up front settles the size before anything is
+    // drawn, so the position is simply known.
+    let size = egui::vec2(width, height) + margin * 2.0;
+    let origin = egui::pos2(
+        (area.right() - OVERLAY_INSET - size.x).max(area.left()),
+        area.top() + OVERLAY_INSET,
+    );
     painter.rect_filled(
-        egui::Rect::from_min_size(origin, egui::vec2(width, height) + margin * 2.0),
+        egui::Rect::from_min_size(origin, size),
         4.0,
         egui::Color32::from_black_alpha(0xC0),
     );

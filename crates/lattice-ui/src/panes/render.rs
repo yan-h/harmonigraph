@@ -39,6 +39,11 @@ const RENDER_POINTS_ACROSS: f32 = 1280.0;
 /// picture. See [`frame_chrome`].
 const FRAME_CHROME_PAD: f32 = 8.0;
 
+/// The preview keeps at least this much height, even when the controls above
+/// it have already used the pane up. See [`render_pane`] — the floor is what
+/// lets the pane overflow, and overflow is what the wheel scrolls.
+const PREVIEW_MIN_HEIGHT: f32 = 160.0;
+
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -49,15 +54,24 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     section(ui, "Preview");
     let frame = state.render_config.frame;
     let avail = ui.available_size();
-    if avail.x < 20.0 || avail.y < 20.0 {
+    if avail.x < 20.0 {
         return;
     }
-    let (outer, _) = ui.allocate_exact_size(avail, Sense::hover());
+    // The preview takes whatever the controls left it — but never less than
+    // PREVIEW_MIN_HEIGHT. Without that floor it absorbed exactly the slack, so
+    // the pane's content measured the same height as the pane no matter how
+    // short the pane got: the dock's `ScrollArea` saw nothing sticking out and
+    // the wheel had nothing to grab, which made Video the one settings pane
+    // that would not scroll. Now a squeezed pane overflows instead, and the
+    // controls stay reachable by scrolling rather than the preview shrinking
+    // to a sliver.
+    let size = egui::vec2(avail.x, avail.y.max(PREVIEW_MIN_HEIGHT));
+    let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
     let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
     // Inset before letterboxing: `letterbox` fits the box exactly on one axis,
     // so without this the frame's boundary chrome would have nowhere to go on
     // two sides. Shrinks on a small preview rather than eating it.
-    let pad = FRAME_CHROME_PAD.min(avail.min_elem() * 0.15);
+    let pad = FRAME_CHROME_PAD.min(size.min_elem() * 0.15);
     let box_rect = letterbox(outer.shrink(pad), aspect);
     // How far the preview shrinks the render frame — labels scale by this so
     // they read at the size they will in the render, not at full point size.

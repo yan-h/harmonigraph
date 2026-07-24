@@ -431,6 +431,39 @@ impl ViewImpl for BaseviewView {
     }
 
     fn scroll_wheel(this: ViewRef<Self>, event: &NSEvent) {
+        // Report where the wheel happened before reporting the wheel itself.
+        //
+        // `scrollWheel:` carries a location but no CursorMoved, and consumers
+        // route a wheel by where they last saw the pointer — egui hands it to
+        // whatever its stored pointer position is over. That position can be
+        // absent or stale, because `mouseMoved:` only arrives through the
+        // tracking area (`ActiveInActiveApp`) and `mouseExited:` clears it: a
+        // window opened with the cursor already inside it, or one whose app was
+        // not frontmost while the cursor moved in, has never been told where the
+        // pointer is. The wheel then did nothing at all, or landed on whatever
+        // was under the LAST known position — scrolling one pane while the
+        // cursor sat over another.
+        //
+        // The event's own location is always right, so send it first and the
+        // wheel is applied where the cursor actually is. Gated on the location
+        // being inside the view so inertial scrolling that outlives the pointer
+        // leaving cannot resurrect it.
+        let point = this.view.convertPoint_fromView(event.locationInWindow(), None);
+        let bounds = this.view.bounds();
+        let inside = point.x >= bounds.origin.x
+            && point.y >= bounds.origin.y
+            && point.x <= bounds.origin.x + bounds.size.width
+            && point.y <= bounds.origin.y + bounds.size.height;
+        if inside {
+            Self::trigger_event(
+                this,
+                Event::Mouse(MouseEvent::CursorMoved {
+                    position: Point { x: point.x, y: point.y },
+                    modifiers: make_modifiers(event.modifierFlags()),
+                }),
+            );
+        }
+
         let x = event.scrollingDeltaX() as f32;
         let y = event.scrollingDeltaY() as f32;
 
