@@ -229,7 +229,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              display itself: drag the roll along the time axis, away from the \
              now-line to zoom in.",
         );
-    ValueBar::new(&mut cfg.roll_thickness, 0.2..=8.0, "Note width")
+    ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Note width")
         .show(ui)
         .on_hover_text(
             "Ribbon width in semitones of the pitch axis — so it holds its \

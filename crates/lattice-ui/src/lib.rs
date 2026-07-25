@@ -589,8 +589,12 @@ fn default_roll_seconds() -> f32 {
     12.0
 }
 
+/// Thin: a note is a line through the spectrogram at its own pitch, not a
+/// slab over it. At 0.3 semitones a semitone of pitch axis still separates
+/// two neighbouring keys, which is what makes the roll readable when the
+/// pitch range is zoomed out over the whole spectrum.
 fn default_roll_thickness() -> f32 {
-    0.8
+    0.3
 }
 
 fn default_roll_outline_width() -> f32 {
