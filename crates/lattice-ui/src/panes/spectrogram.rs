@@ -192,6 +192,38 @@ impl SpectrogramRing {
     fn x_of(&self, key: i64) -> usize {
         key.rem_euclid(self.capacity as i64) as usize
     }
+
+    /// Whether this ring can be carried forward for a run starting at
+    /// `first_key`: it has to describe THIS texture, in this style, and still
+    /// hold columns the run continues from. A gap (the window jumped, history
+    /// was cleared) would leave never-written texels between the old columns
+    /// and the new ones.
+    ///
+    /// Answering NO is always safe and never cheap — it re-blanks the texture
+    /// and repaints every column — so this is the predicate the ring's whole
+    /// value rests on, and `no_cache_layer_falls_back_as_the_window_scrolls`
+    /// holds it to yes for every Span the pane offers.
+    fn carries(&self, capacity: usize, style: &RingStyle, first_key: i64) -> bool {
+        self.capacity == capacity
+            && self.style == *style
+            && first_key >= self.oldest_valid
+            && first_key <= self.written_through + 1
+    }
+
+    /// A ring with nothing written yet, for a run starting at `first_key` — so
+    /// its caller paints every visible slab rather than trusting a column that
+    /// was never uploaded.
+    fn restarted(capacity: usize, style: RingStyle, first_key: i64) -> SpectrogramRing {
+        SpectrogramRing { capacity, style, written_through: first_key - 1, oldest_valid: first_key }
+    }
+
+    /// Record a run written through `last_key`. Anything older than a full lap
+    /// has been overwritten by it; the far guard sits one before the run, so it
+    /// is the oldest texel in use.
+    fn wrote(&mut self, last_key: i64) {
+        self.written_through = last_key;
+        self.oldest_valid = self.oldest_valid.max(last_key - self.capacity as i64 + 2);
+    }
 }
 
 pub(super) fn draw_spectrogram(
@@ -908,19 +940,12 @@ fn write_ring(
     let last_key = first_key + visible as i64 - 1;
     let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
 
-    // Carry the ring forward only when it describes THIS texture, in this
-    // style, and still holds columns the visible run continues from. A gap
-    // (the window jumped, history was cleared) would leave never-written
-    // texels between the old columns and the new ones.
-    let usable = match (&spectrum.spectrogram_ring[surface], &spectrum.spectrogram_tex[surface]) {
-        (Some(ring), Some(_)) => {
-            ring.capacity == capacity
-                && ring.style == style
-                && first_key >= ring.oldest_valid
-                && first_key <= ring.written_through + 1
-        }
-        _ => false,
-    };
+    // A ring with no texture under it describes nothing, whatever its
+    // bookkeeping says.
+    let usable = matches!(
+        (&spectrum.spectrogram_ring[surface], &spectrum.spectrogram_tex[surface]),
+        (Some(ring), Some(_)) if ring.carries(capacity, &style, first_key),
+    );
 
     if !usable {
         // A fresh texture starts black, so a column never written reads as
@@ -930,14 +955,8 @@ fn write_ring(
             Some(handle) => handle.set(blank, opts),
             slot => *slot = Some(ctx.load_texture("spectrogram", blank, opts)),
         }
-        spectrum.spectrogram_ring[surface] = Some(SpectrogramRing {
-            capacity,
-            style,
-            // Nothing written yet: the loop below then paints every visible
-            // slab rather than trusting a column that was never uploaded.
-            written_through: first_key - 1,
-            oldest_valid: first_key,
-        });
+        spectrum.spectrogram_ring[surface] =
+            Some(SpectrogramRing::restarted(capacity, style, first_key));
     }
 
     let (Some(ring), Some(tex)) =
@@ -979,10 +998,7 @@ fn write_ring(
         tex.set_partial([x + capacity, 0], image, opts);
     }
 
-    ring.written_through = last_key;
-    // Anything older than a full lap has been overwritten by the columns above.
-    // The far guard sits one before the run, so it is the oldest texel in use.
-    ring.oldest_valid = ring.oldest_valid.max(last_key - capacity as i64 + 2);
+    ring.wrote(last_key);
 }
 
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
@@ -1480,54 +1496,108 @@ mod tests {
         assert_eq!(agg.rebuilds, 1, "the fast path stopped carrying a short window");
     }
 
-    /// The ring exists so a scrolling window writes ONE column per frame. Its
-    /// capacity is what decides whether it can be carried forward at all — a
-    /// different capacity is a different texture, so every change re-blanks it
-    /// and repaints every column, which at a full window is the whole cost the
-    /// ring was built to avoid, several times a second.
+    /// **Every cache layer must stay on its fast path across the whole REGIME
+    /// GRID**, not just at the settings the pane opens on.
     ///
-    /// The trap is that the visible run breathes against the slab grid: it
-    /// reaches from the last column BEFORE the far edge to the newest column,
-    /// and both ends are floored onto slabs. Where a slab is WIDER than the
-    /// analyzer's lag — a long Span — the run reaches the near end too, so it
-    /// can be as long as the window itself, and a capacity that tracked it
-    /// flipped back and forth. This walks a real window across a real store and
-    /// holds the capacity to ONE value.
+    /// Falling back is always CORRECT — a rescan and a reallocation both draw
+    /// the right picture — so no value assertion anywhere in this file can see
+    /// a layer that has quietly stopped working. What is left is to count the
+    /// fallbacks, and to count them at settings the defaults never reach: both
+    /// of the regressions this guards fired only past a Span the whole suite
+    /// otherwise stayed below, and both then held until the plugin was reloaded.
+    ///
+    /// The grid is chosen where the cliffs are, and the cliffs are RATIOS
+    /// between constants picked independently of each other:
+    ///
+    /// - the window against the store's finest tier
+    ///   (`FINE_COLUMNS * FFT_INTERVAL`, ~16.4 s), which decides whether the
+    ///   aggregator's window holds merged columns; and
+    /// - a SLAB against the analyzer's LAG (half an analysis window), which
+    ///   decides whether the visible run reaches the far end of the window and
+    ///   so whether the ring's capacity tracks it.
+    ///
+    /// The second moves with the FFT window AND with the pane's width, since a
+    /// slab is `Span / depth pixels` — a narrow pane crosses it at a much
+    /// shorter Span than a wide one. So the sweep is taken per (window, pane)
+    /// pair, either side of that pair's own crossing.
+    ///
+    /// The texture cache above these two is deliberately not counted: its key
+    /// holds the newest column's time, so it is MEANT to miss once per column.
+    /// It is the two layers under it that must turn a miss into O(one column).
     #[test]
-    fn the_ring_capacity_holds_still_as_the_window_scrolls() {
+    fn no_cache_layer_falls_back_as_the_window_scrolls() {
         let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
-        let interval = 0.008;
-        // Half an analysis window, the lag every healthy column has: the
-        // default Balanced window is 8192 samples at 48 kHz.
-        let lag = 0.5 * 8192.0 / 48000.0;
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let style = RingStyle {
+            rows: reads.len(),
+            bucket_bits: 0,
+            scale_min_bits: 0,
+            scale_span_bits: 0,
+            cfg: SpectrumConfig::default(),
+            frame: FrameParams::default(),
+        };
 
-        // Either side of the slab-vs-lag crossing, and out to ROLL_SECONDS_MAX.
-        for window in [12.0f64, 30.0, 60.0, 120.0, 300.0, 600.0] {
-            let bucket = (window / LIVE_SLAB_CAP as f64).max(MIN_BUCKET);
-            let mut agg = SpectrogramAgg::new();
-            let mut history = crate::SpectrumHistory::default();
-            let mut caps: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-            let columns = ((window + 20.0) / interval) as usize;
-            for i in 0..columns {
-                let t = i as f64 * interval;
-                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
-                // The shell clock: the newest column is always half an analysis
-                // window old.
-                let now = t + lag;
-                let first =
-                    history.partition_point(|c| c.time < now - window).saturating_sub(1);
-                let (centers, _) = agg.window(&history, first, bucket, &reads);
-                // Steady state only — the run really does grow while the window
-                // is still filling.
-                if now > window + 5.0 {
-                    caps.insert(ring_capacity(window, bucket, centers.len()));
+        // Every FFT window the pane offers, by the lag it gives a column: a
+        // column is stamped at the middle of the window it measured.
+        let windows = [
+            ("Fast", 0.5 * 4096.0 / 48000.0),
+            ("Balanced", 0.5 * 8192.0 / 48000.0),
+            ("Precise", 0.5 * 16384.0 / 48000.0),
+        ];
+        // Depth pixels the image is cut into: a full-width pane (which the cap
+        // holds at LIVE_SLAB_CAP) and a narrow one.
+        let panes = [("wide", LIVE_SLAB_CAP as f64), ("narrow", 384.0)];
+
+        for (algo, lag) in windows {
+            for (pane, cols) in panes {
+                // Where a slab is exactly the lag — the crossing this pair's
+                // ring behaviour turns on — plus the Span the pane opens on.
+                let crossing = lag * cols;
+                for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
+                    let bucket = (span / cols).max(MIN_BUCKET);
+                    let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
+
+                    let mut agg = SpectrogramAgg::new();
+                    let mut history = crate::SpectrumHistory::default();
+                    let mut ring: Option<SpectrogramRing> = None;
+                    let (mut restarts, mut caps) = (0u32, std::collections::BTreeSet::new());
+
+                    // Long enough to fill the window and then scroll a while
+                    // inside it, which is where the run starts breathing.
+                    let columns = ((span + 15.0) / interval) as usize;
+                    for i in 0..columns {
+                        let t = i as f64 * interval;
+                        history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+                        // The shell clock: the newest column always lags it.
+                        let now = t + lag;
+
+                        // Exactly what `draw_spectrogram` asks for each frame.
+                        let first =
+                            history.partition_point(|c| c.time < now - span).saturating_sub(1);
+                        let (centers, _) = agg.window(&history, first, bucket, &reads);
+                        let visible = centers.len();
+                        let first_key = (centers[0] / bucket).floor() as i64;
+                        let capacity = ring_capacity(span, bucket, visible);
+
+                        // And exactly what `write_ring` then decides.
+                        if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key)) {
+                            restarts += 1;
+                            ring = Some(SpectrogramRing::restarted(
+                                capacity,
+                                style.clone(),
+                                first_key,
+                            ));
+                            caps.insert(capacity);
+                        }
+                        ring.as_mut().expect("just restarted").wrote(first_key + visible as i64 - 1);
+                    }
+
+                    // One of each to get started, and none after: from then on a
+                    // frame folds one column and writes one texel column.
+                    assert_eq!(agg.rebuilds, 1, "the aggregator rescans the window: {at}");
+                    assert_eq!(restarts, 1, "the ring is reallocated ({caps:?} slabs): {at}");
                 }
             }
-            assert_eq!(
-                caps.len(),
-                1,
-                "a {window} s Span reallocates the ring as it scrolls: capacities {caps:?}",
-            );
         }
     }
 
