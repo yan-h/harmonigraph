@@ -11,8 +11,8 @@
 //! anti-aliased rounded rects — keyline, black outline, core — each a
 //! couple of hundred vertices once its corners and AA ring were subdivided.
 //!
-//! **What this does instead.** One quad per note segment, with a rounded-box
-//! signed distance field in the fragment shader ([`shaders/roll.wgsl`]).
+//! **What this does instead.** One quad per note segment, with a box signed
+//! distance field in the fragment shader ([`shaders/roll.wgsl`]).
 //! Core, black outline and white keyline are bands of that distance, so they
 //! cost a compare rather than a second and third shape. Four vertices per
 //! note against several hundred: the upload stops mattering rather than
@@ -43,8 +43,8 @@ const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 #[cfg(test)]
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &["vs_note", "fs_note_gamma", "fs_note_linear"];
 
-/// One note segment: a rounded box in the pane's (pitch, depth) plane, its
-/// colors, and the two rim bands standing outside it.
+/// One note segment: a box in the pane's (pitch, depth) plane, its colors,
+/// and the two rim bands standing outside it.
 ///
 /// Screen geometry, in egui POINTS, already resolved through the pane's
 /// `Axes` — this crate never learns which way the pane is turned. Lengths
@@ -60,12 +60,16 @@ pub struct RollInstance {
     /// is drawn as a bare spine — the outline width alone then gives it its
     /// thickness, exactly as the hairline branch did with a line stroke.
     pub half_extent: [f32; 2],
-    /// `(shear, corner radius, outline width, interior fill)`.
+    /// `(shear, outline width, interior fill, spare)`.
     ///
     /// Shear is the center line's pitch drift per point of depth: 0 for a
     /// held note, non-zero for a glide, which makes the box a parallelogram
     /// rather than needing a second shape. Fill is how solidly the inside of
     /// the outline is painted in the note's own color, 0 leaving it hollow.
+    ///
+    /// No corner radius: a note is a rectangle, always. Rounding was a setting
+    /// and is gone — on the notes short enough for it to show at all, it only
+    /// ever rounded a tapped key into a bead.
     pub shape: [f32; 4],
     /// `(black outline width, white keyline width, edge mode, spare)`.
     ///
@@ -461,7 +465,7 @@ mod tests {
         RollInstance {
             center: [128.0, 128.0],
             half_extent: [12.0, 60.0],
-            shape: [0.0, 0.0, 4.0, 0.0],
+            shape: [0.0, 4.0, 0.0, 0.0],
             rim: [2.0, 2.0, EDGE_AROUND, 0.0],
             core: [255, 0, 0, 255],
             border: [0, 0, 0, 255],
@@ -550,7 +554,7 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        let solid = RollInstance { shape: [0.0, 0.0, 4.0, 1.0], ..centered_note() };
+        let solid = RollInstance { shape: [0.0, 4.0, 1.0, 0.0], ..centered_note() };
         let frame = draw(&device, &queue, vec![solid], bg_color());
         let at = |x: u32| pixel(&frame, x, 128);
         const RED: [u8; 4] = [255, 0, 0, 255];
@@ -561,7 +565,7 @@ mod tests {
 
         // Half fill over an opaque background is half the note's color and half
         // the picture behind it.
-        let wash = RollInstance { shape: [0.0, 0.0, 4.0, 0.5], ..centered_note() };
+        let wash = RollInstance { shape: [0.0, 4.0, 0.5, 0.0], ..centered_note() };
         let frame = draw(&device, &queue, vec![wash], bg_color());
         let middle = pixel(&frame, 128, 128);
         let half = |a: u8, b: u8| ((u32::from(a) + u32::from(b)) / 2) as u8;
@@ -616,36 +620,35 @@ mod tests {
         assert!(near(side[2], BG), "Ends still rimmed the side in white: {:?}", side[2]);
     }
 
-    /// A note too short to hold its corner radius squares off instead of
-    /// rounding into a bead.
+    /// A note is a rectangle: its corners are square, right out to them.
     ///
-    /// Clamping the radius to the note's own half-length (which is all it used
-    /// to do) turns a tapped key into a stadium — at a few points long, a
-    /// disc — so a run of taps came out as a string of beads. The taper is on
-    /// the LENGTH, so the ribbon's thickness still rounds as asked wherever
-    /// the note is long enough to show it.
+    /// Rounding used to be a setting, and on the notes short enough for it to
+    /// show at all it only ever hurt — a tap is a few points long, the radius
+    /// clamps to its own half-length, and the note comes out a bead. A run of
+    /// them came out as a string of beads. Nothing rounds a note now, and this
+    /// samples the corner a radius would have taken off.
     #[test]
-    fn a_note_too_short_for_its_rounding_squares_off_instead_of_becoming_a_bead() {
+    fn a_notes_corners_are_square() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // 40 points across pitch, 6 along time, asking for a 20-point radius:
-        // far more than it can hold either way. Filled and unrimmed, so the
-        // sample reads the shape alone.
+        // 40 points across pitch, 6 along time — the shape of a tapped key on
+        // a thick ribbon. Filled and unrimmed, so the sample reads the shape
+        // alone.
         let tap = RollInstance {
             half_extent: [20.0, 3.0],
-            shape: [0.0, 20.0, 0.0, 1.0],
+            shape: [0.0, 0.0, 1.0, 0.0],
             rim: [0.0, 0.0, EDGE_AROUND, 0.0],
             ..centered_note()
         };
         let frame = draw(&device, &queue, vec![tap], bg_color());
         // 19.5 points out along pitch and 2.5 along time: inside the square
-        // note, and well outside the stadium a clamp alone would have left
-        // (whose corner arc is centered 17 out, with a radius of 3).
+        // note, and outside any rounding of it (a radius clamped to the note's
+        // half-length would arc from 17 out, missing this by half a point).
         let corner = pixel(&frame, 147, 130);
         assert!(
             near(corner, [255, 0, 0, 255]),
-            "the tap's corner is missing ({corner:?}) — it rounded into a bead",
+            "the tap's corner is missing ({corner:?}) — something is rounding it off",
         );
     }
 

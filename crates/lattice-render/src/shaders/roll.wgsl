@@ -33,7 +33,7 @@ struct VertexOut {
     @location(0) local: vec2<f32>,
     /// Half extents of the note's own outline, same two axes.
     @location(1) @interpolate(flat) half_extent: vec2<f32>,
-    /// (shear, corner radius, outline width, interior fill).
+    /// (shear, outline width, interior fill, spare).
     @location(2) @interpolate(flat) shape: vec4<f32>,
     /// (black outline width, white keyline width, which edges the rim rides,
     /// spare). Widths are in points, and either is zero when that band is
@@ -66,7 +66,7 @@ fn vs_note(
     // How far outside its own outline a note can paint: half the outline
     // (the stroke is centered), the two rim bands standing outside that,
     // and the antialiasing ramp.
-    let reach = shape.z * 0.5 + rim.x + rim.y + locals.feather;
+    let reach = shape.y * 0.5 + rim.x + rim.y + locals.feather;
     // The quad is the note's bounding box grown by `reach` on every side.
     // Growing a box by a disc of radius r grows its bounds by exactly r,
     // so this covers the rim however the note is slanted; the shear term
@@ -119,22 +119,6 @@ fn inside(d: f32, edge: f32) -> f32 {
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
-/// The corner radius a note can actually hold.
-///
-/// Clamped to half the ribbon's thickness, or a short or thin note rounds
-/// itself inside out — and then TAPERED away on a note too short to carry
-/// it. Clamping alone (against the note's own length) rounds a tapped key
-/// into a stadium: a few points long, a note becomes a bead, and a run of
-/// taps a string of beads whose rims curl around neighbours they are nearly
-/// touching. The taper is smooth in the length, so a held note growing out of
-/// a tap rounds up gradually instead of popping the moment it clears its own
-/// radius.
-fn corner_radius(want: f32, half_across: f32, half_depth: f32) -> f32 {
-    let r = min(want, half_across);
-    let taper = smoothstep(0.0, 2.0 * max(r, 1e-6), half_depth);
-    return min(r * taper, half_depth);
-}
-
 /// How much of the rim survives at this fragment, per the Edge shape setting:
 /// 0 all the way around, 1 the long edges only, 2 the ends only.
 ///
@@ -172,13 +156,13 @@ fn note_color(in: VertexOut) -> vec4<f32> {
     let across = (in.local.x - slope * in.local.y) / skew;
     let half_across = in.half_extent.x / skew;
 
-    // Rounded-box distance, at whatever radius this note can hold.
-    let radius = corner_radius(in.shape.y, half_across, in.half_extent.y);
-    let q = vec2<f32>(
-        abs(across) - (half_across - radius),
-        abs(in.local.y) - (in.half_extent.y - radius),
-    );
-    let d = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - radius;
+    // Box distance. Square corners, always: a note is a rectangle in the
+    // pane's two axes, and rounding one was a setting until it turned out to
+    // be doing nothing a piano roll wants — on the notes short enough for it
+    // to show (a tapped key), the radius clamps to the note's own half-length
+    // and turns it into a bead.
+    let q = vec2<f32>(abs(across) - half_across, abs(in.local.y) - in.half_extent.y);
+    let d = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
 
     // Reading outward from the note's own outline: its interior at whatever
     // Fill asks for (0 leaves it hollow and the spectrogram shows straight
@@ -188,10 +172,10 @@ fn note_color(in: VertexOut) -> vec4<f32> {
     // The two rim bands are windows on the same box filter as the outline, so
     // they tile the distance without ever overlapping it — which is what keeps
     // the rim OUTSIDE the note however thin the ribbon is.
-    let inner = in.shape.z * 0.5;
+    let inner = in.shape.y * 0.5;
     let dark = inner + in.rim.x;
     let light = dark + in.rim.y;
-    var out = in.core * in.shape.w * inside(d, -inner);
+    var out = in.core * in.shape.z * inside(d, -inner);
     out += in.core * band(d, -inner, inner);
     let mask = rim_mask(in, across, half_across, inner);
     out += in.border * band(d, inner, dark) * mask;

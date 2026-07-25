@@ -241,14 +241,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              through; 1 fills it. In between is a wash the heatmap still reads \
              through.",
         );
-    ValueBar::new(&mut cfg.roll_rounding, 0.0..=1.0, "Rounding")
-        .show(ui)
-        .on_hover_text(
-            "Corner rounding of an unbent note, as a fraction of half its \
-             width (bent notes stay angular). Tapered away on a note too short \
-             to hold it, so a tapped key stays a square tick rather than \
-             rounding into a bead.",
-        );
     ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
         .show(ui)
         .on_hover_text(

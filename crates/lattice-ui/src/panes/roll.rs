@@ -350,28 +350,20 @@ pub(super) fn note_instances(
             let slope =
                 if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
             let width = cfg.roll_outline_width.clamp(0.5, MAX_RIM_PX);
-            let (half_pitch, width, radius) = if ribbon_px < MIN_RIBBON_PX {
+            let (half_pitch, width) = if ribbon_px < MIN_RIBBON_PX {
                 // Too thin to bound: the note IS its spine. It has no interior
                 // to fill, so the outline width alone carries it (at hairline
                 // width a filled shape disappears, a line does not), and the
                 // rim stands outside that.
-                (0.0, width.max(MIN_RIBBON_PX), 0.0)
+                (0.0, width.max(MIN_RIBBON_PX))
             } else {
-                // Corners round only where the ribbon runs straight. A glide's
-                // segments butt end to end, and rounding those ends would pinch
-                // the ribbon at every breakpoint.
-                let radius = if p0 == p1 {
-                    cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5
-                } else {
-                    0.0
-                };
-                (half * axes.pitch_len(), width, radius)
+                (half * axes.pitch_len(), width)
             };
 
             instances.push(RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, depth_px.abs() * 0.5],
-                shape: [slope, radius, width, fill],
+                shape: [slope, width, fill, 0.0],
                 rim: [rim[0], rim[1], edge_mode, 0.0],
                 core: core.to_array(),
                 border: dark.to_array(),
@@ -614,7 +606,7 @@ mod tests {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
         let notes = instances(&state, 0.05);
-        assert_eq!(one(&notes).shape[3], 0.6, "Fill did not reach the note");
+        assert_eq!(one(&notes).shape[2], 0.6, "Fill did not reach the note");
         assert_eq!(one(&notes).rim[2], 2.0, "the Edge shape did not reach the note");
 
         state.spectrum_config.roll_edge = crate::RollEdge::Sides;
@@ -683,29 +675,27 @@ mod tests {
         let thick = ribbon_with_range(0.5, 12.0);
         let note = one(&thick);
         assert!(note.half_extent[0] > 0.0, "a bounded ribbon lost its thickness");
-        assert_eq!(note.shape[2], 2.0, "a bounded ribbon should use the outline width as set");
+        assert_eq!(note.shape[1], 2.0, "a bounded ribbon should use the outline width as set");
 
         let thin = ribbon_with_range(0.5, 600.0);
         let note = one(&thin);
         assert_eq!(note.half_extent[0], 0.0, "a hairline ribbon still claims a half-width");
         assert!(
-            note.shape[2] >= MIN_RIBBON_PX,
+            note.shape[1] >= MIN_RIBBON_PX,
             "a hairline spine ({}) is thinner than it can be seen at",
-            note.shape[2],
+            note.shape[1],
         );
     }
 
     /// A glide is the same instance sheared, not a second kind of shape: the
-    /// note's center line drifts along pitch as it runs down the depth axis.
-    /// Its corners stay square — a glide's segments butt end to end, and
-    /// rounding those ends would pinch the ribbon at every breakpoint.
+    /// note's center line drifts along pitch as it runs down the depth axis,
+    /// which makes the box a parallelogram and costs nothing else.
     #[test]
     fn a_glide_shears_the_note_rather_than_needing_another_shape() {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
-        state.spectrum_config.roll_rounding = 1.0;
         state.tracker.handle_event(NoteEvent {
             time: 0.0,
             channel: 0,
@@ -714,7 +704,6 @@ mod tests {
         });
         let held = instances(&state, 1.0);
         assert_eq!(one(&held).shape[0], 0.0, "a held note should not be sheared");
-        assert!(one(&held).shape[1] > 0.0, "a held note should round its corners");
 
         // Bend it a semitone up over the next second.
         state.tracker.handle_event(NoteEvent {
@@ -724,11 +713,9 @@ mod tests {
             kind: NoteEventKind::Tuning { semitones: 1.0 },
         });
         let bent = instances(&state, 2.0);
-        let glide = bent
-            .iter()
+        bent.iter()
             .find(|n| n.shape[0] != 0.0)
             .expect("the bent segment should be sheared");
-        assert_eq!(glide.shape[1], 0.0, "a glide's ends should stay square");
     }
 
     /// Notes are placed sub-pixel, and that is load-bearing. egui snaps rects

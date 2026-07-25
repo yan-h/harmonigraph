@@ -411,12 +411,6 @@ pub struct SpectrumConfig {
     /// Note ribbon width, in semitones of the pitch axis.
     #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
-    /// Corner rounding of an unbent note, as a fraction of half its width.
-    ///
-    /// Tapered away on a note too short to hold it, so a tapped key stays a
-    /// square tick instead of rounding into a bead (see `shaders/roll.wgsl`).
-    #[serde(default = "default_roll_rounding")]
-    pub roll_rounding: f32,
     /// Stroke width of a note's outline, in points — the band of the note's
     /// own color straddling its boundary. What is INSIDE that boundary is
     /// [`roll_fill`](Self::roll_fill).
@@ -605,10 +599,6 @@ fn default_roll_thickness() -> f32 {
     0.8
 }
 
-fn default_roll_rounding() -> f32 {
-    0.5
-}
-
 fn default_roll_outline_width() -> f32 {
     1.5
 }
@@ -671,7 +661,6 @@ impl Default for SpectrumConfig {
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
-            roll_rounding: default_roll_rounding(),
             roll_outline_width: default_roll_outline_width(),
             roll_fill: default_roll_fill(),
             roll_border_width: default_roll_border_width(),
