@@ -69,10 +69,14 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
     };
 
-    // ---- Layout ---------------------------------------------------------
-    // Just the orientation now; drag the pane wherever you like (egui_dock
-    // docks it freely), and Auto follows the shape it lands in.
-    section(ui, "Layout");
+    // ---- Axes -----------------------------------------------------------
+    // Which way the plot runs, and how much of the pitch axis it shows. Time's
+    // own extent is the roll's Span, and lives with the roll — it is the one
+    // axis setting that means nothing without the layer it measures.
+    //
+    // A plain heading rather than `section`: this is the top of the pane, and
+    // a leading rule there is a line under nothing.
+    ui.heading("Axes");
     let cfg = &mut state.spectrum_config;
     choice_row(
         ui,
@@ -93,6 +97,43 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
                 SpectralOrientation::Vertical,
                 "Upright",
                 "Time scrolls downward (now on top); pitch is horizontal, spectrum on top",
+            ),
+        ],
+    );
+    // One control for both ends, because the two ends are one thing: the
+    // window onto the analyzer's axis. Dragged in MIDI note (which is what
+    // makes it a log-frequency zoom) and read out in Hz. Labelled, since a
+    // RangeBar carries no label of its own and the heading above is naming
+    // the group rather than this bar.
+    ui.label("Pitch range");
+    RangeBar::new(
+        &mut cfg.low_midi,
+        &mut cfg.high_midi,
+        lattice_core::spectrum::SPECTRUM_MIN_MIDI..=lattice_core::spectrum::SPECTRUM_MAX_MIDI,
+    )
+    .min_span(crate::PITCH_RANGE_MIN_SPAN)
+    .display(hz_readout)
+    .show(ui)
+    .on_hover_text(
+        "The slice of the spectrum on show. Drag either end to move it, drag \
+         between them to slide the whole range (it squishes when it meets an \
+         end), double-click for the full axis. The scale is logarithmic — \
+         equal distances are equal musical intervals — so an octave is the \
+         same width wherever it sits.\n\nOr set it on the display itself: drag \
+         the Analyzer pane across the pitch axis to pan the range, scroll to \
+         zoom it around the pointer. (Dragging the other way, along time, zooms \
+         the roll's Span instead.)",
+    );
+    choice_row(
+        ui,
+        "Labels",
+        &mut cfg.labels,
+        &[
+            (SpectrumLabels::Notes, "Notes", "A gridline at every C, Bitwig octave numbers"),
+            (
+                SpectrumLabels::Frequency,
+                "Frequency",
+                "Gridlines at 20, 50, 100 ... 10k, 20k Hz",
             ),
         ],
     );
@@ -172,43 +213,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          behind it and lose its shape. 0 draws none.",
     );
 
-    // ---- Pitch axis -----------------------------------------------------
-    section(ui, "Pitch axis");
-    // One control for both ends, because the two ends are one thing: the
-    // window onto the analyzer's axis. Dragged in MIDI note (which is what
-    // makes it a log-frequency zoom) and read out in Hz.
-    RangeBar::new(
-        &mut cfg.low_midi,
-        &mut cfg.high_midi,
-        lattice_core::spectrum::SPECTRUM_MIN_MIDI..=lattice_core::spectrum::SPECTRUM_MAX_MIDI,
-    )
-    .min_span(crate::PITCH_RANGE_MIN_SPAN)
-    .display(hz_readout)
-    .show(ui)
-    .on_hover_text(
-        "The slice of the spectrum on show. Drag either end to move it, drag \
-         between them to slide the whole range (it squishes when it meets an \
-         end), double-click for the full axis. The scale is logarithmic — \
-         equal distances are equal musical intervals — so an octave is the \
-         same width wherever it sits.\n\nOr set it on the display itself: drag \
-         the Analyzer pane across the pitch axis to pan the range, scroll to \
-         zoom it around the pointer. (Dragging the other way, along time, zooms \
-         the roll's Span instead.)",
-    );
-    choice_row(
-        ui,
-        "Labels",
-        &mut cfg.labels,
-        &[
-            (SpectrumLabels::Notes, "Notes", "A gridline at every C, Bitwig octave numbers"),
-            (
-                SpectrumLabels::Frequency,
-                "Frequency",
-                "Gridlines at 20, 50, 100 ... 10k, 20k Hz",
-            ),
-        ],
-    );
-
     // ---- Piano roll -----------------------------------------------------
     section(ui, "Piano roll");
     ui.checkbox(&mut cfg.show_roll, "Note history").on_hover_text(
@@ -267,7 +271,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     // ---- Spectrogram ----------------------------------------------------
     section(ui, "Spectrogram");
-    ui.checkbox(&mut cfg.show_spectrogram, "Spectrogram").on_hover_text(
+    ui.checkbox(&mut cfg.show_spectrogram, "Heatmap").on_hover_text(
         "A frequency-vs-time heatmap of the audio, drawn in the roll's \
          region on the same time axis — so each column of energy lines up \
          with the notes that made it. Shares the Spectrum's Floor and Tilt \

@@ -36,7 +36,10 @@ pub(super) fn tuning_pane(
     params: &dyn ParamBackend,
     now: f64,
 ) {
-    section(ui, "Tuning");
+    // A plain heading rather than `section`: this is the top of the pane, and
+    // the leading rule `section` draws would be a line under nothing. Matches
+    // the Nodes, Scene, Panel and Analyzer panes.
+    ui.heading("Tuning");
     // Tuning sliders. In meantone mode the major third is locked to four
     // perfect fifths, so its bar is shown read-only at the derived value.
     for &key in &ParamKey::TUNING {

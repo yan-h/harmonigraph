@@ -1,7 +1,7 @@
 //! The Nodes pane: how a sounding note is drawn — its core mark, the octave
 //! ring around it, the melody/bass marks on the outer held notes, and the
-//! color and fade the whole node wears. Everything here is the *played note*;
-//! the surrounding structure and overlays live in [`super::scene`].
+//! color, fade and halo the whole node wears. Everything here is the *played
+//! note*; the surrounding structure and overlays live in [`super::scene`].
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
@@ -11,8 +11,9 @@ use lattice_scene::{NodeStyle, ViewConfig};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
-/// on the outer notes, then the Color it's tinted and the Fade it lingers on
-/// release. Scrolls so the full list is reachable in a short pane.
+/// on the outer notes, and then the three settings that are not about any one
+/// of those layers but about all of them at once. Scrolls so the full list is
+/// reachable in a short pane.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -20,8 +21,7 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
             core_section(ui, &mut state.view);
             octaves_section(ui, &mut state.view);
             melody_bass_section(ui, &mut state.view);
-            color_section(ui, params);
-            fade_section(ui, params);
+            every_layer_section(ui, &mut state.view, params);
         });
 }
 
@@ -150,11 +150,23 @@ fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", lattice_core::notes::display_octave_of(n))
 }
 
-/// Color: the pitch->color gradient endpoints the pitch-colored channels map
-/// through — the darkest pitch and the brightest, as one two-handle range.
-fn color_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
-    section(ui, "Color");
-    ui.label("Pitch range");
+/// What every layer of the node shares: the pitch->color gradient it is
+/// tinted through, the time it takes to fade on release, and the halo it
+/// carries while lit.
+///
+/// One section rather than three of one control each, because the three are
+/// one idea — none of them is about the core, the octave glyphs or the
+/// melody/bass rings in particular, and all three apply to whichever of those
+/// happen to be drawn. Fade especially: one time for the node rather than one
+/// per layer, so a release reads as a single gesture instead of pieces of the
+/// node going dark at different moments.
+fn every_layer_section(
+    ui: &mut egui::Ui,
+    view: &mut ViewConfig,
+    params: &dyn ParamBackend,
+) {
+    section(ui, "Every layer");
+    ui.label("Color range");
     super::param_range_bar(
         ui,
         params,
@@ -169,17 +181,16 @@ fn color_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
          darkest color, the high end the brightest. Drag either end, or drag \
          between them to slide the whole range.",
     );
-}
-
-/// Fade: how long a released note lingers. One time for the whole node —
-/// core, octave glyphs, and melody/bass marks — rather than one per layer, so
-/// a release reads as a single gesture instead of pieces of the node going
-/// dark at different moments.
-fn fade_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
-    section(ui, "Fade");
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a released note keeps fading — the pitch class core, \
          the octave glyphs, and the melody/bass marks together. 0 cuts \
          notes off the moment they're released",
     );
+    // 0 = off (the renderer skips the whole post-process chain), so the bar
+    // doubles as the toggle.
+    ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
+        .show(ui)
+        .on_hover_text(
+            "Soft halo around bright notes; 0 turns the post-process off",
+        );
 }
