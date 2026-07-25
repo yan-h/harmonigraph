@@ -479,10 +479,28 @@ impl SpectrogramRing {
     ///
     /// Anything older than a full lap has been overwritten by it; the far guard
     /// sits one before the run, so it is the oldest texel in use.
+    ///
+    /// The floor is `first_key` and NOT the oldest run ever painted, because
+    /// the guard destroys exactly that slack. [`write_ring`] duplicates the
+    /// run's oldest column into the texel of `first_key - 1`, so that key stops
+    /// being its own, and a window that scrolls a slab at a time walks the
+    /// guard forward one key per frame — remembering a band below `first_key`
+    /// would be remembering the keys it has just walked over.
+    ///
+    /// A widen still costs only the slabs it reveals: `back` runs from the new
+    /// `first_key` up to this floor, one past the key the previous frame's
+    /// guard overwrote.
+    ///
+    /// It is a floor and not the exact truth. When `first_key` jumps several
+    /// keys at once — a dropped frame, a fast narrowing — only the last of
+    /// them was guarded, and the ones before it are forgotten though they were
+    /// still their own. That costs a repaint of a few columns and never a wrong
+    /// pixel, and two endpoints cannot say otherwise: one guard punches a hole
+    /// in the middle of the painted range, so the valid set stops being an
+    /// interval and this is the tightest interval inside it.
     fn wrote(&mut self, first_key: i64, last_key: i64) {
         self.written_through = self.written_through.max(last_key);
-        self.oldest_valid =
-            self.oldest_valid.min(first_key).max(last_key - self.capacity as i64 + 2);
+        self.oldest_valid = first_key.max(last_key - self.capacity as i64 + 2);
     }
 }
 
@@ -2492,6 +2510,124 @@ mod tests {
                 assert_eq!(*pixel, whole[y * w + slab], "slab {slab}, bin {y}");
             }
         }
+    }
+
+    /// Every texel the window reads holds ITS OWN slab's column — asserted
+    /// against the uploaded texture, not against the ring's account of it.
+    ///
+    /// [`write_ring`] duplicates the run's oldest column into the texel of
+    /// `first_key - 1`, to fill the half texel the quad overruns at the far
+    /// edge, so that one texel deliberately holds a slab that is not its own.
+    /// A window scrolling a slab at a time walks that guard forward a key per
+    /// frame, and the whole band below `first_key` ends up holding its
+    /// neighbour's column. What keeps the band off the screen is
+    /// [`SpectrogramRing::wrote`] floating its floor up to `first_key`, so a
+    /// widen reaching back into it lands inside `back` and is repainted rather
+    /// than trusted.
+    ///
+    /// Bookkeeping cannot see any of that. An assertion on `oldest_valid`
+    /// restates the arithmetic the floor is written in, and passes just as
+    /// happily when the repaint it authorises is deleted — which is how both a
+    /// gutted `back` range and a deleted guard once left the whole suite
+    /// green. This drives the real [`write_ring`], drains egui's texture
+    /// deltas into a model of the texture, and compares each texel against the
+    /// column its slab should have, so it fails on the WRONG PICTURE rather
+    /// than on a changed expression, and survives a refactor of how `back` is
+    /// computed.
+    ///
+    /// Neither of the branches that met here owns the bug this pins. While the
+    /// ring's style still held the whole `SpectrumConfig` it held
+    /// `roll_seconds`, so every frame of a Span drag restarted the ring and
+    /// wiped the guarded band before anything could sample it — the
+    /// carry-forward was unreachable for the one gesture that reaches
+    /// backwards. Narrowing the style is what made a widen carry, and so made
+    /// the band reachable.
+    ///
+    /// The run starts below zero and crosses it, so `x_of`'s `rem_euclid` is
+    /// in play on negative keys.
+    #[test]
+    fn every_texel_the_window_reads_holds_its_own_slab() {
+        let ctx = egui::Context::default();
+        let mut spectrum = crate::AudioSpectrum::default();
+        let scale = SWEEP_SCALE;
+        let bins = bins_for(4, &scale);
+        let h = bins.len();
+        let cfg = SpectrumConfig::default();
+        let bucket = 0.05;
+        let style = style_for(h, bucket, 12.0, &scale);
+        let capacity = 32usize;
+        let tex_w = capacity * 2;
+
+        // A distinct, reproducible column per slab key, so a texel holding its
+        // NEIGHBOUR is a value mismatch rather than a shape one.
+        let power_of = |key: i64| -> Vec<BucketDb> {
+            (0..h).map(|b| ((key * 13 + b as i64 * 29).rem_euclid(200) + 30) as BucketDb).collect()
+        };
+        let expect = |key: i64| fill_column(&cfg, &bins, &power_of(key));
+
+        // A model of the uploaded texture, kept in step by draining egui's
+        // texture deltas after every call — `set_partial` is the only thing
+        // that says where a column actually landed.
+        let mut model = vec![Color32::TRANSPARENT; tex_w * h];
+        let drain = |model: &mut Vec<Color32>| {
+            let delta = ctx.tex_manager().write().take_delta();
+            for (_, d) in delta.set {
+                let egui::epaint::image::ImageData::Color(img) = d.image;
+                let w = img.size[0];
+                let [px, py] = d.pos.unwrap_or([0, 0]);
+                for (i, c) in img.pixels.iter().enumerate() {
+                    model[(py + i / w) * tex_w + px + i % w] = *c;
+                }
+            }
+        };
+
+        let run = |spectrum: &mut crate::AudioSpectrum, first: i64, last: i64| {
+            let n = (last - first + 1) as usize;
+            let mut power = Vec::with_capacity(n * h);
+            for key in first..=last {
+                power.extend(power_of(key));
+            }
+            write_ring(&ctx, spectrum, 0, style.clone(), capacity, &cfg, &bins, &power, first, n);
+        };
+
+        // Start below zero and cross it, so the wrap is in play on negatives.
+        let (k0, visible) = (-3i64, 12i64);
+        run(&mut spectrum, k0, k0 + visible - 1);
+        drain(&mut model);
+
+        // Scroll a slab at a time, as `now` advancing does. Each frame the
+        // guard overwrites the texel of the key just left behind.
+        for n in 1..=6 {
+            run(&mut spectrum, k0 + n, k0 + n + visible - 1);
+            drain(&mut model);
+        }
+
+        // Widen inside the same rung: the far edge reaches back into the band
+        // the guard has walked over, and `back` is what has to repaint it.
+        let (first, last) = (k0 + 1, k0 + 6 + visible - 1);
+        run(&mut spectrum, first, last);
+        drain(&mut model);
+
+        let ring = spectrum.spectrogram[0].ring.as_ref().expect("a ring");
+        for key in first..=last {
+            let x = ring.x_of(key);
+            let got: Vec<Color32> = (0..h).map(|y| model[y * tex_w + x]).collect();
+            assert_eq!(
+                got,
+                expect(key),
+                "texel {x} should hold slab {key}; it holds {}",
+                (first - 4..=last + 4)
+                    .find(|&k| (0..h).map(|y| model[y * tex_w + x]).eq(expect(k)))
+                    .map_or("no slab in range".to_string(), |k| format!("slab {k}")),
+            );
+        }
+
+        // The far guard is the ONE texel meant to hold another slab's column:
+        // `first - 1` carries a duplicate of `first`, which is what fills the
+        // half texel the quad overruns past the oldest slab's leading edge.
+        let x = ring.x_of(first - 1);
+        let got: Vec<Color32> = (0..h).map(|y| model[y * tex_w + x]).collect();
+        assert_eq!(got, expect(first), "the far guard at texel {x} does not duplicate slab {first}");
     }
 
     /// Columns are placed by absolute slab key, and every one is written twice
