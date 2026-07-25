@@ -2,34 +2,6 @@
 //! shader indices they map to. Adding a style means touching this file and
 //! the matching branch in `lattice.wgsl`.
 
-/// The OUTER layer: whether a node shows which octaves its pitch class is
-/// sounding in. The glyphs draw inside the radial band between the view's
-/// `outer_inner` and `outer_outer` radii, from the per-node octave bitmask.
-///
-/// Only ONE glyph shape remains. This started as a set of switchable looks
-/// (dots, rings, and several trimmed earlier) for live comparison; slices
-/// won, so the choice is now just whether the layer draws at all. The dead
-/// names are kept as serde aliases, not variants — an old blob naming one
-/// loads as slices rather than dropping the whole persist.
-///
-/// Fully independent of the CORE layer ([`CoreStyle`]): the glyphs draw
-/// the same whatever the core does. [`ViewConfig::outer_backdrop`] — its
-/// own outer-layer setting, not the core's business — ghosts the silent
-/// slots in the note color, completing the circle so a single sounding
-/// octave still reads as one whole note.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum OuterStyle {
-    /// No octave indication.
-    Off,
-    /// Annular pizza-slice sectors spanning the band, with
-    /// constant-thickness gaps between neighbors. Each sector's angle
-    /// tracks absolute pitch: middle C straight up, 45deg clockwise per
-    /// octave, pitch class within the octave included.
-    #[default]
-    #[serde(alias = "Dots", alias = "Rings", alias = "Petals", alias = "Flares", alias = "Bumps")]
-    Slices,
-}
-
 /// How the core orb is painted while notes sound (inert when there is no
 /// orb, i.e. [`ViewConfig::core_radius`](crate::ViewConfig::core_radius)
 /// is 0). All styles share the same instance data
@@ -38,9 +10,9 @@ pub enum OuterStyle {
 /// nodes look identical in every style.
 ///
 /// The aliases on Steady absorb node styles that used to exist (Breathe,
-/// Sparks, and the Wire/Corona/Plasma/Aurora/Marble/Lava/Filament/Stripes/
-/// Rings/Tiles set trimmed later) so persisted view blobs that still name
-/// them keep loading.
+/// Sparks, the Wire/Corona/Plasma/Aurora/Marble/Lava/Filament/Stripes/
+/// Rings/Tiles set trimmed later, and Pinwheel after them) so persisted
+/// view blobs that still name them keep loading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NodeStyle {
     /// The original look: steady disc + glow.
@@ -57,7 +29,8 @@ pub enum NodeStyle {
         alias = "Filament",
         alias = "Stripes",
         alias = "Rings",
-        alias = "Tiles"
+        alias = "Tiles",
+        alias = "Pinwheel"
     )]
     Steady,
     /// Gas ball: octave colors sheared into rotating spiral streaks, like
@@ -67,8 +40,6 @@ pub enum NodeStyle {
     Checker,
     /// Pattern: two-armed spiral of color waves hugging the sphere.
     Spiral,
-    /// Pattern: beach-ball sectors around a tilted pole, slowly turning.
-    Pinwheel,
 }
 
 impl NodeStyle {
@@ -80,7 +51,6 @@ impl NodeStyle {
         match self {
             NodeStyle::Steady => 0,
             NodeStyle::Vortex => 3,
-            NodeStyle::Pinwheel => 11,
             NodeStyle::Spiral => 12,
             NodeStyle::Checker => 13,
         }
@@ -93,18 +63,6 @@ impl NodeStyle {
     /// the pattern. Mirrors `is_field_style` in lattice.wgsl; keep in sync.
     pub fn is_field_style(self) -> bool {
         !matches!(self, NodeStyle::Steady)
-    }
-}
-
-impl OuterStyle {
-    /// Index used by the shader (uniform `misc.z`). Now only "off" or
-    /// "on" — the shader has one glyph shape left — but kept as the
-    /// original index so the slices branch stays byte-for-byte unchanged.
-    pub fn shader_index(self) -> u32 {
-        match self {
-            OuterStyle::Off => 0,
-            OuterStyle::Slices => 5,
-        }
     }
 }
 
@@ -158,11 +116,18 @@ impl IdleMarker {
     }
 }
 
-/// Which extreme held notes get marked, so a chord's melody and/or bass
-/// line is identifiable at a glance. "Extreme" is by sounding pitch
-/// (`Voice::pitch`, which includes MPE/tuning bends), over HELD voices
-/// only: a released note is on its way out and shouldn't keep the mark
-/// from the note that replaced it.
+/// Legacy load-only spelling of the melody/bass marks, from before they
+/// became the two independent flags they always were:
+/// [`ViewConfig::mark_melody`](crate::ViewConfig::mark_melody) and
+/// [`mark_bass`](crate::ViewConfig::mark_bass). Four variants for two bits
+/// meant the UI offered a row of alternatives to a question with two
+/// answers, and "Both" had to be argued for as a default rather than
+/// falling out of two boxes both being ticked.
+///
+/// Persisted blobs still carry a `highlight_extremes` token;
+/// [`ViewConfig::migrate_legacy`](crate::ViewConfig::migrate_legacy) folds
+/// it into the pair and it is never written back. Kept as a distinct type
+/// only so those tokens keep deserializing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum HighlightExtremes {
     Off,
@@ -170,13 +135,7 @@ pub enum HighlightExtremes {
     Melody,
     /// The lowest held note — the bass.
     Bass,
-    /// Both. Each ring takes its own note's color, and they are told apart
-    /// by radius (melody inside the octave band, bass outside) rather than
-    /// by hue. The default: the marks are subtle
-    /// enough to live with always-on, and a chord's outer voices are
-    /// worth seeing without having to go turn something on first. Blobs
-    /// saved before this setting existed pick it up too, which is
-    /// deliberate.
+    /// Both, which is what a blob predating the setting entirely picks up.
     #[default]
     Both,
 }

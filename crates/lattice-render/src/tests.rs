@@ -214,8 +214,6 @@ fn parity_scene() -> Scene {
         background: lattice_scene::skin::panel_color(),
         sevens_soft: 0.24,
         node_radius: 0.34,
-        outer_style: Default::default(),
-        mark_unlinked: 1.0,
         mark_thickness: 0.09,
         node_style: Default::default(),
         core_radius: 0.46,
@@ -602,7 +600,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         return;
     };
     use lattice_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
-    use lattice_scene::{derive_scene, Camera, FrameParams, HighlightExtremes, ViewConfig};
+    use lattice_scene::{derive_scene, Camera, FrameParams, ViewConfig};
 
     const SIZE: [u32; 2] = [256, 256];
     let format = wgpu::TextureFormat::Rgba8Unorm;
@@ -625,11 +623,11 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         extent_sevens: 0,
         ..ViewConfig::default()
     };
-    let scene_for = |which: HighlightExtremes| {
+    let scene_for = |marks: bool| {
         derive_scene(
             &tracker,
             &Tuning::default(),
-            &ViewConfig { highlight_extremes: which, ..base.clone() },
+            &ViewConfig { mark_melody: marks, mark_bass: marks, ..base.clone() },
             &FrameParams::default(),
             Camera::default(),
             None,
@@ -673,7 +671,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     };
 
     // The masks must survive derive_scene in the first place.
-    let marked = scene_for(HighlightExtremes::Both);
+    let marked = scene_for(true);
     let melody_nodes = marked.nodes.iter().filter(|n| n.melody_slots != 0).count();
     let bass_nodes = marked.nodes.iter().filter(|n| n.bass_slots != 0).count();
     assert!(
@@ -681,7 +679,7 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         "derive_scene marked nothing: {melody_nodes} melody, {bass_nodes} bass nodes"
     );
 
-    let off = shot(&scene_for(HighlightExtremes::Off), 50);
+    let off = shot(&scene_for(false), 50);
     let on = shot(&marked, 51);
     let lit = off.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
     let changed = off

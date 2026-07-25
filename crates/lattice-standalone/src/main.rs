@@ -537,15 +537,11 @@ impl eframe::App for App {
 
         // The harness has no real audio; synthesize the held notes so the
         // Spectral pane's audio overlay is demoable without a DAW.
-        if self.state.spectrum_config.show_audio {
-            self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
-            let config = self.state.spectrum_config;
-            self.state
-                .spectrum
-                .push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
-        } else {
-            self.synth.reset();
-        }
+        self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
+        let config = self.state.spectrum_config;
+        self.state
+            .spectrum
+            .push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
 
         lattice_ui::root_ui(ui, &mut self.state, &self.params, now);
 
@@ -706,12 +702,6 @@ impl MockSynth {
             }
             out.push(sample as f32);
         }
-    }
-
-    /// Forget the clock while the overlay is off, so re-enabling starts
-    /// fresh instead of rendering the whole gap.
-    fn reset(&mut self) {
-        self.rendered_to = None;
     }
 }
 

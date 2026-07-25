@@ -32,8 +32,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
-    SevensLabel,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SevensLabel,
 };
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
@@ -137,7 +136,7 @@ pub struct NodeInstance {
     /// masks is a note that is at once the melody and the bass (a lone held
     /// note, or the two ends of a chord voiced inside one octave). The two
     /// marks are drawn as rings at different radii, so that costs nothing:
-    /// they simply both draw. See [`HighlightExtremes`].
+    /// they simply both draw. See [`ViewConfig::mark_melody`].
     pub bass_slots: u32,
     /// How far each mark has eased in, 0..1: a ring grows on over
     /// [`ATTACK_TIME`] from the moment its note TOOK that end, rather than
@@ -217,7 +216,6 @@ pub struct Scene {
     pub time: f32,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
-    pub outer_style: OuterStyle,
     pub node_style: NodeStyle,
     /// The core's radius in quad UV units; `0` turns the core off (nothing
     /// at all). Sizes both the disc and its glow; the shader reads solidity
@@ -281,10 +279,6 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// Opacity of the part of each mark ring cut off from the octave that
-    /// owns it (see [`ViewConfig::mark_unlinked`]). Already clamped. Which
-    /// NOTES are marked is baked into each node's `melody_slots`/`bass_slots`.
-    pub mark_unlinked: f32,
     /// Melody/bass ring thickness in quad UV units, 0 = off (see
     /// [`ViewConfig::mark_thickness`]). Already clamped.
     pub mark_thickness: f32,

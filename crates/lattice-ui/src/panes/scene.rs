@@ -1,7 +1,9 @@
 //! The Scene pane: everything drawn *around* the sounding notes — the home
-//! grid that carries the lattice's shape at rest, the note-name labels, the
-//! trail of where the music has been, and scene-wide effects. The played
-//! note's own look lives in [`super::nodes`].
+//! grid that carries the lattice's shape at rest, the note-name labels, and
+//! the trail of where the music has been. The played note's own look lives in
+//! [`super::nodes`], and Bloom went with it: a halo around bright notes is a
+//! property of the notes, and it was the only thing an "Effects" heading here
+//! ever had to hold.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
@@ -10,8 +12,8 @@ use lattice_core::NoteTracker;
 use lattice_scene::{IdleMarker, TrailMark, ViewConfig};
 
 /// The scene-wide look, top to bottom: the always-drawn Home grid, the Labels
-/// on nodes, the Trail of visited nodes, then Effects layered over everything.
-/// Scrolls so the full list is reachable in a short pane.
+/// on nodes, then the Trail of visited nodes. Scrolls so the full list is
+/// reachable in a short pane.
 pub(super) fn scene_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -19,7 +21,6 @@ pub(super) fn scene_pane(ui: &mut egui::Ui, state: &mut SharedState) {
             home_grid_section(ui, &mut state.view);
             labels_section(ui, &mut state.view);
             trail_section(ui, &mut state.view, &mut state.tracker);
-            effects_section(ui, &mut state.view);
         });
 }
 
@@ -179,14 +180,4 @@ fn trail_section(ui: &mut egui::Ui, view: &mut ViewConfig, tracker: &mut NoteTra
             });
         },
     );
-}
-
-/// Effects: scene-wide extras layered over the notes.
-fn effects_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Effects");
-    // 0 = off (the renderer skips the whole post-process chain), so
-    // the bar doubles as the toggle.
-    ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
-        .show(ui)
-        .on_hover_text("Soft halo around bright notes; 0 turns the post-process off");
 }

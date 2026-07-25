@@ -19,7 +19,7 @@ so overlapping nodes resolve per-pixel by true depth instead of draw order.
 
 **The catch — why it isn't a one-line flag flip.** The nodes aren't opaque
 spheres. They're soft, semi-transparent discs with glows; the field node
-styles (Vortex / Spiral / Checker / Pinwheel) and the envelope fades are
+styles (Vortex / Spiral / Checker) and the envelope fades are
 translucent. Depth testing + alpha blending is order-dependent:
 
 - if transparent fragments *write* depth, a faint glow halo starts occluding
@@ -44,18 +44,19 @@ keep sitting there unused at zero cost.
 **State.** Most of the "prune the experiments" work is already done — see the
 enum comments in `crates/lattice-scene/src/lib.rs`:
 
-- **`NodeStyle`**: trimmed from a 15-style set down to **5** — Steady,
-  Vortex, Checker, Spiral, Pinwheel. (Breathe, Sparks, Wire, Corona, Plasma,
-  Aurora, Marble, Lava, Filament, Stripes, Tiles were removed, kept only as
-  `serde` aliases onto Steady so old projects still load.)
-- **`OuterStyle`**: down to **4** — Off, Dots, Slices, Rings (Petals / Flares
-  removed, Bumps merged into Dots).
+- **`NodeStyle`**: trimmed from a 15-style set down to **4** — Steady,
+  Vortex, Checker, Spiral. (Breathe, Sparks, Wire, Corona, Plasma, Aurora,
+  Marble, Lava, Filament, Stripes, Tiles and Pinwheel were removed, kept only
+  as `serde` aliases onto Steady so old projects still load.)
+- **`OuterStyle`**: gone. The glyph shapes settled on slices and the layer
+  became unconditional, so the enum and its persisted key were dropped; an
+  old blob's `outer_style` is now an ignored unknown field.
 - **`CoreStyle`**: replaced entirely by a `core_radius` + `core_solidity`
   slider pair; the enum is now legacy load-only (`migrate_legacy` folds old
   tokens into radius/solidity).
 
-**The work.** A final aesthetic pass on the 5 surviving node styles: decide
-whether Vortex, Checker, Spiral, and Pinwheel all earn their keep. Each cut
+**The work.** A final aesthetic pass on the 4 surviving node styles: decide
+whether Vortex, Checker and Spiral all earn their keep. Each cut
 removes one shader branch (`lattice.wgsl`, indexed by
 `NodeStyle::shader_index`) and one enum variant, keeping a `serde` alias onto
 the survivor so persisted views still load (the established pattern).

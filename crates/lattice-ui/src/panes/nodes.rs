@@ -1,18 +1,19 @@
 //! The Nodes pane: how a sounding note is drawn — its core mark, the octave
 //! ring around it, the melody/bass marks on the outer held notes, and the
-//! color and fade the whole node wears. Everything here is the *played note*;
-//! the surrounding structure and overlays live in [`super::scene`].
+//! color, fade and halo the whole node wears. Everything here is the *played
+//! note*; the surrounding structure and overlays live in [`super::scene`].
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, NodeStyle, OuterStyle, ViewConfig};
+use lattice_scene::{NodeStyle, ViewConfig};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
-/// on the outer notes, then the Color it's tinted and the Fade it lingers on
-/// release. Scrolls so the full list is reachable in a short pane.
+/// on the outer notes, and then the three settings that are not about any one
+/// of those layers but about all of them at once. Scrolls so the full list is
+/// reachable in a short pane.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -20,8 +21,7 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
             core_section(ui, &mut state.view);
             octaves_section(ui, &mut state.view);
             melody_bass_section(ui, &mut state.view);
-            color_section(ui, params);
-            fade_section(ui, params);
+            every_layer_section(ui, &mut state.view, params);
         });
 }
 
@@ -48,7 +48,7 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // Switchable paints (idle nodes look the same in all).
         // Steady is a calm solid disc blending the sounding octaves'
         // colors; the rest are field styles — Vortex the gas look,
-        // Checker/Spiral/Pinwheel patterns on the sphere. The paint
+        // Checker and Spiral patterns on the sphere. The paint
         // dissolves with the disc toward the glow end.
         choice_row(
             ui,
@@ -59,7 +59,6 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 (NodeStyle::Vortex, "Vortex", ""),
                 (NodeStyle::Checker, "Checker", ""),
                 (NodeStyle::Spiral, "Spiral", ""),
-                (NodeStyle::Pinwheel, "Pinwheel", ""),
             ],
         );
     });
@@ -70,94 +69,68 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
-    // One glyph shape (ring sectors) — the alternatives were
-    // switchable for live comparison and have been settled — so this
-    // is just whether the layer draws. The bool goes through the
-    // OuterStyle enum the persist and the shader still speak.
-    let mut show = view.outer_style != OuterStyle::Off;
-    if ui
-        .checkbox(&mut show, "Show octaves")
+    // No on/off: the layer is what says which octaves are sounding, which
+    // is the node's whole outer half, and Band already reaches every size
+    // from a hairline to the quad edge.
+    //
+    // Inner and outer radius are one control: the band is the ring between
+    // them. Drag either edge, or drag between to slide the ring at a fixed
+    // width; the min span keeps it from collapsing.
+    ui.label("Band");
+    RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
+        .min_span(0.05)
+        .show(ui)
         .on_hover_text(
-            "Ring sectors spanning the band, one per sounding octave, \
-             each at its own pitch's angle; band inner 0 = pie wedges",
-        )
-        .changed()
-    {
-        view.outer_style = if show { OuterStyle::Slices } else { OuterStyle::Off };
-    }
-    ui.add_enabled_ui(show, |ui| {
-        // Inner and outer radius are one control: the band is the ring between
-        // them. Drag either edge, or drag between to slide the ring at a fixed
-        // width; the min span keeps it from collapsing.
-        ui.label("Band");
-        RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
-            .min_span(0.05)
-            .show(ui)
-            .on_hover_text(
-                "The octave band's inner and outer radius. Inner 0 reaches the \
-                 node center (pie wedges); drag between the handles to move the \
-                 whole ring in or out.",
-            );
-        ValueBar::new(&mut view.outer_solidity, 0.0..=1.0, "Solidity")
-            .show(ui)
-            .on_hover_text(
-                "0 = soft glowy octave marks, 1 = the crisp classic \
-                 shapes; only softens the glyph edges, shapes and \
-                 angles stay put",
-            );
-        // One padding for the whole layer: between sectors, and
-        // between the band and the melody/bass rings.
-        ValueBar::new(&mut view.outer_gap, 0.0..=0.4, "Gap")
-            .show(ui)
-            .on_hover_text(
-                "Padding inside the octave layer: between one octave \
-                 and the next, and between the band and the \
-                 melody/bass rings. 0 closes the octaves into a solid \
-                 annulus and seats the rings against it. Wide values \
-                 push the bass ring in toward the core -- raise Band \
-                 inner to make room",
-            );
-        // Backdrop: draw the silent octaves faintly so a lone octave
-        // still reads as a whole note.
-        ValueBar::new(&mut view.outer_backdrop, 0.0..=1.0, "Backdrop")
-            .show(ui)
-            .on_hover_text(
-                "Complete the octave ring: draw the silent octaves \
-                 faintly behind the sounding sectors, so a lone octave \
-                 still reads as a whole note. 0 = off",
-            );
-    });
+            "The octave band's inner and outer radius. Inner 0 reaches the \
+             node center (pie wedges); drag between the handles to move the \
+             whole ring in or out.",
+        );
+    ValueBar::new(&mut view.outer_solidity, 0.0..=1.0, "Solidity")
+        .show(ui)
+        .on_hover_text(
+            "0 = soft glowy octave marks, 1 = the crisp classic \
+             shapes; only softens the glyph edges, shapes and \
+             angles stay put",
+        );
+    // One padding for the whole layer: between sectors, and
+    // between the band and the melody/bass rings.
+    ValueBar::new(&mut view.outer_gap, 0.0..=0.4, "Gap")
+        .show(ui)
+        .on_hover_text(
+            "Padding inside the octave layer: between one octave \
+             and the next, and between the band and the \
+             melody/bass rings. 0 closes the octaves into a solid \
+             annulus and seats the rings against it. Wide values \
+             push the bass ring in toward the core -- raise Band \
+             inner to make room",
+        );
+    // Backdrop: draw the silent octaves faintly so a lone octave
+    // still reads as a whole note.
+    ValueBar::new(&mut view.outer_backdrop, 0.0..=1.0, "Backdrop")
+        .show(ui)
+        .on_hover_text(
+            "Complete the octave ring: draw the silent octaves \
+             faintly behind the sounding sectors, so a lone octave \
+             still reads as a whole note. 0 = off",
+        );
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line
 /// read at a glance.
 fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Melody / bass");
-    choice_row(
-        ui,
-        "Mark",
-        &mut view.highlight_extremes,
-        &[
-            (HighlightExtremes::Off, "Off", "No melody or bass mark"),
-            (HighlightExtremes::Melody, "Melody", "Mark the highest held note"),
-            (HighlightExtremes::Bass, "Bass", "Mark the lowest held note"),
-            (
-                HighlightExtremes::Both,
-                "Both",
-                "Mark both. Each ring takes its own note's color and \
-                 they are told apart by radius, so a note that is at \
-                 once the highest and the lowest -- a lone held note, \
-                 or a chord whose top and bottom share a pitch class -- \
-                 simply gets both",
-            ),
-        ],
-    );
+    // Two boxes, not a four-way row: the marks are independent, they are
+    // told apart by radius rather than by hue, and a note that is at once
+    // the highest and the lowest -- a lone held note, or a chord whose top
+    // and bottom share a pitch class -- simply gets both.
+    ui.checkbox(&mut view.mark_melody, "Melody")
+        .on_hover_text("Ring the highest held note, just inside the octave band");
+    ui.checkbox(&mut view.mark_bass, "Bass")
+        .on_hover_text("Ring the lowest held note, just outside the octave band");
     // The marks are full rings bracketing the octave band (melody
     // inside, bass outside), each slit either side of the octave
-    // responsible so that stretch reads as its own piece. This
-    // fades everything BUT that stretch, from a whole ring down to
-    // just the arc over the marked octave.
-    ui.add_enabled_ui(view.highlight_extremes != HighlightExtremes::Off, |ui| {
+    // responsible so that stretch reads as its own piece.
+    ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
         ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Thickness")
             .show(ui)
             .on_hover_text(
@@ -165,16 +138,6 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  the band radii and Gap. 0 turns the rings off; thick \
                  values grow the bass ring in over the core, so raise \
                  Band inner to make room",
-            );
-        ValueBar::new(&mut view.mark_unlinked, 0.0..=1.0, "Unlinked")
-            .show(ui)
-            .on_hover_text(
-                "Opacity of the rest of the ring -- the part cut off \
-                 from the marked octave's sector. The stretch beside \
-                 that sector always draws full. 1 keeps the whole \
-                 circle, 0 leaves only the arc over the marked octave. \
-                 The slits come from Gap, so Gap 0 leaves nothing to \
-                 separate and this does nothing",
             );
     });
 }
@@ -187,11 +150,23 @@ fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", lattice_core::notes::display_octave_of(n))
 }
 
-/// Color: the pitch->color gradient endpoints the pitch-colored channels map
-/// through — the darkest pitch and the brightest, as one two-handle range.
-fn color_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
-    section(ui, "Color");
-    ui.label("Pitch range");
+/// What every layer of the node shares: the pitch->color gradient it is
+/// tinted through, the time it takes to fade on release, and the halo it
+/// carries while lit.
+///
+/// One section rather than three of one control each, because the three are
+/// one idea — none of them is about the core, the octave glyphs or the
+/// melody/bass rings in particular, and all three apply to whichever of those
+/// happen to be drawn. Fade especially: one time for the node rather than one
+/// per layer, so a release reads as a single gesture instead of pieces of the
+/// node going dark at different moments.
+fn every_layer_section(
+    ui: &mut egui::Ui,
+    view: &mut ViewConfig,
+    params: &dyn ParamBackend,
+) {
+    section(ui, "Every layer");
+    ui.label("Color range");
     super::param_range_bar(
         ui,
         params,
@@ -206,17 +181,16 @@ fn color_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
          darkest color, the high end the brightest. Drag either end, or drag \
          between them to slide the whole range.",
     );
-}
-
-/// Fade: how long a released note lingers. One time for the whole node —
-/// core, octave glyphs, and melody/bass marks — rather than one per layer, so
-/// a release reads as a single gesture instead of pieces of the node going
-/// dark at different moments.
-fn fade_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
-    section(ui, "Fade");
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a released note keeps fading — the pitch class core, \
          the octave glyphs, and the melody/bass marks together. 0 cuts \
          notes off the moment they're released",
     );
+    // 0 = off (the renderer skips the whole post-process chain), so the bar
+    // doubles as the toggle.
+    ValueBar::new(&mut view.bloom_strength, 0.0..=1.5, "Bloom")
+        .show(ui)
+        .on_hover_text(
+            "Soft halo around bright notes; 0 turns the post-process off",
+        );
 }

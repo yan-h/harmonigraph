@@ -15,13 +15,11 @@ struct Uniforms {
     //    instance age/seed, which stay small and precise however long the
     //    session runs.
     // y: base node radius (world units),
-    // z: outer octave layer (0 off, 5 on — one glyph shape is left, and
-    //    its original index is kept; see OuterStyle::shader_index),
-    // w: node style — the core orb's paint (0 steady, 3 vortex,
-    //    11 pinwheel, 12 spiral, 13 checker). Indices are sparse: they
-    //    are preserved from the original 15-style set so the kept styles'
-    //    branches below stay unchanged (see NodeStyle::shader_index in
-    //    lattice-scene).
+    // z: unused,
+    // w: node style — the core orb's paint (0 steady, 3 vortex, 12 spiral,
+    //    13 checker). Indices are sparse: they are preserved from the
+    //    original 15-style set so the kept styles' branches below stay
+    //    unchanged (see NodeStyle::shader_index in lattice-scene).
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     // (offscreen pixels per screen pixel — converts the screen-pixel
@@ -47,8 +45,7 @@ struct Uniforms {
     // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
-    // y: opacity of the part of a melody/bass ring cut off from the octave
-    // that owns it (see mark_ring_alpha).
+    // y: unused.
     // z: padding inside the octave layer, in quad UV units — the gap
     // between neighbouring sectors AND between the band and the mark
     // rings. w: melody/bass ring thickness, same units; 0 = no rings.
@@ -605,17 +602,6 @@ fn field_pattern(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec
         let q = rot2(time * 0.5) * uv;
         let lum = 0.74 + 0.5 * fbm(q * 3.0 + vec2<f32>(seed * 5.0, 0.0));
         return vec2<f32>(t, lum);
-    } else if style == 11u {
-        // Pinwheel: beach-ball sectors — azimuthal color waves around a
-        // pole tilted toward the viewer, so the wedges curve over the
-        // sphere like a globe seen at an angle. The integer harmonic keeps
-        // the atan2 wrap invisible.
-        let q0 = sphere_point(rot2(seed) * uv);
-        let q = vec3<f32>(q0.x, 0.62 * q0.y - 0.78 * q0.z, 0.78 * q0.y + 0.62 * q0.z);
-        let phi = atan2(q.x, q.z);
-        let wob = (fbm(uv * 2.4 + vec2<f32>(seed * 6.3, time * 0.12)) - 0.5) * 2.6;
-        let lum = 0.78 + 0.4 * fbm(uv * 3.1 + vec2<f32>(seed * 2.7, time * 0.09));
-        return vec2<f32>(0.5 + 0.5 * cos(3.0 * phi + time * 0.25 + wob), lum);
     } else if style == 12u {
         // Spiral: two-armed spiral of color waves winding out from the
         // face center; the polar-angle radial term keeps the arms hugging
@@ -784,22 +770,22 @@ const MARK_RING_MIN_AA: f32 = 1.5;
 // would scale both the width and the blur by the ring's radius over the
 // band's, which reads as a wider, softer cut.
 //
-// Those slits leave the stretch of ring beside the marked sector separated
-// from the remainder of the circle. That stretch always draws full; `rest`
-// fades everything else, from a whole ring (1) down to just that arc (0).
+// The slits are the whole of the link now. An `Unlinked` opacity used to fade
+// the stretch of ring on the far side of them, down to just the arc over the
+// marked sector; it is pinned at full, so the ring is a whole circle that the
+// slits merely break -- which is what says which octave without spending the
+// shape to say it.
 //
 // The dot gate throws away the antipode: a boundary line runs through the
 // origin, so it passes just as close on the far side of the node and would
-// otherwise cut the ring twice. The ownership test needs no such gate --
-// its two smoothsteps disagree in sign there and it falls to zero.
+// otherwise cut the ring twice.
 //
 // A slot mask can name more than one sector: releasing the top of a chord
 // leaves the old melody fading on its slot while the new one takes another,
 // and both are the melody for as long as that lasts.
-fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, rest: f32, aa: f32) -> f32 {
+fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
     let half = slice_gap_half();
     let hb = RAD_PER_OCTAVE * 0.5;
-    var own = 0.0;
     var slit = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         if (slots & (1u << i)) != 0u {
@@ -809,27 +795,18 @@ fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, rest: f32, aa: f32) ->
             let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
             let c1 = uv.x * b1.y - uv.y * b1.x;
             let c2 = uv.x * b2.y - uv.y * b2.x;
-            own = max(own, smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2));
             let facing = step(0.0, dot(uv, vec2<f32>(cos(ang), sin(ang))));
             let cut = max(aa_inside(half, abs(c1), aa), aa_inside(half, abs(c2), aa));
             slit = max(slit, cut * facing);
         }
     }
-    return mix(rest, 1.0, own) * (1.0 - slit);
+    return 1.0 - slit;
 }
 
 // Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
 // derived so the bass ring (outside the band) and the melody ring (inside)
 // can share this one body.
-fn mark_ring(
-    slots: u32,
-    cents: f32,
-    uv: vec2<f32>,
-    r_in: f32,
-    r_out: f32,
-    rest: f32,
-    aa: f32,
-) -> f32 {
+fn mark_ring(slots: u32, cents: f32, uv: vec2<f32>, r_in: f32, r_out: f32, aa: f32) -> f32 {
     // No room for this ring: the band's inner radius can be dialed to 0
     // (pie wedges), which leaves the inner ring nothing to sit in.
     if r_out <= 0.0 || r_out <= r_in {
@@ -837,7 +814,7 @@ fn mark_ring(
     }
     let d = length(uv);
     let ring = aa_inside(r_out, d, aa) * (1.0 - aa_inside(max(r_in, 0.0), d, aa));
-    return ring * mark_ring_alpha(slots, cents, uv, rest, aa);
+    return ring * mark_ring_alpha(slots, cents, uv, aa);
 }
 
 // How much of the destination a node's knockout clears at radius `d`.
@@ -998,9 +975,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // its own envelope. Whichever element covers a pixel most strongly owns
     // its color there: sounding glyphs are tinted by their own pitch;
     // ghosts and the rest use the whitened node color.
-    // The outer layer is on or off; there is one glyph shape (see
-    // OuterStyle), whose index the scene still passes through misc.z.
-    let outer_on = u.misc.z > 0.5;
+    // The octave layer always draws — one glyph shape, no on/off. Which
+    // octaves it shows is the per-node bitmask, and how much of the band it
+    // covers is the band radii; there is nothing left for a switch to say.
     let node_glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.55);
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
@@ -1022,7 +999,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ring_thick = u.misc5.w;
     let ring_w = select(max(ring_thick, outer_aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
     let ring_gap = slice_gap_half() * 2.0;
-    let mark_rest = clamp(u.misc5.y, 0.0, 1.0);
     // Headroom: the band's outer radius can be dialed to 1.0, so the outer
     // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
     // circle of radius QUAD_MARGIN fits the square quad) and ease it off
@@ -1030,44 +1006,41 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let lim = QUAD_MARGIN - 0.02;
     let outer_in = min(band_out + ring_gap, lim);
     let inner_out = band_in - ring_gap;
-    if outer_on {
-        // Sounding slots draw bright, tinted by their own pitch, each
-        // fading on its own envelope. The backdrop opacity (its own
-        // outer-layer setting, independent of the core) fades in the
-        // layer's cohesion device: the silent slots drawn as ghosts in the
-        // loop below.
-        let ghosted = has_backdrop;
-        for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-            let level = octave_level(in.octaves, i);
-            if level <= 0.0 && !(ghosted && presence > 0.0) {
-                continue;
-            }
-            let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
-            // Ghosts complete the circle silhouette in the note's own
-            // color; a sounding slot never dips below its ghost, so a
-            // fading octave hands off to it instead of leaving a hole.
-            var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
-            var slot_rgb = node_glyph_rgb;
-            if level > 0.0 {
-                // Straight off the octave's own envelope, so the glyph eases
-                // in over the attack and ends at nothing on release. The
-                // max() hands a backdrop slot off to its ghost as the lit
-                // coverage sinks through it.
-                cov = max(cov, shape * level);
-                // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
-                // this node's pitch class for the glyph's true pitch.
-                let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
-                // Exactly the color that pitch lights everywhere else. The LUT
-                // is the pitch ramp, which is defined already lightened
-                // (pitch_ramp_lch / NOTE_LIGHTEN in lattice-scene), and the
-                // core disc and the piano roll sample that same ramp — so all
-                // three read as one color. No separate white mix here anymore.
-                slot_rgb = pitch_lut_color(pitch);
-            }
-            if cov > glyph {
-                glyph = cov;
-                glyph_rgb = slot_rgb;
-            }
+    // Sounding slots draw bright, tinted by their own pitch, each fading on
+    // its own envelope. The backdrop opacity (its own outer-layer setting,
+    // independent of the core) fades in the layer's cohesion device: the
+    // silent slots drawn as ghosts in the loop below.
+    let ghosted = has_backdrop;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        let level = octave_level(in.octaves, i);
+        if level <= 0.0 && !(ghosted && presence > 0.0) {
+            continue;
+        }
+        let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
+        // Ghosts complete the circle silhouette in the note's own color; a
+        // sounding slot never dips below its ghost, so a fading octave hands
+        // off to it instead of leaving a hole.
+        var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
+        var slot_rgb = node_glyph_rgb;
+        if level > 0.0 {
+            // Straight off the octave's own envelope, so the glyph eases in
+            // over the attack and ends at nothing on release. The max() hands
+            // a backdrop slot off to its ghost as the lit coverage sinks
+            // through it.
+            cov = max(cov, shape * level);
+            // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add this
+            // node's pitch class for the glyph's true pitch.
+            let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
+            // Exactly the color that pitch lights everywhere else. The LUT is
+            // the pitch ramp, which is defined already lightened
+            // (pitch_ramp_lch / NOTE_LIGHTEN in lattice-scene), and the core
+            // disc and the piano roll sample that same ramp — so all three
+            // read as one color. No separate white mix here anymore.
+            slot_rgb = pitch_lut_color(pitch);
+        }
+        if cov > glyph {
+            glyph = cov;
+            glyph_rgb = slot_rgb;
         }
     }
     // Fade a soft (low-solidity) glyph out across the billboard's margin
@@ -1085,12 +1058,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let melody_cov = mark_ring(
         in.marks.x, in.cents, in.uv,
         inner_out - ring_w, inner_out,
-        mark_rest, outer_aa,
+        outer_aa,
     ) * in.params.y;
     let bass_cov = mark_ring(
         in.marks.y, in.cents, in.uv,
         outer_in, min(outer_in + ring_w, lim),
-        mark_rest, outer_aa,
+        outer_aa,
     ) * in.params.z;
     // Disjoint radii, so at most one of the two covers any given pixel.
     var mark = max(melody_cov, bass_cov);
