@@ -621,8 +621,10 @@ pub struct AudioSpectrum {
     last_samples: Option<f64>,
     /// Timestamped raw spectra, one per FFT, for the spectrogram — oldest
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
-    /// Bounded by age and count (see [`AudioSpectrum::push_history`]).
-    history: VecDeque<SpectrogramColumn>,
+    /// Bounded by age and, by construction, by memory: see
+    /// [`SpectrumHistory`](lattice_core::SpectrumHistory) and
+    /// [`AudioSpectrum::push_history`].
+    history: SpectrumHistory,
     /// The spectrogram's pixels, uploaded and sampled with bilinear filtering
     /// so the heatmap reads as a smooth image rather than a mesh of interpolated
     /// triangles. One texture per drawing surface — index 0 the docked Spectral
@@ -648,12 +650,11 @@ pub struct AudioSpectrum {
     spectrogram_ring: [Option<crate::panes::spectrogram::SpectrogramRing>; 2],
 }
 
-/// One column of the spectrogram: the raw power spectrum at a moment, on the
-/// shell clock, so it can be placed on the roll's time axis.
-pub struct SpectrogramColumn {
-    pub time: f64,
-    pub power: Box<SpectrumBuckets>,
-}
+/// One column of the spectrogram, and the age-tiered store they live in — both
+/// pure data, so they live in the core crate. See
+/// [`lattice_core::spectrogram`] for why a column is bytes of dB rather than
+/// floats of power, and why old ones are merged.
+pub use lattice_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 
 /// The inputs the built spectrogram image depends on. Equal keys mean the
 /// uploaded texture is still valid, so `draw_spectrogram` skips the rebuild
@@ -817,10 +818,7 @@ impl WholeSong {
                 fed = end;
             }
             if let Some(power) = analyzer.pitch_spectrum() {
-                columns.push(SpectrogramColumn {
-                    time: time_origin + end as f64 / sr,
-                    power: Box::new(power),
-                });
+                columns.push(SpectrogramColumn::from_power(time_origin + end as f64 / sr, &power));
             }
             if end >= total {
                 break;
@@ -841,7 +839,7 @@ impl Default for AudioSpectrum {
             peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             last_fft: None,
             last_samples: None,
-            history: VecDeque::new(),
+            history: SpectrumHistory::default(),
             spectrogram_tex: [None, None],
             spectrogram_cache: [None, None],
             spectrogram_agg: [None, None],
@@ -871,8 +869,10 @@ impl AudioSpectrum {
     /// Raised from 50 ms once the heatmap stopped repainting itself for every
     /// column (see `write_ring`): the cost of a column is now O(pitch pixels)
     /// rather than O(pitch pixels x slabs), so the rate buys smoothness at the
-    /// newest edge almost for free. What it does still cost is REACH — see
-    /// [`Self::HISTORY_MAX`], which bounds the ring by memory, not by time.
+    /// newest edge almost for free. It used to cost REACH as well, back when
+    /// the ring kept every column at this rate forever; the store now coarsens
+    /// with age (see [`SpectrumHistory`]), so the rate sets the resolution of
+    /// the recent stretch and barely touches how far back the heatmap goes.
     const FFT_INTERVAL: f64 = 0.02;
     /// How long after the last samples the curve keeps drawing.
     const HOLD_SECONDS: f64 = 0.5;
@@ -911,7 +911,7 @@ impl AudioSpectrum {
                 let dt = self.last_fft.map_or(Self::FFT_INTERVAL, |t| now - t);
                 let decay = 0.5f32.powf((dt / Self::PEAK_HALF_LIFE) as f32);
                 for ((shown, peak), new) in
-                    self.display.iter_mut().zip(&mut self.peaks).zip(fresh)
+                    self.display.iter_mut().zip(&mut self.peaks).zip(&fresh)
                 {
                     *shown += (new - *shown) * alpha;
                     *peak = if config.peak_hold {
@@ -926,7 +926,7 @@ impl AudioSpectrum {
                 // `display` would smear one column into the next). Retention is
                 // span-INDEPENDENT (see `push_history`): shrinking the span and
                 // widening it again must not lose the history in between.
-                self.push_history(now, fresh);
+                self.push_history(now, &fresh);
                 self.last_fft = Some(now);
             }
         }
@@ -937,49 +937,38 @@ impl AudioSpectrum {
     /// offers (`roll_seconds` max, 600 s) plus 10 s of headroom so a column is
     /// ready the instant the window reaches back to it. Nothing older is
     /// retained even at the maximum span.
+    ///
+    /// This is now the ONLY thing that decides reach. It used to be shadowed by
+    /// a memory backstop that bound first — 160 MB bought only ~3.5 minutes at
+    /// 50 Hz, so a long span drew a heatmap over the recent stretch and bare
+    /// roll beyond it. Storing a bucket as a byte of dB and coarsening old
+    /// columns (see [`SpectrumHistory`]) made the full span cost about 17 MB,
+    /// so the cap can simply be the span again.
+    ///
+    /// Raising it is cheap and no longer linear: another
+    /// [`SpectrumHistory::COARSE_COLUMNS`] (~2 MB) doubles the reach. The unit
+    /// test `spectrum_history_reaches_the_retention_cap` is what keeps the
+    /// structure sized for whatever this says.
     const HISTORY_MAX_SECONDS: f64 = 610.0;
-    /// Backstop on the column count regardless of timing, and the real memory
-    /// bound — each column is a whole spectrum, so this is what decides how
-    /// much the plugin sits on.
-    ///
-    /// Derived from a memory budget rather than written as a column count, so
-    /// the FFT rate can move without silently changing the footprint. The
-    /// trade it makes explicit: at a fixed budget, a faster rate buys
-    /// smoothness at the newest edge and pays for it in REACH. The budget was
-    /// raised alongside the move to 50 Hz to keep ~3.5 minutes of history —
-    /// more than the 20 Hz build reached — rather than let the rate quietly
-    /// shorten it. Only the live preview is bounded this way; an offline
-    /// render precomputes the whole take.
-    ///
-    /// At a very long span the heatmap therefore covers the most recent
-    /// stretch while the note roll still spans the whole window.
-    const HISTORY_BUDGET_BYTES: usize = 160 * 1024 * 1024;
-    const HISTORY_MAX: usize =
-        Self::HISTORY_BUDGET_BYTES / (lattice_core::spectrum::SPECTRUM_BINS * 4);
 
-    /// Append one raw spectrum to the ring, trimming anything past the
-    /// backstop (`HISTORY_MAX_SECONDS` of age or `HISTORY_MAX` columns).
+    /// Append one raw spectrum to the store, trimming anything past
+    /// `HISTORY_MAX_SECONDS` of age. The store bounds its own memory (older
+    /// columns merge, and its last tier's overflow is dropped), so there is no
+    /// separate column-count backstop to keep in step with the FFT rate.
     ///
     /// Retention is deliberately NOT keyed to the current span: trimming to the
     /// live `roll_seconds` meant shrinking the span popped columns off the
     /// front, and widening it again could never bring them back — the span
     /// control silently erased spectrogram history. The heatmap simply reads
     /// back as far as the span asks; anything it isn't showing yet stays in the
-    /// ring until it ages past the backstop.
-    fn push_history(&mut self, now: f64, power: SpectrumBuckets) {
-        self.history.push_back(SpectrogramColumn { time: now, power: Box::new(power) });
-        let oldest_kept = now - Self::HISTORY_MAX_SECONDS;
-        while self
-            .history
-            .front()
-            .is_some_and(|c| c.time < oldest_kept || self.history.len() > Self::HISTORY_MAX)
-        {
-            self.history.pop_front();
-        }
+    /// store until it ages past the cap.
+    fn push_history(&mut self, now: f64, power: &SpectrumBuckets) {
+        self.history.push(SpectrogramColumn::from_power(now, power));
+        self.history.trim_older_than(now - Self::HISTORY_MAX_SECONDS);
     }
 
     /// The spectrogram columns, oldest first. Empty until audio has flowed.
-    pub fn history(&self) -> &VecDeque<SpectrogramColumn> {
+    pub fn history(&self) -> &SpectrumHistory {
         &self.history
     }
 
