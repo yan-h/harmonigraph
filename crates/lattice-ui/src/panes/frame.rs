@@ -176,9 +176,11 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     sevens_layer_controls(ui, state);
 }
 
-/// How the sheets other than the home one draw. Every control here is inert
+/// How the sheets other than the home one draw. Size and label are inert
 /// with the sevenths extent at 0 (a flat lattice has only the home sheet), so
-/// the whole group disables itself rather than pretending otherwise.
+/// they disable themselves rather than pretending otherwise. The two gutter
+/// bars stay live: every sounding node clears, the home sheet included, so at
+/// extent 0 they still cut the grid lines under the notes.
 ///
 /// What they are all for: the 5-limit sheet wants its pitch classes as large
 /// as they will go, and turning depth on asks the same rectangle to hold
@@ -186,7 +188,8 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// — that is the picture — but to let the sevens layer sit ON it, smaller and
 /// clearing its own gutter.
 fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
-    ui.add_enabled_ui(state.view.extent_sevens != 0, |ui| {
+    let has_depth = state.view.extent_sevens != 0;
+    ui.add_enabled_ui(has_depth, |ui| {
         ValueBar::new(&mut state.view.sevens_size, 0.15..=1.0, "Sevenths size")
             .show(ui)
             .on_hover_text(
@@ -195,22 +198,25 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
                  sheet, not depth toward you -- so the home sheet stays the \
                  largest thing on screen. 1 draws every sheet alike",
             );
-        ValueBar::new(&mut state.view.sevens_gutter, 0.0..=0.5, "Sevenths gutter")
-            .show(ui)
-            .on_hover_text(
-                "The dark gap a node clears around itself, so a sheet reads \
-                 over the ones behind it instead of needing room of its own. \
-                 Measured past the node's own edge, and the same width on \
-                 screen whatever size the node draws at. 0 draws none and \
-                 the sheets simply overlap",
-            );
-        ValueBar::new(&mut state.view.sevens_gutter_soft, 0.0..=0.5, "Sevenths gutter fade")
-            .show(ui)
-            .on_hover_text(
-                "How gradually the gap ends, independent of how wide it is. \
-                 0 is a hard edge; past the gutter's own width it softens \
-                 outward rather than eating into the node",
-            );
+    });
+    ValueBar::new(&mut state.view.sevens_gutter, 0.0..=0.5, "Sevenths gutter")
+        .show(ui)
+        .on_hover_text(
+            "The dark gap a node clears around itself, so a sheet reads \
+             over the ones behind it instead of needing room of its own. \
+             Measured past the node's own edge, and the same width on \
+             screen whatever size the node draws at. The home sheet clears \
+             too, cutting the grid lines under a sounding note even with no \
+             depth at all. 0 draws none",
+        );
+    ValueBar::new(&mut state.view.sevens_gutter_soft, 0.0..=0.5, "Sevenths gutter fade")
+        .show(ui)
+        .on_hover_text(
+            "How gradually the gap ends, independent of how wide it is. \
+             0 is a hard edge; past the gutter's own width it softens \
+             outward rather than eating into the node",
+        );
+    ui.add_enabled_ui(has_depth, |ui| {
         choice_row(
             ui,
             "Sevenths label",

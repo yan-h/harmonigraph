@@ -173,11 +173,23 @@ pub struct ValueBar<'a> {
     /// Read-only: shows the value but takes no drag/type input and paints
     /// dimmed. Used for the major-third bar while meantone mode drives it.
     locked: bool,
+    /// How the value READS OUT, when plain decimals won't say it (see
+    /// [`ValueBar::display`]). Never how it is typed in.
+    display: Option<fn(f32) -> String>,
 }
 
 impl<'a> ValueBar<'a> {
     pub fn new(value: &'a mut f32, range: RangeInclusive<f32>, label: &'a str) -> Self {
-        ValueBar { value, range, label, eased: false, decimals: 2, integer: false, locked: false }
+        ValueBar {
+            value,
+            range,
+            label,
+            eased: false,
+            decimals: 2,
+            integer: false,
+            locked: false,
+            display: None,
+        }
     }
 
     pub fn eased(mut self, on: bool) -> Self {
@@ -199,6 +211,18 @@ impl<'a> ValueBar<'a> {
     pub fn integer(mut self) -> Self {
         self.integer = true;
         self.decimals = 0;
+        self
+    }
+
+    /// Read the value out as this rather than as plain decimals — for a
+    /// value whose UNIT changes with its size, which a fixed suffix in the
+    /// label can't say (seconds that become minutes and seconds).
+    ///
+    /// Display only. Typing still takes a bare number in the bar's own
+    /// units, and double-click seeds the box with one, so whatever a
+    /// formatter does to the readout the value stays typeable.
+    pub fn display(mut self, display: fn(f32) -> String) -> Self {
+        self.display = Some(display);
         self
     }
 
@@ -237,8 +261,18 @@ impl<'a> ValueBar<'a> {
         if self.integer { v.round() } else { v }
     }
 
+    /// The value as text to TYPE: always a bare number, so the text-entry
+    /// box round-trips through `parse::<f32>` whatever the readout says.
     fn format(&self, v: f32) -> String {
         format!("{:.*}", self.decimals, v)
+    }
+
+    /// The value as text to READ.
+    fn shown(&self, v: f32) -> String {
+        match self.display {
+            Some(display) => display(v),
+            None => self.format(v),
+        }
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -352,7 +386,7 @@ impl<'a> ValueBar<'a> {
         painter.text(
             rect.right_center() - Vec2::new(8.0, 0.0),
             Align2::RIGHT_CENTER,
-            self.format(*self.value),
+            self.shown(*self.value),
             TextStyle::Monospace.resolve(ui.style()),
             if self.locked { theme::text_dim() } else { theme::text() },
         );

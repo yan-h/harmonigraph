@@ -1505,17 +1505,26 @@ fn every_sounding_node_clears_what_is_behind_it_the_home_sheet_included() {
 }
 
 #[test]
-fn a_flat_lattice_has_nothing_to_clear() {
-    // With the sevenths extent at 0 there is only the home sheet, so there
-    // is nothing behind anything and no reason to punch a hole in the grid
-    // — which is what a clearing with nothing under it would amount to.
-    // This is the out-of-the-box case, so it has to cost nothing.
+fn a_flat_lattice_still_clears_its_grid() {
+    // With the sevenths extent at 0 there is no sheet behind anything, but
+    // the clearing is not only an inter-sheet device: it cuts the grid
+    // lines, so a sounding node sits in a clean gap in the lattice rather
+    // than on top of it. That reading is wanted at any depth, so the home
+    // sheet clears on a flat lattice exactly as it does on a deep one — it
+    // used to be gated on the extent, which made the look reachable only by
+    // growing depth the view didn't want.
     let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..ViewConfig::default() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
-    assert!(scene.nodes.iter().any(|n| n.activation > 0.0), "something is lit");
+    let mut lit = 0;
     for node in &scene.nodes {
-        assert_eq!(node.gutter, 0.0);
+        if node.activation > 0.0 {
+            assert_eq!(node.gutter, 0.2, "a sounding home node clears with no depth at all");
+            lit += 1;
+        } else {
+            assert_eq!(node.gutter, 0.0, "a silent node punches nothing");
+        }
     }
+    assert!(lit > 0, "something is lit");
 }
 
 #[test]
