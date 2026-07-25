@@ -16,7 +16,6 @@
 use egui::Color32;
 use lattice_core::spectrogram::{db_of, BucketDb};
 use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
-use lattice_scene::FrameParams;
 
 use super::spectral::{spectrogram_level_db, Axes, PitchScale, TimeAxis};
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
@@ -250,14 +249,67 @@ pub(crate) struct SpectrogramRing {
 /// carrying forward columns painted under the old setting, which is a WRONG
 /// picture rather than a slow one. `the_key_is_sensitive_to_every_input` covers
 /// both because there is only one to cover.
+///
+/// The converse costs frames rather than correctness, and so is the one that
+/// went unnoticed: an input that decides NOTHING about a column must stay out,
+/// or every change to it throws away a texture that was still good. See
+/// [`ColumnColor`] for what that cost looked like.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ColumnStyle {
     rows: usize,
     bucket_bits: u64,
     scale_min_bits: u32,
     scale_span_bits: u32,
-    cfg: SpectrumConfig,
-    frame: FrameParams,
+    color: ColumnColor,
+}
+
+/// How a bucket becomes a colour: the dB window it is read against, the
+/// contrast curve applied to it, and the ramp the result lands on. Exactly the
+/// fields [`fill_column`] reaches — `cell_color`'s ramp, and everything
+/// [`spectrogram_level_db`] reads down both of its branches — and nothing else.
+///
+/// It is spelled out field by field rather than holding a whole
+/// [`SpectrumConfig`] because the config is also where the pane keeps what it
+/// is LOOKING at, and that moves continuously: `roll_seconds` on every frame of
+/// a Span drag, `roll_fraction` on every frame of a divider drag,
+/// `spectrogram_opacity` on every frame of an opacity drag — none of which
+/// changes a texel (opacity is the quad's tint, applied once at draw). Keying
+/// the ring on the whole config made every one of those a full re-blank and
+/// repaint, which is precisely the per-frame rebuild [`live_slab`]'s ladder was
+/// built to end; the ladder held `bucket` still and the config moved anyway.
+/// `dragging_the_span_carries_the_ring_forward` is that drag.
+///
+/// The cost of listing fields is that a new colour input has to be added here
+/// too, and forgetting leaves a WRONG picture rather than a slow one — so
+/// `the_key_is_sensitive_to_every_input` walks every field in both directions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ColumnColor {
+    ramp: SpectrogramColor,
+    own_range: bool,
+    // Bit patterns, for the same exactness the outer struct's floats get.
+    // The heatmap's own dB window and contrast curve, used when `own_range`;
+    // the curve's shared window when not; the tilt both branches apply.
+    own_floor_bits: u32,
+    own_ceiling_bits: u32,
+    gamma_bits: u32,
+    floor_bits: u32,
+    ceiling_bits: u32,
+    tilt_bits: u32,
+}
+
+impl ColumnColor {
+    fn new(cfg: &SpectrumConfig) -> ColumnColor {
+        ColumnColor {
+            ramp: cfg.spectrogram_color,
+            own_range: cfg.spectrogram_own_range,
+            own_floor_bits: cfg.spectrogram_floor_db.to_bits(),
+            own_ceiling_bits: cfg.spectrogram_ceiling_db.to_bits(),
+            gamma_bits: cfg.spectrogram_gamma.to_bits(),
+            floor_bits: cfg.floor_db.to_bits(),
+            ceiling_bits: cfg.ceiling_db.to_bits(),
+            tilt_bits: cfg.tilt.to_bits(),
+        }
+    }
 }
 
 impl ColumnStyle {
@@ -266,8 +318,7 @@ impl ColumnStyle {
         bucket: f64,
         scale_min: f32,
         scale_span: f32,
-        cfg: SpectrumConfig,
-        frame: FrameParams,
+        cfg: &SpectrumConfig,
     ) -> ColumnStyle {
         // Floats as bit patterns, so equality is exact and free of NaN quirks.
         ColumnStyle {
@@ -275,8 +326,7 @@ impl ColumnStyle {
             bucket_bits: bucket.to_bits(),
             scale_min_bits: scale_min.to_bits(),
             scale_span_bits: scale_span.to_bits(),
-            cfg,
-            frame,
+            color: ColumnColor::new(cfg),
         }
     }
 }
@@ -342,7 +392,6 @@ struct PaneView {
     window: f64,
     scale: PitchScale,
     cfg: SpectrumConfig,
-    frame: FrameParams,
     /// The whole-song (offline playhead) layout rather than the live window.
     whole: bool,
 }
@@ -400,14 +449,8 @@ impl Plan {
         };
         // The heatmap's pixels are a pure function of these; if none has moved
         // since the uploaded texture was built, building it again is dead work.
-        let style = ColumnStyle::new(
-            rows,
-            bucket,
-            view.scale.min_midi,
-            view.scale.span,
-            view.cfg,
-            view.frame,
-        );
+        let style =
+            ColumnStyle::new(rows, bucket, view.scale.min_midi, view.scale.span, &view.cfg);
         let key = crate::SpectrogramKey::new(
             style,
             columns.first,
@@ -619,10 +662,9 @@ pub(super) fn draw_spectrogram(
     // the Render preview) — two live spectrograms in a frame need their own.
     surface: usize,
 ) {
-    // Small copies, so `state.spectrum` is then free to take mutably (its
-    // texture handle) without fighting the config/frame reads.
+    // A small copy, so `state.spectrum` is then free to take mutably (its
+    // texture handle) without fighting the config reads.
     let cfg = state.spectrum_config;
-    let frame = state.frame_params;
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
     // the whole take laid out statically (offline playhead mode).
     let time = TimeAxis::new(state, split, now);
@@ -647,7 +689,6 @@ pub(super) fn draw_spectrogram(
         window: time.window(),
         scale: *scale,
         cfg,
-        frame,
         whole: whole.is_some(),
     };
     let columns = match whole {
@@ -1733,7 +1774,6 @@ mod tests {
             window,
             scale,
             cfg: SpectrumConfig::default(),
-            frame: FrameParams::default(),
             whole,
         };
         let columns = Columns { first: 3, len: 400, newest: 12.0 };
@@ -1831,8 +1871,7 @@ mod tests {
             bucket_bits: 0,
             scale_min_bits: 0,
             scale_span_bits: 0,
-            cfg: SpectrumConfig::default(),
-            frame: FrameParams::default(),
+            color: ColumnColor::new(&SpectrumConfig::default()),
         };
 
         // Every FFT window the pane offers, by the lag it gives a column: a
@@ -1925,8 +1964,7 @@ mod tests {
             bucket_bits: 0,
             scale_min_bits: 0,
             scale_span_bits: 0,
-            cfg: SpectrumConfig::default(),
-            frame: FrameParams::default(),
+            color: ColumnColor::new(&SpectrumConfig::default()),
         };
         // One rung, end to end: at the 1024-slab cap a width holds while the
         // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
@@ -1985,6 +2023,52 @@ mod tests {
         assert_eq!(restarts, 1, "the drag reallocated the ring");
     }
 
+    /// The same drag as above, with the Span read from where the pane reads it.
+    ///
+    /// [`dragging_the_span_holds_the_grid_between_ladder_steps`] sweeps a span
+    /// past a style built once from a default config, so in that fixture the
+    /// two are independent. In the pane they are one number: the window IS
+    /// `cfg.roll_seconds` (`TimeAxis::new`), and the drag writes
+    /// `cfg.roll_seconds` on every frame it delivers. So anything the style
+    /// keeps from `cfg` moves on every frame of the drag, and the ladder's
+    /// whole promise — the grid holds still, so the texture is carried forward
+    /// — is void however still `bucket` holds.
+    ///
+    /// Two frames is the whole test: the drag's cost is per frame, so a single
+    /// step inside one rung either carries or does not.
+    #[test]
+    fn dragging_the_span_carries_the_ring_forward() {
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let columns = Columns { first: 3, len: 400, newest: 12.0 };
+        let plan_at = |span: f32| {
+            let mut cfg = SpectrumConfig::default();
+            cfg.roll_seconds = span;
+            Plan::new(
+                &PaneView {
+                    ppp: 2.0,
+                    max_rows: 8192,
+                    pitch_len: 300.0,
+                    depth_len: 800.0,
+                    window: span as f64,
+                    scale,
+                    cfg,
+                    whole: false,
+                },
+                &columns,
+            )
+        };
+        // One drag-delta apart, well inside a rung — the ladder is what makes
+        // that a claim about the style alone rather than about the slab width.
+        let (a, b) = (plan_at(12.0), plan_at(12.043));
+        assert_eq!(a.bucket, b.bucket, "the sweep crossed a rung; pick a smaller step");
+        assert_eq!(a.capacity, b.capacity, "the pane did not move, so neither may the ring");
+        assert_eq!(
+            a.key.style(),
+            b.key.style(),
+            "one frame of a Span drag re-blanks the whole texture and repaints every column",
+        );
+    }
+
     /// The cache reuses the uploaded texture only while its key matches, and
     /// the RING carries its columns forward only while the key's style matches,
     /// so both must move for every input the pixels depend on — otherwise a
@@ -1997,11 +2081,11 @@ mod tests {
     #[test]
     fn the_key_is_sensitive_to_every_input() {
         let cfg = SpectrumConfig::default();
-        let frame = FrameParams::default();
-        let style = |rows, bucket, min, span, cfg, frame| {
-            ColumnStyle::new(rows, bucket, min, span, cfg, frame)
-        };
-        let base_style = || style(100, 0.1, 40.0, 48.0, cfg, frame);
+        let style =
+            |rows, bucket, min, span, cfg: &SpectrumConfig| {
+                ColumnStyle::new(rows, bucket, min, span, cfg)
+            };
+        let base_style = || style(100, 0.1, 40.0, 48.0, &cfg);
         let base = || crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, false);
         // Same inputs -> equal: this is the hit that skips the rebuild.
         assert_eq!(base(), base());
@@ -2013,18 +2097,46 @@ mod tests {
             assert_ne!(s, base_style(), "the ring would carry a stale texture forward");
             assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
         };
-        styled(style(101, 0.1, 40.0, 48.0, cfg, frame)); // rows
-        styled(style(100, 0.2, 40.0, 48.0, cfg, frame)); // slab width
-        styled(style(100, 0.1, 41.0, 48.0, cfg, frame)); // pitch range, low end
-        styled(style(100, 0.1, 40.0, 49.0, cfg, frame)); // pitch range, span
-        // A palette, dB window or contrast change (cfg), or a gradient-range
-        // change (frame), recolours every pixel without moving a column.
-        let mut cfg2 = cfg;
-        cfg2.spectrogram_gamma += 0.1;
-        styled(style(100, 0.1, 40.0, 48.0, cfg2, frame));
-        let mut frame2 = frame;
-        frame2.brightest_pitch += 1.0;
-        styled(style(100, 0.1, 40.0, 48.0, cfg, frame2));
+        styled(style(101, 0.1, 40.0, 48.0, &cfg)); // rows
+        styled(style(100, 0.2, 40.0, 48.0, &cfg)); // slab width
+        styled(style(100, 0.1, 41.0, 48.0, &cfg)); // pitch range, low end
+        styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
+        // Every colour input, one at a time: a palette, either dB window, the
+        // contrast curve or the tilt recolours every pixel without moving a
+        // column. Spelled out one by one because [`ColumnColor`] is a list kept
+        // by hand, and a field left off it is a WRONG picture — which, unlike a
+        // slow one, no frame counter reports.
+        let recoloured = |edit: fn(&mut SpectrumConfig)| {
+            let mut c = cfg;
+            edit(&mut c);
+            styled(style(100, 0.1, 40.0, 48.0, &c));
+        };
+        recoloured(|c| c.spectrogram_color = SpectrogramColor::Mono);
+        recoloured(|c| c.spectrogram_own_range = !c.spectrogram_own_range);
+        recoloured(|c| c.spectrogram_floor_db -= 6.0);
+        recoloured(|c| c.spectrogram_ceiling_db -= 6.0);
+        recoloured(|c| c.spectrogram_gamma += 0.1);
+        recoloured(|c| c.floor_db -= 6.0);
+        recoloured(|c| c.ceiling_db -= 6.0);
+        recoloured(|c| c.tilt += 1.0);
+
+        // The converse, which is what the ring is FOR. A config field that
+        // reaches no texel has to leave the style ALONE, or every frame of the
+        // drag that moves it re-blanks the texture and repaints every column.
+        // All three below are continuous drags, and the first is the one the
+        // ladder in [`live_slab`] was written to make free.
+        let carried = |edit: fn(&mut SpectrumConfig)| {
+            let mut c = cfg;
+            edit(&mut c);
+            assert_eq!(
+                style(100, 0.1, 40.0, 48.0, &c),
+                base_style(),
+                "a drag on this would re-blank the whole texture on every frame",
+            );
+        };
+        carried(|c| c.roll_seconds *= 1.01); // Span: the drag along time
+        carried(|c| c.roll_fraction += 0.01); // the roll/heatmap divider
+        carried(|c| c.spectrogram_opacity -= 0.1); // the quad's tint, applied at draw
 
         // And every field that says WHICH columns were drawn. These move as the
         // window scrolls, which the ring is built to survive — so they must move
@@ -2079,8 +2191,7 @@ mod tests {
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
                 scale_span_bits: 48.0f32.to_bits(),
-                cfg: SpectrumConfig::default(),
-                frame: FrameParams::default(),
+                color: ColumnColor::new(&SpectrumConfig::default()),
             },
             written_through: 0,
             oldest_valid: 0,
@@ -2115,8 +2226,7 @@ mod tests {
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
                 scale_span_bits: 48.0f32.to_bits(),
-                cfg: SpectrumConfig::default(),
-                frame: FrameParams::default(),
+                color: ColumnColor::new(&SpectrumConfig::default()),
             },
             written_through: 0,
             oldest_valid: 0,
