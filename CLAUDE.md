@@ -114,3 +114,65 @@ which is why a project can show fresh params next to a missing `ui-state`.
 The script explains the container format in its header. Projects live under
 Google Drive, not `~/Documents/Bitwig Studio/Projects` (empty); it finds
 them via `mdfind`.
+
+## Review happens at the merge boundary, not on the branch
+
+Nothing mechanical blocks a merge here: GitHub Actions is disabled on the
+repo and branch protection is not available on this plan, so `ci.sh` via
+the `.githooks/pre-push` hook is the only automatic gate, and it checks
+clippy and tests — not judgement. Review is therefore a habit, in two
+halves, and each half catches a class the other cannot.
+
+**Sessions: review your own diff before you open the PR.** Run
+`/code-review` and act on what it finds. A session has full context on what
+it just wrote, which makes this cheap; it is also biased toward its own
+work, which is why it is only half the gate. This half catches the bugs
+that live entirely inside one branch — a stale invalidation key, an
+underflow, a test whose fixture never reaches the new path.
+
+**Yan: run `/audit-merges` after a batch of merges lands.** Parallel
+sessions produce branches that are each correct against the `main` they
+started from, so the interesting bugs are the ones that do not exist until
+two of them are combined — and a per-branch review is structurally blind to
+those. PR #85 is the worked example: 12 PRs merged in one night, two real
+bugs, both of them a cache whose missing input arrived in a *different* PR.
+The command reads the combined diff and keeps a `last-merge-audit` tag so
+consecutive audits do not re-read the same range.
+
+### The agents in `.claude/agents/`
+
+`merge-auditor` does the reading for `/audit-merges` — read-only, so it hands
+back candidate findings and the fix is written in the calling session. That
+split is the point: a read-only auditor cannot skip from "this looks wrong"
+to a commit without the failing test in between.
+
+It is the only agent here, and the rule that keeps it that way is worth
+stating: **an agent encodes a job or a constraint, never a description of the
+code.** `merge-auditor` describes a method, and a method does not go stale
+when a type is renamed. It also does something no document can — being
+read-only, it *cannot* skip from "this looks wrong" to a commit.
+
+A `spectral` agent carrying the spectrogram's retention and aggregation
+invariants was written and then deleted before it ever ran, which is the
+cheaper way to learn the rule. Every fact in it turned out to be already
+documented, better, on `SpectrumHistory` and `SpectrogramAgg` — a doc comment
+sits in the same diff as the code it describes, so a refactor that invalidates
+it puts it in front of the author, and a prompt in `.claude/agents/` has no
+such gravity. Duplicating docs into a prompt buys a second copy with worse
+invalidation and equal authority.
+
+So: if a fact has a natural home in a doc comment, that is where it goes, and
+a session finds it by reading. Reach for an agent when it restricts tools in
+a way that changes what can happen, encodes a repeatable job, or isolates
+genuinely noisy searching — not when a subsystem merely feels important.
+`/audit-merges` still checks the range for drift in whatever agents do exist,
+because nothing in the build can catch a prompt that has gone stale.
+
+The corollary is a dispatch rule: **before running sessions in parallel,
+check whether they will touch the same files.** Parallelism buys wall-clock
+only when the work is disjoint; when three sessions converge on
+`lattice-ui/src/lib.rs` it buys merge-order bugs instead, and the audit
+above is what pays for them afterwards. Overlapping work is better run in
+sequence, and variants of a single decision (three takes on one fade) are
+better as one session producing several builds to compare than as three
+branches to reconcile.
