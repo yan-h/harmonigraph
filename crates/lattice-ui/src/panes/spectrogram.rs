@@ -622,6 +622,13 @@ pub(crate) struct SpectrogramAgg {
     /// Time of the newest column already folded; the next update folds only
     /// columns past it.
     last_time: f64,
+    /// How many full rebuilds have been taken. The fast path is the whole point
+    /// of this type, and every condition guarding it can only ever ADD a reason
+    /// to fall back — so without a count, a guard that quietly always fires
+    /// would still pass every correctness test here and simply hand back the
+    /// `aggregate_rows` cost this exists to avoid.
+    #[cfg(test)]
+    rebuilds: u32,
 }
 
 impl SpectrogramAgg {
@@ -631,6 +638,8 @@ impl SpectrogramAgg {
             bucket_bits: 0,
             reads: Vec::new(),
             last_time: f64::NEG_INFINITY,
+            #[cfg(test)]
+            rebuilds: 0,
         }
     }
 
@@ -642,6 +651,10 @@ impl SpectrogramAgg {
         bucket: f64,
         reads: &[RowRead],
     ) {
+        #[cfg(test)]
+        {
+            self.rebuilds += 1;
+        }
         self.grid = SlabGrid::default();
         for col in history.iter_from(first) {
             self.grid.fold(col, reads, bucket);
@@ -666,13 +679,26 @@ impl SpectrogramAgg {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
         let layout_same = self.bucket_bits == bucket.to_bits() && self.reads == reads;
+        // Every in-window column has to still be the one that was folded. Past
+        // [`SpectrumHistory::finest_start`] that holds — the finest tier only
+        // grows at the back and shrinks at the front. BEFORE it, columns have
+        // been MAX-merged in pairs and moved to their midpoint time, so batch
+        // re-reads something the grid never saw: energy in a slab it was not
+        // folded into, and a `RowRead::Lerp` row interpolating across a pair of
+        // buckets that the merge has already maxed together (which is not the
+        // max of the two interpolations). The finest tier holds
+        // `FINE_COLUMNS` at the 125 Hz column rate, about 16 s, so this is the
+        // guard that decides long Spans — and dropping to a rebuild there is
+        // just `aggregate_rows`, the cost this cache saves on shorter ones.
+        let window_unmerged = first >= history.finest_start();
         // The fast path is valid only when: the layout is unchanged, we have a
-        // prior grid, time hasn't gone backwards, and the window's first slab
-        // still sits inside the grid we kept (front..=back). Anything else is a
-        // full rebuild, which is always correct.
+        // prior grid, time hasn't gone backwards, the window holds no merged
+        // columns, and the window's first slab still sits inside the grid we
+        // kept (front..=back). Anything else is a full rebuild, always correct.
         let can_increment = layout_same
             && self.grid.cur_key.is_some()
             && newest >= self.last_time
+            && window_unmerged
             && target.zip(self.grid.centers.first()).zip(self.grid.cur_key).is_some_and(
                 |((t, &front_center), back)| {
                     let front = (front_center / bucket).floor() as i64;
@@ -1236,6 +1262,93 @@ mod tests {
         let inc = agg.window(&history, first, 0.4, &reads);
         let bat = aggregate_rows(history.iter_from(first), &reads, 0.4);
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
+    }
+
+    /// The same exactness, but reaching back past a TIER MERGE — which the
+    /// step-for-step test above never does, because it pushes 14 columns and
+    /// tier 0 holds [`crate::SpectrumHistory::FINE_COLUMNS`] of them.
+    ///
+    /// Once tier 0 overflows, its two oldest columns are MAX-merged into one at
+    /// their MIDPOINT time (`SpectrogramColumn::absorb`). Both halves of that
+    /// rewrite history the incremental grid has ALREADY folded, so batch — which
+    /// re-reads the store as it now stands — can see something else entirely:
+    ///
+    /// - the merged column sits at a time neither original had, which can fall
+    ///   in a different slab than the one its energy was folded into; and
+    /// - a [`RowRead::Lerp`] row reads ACROSS two buckets, and a per-bin MAX does
+    ///   not commute with that interpolation —
+    ///   `max(lerp(a), lerp(b)) != lerp(max(a, b))`.
+    ///
+    /// At the 125 Hz column rate (`SpectrumState::FFT_INTERVAL`) tier 0 holds
+    /// only ~16.4 s, so every Span past that draws from merged columns — and the
+    /// live heatmap would drift from the offline render, which does not use this
+    /// aggregator at all.
+    #[test]
+    fn incremental_aggregation_matches_batch_across_a_tier_merge() {
+        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let bucket = 0.25;
+        let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
+        // Long enough that nothing scrolls out: the whole run stays in window,
+        // so any mismatch is the merge and not the front trim.
+        let window_span = 60.0;
+        let columns = crate::SpectrumHistory::FINE_COLUMNS + 64;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history = crate::SpectrumHistory::default();
+        for i in 0..columns {
+            let t = i as f64 * interval;
+            // Adjacent buckets alternate, so the Lerp row's two inputs are never
+            // loud in the same column — exactly the case a per-bin MAX across a
+            // merge collapses into one loud pair.
+            let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+            history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
+
+            let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
+            let inc = agg.window(&history, first, bucket, &reads);
+            // Comparing every step would be O(columns^2); check often enough to
+            // catch the crossing itself, and either side of it.
+            let near_merge = i + 8 >= crate::SpectrumHistory::FINE_COLUMNS;
+            if near_merge || i % 256 == 0 || i + 1 == columns {
+                let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
+                assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
+            }
+        }
+    }
+
+    /// The merge guard must not cost the fast path on the windows that use it.
+    /// A Span SHORTER than the finest tier's reach sits entirely inside columns
+    /// no merge has touched, so the merging going on behind it is none of its
+    /// business and the incremental fold has to keep running. Only the rebuild
+    /// count can tell: falling back is still CORRECT, so every assertion about
+    /// values would pass just the same with the optimization switched off.
+    #[test]
+    fn a_short_window_keeps_the_fast_path_across_merges() {
+        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let bucket = 0.25;
+        let interval = 0.008;
+        // Two seconds against the finest tier's ~16, so the window stays well
+        // inside it even once merging is continuous.
+        let window_span = 2.0;
+        let columns = crate::SpectrumHistory::FINE_COLUMNS + 256;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history = crate::SpectrumHistory::default();
+        for i in 0..columns {
+            let t = i as f64 * interval;
+            let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+            history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
+
+            let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
+            let inc = agg.window(&history, first, bucket, &reads);
+            if i % 256 == 0 || i + 1 == columns {
+                let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
+                assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
+            }
+        }
+        // One to build the grid; the rest of the run rides the incremental path,
+        // merges and all. Anything more means the guard is firing on windows it
+        // has no reason to touch.
+        assert_eq!(agg.rebuilds, 1, "the fast path stopped carrying a short window");
     }
 
     /// The cache reuses the uploaded texture only while its key matches, so the

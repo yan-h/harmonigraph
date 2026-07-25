@@ -227,6 +227,20 @@ pub(crate) struct AtlasMirror {
     seen: std::collections::HashSet<(u32, char)>,
     /// The atlas size the mirror was taken at; a resize moves every glyph.
     size: [usize; 2],
+    /// The scale factor it was taken at, as bits — the third way every glyph
+    /// moves, and the one neither of the others can see.
+    ///
+    /// A pair is a POINT size and a character, but egui rasterizes at PHYSICAL
+    /// pixels, so the same pair is a different image at a different scale.
+    /// Changing it re-rasterizes the whole atlas and hands out new UVs while the
+    /// dimensions stay put — measured: at 1x and 2x the atlas is `[2048, 32]`
+    /// both times, and 'A' sits at texels `[90, 0]..[98, 8]` against
+    /// `[111, 0]..[127, 17]`. So `size` does not move and `seen` reports nothing
+    /// new, and without this the GPU would keep the old pixels while every
+    /// glyph indexes the new layout — labels sampling whatever now lies at the
+    /// coordinates they remember. Dragging the window between a Retina display
+    /// and an external monitor is the ordinary way to do it.
+    ppp: u32,
     /// Bumped on every refresh; the callback compares it against what it
     /// last uploaded.
     key: u64,
@@ -243,15 +257,91 @@ fn atlas_if_changed(
     // A resize (or the overflow that clears the atlas and starts over)
     // rearranges everything, so it counts as a change on its own.
     let size = ctx.fonts(|fonts| fonts.font_image_size());
+    // So does a scale change, which repacks the atlas without resizing it — see
+    // [`AtlasMirror::ppp`]. The pairs already seen were rasterized at the old
+    // scale and say nothing about the new one, so they go with it: every glyph
+    // the panes draw counts as unseen again, which is also what refills `seen`.
+    let ppp = ctx.pixels_per_point().to_bits();
+    let rescaled = ppp != mirror.ppp;
+    if rescaled {
+        mirror.seen.clear();
+    }
     let resized = mirror.seen.is_empty() || size != mirror.size;
     let fresh = drawn.into_iter().fold(false, |fresh, pair| mirror.seen.insert(pair) || fresh);
     if !fresh && !resized {
         return None;
     }
     mirror.size = size;
+    mirror.ppp = ppp;
     mirror.key = mirror.key.wrapping_add(1);
     Some(lattice_render::FontAtlas {
         image: std::sync::Arc::new(ctx.fonts(|fonts| fonts.image())),
         key: mirror.key,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lay a string out at `ppp` and return the atlas dimensions, the first
+    /// glyph's texels, and the (size, char) pairs a pane would report drawing
+    /// it — everything [`atlas_if_changed`] has to decide on.
+    fn draw_at(
+        ctx: &egui::Context,
+        font: &egui::FontId,
+        ppp: f32,
+    ) -> ([usize; 2], [u16; 2], Vec<(u32, char)>) {
+        ctx.set_pixels_per_point(ppp);
+        let mut probe = None;
+        // Twice: the first pass asks for glyphs the atlas may not hold yet, and
+        // the rasterization it triggers lands for the next one.
+        for _ in 0..2 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let galley =
+                    ui.painter().layout_no_wrap("Ag1".to_owned(), font.clone(), egui::Color32::WHITE);
+                let glyphs = &galley.rows[0].glyphs;
+                probe = Some((
+                    glyphs[0].uv_rect.min,
+                    glyphs.iter().map(|g| (font.size.to_bits(), g.chr)).collect::<Vec<_>>(),
+                ));
+            });
+        }
+        let (uv, drawn) = probe.expect("the closure runs");
+        (ctx.fonts(|fonts| fonts.font_image_size()), uv, drawn)
+    }
+
+    /// A SCALE change re-rasterizes every glyph and hands out new UVs, and the
+    /// mirror's other two triggers are both blind to it: the atlas keeps its
+    /// dimensions, and a pane drawing the same characters at the same POINT size
+    /// reports no pair it has not seen. Without a trigger of its own the GPU
+    /// would hold the old pixels while every glyph indexes the new layout, so
+    /// each label would sample whatever now sits where its glyph used to.
+    ///
+    /// The two assertions before the point are what makes it one: they pin the
+    /// egui behaviour the bug is made of, so if a future version repacks to a
+    /// different SIZE this stops quietly passing for the wrong reason.
+    #[test]
+    fn a_scale_change_refreshes_the_mirror_though_nothing_else_moves() {
+        let state = crate::SharedState::new(crate::TextureFormat::Bgra8Unorm);
+        let ctx = egui::Context::default();
+        let font = egui::FontId::proportional(12.0);
+
+        let (size_1x, uv_1x, drawn_1x) = draw_at(&ctx, &font, 1.0);
+        assert!(atlas_if_changed(&ctx, &state, drawn_1x.clone()).is_some(), "the first mirror");
+        assert!(
+            atlas_if_changed(&ctx, &state, drawn_1x.clone()).is_none(),
+            "an unchanged frame must not re-upload the atlas — that is the point of the mirror"
+        );
+
+        let (size_2x, uv_2x, drawn_2x) = draw_at(&ctx, &font, 2.0);
+        assert_eq!(size_2x, size_1x, "the atlas is repacked at the SAME dimensions");
+        assert_ne!(uv_2x, uv_1x, "...but the glyph has moved inside it");
+        assert_eq!(drawn_2x, drawn_1x, "...and the pane reports the same pairs it always did");
+
+        assert!(
+            atlas_if_changed(&ctx, &state, drawn_2x).is_some(),
+            "a scale change must refresh the mirror: the UVs moved, so the pixels must follow"
+        );
+    }
 }
