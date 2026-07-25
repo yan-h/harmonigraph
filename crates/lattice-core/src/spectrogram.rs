@@ -119,6 +119,15 @@ impl SpectrogramColumn {
 /// Consumers see one flat, time-ordered sequence — [`iter`](Self::iter),
 /// [`get`](Self::get), [`partition_point`](Self::partition_point) — and never
 /// have to know which tier a column came from.
+///
+/// What they do have to know is that a column older than the finest tier is not
+/// the one they read last time: a merge REWRITES the pair it replaces, at their
+/// midpoint time and carrying both their energies
+/// ([`absorb`](SpectrogramColumn::absorb)). Re-reading the old stretch therefore
+/// answers a slightly different question each time it ages a tier, so work
+/// derived from it is worth keeping rather than recomputing — see
+/// `SpectrogramAgg` in lattice-ui, which folds each column once as it arrives
+/// and never re-reads it.
 #[derive(Default)]
 pub struct SpectrumHistory {
     /// Finest first: `tiers[0]` holds columns exactly as they were pushed.
@@ -253,27 +262,6 @@ impl SpectrumHistory {
     /// The newest column held.
     pub fn back(&self) -> Option<&SpectrogramColumn> {
         self.tiers.iter().find_map(|t| t.back())
-    }
-
-    /// Flat index where the FINEST tier begins — the oldest column still held
-    /// exactly as it was pushed.
-    ///
-    /// Everything BEFORE it has been through at least one MAX merge, and a merge
-    /// rewrites a column: [`SpectrogramColumn::absorb`] takes the per-bin
-    /// maximum of the pair and moves the survivor to their MIDPOINT time. So a
-    /// cache holding work derived from a column has to know this line. At or
-    /// past it the store only grows at the back and shrinks at the front, and
-    /// the columns themselves never change, so derived work stays valid; before
-    /// it, a column already read can turn into something else underneath the
-    /// reader — at a different time, and carrying another column's energy.
-    ///
-    /// A merge does NOT commute with everything a reader might do: taking the
-    /// per-bin max first and interpolating across buckets after is not the same
-    /// number as interpolating each column and taking the max, which is why this
-    /// is a correctness boundary and not a resolution detail. See
-    /// `SpectrogramAgg::window` in lattice-ui, its only caller.
-    pub fn finest_start(&self) -> usize {
-        self.len - self.tiers[0].len()
     }
 
     /// Which tier flat index `i` falls in, and where inside it.
