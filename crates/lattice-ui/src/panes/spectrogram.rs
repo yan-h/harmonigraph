@@ -2044,8 +2044,8 @@ mod tests {
         let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
         let columns = Columns { first: 3, len: 400, newest: 12.0 };
         let plan_at = |span: f32| {
-            let mut cfg = SpectrumConfig::default();
-            cfg.roll_seconds = span;
+            // The Span as the pane holds it: the window IS this field.
+            let cfg = SpectrumConfig { roll_seconds: span, ..Default::default() };
             Plan::new(
                 &PaneView {
                     ppp: 2.0,

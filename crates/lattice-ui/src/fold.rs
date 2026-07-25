@@ -193,6 +193,7 @@ impl Folds {
     /// Whether anything is being remembered. Nothing in the draw needs this —
     /// it is how a test says "this dock was replaced, so the fractions that
     /// named its splits are gone too".
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
