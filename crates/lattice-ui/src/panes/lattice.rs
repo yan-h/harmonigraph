@@ -352,17 +352,27 @@ fn snap(v: f32, ppp: f32) -> f32 {
     (v * ppp).round() / ppp
 }
 
-/// A rect on whole physical pixels, never thinner than one of them.
-fn snap_rect(rect: egui::Rect, ppp: f32) -> egui::Rect {
-    let px = 1.0 / ppp;
-    let (left, top) = (snap(rect.left(), ppp), snap(rect.top(), ppp));
-    egui::Rect::from_min_max(
-        egui::pos2(left, top),
-        egui::pos2(
-            snap(rect.right(), ppp).max(left + px),
-            snap(rect.bottom(), ppp).max(top + px),
-        ),
-    )
+/// A length rounded to a whole number of physical pixels, at least one.
+///
+/// Sizes go through this and positions through [`snap`], and the split is
+/// the point: rounding a rect's two edges INDEPENDENTLY quantizes its
+/// thickness along with its position, so a 2.3px bar comes out 2px on one
+/// node and 2.5px on the next purely from where each landed. That is the
+/// "same mark, different widths" this was supposed to fix, and snapping
+/// both edges is what caused it. Round the size once, place the near edge,
+/// and let the far edge follow.
+fn px_size(v: f32, ppp: f32) -> f32 {
+    (v * ppp).round().max(1.0) / ppp
+}
+
+/// A rect of a whole-pixel size, with its near corner on the pixel grid.
+fn pixel_rect(center: egui::Pos2, size: egui::Vec2, ppp: f32) -> egui::Rect {
+    let size = egui::vec2(px_size(size.x, ppp), px_size(size.y, ppp));
+    let min = egui::pos2(
+        snap(center.x - size.x / 2.0, ppp),
+        snap(center.y - size.y / 2.0, ppp),
+    );
+    egui::Rect::from_min_size(min, size)
 }
 
 /// Paint a mark: the rim's rings widest-first, then the fill.
@@ -408,14 +418,21 @@ fn paint_mark(
     }
 }
 
-/// One drawn mark's stroke weight, floored at a single PHYSICAL pixel.
+/// One drawn mark's stroke weight, as a WHOLE number of physical pixels,
+/// at least one.
 ///
-/// A point is two pixels on this display, so flooring at one point drew
-/// every small mark at twice the minimum and made the whole set look heavy.
-/// The floor exists to stop a stroke dissolving into partial coverage, and
-/// one pixel is exactly what that takes.
+/// Rounding the weight rather than merely flooring it is what makes the
+/// mark look the same on every node. A 1.5px bar has no whole pixel to
+/// live in: it covers one fully and its neighbour halfway, and which
+/// neighbour depends on where the node projected to, so the same mark reads
+/// crisp here and smeared over two rows there. There is no such thing as a
+/// consistent fractional-pixel line, so the size is quantized before it is
+/// ever placed.
+///
+/// The floor is one PHYSICAL pixel, not one point -- a point is two pixels
+/// here, so flooring in points drew every small mark at twice the minimum.
 fn mark_thickness(size: f32, weight: f32, ppp: f32) -> f32 {
-    (weight * size).max(1.0 / ppp)
+    px_size(weight * size, ppp)
 }
 
 /// The syntonic comma's sign, as geometry: a bar, plus the two stubs that
@@ -439,24 +456,20 @@ fn comma_sign(
     ppp: f32,
 ) -> Vec<MarkPiece> {
     let thick = mark_thickness(size, weight, ppp) + grow * 2.0;
-    let bar = snap_rect(
-        egui::Rect::from_center_size(center, egui::vec2(MARK_INK_W * size + grow * 2.0, thick)),
-        ppp,
-    );
+    let bar = pixel_rect(center, egui::vec2(MARK_INK_W * size + grow * 2.0, thick), ppp);
     let mut pieces = vec![MarkPiece::Bar(bar)];
     if positive {
         let px = 1.0 / ppp;
-        let left = snap(center.x - thick / 2.0, ppp);
-        let right = snap(center.x + thick / 2.0, ppp).max(left + px);
-        let top = snap(center.y - (PLUS_INK_H * size + grow * 2.0) / 2.0, ppp);
-        let bottom = snap(center.y + (PLUS_INK_H * size + grow * 2.0) / 2.0, ppp);
+        // The upright is as wide as the bar is thick, so the cross is one
+        // weight throughout; both come from the same quantized number.
+        let upright = pixel_rect(center, egui::vec2(thick, PLUS_INK_H * size + grow * 2.0), ppp);
         // The stubs start where the bar stops, so the three tile the cross
         // without ever covering the same pixel twice.
-        for (y0, y1) in [(top, bar.top()), (bar.bottom(), bottom)] {
+        for (y0, y1) in [(upright.top(), bar.top()), (bar.bottom(), upright.bottom())] {
             if y1 - y0 >= px {
                 pieces.push(MarkPiece::Bar(egui::Rect::from_min_max(
-                    egui::pos2(left, y0),
-                    egui::pos2(right, y1),
+                    egui::pos2(upright.left(), y0),
+                    egui::pos2(upright.right(), y1),
                 )));
             }
         }
@@ -502,13 +515,12 @@ fn septimal_shape(
             // it: overlapping the two would go patchy on a fading label for
             // the same reason a crossed `+` does.
             let neck = cy + dir * hh * 0.1;
-            let stem = snap_rect(
-                egui::Rect::from_two_pos(
-                    egui::pos2(cx - thick / 2.0 - grow, cy - dir * hh),
-                    egui::pos2(cx + thick / 2.0 + grow, neck),
-                ),
-                ppp,
+            let span = egui::Rect::from_two_pos(
+                egui::pos2(cx, cy - dir * hh),
+                egui::pos2(cx, neck),
             );
+            let stem =
+                pixel_rect(span.center(), egui::vec2(thick + grow * 2.0, span.height()), ppp);
             vec![
                 MarkPiece::Bar(stem),
                 MarkPiece::Solid(vec![
@@ -774,6 +786,41 @@ mod tests {
             // stroke dissolving into partial coverage.
             assert!(rect.width() >= 1.0 / ppp - 1e-3 && rect.height() >= 1.0 / ppp - 1e-3);
         }
+    }
+
+    /// The SAME mark is the same size wherever its node happens to project
+    /// to. Snapping a rect's two edges independently quantizes its thickness
+    /// along with its position -- a 2.3px bar lands 2px here and 2.5px there
+    /// purely from subpixel offset, which is what "the minus looks different
+    /// on different notes" was. Sizes round once; only positions snap.
+    #[test]
+    fn a_mark_is_one_size_wherever_it_lands() {
+        let ppp = 2.0;
+        // Sweep a whole physical pixel, finer than the grid, on both axes.
+        let sizes: Vec<(f32, f32)> = (0..9)
+            .map(|i| {
+                let off = i as f32 * (1.0 / ppp) / 8.0;
+                let rect = bars(comma_sign(
+                    egui::pos2(40.0 + off, 40.0 + off),
+                    8.25,
+                    0.09,
+                    false,
+                    0.0,
+                    ppp,
+                ))[0];
+                (rect.width(), rect.height())
+            })
+            .collect();
+        let first = sizes[0];
+        for size in &sizes {
+            assert!(
+                (size.0 - first.0).abs() < 1e-4 && (size.1 - first.1).abs() < 1e-4,
+                "a mark changed size with subpixel offset: {sizes:?}"
+            );
+        }
+        // And it is a whole number of physical pixels, so it has pixels to
+        // live in rather than straddling two at half coverage.
+        assert!((first.1 * ppp - (first.1 * ppp).round()).abs() < 1e-4, "{first:?}");
     }
 
     /// The floor is one PHYSICAL pixel, not one point. A point is two pixels
