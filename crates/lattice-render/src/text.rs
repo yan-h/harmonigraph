@@ -1,0 +1,628 @@
+//! Haloed label text, drawn as one instanced quad per glyph through a wgpu
+//! paint callback.
+//!
+//! **Why this exists.** A label's rim is the text stamped around two rings,
+//! and once the roll and the lattice's fragment shader stopped dominating
+//! the frame, those stamps were what was left: turning labels off took the
+//! lattice pane's build from 3.9 ms to 0.25 ms, tessellation from 3.5 ms to
+//! 0.05 ms, and the frame from 534k vertices to 3.5k. Twenty of every
+//! twenty-one stamps were rim. Trimming the ring counts bought a third of
+//! that back; this removes the multiplier entirely, so labels can be added
+//! wherever they earn their place instead of being rationed.
+//!
+//! **What it does NOT do.** It does not render text. egui still owns the
+//! fonts, the shaping, the layout and the atlas — this takes the glyphs it
+//! has already placed ([`GlyphInstance`] carries a glyph's screen rect and
+//! its rect in egui's own font atlas) and decides only how they reach the
+//! framebuffer. Glyph rasterization is untouched, so a label here is the
+//! same pixels as the rest of the UI's text.
+//!
+//! **Why the rim comes out identical.** Every stamp of a ring is drawn in
+//! one color, so their composite is `1 - PRODUCT(1 - alpha * coverage_i)` —
+//! a product, which factorizes. That means a fragment can evaluate the whole
+//! ring by sampling the glyph's atlas patch at the same offsets, and that
+//! per-glyph accumulation composites to exactly what stamping produced, even
+//! where neighbouring glyphs' rims overlap. The one thing the arithmetic
+//! does NOT excuse is order: stamping laid down every rim before any text,
+//! so the rim is drawn as its own pass over all glyphs before the fills.
+
+use std::collections::HashMap;
+
+use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
+
+use crate::{create_vertex_buffer, wgpu};
+
+const TEXT_SRC: &str = include_str!("shaders/text.wgsl");
+
+/// Entry points the text shader must provide.
+#[cfg(test)]
+pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &["vs_glyph", "fs_rim", "fs_fill"];
+
+/// One glyph: where it goes on screen, where it lives in egui's font atlas,
+/// and the two colors it is drawn in.
+///
+/// Both rects come straight out of the galley egui laid out, so this crate
+/// never learns what the text says or which font it is in.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GlyphInstance {
+    /// Screen rect of the glyph's ink in points: `[min x, min y, width,
+    /// height]`.
+    pub rect: [f32; 4],
+    /// The same glyph in the atlas, in texels: `[min x, min y, max x, max
+    /// y]`. The shader reads nothing outside it — the neighbouring texels
+    /// are a different letter.
+    pub uv: [f32; 4],
+    /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
+    pub fill: [u8; 4],
+    /// The rim's color at full strength; the rings decide its opacity. A
+    /// fully transparent rim skips the rim pass for this glyph.
+    pub rim: [u8; 4],
+}
+
+impl GlyphInstance {
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<GlyphInstance>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &wgpu::vertex_attr_array![
+            0 => Float32x4, // rect
+            1 => Float32x4, // uv
+            2 => Unorm8x4,  // fill
+            3 => Unorm8x4,  // rim
+        ],
+    };
+}
+
+/// One ring of the rim: how far out it sits (points), how opaque each stamp
+/// is, and how many stamps go round it.
+///
+/// The look lives in the UI layer, which owns what a label should look like;
+/// this crate is handed the numbers. Samples of 0 is a ring that isn't
+/// there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextRing {
+    pub radius: f32,
+    pub alpha: f32,
+    pub samples: u32,
+}
+
+/// egui's font atlas, as this crate needs it: the pixels, and a key that
+/// changes whenever they do.
+///
+/// A callback cannot reach the texture egui uploaded — `CallbackResources`
+/// holds what WE put there — so the atlas is mirrored. The key is what makes
+/// that affordable: the mirror is re-uploaded only when it moves, which is
+/// when a glyph nobody has drawn before is rasterized.
+pub struct FontAtlas {
+    pub image: std::sync::Arc<egui::ColorImage>,
+    pub key: u64,
+}
+
+/// Draw `glyphs` into `rect`. `pane_id` must be unique per pane drawing text
+/// in the same frame (each keeps its own instance buffer; the pipeline and
+/// the atlas are shared).
+///
+/// `atlas` is `None` on the frames where egui's atlas has not changed, which
+/// is nearly all of them.
+pub fn text_paint_callback(
+    rect: egui::Rect,
+    glyphs: Vec<GlyphInstance>,
+    rings: [TextRing; 2],
+    atlas: Option<FontAtlas>,
+    target_format: wgpu::TextureFormat,
+    pane_id: u64,
+) -> egui::PaintCallback {
+    egui_wgpu::Callback::new_paint_callback(
+        rect,
+        TextCallback { glyphs, rings, atlas, target_format, pane_id },
+    )
+}
+
+struct TextCallback {
+    glyphs: Vec<GlyphInstance>,
+    rings: [TextRing; 2],
+    atlas: Option<FontAtlas>,
+    target_format: wgpu::TextureFormat,
+    pane_id: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TextUniforms {
+    screen_points: [f32; 2],
+    atlas_size: [f32; 2],
+    pixels_per_point: f32,
+    /// WGSL aligns a `vec4<f32>` to 16 bytes, so the rings start at 32 and
+    /// this is the gap in front of them. Named rather than derived because
+    /// the mismatch is a validation error at first paint, not a compile one.
+    _pad: [f32; 3],
+    ring0: [f32; 4],
+    ring1: [f32; 4],
+}
+
+struct TextResources {
+    /// The rim pass and the fill pass: one shader, one vertex layout, two
+    /// fragment entry points. Two pipelines rather than one with a flag,
+    /// because the pass is a property of the draw and not of any glyph.
+    rim_pipeline: wgpu::RenderPipeline,
+    fill_pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    target_format: wgpu::TextureFormat,
+    /// The mirrored font atlas, and the key of what is in it.
+    atlas: Option<wgpu::Texture>,
+    atlas_size: [u32; 2],
+    atlas_key: u64,
+    panes: HashMap<u64, TextPane>,
+}
+
+struct TextPane {
+    uniform_buffer: wgpu::Buffer,
+    bind_group: Option<wgpu::BindGroup>,
+    instance_buffer: wgpu::Buffer,
+    capacity: usize,
+    count: u32,
+}
+
+/// Starting size of a pane's glyph buffer. A lattice full of labels is a few
+/// thousand glyphs; it grows by `next_power_of_two` when a frame overflows.
+const INITIAL_GLYPH_CAPACITY: usize = 2048;
+
+impl TextResources {
+    fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("text_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let rim_pipeline = create_text_pipeline(device, target_format, &layout, "fs_rim");
+        let fill_pipeline = create_text_pipeline(device, target_format, &layout, "fs_fill");
+        // Linear, to match how egui samples the same atlas. At the sizes
+        // labels are drawn the glyph lands texel for texel on the
+        // framebuffer, so this is an identity for the fill and only does
+        // real work for the rim's off-grid taps.
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("text_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        TextResources {
+            rim_pipeline,
+            fill_pipeline,
+            layout,
+            sampler,
+            target_format,
+            atlas: None,
+            atlas_size: [0, 0],
+            atlas_key: u64::MAX,
+            panes: HashMap::new(),
+        }
+    }
+
+    /// Upload egui's atlas into our own texture, recreating it when it has
+    /// grown. Bind groups referencing the old texture are dropped with it,
+    /// so every pane rebuilds one on its next frame.
+    fn mirror_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &FontAtlas) {
+        let size = [atlas.image.width() as u32, atlas.image.height() as u32];
+        if self.atlas.is_none() || self.atlas_size != size {
+            self.atlas = Some(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("text_font_atlas"),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            }));
+            self.atlas_size = size;
+            for pane in self.panes.values_mut() {
+                pane.bind_group = None;
+            }
+        }
+        let texture = self.atlas.as_ref().expect("created above");
+        queue.write_texture(
+            texture.as_image_copy(),
+            bytemuck::cast_slice(atlas.image.as_raw()),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size[0] * 4),
+                rows_per_image: Some(size[1]),
+            },
+            wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+        );
+        self.atlas_key = atlas.key;
+    }
+}
+
+/// One pass's pipeline: instanced quads blended exactly the way egui blends
+/// its own text, so a label composites over the picture identically to the
+/// stamped version it replaces.
+fn create_text_pipeline(
+    device: &wgpu::Device,
+    target_format: wgpu::TextureFormat,
+    layout: &wgpu::BindGroupLayout,
+    fragment: &str,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("text_shader"),
+        source: wgpu::ShaderSource::Wgsl(TEXT_SRC.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("text_pipeline_layout"),
+        bind_group_layouts: &[Some(layout)],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(fragment),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_glyph"),
+            compilation_options: Default::default(),
+            buffers: &[GlyphInstance::LAYOUT],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some(fragment),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+impl CallbackTrait for TextCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        screen_descriptor: &ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        let recreate = callback_resources
+            .get::<TextResources>()
+            .is_none_or(|r| r.target_format != self.target_format);
+        if recreate {
+            callback_resources.insert(TextResources::new(device, self.target_format));
+        }
+        let resources: &mut TextResources =
+            callback_resources.get_mut().expect("inserted above when missing");
+
+        if let Some(atlas) = self.atlas.as_ref().filter(|a| a.key != resources.atlas_key) {
+            resources.mirror_atlas(device, queue, atlas);
+        }
+        // No atlas yet means the first frame arrived without one: nothing can
+        // be drawn, and the next frame that sees a change will bring it.
+        if resources.atlas.is_none() {
+            return Vec::new();
+        }
+
+        let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
+        let ring = |r: TextRing| [r.radius, r.alpha, r.samples as f32, 0.0];
+        let uniforms = TextUniforms {
+            screen_points: [
+                screen_descriptor.size_in_pixels[0] as f32 / ppp,
+                screen_descriptor.size_in_pixels[1] as f32 / ppp,
+            ],
+            atlas_size: [resources.atlas_size[0] as f32, resources.atlas_size[1] as f32],
+            pixels_per_point: ppp,
+            _pad: [0.0; 3],
+            ring0: ring(self.rings[0]),
+            ring1: ring(self.rings[1]),
+        };
+
+        let view = resources
+            .atlas
+            .as_ref()
+            .expect("checked above")
+            .create_view(&Default::default());
+        let (layout, sampler) = (&resources.layout, &resources.sampler);
+        let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
+            uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("text_uniforms"),
+                size: std::mem::size_of::<TextUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            bind_group: None,
+            instance_buffer: create_vertex_buffer::<GlyphInstance>(
+                device,
+                "text_glyphs",
+                INITIAL_GLYPH_CAPACITY,
+            ),
+            capacity: INITIAL_GLYPH_CAPACITY,
+            count: 0,
+        });
+        if pane.bind_group.is_none() {
+            pane.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("text_bind_group"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: pane.uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            }));
+        }
+
+        if self.glyphs.len() > pane.capacity {
+            pane.capacity = self.glyphs.len().next_power_of_two();
+            pane.instance_buffer =
+                create_vertex_buffer::<GlyphInstance>(device, "text_glyphs", pane.capacity);
+        }
+        pane.count = self.glyphs.len() as u32;
+        if !self.glyphs.is_empty() {
+            queue.write_buffer(&pane.instance_buffer, 0, bytemuck::cast_slice(&self.glyphs));
+        }
+        queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        Vec::new()
+    }
+
+    fn paint(
+        &self,
+        info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        callback_resources: &CallbackResources,
+    ) {
+        let Some(resources) = callback_resources.get::<TextResources>() else {
+            return;
+        };
+        let Some(pane) = resources.panes.get(&self.pane_id) else {
+            return;
+        };
+        let Some(bind_group) = pane.bind_group.as_ref() else {
+            return;
+        };
+        if pane.count == 0 {
+            return;
+        }
+        // Against the whole surface, as the roll does: the geometry is in
+        // screen points, so the clip mapping is egui's own. The scissor
+        // egui-wgpu set from the clip rect is left alone, and is what keeps
+        // a label inside its pane.
+        render_pass.set_viewport(
+            0.0,
+            0.0,
+            info.screen_size_px[0] as f32,
+            info.screen_size_px[1] as f32,
+            0.0,
+            1.0,
+        );
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+        // Every rim, then every fill. Stamping had that order for free (it
+        // drew the rings before the text); here it is two draws, and without
+        // it two neighbouring letters darken each other's ink.
+        render_pass.set_pipeline(&resources.rim_pipeline);
+        render_pass.draw(0..4, 0..pane.count);
+        render_pass.set_pipeline(&resources.fill_pipeline);
+        render_pass.draw(0..4, 0..pane.count);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{headless_device, readback, render_to_texture};
+
+    const SIZE: [u32; 2] = [64, 64];
+    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+    #[test]
+    fn baked_text_shader_validates() {
+        let module = naga::front::wgsl::parse_str(TEXT_SRC)
+            .map_err(|e| e.emit_to_string(TEXT_SRC))
+            .expect("text.wgsl must parse");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("text.wgsl must validate");
+        for required in TEXT_ENTRY_POINTS {
+            assert!(
+                module.entry_points.iter().any(|ep| ep.name == *required),
+                "missing entry point `{required}`"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pipelines_build_against_a_headless_device() {
+        let Some((device, _queue)) = headless_device() else {
+            return;
+        };
+        let _resources = TextResources::new(&device, FORMAT);
+    }
+
+    /// A stand-in atlas: one opaque 8x8 "glyph" at (8, 8), with nothing
+    /// around it. Coverage is the alpha channel, as egui's atlas stores it.
+    fn atlas() -> FontAtlas {
+        let mut image = egui::ColorImage::filled([32, 32], egui::Color32::TRANSPARENT);
+        for y in 8..16 {
+            for x in 8..16 {
+                image[(x, y)] = egui::Color32::WHITE;
+            }
+        }
+        FontAtlas { image: std::sync::Arc::new(image), key: 1 }
+    }
+
+    /// Draw one glyph through both passes and read the frame back.
+    fn draw(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        glyph: GlyphInstance,
+        rings: [TextRing; 2],
+    ) -> Vec<u8> {
+        let cb = TextCallback {
+            glyphs: vec![glyph],
+            rings,
+            atlas: Some(atlas()),
+            target_format: FORMAT,
+            pane_id: 0,
+        };
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        let texture = render_to_texture(
+            device,
+            queue,
+            SIZE,
+            FORMAT,
+            wgpu::Color::TRANSPARENT,
+            |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            },
+        );
+        readback(device, queue, &texture, SIZE)
+    }
+
+    fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * SIZE[0] + x) * 4) as usize;
+        [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
+    }
+
+    /// A glyph 8 points wide at (24, 24), reading the 8x8 patch of [`atlas`].
+    fn glyph() -> GlyphInstance {
+        GlyphInstance {
+            rect: [24.0, 24.0, 8.0, 8.0],
+            uv: [8.0, 8.0, 16.0, 16.0],
+            fill: [255, 255, 255, 255],
+            rim: [255, 0, 0, 255],
+        }
+    }
+
+    /// The glyph lands where it was told to, in its own color, and the rim
+    /// stands outside it in the rim's color — the whole contract in one
+    /// picture.
+    #[test]
+    fn a_glyph_paints_its_ink_and_the_rim_stands_outside_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rings = [
+            TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
+            TextRing { radius: 2.0, alpha: 1.0, samples: 8 },
+        ];
+        let frame = draw(&device, &queue, glyph(), rings);
+        assert_eq!(pixel(&frame, 28, 28), [255, 255, 255, 255], "the glyph itself");
+        assert_eq!(pixel(&frame, 23, 28), [255, 0, 0, 255], "the rim, one point out");
+        assert_eq!(pixel(&frame, 21, 28), [0, 0, 0, 0], "nothing past the rim's radius");
+        assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
+    }
+
+    /// The rim's opacity is `1 - PRODUCT(1 - alpha)` over the samples that
+    /// cover a pixel, which is what stamping the text around that ring
+    /// composites to. Checked where exactly one sample can reach: two
+    /// stamps at half alpha must read 75% opaque, not 50% and not 100%.
+    ///
+    /// This is the claim the whole approach rests on — that the rim was
+    /// re-derived rather than re-invented — so it is measured against the
+    /// arithmetic rather than eyeballed.
+    #[test]
+    fn the_rim_accumulates_the_way_stamping_composited() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Two samples at half alpha, two points either side. The glyph is 8
+        // points wide, so a pixel in the middle of it is covered by both and
+        // a pixel near its left edge only by the one reaching in from the
+        // right — the two cases the arithmetic has to tell apart.
+        let rings = [
+            TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
+            TextRing { radius: 2.0, alpha: 0.5, samples: 2 },
+        ];
+        let frame = draw(&device, &queue, GlyphInstance { fill: [0, 0, 0, 0], ..glyph() }, rings);
+        let both = pixel(&frame, 28, 28);
+        assert!(
+            both[3].abs_diff(191) <= 2,
+            "two half-alpha samples should compose to 75%, got {both:?}",
+        );
+        let one = pixel(&frame, 25, 28);
+        assert!(
+            one[3].abs_diff(128) <= 2,
+            "one half-alpha sample should read 50%, got {one:?}",
+        );
+    }
+}

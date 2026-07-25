@@ -903,31 +903,28 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     }
 }
 
-/// Every text drawn by one pass over a closure, as (rect, text). The halo
-/// stamps each string many times over, so callers fold the stamps of one
-/// piece back together into the box that piece occupies.
-fn drawn_texts(draw: impl Fn(&egui::Painter)) -> Vec<(egui::Rect, String)> {
+/// Every piece of text one pass over a closure drew, as (line box, text).
+///
+/// Labels no longer go through egui's shape list — they are collected as
+/// glyphs and handed to a paint callback — so this reads the batch instead.
+fn drawn_texts(
+    draw: impl Fn(&mut crate::text::TextBatch, &egui::Painter),
+) -> Vec<(egui::Rect, String)> {
     let ctx = egui::Context::default();
     theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    let output = ctx.run_ui(
+    let mut batch = crate::text::TextBatch::default();
+    let _ = ctx.run_ui(
         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| draw(ui.painter()),
+        |ui| draw(&mut batch, ui.painter()),
     );
-    output
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            egui::Shape::Text(text) => Some((
-                egui::Rect::from_min_size(text.pos, text.galley.size()),
-                text.galley.text().to_owned(),
-            )),
-            _ => None,
-        })
-        .collect()
+    // The line box, as the old shape-list reader reported: the assertions
+    // below are about how pieces stack, and a monospace line box is what
+    // they were calibrated against.
+    batch.pieces().iter().map(|p| (p.galley, p.text.clone())).collect()
 }
 
-/// The box one piece of text occupies, halo stamps and all.
+/// The box one piece of text occupies.
 fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
     texts
         .iter()
@@ -944,8 +941,9 @@ fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
 fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     let anchor = egui::pos2(200.0, 200.0);
     let name = lattice_core::NoteName { letter: 'C', sharps: 5, syntonic_commas: 4 };
-    let texts = drawn_texts(|painter| {
+    let texts = drawn_texts(|batch, painter| {
         panes::lattice::draw_stacked_name(
+            batch,
             painter,
             anchor,
             name,
@@ -960,11 +958,12 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     let accidental = text_box(&texts, "\u{266F}5");
     let comma = text_box(&texts, "+4");
 
-    // One column, beginning where the letter ends. (Every box here is grown
-    // by the halo's rim, so the two edges meet to within that much.)
-    const HALO: f32 = 2.0;
+    // One column, beginning where the letter ends. The boxes are ink, so
+    // they meet within a glyph's own side bearing rather than within the
+    // rim the old stamped boxes carried.
+    const BEARING: f32 = 2.0;
     assert!(
-        (accidental.left() - letter.right()).abs() <= 2.0 * HALO,
+        (accidental.left() - letter.right()).abs() <= 2.0 * BEARING,
         "marks should follow the letter ({accidental:?} after {letter:?})"
     );
     assert!((accidental.left() - comma.left()).abs() < 0.5, "marks share a column");
@@ -981,8 +980,7 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
          letter {letter:?})"
     );
 
-    // The name as a whole straddles the node it labels. (The halo is
-    // symmetric, so it grows the box evenly and does not shift the center.)
+    // The name as a whole straddles the node it labels.
     let name_box = letter.union(accidental).union(comma);
     assert!(
         (name_box.center().x - anchor.x).abs() < 0.5,
@@ -1003,8 +1001,9 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
 fn a_natural_note_label_is_just_the_letter() {
     let anchor = egui::pos2(200.0, 200.0);
     let name = lattice_core::NoteName { letter: 'G', sharps: 0, syntonic_commas: 0 };
-    let texts = drawn_texts(|painter| {
+    let texts = drawn_texts(|batch, painter| {
         panes::lattice::draw_stacked_name(
+            batch,
             painter,
             anchor,
             name,
@@ -1021,11 +1020,10 @@ fn a_natural_note_label_is_just_the_letter() {
 /// The cents readout hangs off the note name's GLYPHS, not its galley box --
 /// a monospace line box carries several pixels of leading below the letter,
 /// and spacing box-to-box left the readout visibly adrift from the name it
-/// belongs to. Drives the whole lattice pane, so it pins what is drawn.
+/// belongs to.
 #[test]
 fn the_cents_readout_sits_right_under_the_note_name() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let backend = RecordingBackend::default();
     state.view.show_labels = true;
     state.view.show_cents = true;
     // Middle C: the origin node, which the default camera looks straight at.
@@ -1035,51 +1033,44 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         note: 60,
         kind: lattice_core::NoteEventKind::On { velocity: 1.0 },
     });
-
-    let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
-    let output = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
-        |ui| root_ui(ui, &mut state, &backend, 0.0),
+    let scene = lattice_scene::derive_scene(
+        &state.tracker,
+        &state.tuning,
+        &state.view,
+        &state.frame_params,
+        state.camera,
+        None,
+        0.0,
     );
 
-    // A held note lights every node of its pitch class, so each piece of text
-    // turns up once per lit node -- and once per halo stamp on top of that.
-    // Cluster the stamps back into the pieces they were drawn as, keeping the
-    // ink each covers on screen, which is what the eye actually reads.
-    let mut names = Vec::new();
-    let mut cents = Vec::new();
-    for clipped in &output.shapes {
-        let egui::Shape::Text(text) = &clipped.shape else { continue };
-        // Sort by the label's own type sizes, which nothing else in the dock
-        // shares. Not by the text: one pitch class is spelled several ways
-        // across the lattice (C, B\u{266F}, D\u{266D}\u{266D}), and every node
-        // lit by the held note draws its own name.
-        let Some(size) = text.galley.job.sections.first().map(|s| s.format.font_id.size) else {
-            continue;
-        };
-        let pieces = if size == panes::lattice::NAME_SIZE || size == panes::lattice::MARK_SIZE {
-            // Letter and marks together: the readout has to clear the comma,
-            // which hangs lower than the letter does.
-            &mut names
-        } else if size == panes::lattice::CENTS_SIZE {
-            &mut cents
-        } else {
-            continue;
-        };
-        let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
-        match pieces.iter_mut().find(|seen: &&mut egui::Rect| seen.intersects(ink)) {
-            Some(seen) => *seen = seen.union(ink),
-            None => pieces.push(ink),
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let mut batch = crate::text::TextBatch::default();
+    let _ = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
+        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, 1.0, &mut batch),
+    );
+
+    // A held note lights every node of its pitch class, so each piece turns
+    // up once per lit node. Sort them by the label's own type sizes, which
+    // nothing else in the pane shares -- not by the text, since one pitch
+    // class is spelled several ways across the lattice.
+    let ink_of = |want: &[f32]| -> Vec<egui::Rect> {
+        let mut clusters: Vec<egui::Rect> = Vec::new();
+        for piece in batch.pieces().iter().filter(|p| want.contains(&p.font_size)) {
+            match clusters.iter_mut().find(|seen| seen.intersects(piece.ink)) {
+                Some(seen) => *seen = seen.union(piece.ink),
+                None => clusters.push(piece.ink),
+            }
         }
-    }
+        clusters
+    };
+    // Letter and marks together: the readout has to clear the comma, which
+    // hangs lower than the letter does.
+    let names = ink_of(&[panes::lattice::NAME_SIZE, panes::lattice::MARK_SIZE]);
+    let cents = ink_of(&[panes::lattice::CENTS_SIZE]);
     assert!(!names.is_empty() && !cents.is_empty(), "the held C should be labeled");
-    // Each cluster is the piece's ink grown by the halo's rim in every
-    // direction; take the rim back off to get the glyphs the eye reads.
-    const HALO: f32 = 2.0;
-    for piece in names.iter_mut().chain(cents.iter_mut()) {
-        *piece = piece.shrink(HALO);
-    }
 
     // Every readout belongs to the name directly above it, and sits the
     // intended air below it -- not the wider, font-dependent gap that

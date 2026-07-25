@@ -83,17 +83,21 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     ui.painter()
         .add(lattice_paint_callback(rect, &scene, state.target_format, 0, Some(state.lattice_stats.clone())));
 
+    // One batch for everything this pane writes, flushed at the end: nothing
+    // is drawn over the text, so collecting it keeps the order it had.
+    let mut batch = crate::text::TextBatch::default();
     if state.learn_active {
-        draw_learn_overlay(ui, rect, now);
+        draw_learn_overlay(&mut batch, ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.view, 1.0);
+        draw_node_labels(ui, rect, &scene, &state.view, 1.0, &mut batch);
     }
+    batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
 /// even when the Tuning tab (and its Learn toggle) is hidden.
-fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
+fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: egui::Rect, now: f64) {
     let color = theme::armed().gamma_multiply(learn_pulse(now));
     let painter = ui.painter_at(rect);
     painter.rect_stroke(
@@ -102,7 +106,7 @@ fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
         egui::Stroke::new(2.0, color),
         egui::StrokeKind::Inside,
     );
-    outlined_text(
+    batch.text(
         &painter,
         rect.left_top() + egui::vec2(10.0, 8.0),
         egui::Align2::LEFT_TOP,
@@ -123,12 +127,13 @@ const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 /// on -- already-visited nodes, drawn as egui text over the 3D view
 /// (projected with the same camera as the nodes): the note name centered on
 /// the node, optionally its pitch class in cents just below.
-pub(super) fn draw_node_labels(
+pub(crate) fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
     scene: &lattice_scene::Scene,
     view: &lattice_scene::ViewConfig,
     scale: f32,
+    batch: &mut crate::text::TextBatch,
 ) {
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     // "Keep note names" retains a name only while the trail marks that
@@ -192,6 +197,7 @@ pub(super) fn draw_node_labels(
         let name_bottom = match sevens {
             SevensLabel::None => 0.0,
             SevensLabel::Cents => draw_plain_name(
+                batch,
                 ui.painter(),
                 center,
                 &format!("{:.0}", node.cents),
@@ -202,6 +208,7 @@ pub(super) fn draw_node_labels(
             SevensLabel::Name | SevensLabel::Comma => {
                 let name = display_note_name(node.lattice_pos, view.meantone);
                 let bottom = draw_stacked_name(
+                    batch,
                     ui.painter(),
                     center,
                     name,
@@ -214,6 +221,7 @@ pub(super) fn draw_node_labels(
                     // this very name — the septimal comma, and the only
                     // part of the label that differs between sheets.
                     draw_plain_name(
+                        batch,
                         ui.painter(),
                         center + egui::vec2(0.0, bottom + CENTS_GAP * scale),
                         &format!("{:+.0}", node.comma),
@@ -237,7 +245,7 @@ pub(super) fn draw_node_labels(
             // monospace box carries enough leading above and below the glyphs
             // that box-to-box spacing left the two floating far apart.
             let top = painter_ink(ui.painter(), &text, &font).min.y;
-            outlined_text(
+            batch.text(
                 ui.painter(),
                 center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
                 egui::Align2::CENTER_TOP,
@@ -287,6 +295,7 @@ pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
 pub(crate) fn draw_stacked_name(
+    batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
     anchor: egui::Pos2,
     name: lattice_core::NoteName,
@@ -315,7 +324,7 @@ pub(crate) fn draw_stacked_name(
     let left = anchor.x - (letter.x + column) / 2.0;
 
     let letter_text = name.letter.to_string();
-    outlined_text(
+    batch.text(
         painter,
         egui::pos2(left, anchor.y),
         egui::Align2::LEFT_CENTER,
@@ -336,7 +345,7 @@ pub(crate) fn draw_stacked_name(
         // it read as a super/subscript stack rather than two loose glyphs.
         let size = mark_size(mark);
         let rise = (letter.y - size.y) / 2.0;
-        outlined_text(
+        batch.text(
             painter,
             egui::pos2(left + letter.x, anchor.y + direction * rise),
             egui::Align2::LEFT_CENTER,
@@ -358,6 +367,7 @@ pub(crate) fn draw_stacked_name(
 /// note names — an off-sheet node's cents, and its comma (see
 /// [`SevensLabel`](lattice_scene::SevensLabel)).
 fn draw_plain_name(
+    batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
     anchor: egui::Pos2,
     text: &str,
@@ -369,7 +379,7 @@ fn draw_plain_name(
     let size = painter
         .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
         .size();
-    outlined_text(
+    batch.text(
         painter,
         anchor,
         egui::Align2::CENTER_CENTER,
@@ -391,97 +401,14 @@ fn painter_ink(painter: &egui::Painter, text: &str, font: &egui::FontId) -> egui
         .mesh_bounds
 }
 
-/// The halo's two rings, as (radius in points, stamp alpha, samples).
-///
-/// The sample counts are a cost, not a look: every stamp is the whole label
-/// again, and a lattice full of labels is most of the geometry in the frame.
-/// Both rings were 16 and neither needed it —
-///
-///   - the crisp ring is opaque, so its samples only have to close the gap:
-///     at a 1.2pt radius, 12 land half a point apart and the union reads as
-///     one line (8 starts to scallop, 4 visibly thins on the diagonals);
-///   - the soft ring is a fade, and a fade is made of overlap. Halving its
-///     samples to 8 thins it, so its stamp alpha rises to compensate: 0.21
-///     against the old 0.15, tuned by rendering the pair and matching pixels
-///     rather than by the compositing arithmetic, which assumes an overlap
-///     count that varies across the rim.
-///
-/// 20 stamps against 32, for a rim that measures within a couple of 8-bit
-/// levels of the one it replaces.
-const RINGS: [(f32, f32, usize); 2] = [(2.0, 0.21, 8), (1.2, 1.0, 12)];
-
-/// Text drawn over a busy picture, haloed so it stays readable whatever
-/// ends up behind it (bright nodes, edges, glow; the Spectral pane's axis
-/// labels use it over the spectrogram). The outline color
-/// should be the skin's recessed surface (`theme::well`), which
-/// contrasts with its text color by construction.
-///
-/// The halo is the galley stamped around two rings: a tight opaque ring
-/// for contrast and a wider faint one that fades the edge out. Every
-/// sample sits at the same radius, snapped to whole physical pixels —
-/// mixed cardinal/diagonal offsets and sub-pixel radii both read as a
-/// lumpy outline on high-DPI displays.
-// One more than clippy's taste, and they are all distinct: the painter, where
-// the text goes, what it says, and how it is dressed. Bundling any of them
-// would name a group that does not exist.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn outlined_text(
-    painter: &egui::Painter,
-    anchor: egui::Pos2,
-    align: egui::Align2,
-    text: String,
-    font: egui::FontId,
-    color: egui::Color32,
-    outline: egui::Color32,
-) {
-    let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
-    let pos = align.anchor_size(anchor, galley.size()).min;
-    let ppp = painter.ctx().pixels_per_point();
-    let snap = |pt: f32| (pt * ppp).round().max(1.0) / ppp;
-    // Soft ring first so the crisp ring and the fill paint over it.
-    //
-    // The sample counts are a cost, not a look: every stamp is the whole
-    // label again, and a lattice full of labels is most of the geometry in
-    // the frame. Both rings were 16 and neither needed it —
-    //
-    //   - the crisp ring is opaque, so its samples only have to close the
-    //     gap: at a 1.2pt radius, 12 land half a point apart and the union
-    //     reads as one line (8 starts to scallop, 4 visibly thins on the
-    //     diagonals);
-    //   - the soft ring is a fade, and a fade is made of overlap. Halving
-    //     its samples to 8 thins it, so its stamp alpha rises to compensate:
-    //     0.21 against the old 0.15, tuned by rendering the pair and
-    //     matching pixels rather than by the compositing arithmetic, which
-    //     assumes an overlap count that varies across the rim.
-    //
-
-    // A rim that cannot paint still costs its full ring of stamps, and a
-    // label's rim is the single biggest thing this pane hands the
-    // tessellator. So one that would paint nothing is skipped rather than
-    // drawn in nothing: that is every label whose fade has taken it past the
-    // last visible alpha, on every frame of every release.
-    if outline.a() > 0 {
-        for (radius, alpha, samples) in RINGS {
-            let radius = snap(radius);
-            let ring = outline.gamma_multiply(alpha);
-            for i in 0..samples {
-                let angle = std::f32::consts::TAU * i as f32 / samples as f32;
-                let off = egui::vec2(angle.cos(), angle.sin()) * radius;
-                painter.galley(pos + off, galley.clone(), ring);
-            }
-        }
-    }
-    painter.galley(pos, galley, color);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use lattice_core::{NoteEvent, NoteEventKind};
 
-    /// Paint the Lattice pane into `rect` with the camera at `distance`, and
-    /// report every galley the labels emitted.
-    fn label_galleys(rect: egui::Rect, distance: f32) -> Vec<egui::epaint::TextShape> {
+    /// Draw the labels for a chord, with the camera at `distance`, and
+    /// report the pieces of text that were laid out.
+    fn label_pieces(rect: egui::Rect, distance: f32) -> Vec<crate::text::TextPiece> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.camera.distance = distance;
         // A chord spread across the lattice, so nodes land all over the pane
@@ -494,60 +421,56 @@ mod tests {
                 kind: NoteEventKind::On { velocity: 1.0 },
             });
         }
+        let scene = derive_scene(
+            &state.tracker,
+            &state.tuning,
+            &state.view,
+            &state.frame_params,
+            state.camera,
+            None,
+            0.05,
+        );
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 900.0));
-        let out = ctx.run_ui(
+        let mut batch = crate::text::TextBatch::default();
+        let _ = ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                lattice_pane(&mut child, &mut state, 0.05);
+                let child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                draw_node_labels(&child, rect, &scene, &state.view, 1.0, &mut batch);
             },
         );
-        out.shapes
-            .into_iter()
-            .filter_map(|s| match s.shape {
-                egui::Shape::Text(t) => Some(t),
-                _ => None,
-            })
-            .collect()
+        batch.pieces().to_vec()
     }
 
-    /// The rim is drawn once per sample and no more, and its budget is 20.
+    /// One quad per glyph, whatever the rim is doing.
     ///
-    /// Both halves matter and neither is obvious from reading the loop: a
-    /// stamp that slipped in twice would double the cost of every label in
-    /// the frame invisibly, and the sample counts are the one number that
-    /// decides what labels cost — 32 of them was the frame's largest single
-    /// expense before they were tuned down.
+    /// This is the whole point of drawing labels ourselves: the rim used to
+    /// multiply a label's geometry by twenty-one, so every new label was a
+    /// cost decision. Here the rim is arithmetic in the fragment shader and
+    /// a piece of text costs its own glyphs and nothing else.
     #[test]
-    fn the_rim_draws_one_stamp_per_sample_and_no_more() {
-        let samples: usize = RINGS.iter().map(|&(_, _, n)| n).sum();
-        assert!(samples <= 20, "the rim's sample budget grew to {samples}");
-
+    fn a_label_costs_one_quad_per_glyph() {
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0));
-        let out = ctx.run_ui(
+        let mut batch = crate::text::TextBatch::default();
+        let _ = ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
-                outlined_text(
+                batch.text(
                     ui.painter(),
                     egui::pos2(100.0, 50.0),
                     egui::Align2::CENTER_CENTER,
-                    "C".to_owned(),
+                    "C440".to_owned(),
                     egui::FontId::monospace(15.0),
                     egui::Color32::WHITE,
                     egui::Color32::BLACK,
                 );
             },
         );
-        let galleys = out
-            .shapes
-            .iter()
-            .filter(|s| matches!(s.shape, egui::Shape::Text(_)))
-            .count();
-        assert_eq!(galleys, samples + 1, "one stamp per sample, plus the text itself");
+        assert_eq!(batch.len(), 4, "four glyphs, four quads");
     }
 
     /// A label is laid out only if it can land on the pane.
@@ -560,8 +483,8 @@ mod tests {
     #[test]
     fn a_label_off_the_pane_is_not_laid_out() {
         let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, 400.0));
-        let wide = label_galleys(rect, 14.0);
-        let zoomed = label_galleys(rect, 2.0);
+        let wide = label_pieces(rect, 14.0);
+        let zoomed = label_pieces(rect, 2.0);
         assert!(!wide.is_empty(), "the pane drew no labels at all; the test is vacuous");
         assert!(
             zoomed.len() < wide.len(),
@@ -573,11 +496,11 @@ mod tests {
         // And nothing is laid out far outside the pane, at either zoom: a
         // label's own reach is the only slack the cull allows.
         let slack = rect.expand(LABEL_REACH * 2.0);
-        for shape in wide.iter().chain(&zoomed) {
+        for piece in wide.iter().chain(&zoomed) {
             assert!(
-                slack.contains(shape.pos),
+                slack.contains(piece.ink.min) && slack.contains(piece.ink.max),
                 "a label was laid out at {:?}, outside the pane {rect:?}",
-                shape.pos,
+                piece.ink,
             );
         }
     }
