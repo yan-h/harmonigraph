@@ -1405,6 +1405,123 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     }
 }
 
+/// A drag whose release never arrives must not take the wheel down with it.
+///
+/// egui gates every `ScrollArea` on `dragged_id().is_none()` — globally, not
+/// per area — so one stale drag stops the wheel in EVERY settings pane at once.
+/// In a plugin window that is a routine event rather than an exotic one: let go
+/// outside the editor, or let the host take focus mid-drag, and the release is
+/// delivered somewhere that is not us. Both gestures below are ones a person
+/// actually makes: panning the Analyzer's pitch range out past its edge, and
+/// dragging any settings bar.
+#[test]
+fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
+    // Default dock: the Analyzer picture is the column at x ~518..720, the
+    // settings leaf is top-right.
+    for (what, at) in [("the analyzer picture", 600.0f32), ("a settings bar", 860.0)] {
+        for lose_it in [Lose::Pointer, Lose::Focus] {
+            let moved = scroll_settings_after_lost_drag(egui::pos2(at, 200.0), lose_it);
+            assert!(
+                moved < -8.0,
+                "a drag on {what} that lost its release to {lose_it:?} left the settings \
+                 pane unscrollable (content moved {moved})",
+            );
+        }
+    }
+}
+
+/// How the release goes missing: the pointer leaves the editor, or the host
+/// takes focus while the button is down.
+#[derive(Clone, Copy, Debug)]
+enum Lose {
+    Pointer,
+    Focus,
+}
+
+/// Press and drag at `from`, lose the release, then wheel over the settings
+/// pane and answer how far its content moved.
+fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let path = state.dock.find_tab(&panes::Tab::Analyzer).expect("the Analyzer settings tab");
+    state.dock.set_active_tab(path).expect("selecting the tab");
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    let screen_h = 500.0;
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, screen_h));
+    let body =
+        egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h * 0.55 + 2.0));
+    // Named texts inside the settings body, as `wheel_over_settings_pane` does:
+    // the y of a string drawn in both frames is the one metric a clip rect and
+    // a culled shape cannot lie about.
+    let texts = |out: &egui::FullOutput| {
+        let mut map = std::collections::HashMap::new();
+        for cs in &out.shapes {
+            if cs.clip_rect.min.x < body.min.x
+                || cs.clip_rect.min.y < body.min.y
+                || cs.clip_rect.max.y > body.max.y
+            {
+                continue;
+            }
+            if let egui::Shape::Text(t) = &cs.shape {
+                map.entry(t.galley.text().to_owned()).or_insert(t.pos.y);
+            }
+        }
+        map
+    };
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        texts(&ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t)))
+    };
+    let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // Hover, press, drag — and then the release goes missing.
+    frame(&mut state, vec![egui::Event::PointerMoved(from)]);
+    frame(&mut state, vec![press(from, true)]);
+    frame(&mut state, vec![egui::Event::PointerMoved(from + egui::vec2(0.0, 40.0))]);
+    frame(
+        &mut state,
+        match lose {
+            Lose::Pointer => vec![egui::Event::PointerGone],
+            Lose::Focus => vec![egui::Event::WindowFocused(false)],
+        },
+    );
+
+    // Back over the settings pane, wheel, and see whether anything moves.
+    let settings = egui::pos2(860.0, 130.0);
+    frame(&mut state, vec![egui::Event::PointerMoved(settings)]);
+    let before = frame(&mut state, vec![]);
+    frame(
+        &mut state,
+        vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, -3.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    // The wheel arrives smoothed over several frames.
+    let mut after = before.clone();
+    for _ in 0..20 {
+        after = frame(&mut state, vec![]);
+    }
+    let mut deltas: Vec<f32> =
+        before.iter().filter_map(|(text, y)| after.get(text).map(|m| m - y)).collect();
+    assert!(!deltas.is_empty(), "the settings pane drew no text to measure");
+    deltas.sort_by(f32::total_cmp);
+    deltas[deltas.len() / 2]
+}
+
 /// The Video pane scrolls at a workable size, rather than swallowing the slack
 /// with its preview.
 ///

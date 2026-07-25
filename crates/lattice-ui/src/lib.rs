@@ -1414,8 +1414,61 @@ pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
 /// and its audio samples into `state.spectrum`. `now` is seconds on the
 /// shell's clock, and must be the SAME clock that timestamped those
 /// `NoteEvent`s — envelopes are derived from the difference.
+/// End a drag whose release is never coming, because it is holding every
+/// scroll area in the editor hostage.
+///
+/// egui decides whether a `ScrollArea` may take the wheel with
+/// `ui.rect_contains_pointer(outer_rect) && ui.ctx().dragged_id().is_none()`
+/// (`scroll_area.rs`). That second test is GLOBAL — not "is this area being
+/// dragged" but "is anything anywhere being dragged" — so a single stale drag
+/// silently stops the wheel in every settings pane at once, and stays that way
+/// until something clears it.
+///
+/// A stale drag is easy to come by in a plugin window. egui ends a drag on the
+/// button release, and deliberately keeps one alive when the pointer merely
+/// leaves the viewport ("when dragging a slider and the mouse leaves the
+/// viewport, we still want the drag to work" — `input_state`, which is why
+/// `PointerGone` does not clear the pressed button either). But a plugin
+/// editor is a guest inside a host window: let go outside it, or let the host
+/// take focus mid-drag, and the release is delivered somewhere that is not us.
+/// egui then believes the button is still down forever.
+///
+/// So: no pointer, or no focus, means no drag. The gesture it costs is
+/// resuming a drag that wandered out of the window and came back, which is
+/// what egui's rule buys; the gesture it saves is scrolling any settings pane,
+/// which is otherwise dead until the next click. Only drags started INSIDE the
+/// window and released inside it survive, and those are all of them in
+/// practice.
+///
+/// Not a `Sense::drag` problem in any one pane — a ValueBar strands the wheel
+/// exactly as well as the Analyzer's pan does, which is why this sits once at
+/// the root rather than in whichever pane the drag came from.
+fn end_stranded_drag(ctx: &egui::Context) {
+    if ctx.dragged_id().is_none() {
+        return;
+    }
+    // Focus is read from the EVENT as well as the flag. `InputState::focused`
+    // comes from `RawInput::focused`, which starts true and only moves if an
+    // integration sets it — and the plugin's (vendored egui-baseview) reports
+    // focus by pushing `WindowFocused` and filling in `ViewportInfo`, never
+    // that field. The flag alone would therefore be true forever in the one
+    // shell this is most needed in. Reading both means neither a shell that
+    // sets the flag nor one that only sends the event is missed, and a shell
+    // that says nothing either way (the offline renderer, the tests) is
+    // untouched.
+    let lost = ctx.input(|i| {
+        i.pointer.latest_pos().is_none()
+            || !i.focused
+            || i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))
+    });
+    if lost {
+        ctx.stop_dragging();
+    }
+}
+
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     begin_frame(state, params, now);
+    end_stranded_drag(ui.ctx());
 
     // Cleared before the panes run, so a frame with the roll hidden (or the
     // Spectral pane not on screen at all) reports zero notes rather than
