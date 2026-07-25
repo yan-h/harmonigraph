@@ -5,7 +5,7 @@ use super::{display_note_name, learn_pulse, visibility_floor};
 use crate::{theme, SharedState};
 use egui::Sense;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{derive_scene, Camera, Projection, SevensLabel, TrailMark};
+use lattice_scene::{derive_scene, Camera, LabelRim, Projection, SevensLabel, TrailMark};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -110,6 +110,10 @@ fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, now: f64) {
         egui::FontId::monospace(12.0),
         color,
         theme::well().gamma_multiply(learn_pulse(now)),
+        // The mode badge is chrome, not a label on the picture: one piece of
+        // text whose whole job is to be unmissable, so it keeps its halo
+        // whatever the labels are set to.
+        LabelRim::Halo,
     );
 }
 
@@ -184,14 +188,7 @@ pub(super) fn draw_node_labels(
         if !rect.expand(LABEL_REACH * scale).contains(center) {
             continue;
         }
-        // A transparent rim is how "no halo" travels: `outlined_text` skips
-        // the whole ring when the outline it is handed cannot paint, so the
-        // setting costs nothing to carry and nothing to check.
-        let outline = if view.label_halo {
-            theme::well().gamma_multiply(strength)
-        } else {
-            egui::Color32::TRANSPARENT
-        };
+        let outline = theme::well().gamma_multiply(strength);
         // Off-sheet nodes draw at their own size (ViewConfig::sevens_size),
         // and their text goes with them — a full-size label on a half-size
         // node reads as a label with a node attached. Floored so the
@@ -211,6 +208,7 @@ pub(super) fn draw_node_labels(
                 theme::text().gamma_multiply(strength),
                 outline,
                 scale,
+                view.label_rim,
             ),
             SevensLabel::Name | SevensLabel::Comma => {
                 let name = display_note_name(node.lattice_pos, view.meantone);
@@ -221,6 +219,7 @@ pub(super) fn draw_node_labels(
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
+                    view.label_rim,
                 );
                 if sevens == SevensLabel::Comma {
                     // The signed distance to the home-sheet node wearing
@@ -233,6 +232,7 @@ pub(super) fn draw_node_labels(
                         theme::armed().gamma_multiply(strength),
                         outline,
                         scale * 0.72,
+                        view.label_rim,
                     ) + bottom
                         + CENTS_GAP * scale
                 } else {
@@ -258,6 +258,7 @@ pub(super) fn draw_node_labels(
                 font,
                 theme::text_dim().gamma_multiply(strength),
                 outline,
+                view.label_rim,
             );
         }
     }
@@ -306,6 +307,7 @@ pub(crate) fn draw_stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
+    rim: LabelRim,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
@@ -336,6 +338,7 @@ pub(crate) fn draw_stacked_name(
         name_font.clone(),
         color,
         outline,
+        rim,
     );
     let mut bottom = ink_below(&letter_text, &name_font, letter);
     for mark in [&accidental, &comma] {
@@ -357,6 +360,7 @@ pub(crate) fn draw_stacked_name(
             mark_font.clone(),
             color,
             outline,
+            rim,
         );
         // The comma hangs below the letter's baseline, so it -- not the
         // letter -- is what the cents readout has to clear.
@@ -377,6 +381,7 @@ fn draw_plain_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
+    rim: LabelRim,
 ) -> f32 {
     let font = egui::FontId::monospace(NAME_SIZE * scale);
     let size = painter
@@ -390,6 +395,7 @@ fn draw_plain_name(
         font.clone(),
         color,
         outline,
+        rim,
     );
     painter_ink(painter, text, &font).max.y - size.y / 2.0
 }
@@ -415,6 +421,10 @@ fn painter_ink(painter: &egui::Painter, text: &str, font: &egui::FontId) -> egui
 /// sample sits at the same radius, snapped to whole physical pixels —
 /// mixed cardinal/diagonal offsets and sub-pixel radii both read as a
 /// lumpy outline on high-DPI displays.
+// One more than clippy's taste, and they are all distinct: the painter, where
+// the text goes, what it says, and how it is dressed. Bundling any of them
+// would name a group that does not exist.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn outlined_text(
     painter: &egui::Painter,
     anchor: egui::Pos2,
@@ -423,29 +433,39 @@ pub(super) fn outlined_text(
     font: egui::FontId,
     color: egui::Color32,
     outline: egui::Color32,
+    rim: LabelRim,
 ) {
     let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
     let pos = align.anchor_size(anchor, galley.size()).min;
     let ppp = painter.ctx().pixels_per_point();
     let snap = |pt: f32| (pt * ppp).round().max(1.0) / ppp;
-    // An outline that cannot paint still costs 32 stamps of the galley, and
-    // the label's rim is the single biggest thing the pane hands the
-    // tessellator. So the rings are skipped rather than drawn in nothing:
-    // that is what makes the Halo setting cheap, and it also drops the rim
-    // of a label that has faded past the last visible alpha.
-    if outline.a() == 0 {
-        painter.galley(pos, galley, color);
-        return;
-    }
-    // Soft ring first so the crisp ring and fill paint over it. Stamp
-    // alpha is well below the intended rim alpha because neighboring
-    // stamps overlap and accumulate.
-    for (radius, alpha) in [(snap(2.0), 0.15), (snap(1.2), 1.0)] {
-        let ring = outline.gamma_multiply(alpha);
-        for i in 0..16 {
-            let angle = std::f32::consts::TAU * i as f32 / 16.0;
-            let off = egui::vec2(angle.cos(), angle.sin()) * radius;
-            painter.galley(pos + off, galley.clone(), ring);
+    // The rim, as (radius, alpha, samples). Soft ring first so the crisp
+    // ring and the fill paint over it; stamp alpha is well below the
+    // intended rim alpha because neighboring stamps overlap and accumulate.
+    //
+    // The crisp ring alone needs fewer samples than the pair does: at a
+    // 1.2pt radius, 8 stamps land under a point apart and the union reads as
+    // a continuous outline (4 does not — the diagonals thin out visibly).
+    // The soft ring keeps 16 because it is what a fade is made of.
+    let rings: &[(f32, f32, usize)] = match rim {
+        LabelRim::Halo => &[(2.0, 0.15, 16), (1.2, 1.0, 16)],
+        LabelRim::Outline => &[(1.2, 1.0, 8)],
+        LabelRim::Off => &[],
+    };
+    // An outline that cannot paint still costs a full ring of stamps, and a
+    // label's rim is the single biggest thing this pane hands the
+    // tessellator. So a rim that would paint nothing is skipped rather than
+    // drawn in nothing — which is what makes `Off` worth having, and also
+    // drops the rim of a label that has faded past the last visible alpha.
+    if outline.a() > 0 {
+        for &(radius, alpha, samples) in rings {
+            let radius = snap(radius);
+            let ring = outline.gamma_multiply(alpha);
+            for i in 0..samples {
+                let angle = std::f32::consts::TAU * i as f32 / samples as f32;
+                let off = egui::vec2(angle.cos(), angle.sin()) * radius;
+                painter.galley(pos + off, galley.clone(), ring);
+            }
         }
     }
     painter.galley(pos, galley, color);
@@ -459,17 +479,17 @@ mod tests {
     /// Paint the Lattice pane into `rect` with the camera at `distance`, and
     /// report every galley the labels emitted.
     fn label_galleys(rect: egui::Rect, distance: f32) -> Vec<egui::epaint::TextShape> {
-        label_galleys_with(rect, distance, true)
+        label_galleys_with(rect, distance, LabelRim::Halo)
     }
 
     fn label_galleys_with(
         rect: egui::Rect,
         distance: f32,
-        halo: bool,
+        rim: LabelRim,
     ) -> Vec<egui::epaint::TextShape> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.camera.distance = distance;
-        state.view.label_halo = halo;
+        state.view.label_rim = rim;
         // A chord spread across the lattice, so nodes land all over the pane
         // and (zoomed in) well outside it.
         for note in [55u8, 60, 62, 64, 67, 69, 71] {
@@ -499,23 +519,31 @@ mod tests {
             .collect()
     }
 
-    /// Turning the halo off has to cost the halo, not just hide it: the rim
-    /// is the label's text stamped 32 more times, and drawing those stamps
-    /// in a transparent color would keep every one of them. One galley per
-    /// piece of text is the whole point of the setting.
+    /// A cheaper rim has to COST less, not just look lighter: the rim is the
+    /// label's text stamped again once per sample, so a setting that changed
+    /// the appearance while still walking the ring would buy nothing.
+    ///
+    /// The ratios are the point — 33 stamps a piece at Halo, 9 at Outline, 1
+    /// at Off — so this checks the counts fall apart in that order rather
+    /// than pinning exact numbers the ring geometry is free to retune.
     #[test]
-    fn turning_the_halo_off_stops_stamping_it() {
+    fn a_cheaper_rim_stamps_less_of_it() {
         let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, 400.0));
-        let haloed = label_galleys_with(rect, 14.0, true);
-        let plain = label_galleys_with(rect, 14.0, false);
+        let haloed = label_galleys_with(rect, 14.0, LabelRim::Halo);
+        let outlined = label_galleys_with(rect, 14.0, LabelRim::Outline);
+        let plain = label_galleys_with(rect, 14.0, LabelRim::Off);
         assert!(!plain.is_empty(), "the labels stopped drawing altogether");
-        // 33 stamps a piece become 1, so anything near the haloed count means
-        // the rings are still being built.
         assert!(
-            plain.len() * 16 < haloed.len(),
-            "halo off still laid out {} galleys against {} with it on",
-            plain.len(),
+            outlined.len() * 2 < haloed.len(),
+            "Outline laid out {} galleys against Halo's {}",
+            outlined.len(),
             haloed.len(),
+        );
+        assert!(
+            plain.len() * 4 < outlined.len(),
+            "Off laid out {} galleys against Outline's {}",
+            plain.len(),
+            outlined.len(),
         );
     }
 

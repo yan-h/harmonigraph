@@ -32,7 +32,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LabelRim, LegacyNodeBody, NodeStyle, OuterStyle,
     SevensLabel,
 };
 pub use trail::TrailMark;
