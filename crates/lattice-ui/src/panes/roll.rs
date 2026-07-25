@@ -22,16 +22,16 @@ use super::spectral::{Axes, PitchScale, TimeAxis};
 use super::{scene_color, PITCH_RAMP_CHANNEL};
 use crate::{theme, RollColor, SharedState};
 
-/// Below this many pixels a ribbon is too thin to read as a shape, so it
-/// is drawn as a bare line instead (which stays visible at hairline
-/// width, where a filled polygon disappears).
+/// Narrowest a note may draw, in points. Note width is in SEMITONES of the
+/// pitch axis, so a wide zoom takes a ribbon under a pixel and a filled
+/// rectangle simply disappears; the floor is what keeps a played note visible
+/// at every zoom, at the cost of the widths below it reading alike.
 const MIN_RIBBON_PX: f32 = 1.5;
 
-/// Widest the note's own outline, or the Gap, may be set to. A bound on how
-/// far outside its box a note can paint — the quad grows by exactly that
-/// (`reach` in roll.wgsl), and the far-edge cull pays for it in time. Well
-/// past what the settings offer; this is the guard against a hand-edited
-/// state blob, not a taste.
+/// Widest the Gap may be set to. A bound on how far outside its box a note
+/// can paint — the quad grows by exactly that (`reach` in roll.wgsl), and the
+/// far-edge cull pays for it in time. Well past what the settings offer; this
+/// is the guard against a hand-edited state blob, not a taste.
 const MAX_RIM_PX: f32 = 8.0;
 
 /// How wide the white keyline riding a note's outer edge is, in points.
@@ -167,7 +167,6 @@ pub(super) fn note_instances(
     let oldest = time.oldest();
 
     let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
-    let ribbon_px = 2.0 * half * axes.pitch_len();
 
     // Build in a stable order (the live notes come out of a HashMap, whose
     // iteration order varies per run): instances rasterize in buffer order,
@@ -181,10 +180,9 @@ pub(super) fn note_instances(
         None => state.tracker.roll(),
     };
     // The whole look of a note, decided once for the roll rather than per
-    // note: the keyline standing outside its long edges, and how solidly its
-    // interior is painted.
+    // note: the keyline standing outside its long edges. The note itself is a
+    // solid rectangle of its own color and has nothing else to decide.
     let (keyline_px, light) = rim(cfg, 1.0);
-    let fill = cfg.roll_fill.clamp(0.0, 1.0);
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -210,7 +208,7 @@ pub(super) fn note_instances(
     // Not in whole-song mode: there the region's far end is the take's start,
     // and overhanging it would paint into the spectrum curve above, which no
     // scissor cuts.
-    let ink_px = cfg.roll_outline_width.clamp(0.5, MAX_RIM_PX) * 0.5 + keyline_px + 1.0;
+    let ink_px = keyline_px + 1.0;
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
     // against. What every screen-space length here (the ink overhang, the Gap)
@@ -279,27 +277,27 @@ pub(super) fn note_instances(
             let alpha = 1.0;
             let pitch = (p0 + p1) * 0.5;
             // The note's TRUE color, so a note matches the node it lit up on
-            // the lattice — on its outline and, at whatever Fill asks for,
-            // inside it.
+            // the lattice. It is painted solid, edge to edge — the interior
+            // and the boundary are one thing, and a heatmap cell showing
+            // through a note said neither clearly.
             let core = note_color(note, cfg, state, pitch, alpha);
-            // Reading outward: the interior, the note's color on its outline,
-            // the bright white keyline riding that outline's outer edge, then
-            // whatever the spectrogram is doing.
+            // Reading outward: the note, the bright white keyline standing
+            // against its long edges, then whatever the spectrogram is doing.
             //
-            // The keyline stands entirely OUTSIDE the note's own outline, never
-            // as a wider stroke of the same path — a centered stroke grows
-            // inward exactly as much as outward, and a note is only a few pixels
-            // thick at the pitch ranges this pane is actually used at, so the
-            // two long edges meet in the middle and paint over the interior.
-            // Here that is structural: the shader reads the band off the
-            // DISTANCE to the outline, and a band at distance 1..2 cannot reach
-            // back inside it whatever the ribbon's thickness.
+            // The keyline stands entirely OUTSIDE the note, never as a stroke
+            // of its path — a centered stroke grows inward exactly as much as
+            // outward, and a note is only a few pixels thick at the pitch
+            // ranges this pane is actually used at, so the two long edges meet
+            // in the middle and paint over it. Here that is structural: the
+            // shader reads the band off the DISTANCE to the note's edge, and a
+            // band at distance 0..1 cannot reach back inside it whatever the
+            // ribbon's thickness.
             //
-            // The rim carries no other bands — no solid black outline under the
-            // keyline, and none approximating the lattice's bloom. The bloom is
-            // the lattice's alone (there it is a real post-process pass, not
-            // hand-placed bands standing in for one), and the black is edge a
-            // filled note does not need.
+            // Nothing else rides the rim — no solid black outline under the
+            // keyline, and none approximating the lattice's bloom. The bloom
+            // is the lattice's alone (there it is a real post-process pass,
+            // not hand-placed bands standing in for one), and the black is
+            // edge a solid note does not need.
 
             // Geometry in the pane's own two axes, which is all the shader is
             // told: `Axes` maps those onto perpendicular screen axes, so
@@ -322,21 +320,15 @@ pub(super) fn note_instances(
             // this frame is one — and a slope is meaningless there.
             let slope =
                 if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
-            let width = cfg.roll_outline_width.clamp(0.5, MAX_RIM_PX);
-            let (half_pitch, width) = if ribbon_px < MIN_RIBBON_PX {
-                // Too thin to bound: the note IS its spine. It has no interior
-                // to fill, so the outline width alone carries it (at hairline
-                // width a filled shape disappears, a line does not), and the
-                // rim stands outside that.
-                (0.0, width.max(MIN_RIBBON_PX))
-            } else {
-                (half * axes.pitch_len(), width)
-            };
+            // Floored rather than switched to a line: a rectangle under a
+            // pixel wide fades out to nothing, and the roll's whole job is
+            // saying a note was played there.
+            let half_pitch = (half * axes.pitch_len()).max(MIN_RIBBON_PX * 0.5);
 
             instances.push(RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, depth_px.abs() * 0.5],
-                shape: [slope, width, fill, 0.0],
+                shear: slope,
                 keyline: keyline_px,
                 core: core.to_array(),
                 glow: light.to_array(),
@@ -401,7 +393,6 @@ mod tests {
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
-        state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_thickness = 2.0;
         state.spectrum_config.keyline = keyline;
         state.tracker.handle_event(NoteEvent {
@@ -529,25 +520,6 @@ mod tests {
         assert_eq!(note.glow[3], 0, "Edge 0 left a keyline color behind");
     }
 
-    /// Fill rides on the instance, so the shader can paint a note's interior
-    /// without a second pass or a second shape.
-    #[test]
-    fn fill_reaches_the_instance() {
-        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
-        state.spectrum_config.low_midi = 54.0;
-        state.spectrum_config.high_midi = 66.0;
-        state.spectrum_config.roll_fill = 0.6;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-        let notes = instances(&state, 0.05);
-        assert_eq!(one(&notes).shape[2], 0.6, "Fill did not reach the note");
-    }
-
     /// The Gap pulls a RELEASED note's tail back off its neighbour, so repeats
     /// of one key read as repeats — and it moves nothing else. An onset stays
     /// on the moment it was played (the spectrogram beside it is lined up
@@ -599,24 +571,25 @@ mod tests {
         );
     }
 
-    /// A ribbon too thin to bound is drawn as a bare spine: no pitch
-    /// half-extent at all, and the outline width alone carries it, floored so
-    /// it stays visible. A filled shape disappears at hairline width; a line
-    /// does not.
+    /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a
+    /// pixel — where a filled rectangle fades out to nothing and the roll
+    /// stops saying a note was played. The width is floored at the point it
+    /// can still be seen at, and left alone above that.
     #[test]
-    fn a_hairline_ribbon_becomes_a_bare_spine() {
+    fn a_hairline_ribbon_is_floored_at_the_width_it_can_be_seen_at() {
         let thick = ribbon_with_range(0.5, 12.0);
-        let note = one(&thick);
-        assert!(note.half_extent[0] > 0.0, "a bounded ribbon lost its thickness");
-        assert_eq!(note.shape[1], 2.0, "a bounded ribbon should use the outline width as set");
+        let wide = one(&thick).half_extent[0];
+        assert!(
+            wide > MIN_RIBBON_PX * 0.5,
+            "a readable ribbon ({wide}) should be wider than the floor, or the \
+             comparison below is vacuous",
+        );
 
         let thin = ribbon_with_range(0.5, 600.0);
-        let note = one(&thin);
-        assert_eq!(note.half_extent[0], 0.0, "a hairline ribbon still claims a half-width");
-        assert!(
-            note.shape[1] >= MIN_RIBBON_PX,
-            "a hairline spine ({}) is thinner than it can be seen at",
-            note.shape[1],
+        assert_eq!(
+            one(&thin).half_extent[0],
+            MIN_RIBBON_PX * 0.5,
+            "a hairline ribbon was not floored at the width it can be seen at",
         );
     }
 
@@ -636,7 +609,7 @@ mod tests {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
         let held = instances(&state, 1.0);
-        assert_eq!(one(&held).shape[0], 0.0, "a held note should not be sheared");
+        assert_eq!(one(&held).shear, 0.0, "a held note should not be sheared");
 
         // Bend it a semitone up over the next second.
         state.tracker.handle_event(NoteEvent {
@@ -647,7 +620,7 @@ mod tests {
         });
         let bent = instances(&state, 2.0);
         bent.iter()
-            .find(|n| n.shape[0] != 0.0)
+            .find(|n| n.shear != 0.0)
             .expect("the bent segment should be sheared");
     }
 

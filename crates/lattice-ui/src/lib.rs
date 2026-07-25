@@ -385,19 +385,11 @@ pub struct SpectrumConfig {
     /// Seconds of history the roll's depth spans.
     #[serde(default = "default_roll_seconds")]
     pub roll_seconds: f32,
-    /// Note ribbon width, in semitones of the pitch axis.
+    /// Note ribbon width, in semitones of the pitch axis. This IS the note's
+    /// painted width — a note is a solid rectangle of its own color, with
+    /// nothing straddling its boundary.
     #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
-    /// Stroke width of a note's outline, in points — the band of the note's
-    /// own color straddling its boundary. What is INSIDE that boundary is
-    /// [`roll_fill`](Self::roll_fill).
-    #[serde(default = "default_roll_outline_width")]
-    pub roll_outline_width: f32,
-    /// How solidly a note's interior is painted in its own color: 0 leaves it
-    /// hollow, so the spectrogram shows straight through the ribbon, 1 fills
-    /// it. In between it is a wash the heatmap still reads through.
-    #[serde(default = "default_roll_fill")]
-    pub roll_fill: f32,
     /// Points shaved off a released note's tail, so repeated notes at one
     /// pitch stay separate instead of merging into one bar.
     ///
@@ -566,17 +558,6 @@ fn default_roll_thickness() -> f32 {
     0.3
 }
 
-fn default_roll_outline_width() -> f32 {
-    1.5
-}
-
-/// Filled, but not so solidly that the spectrogram behind a note is gone:
-/// a note reads as a solid bar at a glance and a loud cell still ghosts
-/// through it.
-fn default_roll_fill() -> f32 {
-    0.8
-}
-
 /// A hairline of background between repeats — enough to read two taps as
 /// two, little enough that a note's length is still its length.
 fn default_roll_gap() -> f32 {
@@ -617,8 +598,6 @@ impl Default for SpectrumConfig {
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
-            roll_outline_width: default_roll_outline_width(),
-            roll_fill: default_roll_fill(),
             roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
             show_spectrogram: true,

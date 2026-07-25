@@ -236,21 +236,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              musical meaning as the pitch range is zoomed, and a note is as \
              wide as the interval it would cover",
         );
-    ValueBar::new(&mut cfg.roll_fill, 0.0..=1.0, "Fill")
-        .show(ui)
-        .on_hover_text(
-            "How solidly a note's interior is painted in its own color. 0 \
-             leaves it a hollow outline with the spectrogram showing straight \
-             through; 1 fills it. In between is a wash the heatmap still reads \
-             through.",
-        );
-    ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
-        .show(ui)
-        .on_hover_text(
-            "Width of the band of the note's own color straddling its edge. \
-             With Fill up this just fattens the note; with Fill at 0 it is the \
-             whole of it.",
-        );
     ValueBar::new(&mut cfg.roll_gap, 0.0..=6.0, "Gap")
         .decimals(1)
         .show(ui)
@@ -1067,10 +1052,8 @@ pub(crate) fn spectral_pane(
                 .map(|c| {
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
                     let (b0, b1) = (bucket_at(edge(c)), bucket_at(edge(c + 1)));
-                    let mut level = 0.0f32;
-                    for b in b0..=b1.max(b0) {
-                        level = level.max(levels[b]);
-                    }
+                    let level =
+                        levels[b0..=b1.max(b0)].iter().fold(0.0f32, |a, &b| a.max(b));
                     let t = (c as f32 + 0.5) / cols as f32;
                     (scale.min_midi + t * scale.span, t, level)
                 })
@@ -1945,7 +1928,6 @@ mod tests {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = orientation;
         state.spectrum_config.roll_fraction = roll_fraction;
-        state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_seconds = 10.0;
         state.view.bloom_strength = 1.2; // exercise the note-glow passes
         // Exercise the spectrogram's mesh path in every orientation too, with
