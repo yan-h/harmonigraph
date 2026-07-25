@@ -310,21 +310,34 @@ impl SpectrogramRing {
         key.rem_euclid(self.capacity as i64) as usize
     }
 
-    /// Whether this ring can be carried forward for a run starting at
-    /// `first_key`: it has to describe THIS texture, in this style, and still
-    /// hold columns the run continues from. A gap (the window jumped, history
-    /// was cleared) would leave never-written texels between the old columns
-    /// and the new ones.
+    /// Whether this ring can be carried forward for the run
+    /// `first_key..=last_key`: it has to describe THIS texture, in this style,
+    /// and the run has to connect to what is already painted.
+    ///
+    /// The window grows at the near end as columns arrive and at the FAR end
+    /// when the Span is zoomed out, and both are served by painting what is
+    /// missing rather than starting over — the slabs a widening window reveals
+    /// are in the view already, since the aggregator keeps what this ring can
+    /// hold. Without that, a restart resets the painted range to the window's
+    /// own, the next frame of the gesture reaches past it again, and the drag
+    /// restarts the texture on every frame of itself.
     ///
     /// Answering NO is always safe and never cheap — it re-blanks the texture
     /// and repaints every column — so this is the predicate the ring's whole
     /// value rests on, and `no_cache_layer_falls_back_as_the_window_scrolls`
     /// holds it to yes for every Span the pane offers.
-    fn carries(&self, capacity: usize, style: &ColumnStyle, first_key: i64) -> bool {
+    fn carries(&self, capacity: usize, style: &ColumnStyle, first_key: i64, last_key: i64) -> bool {
         self.capacity == capacity
             && self.style == *style
-            && first_key >= self.oldest_valid
+            // The run has to CONNECT to what is painted at both ends. A run
+            // starting past `written_through + 1`, or ending before
+            // `oldest_valid - 1`, leaves never-written texels inside itself, and
+            // painting at the edges cannot reach them.
             && first_key <= self.written_through + 1
+            && last_key >= self.oldest_valid - 1
+            // And it has to fit in a lap with its far guard, or painting the far
+            // end would overwrite the near one.
+            && last_key - first_key + 2 <= capacity as i64
     }
 
     /// A ring with nothing written yet, for a run starting at `first_key` — so
@@ -334,12 +347,15 @@ impl SpectrogramRing {
         SpectrogramRing { capacity, style, written_through: first_key - 1, oldest_valid: first_key }
     }
 
-    /// Record a run written through `last_key`. Anything older than a full lap
-    /// has been overwritten by it; the far guard sits one before the run, so it
-    /// is the oldest texel in use.
-    fn wrote(&mut self, last_key: i64) {
-        self.written_through = last_key;
-        self.oldest_valid = self.oldest_valid.max(last_key - self.capacity as i64 + 2);
+    /// Record the run `first_key..=last_key` as painted, widening what this ring
+    /// holds at whichever end it reached past.
+    ///
+    /// Anything older than a full lap has been overwritten by it; the far guard
+    /// sits one before the run, so it is the oldest texel in use.
+    fn wrote(&mut self, first_key: i64, last_key: i64) {
+        self.written_through = self.written_through.max(last_key);
+        self.oldest_valid =
+            self.oldest_valid.min(first_key).max(last_key - self.capacity as i64 + 2);
     }
 }
 
@@ -932,17 +948,32 @@ impl SpectrogramAgg {
         }
     }
 
-    /// Re-fold the whole window from scratch (== `aggregate_rows(history[first..])`).
+    /// Re-fold from scratch, filling the grid to the `keep` slabs it retains
+    /// rather than only to the window's own.
+    ///
+    /// The slack is the point. A rebuild that started at the window's first
+    /// column would leave the grid flush with the window, and a Span being
+    /// ZOOMED OUT asks for something older on the very next frame — which
+    /// rebuilds, flush again, and asks again. That cascade is self-sustaining:
+    /// once a widening gesture trips it, every frame of it rebuilds, however
+    /// long the aggregator had been running before. It reads on the overlay as a
+    /// refold rate pinned at the frame rate for the length of the drag.
     fn rebuild(
         &mut self,
         history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
         reads: &[RowRead],
+        keep: usize,
     ) {
         self.rebuilds += 1;
         self.grid = SlabGrid::default();
-        for col in history.iter_from(first) {
+        // Far enough back to fill the retention, but never past the window's
+        // own first column — that one must be folded whatever the slack says.
+        let newest = history.back().map_or(0.0, |c| c.time);
+        let cutoff = ((newest / bucket).floor() - keep as f64 + 1.0) * bucket;
+        let start = history.partition_point(|c| c.time < cutoff).min(first);
+        for col in history.iter_from(start) {
             self.grid.fold(col, reads, bucket);
         }
         self.bucket_bits = bucket.to_bits();
@@ -981,7 +1012,7 @@ impl SpectrogramAgg {
             );
 
         if !can_increment {
-            self.rebuild(history, first, bucket, reads);
+            self.rebuild(history, first, bucket, reads, keep);
         } else {
             // Fold only columns newer than the last we folded.
             let start = history.partition_point(|c| c.time <= self.last_time);
@@ -995,7 +1026,7 @@ impl SpectrogramAgg {
             }
             if !forward {
                 // A mid-stream backward jump broke the grid; rebuild clean.
-                self.rebuild(history, first, bucket, reads);
+                self.rebuild(history, first, bucket, reads, keep);
             }
         }
         self.view(history, first, bucket, reads, target, keep)
@@ -1187,7 +1218,7 @@ fn write_ring(
     // bookkeeping says.
     let usable = matches!(
         (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex),
-        (Some(ring), Some(_)) if ring.carries(capacity, &style, first_key),
+        (Some(ring), Some(_)) if ring.carries(capacity, &style, first_key, last_key),
     );
 
     if !usable {
@@ -1212,10 +1243,14 @@ fn write_ring(
         return;
     };
 
-    // Start at the last column written, not past it: that slab was uploaded
-    // mid-accumulation and may have gained energy since.
-    let start = ring.written_through.max(first_key);
-    for key in start..=last_key {
+    // Paint what the run has and the texture does not, at either end. Forward
+    // starts AT the last column written rather than past it: that slab was
+    // uploaded mid-accumulation and may have gained energy since. Backward is
+    // the slabs a zoomed-out window has just revealed — none on an ordinary
+    // frame, a handful on the frames of a widening gesture.
+    let back = first_key..ring.oldest_valid.min(last_key + 1);
+    let forward = ring.written_through.max(first_key)..=last_key;
+    for key in back.chain(forward) {
         let i = (key - first_key) as usize;
         let column = fill_column(cfg, bins, &power[i * h..(i + 1) * h]);
         let image = egui::ColorImage::new([1, h], column);
@@ -1245,7 +1280,7 @@ fn write_ring(
         tex.set_partial([x + capacity, 0], image, opts);
     }
 
-    ring.wrote(last_key);
+    ring.wrote(first_key, last_key);
 }
 
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
@@ -1920,10 +1955,14 @@ mod tests {
                             agg.window(&history, first, bucket, &reads, planned);
                         let visible = centers.len();
                         let first_key = (centers[0] / bucket).floor() as i64;
+                        let last_key = first_key + visible as i64 - 1;
                         let capacity = ring_capacity(planned, visible);
 
                         // And exactly what `write_ring` then decides.
-                        if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key)) {
+                        if !ring
+                            .as_ref()
+                            .is_some_and(|r| r.carries(capacity, &style, first_key, last_key))
+                        {
                             restarts += 1;
                             ring = Some(SpectrogramRing::restarted(
                                 capacity,
@@ -1932,7 +1971,7 @@ mod tests {
                             ));
                             caps.insert(capacity);
                         }
-                        ring.as_mut().expect("just restarted").wrote(first_key + visible as i64 - 1);
+                        ring.as_mut().expect("just restarted").wrote(first_key, last_key);
                     }
 
                     // One of each to get started, and none after: from then on a
@@ -1941,6 +1980,93 @@ mod tests {
                     assert_eq!(restarts, 1, "the ring is reallocated ({caps:?} slabs): {at}");
                 }
             }
+        }
+    }
+
+    /// A gesture must cost a re-layout at its BOUNDARIES, not one per frame.
+    ///
+    /// Both caches used to reset their own slack whenever they rebuilt: the
+    /// aggregator re-folded flush with the window, and the ring's painted range
+    /// restarted flush with it too. A Span being ZOOMED OUT then asks for
+    /// something older on the very next frame — which rebuilds, sits flush, and
+    /// is asked again. Self-sustaining: once a widening gesture trips it, every
+    /// frame of the drag rebuilds, however long the caches had been running
+    /// before, and the overlay reads both counters pinned at the frame rate.
+    ///
+    /// Now a rebuild refills the retention behind the window, and the ring
+    /// paints the revealed slabs rather than starting over — so a zoom costs a
+    /// re-layout only where the slab width actually changes, at a rung.
+    ///
+    /// The exception is a PITCH zoom, which moves `reads` on every frame and so
+    /// re-folds on every frame. That one wants time and pitch aggregated
+    /// separately, which is a larger change and not made here; it is left
+    /// unasserted rather than pinned, so fixing it does not fail this.
+    #[test]
+    fn a_gesture_costs_a_layout_at_its_boundaries_not_a_frame() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let lag = 0.5 * 8192.0 / 48000.0;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let rows = 64;
+        let reads: Vec<RowRead> = bins_for(rows, &scale).iter().map(|b| b.read).collect();
+
+        // Held still; zoomed out across four rungs; zoomed in inside one. The
+        // gesture starts as soon as the window is full, so neither cache has
+        // scrolled itself any slack — which is the case that cascaded.
+        let gestures: [(&str, u32, &dyn Fn(u32) -> f64); 3] = [
+            ("held still", 1, &|_| 30.0),
+            ("zoomed out across rungs", 5, &|i| 20.0 * 1.004f64.powi(i as i32)),
+            ("zoomed in inside a rung", 1, &|i| 30.0 - 5.0 * (i as f64 / 200.0)),
+        ];
+
+        for (name, allowed, gesture) in gestures {
+            let mut agg = SpectrogramAgg::new();
+            let mut history = crate::SpectrumHistory::default();
+            let mut ring: Option<SpectrogramRing> = None;
+            let (mut restarts, mut frames) = (0u32, 0u32);
+            let settle = 70.0;
+            for i in 0..(((settle + 2.0) / interval) as usize) {
+                let t = i as f64 * interval;
+                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+                let now = t + lag;
+                if now < settle {
+                    continue;
+                }
+                let span = gesture(frames);
+                frames += 1;
+
+                let bucket = live_slab(span, cols);
+                let style = ColumnStyle::new(
+                    rows,
+                    bucket,
+                    scale.min_midi,
+                    scale.span,
+                    SpectrumConfig::default(),
+                    FrameParams::default(),
+                );
+                let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+                let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
+                let first_key = (centers[0] / bucket).floor() as i64;
+                let last_key = first_key + centers.len() as i64 - 1;
+                let capacity = ring_capacity(planned, centers.len());
+                if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key, last_key))
+                {
+                    restarts += 1;
+                    ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
+                }
+                ring.as_mut().expect("just restarted").wrote(first_key, last_key);
+            }
+            assert!(frames > 200, "{name}: the gesture never ran ({frames} frames)");
+            assert!(
+                agg.rebuilds() <= allowed,
+                "{name}: {} re-folds over {frames} frames, not {allowed}",
+                agg.rebuilds(),
+            );
+            assert!(
+                restarts <= allowed,
+                "{name}: {restarts} ring restarts over {frames} frames, not {allowed}",
+            );
         }
     }
 
@@ -2066,12 +2192,13 @@ mod tests {
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
             let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
             let first_key = (centers[0] / bucket).floor() as i64;
+            let last_key = first_key + centers.len() as i64 - 1;
             let capacity = ring_capacity(planned, centers.len());
-            if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key)) {
+            if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key, last_key)) {
                 restarts += 1;
                 ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
             }
-            ring.as_mut().expect("just restarted").wrote(first_key + centers.len() as i64 - 1);
+            ring.as_mut().expect("just restarted").wrote(first_key, last_key);
         }
 
         assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
