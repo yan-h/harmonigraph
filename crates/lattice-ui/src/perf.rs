@@ -137,6 +137,14 @@ pub(crate) struct Workload {
     /// Whether the last frame was repainting continuously (something moving)
     /// rather than idling. The FPS number means different things in each: idle
     /// caps at the ~20 Hz poll by design, so a low idle rate is not a problem.
+    ///
+    /// Expect "live" almost always in a host, though, and do not read a high
+    /// rate as "something must be animating". This is true whenever
+    /// `spectrum.is_flowing` is, i.e. whenever samples arrived recently — and
+    /// a DAW streams buffers continuously, silence included. With the Analyzer
+    /// on screen the editor therefore reads "live" at the full refresh rate
+    /// with nothing playing, which is correct: the spectrogram scrolls in real
+    /// time, so every frame does have a new column to draw.
     pub(crate) animating: bool,
 }
 
