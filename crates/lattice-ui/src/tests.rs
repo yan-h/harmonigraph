@@ -544,7 +544,7 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
     let sine: Vec<f32> = (0..9_000)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
-    spectrum.push_samples(&sine, 48_000.0, 1.0, &config);
+    spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
     let (levels, _peaks) = spectrum.display(1.0).expect("audio is flowing");
     let peak = levels
         .iter()
@@ -742,7 +742,7 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
     let now = 5.0;
-    spectrum.push_samples(&sine, 48_000.0, now, &config);
+    spectrum.push_samples(&sine, 1, 48_000.0, now, &config);
     spectrum.display(now).expect("audio is flowing");
 
     let window = f64::from(config.window.samples() as u32) / 48_000.0;
@@ -789,7 +789,7 @@ fn columns_are_evenly_spaced_however_the_shell_batches_them() {
         written += n;
         let now = f64::from(written as u32) / f64::from(sr)
             + if batch % 2 == 0 { 0.004 } else { -0.004 };
-        spectrum.push_samples(&chunk, sr, now, &config);
+        spectrum.push_samples(&chunk, 1, sr, now, &config);
     }
 
     let times: Vec<f64> = spectrum.history().iter().map(|c| c.time).collect();
@@ -804,6 +804,69 @@ fn columns_are_evenly_spaced_however_the_shell_batches_them() {
         );
         assert!(gap < MIN_BUCKET, "a {gap:.4} s gap can leave a {MIN_BUCKET} s slab empty");
     }
+}
+
+/// The live pane and the offline render must analyze stereo IDENTICALLY, or a
+/// video would differ from the look it was dialed in against — and only for
+/// stereo-wide material, which is the hardest kind of difference to attribute to
+/// its cause. They share `ChannelBank` so that this holds by construction; this
+/// is what says the sharing actually reaches both paths.
+///
+/// The signal is deliberately one a mono mixdown would mangle: an anti-phase A4
+/// (erased entirely by a sum) under an in-phase E5. If either path mixed down,
+/// its columns would be missing a partial the other one has.
+#[test]
+fn the_live_path_and_the_offline_precompute_agree_on_stereo() {
+    use lattice_core::spectrum::midi_to_hz;
+    let sr = 48_000.0f32;
+    let frames = 48_000usize; // one second
+    let (a4, e5) = (midi_to_hz(69.0), midi_to_hz(76.0));
+    let samples: Vec<f32> = (0..frames)
+        .flat_map(|i| {
+            let t = i as f32 / sr;
+            let anti = 0.6 * (std::f32::consts::TAU * a4 * t).sin();
+            let both = 0.3 * (std::f32::consts::TAU * e5 * t).sin();
+            [both + anti, both - anti]
+        })
+        .collect();
+    let cfg = SpectrumConfig::default();
+    let span = f64::from(frames as u32) / f64::from(sr);
+
+    // Live: one batch, dated so the newest frame sits at the end of the second.
+    let mut spectrum = AudioSpectrum::default();
+    spectrum.push_samples(&samples, 2, sr, span, &cfg);
+    let live: Vec<_> = spectrum.history().iter().map(|c| (c.time, c.db.clone())).collect();
+
+    // Offline: the same buffer, the whole-song build.
+    let ws = WholeSong::precompute(&samples, 2, sr, 0.0, 0.0, span, &cfg);
+    let offline: Vec<_> = ws.columns.iter().map(|c| (c.time, c.db.clone())).collect();
+
+    assert!(live.len() > 50, "only {} live columns for a second of audio", live.len());
+    assert_eq!(live.len(), offline.len(), "different column counts");
+    for (i, ((lt, ldb), (ot, odb))) in live.iter().zip(&offline).enumerate() {
+        assert!((lt - ot).abs() < 1e-6, "column {i} stamped {lt} live, {ot} offline");
+        assert!(ldb == odb, "column {i} holds different buckets live and offline");
+    }
+
+    // And both really did keep the anti-phase partial — otherwise the two could
+    // agree by both being wrong in the same way.
+    let bucket_of = |hz: f32| {
+        ((lattice_core::spectrum::hz_to_midi(hz) - lattice_core::spectrum::SPECTRUM_MIN_MIDI)
+            * lattice_core::spectrum::BINS_PER_SEMITONE as f32)
+            .round() as usize
+    };
+    let loudest = |bucket: usize| {
+        live.iter()
+            .flat_map(|(_, db)| db[bucket.saturating_sub(1)..=bucket + 1].iter().copied())
+            .max()
+            .unwrap_or(0)
+    };
+    assert!(
+        loudest(bucket_of(a4)) > loudest(bucket_of(e5)) / 2,
+        "the anti-phase A4 is missing: {} against E5's {}",
+        loudest(bucket_of(a4)),
+        loudest(bucket_of(e5)),
+    );
 }
 
 /// A spectrum is measured over a WINDOW, not at an instant, so where it lands
@@ -833,7 +896,7 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
         })
         .collect();
     let cfg = SpectrumConfig::default();
-    let ws = WholeSong::precompute(&samples, sr, 0.0, 0.0, seconds, &cfg);
+    let ws = WholeSong::precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
 
     // The bin the tone sits in, and how loud it reads once fully sounding.
     // Columns are stored as bytes of dB, so "half power" is 3 dB down from the
@@ -929,7 +992,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
         (0..n).map(|i| 0.8 * (std::f32::consts::TAU * freq * i as f32 / sr).sin()).collect();
     let cfg = SpectrumConfig::default();
 
-    let ws = WholeSong::precompute(&samples, sr, 0.0, 0.0, seconds, &cfg);
+    let ws = WholeSong::precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
     assert_eq!(ws.span, seconds);
     assert_eq!(ws.start, 0.0);
     assert!(ws.columns.len() > 10, "a 2 s take yields many columns, got {}", ws.columns.len());
@@ -949,7 +1012,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     assert!(peak.abs_diff(a4) <= 1, "peak bin {peak} should be A4 (bin {a4})");
 
     // `time_origin` shifts every column onto the take's timeline.
-    let shifted = WholeSong::precompute(&samples, sr, 5.0, 0.0, seconds, &cfg);
+    let shifted = WholeSong::precompute(&samples, 1, sr, 5.0, 0.0, seconds, &cfg);
     assert!(
         (shifted.columns[0].time - ws.columns[0].time - 5.0).abs() < 1e-6,
         "time_origin offsets the columns"
@@ -957,7 +1020,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
 
     // Pure: same inputs in, byte-identical columns out (the render leans on
     // this for reproducibility).
-    let again = WholeSong::precompute(&samples, sr, 0.0, 0.0, seconds, &cfg);
+    let again = WholeSong::precompute(&samples, 1, sr, 0.0, 0.0, seconds, &cfg);
     assert_eq!(ws.columns.len(), again.columns.len());
     for (a, b) in ws.columns.iter().zip(&again.columns) {
         assert_eq!(a.time, b.time);

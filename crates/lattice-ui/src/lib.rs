@@ -610,15 +610,21 @@ type SpectrumBuckets = [f32; lattice_core::spectrum::SPECTRUM_BINS];
 /// (plugin: input bus via a ring buffer; standalone: the mock synth); the
 /// pane asks for a display refresh when it draws. Runtime-only.
 pub struct AudioSpectrum {
-    analyzer: lattice_core::spectrum::SpectrumAnalyzer,
+    /// One analyzer per input channel, combined in the power domain — see
+    /// [`ChannelBank`](lattice_core::spectrum::ChannelBank).
+    analyzer: lattice_core::spectrum::ChannelBank,
     /// Smoothed display buckets (power; the pane maps to height).
     display: SpectrumBuckets,
     /// Decaying per-bucket maxima for the peak-hold outline.
     peaks: SpectrumBuckets,
-    /// Samples pushed since this analyzer was made, and the count at which the
+    /// FRAMES pushed since this analyzer was made, and the count at which the
     /// next FFT falls due. The column grid is a function of these two and
     /// nothing else — see [`push_samples`](AudioSpectrum::push_samples).
-    samples_seen: u64,
+    ///
+    /// Frames, not samples: a stereo stream carries two samples per instant, and
+    /// a hop is an amount of TIME. Counting samples would halve the hop the
+    /// moment the input went stereo.
+    frames_seen: u64,
     next_hop: u64,
     /// Shell time of sample 0: what turns a sample count into a timestamp.
     ///
@@ -820,34 +826,44 @@ impl WholeSong {
     /// the live path has — every slab still gets a column, none goes empty — for
     /// a quarter of the memory.
     ///
-    /// Pure: `(samples, rate, config)` in, columns out, no clock or RNG, so a
-    /// render built on it stays byte-identical between runs.
+    /// `samples` is INTERLEAVED, `channels` per frame, and the channels are
+    /// combined exactly as the live path combines them — same
+    /// [`ChannelBank`](lattice_core::spectrum::ChannelBank), same power sum. That
+    /// is the point of sharing the type rather than repeating the arithmetic: a
+    /// render that summed its channels differently from the pane would differ
+    /// from the look that was dialed in, and only for stereo-wide material, which
+    /// is the hardest kind of difference to attribute.
+    ///
+    /// Pure: `(samples, channels, rate, config)` in, columns out, no clock or
+    /// RNG, so a render built on it stays byte-identical between runs.
     pub fn precompute(
         samples: &[f32],
+        channels: usize,
         sample_rate: f32,
         time_origin: f64,
         start: f64,
         span: f64,
         config: &SpectrumConfig,
     ) -> WholeSong {
-        let mut analyzer = lattice_core::spectrum::SpectrumAnalyzer::new(sample_rate);
+        let mut analyzer = lattice_core::spectrum::ChannelBank::new(sample_rate, channels);
         analyzer.set_fft_size(config.window.samples());
+        let channels = analyzer.channels();
         let sr = (sample_rate as f64).max(1.0);
         let hop = (span / crate::panes::spectrogram::WHOLE_SONG_SLAB_CAP as f64
             / crate::panes::spectrogram::COLUMNS_PER_SLAB)
             .max(AudioSpectrum::FFT_INTERVAL);
-        let total = samples.len();
+        let total = samples.len() / channels; // frames
         let mut columns = Vec::new();
         // Feed the buffer in one-hop chunks; once the window has filled every
-        // hop yields a column, exactly as the live `display` loop does.
+        // hop yields a column, exactly as the live `push_samples` loop does.
         let (mut fed, mut k) = (0usize, 1usize);
         loop {
             let end = ((k as f64 * hop * sr).round() as usize).min(total);
             if end > fed {
-                analyzer.push_samples(&samples[fed..end]);
+                analyzer.push_frames(&samples[fed * channels..end * channels]);
                 fed = end;
             }
-            if let Some(power) = analyzer.pitch_spectrum() {
+            if let Some(power) = analyzer.power_sum() {
                 // The middle of the window this spectrum measured, exactly as
                 // the live path stamps it — `end` is where that window ENDS.
                 // The take's notes are laid out from their own timestamps, so a
@@ -870,10 +886,10 @@ impl WholeSong {
 impl Default for AudioSpectrum {
     fn default() -> Self {
         AudioSpectrum {
-            analyzer: lattice_core::spectrum::SpectrumAnalyzer::new(48_000.0),
+            analyzer: lattice_core::spectrum::ChannelBank::new(48_000.0, 1),
             display: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
-            samples_seen: 0,
+            frames_seen: 0,
             next_hop: 0,
             anchor: None,
             last_samples: None,
@@ -965,6 +981,7 @@ impl AudioSpectrum {
     pub fn push_samples(
         &mut self,
         samples: &[f32],
+        channels: usize,
         sample_rate: f32,
         now: f64,
         config: &SpectrumConfig,
@@ -972,30 +989,39 @@ impl AudioSpectrum {
         if samples.is_empty() {
             return;
         }
-        // Either change empties the analyzer's ring, so nothing comes out until
-        // it has refilled. The hop grid keeps its phase across that gap rather
-        // than restarting on it.
+        // Any of the three empties the analyzers' rings, so nothing comes out
+        // until they have refilled. The hop grid keeps its phase across that gap
+        // rather than restarting on it.
+        self.analyzer.set_channels(channels);
         self.analyzer.set_fft_size(config.window.samples());
         self.analyzer.set_sample_rate(sample_rate);
         self.last_samples = Some(now);
 
+        // FRAMES throughout: `samples` is interleaved, and a hop is an amount of
+        // time. A partial frame at the end is left for the next batch, so the
+        // de-interleaving in `push_frames` can never slip a channel.
+        let channels = self.analyzer.channels();
+        let batch = samples.len() / channels;
+        if batch == 0 {
+            return;
+        }
         let sr = f64::from(sample_rate.max(1.0));
         let hop = ((Self::FFT_INTERVAL * sr).round() as u64).max(1);
-        // Columns fall on multiples of `hop` samples from the start of the
-        // stream. Left at zero the first boundary would be sample 1 and every
-        // one after it a sample early, which is harmless but makes the grid
+        // Columns fall on multiples of `hop` frames from the start of the
+        // stream. Left at zero the first boundary would be frame 1 and every one
+        // after it a frame early, which is harmless but makes the grid
         // impossible to state (or to test) in whole hops.
         if self.next_hop == 0 {
             self.next_hop = hop;
         }
 
-        // Re-anchor the sample count on the shell clock: the last sample of this
+        // Re-anchor the frame count on the shell clock: the last frame of this
         // batch is at `now`. Smoothed, so the columns below are evenly spaced;
         // snapped when the estimate moves further than any wobble could, which
         // is a stream that restarted — a transport jump, a sample-rate change
         // (the count is re-divided by a different rate, so the anchor moves by
         // minutes), or the first batch after the pane was switched on.
-        let total = self.samples_seen + samples.len() as u64;
+        let total = self.frames_seen + batch as u64;
         let candidate = now - total.saturating_sub(1) as f64 / sr;
         let anchor = match self.anchor {
             Some(prev) if (candidate - prev).abs() <= Self::ANCHOR_SNAP => {
@@ -1005,22 +1031,22 @@ impl AudioSpectrum {
         };
         self.anchor = Some(anchor);
 
-        let mut fed = 0usize;
-        while fed < samples.len() {
+        let mut fed = 0usize; // frames
+        while fed < batch {
             // Feed exactly up to the next hop boundary, so a spectrum is taken
-            // at every multiple of `hop` samples and nowhere else. `max(1)`
+            // at every multiple of `hop` frames and nowhere else. `max(1)`
             // keeps the loop moving if a sample-rate change ever leaves the
             // boundary behind us; the next line puts the grid back on its feet.
-            let want = self.next_hop.saturating_sub(self.samples_seen).max(1) as usize;
-            let take = want.min(samples.len() - fed);
-            self.analyzer.push_samples(&samples[fed..fed + take]);
-            self.samples_seen += take as u64;
+            let want = self.next_hop.saturating_sub(self.frames_seen).max(1) as usize;
+            let take = want.min(batch - fed);
+            self.analyzer.push_frames(&samples[fed * channels..(fed + take) * channels]);
+            self.frames_seen += take as u64;
             fed += take;
-            if self.samples_seen < self.next_hop {
+            if self.frames_seen < self.next_hop {
                 break; // The batch ran out before the boundary.
             }
-            self.next_hop = self.samples_seen + hop;
-            let Some(fresh) = self.analyzer.pitch_spectrum() else { continue };
+            self.next_hop = self.frames_seen + hop;
+            let Some(fresh) = self.analyzer.power_sum() else { continue };
 
             let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
             let decay = 0.5f32.powf((Self::FFT_INTERVAL / Self::PEAK_HALF_LIFE) as f32);
@@ -1043,9 +1069,9 @@ impl AudioSpectrum {
             // boundary itself — see `window_center_offset`. This is what lets a
             // ridge sit under the note ribbon that made it, which is the entire
             // point of drawing the two on one time axis. The boundary is where
-            // the newest sample fed so far sits on the anchored grid, so
-            // consecutive columns are exactly `hop` samples apart.
-            let boundary = anchor + self.samples_seen.saturating_sub(1) as f64 / sr;
+            // the newest frame fed so far sits on the anchored grid, so
+            // consecutive columns are exactly `hop` frames apart.
+            let boundary = anchor + self.frames_seen.saturating_sub(1) as f64 / sr;
             self.push_history(boundary - self.analyzer.window_center_offset(), &fresh);
         }
     }

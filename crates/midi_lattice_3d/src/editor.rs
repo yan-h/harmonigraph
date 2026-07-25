@@ -80,10 +80,15 @@ impl ClockMapper {
 /// window may open and close many times around it.
 pub struct EditorShared {
     consumer: rtrb::Consumer<CoreNoteEvent>,
-    /// Mono input samples from the audio thread (Spectral pane analyzer).
+    /// Interleaved input frames from the audio thread (Spectral pane analyzer);
+    /// `audio_channels` samples each.
     audio_consumer: rtrb::Consumer<f32>,
     /// Sample rate of those samples, as f32 bits (see the plugin struct).
     sample_rate_bits: Arc<AtomicU32>,
+    /// Channels per frame in `audio_consumer`, as the audio thread last saw the
+    /// bus. Read every drain, never cached: de-interleaving by a stale count
+    /// would read one channel as two.
+    audio_channels: Arc<AtomicU32>,
     ui: SharedState,
     /// GUI clock epoch; audio event times are mapped onto this clock.
     start: Instant,
@@ -123,6 +128,7 @@ impl EditorShared {
         consumer: rtrb::Consumer<CoreNoteEvent>,
         audio_consumer: rtrb::Consumer<f32>,
         sample_rate_bits: Arc<AtomicU32>,
+        audio_channels: Arc<AtomicU32>,
         take: crate::take::Control,
         take_events: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
@@ -130,6 +136,7 @@ impl EditorShared {
             consumer,
             audio_consumer,
             sample_rate_bits,
+            audio_channels,
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             start: Instant::now(),
             clock: ClockMapper::new(),
@@ -151,6 +158,11 @@ impl EditorShared {
     /// names the bit-cast so its readers can't spell it inconsistently.
     fn sample_rate(&self) -> f32 {
         f32::from_bits(self.sample_rate_bits.load(Ordering::Relaxed))
+    }
+
+    /// Channels per frame in the audio ring (at least one).
+    fn audio_channels(&self) -> usize {
+        (self.audio_channels.load(Ordering::Relaxed) as usize).max(1)
     }
 
     /// Frames the transport must be still before OnTransportStop ends a
@@ -298,8 +310,9 @@ impl EditorShared {
             self.ui.spectrum_config.show_audio || self.ui.spectrum_config.show_spectrogram;
         if shown && !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
+            let channels = self.audio_channels();
             let config = self.ui.spectrum_config;
-            self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now, &config);
+            self.ui.spectrum.push_samples(&self.audio_buf, channels, sample_rate, now, &config);
         }
     }
 }
@@ -792,6 +805,7 @@ mod tests {
             consumer,
             audio_consumer,
             std::sync::Arc::new(super::AtomicU32::new(48_000.0f32.to_bits())),
+            std::sync::Arc::new(super::AtomicU32::new(1)),
             take_control,
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         );

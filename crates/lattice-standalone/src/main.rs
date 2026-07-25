@@ -542,7 +542,7 @@ impl eframe::App for App {
             let config = self.state.spectrum_config;
             self.state
                 .spectrum
-                .push_samples(&self.synth_buf, SYNTH_RATE as f32, now, &config);
+                .push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
         } else {
             self.synth.reset();
         }

@@ -19,9 +19,14 @@ mod take;
 const EVENT_RING_CAPACITY: usize = 4096;
 
 /// Capacity of the audio→GUI sample ring feeding the Spectral pane's
-/// analyzer: >1 s at 48 kHz. Overflow just drops samples — a spectrum
+/// analyzer: >1 s of STEREO at 48 kHz. Overflow just drops frames — a spectrum
 /// meter would rather skip than stall the audio thread.
-const AUDIO_RING_CAPACITY: usize = 65_536;
+///
+/// Doubled when the ring stopped carrying a mono mixdown and started carrying
+/// the channels themselves (see `process`), so the seconds it holds — which is
+/// what bounds the GUI's catch-up work after a stall, see
+/// `AudioSpectrum::push_samples` — stayed where it was.
+const AUDIO_RING_CAPACITY: usize = 131_072;
 
 /// Sample rate assumed until the host reports the real one in `initialize`.
 /// Held in two representations (the f64 `sample_rate` field and the f32 bit
@@ -31,11 +36,15 @@ const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 pub struct MidiLattice3d {
     params: Arc<MidiLattice3dParams>,
     note_producer: rtrb::Producer<CoreNoteEvent>,
-    /// Mono mixdown of the input bus, for the GUI's spectrum analyzer.
+    /// The input bus, interleaved, for the GUI's spectrum analyzer.
     audio_producer: rtrb::Producer<f32>,
     /// Current sample rate as f32 bits, so the GUI folds FFT bins under
     /// the clock the samples were actually taken at.
     sample_rate_bits: Arc<AtomicU32>,
+    /// How many channels the ring's frames carry, so the GUI can de-interleave
+    /// them. Written every block; the host can renegotiate the bus layout, and a
+    /// GUI de-interleaving by a stale count would read one channel as two.
+    audio_channels: Arc<AtomicU32>,
     /// State shared with the editor; created eagerly so the ring buffer's
     /// consumer end has somewhere to live before the GUI opens.
     editor_shared: Arc<Mutex<editor::EditorShared>>,
@@ -183,6 +192,10 @@ impl Default for MidiLattice3d {
         let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
         let (audio_producer, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
+        // Mono until a block says otherwise: the safe guess, since reading a
+        // stereo ring as mono only halves the pitch of what it draws for one
+        // block, while reading mono as stereo would de-interleave silence.
+        let audio_channels = Arc::new(AtomicU32::new(1));
         let (take, take_control) = take::channel();
         let take_events = Arc::new(AtomicU64::new(0));
         MidiLattice3d {
@@ -190,10 +203,12 @@ impl Default for MidiLattice3d {
             note_producer: producer,
             audio_producer,
             sample_rate_bits: sample_rate_bits.clone(),
+            audio_channels: audio_channels.clone(),
             editor_shared: Arc::new(Mutex::new(editor::EditorShared::new(
                 consumer,
                 audio_consumer,
                 sample_rate_bits,
+                audio_channels,
                 take_control,
                 take_events.clone(),
             ))),
@@ -323,12 +338,15 @@ impl Plugin for MidiLattice3d {
             context.send_event(event);
         }
 
-        // Mono mixdown of the (pass-through) input for the GUI's spectrum
-        // analyzer. A full ring — editor closed, or its thread stalled —
-        // silently drops samples, the same failure mode as the note ring.
+        // The (pass-through) input for the GUI's spectrum analyzer, INTERLEAVED:
+        // it analyzes the channels separately and combines them in the power
+        // domain, so a mixdown here would cancel anti-phase content before it
+        // could (see `lattice_core::spectrum::ChannelBank`). A full ring — editor
+        // closed, or its thread stalled — silently drops frames, the same
+        // failure mode as the note ring.
         let channels = buffer.channels();
         if channels > 0 {
-            let gain = 1.0 / channels as f32;
+            self.audio_channels.store(channels as u32, Ordering::Relaxed);
             // Reserve the block's slots once and fill them, rather than a
             // per-sample push(): one ring-atomic touch per block instead of
             // ~48k/s on the audio thread. Bound the reservation by free space
@@ -337,13 +355,24 @@ impl Plugin for MidiLattice3d {
             // at block granularity. `slots()` only grows as the consumer
             // drains, so the reservation of `want` never fails; the `if let`
             // is defensive.
-            let want = buffer.samples().min(self.audio_producer.slots());
+            //
+            // Rounded DOWN TO WHOLE FRAMES, which is the one thing this must not
+            // get wrong: a tail dropped mid-frame would leave the ring one sample
+            // out of phase, and every later frame would hand the left channel's
+            // data to the right for as long as the plugin ran.
+            let free = self.audio_producer.slots() / channels * channels;
+            let want = (buffer.samples() * channels).min(free);
             if want > 0 {
+                // Interleaved from the per-channel planes the host gave us. A
+                // shared slice-of-slices rather than `iter_samples`, because a
+                // frame view cannot be flat-mapped without collecting it — and
+                // this is the audio thread, where the allocation that would take
+                // is exactly what is not allowed.
+                let planes = buffer.as_slice_immutable();
+                let frames = want / channels;
                 if let Ok(chunk) = self.audio_producer.write_chunk_uninit(want) {
                     chunk.fill_from_iter(
-                        buffer
-                            .iter_samples()
-                            .map(|mut frame| frame.iter_mut().map(|s| *s).sum::<f32>() * gain),
+                        (0..frames).flat_map(|f| (0..channels).map(move |c| planes[c][f])),
                     );
                 }
             }
