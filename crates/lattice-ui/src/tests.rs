@@ -574,6 +574,11 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.spectrogram_opacity = 0.5;
     state.spectrum_config.spectrogram_gamma = 1.6;
     state.spectrum_config.roll_outline_width = 2.5;
+    state.spectrum_config.roll_fill = 0.4;
+    state.spectrum_config.roll_border_width = 1.5;
+    state.spectrum_config.roll_keyline_width = 0.0;
+    state.spectrum_config.roll_edge = crate::RollEdge::Ends;
+    state.spectrum_config.roll_gap = 2.0;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -590,6 +595,12 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
     assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
     assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
+    assert_eq!(restored.spectrum_config.roll_fill, 0.4);
+    assert_eq!(restored.spectrum_config.roll_border_width, 1.5);
+    // A band turned off stays off: 0 is a value, not a missing field.
+    assert_eq!(restored.spectrum_config.roll_keyline_width, 0.0);
+    assert_eq!(restored.spectrum_config.roll_edge, crate::RollEdge::Ends);
+    assert_eq!(restored.spectrum_config.roll_gap, 2.0);
 }
 
 /// The pitch range used to be a pair of Bitwig octave numbers. A blob from

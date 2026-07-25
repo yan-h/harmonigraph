@@ -132,6 +132,29 @@ pub enum RollColor {
     Accent,
 }
 
+/// Which of a note's edges the black outline and white keyline ride.
+///
+/// The rim stands OUTSIDE the note, so wherever it is drawn it reaches into
+/// the note's surroundings — and along the time axis those surroundings are
+/// the next note. Repeated taps of one key butt together there, so a rim that
+/// wraps the ends paints each note's halo over its neighbour, and rounded
+/// corners turn the overlap into a chain of lens-shaped notches. Limiting the
+/// rim to one pair of edges is what stops that, and which pair reads better is
+/// a look, not a fact — hence a setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RollEdge {
+    /// All the way around, corners included — every note fully outlined.
+    Around,
+    /// The note's two long edges only (the pitch-facing sides: horizontal
+    /// above and below a note in Across, vertical either side of it in
+    /// Upright). The rim never grows along time, so repeats butt cleanly.
+    #[default]
+    Sides,
+    /// The note's two ends only — a marker at each onset and release, and
+    /// nothing along its length.
+    Ends,
+}
+
 /// The color ramp a spectrogram cell's intensity maps through. A set of
 /// looks to pick from — the spectrogram is a heatmap, and the palette is
 /// most of its character. Intensity always runs dark (quiet) to bright
@@ -389,12 +412,51 @@ pub struct SpectrumConfig {
     #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
     /// Corner rounding of an unbent note, as a fraction of half its width.
+    ///
+    /// Tapered away on a note too short to hold it, so a tapped key stays a
+    /// square tick instead of rounding into a bead (see `shaders/roll.wgsl`).
     #[serde(default = "default_roll_rounding")]
     pub roll_rounding: f32,
-    /// Stroke width of a note's outline, in pixels (notes are drawn as hollow
-    /// outlines so the spectrogram shows through them).
+    /// Stroke width of a note's outline, in points — the band of the note's
+    /// own color straddling its boundary. What is INSIDE that boundary is
+    /// [`roll_fill`](Self::roll_fill).
     #[serde(default = "default_roll_outline_width")]
     pub roll_outline_width: f32,
+    /// How solidly a note's interior is painted in its own color: 0 leaves it
+    /// hollow, so the spectrogram shows straight through the ribbon, 1 fills
+    /// it. In between it is a wash the heatmap still reads through.
+    #[serde(default = "default_roll_fill")]
+    pub roll_fill: f32,
+    /// Width of the solid black outline standing just outside a note, in
+    /// points. 0 draws none.
+    ///
+    /// The structural rim: the crisp dark line that separates the note's
+    /// color from whatever the spectrogram is doing behind it. Independent of
+    /// the note's own thickness — an outline is an outline whether the ribbon
+    /// it wraps is fat or a hairline.
+    #[serde(default = "default_roll_border_width")]
+    pub roll_border_width: f32,
+    /// Width of the white keyline riding outside the black, in points. 0
+    /// draws none; [`keyline`](Self::keyline) sets how bright it is.
+    ///
+    /// A full point is the floor worth using, and that is a grid-stability
+    /// bargain rather than taste: the keyline is the brightest thing on a
+    /// note, and a *bright* sub-point line shimmers as the roll scrolls, its
+    /// peak intensity wobbling with every sub-pixel step across the grid
+    /// (worst on a Hi-DPI display, where 0.6 points is barely over one
+    /// physical pixel). At a full point the coverage stays put.
+    #[serde(default = "default_roll_keyline_width")]
+    pub roll_keyline_width: f32,
+    /// Which of a note's edges the black outline and white keyline ride.
+    #[serde(default)]
+    pub roll_edge: RollEdge,
+    /// Points shaved off a released note's tail, so repeated notes at one
+    /// pitch stay separate instead of merging into one bar.
+    ///
+    /// The tail only: a held note still reaches the now-line, and no onset
+    /// ever moves off the moment it was played.
+    #[serde(default = "default_roll_gap")]
+    pub roll_gap: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
 
@@ -551,6 +613,28 @@ fn default_roll_outline_width() -> f32 {
     1.5
 }
 
+/// Filled, but not so solidly that the spectrogram behind a note is gone:
+/// a note reads as a solid bar at a glance and a loud cell still ghosts
+/// through it.
+fn default_roll_fill() -> f32 {
+    0.8
+}
+
+fn default_roll_border_width() -> f32 {
+    1.0
+}
+
+/// See [`SpectrumConfig::roll_keyline_width`] for why a full point.
+fn default_roll_keyline_width() -> f32 {
+    1.0
+}
+
+/// A hairline of background between repeats — enough to read two taps as
+/// two, little enough that a note's length is still its length.
+fn default_roll_gap() -> f32 {
+    1.0
+}
+
 fn default_roll_color() -> RollColor {
     RollColor::Channel
 }
@@ -589,6 +673,11 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_rounding: default_roll_rounding(),
             roll_outline_width: default_roll_outline_width(),
+            roll_fill: default_roll_fill(),
+            roll_border_width: default_roll_border_width(),
+            roll_keyline_width: default_roll_keyline_width(),
+            roll_edge: RollEdge::default(),
+            roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
