@@ -8,27 +8,46 @@
 //! `root_ui` entirely, so nothing in this module ever runs on its
 //! (deterministic) draw path — no wall-clock read reaches a recorded frame.
 
-/// Time constant of the smoothed readouts, in seconds: how long they take to
-/// chase most of the way to a new level.
+/// The averaging window, in seconds. Every frame cost on the overlay is the
+/// plain mean of the frames measured over this long, recomputed from scratch
+/// each time and printed unchanged until the next window closes.
 ///
-/// Expressed as a duration rather than a per-frame fraction on purpose. A
-/// fixed fraction settles in a fixed number of FRAMES, so the same constant
-/// steadies the numbers at 30 fps and lets them flicker at 144 — the readout
-/// got twitchier the faster the plugin ran, which is backwards.
-const SMOOTH_TAU: f32 = 0.4;
-
-/// How often the frame numbers on screen are allowed to change.
+/// A window mean rather than the exponential moving average this used to be,
+/// which was the wrong filter for the question the HUD gets asked. An EMA has
+/// unbounded memory, so one stalled frame lifted every row for the best part
+/// of a second, and a steady 2 ms was indistinguishable from 0.8 ms plus a
+/// hiccup — the two want completely different fixes. Worse, keeping it
+/// frame-rate-independent meant deriving its blend factor from the frame
+/// interval, which made that factor COMMON to every row: when pacing turned
+/// ragged the whole HUD lurched at once and read as correlated cost that was
+/// not there. A window mean has no memory to smear and no shared term to
+/// couple the rows. What a row shows happened inside that window and nowhere
+/// else.
 ///
-/// The smoothed values keep updating every frame; the overlay reads a copy
-/// latched this often, so the digits hold still long enough to be read.
+/// Holding the value between windows rather than rounding it to a coarse step.
+/// Rounding trades one kind of churn for a worse one: a value sitting near a
+/// step boundary flips between two readings a whole step apart, which catches
+/// the eye harder than the wobble it replaced — and the resolution is gone for
+/// good, which at a 2 ms frame cost means throwing away a quarter of the
+/// number.
 ///
-/// This rather than rounding the values to a coarse step. Rounding trades one
-/// kind of churn for a worse one: a value sitting near a step boundary flips
-/// between two readings that are a whole step apart, which catches the eye
-/// harder than the wobble it replaced — and the resolution is gone for good,
-/// which at a 2 ms frame cost means throwing away a quarter of the number.
-/// Holding the display keeps every digit and simply stops it flickering.
+/// A quarter second is about fifteen frames at 60 fps: enough to average out
+/// ordinary jitter, short enough that a change you just made shows up while
+/// you are still looking.
 const READOUT_INTERVAL: f64 = 0.25;
+
+/// How many windows the peak column looks back over. Eight of them is two
+/// seconds.
+///
+/// The mean says what a frame usually costs; it cannot say whether the cost is
+/// steady, which is the entire difficulty with a spiky signal. A peak answers
+/// that — but only if it stays up long enough to be read, and a peak over the
+/// current window alone flashes for one latch and is gone before your eye has
+/// travelled down the list. Keeping the last few windows' maxima and printing
+/// the largest holds a stall visible for two seconds without inventing a decay
+/// curve: it is still the worst frame actually measured, just not necessarily
+/// one from this quarter second.
+const PEAK_WINDOWS: usize = 8;
 
 /// Seconds between memory reads. RSS moves slowly and the read is a syscall,
 /// so once a second is plenty and keeps it off the per-frame path.
@@ -124,68 +143,110 @@ impl Default for Workload {
     }
 }
 
+/// One metric's readout: the frames measured since the last latch, the recent
+/// windows' maxima, and the two numbers currently printed for it.
+///
+/// A struct per metric rather than the parallel lists of `x_ms` and
+/// `shown_x_ms` fields this replaced. The overlay tracks sixteen costs, and
+/// with two flat lists every new row meant touching five places — declare,
+/// default, accumulate, latch, print — any one of which could be forgotten
+/// without the compiler minding.
+#[derive(Clone, Copy, Default)]
+struct Window {
+    /// This window so far: running total, frames counted, and the largest
+    /// single frame in it.
+    sum: f32,
+    n: u32,
+    max: f32,
+    /// The last [`PEAK_WINDOWS`] closed windows' maxima, by latch slot.
+    recent_max: [f32; PEAK_WINDOWS],
+    /// What the overlay prints: the last closed window's mean, and the largest
+    /// frame anywhere in `recent_max`.
+    shown_mean: f32,
+    shown_peak: f32,
+}
+
+impl Window {
+    fn record(&mut self, v: f32) {
+        self.sum += v;
+        self.n += 1;
+        self.max = self.max.max(v);
+    }
+
+    /// Close this window and open the next. `slot` is shared by every metric,
+    /// so all sixteen roll their peak history over on the same latch.
+    fn latch(&mut self, slot: usize) {
+        // A window with no frames in it holds the printed mean rather than
+        // dropping the row to zero. The lattice GPU row only gets a sample on
+        // the frames a readback actually lands, and a quiet quarter second
+        // there means "nothing new to say", not "it became free".
+        if self.n > 0 {
+            self.shown_mean = self.sum / self.n as f32;
+        }
+        self.recent_max[slot] = self.max;
+        self.shown_peak = self.recent_max.iter().copied().fold(0.0, f32::max);
+        self.sum = 0.0;
+        self.n = 0;
+        self.max = 0.0;
+    }
+}
+
 /// Rolling performance numbers, updated once per interactive frame. Runtime
 /// only — never persisted, and never touched by the offline renderer.
 pub struct PerfStats {
-    /// Smoothed frame interval in seconds (drives the FPS readout). Seeded to
-    /// a plausible 60 Hz so the first frames don't read as absurd.
-    frame_dt: f32,
-    /// Smoothed GUI CPU time per frame in milliseconds: the wall time spent
-    /// building the dock and its panes on this thread. Not GPU time — the 3D
-    /// draw is submitted to wgpu and finishes off-thread (see `draw_overlay`).
-    cpu_ms: f32,
-    /// Smoothed milliseconds spent turning shapes into triangles.
-    tess_ms: f32,
-    /// Smoothed GPU milliseconds for egui's own render pass — the 2D UI, which
-    /// the lattice's timer does not cover.
-    egui_gpu_ms: f32,
-    /// Smoothed shell work before the UI, and the surface wait after it.
-    shell_ms: f32,
-    acquire_ms: f32,
-    tick_ms: f32,
-    render_ms: f32,
-    upload_ms: f32,
-    texture_ms: f32,
+    /// Frame interval in MILLISECONDS, which also drives the FPS readout.
+    /// Stored in the same unit as every other row so the two columns can be
+    /// formatted by one shared helper.
+    frame_ms: Window,
+    /// The frame callback end to end, and the two halves it divides into.
+    tick: Window,
+    /// `tick` minus `render`. Accumulated per frame rather than subtracted
+    /// from the two printed means, because the maximum of a difference is not
+    /// the difference of the maxima — the peak column would have been quietly
+    /// wrong. Same reason `buf_up` is accumulated rather than derived.
+    egui: Window,
+    shell: Window,
+    /// Building the dock and its panes. Wall time on this thread, not GPU
+    /// time — the 3D draw is submitted to wgpu and finishes off-thread.
+    ui: Window,
+    render: Window,
+    /// Turning shapes into triangles.
+    tess: Window,
+    /// The texture half of the uploads, and everything else in them.
+    texture: Window,
+    buf_up: Window,
+    prepare: Window,
+    poll: Window,
+    /// Blocked acquiring the surface: the vsync wait, which is not work.
+    acquire: Window,
+    encode: Window,
+    submit: Window,
+    /// GPU milliseconds for egui's own render pass — the 2D UI, which the
+    /// lattice's timer does not cover — and for the lattice's own passes. The
+    /// latter only takes a sample on the frames a readback lands.
+    egui_gpu: Window,
+    gpu: Window,
+    /// Which slot of every window's `recent_max` this latch writes.
+    peak_slot: usize,
     prims: u32,
     verts: u32,
     roll_notes: u32,
-    prepare_ms: f32,
-    poll_ms: f32,
-    encode_ms: f32,
-    submit_ms: f32,
     /// Smoothed resident set size in bytes, refreshed about once a second (0
-    /// when the platform can't report it). Smoothed for the same reason the
-    /// frame numbers are: this is read as a number, not watched as a trace,
-    /// and raw RSS wanders by megabytes between reads as the host and the GPU
-    /// driver take and give memory back.
+    /// when the platform can't report it).
+    ///
+    /// Still smoothed where the frame costs no longer are, because it is a
+    /// different kind of signal: a slow-moving LEVEL read once a second, not a
+    /// per-frame cost. There is no spike here for a filter to smear across
+    /// time — raw RSS simply wanders by megabytes between reads as the host
+    /// and the GPU driver take memory and give it back.
     rss_bytes: u64,
     /// Shell-clock time of the last memory read, to throttle it.
     last_mem_read: f64,
     /// Shell-clock time of the previous frame, for measuring the interval.
     /// `None` before the first one.
     last_frame: Option<f64>,
-    /// What the overlay actually prints: `frame_dt` and `cpu_ms` as they
-    /// stood at the last latch, held between them (see [`READOUT_INTERVAL`]).
-    shown_frame_dt: f32,
-    shown_cpu_ms: f32,
-    shown_tess_ms: f32,
-    shown_egui_gpu_ms: f32,
-    shown_shell_ms: f32,
-    shown_acquire_ms: f32,
-    shown_tick_ms: f32,
-    shown_render_ms: f32,
-    shown_upload_ms: f32,
-    shown_texture_ms: f32,
-    shown_prepare_ms: f32,
-    shown_poll_ms: f32,
-    shown_encode_ms: f32,
-    shown_submit_ms: f32,
-    /// Shell-clock time of that latch.
+    /// Shell-clock time of the last latch.
     last_readout: f64,
-    /// GPU milliseconds for the lattice passes, smoothed and held like the
-    /// rest. See [`GpuTime`] for the three states this can be in.
-    gpu_ms: f32,
-    shown_gpu_ms: f32,
     /// Whether the device ever said it could measure GPU time at all.
     gpu_supported: bool,
     /// Whether a measurement has actually come back.
@@ -197,46 +258,37 @@ pub struct PerfStats {
 
 impl Default for PerfStats {
     fn default() -> Self {
+        let w = Window::default();
         PerfStats {
-            frame_dt: 1.0 / 60.0,
-            cpu_ms: 0.0,
-            tess_ms: 0.0,
-            egui_gpu_ms: 0.0,
-            shell_ms: 0.0,
-            acquire_ms: 0.0,
-            tick_ms: 0.0,
-            render_ms: 0.0,
-            upload_ms: 0.0,
-            texture_ms: 0.0,
+            // Seeded to a plausible 60 Hz so the opening frames don't read as
+            // absurd: the first frame has no predecessor to measure against,
+            // so it contributes no interval at all and this is what shows.
+            frame_ms: Window { shown_mean: 1000.0 / 60.0, ..w },
+            tick: w,
+            egui: w,
+            shell: w,
+            ui: w,
+            render: w,
+            tess: w,
+            texture: w,
+            buf_up: w,
+            prepare: w,
+            poll: w,
+            acquire: w,
+            encode: w,
+            submit: w,
+            egui_gpu: w,
+            gpu: w,
+            peak_slot: 0,
             prims: 0,
             verts: 0,
             roll_notes: 0,
-            prepare_ms: 0.0,
-            poll_ms: 0.0,
-            encode_ms: 0.0,
-            submit_ms: 0.0,
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
-            shown_frame_dt: 1.0 / 60.0,
-            shown_cpu_ms: 0.0,
-            shown_tess_ms: 0.0,
-            shown_egui_gpu_ms: 0.0,
-            shown_shell_ms: 0.0,
-            shown_acquire_ms: 0.0,
-            shown_tick_ms: 0.0,
-            shown_render_ms: 0.0,
-            shown_upload_ms: 0.0,
-            shown_texture_ms: 0.0,
-            shown_prepare_ms: 0.0,
-            shown_poll_ms: 0.0,
-            shown_encode_ms: 0.0,
-            shown_submit_ms: 0.0,
-            gpu_ms: 0.0,
-            shown_gpu_ms: 0.0,
+            last_readout: f64::NEG_INFINITY,
             gpu_supported: true,
             have_gpu: false,
-            last_readout: f64::NEG_INFINITY,
             workload: Workload::default(),
         }
     }
@@ -277,30 +329,28 @@ impl PerfStats {
         } = costs;
         let dt = self.last_frame.map_or(0.0, |last| (now - last) as f32);
         self.last_frame = Some(now);
-        // Convert the time constant into this frame's blend factor, so the
-        // readouts settle over SMOOTH_TAU seconds whatever the frame rate.
-        // A frame long enough to make this exceed 1 simply lands on the new
-        // value, which is what a stall should look like.
-        let alpha = (1.0 - (-dt / SMOOTH_TAU).exp()).clamp(0.0, 1.0);
+        // The first frame has nothing to measure an interval against, so it
+        // contributes no sample rather than a zero that would drag the mean.
         if dt > 0.0 {
-            self.frame_dt += (dt - self.frame_dt) * alpha;
+            self.frame_ms.record(dt * 1000.0);
         }
-        self.cpu_ms += (cpu_ms - self.cpu_ms) * alpha;
-        self.tess_ms += (tess_ms - self.tess_ms) * alpha;
-        self.egui_gpu_ms += (egui_gpu_ms - self.egui_gpu_ms) * alpha;
-        self.shell_ms += (shell_ms - self.shell_ms) * alpha;
-        self.acquire_ms += (acquire_ms - self.acquire_ms) * alpha;
-        self.tick_ms += (tick_ms - self.tick_ms) * alpha;
-        self.render_ms += (render_ms - self.render_ms) * alpha;
-        self.upload_ms += (upload_ms - self.upload_ms) * alpha;
-        self.texture_ms += (texture_ms - self.texture_ms) * alpha;
-        self.prims = prims;
-        self.verts = verts;
-        self.roll_notes = roll_notes;
-        self.prepare_ms += (prepare_ms - self.prepare_ms) * alpha;
-        self.poll_ms += (poll_ms - self.poll_ms) * alpha;
-        self.encode_ms += (encode_ms - self.encode_ms) * alpha;
-        self.submit_ms += (submit_ms - self.submit_ms) * alpha;
+        self.tick.record(tick_ms);
+        // Clamped at zero for the same reason the old subtraction was: these
+        // are two independent readings of nested spans, and measurement noise
+        // can put the inner one a hair above the outer.
+        self.egui.record((tick_ms - render_ms).max(0.0));
+        self.shell.record(shell_ms);
+        self.ui.record(cpu_ms);
+        self.render.record(render_ms);
+        self.tess.record(tess_ms);
+        self.texture.record(texture_ms);
+        self.buf_up.record((upload_ms - texture_ms).max(0.0));
+        self.prepare.record(prepare_ms);
+        self.poll.record(poll_ms);
+        self.acquire.record(acquire_ms);
+        self.encode.record(encode_ms);
+        self.submit.record(submit_ms);
+        self.egui_gpu.record(egui_gpu_ms);
         // Three states, not two: a real reading, "the device can't", and
         // "none has landed yet". Collapsing the last two into one "n/a" made
         // a wiring bug and an unsupported GPU look identical, which is
@@ -309,37 +359,24 @@ impl PerfStats {
             lattice_render::GPU_TIME_UNSUPPORTED => self.gpu_supported = false,
             // Still waiting for the first readback; leave the row saying so.
             lattice_render::GPU_TIME_PENDING => {}
-            // Anything else is a real reading, INCLUDING 0.0 — seeded rather
-            // than eased up from nothing, so the GPU doesn't appear to warm
-            // up over the first second of every session.
+            // Anything else is a real reading, INCLUDING 0.0.
             _ => {
                 self.have_gpu = true;
-                self.gpu_ms = if self.have_gpu && self.gpu_ms > 0.0 {
-                    self.gpu_ms + (gpu_ms - self.gpu_ms) * alpha
-                } else {
-                    gpu_ms
-                };
+                self.gpu.record(gpu_ms);
             }
         }
-        // Latch what the overlay prints. Seeded on the first frame rather
-        // than eased up from the defaults, so the HUD opens showing the real
-        // numbers instead of a quarter second of placeholder.
+        self.prims = prims;
+        self.verts = verts;
+        self.roll_notes = roll_notes;
+        // Close every window at once. `last_readout` starts at -inf, so the
+        // first frame latches immediately and the HUD opens showing that
+        // frame's real numbers rather than a quarter second of placeholder.
         if now - self.last_readout >= READOUT_INTERVAL {
-            self.shown_frame_dt = self.frame_dt;
-            self.shown_cpu_ms = self.cpu_ms;
-            self.shown_tess_ms = self.tess_ms;
-            self.shown_egui_gpu_ms = self.egui_gpu_ms;
-            self.shown_shell_ms = self.shell_ms;
-            self.shown_acquire_ms = self.acquire_ms;
-            self.shown_tick_ms = self.tick_ms;
-            self.shown_render_ms = self.render_ms;
-            self.shown_upload_ms = self.upload_ms;
-            self.shown_texture_ms = self.texture_ms;
-            self.shown_prepare_ms = self.prepare_ms;
-            self.shown_poll_ms = self.poll_ms;
-            self.shown_encode_ms = self.encode_ms;
-            self.shown_submit_ms = self.submit_ms;
-            self.shown_gpu_ms = self.gpu_ms;
+            let slot = self.peak_slot;
+            for window in self.windows_mut() {
+                window.latch(slot);
+            }
+            self.peak_slot = (slot + 1) % PEAK_WINDOWS;
             self.last_readout = now;
         }
         self.workload = workload;
@@ -358,12 +395,43 @@ impl PerfStats {
         }
     }
 
-    /// The frame rate as printed: derived from the held frame time, so the
-    /// headline number holds still with the rows under it rather than
+    /// Every window the overlay averages, so a latch cannot quietly miss one.
+    /// Borrowing sixteen disjoint fields at once is fine; forgetting to latch
+    /// a new row, which is what the flat list of fields invited, was not.
+    fn windows_mut(&mut self) -> [&mut Window; 16] {
+        [
+            &mut self.frame_ms,
+            &mut self.tick,
+            &mut self.egui,
+            &mut self.shell,
+            &mut self.ui,
+            &mut self.render,
+            &mut self.tess,
+            &mut self.texture,
+            &mut self.buf_up,
+            &mut self.prepare,
+            &mut self.poll,
+            &mut self.acquire,
+            &mut self.encode,
+            &mut self.submit,
+            &mut self.egui_gpu,
+            &mut self.gpu,
+        ]
+    }
+
+    /// The frame rate as printed: derived from the held mean frame time, so
+    /// the headline number holds still with the rows under it rather than
     /// counting off every frame on its own.
+    ///
+    /// Taking the reciprocal of the MEAN INTERVAL rather than averaging a
+    /// per-frame rate, which is the classic way to get this wrong. The
+    /// intervals in a window sum to the window, so their mean is (window /
+    /// frames) and its reciprocal is exactly (frames / window) — the true
+    /// average rate. Averaging 1/dt instead would weight the quick frames
+    /// hardest and read high on precisely the ragged pacing worth noticing.
     fn fps(&self) -> f32 {
-        if self.shown_frame_dt > 0.0 {
-            1.0 / self.shown_frame_dt
+        if self.frame_ms.shown_mean > 0.0 {
+            1000.0 / self.frame_ms.shown_mean
         } else {
             0.0
         }
@@ -438,59 +506,74 @@ pub(crate) fn draw_overlay(
     let head_font = egui::FontId::monospace(12.0);
 
     let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
-    let ms = |v: f32| format!("{v:.1} ms");
-    // Depth, label, value. The nesting is the point: every indented row is a
-    // PART of the one above it, so a total and its components can be read
+    // A timed row: the window mean, and the worst frame of the last few
+    // windows. Two numbers because neither answers the question alone — the
+    // mean says what the stage costs, the peak says whether that cost is
+    // steady, and until both were on screen a row reading 2 ms could equally
+    // be a stage that got slower or a stage that hiccupped once.
+    let timed = |depth: u8, label: &'static str, w: &Window| {
+        (depth, label, format!("{:.1}", w.shown_mean), Some(format!("{:.1} ms", w.shown_peak)))
+    };
+    // Depth, label, value, peak. The nesting is the point: every indented row
+    // is a PART of the one above it, so a total and its components can be read
     // against each other instead of held in your head. Working out where a
     // frame went meant repeatedly discovering that a cost sat between two
     // readings; the shape of the list now says what contains what.
-    let mut rows: Vec<(u8, &str, String)> = vec![
-        (0, "frame", ms(perf.shown_frame_dt * 1000.0)),
-        (0, "tick", ms(perf.shown_tick_ms)),
+    //
+    // That reading holds for the MEAN column only, which is why the peak sits
+    // apart and dimmer. Means are additive — `egui` and `render` sum to `tick`
+    // because each frame's parts do — but two stages' worst frames are almost
+    // never the same frame, so the peaks do not sum to anything and a column
+    // of them must not look like it does.
+    let mut rows: Vec<(u8, &str, String, Option<String>)> = vec![
+        timed(0, "frame", &perf.frame_ms),
+        timed(0, "tick", &perf.tick),
     ];
     if detail {
-        let egui_ms = (perf.shown_tick_ms - perf.shown_render_ms).max(0.0);
-        let buf_up = (perf.shown_upload_ms - perf.shown_texture_ms).max(0.0);
         rows.extend([
-            (1, "egui", ms(egui_ms)),
-            (2, "shell", ms(perf.shown_shell_ms)),
-            (2, "ui", ms(perf.shown_cpu_ms)),
-            (1, "render", ms(perf.shown_render_ms)),
-            (2, "tess", ms(perf.shown_tess_ms)),
-            (2, "tex up", ms(perf.shown_texture_ms)),
-            (2, "buf up", ms(buf_up)),
-            (3, "prep", ms(perf.shown_prepare_ms)),
-            (3, "poll", ms(perf.shown_poll_ms)),
-            (2, "wait", ms(perf.shown_acquire_ms)),
-            (2, "encode", ms(perf.shown_encode_ms)),
-            (2, "submit", ms(perf.shown_submit_ms)),
+            timed(1, "egui", &perf.egui),
+            timed(2, "shell", &perf.shell),
+            timed(2, "ui", &perf.ui),
+            timed(1, "render", &perf.render),
+            timed(2, "tess", &perf.tess),
+            timed(2, "tex up", &perf.texture),
+            timed(2, "buf up", &perf.buf_up),
+            timed(3, "prep", &perf.prepare),
+            timed(3, "poll", &perf.poll),
+            timed(2, "wait", &perf.acquire),
+            timed(2, "encode", &perf.encode),
+            timed(2, "submit", &perf.submit),
         ]);
     }
     rows.push((0, "gpu", {
         // Both passes on one line at the top level: they run alongside the CPU
         // stages rather than inside any of them, so nesting either under
         // `tick` would be a lie about what contains what.
+        //
+        // Means only. Two peaks as well would be four numbers on one row, and
+        // the row would stop being readable long before it became more useful.
         let lattice = if !perf.gpu_supported {
             "n/a".to_owned()
         } else if perf.have_gpu {
-            format!("{:.1}", perf.shown_gpu_ms)
+            format!("{:.1}", perf.gpu.shown_mean)
         } else {
             "—".to_owned()
         };
-        format!("{:.1} ui · {lattice} 3d", perf.shown_egui_gpu_ms)
-    }));
+        format!("{:.1} ui · {lattice} 3d", perf.egui_gpu.shown_mean)
+    }, None));
     if detail {
-        rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims)));
+        rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims), None));
         // The roll's geometry, which `verts` can no longer see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
-        rows.push((1, "roll", format!("{} notes", perf.roll_notes)));
+        rows.push((1, "roll", format!("{} notes", perf.roll_notes), None));
     }
     rows.extend([
-        (0, "memory", memory_readout(perf.rss_bytes)),
+        (0, "memory", memory_readout(perf.rss_bytes), None),
         (
             0,
             "voices",
             format!("{} held · {fading} fading", perf.workload.held_voices),
+            None,
         ),
         (
             0,
@@ -499,6 +582,7 @@ pub(crate) fn draw_overlay(
                 "{}  ·  {:.2}× scale",
                 perf.workload.visible_nodes, perf.workload.render_scale
             ),
+            None,
         ),
     ]);
 
@@ -521,39 +605,90 @@ pub(crate) fn draw_overlay(
         ctx.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), color))
     };
 
-    // Two columns, both measured rather than assumed: labels left-aligned in
-    // the first, values RIGHT-aligned in the second so the units line up.
+    // Three columns, all measured rather than assumed: labels left-aligned in
+    // the first, means RIGHT-aligned in the second and peaks in the third, so
+    // the digits and the unit line up down the list.
     //
     // The label column used to be a hardcoded seven characters, which was
     // fine until a row was called "lattice gpu" — eleven characters, and the
     // value column started underneath it. Sizing from the widest label
     // actually present cannot drift out of step with the rows again.
     const COL_GAP: f32 = 10.0;
+    // Between the labels and the means: the peak answers a different question
+    // from the cost beside it, and reading it as a second opinion on that cost
+    // is the misreading worth designing against.
+    let peak_ink = egui::Color32::from_gray(0xB4);
     let head_fps = layout(&format!("{fps:.0} fps"), &head_font, health);
     let head_state = layout(state, &mono, dim);
+    // Say which column is which. Two unlabelled columns of milliseconds is a
+    // guess, and the wrong guess — taking a peak for a cost — sends you
+    // optimizing a stage that is already fast.
+    let head_mean = layout("avg", &mono, dim);
+    let head_peak = layout("peak", &mono, dim);
     // Indent by depth, so nesting reads without any drawn guides.
     let labels: Vec<_> = rows
         .iter()
-        .map(|(depth, label, _)| {
+        .map(|(depth, label, _, _)| {
             layout(&format!("{:indent$}{label}", "", indent = *depth as usize * 2), &mono, dim)
         })
         .collect();
-    let values: Vec<_> = rows.iter().map(|(_, _, v)| layout(v, &mono, bright)).collect();
-    let widest = |gs: &[std::sync::Arc<egui::Galley>]| {
-        gs.iter().map(|g| g.rect.width()).fold(0.0f32, f32::max)
-    };
-    let (label_col, value_col) = (widest(&labels), widest(&values));
+    let values: Vec<_> = rows.iter().map(|(_, _, v, _)| layout(v, &mono, bright)).collect();
+    let peaks: Vec<_> = rows
+        .iter()
+        .map(|(_, _, _, p)| p.as_ref().map(|p| layout(p, &mono, peak_ink)))
+        .collect();
+
+    let label_col = labels.iter().map(|g| g.rect.width()).fold(0.0f32, f32::max);
+    let peak_col = peaks
+        .iter()
+        .flatten()
+        .map(|g| g.rect.width())
+        .fold(head_peak.rect.width(), f32::max);
+    // Sized over the rows that HAVE a peak only. A row without one (memory,
+    // voices) spans both number columns instead, so letting "3 held · 1
+    // fading" set this width would shove the peaks off the right edge for
+    // nothing.
+    let mean_col = values
+        .iter()
+        .zip(&peaks)
+        .filter(|(_, p)| p.is_some())
+        .map(|(v, _)| v.rect.width())
+        .fold(head_mean.rect.width(), f32::max);
+    let spanned = values
+        .iter()
+        .zip(&peaks)
+        .filter(|(_, p)| p.is_none())
+        .map(|(v, _)| v.rect.width())
+        .fold(0.0f32, f32::max);
+    // Everything right of the labels: whichever of the two number columns
+    // together and the widest spanning row claims more.
+    let nums_x = label_col + COL_GAP;
+    let mean_right = nums_x + (mean_col + COL_GAP + peak_col).max(spanned) - peak_col - COL_GAP;
+    let peak_right = nums_x + (mean_col + COL_GAP + peak_col).max(spanned);
 
     let mut lines: Vec<Vec<(f32, std::sync::Arc<egui::Galley>)>> = Vec::new();
     lines.push(vec![
         (0.0, head_fps.clone()),
         (head_fps.rect.width() + 4.0, head_state),
     ]);
-    for (label, value) in labels.into_iter().zip(values) {
-        // Right-aligned inside the value column, so "4.2 ms" and "12.5 ms"
-        // end on the same edge and can be read down the list.
-        let x = label_col + COL_GAP + (value_col - value.rect.width());
-        lines.push(vec![(0.0, label), (x, value)]);
+    lines.push(vec![
+        (mean_right - head_mean.rect.width(), head_mean),
+        (peak_right - head_peak.rect.width(), head_peak),
+    ]);
+    for ((label, value), peak) in labels.into_iter().zip(values).zip(peaks) {
+        // Right-aligned inside its column, so "4.2" and "12.5" end on the same
+        // edge and can be read down the list.
+        let mut parts = vec![(0.0, label)];
+        match peak {
+            Some(peak) => {
+                parts.push((mean_right - value.rect.width(), value));
+                parts.push((peak_right - peak.rect.width(), peak));
+            }
+            // Nothing to put in the peak column, so the value takes both and
+            // ends on the same right edge — the block still squares off.
+            None => parts.push((peak_right - value.rect.width(), value)),
+        }
+        lines.push(parts);
     }
     // Which build this is — the answer to "did the swap take?", which is a
     // question you have before you trust any number above it.
@@ -665,14 +800,25 @@ fn rss_bytes() -> u64 {
 mod tests {
     use super::*;
 
+    /// `frames` frames costing `cpu_ms` each at 60 Hz, advancing the shell
+    /// clock as it goes — the interval is derived from `now`, so the clock
+    /// moving IS the measurement.
+    fn feed(perf: &mut PerfStats, now: &mut f64, frames: usize, cpu_ms: f32) {
+        for _ in 0..frames {
+            *now += 1.0 / 60.0;
+            perf.record(
+                FrameCosts { cpu_ms, ..Default::default() },
+                *now,
+                Workload::default(),
+            );
+        }
+    }
+
     #[test]
-    fn fps_converges_on_the_smoothed_frame_time() {
+    fn fps_converges_on_the_measured_frame_time() {
         let mut perf = PerfStats::default();
         // Seeded at a plausible 60 Hz so early frames don't read as absurd.
         assert!((perf.fps() - 60.0).abs() < 1.0);
-        // Feed a steady 30 Hz on the shell clock; the EMA should chase it
-        // down. The interval is derived from `now`, so the clock must advance
-        // — that IS the measurement.
         for i in 1..=500 {
             let now = i as f64 / 30.0;
             perf.record(FrameCosts { cpu_ms: 2.0, ..Default::default() }, now, Workload { animating: true, ..Default::default() });
@@ -756,49 +902,146 @@ mod tests {
         assert_eq!(perf.last_mem_read, 10.0 + MEM_INTERVAL);
     }
 
-    /// The readouts must settle over the same DURATION at any frame rate.
-    /// A per-frame blend factor settles in a fixed number of FRAMES instead,
-    /// so one constant steadied 30 fps while letting 144 fps flicker.
+    /// What a row prints is the plain mean of the frames inside its window:
+    /// every frame weighted alike, and nothing carried in from before it.
+    ///
+    /// The clock is driven straight to the window boundaries rather than
+    /// stepped at some frame rate and assumed to land on them. A latch fires
+    /// on whichever frame first crosses [`READOUT_INTERVAL`] past the last
+    /// one, so a sequence started at an arbitrary instant gets cut somewhere
+    /// in the middle and the assertion ends up over a window nobody chose.
     #[test]
-    fn smoothing_settles_over_the_same_time_at_any_rate() {
-        let settle_after_one_tau = |rate: f64| {
-            let mut perf = PerfStats::default();
-            // Seed the clock so every measured step is a full 1/rate.
-            perf.record(FrameCosts { cpu_ms: 0.0, ..Default::default() }, 0.0, Workload::default());
-            let frames = (rate * SMOOTH_TAU as f64).round() as usize;
-            for i in 1..=frames {
-                perf.record(FrameCosts { cpu_ms: 10.0, ..Default::default() }, i as f64 / rate, Workload::default());
-            }
-            perf.cpu_ms
-        };
-        // One time constant is ~63% of the way to the new level, whatever
-        // the frame rate.
-        for rate in [30.0, 60.0, 144.0] {
-            let settled = settle_after_one_tau(rate);
-            assert!((settled - 6.32).abs() < 0.2, "{rate} fps settled to {settled}");
+    fn the_printed_value_is_the_windows_arithmetic_mean() {
+        let mut perf = PerfStats::default();
+        // Closes whatever window was open and opens the one under test at a
+        // known instant.
+        perf.record(FrameCosts { cpu_ms: 0.0, ..Default::default() }, 0.0, Workload::default());
+
+        // Ten frames well inside the window, then one on the boundary that
+        // closes it: eleven in all, and the row prints their plain mean —
+        // deliberately not a figure a median or an EMA would also produce.
+        let costs = [1.0f32, 3.0, 2.0, 8.0, 1.0, 1.0, 4.0, 2.0, 3.0, 5.0, 6.0];
+        let last = costs.len() - 1;
+        for (i, cpu_ms) in costs.iter().enumerate() {
+            let now = if i == last {
+                READOUT_INTERVAL
+            } else {
+                (i + 1) as f64 * READOUT_INTERVAL / 20.0
+            };
+            perf.record(
+                FrameCosts { cpu_ms: *cpu_ms, ..Default::default() },
+                now,
+                Workload::default(),
+            );
         }
+        let expected = costs.iter().sum::<f32>() / costs.len() as f32;
+        assert!(
+            (perf.ui.shown_mean - expected).abs() < 1e-4,
+            "{} vs {expected}",
+            perf.ui.shown_mean
+        );
+    }
+
+    /// The window mean has NO MEMORY: once the window holding a stall has
+    /// closed, the row is back to what the frames actually cost.
+    ///
+    /// This is the property the exponential moving average could not have, and
+    /// the reason it went. There, one 40 ms frame lifted every row for the
+    /// best part of a second, so "this stage got slower" and "this stage
+    /// hiccupped once" printed the same number.
+    #[test]
+    fn a_spike_leaves_the_mean_once_its_window_closes() {
+        let mut perf = PerfStats::default();
+        let mut now = 0.0;
+        feed(&mut perf, &mut now, 40, 1.0);
+        assert!((perf.ui.shown_mean - 1.0).abs() < 0.01, "{}", perf.ui.shown_mean);
+
+        // One catastrophic frame, then a steady 1 ms again.
+        feed(&mut perf, &mut now, 1, 100.0);
+        feed(&mut perf, &mut now, 40, 1.0);
+        assert!(
+            (perf.ui.shown_mean - 1.0).abs() < 0.01,
+            "the spike is still dragging the mean: {}",
+            perf.ui.shown_mean
+        );
+        // And it is still on screen — in the column that exists for it.
+        assert!(perf.ui.shown_peak > 90.0, "the peak lost it: {}", perf.ui.shown_peak);
+    }
+
+    /// The peak holds a stall up long enough to be read and then lets go. One
+    /// that never expired would be a high-water mark for the session, which
+    /// says nothing about now.
+    #[test]
+    fn the_peak_expires_once_its_windows_roll_past() {
+        let mut perf = PerfStats::default();
+        let mut now = 0.0;
+        feed(&mut perf, &mut now, 1, 100.0);
+        feed(&mut perf, &mut now, 30, 1.0); // half a second on
+        assert!(perf.ui.shown_peak > 90.0, "gone too soon: {}", perf.ui.shown_peak);
+
+        let quiet = (READOUT_INTERVAL * PEAK_WINDOWS as f64 * 60.0) as usize + 60;
+        feed(&mut perf, &mut now, quiet, 1.0);
+        assert!(perf.ui.shown_peak < 2.0, "the peak never let go: {}", perf.ui.shown_peak);
+    }
+
+    /// The nested rows must still add up, which is exactly what the indented
+    /// layout promises: `egui` and `render` are the two halves of `tick`, and
+    /// reading a total against its parts is why they sit under it.
+    ///
+    /// True of the MEAN and of nothing else, which is why the value column is
+    /// one. Two stages' worst frames are almost never the same frame, so the
+    /// peaks beside them do not sum to anything — nor would medians.
+    #[test]
+    fn the_nested_means_still_sum_to_their_parent() {
+        let mut perf = PerfStats::default();
+        let mut now = 0.0;
+        // Costs that vary frame to frame, so a constant input cannot make
+        // this pass by accident.
+        for i in 0..60 {
+            now += 1.0 / 60.0;
+            let render_ms = 2.0 + (i % 5) as f32;
+            let texture_ms = 0.5 + (i % 4) as f32 * 0.25;
+            perf.record(
+                FrameCosts {
+                    tick_ms: render_ms + 1.0 + (i % 3) as f32,
+                    render_ms,
+                    upload_ms: texture_ms + 1.5,
+                    texture_ms,
+                    ..Default::default()
+                },
+                now,
+                Workload::default(),
+            );
+        }
+        let (tick, egui, render) =
+            (perf.tick.shown_mean, perf.egui.shown_mean, perf.render.shown_mean);
+        assert!((egui + render - tick).abs() < 1e-4, "{egui} + {render} != {tick}");
+        // Same for the upload's two halves, accumulated the same way.
+        assert!((perf.buf_up.shown_mean - 1.5).abs() < 1e-4, "{}", perf.buf_up.shown_mean);
     }
 
     /// Digits that never hold still get squinted at rather than read. The
-    /// values keep tracking every frame; what the overlay PRINTS is latched,
-    /// so it changes a few times a second instead of 144.
+    /// window keeps accumulating every frame; what the overlay PRINTS is
+    /// latched, so it changes four times a second instead of 144.
     #[test]
     fn the_printed_numbers_hold_between_latches() {
         let mut perf = PerfStats::default();
         perf.record(FrameCosts { cpu_ms: 2.0, ..Default::default() }, 0.0, Workload::default());
-        let shown = perf.shown_cpu_ms;
+        let shown = perf.ui.shown_mean;
+        assert_eq!(shown, 2.0, "the opening frame latches at once, not from a placeholder");
 
-        // Frames well inside the interval: the live value moves, the printed
-        // one does not.
+        // Frames well inside the interval: they accumulate, the printed value
+        // does not budge.
         for i in 1..=10 {
             perf.record(FrameCosts { cpu_ms: 20.0, ..Default::default() }, i as f64 * READOUT_INTERVAL / 20.0, Workload::default());
         }
-        assert!(perf.cpu_ms > shown, "the live value should have moved");
-        assert_eq!(perf.shown_cpu_ms, shown, "the printed value must hold");
+        assert_eq!(perf.ui.n, 10, "the frames should have accumulated");
+        assert_eq!(perf.ui.shown_mean, shown, "the printed value must hold");
 
-        // Past the interval it catches up.
+        // Past the interval it catches up — to the mean of that window, which
+        // holds nothing but the 20s.
         perf.record(FrameCosts { cpu_ms: 20.0, ..Default::default() }, READOUT_INTERVAL, Workload::default());
-        assert_eq!(perf.shown_cpu_ms, perf.cpu_ms, "and then it latches");
+        assert_eq!(perf.ui.shown_mean, 20.0, "and then it latches");
     }
 
     /// Latching must not cost resolution: a reading a tenth of a millisecond
@@ -819,7 +1062,7 @@ mod tests {
         for i in 1..=200 {
             perf.record(FrameCosts { cpu_ms: 1.0, ..Default::default() }, i as f64 / 120.0, Workload::default());
         }
-        let from_row = 1000.0 / (perf.shown_frame_dt * 1000.0);
+        let from_row = 1000.0 / perf.frame_ms.shown_mean;
         assert!((perf.fps() - from_row).abs() < 1e-3, "{} vs {from_row}", perf.fps());
     }
 
@@ -892,4 +1135,5 @@ mod tests {
             );
         }
     }
+
 }
