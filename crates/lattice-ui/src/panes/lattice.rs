@@ -123,6 +123,45 @@ fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: e
 /// text is that it can be read: a name at 5% alpha says nothing.
 const TRAIL_LABEL_STRENGTH: f32 = 0.5;
 
+/// How readable one node's label is, 0..1. `trailed` is whether this node
+/// carries a kept name already, `keeps_names` whether the view keeps them at
+/// all (see [`draw_node_labels`]).
+///
+/// A sounding label rides its note's envelope straight down to nothing. The
+/// one exception is a name this view is about to KEEP, which settles on
+/// `TRAIL_LABEL_STRENGTH` instead of fading out: `node.trail` is the recorded
+/// memory, and it is only written the frame the release finishes, so during
+/// the fade there is nothing to settle onto and the level has to be reserved
+/// ahead of the record. Without that reserve the name eases to zero and the
+/// trail pops it back a frame later — the "flash back in" that made one label
+/// read as two.
+///
+/// Reserved only where a trail can actually land, which is the home sheet:
+/// off-sheet nodes are deliberately never marked (a lone memory floating out
+/// in the sevens dimension reads as noise — see `lattice_scene::trail`), so
+/// reserving there held the label at half brightness through the whole
+/// release and then dropped it to nothing at prune. Fading to a level and
+/// vanishing from it is exactly what a visibility floor looks like, and this
+/// was the last one left.
+///
+/// One corner is left, and it needs a number this layer doesn't have: a trail
+/// Memory *shorter than the Fade* forgets the pitch before the release ends,
+/// so the reserve holds a home-sheet name that then has nothing to hand it to.
+/// Memory is 0 — never forget — by default, and the fix needs the fade time
+/// down here to predict the level the record will land on.
+fn label_strength(node: &lattice_scene::NodeInstance, trailed: bool, keeps_names: bool) -> f32 {
+    if node.hovered {
+        return 1.0;
+    }
+    let recorded = if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 };
+    let reserved = if keeps_names && node.on_home && node.activation > 0.0 {
+        TRAIL_LABEL_STRENGTH
+    } else {
+        0.0
+    };
+    node.activation.max(recorded).max(reserved)
+}
+
 /// Labels on hovered, sounding, and -- with the trail's "Keep note names"
 /// on -- already-visited nodes, drawn as egui text over the 3D view
 /// (projected with the same camera as the nodes): the note name centered on
@@ -153,25 +192,7 @@ pub(crate) fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        // Fade with the activation envelope; hovered nodes get a full,
-        // steady label regardless.
-        let strength = if node.hovered {
-            1.0
-        } else {
-            let sounding = node.activation;
-            // The level a kept name settles on. `node.trail` is the recorded
-            // memory, but it is only written the frame the release finishes —
-            // during the fade it's still zero. So for a note still sounding
-            // under "Keep note names", reserve its resting level NOW: the
-            // fading `sounding` term then lands on the same value the recorded
-            // trail takes over at, instead of easing to zero and the trail
-            // popping back a frame later. That pop was the "flash back in"
-            // that made one label read as two.
-            let recorded = if trailed { TRAIL_LABEL_STRENGTH * node.trail } else { 0.0 };
-            let reserved =
-                if keeps_names && node.activation > 0.0 { TRAIL_LABEL_STRENGTH } else { 0.0 };
-            sounding.max(recorded).max(reserved)
-        };
+        let strength = label_strength(node, trailed, keeps_names);
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
         // behind the camera, so a node off to the side still lands at a
@@ -503,5 +524,71 @@ mod tests {
                 piece.ink,
             );
         }
+    }
+
+    /// A node with `activation`, on the home sheet or off it, and nothing
+    /// else going on — the two inputs the reserve turns on.
+    fn fading(activation: f32, on_home: bool) -> lattice_scene::NodeInstance {
+        lattice_scene::NodeInstance {
+            lattice_pos: lattice_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
+            world_pos: glam::Vec3::ZERO,
+            color: glam::Vec4::ONE,
+            activation,
+            octaves: [0.0; lattice_scene::OCTAVE_SLOTS],
+            seed: 0.0,
+            outlined: false,
+            hovered: false,
+            on_home,
+            scale: 1.0,
+            gutter: 0.0,
+            comma: 0.0,
+            cents: 0.0,
+            melody_slots: 0,
+            bass_slots: 0,
+            melody_level: 0.0,
+            bass_level: 0.0,
+            melody_color: glam::Vec4::ONE,
+            bass_color: glam::Vec4::ONE,
+            trail: 0.0,
+        }
+    }
+
+    /// The last visibility floor: a label that stops part-way down and then
+    /// vanishes reads as holding steady and being switched off, which is the
+    /// thing the 0.35 floor was removed everywhere for.
+    ///
+    /// The reserve that produces it is right on the home sheet — the recorded
+    /// name takes over at exactly that level — and wrong anywhere a trail can
+    /// never land, which is every other sheet.
+    #[test]
+    fn only_a_name_that_will_be_kept_stops_short_of_zero() {
+        // Off the home sheet: nothing will ever be recorded there, so the
+        // label rides the envelope all the way out.
+        for keeps_names in [false, true] {
+            assert_eq!(label_strength(&fading(0.2, false), false, keeps_names), 0.2);
+            assert_eq!(label_strength(&fading(0.02, false), false, keeps_names), 0.02);
+            assert_eq!(label_strength(&fading(0.0, false), false, keeps_names), 0.0);
+        }
+        // On the home sheet with the names kept, it settles on the level the
+        // record will hold it at rather than easing out and popping back.
+        assert_eq!(label_strength(&fading(0.8, true), false, true), 0.8);
+        assert_eq!(label_strength(&fading(0.2, true), false, true), TRAIL_LABEL_STRENGTH);
+        // ...and with them off, the home sheet fades out like anything else.
+        assert_eq!(label_strength(&fading(0.2, true), false, false), 0.2);
+        // A silent node reserves nothing at all, wherever it sits: the
+        // reserve is for a name on its way to being kept, not for every node
+        // the view holds.
+        assert_eq!(label_strength(&fading(0.0, true), false, true), 0.0);
+        // A hover is always fully readable, mid-fade or not.
+        let mut hovered = fading(0.05, false);
+        hovered.hovered = true;
+        assert_eq!(label_strength(&hovered, false, false), 1.0);
+        // Once the name IS recorded, it reads at the kept level, scaled by
+        // how much memory is left.
+        let mut kept = fading(0.0, true);
+        kept.trail = 1.0;
+        assert_eq!(label_strength(&kept, true, true), TRAIL_LABEL_STRENGTH);
+        kept.trail = 0.5;
+        assert_eq!(label_strength(&kept, true, true), TRAIL_LABEL_STRENGTH * 0.5);
     }
 }
