@@ -435,8 +435,13 @@ fn default_sevens_label() -> SevensLabel {
 /// heavier mark by a wide margin. Small marks need relatively more weight
 /// to hold the same color on the page, which is ordinary optical sizing —
 /// and the freedom to say so is the point of drawing them.
+///
+/// How MUCH more is a look, and this is where looking landed: half again
+/// Iosevka's weight rather than the near-double 0.12 was, which read heavy
+/// once the marks stopped being composited shapes and started resolving
+/// like the glyphs around them.
 fn default_mark_weight() -> f32 {
-    0.12
+    0.10
 }
 
 /// The classic solid orb — the identity end of the solidity axis.
