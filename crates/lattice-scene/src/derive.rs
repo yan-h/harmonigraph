@@ -4,7 +4,6 @@
 
 use crate::camera::Camera;
 use crate::color::{channel_color, idle_color, pitch_ramp_lut};
-use crate::style::HighlightExtremes;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
@@ -53,9 +52,10 @@ impl Mark {
 /// pane sorts on pitch.
 pub(crate) fn held_extremes(
     tracker: &NoteTracker,
-    which: HighlightExtremes,
+    mark_melody: bool,
+    mark_bass: bool,
 ) -> (Option<VoiceKey>, Option<VoiceKey>) {
-    if which == HighlightExtremes::Off {
+    if !mark_melody && !mark_bass {
         return (None, None);
     }
     let held = || {
@@ -64,12 +64,10 @@ pub(crate) fn held_extremes(
             .filter(|v| v.state == lattice_core::VoiceState::Held)
     };
     let key = |v: &lattice_core::Voice| (v.channel, v.note);
-    let melody = which
-        .marks_melody()
+    let melody = mark_melody
         .then(|| held().max_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
         .flatten();
-    let bass = which
-        .marks_bass()
+    let bass = mark_bass
         .then(|| held().min_by(|a, b| a.pitch.total_cmp(&b.pitch)).map(key))
         .flatten();
     (melody, bass)
@@ -155,7 +153,7 @@ pub fn derive_scene(
     let mut node_pcs = Vec::with_capacity(view.visible_count());
     let center = view.center();
     let node_idle = idle_color(view);
-    let live_extremes = held_extremes(tracker, view.highlight_extremes);
+    let live_extremes = held_extremes(tracker, view.mark_melody, view.mark_bass);
     // Each ring's ease-in, resolved once per frame: which note wears an end
     // and how long it has worn it are properties of the CHORD, identical on
     // every node the note lights.
@@ -362,7 +360,6 @@ pub fn derive_scene(
         camera,
         time: (now % 3600.0) as f32,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
-        outer_style: view.outer_style,
         node_style: view.node_style,
         core_radius,
         core_solidity,
@@ -378,7 +375,6 @@ pub fn derive_scene(
         node_idle,
         trail_mark: view.trail_mark,
         trail_strength: view.trail_strength.clamp(0.0, 1.0),
-        mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
         mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),

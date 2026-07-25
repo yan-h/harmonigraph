@@ -135,29 +135,6 @@ pub enum RollColor {
     Accent,
 }
 
-/// Which of a note's edges the black outline and white keyline ride.
-///
-/// The rim stands OUTSIDE the note, so wherever it is drawn it reaches into
-/// the note's surroundings — and along the time axis those surroundings are
-/// the next note. Repeated taps of one key butt together there, so a rim that
-/// wraps the ends paints each note's halo over its neighbour, and rounded
-/// corners turn the overlap into a chain of lens-shaped notches. Limiting the
-/// rim to one pair of edges is what stops that, and which pair reads better is
-/// a look, not a fact — hence a setting.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum RollEdge {
-    /// All the way around, corners included — every note fully outlined.
-    Around,
-    /// The note's two long edges only (the pitch-facing sides: horizontal
-    /// above and below a note in Across, vertical either side of it in
-    /// Upright). The rim never grows along time, so repeats butt cleanly.
-    #[default]
-    Sides,
-    /// The note's two ends only — a marker at each onset and release, and
-    /// nothing along its length.
-    Ends,
-}
-
 /// The color ramp a spectrogram cell's intensity maps through. A set of
 /// looks to pick from — the spectrogram is a heatmap, and the palette is
 /// most of its character. Intensity always runs dark (quiet) to bright
@@ -167,25 +144,26 @@ pub enum SpectrogramColor {
     /// Grayscale: black to white. The classic, and the most neutral over
     /// the roll's own colors.
     Mono,
-    /// Black → deep red → orange → yellow → white. The familiar "heat"
-    /// spectrogram; reads loudest as hottest.
-    ///
-    /// The aliases absorb palettes that used to exist — Pitch, which tinted
-    /// each cell with the lattice's own low-to-high pitch color, and Paper,
-    /// an inverted ramp for light backgrounds. Without them a blob still
-    /// naming one wouldn't just lose its palette: the parse would fail and
-    /// drop the WHOLE persist, layout and camera with it.
-    #[default]
-    #[serde(alias = "Pitch", alias = "Paper")]
-    Heat,
-    /// Black → navy → blue → cyan → white. Cool counterpart to Heat.
+    /// Black → navy → blue → cyan → white. The cool ramp.
     Ice,
     /// Black → violet → teal → green → yellow. A perceptually even ramp
-    /// (viridis-like) where every step reads as an equal change.
+    /// (viridis-like) where every step reads as an equal change — the
+    /// default, because an even ramp is the one that reads a heatmap's
+    /// quiet detail honestly.
+    #[default]
     Aurora,
-    /// Black → indigo → magenta → orange → cream. Warmer than [`Self::Aurora`]
-    /// and evenly stepped like it, where Heat spends most of its range in the
-    /// reds.
+    /// Black → indigo → magenta → orange → cream. Warmer than
+    /// [`Self::Aurora`] and evenly stepped like it.
+    ///
+    /// The aliases absorb palettes that used to exist: Heat (the familiar
+    /// black-red-orange-yellow-white spectrogram, dropped for spending most
+    /// of its range in the reds — Magma is that warmth evenly stepped),
+    /// Pitch, which tinted each cell with the lattice's own low-to-high
+    /// pitch color, and Paper, an inverted ramp for light backgrounds.
+    /// Without them a blob still naming one wouldn't just lose its palette:
+    /// the parse would fail and drop the WHOLE persist, layout and camera
+    /// with it.
+    #[serde(alias = "Heat", alias = "Pitch", alias = "Paper")]
     Magma,
 }
 
@@ -329,10 +307,6 @@ pub struct SpectrumConfig {
     /// its baseline with pitch ascending, so there is nothing to flip.
     #[serde(default)]
     pub orientation: SpectralOrientation,
-    /// Analyze and overlay the shell's audio (plugin: the input bus;
-    /// standalone: a synth on the held notes).
-    #[serde(default = "default_true")]
-    pub show_audio: bool,
     pub window: SpectrumWindow,
     /// Bottom of the dB height scale: what reads as silence. A full-scale
     /// sine sits at 0 dB.
@@ -363,8 +337,6 @@ pub struct SpectrumConfig {
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
     pub labels: SpectrumLabels,
-    /// Keep a slowly decaying outline at each bucket's recent maximum.
-    pub peak_hold: bool,
     /// Strength of the light edge drawn along the spectrum's profile and
     /// around each note ribbon, 0 = none. On a roll note it is the whole of
     /// the rim — how bright the keyline is, and whether it is drawn at all.
@@ -413,22 +385,11 @@ pub struct SpectrumConfig {
     /// Seconds of history the roll's depth spans.
     #[serde(default = "default_roll_seconds")]
     pub roll_seconds: f32,
-    /// Note ribbon width, in semitones of the pitch axis.
+    /// Note ribbon width, in semitones of the pitch axis. This IS the note's
+    /// painted width — a note is a solid rectangle of its own color, with
+    /// nothing straddling its boundary.
     #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
-    /// Stroke width of a note's outline, in points — the band of the note's
-    /// own color straddling its boundary. What is INSIDE that boundary is
-    /// [`roll_fill`](Self::roll_fill).
-    #[serde(default = "default_roll_outline_width")]
-    pub roll_outline_width: f32,
-    /// How solidly a note's interior is painted in its own color: 0 leaves it
-    /// hollow, so the spectrogram shows straight through the ribbon, 1 fills
-    /// it. In between it is a wash the heatmap still reads through.
-    #[serde(default = "default_roll_fill")]
-    pub roll_fill: f32,
-    /// Which of a note's edges the white keyline rides.
-    #[serde(default)]
-    pub roll_edge: RollEdge,
     /// Points shaved off a released note's tail, so repeated notes at one
     /// pitch stay separate instead of merging into one bar.
     ///
@@ -589,19 +550,12 @@ fn default_roll_seconds() -> f32 {
     12.0
 }
 
+/// Thin: a note is a line through the spectrogram at its own pitch, not a
+/// slab over it. At 0.3 semitones a semitone of pitch axis still separates
+/// two neighbouring keys, which is what makes the roll readable when the
+/// pitch range is zoomed out over the whole spectrum.
 fn default_roll_thickness() -> f32 {
-    0.8
-}
-
-fn default_roll_outline_width() -> f32 {
-    1.5
-}
-
-/// Filled, but not so solidly that the spectrogram behind a note is gone:
-/// a note reads as a solid bar at a glance and a loud cell still ghosts
-/// through it.
-fn default_roll_fill() -> f32 {
-    0.8
+    0.3
 }
 
 /// A hairline of background between repeats — enough to read two taps as
@@ -629,14 +583,12 @@ impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
             orientation: SpectralOrientation::Horizontal,
-            show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             ceiling_db: default_ceiling_db(),
             smoothing: 0.55,
             tilt: default_tilt(),
             labels: SpectrumLabels::Notes,
-            peak_hold: false,
             keyline: default_keyline(),
             low_midi: default_low_midi(),
             high_midi: default_high_midi(),
@@ -646,9 +598,6 @@ impl Default for SpectrumConfig {
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
-            roll_outline_width: default_roll_outline_width(),
-            roll_fill: default_roll_fill(),
-            roll_edge: RollEdge::default(),
             roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
             show_spectrogram: true,
@@ -676,8 +625,6 @@ pub struct AudioSpectrum {
     analyzer: lattice_core::spectrum::ChannelBank,
     /// Smoothed display buckets (power; the pane maps to height).
     display: SpectrumBuckets,
-    /// Decaying per-bucket maxima for the peak-hold outline.
-    peaks: SpectrumBuckets,
     /// FRAMES pushed since this analyzer was made, and the count at which the
     /// next FFT falls due. The column grid is a function of these two and
     /// nothing else — see [`push_samples`](AudioSpectrum::push_samples).
@@ -955,7 +902,6 @@ impl Default for AudioSpectrum {
         AudioSpectrum {
             analyzer: lattice_core::spectrum::ChannelBank::new(48_000.0, 1),
             display: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
-            peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             frames_seen: 0,
             next_hop: 0,
             anchor: None,
@@ -1003,8 +949,6 @@ impl AudioSpectrum {
     /// event times with the same two numbers.
     const ANCHOR_SMOOTHING: f64 = 0.05;
     const ANCHOR_SNAP: f64 = 1.0;
-    /// Peak-hold half-life in seconds.
-    const PEAK_HALF_LIFE: f64 = 1.2;
 
     /// Feed mono samples from the shell, analyzing one spectrum per
     /// [`FFT_INTERVAL`](Self::FFT_INTERVAL) of audio in them. `now` is the shell
@@ -1106,16 +1050,8 @@ impl AudioSpectrum {
             let Some(fresh) = self.analyzer.power_sum() else { continue };
 
             let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
-            let decay = 0.5f32.powf((Self::FFT_INTERVAL / Self::PEAK_HALF_LIFE) as f32);
-            for ((shown, peak), new) in self.display.iter_mut().zip(&mut self.peaks).zip(&fresh) {
+            for (shown, new) in self.display.iter_mut().zip(&fresh) {
                 *shown += (new - *shown) * alpha;
-                *peak = if config.peak_hold {
-                    (*peak * decay).max(*shown)
-                } else {
-                    // Track the live level while off, so switching the
-                    // outline on starts from now, not stale maxima.
-                    *shown
-                };
             }
             // Keep the RAW spectrum for the spectrogram (the smoothed
             // `display` would smear one column into the next). Retention is
@@ -1133,14 +1069,13 @@ impl AudioSpectrum {
         }
     }
 
-    /// The curve to draw — (levels, peak-holds) — or None while no audio is
-    /// flowing. Both are maintained per column by
-    /// [`push_samples`](Self::push_samples); this only decides whether they are
-    /// still live.
-    pub fn display(&self, now: f64) -> Option<(&SpectrumBuckets, &SpectrumBuckets)> {
+    /// The curve to draw, or None while no audio is flowing. The levels are
+    /// maintained per column by [`push_samples`](Self::push_samples); this
+    /// only decides whether they are still live.
+    pub fn display(&self, now: f64) -> Option<&SpectrumBuckets> {
         self.last_samples
             .is_some_and(|t| now - t <= Self::HOLD_SECONDS)
-            .then_some((&self.display, &self.peaks))
+            .then_some(&self.display)
     }
 
     /// The most history ever kept, span-independent: the longest span the roll

@@ -4,8 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
-    SevensLabel,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SevensLabel,
 };
 use crate::trail::TrailMark;
 use lattice_core::{coords, LatticePos};
@@ -102,10 +101,6 @@ pub struct ViewConfig {
     /// Only meaningful while `show_labels` is on.
     #[serde(default = "default_sevens_label")]
     pub sevens_label: SevensLabel,
-    /// Outer octave layer style. The alias keeps pre-rename blobs (field
-    /// `octave_style`) loading; the default covers even older blobs.
-    #[serde(default, alias = "octave_style")]
-    pub outer_style: OuterStyle,
     /// Draw note-name labels on hovered and sounding nodes.
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
@@ -168,7 +163,7 @@ pub struct ViewConfig {
         default,
         skip_serializing,
         rename = "outer_backdrop",
-        deserialize_with = "bare_bool_as_some"
+        deserialize_with = "bare_as_some"
     )]
     pub legacy_outer_backdrop: Option<bool>,
     /// The outer glyphs' solidity, 0..1 (mirrors [`core_solidity`] for the
@@ -207,34 +202,56 @@ pub struct ViewConfig {
     #[serde(default, skip_serializing)]
     pub node_body: LegacyNodeBody,
     // ---- Melody / bass highlight -----------------------------------------
-    /// Which of the outer held notes to mark, so the melody and/or bass
-    /// line reads at a glance out of a chord. The mark rides the OUTER EDGE
-    /// of that note's octave indicator and nothing else — it never touches
-    /// the core, whose color is the note's own. That also makes it the layer
-    /// that survives a chord voiced within a single pitch class: every
-    /// octave of one note lands on the same node, differing only by slot.
-    #[serde(default)]
-    pub highlight_extremes: HighlightExtremes,
-    /// Opacity of the part of a mark ring that is cut off from the octave
-    /// responsible for it, 0..1.
+    // Mark the outer held notes, so the melody and/or bass line reads at a
+    // glance out of a chord. "Outer" is by sounding pitch (`Voice::pitch`,
+    // which includes MPE/tuning bends), over HELD voices only: a released
+    // note is on its way out and shouldn't keep the mark from the note that
+    // replaced it.
+    //
+    // A mark rides the OUTER EDGE of that note's octave indicator and
+    // nothing else — it never touches the core, whose color is the note's
+    // own. That also makes it the layer that survives a chord voiced within
+    // a single pitch class: every octave of one note lands on the same node,
+    // differing only by slot.
+    /// Mark the highest held note.
     ///
-    /// Each ring is slit at that octave's two sector boundaries — the slit
-    /// IS the gap between two octaves, continued outward — which leaves the
-    /// stretch of ring belonging to the marked octave separated from the
-    /// remainder of the circle. That stretch always draws at full strength;
-    /// this fades everything else. 1 keeps the whole circle (the ring reads
-    /// as a ring, merely broken); 0 leaves only the arc over the marked
-    /// octave, which says WHICH octave loudly at the cost of the shape.
-    ///
-    /// A Gap of 0 leaves no slit, so there is nothing to separate and this
-    /// has no effect.
-    #[serde(default = "default_mark_unlinked")]
-    pub mark_unlinked: f32,
+    /// Independent of [`mark_bass`](Self::mark_bass), which is what the two
+    /// of them are: the rings are told apart by radius (melody inside the
+    /// octave band, bass outside) rather than by hue, so a note that is at
+    /// once the highest and the lowest — a lone held note, or a chord whose
+    /// top and bottom share a pitch class — simply gets both.
+    #[serde(default = "default_true")]
+    pub mark_melody: bool,
+    /// Mark the lowest held note. See [`mark_melody`](Self::mark_melody).
+    #[serde(default = "default_true")]
+    pub mark_bass: bool,
+    /// Load-only shim: blobs from before the two marks became independent
+    /// flags carry one `highlight_extremes` token (Off/Melody/Bass/Both).
+    /// Folded into the pair by [`migrate_legacy`](Self::migrate_legacy) and
+    /// never written back — the same shape as
+    /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop), and for the
+    /// same reason: the old blobs wrote the variant BARE, which RON will not
+    /// read into an `Option`'s `Some`, and a failed parse drops the whole
+    /// persist rather than just this field.
+    #[serde(
+        default,
+        skip_serializing,
+        rename = "highlight_extremes",
+        deserialize_with = "bare_as_some"
+    )]
+    pub legacy_highlight_extremes: Option<HighlightExtremes>,
     /// How thick each melody/bass ring is, in quad UV units — the same
     /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
     /// three read against each other directly. One thickness for both
     /// rings: they are one mark seen at two radii, and letting them differ
     /// would say something that isn't true.
+    ///
+    /// A ring is a whole circle, slit at the two sector boundaries of the
+    /// octave responsible for it — the slit IS the gap between two octaves,
+    /// continued outward, so the ring says which octave without giving up
+    /// the shape. (An `Unlinked` opacity used to fade everything but that
+    /// arc; it is fixed at full now, which is the ring reading as a ring.)
+    /// A [`outer_gap`](Self::outer_gap) of 0 leaves no slit to draw.
     ///
     /// 0 turns the rings off, as a radius of 0 turns the core off. Was
     /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
@@ -350,14 +367,15 @@ fn default_true() -> bool {
     true
 }
 
-/// Read a legacy bare `true`/`false` into an `Option<bool>` that means
-/// "the key was there". A plain `Option<bool>` field can't do this: RON
-/// writes options as `Some(true)`/`None`, so it rejects the bare bool the
+/// Read a legacy BARE value — `true`, `Both` — into an `Option<T>` that
+/// means "the key was there". A plain `Option<T>` field can't do this: RON
+/// writes options as `Some(true)`/`None`, so it rejects the bare token the
 /// old blobs actually contain. `serde(default)` still supplies `None` when
 /// the key is absent — this only runs when it is present.
-fn bare_bool_as_some<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+fn bare_as_some<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
 {
     serde::Deserialize::deserialize(d).map(Some)
 }
@@ -399,12 +417,6 @@ fn default_core_solidity() -> f32 {
 /// Crisp octave glyphs by default (the classic look, identity end of the
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
-    1.0
-}
-
-/// The whole circle at full strength: the ring reads as a ring, and the
-/// slits alone say which octave owns it.
-fn default_mark_unlinked() -> f32 {
     1.0
 }
 
@@ -512,6 +524,13 @@ impl ViewConfig {
             self.outer_backdrop = if on { 1.0 } else { 0.0 };
         }
 
+        // The melody/bass marks' pre-split enum, which was exactly these two
+        // bits packed into four names.
+        if let Some(which) = self.legacy_highlight_extremes.take() {
+            self.mark_melody = which.marks_melody();
+            self.mark_bass = which.marks_bass();
+        }
+
         match std::mem::replace(&mut self.core_style, CoreStyle::On) {
             CoreStyle::None => self.core_radius = 0.0,
             CoreStyle::Orb => self.core_solidity = 1.0,
@@ -524,7 +543,6 @@ impl ViewConfig {
             LegacyNodeBody::Slices | LegacyNodeBody::Rings | LegacyNodeBody::Beads => {}
         }
         self.core_solidity = 0.0;
-        self.outer_style = OuterStyle::Slices;
         self.outer_backdrop = 1.0;
     }
 }
@@ -567,7 +585,6 @@ impl Default for ViewConfig {
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
             sevens_label: SevensLabel::Comma,
-            outer_style: OuterStyle::Slices,
             show_labels: true,
             show_cents: true,
             node_style: NodeStyle::Steady,
@@ -595,12 +612,13 @@ impl Default for ViewConfig {
             idle_marker: IdleMarker::None,
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
-            highlight_extremes: HighlightExtremes::default(),
-            // The mark rings are thin, and mostly cut away: only the arc
-            // over the marked octave draws at full strength, the rest of
-            // the circle at about a third. Says WHICH octave loudly, at
-            // some cost to reading as a ring.
-            mark_unlinked: 0.371_107_28,
+            // Both ends marked: the rings are subtle enough to live with
+            // always on, and a chord's outer voices are worth seeing without
+            // having to go turn something on first.
+            mark_melody: true,
+            mark_bass: true,
+            legacy_highlight_extremes: None,
+            // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.070_653_12,
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,

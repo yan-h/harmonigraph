@@ -67,10 +67,8 @@ fn main() -> Result<(), String> {
             "show_cents" => view.show_cents = flag()?,
             "show_perf" => view.show_perf = flag()?,
             "frameless" => view.frameless = flag()?,
-            "highlight_extremes" => {
-                view.highlight_extremes = ron::from_str(value)
-                    .map_err(|e| format!("`highlight_extremes`: {e}"))?
-            }
+            "mark_melody" => view.mark_melody = flag()?,
+            "mark_bass" => view.mark_bass = flag()?,
             // Camera
             "distance" => state.camera.distance = num()?,
             "cabinet_scale" => state.camera.cabinet_scale = num()?,

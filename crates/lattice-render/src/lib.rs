@@ -481,7 +481,7 @@ impl LatticeCallback {
                 misc: [
                     scene.time,
                     scene.node_radius,
-                    scene.outer_style.shader_index() as f32,
+                    0.0,
                     scene.node_style.shader_index() as f32,
                 ],
                 misc2: [
@@ -504,12 +504,7 @@ impl LatticeCallback {
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],
-                misc5: [
-                    scene.grid_thickness,
-                    scene.mark_unlinked,
-                    scene.outer_gap,
-                    scene.mark_thickness,
-                ],
+                misc5: [scene.grid_thickness, 0.0, scene.outer_gap, scene.mark_thickness],
                 misc6: [
                     scene.trail_mark.shader_index() as f32,
                     scene.trail_strength,

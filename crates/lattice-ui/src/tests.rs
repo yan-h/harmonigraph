@@ -10,7 +10,6 @@ fn persist_round_trips_camera_and_view() {
     state.view.extent_sevens = 3;
     // Non-default values throughout, so the fields prove they
     // round-trip rather than matching the defaults by luck.
-    state.view.outer_style = lattice_scene::OuterStyle::Off;
     // Radius 0 is the off state; this proves it (and solidity) persist.
     state.view.core_radius = 0.0;
     state.view.core_solidity = 0.4;
@@ -20,10 +19,11 @@ fn persist_round_trips_camera_and_view() {
     state.view.outer_solidity = 0.3;
     state.view.idle_marker = lattice_scene::IdleMarker::Dot;
     state.view.idle_radius = 0.31;
-    // Melody, not Both: Both is the default, and this test's whole
+    // Melody alone: both marks on is the default, and this test's whole
     // point is that the fields prove they round-trip rather than
     // matching the defaults by luck.
-    state.view.highlight_extremes = lattice_scene::HighlightExtremes::Melody;
+    state.view.mark_melody = true;
+    state.view.mark_bass = false;
     state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
@@ -41,7 +41,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.camera.yaw, 1.23);
     assert_eq!(restored.camera.distance, 42.0);
     assert_eq!(restored.view.extent_sevens, 3);
-    assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Off);
     assert_eq!(restored.view.core_radius, 0.0, "off (radius 0) round-trips");
     assert_eq!(restored.view.core_solidity, 0.4);
     assert_eq!(restored.view.outer_inner, 0.1);
@@ -50,10 +49,8 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.outer_solidity, 0.3);
     assert_eq!(restored.view.idle_marker, lattice_scene::IdleMarker::Dot);
     assert_eq!(restored.view.idle_radius, 0.31);
-    assert_eq!(
-        restored.view.highlight_extremes,
-        lattice_scene::HighlightExtremes::Melody
-    );
+    assert!(restored.view.mark_melody);
+    assert!(!restored.view.mark_bass, "bass off round-trips");
     assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
@@ -83,50 +80,76 @@ fn removed_node_styles_in_old_persist_blobs_load_as_steady() {
 }
 
 #[test]
-fn removed_octave_styles_in_old_persist_blobs_load_as_slices() {
-    // Dots and Rings joined Petals/Flares/Bumps as removed styles: one
-    // glyph shape is left, so none of these exist as variants and serde
-    // aliases must absorb each. Without them an old blob doesn't just lose
-    // its style, it fails to parse and drops the WHOLE persist (layout,
-    // camera and all). Inject the dead tokens as strings, since the enum
-    // can no longer name them.
-    for removed in ["Dots", "Rings", "Petals", "Flares", "Bumps"] {
+fn an_old_blobs_octave_style_key_is_ignored_rather_than_fatal() {
+    // The octave layer had a style setting (Off, and the Dots/Rings/Petals/
+    // Flares/Bumps glyph shapes trimmed before it) until the layer became
+    // unconditional. Every one of those tokens still sits in saved blobs, and
+    // an unknown key must be SKIPPED — a failed parse drops the whole persist,
+    // camera and layout with it, which is a far worse trade than losing a
+    // setting that no longer exists.
+    for removed in ["Off", "Slices", "Dots", "Rings", "Petals", "Flares", "Bumps"] {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.view.outer_style = lattice_scene::OuterStyle::Slices;
+        state.camera.yaw = 1.23;
+        state.view.outer_inner = 0.25;
         let saved = state
             .save_persist()
-            .replace("outer_style:Slices", &format!("outer_style:{removed}"));
-        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
+            .replace("outer_inner:", &format!("outer_style:{removed},outer_inner:"));
+        assert_ne!(saved, state.save_persist(), "injection must have hit for {removed}");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
-        assert_eq!(
-            restored.view.outer_style,
-            lattice_scene::OuterStyle::Slices,
-            "{removed} folds to the one surviving style"
+        assert_eq!(restored.camera.yaw, 1.23, "{removed} took the persist down");
+        assert_eq!(restored.view.outer_inner, 0.25, "{removed}");
+    }
+}
+
+#[test]
+fn a_pre_split_melody_bass_blob_loads_as_the_two_flags() {
+    // The two marks were one four-way enum before they became the pair of
+    // flags they always were. An old blob carries `highlight_extremes` and
+    // NEITHER flag, and it writes the variant BARE — so without the
+    // load-only shim the token wouldn't parse into an Option and the failed
+    // parse would drop the WHOLE persist, camera and layout with it.
+    for (token, melody, bass) in [
+        ("Off", false, false),
+        ("Melody", true, false),
+        ("Bass", false, true),
+        ("Both", true, true),
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        state.view.mark_melody = false;
+        state.view.mark_bass = false;
+        let saved = state.save_persist().replace(
+            "mark_melody:false,mark_bass:false",
+            &format!("highlight_extremes:{token}"),
         );
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {token}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.view.mark_melody, melody, "{token} -> melody");
+        assert_eq!(restored.view.mark_bass, bass, "{token} -> bass");
+        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores ({token})");
     }
 }
 
 #[test]
 fn pre_rename_octave_style_and_slice_band_fields_still_load() {
-    // The outer layer's fields were renamed (octave_style ->
-    // outer_style, slice_inner/outer -> outer_inner/outer); aliases
-    // must keep blobs with the old names loading.
+    // The outer layer's band fields were renamed (slice_inner/outer ->
+    // outer_inner/outer); aliases must keep blobs with the old names
+    // loading, alongside the octave_style key that era also wrote.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.view.outer_style = lattice_scene::OuterStyle::Slices;
     state.view.outer_inner = 0.25;
     state.view.outer_outer = 0.85;
     let saved = state
         .save_persist()
-        .replace("outer_style:", "octave_style:")
-        .replace("outer_inner:", "slice_inner:")
+        .replace("outer_inner:", "octave_style:Slices,slice_inner:")
         .replace("outer_outer:", "slice_outer:");
     assert_ne!(saved, state.save_persist(), "replacements must have hit");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
-    assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Slices);
     assert_eq!(restored.view.outer_inner, 0.25);
     assert_eq!(restored.view.outer_outer, 0.85);
 }
@@ -280,7 +303,7 @@ fn pre_radius_off_core_modes_fold_onto_radius_and_solidity() {
 }
 
 #[test]
-fn node_body_experiment_blobs_fold_into_core_and_outer() {
+fn node_body_experiment_blobs_fold_into_the_core_and_backdrop() {
     // Blobs saved by the one-build NodeBody experiment carry a
     // node_body field the current layout no longer writes; loading one
     // must both parse and fold the body into the core/outer split
@@ -296,7 +319,6 @@ fn node_body_experiment_blobs_fold_into_core_and_outer() {
     restored.load_persist(&saved);
     assert_eq!(restored.view.core_solidity, 0.0, "octave-only body is the glow end");
     assert!(restored.view.core_radius > 0.0, "still on");
-    assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Slices);
     assert_eq!(
         restored.view.outer_backdrop, 1.0,
         "Beads' cohesion device rides the backdrop, at full strength"
@@ -591,7 +613,7 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
     spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
-    let (levels, _peaks) = spectrum.display(1.0).expect("audio is flowing");
+    let levels = spectrum.display(1.0).expect("audio is flowing");
     let peak = levels
         .iter()
         .enumerate()
@@ -610,7 +632,6 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
 #[test]
 fn spectrum_config_round_trips_through_persist() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.spectrum_config.show_audio = true;
     state.spectrum_config.floor_db = -48.0;
     state.spectrum_config.ceiling_db = -12.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
@@ -619,15 +640,11 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
     state.spectrum_config.spectrogram_opacity = 0.5;
     state.spectrum_config.spectrogram_gamma = 1.6;
-    state.spectrum_config.roll_outline_width = 2.5;
-    state.spectrum_config.roll_fill = 0.4;
-    state.spectrum_config.roll_edge = crate::RollEdge::Ends;
     state.spectrum_config.roll_gap = 2.0;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
-    assert!(restored.spectrum_config.show_audio);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
     assert_eq!(restored.spectrum_config.ceiling_db, -12.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);
@@ -638,9 +655,6 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
     assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
-    assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
-    assert_eq!(restored.spectrum_config.roll_fill, 0.4);
-    assert_eq!(restored.spectrum_config.roll_edge, crate::RollEdge::Ends);
     assert_eq!(restored.spectrum_config.roll_gap, 2.0);
 }
 
@@ -1714,12 +1728,13 @@ fn heatmap_contrast_bends_the_level_without_clipping_it() {
 }
 
 /// Palettes that no longer exist must still PARSE. Serde aliases fold them
-/// onto the default; without them the failed parse would drop the whole
-/// persist — layout, camera and every view setting with it — not just the
-/// palette. Injected as strings, since the enum can no longer name them.
+/// onto Magma, the nearest surviving ramp; without them the failed parse
+/// would drop the whole persist — layout, camera and every view setting with
+/// it — not just the palette. Injected as strings, since the enum can no
+/// longer name them.
 #[test]
-fn removed_spectrogram_palettes_load_as_heat() {
-    for removed in ["Pitch", "Paper"] {
+fn removed_spectrogram_palettes_load_as_magma() {
+    for removed in ["Heat", "Pitch", "Paper"] {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
         state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
         state.view.extent_sevens = 3;
@@ -1732,8 +1747,8 @@ fn removed_spectrogram_palettes_load_as_heat() {
         restored.load_persist(&saved);
         assert_eq!(
             restored.spectrum_config.spectrogram_color,
-            crate::SpectrogramColor::Heat,
-            "{removed} should fold onto the default",
+            crate::SpectrogramColor::Magma,
+            "{removed} should fold onto the nearest surviving ramp",
         );
         assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
     }

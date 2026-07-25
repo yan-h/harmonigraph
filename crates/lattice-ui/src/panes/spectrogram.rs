@@ -1474,10 +1474,6 @@ pub(super) fn cell_color(kind: SpectrogramColor, level: f32) -> Color32 {
     let t = level.clamp(0.0, 1.0);
     let rgb = match kind {
         SpectrogramColor::Mono => ramp(t, &[[0, 0, 0], [255, 255, 255]]),
-        SpectrogramColor::Heat => ramp(
-            t,
-            &[[0, 0, 0], [90, 0, 20], [200, 40, 20], [240, 150, 30], [255, 240, 180]],
-        ),
         SpectrogramColor::Ice => ramp(
             t,
             &[[0, 0, 0], [10, 20, 70], [20, 70, 180], [60, 180, 220], [220, 250, 255]],
@@ -1732,8 +1728,8 @@ mod tests {
 
     #[test]
     fn cells_are_opaque_and_run_dark_to_bright() {
-        let quiet = cell_color(SpectrogramColor::Heat, 0.0);
-        let loud = cell_color(SpectrogramColor::Heat, 1.0);
+        let quiet = cell_color(SpectrogramColor::Magma, 0.0);
+        let loud = cell_color(SpectrogramColor::Magma, 1.0);
         // Opaque throughout (opacity is applied as the quad tint, not here).
         assert_eq!(quiet.a(), 255);
         assert_eq!(loud.a(), 255);

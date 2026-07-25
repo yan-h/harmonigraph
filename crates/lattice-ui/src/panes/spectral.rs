@@ -66,13 +66,17 @@ fn span_readout(seconds: f32) -> String {
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     use crate::{
-        RollColor, RollEdge, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
+        RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
     };
 
-    // ---- Layout ---------------------------------------------------------
-    // Just the orientation now; drag the pane wherever you like (egui_dock
-    // docks it freely), and Auto follows the shape it lands in.
-    section(ui, "Layout");
+    // ---- Axes -----------------------------------------------------------
+    // Which way the plot runs, and how much of the pitch axis it shows. Time's
+    // own extent is the roll's Span, and lives with the roll — it is the one
+    // axis setting that means nothing without the layer it measures.
+    //
+    // A plain heading rather than `section`: this is the top of the pane, and
+    // a leading rule there is a line under nothing.
+    ui.heading("Axes");
     let cfg = &mut state.spectrum_config;
     choice_row(
         ui,
@@ -96,15 +100,49 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             ),
         ],
     );
-
-    // ---- Audio spectrum -------------------------------------------------
-    section(ui, "Spectrum");
-    ui.checkbox(&mut cfg.show_audio, "Audio spectrum").on_hover_text(
-        "Analyze and overlay the audio's spectrum, every partial at its \
-         actual pitch (plugin: the input bus; standalone: a synth on the \
-         held notes)",
+    // One control for both ends, because the two ends are one thing: the
+    // window onto the analyzer's axis. Dragged in MIDI note (which is what
+    // makes it a log-frequency zoom) and read out in Hz. Labelled, since a
+    // RangeBar carries no label of its own and the heading above is naming
+    // the group rather than this bar.
+    ui.label("Pitch range");
+    RangeBar::new(
+        &mut cfg.low_midi,
+        &mut cfg.high_midi,
+        lattice_core::spectrum::SPECTRUM_MIN_MIDI..=lattice_core::spectrum::SPECTRUM_MAX_MIDI,
+    )
+    .min_span(crate::PITCH_RANGE_MIN_SPAN)
+    .display(hz_readout)
+    .show(ui)
+    .on_hover_text(
+        "The slice of the spectrum on show. Drag either end to move it, drag \
+         between them to slide the whole range (it squishes when it meets an \
+         end), double-click for the full axis. The scale is logarithmic — \
+         equal distances are equal musical intervals — so an octave is the \
+         same width wherever it sits.\n\nOr set it on the display itself: drag \
+         the Analyzer pane across the pitch axis to pan the range, scroll to \
+         zoom it around the pointer. (Dragging the other way, along time, zooms \
+         the roll's Span instead.)",
+    );
+    choice_row(
+        ui,
+        "Labels",
+        &mut cfg.labels,
+        &[
+            (SpectrumLabels::Notes, "Notes", "A gridline at every C, Bitwig octave numbers"),
+            (
+                SpectrumLabels::Frequency,
+                "Frequency",
+                "Gridlines at 20, 50, 100 ... 10k, 20k Hz",
+            ),
+        ],
     );
 
+    // ---- Audio spectrum -------------------------------------------------
+    // Always analyzed: the pane IS the analyzer, the spectrogram reads the
+    // same buckets, and giving the whole depth axis to the roll is what the
+    // divider is for.
+    section(ui, "Spectrum");
     button_row(ui, |ui| {
         ui.label("Window");
         for (window, label) in [
@@ -158,55 +196,21 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             "Reference slope (dB/oct) that displays flat: 0 = raw power, \
              -3 flattens pink noise, -4.5 flattens typical material",
         );
+        // Monospace: five signed numbers side by side, where a
+        // proportional face gives "0.0" and "-1.5" different widths and
+        // leaves the row of buttons visibly uneven. Digits of one width
+        // make it a scale.
         for step in crate::TILT_STEPS {
-            ui.selectable_value(&mut cfg.tilt, step, format!("{step:.1}"));
+            let label = egui::RichText::new(format!("{step:.1}")).monospace();
+            ui.selectable_value(&mut cfg.tilt, step, label);
         }
     });
 
-    ui.checkbox(&mut cfg.peak_hold, "Peak hold")
-        .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
     ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Edge").show(ui).on_hover_text(
         "A light rim along the spectrum's profile and around each note \
          ribbon. Both sit over the spectrogram, whose colors run from black \
          to near-white, so either can end up the same brightness as what is \
          behind it and lose its shape. 0 draws none.",
-    );
-
-    // ---- Pitch axis -----------------------------------------------------
-    section(ui, "Pitch axis");
-    // One control for both ends, because the two ends are one thing: the
-    // window onto the analyzer's axis. Dragged in MIDI note (which is what
-    // makes it a log-frequency zoom) and read out in Hz.
-    RangeBar::new(
-        &mut cfg.low_midi,
-        &mut cfg.high_midi,
-        lattice_core::spectrum::SPECTRUM_MIN_MIDI..=lattice_core::spectrum::SPECTRUM_MAX_MIDI,
-    )
-    .min_span(crate::PITCH_RANGE_MIN_SPAN)
-    .display(hz_readout)
-    .show(ui)
-    .on_hover_text(
-        "The slice of the spectrum on show. Drag either end to move it, drag \
-         between them to slide the whole range (it squishes when it meets an \
-         end), double-click for the full axis. The scale is logarithmic — \
-         equal distances are equal musical intervals — so an octave is the \
-         same width wherever it sits.\n\nOr set it on the display itself: drag \
-         the Analyzer pane across the pitch axis to pan the range, scroll to \
-         zoom it around the pointer. (Dragging the other way, along time, zooms \
-         the roll's Span instead.)",
-    );
-    choice_row(
-        ui,
-        "Labels",
-        &mut cfg.labels,
-        &[
-            (SpectrumLabels::Notes, "Notes", "A gridline at every C, Bitwig octave numbers"),
-            (
-                SpectrumLabels::Frequency,
-                "Frequency",
-                "Gridlines at 20, 50, 100 ... 10k, 20k Hz",
-            ),
-        ],
     );
 
     // ---- Piano roll -----------------------------------------------------
@@ -229,55 +233,13 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              display itself: drag the roll along the time axis, away from the \
              now-line to zoom in.",
         );
-    ValueBar::new(&mut cfg.roll_thickness, 0.2..=8.0, "Note width")
+    ValueBar::new(&mut cfg.roll_thickness, 0.2..=2.0, "Note width")
         .show(ui)
         .on_hover_text(
             "Ribbon width in semitones of the pitch axis — so it holds its \
              musical meaning as the pitch range is zoomed, and a note is as \
              wide as the interval it would cover",
         );
-    ValueBar::new(&mut cfg.roll_fill, 0.0..=1.0, "Fill")
-        .show(ui)
-        .on_hover_text(
-            "How solidly a note's interior is painted in its own color. 0 \
-             leaves it a hollow outline with the spectrogram showing straight \
-             through; 1 fills it. In between is a wash the heatmap still reads \
-             through.",
-        );
-    ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
-        .show(ui)
-        .on_hover_text(
-            "Width of the band of the note's own color straddling its edge. \
-             With Fill up this just fattens the note; with Fill at 0 it is the \
-             whole of it.",
-        );
-    choice_row(
-        ui,
-        "Edges",
-        &mut cfg.roll_edge,
-        &[
-            (
-                RollEdge::Around,
-                "Around",
-                "All the way around a note, corners included. (Where the white \
-                 keyline rides; Edge, up in Spectrum, sets how bright it is.)",
-            ),
-            (
-                RollEdge::Sides,
-                "Sides",
-                "The long edges only — above and below a note in Across, either \
-                 side of it in Upright. The keyline never grows along time, so \
-                 repeats of one key butt together cleanly instead of painting \
-                 their highlights over each other",
-            ),
-            (
-                RollEdge::Ends,
-                "Ends",
-                "The onset and release only — a marker across each end of a \
-                 note, and nothing along its length",
-            ),
-        ],
-    );
     ValueBar::new(&mut cfg.roll_gap, 0.0..=6.0, "Gap")
         .decimals(1)
         .show(ui)
@@ -309,7 +271,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
 
     // ---- Spectrogram ----------------------------------------------------
     section(ui, "Spectrogram");
-    ui.checkbox(&mut cfg.show_spectrogram, "Spectrogram").on_hover_text(
+    ui.checkbox(&mut cfg.show_spectrogram, "Heatmap").on_hover_text(
         "A frequency-vs-time heatmap of the audio, drawn in the roll's \
          region on the same time axis — so each column of energy lines up \
          with the notes that made it. Shares the Spectrum's Floor and Tilt \
@@ -321,7 +283,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         &mut cfg.spectrogram_color,
         &[
             (SpectrogramColor::Mono, "Mono", "Grayscale; the most neutral over the roll"),
-            (SpectrogramColor::Heat, "Heat", "Black-red-orange-yellow-white"),
             (SpectrogramColor::Ice, "Ice", "Black-blue-cyan-white"),
             (SpectrogramColor::Aurora, "Aurora", "Violet-teal-green-yellow (even ramp)"),
             (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),
@@ -1076,8 +1037,8 @@ pub(crate) fn spectral_pane(
     // Audio spectrum: the FFT of the shell's audio source, every partial
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
-    if cfg.show_audio && split > 0.0 {
-        if let Some((levels, peaks)) = state.spectrum.display(now) {
+    if split > 0.0 {
+        if let Some(levels) = state.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each taking the loudest bucket that
             // falls in it — not one slab per bucket. The axis holds thousands
@@ -1091,17 +1052,14 @@ pub(crate) fn spectral_pane(
                     .clamp(0, levels.len() as isize - 1) as usize
             };
             let cols = (axes.pitch_len().round() as usize).clamp(2, 4096);
-            let visible: Vec<(f32, f32, f32, f32)> = (0..cols)
+            let visible: Vec<(f32, f32, f32)> = (0..cols)
                 .map(|c| {
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
                     let (b0, b1) = (bucket_at(edge(c)), bucket_at(edge(c + 1)));
-                    let (mut level, mut peak) = (0.0f32, 0.0f32);
-                    for b in b0..=b1.max(b0) {
-                        level = level.max(levels[b]);
-                        peak = peak.max(peaks[b]);
-                    }
+                    let level =
+                        levels[b0..=b1.max(b0)].iter().fold(0.0f32, |a, &b| a.max(b));
                     let t = (c as f32 + 0.5) / cols as f32;
-                    (scale.min_midi + t * scale.span, t, level, peak)
+                    (scale.min_midi + t * scale.span, t, level)
                 })
                 .collect();
 
@@ -1121,7 +1079,7 @@ pub(crate) fn spectral_pane(
             // enough to read as a solid fill; densely packed, their tops make
             // the shape's edge (no separate line to fray).
             let slab = axes.pitch_len() / cols as f32 + 0.5;
-            for &(midi, t, level, _) in &visible {
+            for &(midi, t, level) in &visible {
                 let d = d_of(level, midi);
                 if d * axes.depth_len() > 0.5 {
                     painter.line_segment(
@@ -1140,17 +1098,9 @@ pub(crate) fn spectral_pane(
             if let Some(edge) = super::roll::keyline(&cfg, 1.0) {
                 let top: Vec<egui::Pos2> = visible
                     .iter()
-                    .map(|&(midi, t, level, _)| axes.at(t, sd(d_of(level, midi))))
+                    .map(|&(midi, t, level)| axes.at(t, sd(d_of(level, midi))))
                     .collect();
                 painter.add(egui::Shape::line(top, egui::Stroke::new(1.0, edge)));
-            }
-            if cfg.peak_hold {
-                // The one remaining line: a decaying trace of recent maxima,
-                // in the palette's loud color.
-                let loud = super::spectrogram::cell_color(cfg.spectrogram_color, 1.0);
-                let pts: Vec<egui::Pos2> =
-                    visible.iter().map(|&(m, t, _, pk)| axes.at(t, sd(d_of(pk, m)))).collect();
-                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 150))));
             }
         }
     }
@@ -1982,7 +1932,6 @@ mod tests {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = orientation;
         state.spectrum_config.roll_fraction = roll_fraction;
-        state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_seconds = 10.0;
         state.view.bloom_strength = 1.2; // exercise the note-glow passes
         // Exercise the spectrogram's mesh path in every orientation too, with
