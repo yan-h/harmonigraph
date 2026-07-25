@@ -38,18 +38,19 @@ pub type ColumnDb = [BucketDb; SPECTRUM_BINS];
 
 /// The dB a stored `0` byte stands for, and the step between bytes.
 ///
-/// The pair covers -100 dB to +27.5 dB. The floor is well under the level the
-/// display treats as silence outright (-90 dB, `NEAR_ZERO` in the spectrogram
-/// pane), so quantizing introduces no floor of its own; the ceiling is far
-/// above a full-scale sine's 0 dB, so nothing real clips against it. Half a dB
-/// of step is under a twentieth of the narrowest dB window the range bar can be
-/// dragged to, i.e. well inside one step of the 8-bit colour ramp it ends up in.
-pub const DB_FLOOR: f32 = -100.0;
+/// The pair covers -120 dB to +7.5 dB. The floor is exactly where the display's
+/// own mapping bottoms out (`loudness` clamps power at 1e-12) and exactly where
+/// the heatmap's range bar stops, so the quietest cell the UI can ask to see is
+/// the quietest byte there is — the encoding adds no floor of its own, and
+/// nothing fades out early against one. The ceiling sits above a full-scale
+/// sine's 0 dB, which is already saturated white at any range the bars allow,
+/// so nothing visible clips against it either.
+pub const DB_FLOOR: f32 = -120.0;
 pub const DB_STEP: f32 = 0.5;
 
 /// Power at or below [`DB_FLOOR`] — the many empty buckets of a typical
 /// spectrum, which [`quantize`] answers without reaching for a `log10`.
-const POWER_FLOOR: f32 = 1e-10;
+const POWER_FLOOR: f32 = 1e-12;
 
 /// Store a bucket's absolute power (as [`crate::spectrum::SpectrumAnalyzer`]
 /// reports it) as a byte of dB.
@@ -324,15 +325,20 @@ mod tests {
     /// started, across the whole range the display can read.
     #[test]
     fn quantizing_round_trips_to_half_a_step() {
-        for db in [-100.0f32, -90.0, -60.0, -30.0, -12.0, -0.5, 0.0, 6.0, 20.0] {
+        // The whole span the display can be asked to show: its dB window stops
+        // at -120 dB, and 0 dB (a full-scale sine) is the top of every range bar.
+        for db in [-120.0f32, -110.0, -100.0, -90.0, -60.0, -30.0, -12.0, -0.5, 0.0, 6.0] {
             let power = 10.0f32.powf(db / 10.0);
             let back = db_of(quantize(power));
             assert!((back - db).abs() <= DB_STEP * 0.5 + 1e-3, "{db} dB came back as {back} dB");
         }
-        // Out of range in both directions saturates rather than wrapping.
+        // Out of range in both directions saturates rather than wrapping. The
+        // top is 7.5 dB — five times a full-scale sine, and far above any
+        // ceiling the bars offer, so what saturates there was already white.
         assert_eq!(quantize(0.0), 0);
         assert_eq!(quantize(1e-30), 0);
         assert_eq!(quantize(1e9), 255);
+        assert!(db_of(255) >= 6.0, "no headroom left above a full-scale sine");
     }
 
     /// The flat view has to behave exactly like the single queue it replaced:

@@ -21,12 +21,6 @@ use lattice_scene::FrameParams;
 use super::spectral::{spectrogram_level_db, Axes, PitchScale, TimeAxis};
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
-/// A bucket at or below this reads as flat silence — skips the level mapping
-/// for the many empty buckets, without changing the look. The same threshold as
-/// the power one it replaced (1e-9 power is -90 dB), just stated in the domain
-/// the columns are now stored in.
-const NEAR_ZERO_DB: f32 = -90.0;
-
 /// Most time slabs a live window is ever cut into, whatever the pane's size —
 /// and so, with the window, the FINEST slab any given moment can be drawn into.
 /// That is what [`SpectrumHistory`](lattice_core::SpectrumHistory) sizes its
@@ -783,13 +777,18 @@ fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[BucketDb]) -> Vec<Col
 }
 
 /// One cell's 0..1 loudness from its stored byte.
+///
+/// Deliberately unguarded. There used to be a shortcut here — anything under
+/// -90 dB was answered as flat silence without consulting the mapping, on the
+/// grounds that it "would land at 0 anyway" and it saved a `log10` for the many
+/// empty buckets of a typical spectrum. Both halves of that stopped being true:
+/// the dB window became draggable down to -120 dB, which makes -90 dB a
+/// perfectly visible tenth of the way up the ramp, and the columns became dB
+/// already, so there is no `log10` left to skip. What the shortcut actually did
+/// was cut the ramp off at -90 dB — the faintest colour dropping straight to
+/// black, with the whole quiet end of a wide window missing behind the cliff.
 fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    let db = db_of(bucket);
-    if db <= NEAR_ZERO_DB {
-        0.0
-    } else {
-        spectrogram_level_db(cfg, db, midi)
-    }
+    spectrogram_level_db(cfg, db_of(bucket), midi)
 }
 
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
@@ -1008,6 +1007,40 @@ mod tests {
         cfg.spectrogram_own_range = true;
         cfg.spectrogram_floor_db = -120.0;
         assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "an empty bucket must read as silence");
+    }
+
+    /// The quiet end of the ramp must FADE to black, not fall off a cliff into
+    /// it. A shortcut used to answer everything under -90 dB as silence, which
+    /// was invisible while the dB window bottomed out above that and became a
+    /// hard edge — faintest colour straight to black — the moment the window
+    /// could be dragged below it. Nothing between two adjacent stored bytes may
+    /// move the level by more than the step between them.
+    #[test]
+    fn the_quiet_end_of_the_ramp_fades_instead_of_cutting_off() {
+        let mut cfg = SpectrumConfig {
+            spectrogram_own_range: true,
+            spectrogram_ceiling_db: 0.0,
+            ..SpectrumConfig::default()
+        };
+        for floor in [-60.0f32, -90.0, -100.0, -120.0] {
+            cfg.spectrogram_floor_db = floor;
+            // One byte of dB, as a fraction of the window it is drawn in; the
+            // levels either side of any byte may differ by that and no more.
+            let step = lattice_core::spectrogram::DB_STEP / (cfg.spectrogram_ceiling_db - floor);
+            for bucket in 0..u8::MAX {
+                let (here, next) = (bin_level(&cfg, bucket, 60.0), bin_level(&cfg, bucket + 1, 60.0));
+                assert!(
+                    next - here <= step * 1.001 && next >= here,
+                    "floor {floor}: byte {bucket} ({}) -> {} jumps by {}, one step is {step}",
+                    here,
+                    next,
+                    next - here,
+                );
+            }
+            // And the bottom byte is black at every window, so silence still
+            // recedes into the region's bed rather than glowing.
+            assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "floor {floor}: silence must be black");
+        }
     }
 
     #[test]
