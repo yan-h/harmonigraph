@@ -1109,12 +1109,9 @@ fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
         .unwrap_or_else(|| panic!("no {want:?} drawn, got {texts:?}"))
 }
 
-/// The style the label tests draw with: the default design, at the default
-/// weight. Which design is on top does not change any layout below.
-const TEST_MARKS: panes::lattice::MarkStyle = panes::lattice::MarkStyle {
-    glyph: lattice_scene::SeptimalGlyph::Triangle,
-    weight: 0.14,
-};
+/// The stroke weight the label tests draw their marks at. Nothing below
+/// depends on the number; the marks only have to be present and placed.
+const TEST_MARK_WEIGHT: f32 = 0.10;
 
 /// A label's text pieces AND the boxes of its drawn marks.
 ///
@@ -1142,7 +1139,7 @@ fn drawn_label(
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
                 1.0,
-                TEST_MARKS,
+                TEST_MARK_WEIGHT,
             );
         },
     );
@@ -1222,12 +1219,16 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     );
 }
 
-/// The septimal mark says its direction twice: by the shape it is drawn as,
-/// and by which end of the column it sits at. The second cue is the one that
-/// survives a node small enough that the shape is a few pixels across, so it
-/// has to actually be there.
+/// The septimal mark sits ACROSS the divide between the accidental and the
+/// comma, not in either slot.
+///
+/// It belongs to a different prime than the two it sits beside, and it is
+/// placed to say so: centered on the letter's own line, with air before it.
+/// It used to take one slot or the other as a second cue for its direction,
+/// which put it in the stack it is not part of; the chevron carries its own
+/// direction, so the slot is free to mean this instead.
 #[test]
-fn the_septimal_mark_takes_its_direction_from_the_slot_as_well_as_the_shape() {
+fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
     let anchor = egui::pos2(200.0, 200.0);
     let mark_of = |septimal_commas: i32| {
         let name = lattice_core::NoteName {
@@ -1239,16 +1240,14 @@ fn the_septimal_mark_takes_its_direction_from_the_slot_as_well_as_the_shape() {
         let (_, shapes) = drawn_label(name, anchor);
         shapes.into_iter().reduce(|a, b| a.union(b)).expect("a septimal mark should be drawn")
     };
-    // One step UP the sevens axis lands a comma BELOW its namesake, so the
-    // mark points down -- and sits low.
-    assert!(
-        mark_of(-1).center().y > anchor.y,
-        "a lowering septimal mark belongs at the bottom of its column"
-    );
-    assert!(
-        mark_of(1).center().y < anchor.y,
-        "a raising septimal mark belongs at the top of its column"
-    );
+    // Both directions sit on the same line, and it is the letter's own.
+    for commas in [-1, 1] {
+        let mark = mark_of(commas);
+        assert!(
+            (mark.center().y - anchor.y).abs() < 1.0,
+            "a septimal mark belongs on the letter's line, got {mark:?} against {anchor:?}"
+        );
+    }
     // A home-sheet name draws no mark at all.
     let (_, none) = drawn_label(
         lattice_core::NoteName {

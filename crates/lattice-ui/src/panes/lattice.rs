@@ -5,7 +5,7 @@ use super::{display_note_name, learn_pulse};
 use crate::{theme, SharedState};
 use egui::Sense;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{derive_scene, Camera, Projection, SeptimalGlyph, SevensLabel, TrailMark};
+use lattice_scene::{derive_scene, Camera, Projection, SevensLabel, TrailMark};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -226,9 +226,9 @@ pub(crate) fn draw_node_labels(
                 outline,
                 scale,
             ),
-            SevensLabel::Name | SevensLabel::Comma => {
+            SevensLabel::Name => {
                 let name = display_note_name(node.lattice_pos, view.meantone);
-                let bottom = draw_stacked_name(
+                draw_stacked_name(
                     batch,
                     ui.painter(),
                     center,
@@ -236,25 +236,8 @@ pub(crate) fn draw_node_labels(
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
-                    MarkStyle { glyph: view.septimal_glyph, weight: view.mark_weight },
-                );
-                if sevens == SevensLabel::Comma {
-                    // The signed distance to the home-sheet node wearing
-                    // this very name — the septimal comma, and the only
-                    // part of the label that differs between sheets.
-                    draw_plain_name(
-                        batch,
-                        ui.painter(),
-                        center + egui::vec2(0.0, bottom + CENTS_GAP * scale),
-                        &format!("{:+.0}", node.comma),
-                        theme::armed().gamma_multiply(strength),
-                        outline,
-                        scale * 0.72,
-                    ) + bottom
-                        + CENTS_GAP * scale
-                } else {
-                    bottom
-                }
+                    view.mark_weight,
+                )
             }
         };
         // The cents line is the home sheet's business: off the home sheet
@@ -304,15 +287,6 @@ const MARK_SCALE: f32 = 0.55;
 /// The size the marks are actually laid out at.
 pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
 
-/// Which of the drawn septimal designs to use, and how heavy to draw every
-/// mark that is geometry rather than type. Both are being compared rather
-/// than settled; see [`SeptimalGlyph`].
-#[derive(Clone, Copy)]
-pub(crate) struct MarkStyle {
-    pub glyph: SeptimalGlyph,
-    pub weight: f32,
-}
-
 /// Iosevka Fixed's advance, as a fraction of the em: every cell is half an
 /// em wide. A drawn mark claims exactly this, so it sits in the same column
 /// grid as the typeset accidental above it.
@@ -323,6 +297,11 @@ const MARK_ADVANCE: f32 = 0.5;
 const MARK_INK_W: f32 = 0.372;
 /// And the height of `+`'s upright (386/1000 em).
 const PLUS_INK_H: f32 = 0.386;
+/// Air between the accidental/comma column and the septimal mark, as a
+/// fraction of the mark's font size. Small: enough that the mark is not
+/// read as another row of the stack it sits beside, not so much that it
+/// floats free of the name it belongs to.
+const SEPTIMAL_GAP: f32 = 0.22;
 /// How much larger the septimal shape draws than that `+` box. A triangle
 /// covers half its bounding box, so drawn to the same box it reads as the
 /// lighter mark of the two; this is the size at which the pair looks like
@@ -336,7 +315,6 @@ const SEPTIMAL_BULK: f32 = 1.25;
 /// none of the artifacts of drawing them separately can arise.
 enum MarkPiece {
     Bar(egui::Rect),
-    Solid(Vec<egui::Pos2>),
     Line(Vec<egui::Pos2>, f32),
 }
 
@@ -345,19 +323,6 @@ impl MarkPiece {
     fn covers(&self, p: egui::Pos2) -> bool {
         match self {
             MarkPiece::Bar(rect) => rect.contains(p),
-            MarkPiece::Solid(points) => {
-                // Convex, consistently wound: inside means the same side of
-                // every edge.
-                let mut neg = false;
-                let mut pos = false;
-                for i in 0..points.len() {
-                    let (a, b) = (points[i], points[(i + 1) % points.len()]);
-                    let cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
-                    neg |= cross < 0.0;
-                    pos |= cross > 0.0;
-                }
-                !(neg && pos)
-            }
             MarkPiece::Line(points, width) => points
                 .windows(2)
                 .any(|seg| point_to_segment(p, seg[0], seg[1]) <= width / 2.0),
@@ -392,8 +357,15 @@ struct MarkKey {
 enum MarkKind {
     Minus,
     Plus,
-    /// A septimal design, and whether it points up.
-    Septimal(SeptimalGlyph, bool),
+    /// The septimal mark -- a chevron -- and whether it points up.
+    ///
+    /// A chevron out of four designs built to be compared: it is the
+    /// lightest of them, and the only one whose weight reads as belonging
+    /// with the `+`/`-` rather than as a second, heavier kind of mark. The
+    /// others (filled and hollow triangles, a stemmed arrow) are deleted
+    /// rather than kept switchable -- a comparison that has been made is
+    /// not a setting.
+    Septimal(bool),
 }
 
 /// A mark's geometry in its bitmap's pixel space, with the bitmap size.
@@ -408,7 +380,7 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
     let size = key.size_px as f32;
     let thick = key.weight_16 as f32 / 16.0;
     let (w, h) = match key.kind {
-        MarkKind::Septimal(..) => (
+        MarkKind::Septimal(_) => (
             MARK_INK_W * size * SEPTIMAL_BULK,
             PLUS_INK_H * size * SEPTIMAL_BULK,
         ),
@@ -428,34 +400,14 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
             MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(w, thick))),
             MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(thick, h))),
         ],
-        MarkKind::Septimal(glyph, up) => {
-            // Point-toward-the-tip: -1 draws upward, +1 downward, so each
-            // design is written once and mirrored by arithmetic.
+        MarkKind::Septimal(up) => {
+            // Point-toward-the-tip: -1 draws upward, +1 downward, so the
+            // shape is written once and mirrored by arithmetic.
             let dir = if up { -1.0 } else { 1.0 };
             let tip = egui::pos2(c.x, c.y + dir * hh);
             let base_l = egui::pos2(c.x - hw, c.y - dir * hh);
             let base_r = egui::pos2(c.x + hw, c.y - dir * hh);
-            match glyph {
-                SeptimalGlyph::Triangle => vec![MarkPiece::Solid(vec![tip, base_l, base_r])],
-                SeptimalGlyph::Hollow => {
-                    vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick)]
-                }
-                SeptimalGlyph::Arrow => {
-                    // Head over the outer end, stem down the middle. They
-                    // may overlap freely: this is a coverage bitmap, so an
-                    // overlap costs nothing where a composite would show.
-                    let neck = c.y + dir * hh * 0.1;
-                    vec![
-                        MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(thick, h))),
-                        MarkPiece::Solid(vec![
-                            tip,
-                            egui::pos2(c.x - hw, neck),
-                            egui::pos2(c.x + hw, neck),
-                        ]),
-                    ]
-                }
-                SeptimalGlyph::Chevron => vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)],
-            }
+            vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)]
         }
     };
     (pieces, [bw as usize, bh as usize])
@@ -623,7 +575,7 @@ pub(crate) fn draw_stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
-    marks: MarkStyle,
+    mark_weight: f32,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
@@ -659,7 +611,10 @@ pub(crate) fn draw_stacked_name(
         .x
         .max(signed_width(&syntonic, name.syntonic_commas != 0));
     let septimal_column = signed_width(&septimal, name.septimal_commas != 0);
-    let left = anchor.x - (letter.x + column + septimal_column) / 2.0;
+    // Air between the accidental column and the septimal mark, so the mark
+    // reads as its own thing rather than as a third row of the stack.
+    let gap = if name.septimal_commas != 0 { SEPTIMAL_GAP * mark_size } else { 0.0 };
+    let left = anchor.x - (letter.x + column + gap + septimal_column) / 2.0;
 
     batch.text(
         painter,
@@ -693,7 +648,7 @@ pub(crate) fn draw_stacked_name(
                            count: &str,
                            kind: MarkKind|
      -> f32 {
-        let key = mark_key(kind, mark_size, marks.weight, ppp);
+        let key = mark_key(kind, mark_size, mark_weight, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
         paint_mark(painter, ppp, key, center, color, outline);
         if !count.is_empty() {
@@ -720,15 +675,17 @@ pub(crate) fn draw_stacked_name(
         bottom = bottom.max(draw_signed(left + letter.x, 1.0, &syntonic, kind));
     }
     if name.septimal_commas != 0 {
-        let up = name.septimal_commas > 0;
-        // Up marks sit high and down marks sit low, so the column's own
-        // geometry says the same thing the shape does.
-        let direction = if up { -1.0 } else { 1.0 };
+        // Centered on the letter's own line -- the seam between the
+        // accidental riding above it and the comma sitting below -- rather
+        // than in one slot or the other. It is not a third member of that
+        // stack: it belongs to a different prime, and sitting across the
+        // divide with a gap before it is what says so. The chevron carries
+        // its own direction, so the slot is free to mean this instead.
         bottom = bottom.max(draw_signed(
-            left + letter.x + column,
-            direction,
+            left + letter.x + column + gap,
+            0.0,
             &septimal,
-            MarkKind::Septimal(marks.glyph, up),
+            MarkKind::Septimal(name.septimal_commas > 0),
         ));
     }
     bottom
@@ -847,6 +804,32 @@ mod tests {
                 assert_eq!(coverage(&img, x, y), coverage(&img, x, h - 1 - y));
             }
         }
+    }
+
+    /// The septimal mark's direction lives in the shape: up and down are
+    /// each other's mirror, which is the whole of what tells them apart now
+    /// that both sit on the same line.
+    #[test]
+    fn the_septimal_chevron_mirrors_with_its_direction() {
+        let up = rasterize_mark(mark_key(MarkKind::Septimal(true), 12.0, 0.10, 2.0));
+        let down = rasterize_mark(mark_key(MarkKind::Septimal(false), 12.0, 0.10, 2.0));
+        assert_eq!(up.size, down.size);
+        let [w, h] = up.size;
+        for y in 0..h {
+            for x in 0..w {
+                assert_eq!(
+                    coverage(&up, x, y),
+                    coverage(&down, x, h - 1 - y),
+                    "up and down disagree at {x},{y}"
+                );
+            }
+        }
+        // And it is NOT its own vertical mirror, or the two would be
+        // indistinguishable and the mark would say nothing.
+        assert!(
+            (0..h).any(|y| (0..w).any(|x| coverage(&up, x, y) != coverage(&up, x, h - 1 - y))),
+            "a chevron that mirrors onto itself carries no direction"
+        );
     }
 
     /// The stroke floor is one PHYSICAL pixel, not one point -- a point is

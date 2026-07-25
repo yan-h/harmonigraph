@@ -171,62 +171,34 @@ pub enum LegacyNodeBody {
 /// What text an OFF-SHEET node's label carries — a node on any sevens sheet
 /// but the center one.
 ///
-/// Their names are the reason this exists.
+/// This used to exist because the name was WRONG off the home sheet.
 /// [`LatticePos::note_name`](lattice_core::LatticePos::note_name) walks the
-/// chain of fifths with `1 + threes + fives*4 - sevens*2`, and nothing
-/// anywhere adds a septimal mark, so **every sevens step spells exactly like
-/// two fifths down**: `(0,0,1)` and `(-2,0,0)` are both `B♭`, 27 cents apart.
-/// On a three-sheet view each name appears three times at three different
-/// pitches — in the biggest glyph on the node. Off the home sheet the name is
-/// not merely uninformative; it asserts something false.
+/// chain of fifths with `1 + threes + fives*4 - sevens*2`, and nothing added
+/// a septimal mark, so every sevens step spelled exactly like two fifths
+/// down: `(0,0,1)` and `(-2,0,0)` were both `B♭`, 27 cents apart. A name
+/// that appeared three times at three pitches was not merely uninformative;
+/// it asserted something false, and the alternatives here were ways of not
+/// saying it.
+///
+/// The name now carries a septimal mark, so it is true on every sheet and
+/// [`Name`](SevensLabel::Name) is the default again. What is left is a
+/// choice of how much a small off-sheet node should say, which is a look.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SevensLabel {
-    /// The same name the home sheet gets, ambiguity and all. What a view
-    /// saved before this setting existed keeps.
+    /// The note name, which off the home sheet now carries the septimal
+    /// mark that tells it from its namesake.
+    ///
+    /// Aliases the retired `Comma` mode — the name plus the signed cents to
+    /// that namesake — which existed to supply exactly the information the
+    /// mark now carries in the name itself.
     #[default]
+    #[serde(alias = "Comma")]
     Name,
     /// The pitch class in cents under the current tuning, alone. Says what
     /// the node is and nothing it isn't, at the cost of saying where it is.
     Cents,
-    /// The shared name, plus the signed cents to the home-sheet node it
-    /// shares that name with — the septimal comma, ±27¢ at just intonation.
-    /// Keeps the letter for orientation and adds precisely the information
-    /// the name refuses to carry. The fifth, third and seventh are all
-    /// tunable, so the number moves: it reads out how far the sevens axis
-    /// sits from the name it inherits.
-    Comma,
     /// No text at all. The octave band, the marks and the color carry the
     /// node; text is what the home sheet gets and the sevens layer does
     /// without.
     None,
-}
-
-/// Which shape the septimal mark is DRAWN as.
-///
-/// It is drawn rather than typeset because no character in the bundled
-/// Iosevka subset can carry it: the subset holds exactly four arrow glyphs
-/// (`←↑→↓`) and no triangles, and an arrow puts its direction in the head --
-/// a 1px detail at the size a mark actually renders, which is `MARK_SIZE`
-/// (8.25pt) times the off-sheet floor. Geometry lets the weight be chosen in
-/// pixels instead of inherited from a typeface designed for body text.
-///
-/// This enum exists to be DELETED. Four designs are hard to rank by
-/// reasoning about them and easy to rank by looking, so they ship together
-/// and the winner gets hardcoded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
-pub enum SeptimalGlyph {
-    /// Filled triangle. The most ink and the most robust silhouette: the
-    /// direction is the whole shape, so nothing about it is a small detail
-    /// that can blur away.
-    #[default]
-    Triangle,
-    /// The triangle's outline only. Lighter beside the letter, at the cost
-    /// of an interior that closes up as it shrinks.
-    Hollow,
-    /// Stem plus a solid head -- an arrow, but with the head sized for this
-    /// use rather than for a text face.
-    Arrow,
-    /// The head alone, as a stroked V. The lightest of the four, and the
-    /// only one whose weight reads like the `+`/`-` beside it.
-    Chevron,
 }

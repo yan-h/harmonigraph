@@ -4,8 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SeptimalGlyph,
-    SevensLabel,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SevensLabel,
 };
 use crate::trail::TrailMark;
 use lattice_core::{coords, LatticePos};
@@ -102,10 +101,6 @@ pub struct ViewConfig {
     /// Only meaningful while `show_labels` is on.
     #[serde(default = "default_sevens_label")]
     pub sevens_label: SevensLabel,
-    /// Which shape the drawn septimal mark takes (see [`SeptimalGlyph`]).
-    /// Temporary: it is here to be compared and then decided.
-    #[serde(default)]
-    pub septimal_glyph: SeptimalGlyph,
     /// Stroke weight of the DRAWN label marks (`+`, `-`, and the septimal
     /// shape), as a fraction of the mark's own font size.
     ///
@@ -619,8 +614,7 @@ impl Default for ViewConfig {
             // past it.
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
-            sevens_label: SevensLabel::Comma,
-            septimal_glyph: SeptimalGlyph::Triangle,
+            sevens_label: SevensLabel::Name,
             mark_weight: default_mark_weight(),
             show_labels: true,
             show_cents: true,

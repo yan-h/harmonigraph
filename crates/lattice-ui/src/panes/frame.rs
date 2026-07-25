@@ -14,7 +14,6 @@ use crate::{CameraPreset, SharedState};
 use super::normalize_deg;
 use lattice_scene::Camera;
 use lattice_scene::Projection;
-use lattice_scene::SeptimalGlyph;
 use lattice_scene::SevensLabel;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
@@ -224,11 +223,10 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             &mut state.view.sevens_label,
             &[
                 (
-                    SevensLabel::Comma,
-                    "Comma",
-                    "The name, plus the signed cents to the home-sheet note \
-                     that wears the same name -- the septimal comma, which \
-                     moves as you retune",
+                    SevensLabel::Name,
+                    "Name",
+                    "The note name, carrying the septimal mark that tells it \
+                     from the node two fifths down that shares its letter",
                 ),
                 (
                     SevensLabel::Cents,
@@ -236,48 +234,10 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
                     "The pitch class alone, in cents. Says what the node is \
                      and nothing it isn't",
                 ),
-                (
-                    SevensLabel::Name,
-                    "Name",
-                    "The note name, as the home sheet gets. Note that it is \
-                     the SAME name the node two fifths down wears: the \
-                     spelling carries no sevenths information at all",
-                ),
                 (SevensLabel::None, "None", "No text off the home sheet"),
             ],
         );
     });
-    choice_row(
-        ui,
-        "Septimal mark",
-        &mut state.view.septimal_glyph,
-        &[
-            (
-                SeptimalGlyph::Triangle,
-                "Triangle",
-                "Filled. The most ink, and its direction is the whole \
-                 silhouette rather than a detail that can blur away",
-            ),
-            (
-                SeptimalGlyph::Hollow,
-                "Hollow",
-                "The triangle's outline only -- lighter beside the letter, \
-                 at the cost of an interior that closes up as it shrinks",
-            ),
-            (
-                SeptimalGlyph::Arrow,
-                "Arrow",
-                "Stem plus a solid head, with the head sized for a mark \
-                 rather than for running text",
-            ),
-            (
-                SeptimalGlyph::Chevron,
-                "Chevron",
-                "The head alone. The lightest of the four, and the only one \
-                 whose weight matches the +/- beside it",
-            ),
-        ],
-    );
     ValueBar::new(&mut state.view.mark_weight, 0.04..=0.20, "Mark weight")
         .show(ui)
         .on_hover_text(
