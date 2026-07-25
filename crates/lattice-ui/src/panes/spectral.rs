@@ -307,7 +307,19 @@ const TILT_PIVOT_MIDI: f32 = 83.213_1;
 /// spectrogram's cell intensity both read from this, so the two always agree
 /// on what "loud" means for a given bucket.
 pub(crate) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
-    let db = 10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+    loudness_db(cfg, power_db(power), midi)
+}
+
+/// A bucket's power as dB — the form the spectrogram's history already stores,
+/// and the only thing [`loudness`] does with power before mapping it.
+pub(crate) fn power_db(power: f32) -> f32 {
+    10.0 * power.max(1e-12).log10()
+}
+
+/// [`loudness`] from a bucket already in dB, so the heatmap (whose columns are
+/// stored that way) never takes a `log10` per pixel.
+pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
+    let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     // Never trust the pair to be ordered or apart, exactly as the pitch range
     // is not trusted: the bar can't produce a collapsed one, a hand-edited
     // state blob can, and dividing by its zero span paints NaN geometry that
@@ -317,23 +329,24 @@ pub(crate) fn loudness(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f3
 }
 
 /// [`loudness`] as the SPECTROGRAM sees it: its own dB window when it has been
-/// given one, then its contrast curve.
+/// given one, then its contrast curve. Takes the bucket in dB, which is how its
+/// history stores it, so there is no `log10` per pixel.
 ///
 /// Split from the curve's mapping because the two are read differently. The
 /// curve is read as a shape against a baseline, so its range wants to keep
 /// peaks on the pane; the heatmap is read as a picture, so its range wants to
 /// lift quiet partials clear of the background. Sharing one range meant
 /// tuning either one spoiled the other.
-pub(crate) fn spectrogram_level(cfg: &crate::SpectrumConfig, power: f32, midi: f32) -> f32 {
+pub(crate) fn spectrogram_level_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let level = if cfg.spectrogram_own_range {
-        let db = 10.0 * power.max(1e-12).log10() - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
+        let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
         // Same guard as `loudness`: a collapsed pair out of a hand-edited blob
         // would divide by a zero span and paint NaN geometry.
         let floor = cfg.spectrogram_floor_db;
         let ceiling = cfg.spectrogram_ceiling_db.max(floor + crate::LEVEL_RANGE_MIN_SPAN);
         ((db - floor) / (ceiling - floor)).clamp(0.0, 1.0)
     } else {
-        loudness(cfg, power, midi)
+        loudness_db(cfg, power_db, midi)
     };
     // powf(1.0) is not free and gamma sits at 1 unless touched, so skip it.
     let gamma = cfg.spectrogram_gamma;
@@ -1472,7 +1485,7 @@ mod tests {
         bins[lattice_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
         bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.4;
         for i in 0..40 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, bins);
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
         }
 
         // ONE context across both frames, as in the live app: the cache hands
@@ -1707,7 +1720,7 @@ mod tests {
         spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS / 2] = 0.5;
         spectrum_bins[lattice_core::spectrum::SPECTRUM_BINS - 1] = 0.3;
         for i in 0..80 {
-            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, spectrum_bins);
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.125, &spectrum_bins);
         }
 
         let on = |time, note| NoteEvent {
