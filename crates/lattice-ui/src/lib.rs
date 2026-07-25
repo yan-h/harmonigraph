@@ -141,7 +141,9 @@ pub enum PitchLanes {
     /// to now. What is left once you know which lane is which and only want
     /// the levels back.
     Lines,
-    /// ...and the pitch's name at the end its line starts from.
+    /// ...and the pitch's name at the end its line starts from, spelled and
+    /// drawn exactly as the lattice spells and draws that node — so the two
+    /// read as one label in two places.
     #[default]
     Named,
 }

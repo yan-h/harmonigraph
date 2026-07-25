@@ -20,17 +20,27 @@
 //! named long before it arrived, and the naming happens at the rate new
 //! material does.
 //!
+//! The name is the LATTICE's, in the lattice's own hand: the same
+//! [`NoteName`] the node carries, drawn by the same
+//! [`draw_stacked_name`](super::lattice::draw_stacked_name) — letter at full
+//! size, accidental riding high, syntonic-comma mark low. Not a resemblance
+//! but the same function, so the two cannot drift apart. That is the errand:
+//! a lane is read against the lattice, so it has to answer in the lattice's
+//! vocabulary. A cents deviation off the nearest piano key would say where a
+//! pitch sits between two keys when what is wanted is which node it IS — and
+//! for a just third, `E-` says it where "E +14\u{a2}" does not.
+//!
 //! Geometry comes from [`Axes`](super::spectral::Axes) like everything else in
 //! the pane, so lanes turn and flip with it and nothing here names a screen
 //! side.
 
 use std::collections::HashMap;
 
-use lattice_core::notes::display_octave_of;
-use lattice_core::NoteRoll;
+use lattice_core::{LatticePos, NoteName, NoteRoll, PitchClass, Tuning};
+use lattice_scene::ViewConfig;
 
+use super::lattice;
 use super::spectral::{Axes, PitchScale, TimeAxis};
-use super::KEY_NAMES;
 use crate::{theme, PitchLanes, SharedState};
 
 /// Pitches within this many cents of each other are one lane.
@@ -110,8 +120,14 @@ const STAGGER_STEPS: usize = 4;
 /// first sounded.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Lane {
-    /// The pitch in MIDI note units — the units the axis is scaled in, and
-    /// already quantized to [`LANE_CENTS`].
+    /// The pitch in MIDI note units — the units the axis is scaled in.
+    ///
+    /// The pitch as PLAYED, not the [`LANE_CENTS`] bucket that grouped it.
+    /// The bucket is a grouping key and nothing else: rounding a pitch to the
+    /// cent before naming it would spend up to half a cent of the tuning's
+    /// own half-cent match tolerance, so a just third could quantize itself
+    /// clear of the node it is, and the lane would fall back to naming a
+    /// piano key.
     pub midi: f32,
     /// Take time of the earliest press at this pitch the roll still holds.
     pub first: f64,
@@ -162,7 +178,9 @@ fn refresh(state: &mut SharedState) {
 
 /// Every pitch in `roll`, with the earliest press at it, in pitch order.
 fn derive(roll: &NoteRoll, lanes: &mut Vec<Lane>) {
-    let mut first: HashMap<i32, f64> = HashMap::new();
+    // Keyed by the cent bucket, holding the earliest press in it and the pitch
+    // that press actually sounded at — see [`Lane::midi`].
+    let mut first: HashMap<i32, (f64, f32)> = HashMap::new();
     for note in roll.notes() {
         // The pitch it SETTLED on, not the key it was pressed at: a retuned
         // note reaches its actual pitch through an expression just after its
@@ -170,18 +188,15 @@ fn derive(roll: &NoteRoll, lanes: &mut Vec<Lane>) {
         // just-intoned piece on one of twelve equal-tempered heights — which
         // is the reading this whole file exists to replace. See
         // [`RollNote::settled_pitch`].
-        let key = (note.settled_pitch() / LANE_CENTS * 100.0).round() as i32;
-        let at = first.entry(key).or_insert(note.start);
-        if note.start < *at {
-            *at = note.start;
+        let pitch = note.settled_pitch();
+        let key = (pitch / LANE_CENTS * 100.0).round() as i32;
+        let at = first.entry(key).or_insert((note.start, pitch));
+        if note.start < at.0 {
+            *at = (note.start, pitch);
         }
     }
     lanes.clear();
-    lanes.extend(
-        first
-            .into_iter()
-            .map(|(cents, first)| Lane { midi: cents as f32 * LANE_CENTS / 100.0, first }),
-    );
+    lanes.extend(first.into_values().map(|(first, midi)| Lane { midi, first }));
     // Pitch order, not the map's. A HashMap iterates differently between runs,
     // and the labels below are placed first-come — so an unsorted set would
     // hand a different picture to two renders of one take, which the offline
@@ -204,40 +219,134 @@ pub(super) struct LaneDraw {
     /// Points the name was slid along the lane to find room — see
     /// [`STAGGER_STEPS`]. Zero for a name that fitted where it wanted to.
     pub slide: f32,
-    pub label: Option<String>,
+    /// The lattice's spelling of this pitch, once it has won room for it.
+    pub name: Option<NoteName>,
 }
 
-/// A pitch's name: the nearest key with its octave, and the cents it sits off
-/// that key when it is not one of them — "C4", "E4-14\u{a2}".
+/// A lane's name: the LATTICE's own spelling of that pitch — the same
+/// [`NoteName`] the node carries, drawn by the same code (see
+/// [`push_labels`]), so a lane and the node it points at are one label in two
+/// places rather than two descriptions of one thing.
 ///
-/// The cents are what keeps this honest in a tuning that is not 12-EDO, which
-/// is the tuning this plugin exists for. Rounding a JI third to "E4" and
-/// leaving it there would name two different lanes identically, and the lanes
-/// would then say the opposite of what they are for.
-pub(super) fn lane_name(midi: f32) -> String {
-    let nearest = midi.round();
-    let key = nearest as i32;
-    let name = KEY_NAMES[key.rem_euclid(12) as usize];
-    let octave = display_octave_of(key);
-    let cents = ((midi - nearest) * 100.0).round() as i32;
-    if cents == 0 {
-        format!("{name}{octave}")
-    } else {
-        format!("{name}{octave}{cents:+}\u{a2}")
+/// That is the whole errand. A lane exists to be read against the lattice, so
+/// a naming of its own — a cents deviation off the nearest piano key, say —
+/// would answer a different question in the same typeface: it would say where
+/// the pitch sits between two keys, when what is wanted is which node it IS.
+/// The lattice's spelling carries that in the accidental and the comma mark:
+/// a just third is `E-`, and no amount of "E +14\u{a2}" says so.
+///
+/// No octave, for the same reason. A lattice node is a pitch class and wears
+/// no octave number, so a lane matching one must not invent it; the lanes for
+/// two octaves of a pitch are far apart on the axis and read as what they are.
+///
+/// The fallback, for a pitch the visible lattice has no node for, is the
+/// equal-tempered spelling — still a [`NoteName`], so it draws identically and
+/// there is one rendering path rather than two. It is a real case: the pane
+/// already flags notes sounding off the lattice with a band down the spectrum,
+/// and a lane with no name at all would just look like a bug.
+fn lane_name(view: &ViewConfig, tuning: &Tuning, midi: f32) -> NoteName {
+    // Cents from C, measured from MIDI 0 (which IS a C) — the same reduction
+    // the pane's hover readout makes before asking the same question.
+    let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
+    match naming_node(view, tuning, pc) {
+        Some(pos) => super::display_note_name(pos, view.meantone),
+        None => equal_tempered_name(midi),
     }
 }
 
-/// Where a lane's name is anchored, and which way it grows from there.
-pub(super) fn label_anchor(
-    axes: &Axes,
-    draw: &LaneDraw,
-    size: f32,
-) -> (egui::Pos2, egui::Align2) {
-    anchor_at(axes, draw, size, draw.slide)
+/// The visible node to name a pitch by: the closest match, and among matches
+/// equally close the one that spells most plainly.
+///
+/// Its own function rather than
+/// [`nearest_visible_node`](super::nearest_visible_node), which it otherwise
+/// mirrors exactly, because of the tiebreak — and the tiebreak matters only
+/// where that function has nothing to go on.
+///
+/// In a JUST tuning the two agree and there is nothing to break: distinct
+/// lattice positions are distinct pitches, so at the half-cent tolerance
+/// exactly one node can match. In an EQUAL temperament — which is the default
+/// this plugin opens on — the lattice collapses: twelve fifths are seven
+/// octaves exactly, so the origin and `(12,0,0)` are one pitch, three major
+/// thirds are an octave, and a dozen visible nodes answer to middle C. All are
+/// the same distance (zero) from it, so the plain minimum returns whichever
+/// the iteration reached first, which is the CORNER of the visible window:
+/// middle C names itself `F♭5+6`, and renames itself whenever the view is
+/// panned. True, useless, and not what the lattice shows you, which is the lit
+/// node you were looking at.
+///
+/// Left where it is rather than pushed into the shared function because the
+/// shared one answers "which node do I light", where any of a collapsed set
+/// will do, and this one answers "what do I call it", where they differ.
+fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<LatticePos> {
+    view.visible_positions()
+        .filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos)))
+        .min_by_key(|&pos| {
+            (
+                pc.distance_to(tuning.pitch_class(pos)),
+                spelling_cost(super::display_note_name(pos, view.meantone), pos),
+            )
+        })
 }
 
-/// The same, at a trial `slide` down the lane rather than the one the draw
-/// ended up with.
+/// How hard a spelling is to read, worst first: comma marks, then
+/// accidentals, then how far out the node sits.
+///
+/// In that order because that is the order the marks cost a reader. Four
+/// fifths up from C and one just third up from C are the same pitch in an
+/// equal temperament, and they spell `E` and `E-`; the plain letter is the
+/// name for it, even though the comma'd node is nearer the origin. The final
+/// term only settles what the marks cannot, and keeps the answer from moving
+/// with the view.
+fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32) {
+    (
+        name.syntonic_commas.abs(),
+        name.sharps.abs(),
+        pos.threes.abs() + pos.fives.abs() + pos.sevens.abs(),
+    )
+}
+
+/// The nearest piano key, spelled with sharps — [`KEY_NAMES`] as a
+/// [`NoteName`] rather than as text, so it reaches the same drawing code.
+fn equal_tempered_name(midi: f32) -> NoteName {
+    const SPELLINGS: [(char, i32); 12] = [
+        ('C', 0),
+        ('C', 1),
+        ('D', 0),
+        ('D', 1),
+        ('E', 0),
+        ('F', 0),
+        ('F', 1),
+        ('G', 0),
+        ('G', 1),
+        ('A', 0),
+        ('A', 1),
+        ('B', 0),
+    ];
+    let (letter, sharps) = SPELLINGS[(midi.round() as i32).rem_euclid(12) as usize];
+    NoteName { letter, sharps, syntonic_commas: 0 }
+}
+
+/// What a name covers, estimated from the sizes its pieces are laid out at.
+///
+/// A stacked name is a letter with a column of marks after it — see
+/// [`lattice::draw_stacked_name`] — so its width is the letter plus the wider
+/// mark, and its height is the letter's line box, which the marks are sized to
+/// stay inside.
+fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
+    let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
+    let marks = name
+        .accidental_mark()
+        .chars()
+        .count()
+        .max(name.comma_mark().chars().count());
+    egui::vec2(
+        (size + marks as f32 * mark_size) * GLYPH_ADVANCE,
+        size * LINE_HEIGHT,
+    )
+}
+
+/// Where a lane's name is anchored at a given `slide` down the lane, and which
+/// way it grows from there.
 fn anchor_at(
     axes: &Axes,
     draw: &LaneDraw,
@@ -261,16 +370,15 @@ fn anchor_at(
 /// an upright one it is the text's height. Projecting onto the depth direction
 /// answers both without naming a screen side, which is the rule the whole pane
 /// is written to.
-fn label_box(
+pub(super) fn label_box(
     axes: &Axes,
     draw: &LaneDraw,
-    text: &str,
+    name: &NoteName,
     size: f32,
     slide: f32,
 ) -> (egui::Rect, f32) {
     let (pos, align) = anchor_at(axes, draw, size, slide);
-    let est =
-        egui::vec2(text.chars().count() as f32 * size * GLYPH_ADVANCE, size * LINE_HEIGHT);
+    let est = name_extent(name, size);
     let depth = axes.dir_depth();
     let along_depth = (est.x * depth.x).abs() + (est.y * depth.y).abs();
     (align.anchor_size(pos, est).expand(LABEL_PAD), along_depth + 2.0 * LABEL_PAD)
@@ -283,13 +391,16 @@ fn label_box(
 /// most of what there is to get wrong here, since the two rules that matter
 /// (a lane's start clamps rather than re-anchoring, and a name gives way to
 /// the one already there) are both invisible in a still picture.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn lane_draws(
     lanes: &[Lane],
     axes: &Axes,
     scale: &PitchScale,
     time: &TimeAxis,
     split: f32,
-    named: bool,
+    // `None` to draw the lines bare; the lattice to name them against
+    // otherwise — see [`lane_name`].
+    naming: Option<(&ViewConfig, &Tuning)>,
     size: f32,
 ) -> Vec<LaneDraw> {
     // Live, time runs from the now-line at `split` out to the past; whole-song
@@ -323,11 +434,11 @@ pub(super) fn lane_draws(
             d_first: time.depth_of(lane.first),
             d_now,
             slide: 0.0,
-            label: None,
+            name: None,
         });
     }
 
-    if named {
+    if let Some((view, tuning)) = naming {
         // Oldest onset first, so an established name holds its place and a
         // newly-introduced pitch is the one that gives way where the two would
         // collide. The opposite reads as flicker: every new note in a dense
@@ -340,11 +451,19 @@ pub(super) fn lane_draws(
         order.sort_by(|&a, &b| draws[a].lane.first.total_cmp(&draws[b].lane.first));
         let mut placed: Vec<egui::Rect> = Vec::new();
         let depth_len = axes.depth_len();
+        // One naming per pitch CLASS rather than per lane. Naming walks every
+        // visible lattice node looking for the match that spells best, and a
+        // piece's lanes are the same handful of classes spread over several
+        // octaves — so this is the difference between a walk per lane and a
+        // walk per distinct note of the music.
+        let mut names: HashMap<i32, NoteName> = HashMap::new();
         for i in order {
-            let text = lane_name(draws[i].lane.midi);
+            let midi = draws[i].lane.midi;
+            let class = (midi.rem_euclid(12.0) * 100.0).round() as i32;
+            let name = *names.entry(class).or_insert_with(|| lane_name(view, tuning, midi));
             // A step is the name's own reach along the lane, so consecutive
             // places butt together rather than overlap.
-            let (_, step) = label_box(axes, &draws[i], &text, size, 0.0);
+            let (_, step) = label_box(axes, &draws[i], &name, size, 0.0);
             // How much lane there is to slide along. A name past its own
             // line's end would be pointing at nothing, so a lane with no
             // length yet — a pitch introduced this instant — gets its one try
@@ -353,12 +472,12 @@ pub(super) fn lane_draws(
             let spot = (0..STAGGER_STEPS)
                 .map(|k| k as f32 * step)
                 .take_while(|&slide| slide <= room)
-                .map(|slide| (slide, label_box(axes, &draws[i], &text, size, slide).0))
+                .map(|slide| (slide, label_box(axes, &draws[i], &name, size, slide).0))
                 .find(|(_, rect)| !placed.iter().any(|r| r.intersects(*rect)));
             if let Some((slide, rect)) = spot {
                 placed.push(rect);
                 draws[i].slide = slide;
-                draws[i].label = Some(text);
+                draws[i].name = Some(name);
             }
         }
     }
@@ -385,15 +504,8 @@ pub(super) fn plan(
     }
     refresh(state);
     let time = TimeAxis::new(state, split, now);
-    lane_draws(
-        state.lanes.lanes(),
-        axes,
-        scale,
-        &time,
-        split,
-        mode == PitchLanes::Named,
-        LABEL_PT * label_scale,
-    )
+    let naming = (mode == PitchLanes::Named).then_some((&state.view, &state.tuning));
+    lane_draws(state.lanes.lanes(), axes, scale, &time, split, naming, LABEL_PT * label_scale)
 }
 
 /// The hairlines. Drawn over the heatmap they are there to let you read, and
@@ -409,6 +521,14 @@ pub(super) fn draw_lines(painter: &egui::Painter, axes: &Axes, draws: &[LaneDraw
 
 /// The names, into whichever batch the pane is drawing its labels from.
 ///
+/// Drawn by [`lattice::draw_stacked_name`] — the lattice's own label code, not
+/// a copy of it — so a lane's name is the same glyphs in the same arrangement
+/// as the node it points at: the letter at full size with its accidental
+/// riding high and its comma mark low, counted rather than repeated. Sharing
+/// the function rather than the look is what keeps them from drifting apart
+/// the next time either is touched, and it is why a name is carried this far
+/// as a [`NoteName`] rather than as a string.
+///
 /// Haloed like the axis labels and for the same reason: what is behind them is
 /// a picture, not a background, and a name over a bright heatmap slab has no
 /// contrast of its own to rely on.
@@ -420,17 +540,23 @@ pub(super) fn push_labels(
     batch: &mut crate::text::TextBatch,
 ) {
     let size = LABEL_PT * label_scale;
+    // `draw_stacked_name` sizes everything off the lattice's own letter size,
+    // so ask it for the lane's smaller one as a fraction of that.
+    let scale = size / lattice::NAME_SIZE;
     for draw in draws {
-        let Some(text) = &draw.label else { continue };
-        let (pos, align) = label_anchor(axes, draw, size);
-        batch.text(
+        let Some(name) = draw.name else { continue };
+        // It centers a name on its anchor, where the placement above works in
+        // boxes that grow away from theirs — so hand it the box's middle, and
+        // the name lands exactly where it was measured to fit.
+        let (rect, _) = label_box(axes, draw, &name, size, draw.slide);
+        lattice::draw_stacked_name(
+            batch,
             painter,
-            pos,
-            align,
-            text.clone(),
-            egui::FontId::monospace(size),
+            rect.center(),
+            name,
             theme::text(),
             theme::well(),
+            scale,
         );
     }
 }
@@ -503,8 +629,8 @@ mod tests {
         plan(state, &axes, &scale, split, now, 1.0)
     }
 
-    fn named(draws: &[LaneDraw]) -> Vec<&str> {
-        draws.iter().filter_map(|d| d.label.as_deref()).collect()
+    fn named(draws: &[LaneDraw]) -> Vec<String> {
+        draws.iter().filter_map(|d| d.name.map(|n| n.to_string())).collect()
     }
 
     /// The premise the whole feature rests on: a pitch is named once, however
@@ -521,10 +647,11 @@ mod tests {
         state.tracker.handle_event(on(3.0, 67));
         state.tracker.handle_event(off(3.5, 67));
 
-        // Bitwig's octave numbering throughout the app: middle C is C3.
+        // Named the way the lattice names its nodes: a pitch class, with no
+        // octave number, because a lattice node does not wear one either.
         let draws = draws(&mut state, 8.0);
         assert_eq!(draws.len(), 2, "two pitches, eight presses");
-        assert_eq!(named(&draws), ["C3", "G3"]);
+        assert_eq!(named(&draws), ["C", "G"]);
     }
 
     /// A lane starts where its pitch FIRST sounded, so the name sits at the
@@ -591,16 +718,56 @@ mod tests {
         // which is what it takes for a comma to be several points wide; drawn
         // smaller the two merge, which is the rule below.
         let mut state = state(12.0, 10.0);
+        // ...and a JUST tuning, which is the one the distinction lives in. An
+        // equal temperament tempers the syntonic comma out by construction, so
+        // there is no node a comma below E for a lane to be named after and
+        // both would read "E" — correctly, since in that tuning they ARE one
+        // note.
+        state.tuning = lattice_core::Tuning::just();
         state.tracker.handle_event(on(0.0, 64));
         state.tracker.handle_event(off(0.5, 64));
-        // The same key again, retuned down a syntonic comma (~13.7 cents
-        // under the equal-tempered third) a block after its note-on.
+        // The same key again, retuned down a syntonic comma (~13.7 cents under
+        // the equal-tempered third, which lands it on the just one) a block
+        // after its note-on.
         state.tracker.handle_event(on(1.0, 64));
         state.tracker.handle_event(tuning(1.01, 64, -0.137));
 
         let draws = draws_in(&mut state, 5.0, BIG);
         assert_eq!(draws.len(), 2, "a comma is two pitches");
-        assert_eq!(named(&draws), ["E3-14\u{a2}", "E3"]);
+        let names = named(&draws);
+        // The just third is a lattice node, and says so with the comma mark
+        // the lattice draws on that node — the whole reason to spell a lane
+        // the lattice's way rather than as a piano key and a cents offset.
+        assert_eq!(names[0], "E-");
+        // The equal-tempered third is a different pitch, so a different name.
+        // WHICH name is not worth pinning: at a half-cent tolerance it lands
+        // on whatever remote node happens to coincide with it — a real node,
+        // really on screen, but a schisma coincidence, and asserting the
+        // spelling of one would be testing the tuning's arithmetic.
+        assert_ne!(names[1], names[0]);
+    }
+
+    /// In an EQUAL temperament the lattice collapses — twelve fifths are seven
+    /// octaves exactly — so a dozen visible nodes answer to middle C, all at
+    /// distance zero. Something has to choose between them, and the choice has
+    /// to be the plain one.
+    ///
+    /// Taking the first match instead names middle C `F♭5+6`: true, unreadable,
+    /// and it changes whenever the view is panned, because "first" means the
+    /// corner of the visible window. This is the default tuning the plugin
+    /// opens on, so it is the naming most sessions would actually see.
+    #[test]
+    fn a_collapsed_tuning_names_a_pitch_plainly_rather_than_from_the_corner() {
+        let view = lattice_scene::ViewConfig::default();
+        let equal = lattice_core::Tuning::default();
+        let name = |midi| lane_name(&view, &equal, midi).to_string();
+
+        assert_eq!(name(60.0), "C", "the origin, not a remote spelling of it");
+        assert_eq!(name(67.0), "G", "a fifth up");
+        assert_eq!(name(65.0), "F", "a fifth down");
+        // Four fifths up spells E; one just third up spells E-, and in this
+        // tuning they are the same pitch. The plain letter wins.
+        assert_eq!(name(64.0), "E");
     }
 
     /// Float noise in a pitch must not open a second lane a thousandth of a
@@ -665,7 +832,7 @@ mod tests {
         assert!(names.len() < 6, "but not all six fit: {names:?}");
         // Oldest first, so the pitch introduced first is the one that keeps
         // its name.
-        assert_eq!(names[0], "C3");
+        assert_eq!(names[0], "C");
 
         // The same six notes with room for all of them keep all their names.
         let mut close = state(12.0, 10.0);
@@ -699,7 +866,7 @@ mod tests {
         assert!(draws.iter().all(|d| d.d_first == 1.0), "every start has scrolled out");
 
         let slid: Vec<f32> =
-            draws.iter().filter_map(|d| d.label.is_some().then_some(d.slide)).collect();
+            draws.iter().filter_map(|d| d.name.is_some().then_some(d.slide)).collect();
         assert_eq!(slid.len(), 6, "all six are named: {slid:?}");
         assert!(slid.iter().any(|&s| s > 0.0), "by some of them moving down their lane");
     }
@@ -714,7 +881,7 @@ mod tests {
             state.tracker.handle_event(off(0.5, note));
         }
         let draws = draws(&mut state, 5.0);
-        assert_eq!(named(&draws), ["C3"], "only the one inside 54..66");
+        assert_eq!(named(&draws), ["C"], "only the one inside 54..66");
     }
 
     /// The setting is three positions, and the middle one is the whole reason
@@ -731,7 +898,7 @@ mod tests {
         state.spectrum_config.pitch_lanes = PitchLanes::Lines;
         let lines = draws(&mut state, 5.0);
         assert_eq!(lines.len(), 1, "the line is still there");
-        assert!(lines[0].label.is_none(), "with no name on it");
+        assert!(lines[0].name.is_none(), "with no name on it");
 
         state.spectrum_config.pitch_lanes = PitchLanes::Off;
         assert!(draws(&mut state, 5.0).is_empty());
@@ -775,16 +942,22 @@ mod tests {
         assert_eq!(pitches, [48.0, 55.0, 60.0, 61.0, 67.0, 72.0]);
     }
 
-    /// A name says the key, its octave in the app's own (Bitwig) numbering,
-    /// and — only where there is one — how far off that key the pitch sits.
+    /// A pitch the visible lattice has no node for still gets a name, spelled
+    /// the equal-tempered way — and still as a [`NoteName`], so it draws
+    /// through the same code as every other lane rather than down a second
+    /// path that could look different.
+    ///
+    /// It is not a corner: the pane already flags notes sounding off the
+    /// lattice with a band down the spectrum, so the case is expected, and a
+    /// lane with no name at all would read as a bug rather than as an answer.
     #[test]
-    fn a_name_carries_its_cents_only_when_it_has_some() {
-        assert_eq!(lane_name(60.0), "C3", "middle C, in Bitwig's numbering");
-        assert_eq!(lane_name(69.0), "A3");
-        assert_eq!(lane_name(64.0 - 0.137), "E3-14\u{a2}");
-        assert_eq!(lane_name(67.0 + 0.02), "G3+2\u{a2}");
-        assert_eq!(lane_name(66.0), "F\u{266F}3");
-        // Rounded away entirely: half a cent is not a pitch difference.
-        assert_eq!(lane_name(60.004), "C3");
+    fn a_pitch_the_lattice_cannot_show_falls_back_to_its_piano_spelling() {
+        assert_eq!(equal_tempered_name(60.0).to_string(), "C");
+        assert_eq!(equal_tempered_name(66.0).to_string(), "F\u{266F}");
+        assert_eq!(equal_tempered_name(69.0).to_string(), "A");
+        // Rounded to the nearest key, and carrying no comma mark: the
+        // equal-tempered grid has no commas to report.
+        assert_eq!(equal_tempered_name(64.004).to_string(), "E");
+        assert_eq!(equal_tempered_name(63.9).to_string(), "E");
     }
 }

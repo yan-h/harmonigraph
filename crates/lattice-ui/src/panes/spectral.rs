@@ -273,8 +273,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
                  reading the heatmap: a band of energy sits at some height on \
                  an axis marked only every octave, and this puts a named \
                  level under it — so a repeat lands on a line that was named \
-                 when the material was introduced. Works with Note history \
-                 off, which is how to read the heatmap alone.",
+                 when the material was introduced.\n\nNames are the lattice's \
+                 own, in its own hand: the node's spelling, with its \
+                 accidental and comma mark. Works with Note history off, \
+                 which is how to read the heatmap alone.",
             ),
             (
                 PitchLanes::Lines,
