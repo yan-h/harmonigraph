@@ -248,36 +248,24 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              With Fill up this just fattens the note; with Fill at 0 it is the \
              whole of it.",
         );
-    ValueBar::new(&mut cfg.roll_border_width, 0.0..=6.0, "Black")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text(
-            "Width of the solid black outline standing just outside a note — \
-             the crisp dark line that separates it from whatever the \
-             spectrogram is doing behind it. 0 draws none.",
-        );
-    ValueBar::new(&mut cfg.roll_keyline_width, 0.0..=6.0, "White")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text(
-            "Width of the white keyline riding outside the black; Edge (up in \
-             Spectrum) sets how bright it is. 0 draws none. Below a full point \
-             a bright line shimmers as the roll scrolls, its peak intensity \
-             wobbling with every sub-pixel step across the grid.",
-        );
     choice_row(
         ui,
         "Edges",
         &mut cfg.roll_edge,
         &[
-            (RollEdge::Around, "Around", "All the way around a note, corners included"),
+            (
+                RollEdge::Around,
+                "Around",
+                "All the way around a note, corners included. (Where the white \
+                 keyline rides; Edge, up in Spectrum, sets how bright it is.)",
+            ),
             (
                 RollEdge::Sides,
                 "Sides",
                 "The long edges only — above and below a note in Across, either \
-                 side of it in Upright. The rim never grows along time, so \
+                 side of it in Upright. The keyline never grows along time, so \
                  repeats of one key butt together cleanly instead of painting \
-                 their halos over each other",
+                 their highlights over each other",
             ),
             (
                 RollEdge::Ends,
