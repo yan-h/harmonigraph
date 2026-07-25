@@ -57,6 +57,29 @@ pub(crate) const COLUMNS_PER_SLAB: f64 = 1.6;
 /// no longer floors it.
 pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_PER_SLAB;
 
+/// Device pixels the pane's size is rounded UP to before anything is derived
+/// from it.
+///
+/// The same argument as [`live_slab`]'s ladder, for the other axis. A pane's
+/// height decides how many rows the image has, and its width decides how many
+/// slabs and how wide the ring is — so taken to the pixel, every pixel of a
+/// resize drag is a different image AND a different texture, and the drag pays
+/// a full re-fold and a full repaint on every frame of itself. Measured on the
+/// overlay's fallback row, a resize sat at the frame rate: one of each, per
+/// frame, for as long as the drag lasted.
+///
+/// Rounded UP, so the image is never coarser than the pane it is stretched
+/// over — the quantum costs a little oversampling and no detail, which is the
+/// same trade [`PaneView`] makes by sizing in pixels rather than points. Sixty
+/// four turns a 600-pixel drag into ten re-layouts instead of six hundred, and
+/// leaves the image at most 9% taller than a 700-pixel pane needs.
+const PANE_QUANTUM: f32 = 64.0;
+
+/// A pane measurement in device pixels, rounded up to [`PANE_QUANTUM`].
+fn quantized(pixels: f32) -> f32 {
+    (pixels / PANE_QUANTUM).ceil() * PANE_QUANTUM
+}
+
 /// The live grid's finest rung, in analysis intervals — see [`live_slab`].
 ///
 /// TWO, not one: the column grid and the slab grid share a period on the ladder
@@ -209,6 +232,52 @@ pub(crate) struct TexLayout {
     pub(crate) tex_w: f32,
 }
 
+/// Why a ring could not be carried forward.
+///
+/// Worth telling apart, and reported separately by the performance overlay,
+/// because each says something different about what to go and look at: a style
+/// is the image changing, a capacity is the PANE changing, and a gap is the
+/// window having moved somewhere the texture cannot reach from. Twice now the
+/// question "which of these is it?" has been the whole diagnosis, answered by
+/// instrumenting rather than by reasoning about it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Restart {
+    /// The image's shape: its rows (the pane's pitch side), or the width of a
+    /// slab (its time side, through the Span).
+    Rows,
+    Slab,
+    /// The pitch range the rows read, or the dB window, tilt, contrast and
+    /// ramp that colour them.
+    Pitch,
+    Colour,
+    /// The ring's own size, which is the pane's time side.
+    Pane,
+    /// The run does not connect to what is painted — the window jumped, or
+    /// history was cleared.
+    Gap,
+}
+
+impl Restart {
+    /// Where each is counted, and what the overlay calls it. Named to the FIELD
+    /// rather than to the layer, because "the style changed" only narrows it to
+    /// six things and the whole value of the readout is not having to narrow it
+    /// by argument.
+    pub(crate) const LABELS: [&'static str; Self::COUNT] =
+        ["rows", "slab", "pitch", "colour", "pane", "gap"];
+    pub(crate) const COUNT: usize = 6;
+
+    fn slot(self) -> usize {
+        match self {
+            Restart::Rows => 0,
+            Restart::Slab => 1,
+            Restart::Pitch => 2,
+            Restart::Colour => 3,
+            Restart::Pane => 4,
+            Restart::Gap => 5,
+        }
+    }
+}
+
 /// Which slabs the uploaded texture's columns currently hold.
 ///
 /// The heatmap's columns are indexed by SLAB KEY — `floor(time / bucket)`, a
@@ -313,6 +382,24 @@ impl ColumnColor {
 }
 
 impl ColumnStyle {
+    /// Which field of this differs from `other`, or `None` if none does — the
+    /// first found, since one is enough to say where to look.
+    fn differs(&self, other: &ColumnStyle) -> Option<Restart> {
+        if self.rows != other.rows {
+            Some(Restart::Rows)
+        } else if self.bucket_bits != other.bucket_bits {
+            Some(Restart::Slab)
+        } else if self.scale_min_bits != other.scale_min_bits
+            || self.scale_span_bits != other.scale_span_bits
+        {
+            Some(Restart::Pitch)
+        } else if self.color != other.color {
+            Some(Restart::Colour)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn new(
         rows: usize,
         bucket: f64,
@@ -337,21 +424,47 @@ impl SpectrogramRing {
         key.rem_euclid(self.capacity as i64) as usize
     }
 
-    /// Whether this ring can be carried forward for a run starting at
-    /// `first_key`: it has to describe THIS texture, in this style, and still
-    /// hold columns the run continues from. A gap (the window jumped, history
-    /// was cleared) would leave never-written texels between the old columns
-    /// and the new ones.
+    /// Whether this ring can be carried forward for the run
+    /// `first_key..=last_key`: it has to describe THIS texture, in this style,
+    /// and the run has to connect to what is already painted.
+    ///
+    /// The window grows at the near end as columns arrive and at the FAR end
+    /// when the Span is zoomed out, and both are served by painting what is
+    /// missing rather than starting over — the slabs a widening window reveals
+    /// are in the view already, since the aggregator keeps what this ring can
+    /// hold. Without that, a restart resets the painted range to the window's
+    /// own, the next frame of the gesture reaches past it again, and the drag
+    /// restarts the texture on every frame of itself.
     ///
     /// Answering NO is always safe and never cheap — it re-blanks the texture
     /// and repaints every column — so this is the predicate the ring's whole
     /// value rests on, and `no_cache_layer_falls_back_as_the_window_scrolls`
     /// holds it to yes for every Span the pane offers.
-    fn carries(&self, capacity: usize, style: &ColumnStyle, first_key: i64) -> bool {
-        self.capacity == capacity
-            && self.style == *style
-            && first_key >= self.oldest_valid
-            && first_key <= self.written_through + 1
+    fn carries(
+        &self,
+        capacity: usize,
+        style: &ColumnStyle,
+        first_key: i64,
+        last_key: i64,
+    ) -> Option<Restart> {
+        if let Some(field) = self.style.differs(style) {
+            // The image itself changed, so every column is wrong at once.
+            return Some(field);
+        }
+        if self.capacity != capacity {
+            // A different capacity is a different texture: the slab a texel
+            // stands for is `key mod capacity`, so the whole mapping moves.
+            return Some(Restart::Pane);
+        }
+        // The run has to CONNECT to what is painted at both ends. A run starting
+        // past `written_through + 1`, or ending before `oldest_valid - 1`,
+        // leaves never-written texels inside itself, and painting at the edges
+        // cannot reach them. It also has to fit in a lap with its far guard, or
+        // painting the far end would overwrite the near one.
+        let connects = first_key <= self.written_through + 1
+            && last_key >= self.oldest_valid - 1
+            && last_key - first_key + 2 <= capacity as i64;
+        (!connects).then_some(Restart::Gap)
     }
 
     /// A ring with nothing written yet, for a run starting at `first_key` — so
@@ -361,12 +474,15 @@ impl SpectrogramRing {
         SpectrogramRing { capacity, style, written_through: first_key - 1, oldest_valid: first_key }
     }
 
-    /// Record a run written through `last_key`. Anything older than a full lap
-    /// has been overwritten by it; the far guard sits one before the run, so it
-    /// is the oldest texel in use.
-    fn wrote(&mut self, last_key: i64) {
-        self.written_through = last_key;
-        self.oldest_valid = self.oldest_valid.max(last_key - self.capacity as i64 + 2);
+    /// Record the run `first_key..=last_key` as painted, widening what this ring
+    /// holds at whichever end it reached past.
+    ///
+    /// Anything older than a full lap has been overwritten by it; the far guard
+    /// sits one before the run, so it is the oldest texel in use.
+    fn wrote(&mut self, first_key: i64, last_key: i64) {
+        self.written_through = self.written_through.max(last_key);
+        self.oldest_valid =
+            self.oldest_valid.min(first_key).max(last_key - self.capacity as i64 + 2);
     }
 }
 
@@ -434,11 +550,22 @@ struct Plan {
 
 impl Plan {
     fn new(view: &PaneView, columns: &Columns) -> Plan {
-        let rows = ((view.pitch_len * view.ppp).round() as usize).clamp(2, view.max_rows);
+        // The offline build's pane cannot resize mid-render, so it has nothing
+        // to hold still and takes its size to the pixel; the live one rounds up
+        // to a quantum so a resize drag re-lays the grid a handful of times
+        // instead of once a frame. See [`PANE_QUANTUM`].
+        let pitch_px = view.pitch_len * view.ppp;
+        let depth_px = view.depth_len * view.ppp;
+        let (pitch_px, depth_px) = if view.whole {
+            (pitch_px.round(), depth_px.round())
+        } else {
+            (quantized(pitch_px), quantized(depth_px))
+        };
+        let rows = (pitch_px as usize).clamp(2, view.max_rows);
         // One image column per output depth pixel; whole-song spans an entire
         // take, so it needs a higher cap than the live window.
         let col_cap = if view.whole { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
-        let target_cols = (view.depth_len * view.ppp).round().clamp(2.0, col_cap) as usize;
+        let target_cols = depth_px.clamp(2.0, col_cap) as usize;
         let bucket = if view.whole {
             // The offline build draws its own fixed column set rather than the
             // live store's, so it shares no ladder with it and has nothing to
@@ -939,17 +1066,32 @@ impl SpectrogramAgg {
         }
     }
 
-    /// Re-fold the whole window from scratch (== `aggregate_rows(history[first..])`).
+    /// Re-fold from scratch, filling the grid to the `keep` slabs it retains
+    /// rather than only to the window's own.
+    ///
+    /// The slack is the point. A rebuild that started at the window's first
+    /// column would leave the grid flush with the window, and a Span being
+    /// ZOOMED OUT asks for something older on the very next frame — which
+    /// rebuilds, flush again, and asks again. That cascade is self-sustaining:
+    /// once a widening gesture trips it, every frame of it rebuilds, however
+    /// long the aggregator had been running before. It reads on the overlay as a
+    /// refold rate pinned at the frame rate for the length of the drag.
     fn rebuild(
         &mut self,
         history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
         reads: &[RowRead],
+        keep: usize,
     ) {
         self.rebuilds += 1;
         self.grid = SlabGrid::default();
-        for col in history.iter_from(first) {
+        // Far enough back to fill the retention, but never past the window's
+        // own first column — that one must be folded whatever the slack says.
+        let newest = history.back().map_or(0.0, |c| c.time);
+        let cutoff = ((newest / bucket).floor() - keep as f64 + 1.0) * bucket;
+        let start = history.partition_point(|c| c.time < cutoff).min(first);
+        for col in history.iter_from(start) {
             self.grid.fold(col, reads, bucket);
         }
         self.bucket_bits = bucket.to_bits();
@@ -988,7 +1130,7 @@ impl SpectrogramAgg {
             );
 
         if !can_increment {
-            self.rebuild(history, first, bucket, reads);
+            self.rebuild(history, first, bucket, reads, keep);
         } else {
             // Fold only columns newer than the last we folded.
             let start = history.partition_point(|c| c.time <= self.last_time);
@@ -1002,7 +1144,7 @@ impl SpectrogramAgg {
             }
             if !forward {
                 // A mid-stream backward jump broke the grid; rebuild clean.
-                self.rebuild(history, first, bucket, reads);
+                self.rebuild(history, first, bucket, reads, keep);
             }
         }
         self.view(history, first, bucket, reads, target, keep)
@@ -1194,17 +1336,18 @@ fn write_ring(
     let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
 
     // A ring with no texture under it describes nothing, whatever its
-    // bookkeeping says.
-    let usable = matches!(
-        (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex),
-        (Some(ring), Some(_)) if ring.carries(capacity, &style, first_key),
-    );
+    // bookkeeping says — and there is no more specific reason to report than
+    // that it has to be built at all.
+    let restart = match (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex) {
+        (Some(ring), Some(_)) => ring.carries(capacity, &style, first_key, last_key),
+        _ => Some(Restart::Rows),
+    };
 
-    if !usable {
+    if let Some(why) = restart {
         // Counted for the same reason the aggregator counts its rebuilds: a
         // restart re-blanks the texture and repaints every column, and nothing
         // about the picture says it happened.
-        spectrum.spectrogram[surface].restarts += 1;
+        spectrum.spectrogram[surface].restarts[why.slot()] += 1;
         // A fresh texture starts black, so a column never written reads as
         // silence rather than as whatever the allocation happened to contain.
         let blank = egui::ColorImage::new([tex_w, h], vec![Color32::BLACK; tex_w * h]);
@@ -1222,10 +1365,14 @@ fn write_ring(
         return;
     };
 
-    // Start at the last column written, not past it: that slab was uploaded
-    // mid-accumulation and may have gained energy since.
-    let start = ring.written_through.max(first_key);
-    for key in start..=last_key {
+    // Paint what the run has and the texture does not, at either end. Forward
+    // starts AT the last column written rather than past it: that slab was
+    // uploaded mid-accumulation and may have gained energy since. Backward is
+    // the slabs a zoomed-out window has just revealed — none on an ordinary
+    // frame, a handful on the frames of a widening gesture.
+    let back = first_key..ring.oldest_valid.min(last_key + 1);
+    let forward = ring.written_through.max(first_key)..=last_key;
+    for key in back.chain(forward) {
         let i = (key - first_key) as usize;
         let column = fill_column(cfg, bins, &power[i * h..(i + 1) * h]);
         let image = egui::ColorImage::new([1, h], column);
@@ -1255,7 +1402,7 @@ fn write_ring(
         tex.set_partial([x + capacity, 0], image, opts);
     }
 
-    ring.wrote(last_key);
+    ring.wrote(first_key, last_key);
 }
 
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
@@ -1361,6 +1508,22 @@ mod tests {
     /// windows holds, so the trim never enters into it. The sweep and the drag
     /// test below pass the real, pane-sized retention instead.
     const KEEP: usize = 1 << 20;
+
+    /// The pitch range the ring sweeps hold fixed while they move time.
+    const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+
+    /// The style the pane would build for a window of `span` seconds.
+    ///
+    /// `cfg.roll_seconds` moves WITH the span, because in the pane they are the
+    /// same number — `TimeAxis::new` reads the window straight out of the
+    /// config. A fixture that leaves it at its default makes them independent,
+    /// and then a style keyed on the config looks stable across a Span drag
+    /// when in the pane it is being rewritten every frame. That is exactly how
+    /// the drag bug survived a test named after the drag.
+    fn style_for(rows: usize, bucket: f64, span: f64, scale: &PitchScale) -> ColumnStyle {
+        let cfg = SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() };
+        ColumnStyle::new(rows, bucket, scale.min_midi, scale.span, &cfg)
+    }
 
     /// A column at `time` with the given (bin, power) energy, rest silent.
     fn col(time: f64, energy: &[(usize, f32)]) -> crate::SpectrogramColumn {
@@ -1784,8 +1947,17 @@ mod tests {
 
         // Rows are PIXELS, not points: on a 2x screen the image is built at the
         // density it will be drawn at, rather than upsampled from half of it.
-        assert_eq!(plan(&view(1.0, 300.0, 800.0, 12.0, false)).rows, 300);
-        assert_eq!(plan(&view(2.0, 300.0, 800.0, 12.0, false)).rows, 600);
+        // Rounded up to a quantum, so never coarser than the pane and never
+        // more than a quantum finer — see [`PANE_QUANTUM`].
+        let rows_at = |ppp: f32, pitch: f32| plan(&view(ppp, pitch, 800.0, 12.0, false)).rows as f32;
+        for (ppp, pitch) in [(1.0, 300.0), (2.0, 300.0), (1.0, 517.0), (2.0, 517.0)] {
+            let rows = rows_at(ppp, pitch);
+            let want = pitch * ppp;
+            assert!(rows >= want, "{rows} rows is coarser than {want} pixels");
+            assert!(rows < want + PANE_QUANTUM, "{rows} rows for {want} pixels wastes an image");
+        }
+        // Twice the density really is twice the image, quantum aside.
+        assert!((rows_at(2.0, 517.0) / rows_at(1.0, 517.0) - 2.0).abs() < 0.2);
         // And never a taller image than the GPU will take.
         let mut small = view(2.0, 4000.0, 800.0, 12.0, false);
         small.max_rows = 2048;
@@ -1869,13 +2041,6 @@ mod tests {
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
         let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let style = ColumnStyle {
-            rows: reads.len(),
-            bucket_bits: 0,
-            scale_min_bits: 0,
-            scale_span_bits: 0,
-            color: ColumnColor::new(&SpectrumConfig::default()),
-        };
 
         // Every FFT window the pane offers, by the lag it gives a column: a
         // column is stamped at the middle of the window it measured.
@@ -1919,10 +2084,14 @@ mod tests {
                             agg.window(&history, first, bucket, &reads, planned);
                         let visible = centers.len();
                         let first_key = (centers[0] / bucket).floor() as i64;
+                        let last_key = first_key + visible as i64 - 1;
                         let capacity = ring_capacity(planned, visible);
+                        let style = style_for(reads.len(), bucket, span, &SWEEP_SCALE);
 
                         // And exactly what `write_ring` then decides.
-                        if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key)) {
+                        if ring.as_ref().is_none_or(|r| {
+                            r.carries(capacity, &style, first_key, last_key).is_some()
+                        }) {
                             restarts += 1;
                             ring = Some(SpectrogramRing::restarted(
                                 capacity,
@@ -1931,7 +2100,7 @@ mod tests {
                             ));
                             caps.insert(capacity);
                         }
-                        ring.as_mut().expect("just restarted").wrote(first_key + visible as i64 - 1);
+                        ring.as_mut().expect("just restarted").wrote(first_key, last_key);
                     }
 
                     // One of each to get started, and none after: from then on a
@@ -1941,6 +2110,149 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A gesture must cost a re-layout at its BOUNDARIES, not one per frame.
+    ///
+    /// Both caches used to reset their own slack whenever they rebuilt: the
+    /// aggregator re-folded flush with the window, and the ring's painted range
+    /// restarted flush with it too. A Span being ZOOMED OUT then asks for
+    /// something older on the very next frame — which rebuilds, sits flush, and
+    /// is asked again. Self-sustaining: once a widening gesture trips it, every
+    /// frame of the drag rebuilds, however long the caches had been running
+    /// before, and the overlay reads both counters pinned at the frame rate.
+    ///
+    /// Now a rebuild refills the retention behind the window, and the ring
+    /// paints the revealed slabs rather than starting over — so a zoom costs a
+    /// re-layout only where the slab width actually changes, at a rung.
+    ///
+    /// The exception is a PITCH zoom, which moves `reads` on every frame and so
+    /// re-folds on every frame. That one wants time and pitch aggregated
+    /// separately, which is a larger change and not made here; it is left
+    /// unasserted rather than pinned, so fixing it does not fail this.
+    #[test]
+    fn a_gesture_costs_a_layout_at_its_boundaries_not_a_frame() {
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let lag = 0.5 * 8192.0 / 48000.0;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let rows = 64;
+        let reads: Vec<RowRead> = bins_for(rows, &scale).iter().map(|b| b.read).collect();
+
+        // A gesture: what Span it asks for on its `n`th frame, and the
+        // re-layouts it is allowed over the whole run.
+        type Gesture<'a> = (&'a str, u32, &'a dyn Fn(u32) -> f64);
+        // Held still; zoomed out across four rungs; zoomed in inside one. The
+        // gesture starts as soon as the window is full, so neither cache has
+        // scrolled itself any slack — which is the case that cascaded.
+        let gestures: [Gesture; 3] = [
+            ("held still", 1, &|_| 30.0),
+            ("zoomed out across rungs", 5, &|i| 20.0 * 1.004f64.powi(i as i32)),
+            ("zoomed in inside a rung", 1, &|i| 30.0 - 5.0 * (i as f64 / 200.0)),
+        ];
+
+        for (name, allowed, gesture) in gestures {
+            let mut agg = SpectrogramAgg::new();
+            let mut history = crate::SpectrumHistory::default();
+            let mut ring: Option<SpectrogramRing> = None;
+            let (mut restarts, mut frames) = (0u32, 0u32);
+            let settle = 70.0;
+            for i in 0..(((settle + 2.0) / interval) as usize) {
+                let t = i as f64 * interval;
+                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+                let now = t + lag;
+                if now < settle {
+                    continue;
+                }
+                let span = gesture(frames);
+                frames += 1;
+
+                let bucket = live_slab(span, cols);
+                let style = style_for(rows, bucket, span, &scale);
+                let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+                let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
+                let first_key = (centers[0] / bucket).floor() as i64;
+                let last_key = first_key + centers.len() as i64 - 1;
+                let capacity = ring_capacity(planned, centers.len());
+                if ring
+                    .as_ref()
+                    .is_none_or(|r| r.carries(capacity, &style, first_key, last_key).is_some())
+                {
+                    restarts += 1;
+                    ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
+                }
+                ring.as_mut().expect("just restarted").wrote(first_key, last_key);
+            }
+            assert!(frames > 200, "{name}: the gesture never ran ({frames} frames)");
+            assert!(
+                agg.rebuilds() <= allowed,
+                "{name}: {} re-folds over {frames} frames, not {allowed}",
+                agg.rebuilds(),
+            );
+            assert!(
+                restarts <= allowed,
+                "{name}: {restarts} ring restarts over {frames} frames, not {allowed}",
+            );
+        }
+    }
+
+    /// Resizing the pane must not re-lay the grid on every PIXEL of the drag.
+    ///
+    /// The pane's height decides the image's rows and its width decides the
+    /// slabs and the ring's width, so taken to the pixel every frame of a resize
+    /// is a different image and a different texture — a full re-fold and a full
+    /// repaint each, for as long as the drag lasts. On the overlay's fallback
+    /// row that showed up as both counters sitting at the frame rate: the drag
+    /// was not merely dropping frames, it was spending each one rebuilding.
+    ///
+    /// Vertical moves both (rows change the image AND which buckets a row
+    /// reads); horizontal moves the ring alone, since [`live_slab`] holds the
+    /// slab width across a rung. Both are counted here.
+    #[test]
+    fn resizing_the_pane_holds_the_grid_between_quanta() {
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let view = |pitch_len: f32, depth_len: f32| PaneView {
+            ppp: 2.0,
+            max_rows: 8192,
+            pitch_len,
+            depth_len,
+            window: 30.0,
+            scale,
+            cfg: SpectrumConfig::default(),
+            whole: false,
+        };
+        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
+        // What a re-layout is, from each cache's point of view: the aggregator
+        // re-folds when the style changes (rows or slab width), and the ring
+        // restarts when the style OR its capacity does.
+        let layouts = |sizes: &dyn Fn(f32) -> PaneView, from: i32, to: i32| {
+            let (mut styles, mut rings) = (
+                std::collections::BTreeSet::new(),
+                std::collections::BTreeSet::new(),
+            );
+            for px in from..=to {
+                let plan = Plan::new(&sizes(px as f32), &columns);
+                styles.insert(format!("{:?}", plan.key.style()));
+                rings.insert((format!("{:?}", plan.key.style()), plan.capacity));
+            }
+            (styles.len(), rings.len())
+        };
+
+        // A 600-point drag at 2x is 1200 device pixels: without a quantum every
+        // one of them is its own layout.
+        let dragged = 600;
+        let quanta = (dragged as f32 * 2.0 / PANE_QUANTUM).ceil() as usize + 1;
+
+        let (folds, rings) = layouts(&|h| view(h, 800.0), 300, 300 + dragged);
+        assert!(folds <= quanta, "a vertical drag re-folds {folds} times, not {quanta}");
+        assert!(rings <= quanta, "a vertical drag restarts the ring {rings} times");
+
+        let (folds, rings) = layouts(&|w| view(400.0, w), 300, 300 + dragged);
+        assert!(rings <= quanta, "a horizontal drag restarts the ring {rings} times");
+        // And the ladder means width barely touches the aggregator at all: only
+        // a rung crossing re-folds, which a whole drag does a handful of times.
+        assert!(folds <= 8, "a horizontal drag re-folds {folds} times, not a handful");
     }
 
     /// Dragging the Span must not re-lay the grid on every frame of the drag.
@@ -1962,13 +2274,6 @@ mod tests {
         let lag = 0.5 * 8192.0 / 48000.0;
         let cols = LIVE_SLAB_CAP as usize;
         let planned = cols + RING_HEADROOM;
-        let style = ColumnStyle {
-            rows: reads.len(),
-            bucket_bits: 0,
-            scale_min_bits: 0,
-            scale_span_bits: 0,
-            color: ColumnColor::new(&SpectrumConfig::default()),
-        };
         // One rung, end to end: at the 1024-slab cap a width holds while the
         // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
         // 32.8 s. The sweep stops just inside both ends, since crossing a rung
@@ -1980,6 +2285,11 @@ mod tests {
         let mut history = crate::SpectrumHistory::default();
         let mut ring: Option<SpectrogramRing> = None;
         let (mut restarts, mut widths) = (0u32, std::collections::BTreeSet::new());
+        // Which reason, if it does — a Span drag must not restyle at all now
+        // that the style holds only what reaches a texel, so anything but the
+        // opening build is a real bug and this says which.
+        let mut reasons: std::collections::BTreeSet<&'static str> =
+            std::collections::BTreeSet::new();
 
         // Fill past the widest Span in the sweep, so every frame of it is asking
         // for a window the store can actually cover.
@@ -2001,16 +2311,20 @@ mod tests {
             };
 
             let bucket = live_slab(span, cols);
+            let style = style_for(reads.len(), bucket, span, &SWEEP_SCALE);
             widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
             let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
             let first_key = (centers[0] / bucket).floor() as i64;
+            let last_key = first_key + centers.len() as i64 - 1;
             let capacity = ring_capacity(planned, centers.len());
-            if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key)) {
+            let why = ring.as_ref().map(|r| r.carries(capacity, &style, first_key, last_key));
+            if why.is_none_or(|w| w.is_some()) {
                 restarts += 1;
+                reasons.extend(why.flatten().map(|w| Restart::LABELS[w.slot()]));
                 ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
             }
-            ring.as_mut().expect("just restarted").wrote(first_key + centers.len() as i64 - 1);
+            ring.as_mut().expect("just restarted").wrote(first_key, last_key);
         }
 
         assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
@@ -2023,6 +2337,10 @@ mod tests {
             (widths.first(), widths.last()),
         );
         assert_eq!(agg.rebuilds, 1, "the drag rescanned the window");
+        // The opening build and nothing else. A reason here names the field
+        // that moved, which since the style holds only what reaches a texel is
+        // a real bug rather than a cost.
+        assert!(reasons.is_empty(), "the drag restarted the ring: {reasons:?}");
         assert_eq!(restarts, 1, "the drag reallocated the ring");
     }
 

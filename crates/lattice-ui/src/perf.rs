@@ -109,10 +109,10 @@ pub struct FrameCosts {
     /// stroked rounded rect costs.
     pub roll_notes: u32,
     /// The spectrogram's cache fallbacks since the plugin opened: full
-    /// re-aggregations of the window, and ring restarts. CUMULATIVE, so the
-    /// readout below can difference them into a rate without a dropped frame
-    /// losing an event.
-    pub spectrogram_fallbacks: (u32, u32),
+    /// re-aggregations of the window, and ring restarts BY REASON (see
+    /// `panes::spectrogram::Restart`). CUMULATIVE, so the readout below can
+    /// difference them into a rate without a dropped frame losing an event.
+    pub spectrogram_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -271,8 +271,12 @@ pub struct PerfStats {
     /// this pane's silent performance bugs sat at hundreds a second while a
     /// healthy build sits at zero.
     spec_fallbacks: (f32, f32),
+    /// Which reason accounted for most of the restarts in that interval — the
+    /// question that turns a rate into somewhere to look. Empty while there are
+    /// none.
+    spec_restart_reason: &'static str,
     /// The totals the rates were last differenced from.
-    last_fallbacks: (u32, u32),
+    last_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it).
     ///
@@ -330,7 +334,8 @@ impl Default for PerfStats {
             verts: 0,
             roll_notes: 0,
             spec_fallbacks: (0.0, 0.0),
-            last_fallbacks: (0, 0),
+            spec_restart_reason: "",
+            last_fallbacks: (0, [0; crate::panes::spectrogram::Restart::COUNT]),
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -442,10 +447,25 @@ impl PerfStats {
             if elapsed.is_finite() && elapsed > 0.0 {
                 let rate =
                     |total: u32, then: u32| (total.saturating_sub(then) as f64 / elapsed) as f32;
+                let by_reason: Vec<u32> = spectrogram_fallbacks
+                    .1
+                    .iter()
+                    .zip(self.last_fallbacks.1)
+                    .map(|(total, then)| total.saturating_sub(then))
+                    .collect();
+                let restarts: u32 = by_reason.iter().sum();
                 self.spec_fallbacks = (
                     rate(spectrogram_fallbacks.0, self.last_fallbacks.0),
-                    rate(spectrogram_fallbacks.1, self.last_fallbacks.1),
+                    (restarts as f64 / elapsed) as f32,
                 );
+                // The reason that accounted for most of them, which is the one
+                // worth naming.
+                self.spec_restart_reason = by_reason
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, n)| **n)
+                    .filter(|(_, n)| **n > 0)
+                    .map_or("", |(i, _)| crate::panes::spectrogram::Restart::LABELS[i]);
             }
             self.last_fallbacks = spectrogram_fallbacks;
             self.last_readout = now;
@@ -650,12 +670,14 @@ pub(crate) fn draw_overlay(
         // fallen back to redrawing the whole heatmap, which costs milliseconds
         // and looks exactly like a correct picture.
         let (folds, rings) = perf.spec_fallbacks;
-        rows.push((
-            1,
-            "spec",
-            format!("{folds:.0}/s refold · {rings:.0}/s ring"),
-            None,
-        ));
+        // Naming which reason dominated is what turns the rate into somewhere
+        // to look: the image changed, the pane changed, or the window moved
+        // where the texture could not follow.
+        let why = match perf.spec_restart_reason {
+            "" => String::new(),
+            reason => format!(" ({reason})"),
+        };
+        rows.push((1, "spec", format!("{folds:.0}/s refold · {rings:.0}/s ring{why}"), None));
     }
     rows.extend([
         (0, "memory", memory_readout(perf.rss_bytes), None),
@@ -921,7 +943,10 @@ mod tests {
             totals = (totals.0 + folds, totals.1 + rings);
             *now += 1.0 / 60.0;
             perf.record(
-                FrameCosts { spectrogram_fallbacks: totals, ..Default::default() },
+                FrameCosts {
+                    spectrogram_fallbacks: (totals.0, [totals.1, 0, 0, 0, 0, 0]),
+                    ..Default::default()
+                },
                 *now,
                 Workload::default(),
             );
@@ -950,6 +975,26 @@ mod tests {
         let (folds, rings) = perf.spec_fallbacks;
         assert!((folds - 60.0).abs() < 5.0, "a per-frame refold read as {folds}/s, not ~60");
         assert!((rings - 60.0).abs() < 5.0, "a per-frame restart read as {rings}/s, not ~60");
+
+        // And it names WHERE to look: the reason that accounted for most of the
+        // restarts in the interval, which is the difference between "the image
+        // changed", "the pane changed" and "the window jumped".
+        assert_eq!(perf.spec_restart_reason, crate::panes::spectrogram::Restart::LABELS[0]);
+        let mut heavier = (totals.0, [totals.1, totals.1 + 200, 0, 0, 0, 0]);
+        for _ in 0..120 {
+            heavier = (heavier.0, [heavier.1[0], heavier.1[1] + 1, 0, 0, 0, 0]);
+            now += 1.0 / 60.0;
+            perf.record(
+                FrameCosts { spectrogram_fallbacks: heavier, ..Default::default() },
+                now,
+                Workload::default(),
+            );
+        }
+        assert_eq!(
+            perf.spec_restart_reason,
+            crate::panes::spectrogram::Restart::LABELS[1],
+            "the dominant reason must follow the counts",
+        );
     }
 
     #[test]
@@ -1222,7 +1267,7 @@ mod tests {
             FrameCosts {
                 // Enough of both to lay out at their widest: the row carries
                 // two rates, so a build falling back hard is the long case.
-                spectrogram_fallbacks: (900, 900),
+                spectrogram_fallbacks: (900, [150; crate::panes::spectrogram::Restart::COUNT]),
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,
