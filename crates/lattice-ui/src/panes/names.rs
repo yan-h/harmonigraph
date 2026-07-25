@@ -164,9 +164,9 @@ pub(super) fn plan(
         .notes()
         .filter(|note| note.stop(now) >= oldest && scale.contains(note.settled_pitch()))
         .collect();
-    // Held notes first, then the rest oldest first — and a total order within
-    // each, since the offline render must not depend on the order the roll
-    // happened to hand them back and a name's place is decided first-come.
+    // Oldest first — and a total order, since the offline render must not
+    // depend on the order the roll happened to hand them back and a name's
+    // place is decided first-come.
     //
     // OLDEST first is what makes the picture hold still while you play. The
     // greedy gives a name to the first instance of a note it reaches and then
@@ -176,12 +176,13 @@ pub(super) fn plan(
     // evicting it. Newest-first reshuffles the whole pane on every note played,
     // which is precisely when you are trying to read it.
     //
-    // Held notes are the exception, and they are placed BEFORE the sweep, not
-    // merely early in it: a note you are holding down is the one you are most
-    // likely to be asking about, so its name is not the greedy's to refuse.
+    // Held notes go LAST, and step outside the sweep entirely (see below).
+    // Last so that where one does overlap something, it is the held name that
+    // lands on top — they are drawn in this order, and it is the note under
+    // your finger that has to stay readable.
     notes.sort_unstable_by(|a, b| {
-        b.is_live()
-            .cmp(&a.is_live())
+        a.is_live()
+            .cmp(&b.is_live())
             .then(a.start.total_cmp(&b.start))
             .then(a.channel.cmp(&b.channel))
             .then(a.note.cmp(&b.note))
@@ -203,10 +204,29 @@ pub(super) fn plan(
             .or_insert_with(|| note_name(&state.view, &state.tuning, pitch));
         let lead = leading_depth(&time, note, now);
         let rect = label_rect(axes, scale.t_of(pitch), lead, &name, size);
-        // A held note takes its place whatever is already there; everything
-        // else has to find room, including room for the gap it will demand of
-        // whoever comes next.
-        if !note.is_live() && !occupied.free(keep_out(axes, rect)) {
+        // A held note stands outside the sweep in BOTH directions: it is named
+        // whatever is already there, and it is not recorded, so it takes
+        // nothing out of the running for anyone else.
+        //
+        // The second half is not a nicety. A held note's name sits at the
+        // now-line and stays there, while every other name scrolls away from
+        // it — so a held name that occupied its ground would suppress each
+        // older name in turn as the two came level and hand it back once they
+        // parted, which reads as names blinking out and in for as long as the
+        // key is down. Exempting a name from refusal but not from refusing
+        // trades one arbitrary gap for a moving one.
+        //
+        // What it costs is that a held name can overlap another. Briefly, and
+        // it lands on top (the order above), and it is the note being played:
+        // of the three ways to break the tie, this is the one that never
+        // withholds a name that could have been shown.
+        if note.is_live() {
+            placed.push(NoteLabel { name, rect });
+            continue;
+        }
+        // Everything else has to find room — including room for the gap it
+        // will demand of whoever comes next.
+        if !occupied.free(keep_out(axes, rect)) {
             continue;
         }
         occupied.insert(rect);
@@ -669,7 +689,10 @@ mod tests {
         state.tracker.handle_event(off(1.9, 61));
         state.tracker.handle_event(on(1.5, 60));
 
-        assert_eq!(said(&labels(&state, 2.0)), ["C"], "held, it takes the place regardless");
+        // Both are named: the older keeps the place the sweep gave it, and the
+        // held one takes its own regardless. Held names are drawn last, so
+        // where they do overlap it is the held one on top.
+        assert_eq!(said(&labels(&state, 2.0)), ["D\u{266D}", "C"], "held, it is named regardless");
 
         // ...and keeps it for as long as it is held, however the picture
         // around it moves.
@@ -680,6 +703,36 @@ mod tests {
         // the sweep like everything else, and the older note wins.
         state.tracker.handle_event(off(2.0, 60));
         assert_eq!(said(&labels(&state, 2.0)), ["D\u{266D}"], "released, it is one of the crowd");
+    }
+
+    /// A held note takes NOTHING out of the running for anyone else — its name
+    /// is not in the reckoning the other names are placed against.
+    ///
+    /// The other half of the exception, and the half that is not a nicety. A
+    /// held note's name sits at the now-line and stays there while every other
+    /// name scrolls away from it, so a held name that occupied its ground
+    /// would suppress each older name in turn as the two came level and hand
+    /// it back once they parted — names blinking out and in, for as long as
+    /// the key is down. Exempting a name from refusal but not from refusing
+    /// only trades one arbitrary gap for a moving one.
+    #[test]
+    fn a_held_note_takes_no_name_away_from_an_older_one() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 61));
+        state.tracker.handle_event(off(1.9, 61));
+        assert_eq!(said(&labels(&state, 2.0)), ["D\u{266D}"], "alone, it is named");
+
+        // Press middle C right beside it and hold. The two names are close
+        // enough that the sweep would refuse the second of them — but the held
+        // note is not in the sweep, so neither name is withheld.
+        state.tracker.handle_event(on(1.95, 60));
+        assert_eq!(
+            said(&labels(&state, 2.0)),
+            ["D\u{266D}", "C"],
+            "the older name must not blink out because something is being held beside it",
+        );
+        // Still both, a moment later, as the older one starts to draw away.
+        assert_eq!(said(&labels(&state, 2.2)), ["D\u{266D}", "C"]);
     }
 
     /// Per-note tuning, which is what this plugin is for: a note is named by
