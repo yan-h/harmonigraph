@@ -543,6 +543,15 @@ impl SpectrumConfig {
 /// what the octave-pair control guaranteed before it went continuous.
 pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 12.0;
 
+/// How far the roll's time span may be taken, in seconds. Named because two
+/// controls now set it — the Analyzer tab's Span bar and the drag across the
+/// picture — and a gesture that clamped to its own idea of the limits would
+/// push the bar past its own ends. The maximum is also what
+/// [`AudioSpectrum::HISTORY_MAX_SECONDS`] is sized to reach back to, so the
+/// heatmap can fill the widest span the axis offers.
+pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;
+pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
+
 /// The level range's domain, in dB. The top is a full-scale sine, the
 /// loudest thing a bucket can hold; the bottom is well under any noise
 /// floor worth looking at.
