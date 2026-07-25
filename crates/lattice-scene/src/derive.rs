@@ -238,8 +238,13 @@ pub fn derive_scene(
         //
         // The home sheet's clearing cuts the grid lines as well as the
         // sheets behind it — a sounding node sits in a clean gap in the
-        // lattice rather than on top of it. Nothing to clear at all when
-        // the window holds no depth.
+        // lattice rather than on top of it. That is reason enough on its
+        // own, so it does NOT wait for depth: on a flat lattice there are
+        // no sheets to hide, but the grid is still there to be cut, and a
+        // gap in the lines is the look either way. (It was gated on the
+        // sevenths extent when the clearing was purely an inter-sheet
+        // device; a flat lattice then had to turn the gutter on by growing
+        // depth it didn't want.)
         //
         // The WIDTH is a constant of the view; the STRENGTH is the note's
         // envelope, applied in the shader against the same `activation` it
@@ -248,11 +253,7 @@ pub fn derive_scene(
         // clearing fully opaque for the whole release and only narrows its
         // soft edge, so the hole hangs around at full strength and then
         // vanishes the instant the voice is pruned.
-        let gutter = if activation > 0.0 && view.extent_sevens != 0 {
-            sevens_gutter
-        } else {
-            0.0
-        };
+        let gutter = if activation > 0.0 { sevens_gutter } else { 0.0 };
 
         nodes.push(NodeInstance {
             lattice_pos: pos,

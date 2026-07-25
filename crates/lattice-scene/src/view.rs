@@ -79,6 +79,11 @@ pub struct ViewConfig {
     /// shader, against the same activation that paints the node), so a
     /// clearing fades out exactly as its note does while holding its width;
     /// a node that sounds nothing clears nothing at all.
+    ///
+    /// Named for the sevens layer it was built for, but not confined to it:
+    /// the home sheet clears too, and at any sevenths extent — with the
+    /// lattice flat there is no sheet behind to hide, but the grid lines
+    /// are still cut, which is a look worth having on its own.
     #[serde(default)]
     pub sevens_gutter: f32,
     /// How wide the clearing's fade is, same units — and deliberately NOT

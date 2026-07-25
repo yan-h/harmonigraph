@@ -98,8 +98,9 @@ pub struct NodeInstance {
     /// node's size on screen changes.
     pub scale: f32,
     /// Width of the knockout gutter this node clears around itself, in quad
-    /// UV units (see [`ViewConfig::sevens_gutter`]). 0 on the home sheet,
-    /// and whenever the gutter is off.
+    /// UV units (see [`ViewConfig::sevens_gutter`]). Every sounding node
+    /// clears, the home sheet included and whatever depth the window holds;
+    /// 0 on a silent node, and whenever the gutter is off.
     pub gutter: f32,
     /// Signed cents from the home-sheet node this one SHARES A NAME with:
     /// `(threes - 2*(sevens - center), fives, center)`, which is the
