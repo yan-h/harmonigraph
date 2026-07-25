@@ -10,10 +10,9 @@
 //! second pitch-keyed scheme laid over the first is two things to read where
 //! there was one.
 //!
-//! So the roll says it, since the roll is already drawing the notes: a name at
-//! the moment each one was struck, riding just clear of the ribbon it belongs
-//! to. The heatmap band under a ribbon is the same note, so naming the ribbon
-//! names the band.
+//! So the roll says it, since the roll is already drawing the notes: a name
+//! written ON each ribbon, at its leading edge. The heatmap band under a
+//! ribbon is the same note, so naming the ribbon names the band.
 //!
 //! EVERY note, not one per pitch. The alternative — name a pitch the first
 //! time it is played and rule a line forward to carry it — reads well on paper
@@ -51,15 +50,8 @@ use crate::{theme, SharedState};
 /// its edge.
 const LABEL_PT: f32 = 9.5;
 
-/// Points of clear air between a ribbon's edge and the name riding above it,
-/// and how far the name is set in from the onset along the time axis.
-///
-/// The lift keeps the name off the ribbon rather than across it. A ribbon is a
-/// couple of points thick at the zooms this pane is used at and a name is ten,
-/// so a name centred on the note would have the note's own colour running
-/// through the middle of the letter — losing both the letter and the one thing
-/// the ribbon's colour is for.
-const LABEL_LIFT: f32 = 2.0;
+/// Points the name is set in from the ribbon's leading edge, along the time
+/// axis. Enough that the letter is not touching the end it starts from.
 const LABEL_INSET: f32 = 2.0;
 
 /// What a monospace glyph advances, and a line box stands, as fractions of the
@@ -140,12 +132,6 @@ pub(super) fn plan(
     notes.truncate(MAX_CANDIDATES);
 
     let size = LABEL_PT * label_scale;
-    // Time runs from the now-line at `split` out to the past live; whole-song
-    // lays the whole take out from the near edge, so "later" is the far one.
-    let d_now = if time.whole_song() { 1.0 } else { split };
-    // Half a ribbon, in points — how far a name has to be lifted to clear the
-    // note it names. In semitones of the pitch axis, like the ribbon itself.
-    let half_ribbon = (cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len();
 
     // One naming per pitch CLASS rather than per note. Naming walks every
     // visible lattice node looking for the match that spells best, and a
@@ -158,11 +144,8 @@ pub(super) fn plan(
         let name = *names
             .entry(class)
             .or_insert_with(|| note_name(&state.view, &state.tuning, pitch));
-        // The onset, CLAMPED into the region: a note that began before the
-        // window still has a ribbon on the pane, and the visible start of that
-        // ribbon is where its name belongs.
-        let d = time.depth_of(note.start);
-        let rect = label_rect(axes, scale.t_of(pitch), d, d_now, &name, size, half_ribbon);
+        let lead = leading_depth(&time, note, now);
+        let rect = label_rect(axes, scale.t_of(pitch), lead, &name, size);
         if placed.iter().any(|other| other.rect.intersects(rect)) {
             continue;
         }
@@ -171,24 +154,52 @@ pub(super) fn plan(
     placed
 }
 
-/// The screen box a name covers at pitch `p` and depth `d`, padded by the
-/// clear space it demands around itself.
-fn label_rect(
-    axes: &Axes,
-    p: f32,
-    d: f32,
-    d_now: f32,
-    name: &NoteName,
-    size: f32,
-    half_ribbon: f32,
-) -> egui::Rect {
-    // Set in toward the end the note runs to, so the name lies along its own
-    // ribbon rather than off the start of it.
-    let into = if d_now > d { LABEL_INSET } else { -LABEL_INSET };
-    // Lifted clear of the ribbon's own edge, so the note's colour stays
-    // readable underneath its name.
-    let (pos, align) = axes.text_anchor(p, d, half_ribbon + LABEL_LIFT, into);
-    align.anchor_size(pos, name_extent(name, size)).expand(LABEL_PAD)
+/// The depth of a ribbon's LEADING edge — the end of it that comes first in
+/// reading order, which is the low-depth end in either layout and in either
+/// orientation (the left of a pane laid out along its long side, the top of an
+/// upright one).
+///
+/// Taken as a minimum rather than by naming an end, because which end of a
+/// note that is differs between the two layouts and the arithmetic does not:
+/// live, time runs from the now-line outward, so a note's leading edge is
+/// where it most recently sounded; whole-song lays the take out in reading
+/// order, so it is the onset.
+///
+/// What this buys live is the behaviour a held note ought to have. While the
+/// key is down the note keeps reaching the present, so its leading edge IS the
+/// now-line: the name sits still there, at the head of a ribbon growing out
+/// behind it, for as long as the note is held. The moment it is released that
+/// edge is the release, and the name travels away with the note it belongs to.
+/// Anchoring on the onset instead would slide the name away from the note the
+/// whole time it was being played — which is exactly when you are looking at
+/// it.
+///
+/// Both ends are CLAMPED into the region on the way, so a note that reaches
+/// past either edge is named at the last of it still on the pane.
+fn leading_depth(time: &TimeAxis, note: &RollNote, now: f64) -> f32 {
+    time.depth_of(note.start).min(time.depth_of(note.stop(now)))
+}
+
+/// The screen box a name covers on a ribbon at pitch `p` whose leading edge is
+/// at depth `d`, padded by the clear space it demands around itself.
+///
+/// ON the ribbon across the pitch axis — centred on the note's own line, not
+/// standing off it. The note is what the name is about, so the name sits on
+/// it; the halo every label here carries is what keeps the letter legible
+/// against whatever colour the ribbon is (see [`draw`]).
+///
+/// Along the time axis it grows from the leading edge INTO the note, so a name
+/// lies over its own ribbon rather than over the picture in front of it.
+fn label_rect(axes: &Axes, p: f32, d: f32, name: &NoteName, size: f32) -> egui::Rect {
+    let est = name_extent(name, size);
+    let depth = axes.dir_depth();
+    // How far the box reaches along the depth axis: text always runs across
+    // the screen, so that is its width on a pane laid out along its long side
+    // and its height on an upright one. Projecting answers both without naming
+    // a screen side.
+    let along_depth = (est.x * depth.x).abs() + (est.y * depth.y).abs();
+    let centre = axes.at(p, d) + depth * (LABEL_INSET + along_depth * 0.5);
+    egui::Rect::from_center_size(centre, est).expand(LABEL_PAD)
 }
 
 /// What a name covers, estimated from the sizes its pieces are laid out at.
@@ -419,45 +430,70 @@ mod tests {
         assert_eq!(said(&labels(&state, 8.0)), ["C", "C", "C", "C"]);
     }
 
-    /// A name sits at the note's ONSET and rides clear of the ribbon rather
-    /// than across it: a ribbon is a couple of points thick where a name is
-    /// ten, so a name centred on the note would have the note's own colour
-    /// running through the middle of the letter.
+    /// A name sits ON its ribbon — centred across the note's own line, not
+    /// standing off it — and at the ribbon's LEADING edge, growing back into
+    /// the note from there.
     #[test]
-    fn a_name_sits_at_the_onset_and_clear_of_the_ribbon() {
+    fn a_name_sits_on_its_ribbon_at_the_leading_edge() {
         let mut state = state(24.0, 10.0);
         state.tracker.handle_event(on(2.0, 60));
-        state.tracker.handle_event(off(9.0, 60));
+        state.tracker.handle_event(off(6.0, 60));
 
         let placed = labels(&state, 10.0);
         assert_eq!(placed.len(), 1);
         let axes = Axes::new(PANE, &state.spectrum_config);
-        // Depth runs 0 (now) to 1 (a window ago); the onset is 8 of the
-        // window's 10 seconds back. Horizontal: depth is the x axis, and pitch
-        // climbs with -y.
-        let onset = axes.at(0.5, 0.8);
+        // Horizontal: depth is the x axis with now at the left, and pitch
+        // climbs with -y. The ribbon runs from the release (4s back, depth
+        // 0.4) to the onset (8s back, depth 0.8), so its leading edge is the
+        // release.
         let rect = placed[0].rect;
+        let lead = axes.at(0.5, 0.4);
         assert!(
-            rect.max.x <= onset.x + LABEL_PAD + 0.01,
-            "the name lies back along the ribbon from the onset, not past it",
+            (rect.center().y - lead.y).abs() < 1.0,
+            "the name is centred on the note's own line, not lifted off it",
         );
-        assert!(rect.max.y < onset.y, "and clears the ribbon rather than crossing it");
+        assert!(rect.min.x >= lead.x, "it starts at the leading edge");
+        assert!(rect.min.x < lead.x + 2.0 * LABEL_INSET, "...and right at it");
+        assert!(rect.max.x < axes.at(0.5, 0.8).x, "growing back into the note, not past it");
+    }
+
+    /// A HELD note's name stays put at the now-line, and starts travelling
+    /// only once the note is released.
+    ///
+    /// This is what anchoring on the leading edge rather than the onset buys.
+    /// While the key is down the note keeps reaching the present, so its
+    /// leading edge IS the now-line and the name sits still at the head of a
+    /// ribbon growing out behind it. Anchored on the onset, the name would
+    /// slide away down the pane for the whole time the note was sounding —
+    /// which is exactly when you are looking at it.
+    #[test]
+    fn a_held_notes_name_waits_at_the_now_line_and_leaves_when_released() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60));
+
+        let at = |state: &SharedState, now| labels(state, now)[0].rect.min.x;
+        let early = at(&state, 2.0);
+        let later = at(&state, 4.0);
+        assert_eq!(early, later, "held, the name holds its place while the ribbon grows");
+
+        state.tracker.handle_event(off(4.0, 60));
+        assert!(at(&state, 5.0) > later, "released, it travels away with the note");
+        assert!(at(&state, 7.0) > at(&state, 5.0), "...and keeps travelling");
     }
 
     /// A note that began before the window still has a ribbon on the pane, so
-    /// it still gets a name — at the visible start of that ribbon. A drone
-    /// held since before the Span reaches back is exactly the note whose name
-    /// is hardest to recover any other way.
+    /// it still gets a name. A drone held since before the Span reaches back
+    /// is exactly the note whose name is hardest to recover any other way —
+    /// and being held, its name waits at the now-line.
     #[test]
-    fn a_note_that_began_before_the_window_is_named_at_the_edge() {
+    fn a_note_that_began_before_the_window_is_still_named() {
         let mut state = state(24.0, 10.0);
         state.tracker.handle_event(on(0.0, 67)); // still held
         let placed = labels(&state, 100.0);
         assert_eq!(said(&placed), ["G"]);
 
         let axes = Axes::new(PANE, &state.spectrum_config);
-        let far = axes.at(0.5, 1.0);
-        assert!(placed[0].rect.max.x <= far.x + LABEL_PAD + 0.01, "clamped to the far edge");
+        assert!(placed[0].rect.min.x >= axes.at(0.5, 0.0).x, "at the now-line, held");
     }
 
     /// Notes off the pitch zoom are not named, and the zoom is the ordinary
