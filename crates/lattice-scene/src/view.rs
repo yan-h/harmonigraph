@@ -168,7 +168,7 @@ pub struct ViewConfig {
         default,
         skip_serializing,
         rename = "outer_backdrop",
-        deserialize_with = "bare_bool_as_some"
+        deserialize_with = "bare_as_some"
     )]
     pub legacy_outer_backdrop: Option<bool>,
     /// The outer glyphs' solidity, 0..1 (mirrors [`core_solidity`] for the
@@ -207,14 +207,44 @@ pub struct ViewConfig {
     #[serde(default, skip_serializing)]
     pub node_body: LegacyNodeBody,
     // ---- Melody / bass highlight -----------------------------------------
-    /// Which of the outer held notes to mark, so the melody and/or bass
-    /// line reads at a glance out of a chord. The mark rides the OUTER EDGE
-    /// of that note's octave indicator and nothing else — it never touches
-    /// the core, whose color is the note's own. That also makes it the layer
-    /// that survives a chord voiced within a single pitch class: every
-    /// octave of one note lands on the same node, differing only by slot.
-    #[serde(default)]
-    pub highlight_extremes: HighlightExtremes,
+    // Mark the outer held notes, so the melody and/or bass line reads at a
+    // glance out of a chord. "Outer" is by sounding pitch (`Voice::pitch`,
+    // which includes MPE/tuning bends), over HELD voices only: a released
+    // note is on its way out and shouldn't keep the mark from the note that
+    // replaced it.
+    //
+    // A mark rides the OUTER EDGE of that note's octave indicator and
+    // nothing else — it never touches the core, whose color is the note's
+    // own. That also makes it the layer that survives a chord voiced within
+    // a single pitch class: every octave of one note lands on the same node,
+    // differing only by slot.
+    /// Mark the highest held note.
+    ///
+    /// Independent of [`mark_bass`](Self::mark_bass), which is what the two
+    /// of them are: the rings are told apart by radius (melody inside the
+    /// octave band, bass outside) rather than by hue, so a note that is at
+    /// once the highest and the lowest — a lone held note, or a chord whose
+    /// top and bottom share a pitch class — simply gets both.
+    #[serde(default = "default_true")]
+    pub mark_melody: bool,
+    /// Mark the lowest held note. See [`mark_melody`](Self::mark_melody).
+    #[serde(default = "default_true")]
+    pub mark_bass: bool,
+    /// Load-only shim: blobs from before the two marks became independent
+    /// flags carry one `highlight_extremes` token (Off/Melody/Bass/Both).
+    /// Folded into the pair by [`migrate_legacy`](Self::migrate_legacy) and
+    /// never written back — the same shape as
+    /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop), and for the
+    /// same reason: the old blobs wrote the variant BARE, which RON will not
+    /// read into an `Option`'s `Some`, and a failed parse drops the whole
+    /// persist rather than just this field.
+    #[serde(
+        default,
+        skip_serializing,
+        rename = "highlight_extremes",
+        deserialize_with = "bare_as_some"
+    )]
+    pub legacy_highlight_extremes: Option<HighlightExtremes>,
     /// How thick each melody/bass ring is, in quad UV units — the same
     /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
     /// three read against each other directly. One thickness for both
@@ -342,14 +372,15 @@ fn default_true() -> bool {
     true
 }
 
-/// Read a legacy bare `true`/`false` into an `Option<bool>` that means
-/// "the key was there". A plain `Option<bool>` field can't do this: RON
-/// writes options as `Some(true)`/`None`, so it rejects the bare bool the
+/// Read a legacy BARE value — `true`, `Both` — into an `Option<T>` that
+/// means "the key was there". A plain `Option<T>` field can't do this: RON
+/// writes options as `Some(true)`/`None`, so it rejects the bare token the
 /// old blobs actually contain. `serde(default)` still supplies `None` when
 /// the key is absent — this only runs when it is present.
-fn bare_bool_as_some<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+fn bare_as_some<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
 {
     serde::Deserialize::deserialize(d).map(Some)
 }
@@ -498,6 +529,13 @@ impl ViewConfig {
             self.outer_backdrop = if on { 1.0 } else { 0.0 };
         }
 
+        // The melody/bass marks' pre-split enum, which was exactly these two
+        // bits packed into four names.
+        if let Some(which) = self.legacy_highlight_extremes.take() {
+            self.mark_melody = which.marks_melody();
+            self.mark_bass = which.marks_bass();
+        }
+
         match std::mem::replace(&mut self.core_style, CoreStyle::On) {
             CoreStyle::None => self.core_radius = 0.0,
             CoreStyle::Orb => self.core_solidity = 1.0,
@@ -581,7 +619,12 @@ impl Default for ViewConfig {
             idle_marker: IdleMarker::None,
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
-            highlight_extremes: HighlightExtremes::default(),
+            // Both ends marked: the rings are subtle enough to live with
+            // always on, and a chord's outer voices are worth seeing without
+            // having to go turn something on first.
+            mark_melody: true,
+            mark_bass: true,
+            legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.070_653_12,
             grid_color: default_grid_color(),

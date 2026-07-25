@@ -137,7 +137,7 @@ pub struct NodeInstance {
     /// masks is a note that is at once the melody and the bass (a lone held
     /// note, or the two ends of a chord voiced inside one octave). The two
     /// marks are drawn as rings at different radii, so that costs nothing:
-    /// they simply both draw. See [`HighlightExtremes`].
+    /// they simply both draw. See [`ViewConfig::mark_melody`].
     pub bass_slots: u32,
     /// How far each mark has eased in, 0..1: a ring grows on over
     /// [`ATTACK_TIME`] from the moment its note TOOK that end, rather than

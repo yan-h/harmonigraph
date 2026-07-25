@@ -20,10 +20,11 @@ fn persist_round_trips_camera_and_view() {
     state.view.outer_solidity = 0.3;
     state.view.idle_marker = lattice_scene::IdleMarker::Dot;
     state.view.idle_radius = 0.31;
-    // Melody, not Both: Both is the default, and this test's whole
+    // Melody alone: both marks on is the default, and this test's whole
     // point is that the fields prove they round-trip rather than
     // matching the defaults by luck.
-    state.view.highlight_extremes = lattice_scene::HighlightExtremes::Melody;
+    state.view.mark_melody = true;
+    state.view.mark_bass = false;
     state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
@@ -50,10 +51,8 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.outer_solidity, 0.3);
     assert_eq!(restored.view.idle_marker, lattice_scene::IdleMarker::Dot);
     assert_eq!(restored.view.idle_radius, 0.31);
-    assert_eq!(
-        restored.view.highlight_extremes,
-        lattice_scene::HighlightExtremes::Melody
-    );
+    assert!(restored.view.mark_melody);
+    assert!(!restored.view.mark_bass, "bass off round-trips");
     assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
@@ -105,6 +104,37 @@ fn removed_octave_styles_in_old_persist_blobs_load_as_slices() {
             lattice_scene::OuterStyle::Slices,
             "{removed} folds to the one surviving style"
         );
+    }
+}
+
+#[test]
+fn a_pre_split_melody_bass_blob_loads_as_the_two_flags() {
+    // The two marks were one four-way enum before they became the pair of
+    // flags they always were. An old blob carries `highlight_extremes` and
+    // NEITHER flag, and it writes the variant BARE — so without the
+    // load-only shim the token wouldn't parse into an Option and the failed
+    // parse would drop the WHOLE persist, camera and layout with it.
+    for (token, melody, bass) in [
+        ("Off", false, false),
+        ("Melody", true, false),
+        ("Bass", false, true),
+        ("Both", true, true),
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        state.view.mark_melody = false;
+        state.view.mark_bass = false;
+        let saved = state.save_persist().replace(
+            "mark_melody:false,mark_bass:false",
+            &format!("highlight_extremes:{token}"),
+        );
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {token}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.view.mark_melody, melody, "{token} -> melody");
+        assert_eq!(restored.view.mark_bass, bass, "{token} -> bass");
+        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores ({token})");
     }
 }
 

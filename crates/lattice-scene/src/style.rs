@@ -158,11 +158,18 @@ impl IdleMarker {
     }
 }
 
-/// Which extreme held notes get marked, so a chord's melody and/or bass
-/// line is identifiable at a glance. "Extreme" is by sounding pitch
-/// (`Voice::pitch`, which includes MPE/tuning bends), over HELD voices
-/// only: a released note is on its way out and shouldn't keep the mark
-/// from the note that replaced it.
+/// Legacy load-only spelling of the melody/bass marks, from before they
+/// became the two independent flags they always were:
+/// [`ViewConfig::mark_melody`](crate::ViewConfig::mark_melody) and
+/// [`mark_bass`](crate::ViewConfig::mark_bass). Four variants for two bits
+/// meant the UI offered a row of alternatives to a question with two
+/// answers, and "Both" had to be argued for as a default rather than
+/// falling out of two boxes both being ticked.
+///
+/// Persisted blobs still carry a `highlight_extremes` token;
+/// [`ViewConfig::migrate_legacy`](crate::ViewConfig::migrate_legacy) folds
+/// it into the pair and it is never written back. Kept as a distinct type
+/// only so those tokens keep deserializing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum HighlightExtremes {
     Off,
@@ -170,13 +177,7 @@ pub enum HighlightExtremes {
     Melody,
     /// The lowest held note — the bass.
     Bass,
-    /// Both. Each ring takes its own note's color, and they are told apart
-    /// by radius (melody inside the octave band, bass outside) rather than
-    /// by hue. The default: the marks are subtle
-    /// enough to live with always-on, and a chord's outer voices are
-    /// worth seeing without having to go turn something on first. Blobs
-    /// saved before this setting existed pick it up too, which is
-    /// deliberate.
+    /// Both, which is what a blob predating the setting entirely picks up.
     #[default]
     Both,
 }

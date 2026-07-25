@@ -108,7 +108,8 @@ fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     tracker.prune(1.0, frame.fade_time);
     let view = ViewConfig {
-        highlight_extremes: HighlightExtremes::Both,
+        mark_melody: true,
+        mark_bass: true,
         ..ViewConfig::default()
     };
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
@@ -160,7 +161,8 @@ fn releasing_a_chord_leaves_no_fading_marks() {
     // Mid-fade, well within one fade time.
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let view = ViewConfig {
-        highlight_extremes: HighlightExtremes::Both,
+        mark_melody: true,
+        mark_bass: true,
         ..ViewConfig::default()
     };
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.5);
@@ -409,7 +411,7 @@ fn grid_color_and_dashes_come_from_the_view() {
 }
 
 /// Play `notes` on channel 0 and derive a scene marking both extremes.
-fn marked_scene(notes: &[u8], which: HighlightExtremes) -> Scene {
+fn marked_scene(notes: &[u8], mark_melody: bool, mark_bass: bool) -> Scene {
     let mut tracker = NoteTracker::new();
     for &note in notes {
         tracker.handle_event(NoteEvent {
@@ -419,7 +421,7 @@ fn marked_scene(notes: &[u8], which: HighlightExtremes) -> Scene {
             kind: NoteEventKind::On { velocity: 1.0 },
         });
     }
-    let view = ViewConfig { highlight_extremes: which, ..ViewConfig::default() };
+    let view = ViewConfig { mark_melody, mark_bass, ..ViewConfig::default() };
     scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0)
 }
 
@@ -441,7 +443,7 @@ fn marked_slots(scene: &Scene, melody: bool) -> (u32, usize) {
 fn melody_and_bass_mark_the_outer_held_notes() {
     // C4/E4/G4: the melody is G4 (octave slot 4), the bass C4 (slot 4
     // too -- same MIDI octave, but different nodes/pitch classes).
-    let scene = marked_scene(&[60, 64, 67], HighlightExtremes::Both);
+    let scene = marked_scene(&[60, 64, 67], true, true);
     let (melody_bits, melody_nodes) = marked_slots(&scene, true);
     let (bass_bits, bass_nodes) = marked_slots(&scene, false);
     assert_eq!(melody_bits, 1 << 4, "G4 sounds in MIDI octave 4");
@@ -462,10 +464,10 @@ fn melody_and_bass_mark_the_outer_held_notes() {
     }
 
     // Asking for one end leaves the other unmarked.
-    let melody_only = marked_scene(&[60, 64, 67], HighlightExtremes::Melody);
+    let melody_only = marked_scene(&[60, 64, 67], true, false);
     assert_eq!(marked_slots(&melody_only, true).0, 1 << 4);
     assert_eq!(marked_slots(&melody_only, false).0, 0, "bass not asked for");
-    let off = marked_scene(&[60, 64, 67], HighlightExtremes::Off);
+    let off = marked_scene(&[60, 64, 67], false, false);
     assert_eq!(marked_slots(&off, true).0, 0);
     assert_eq!(marked_slots(&off, false).0, 0);
 }
@@ -476,7 +478,7 @@ fn a_lone_held_note_is_marked_as_both_ends() {
     // as both. The shader splits such a mark between the two colors (see
     // mark_paint) rather than blanking it -- blanking gives an outline that
     // vanishes exactly when two things are true at once.
-    let scene = marked_scene(&[60], HighlightExtremes::Both);
+    let scene = marked_scene(&[60], true, true);
     let mut seen = false;
     for n in &scene.nodes {
         assert_eq!(
@@ -493,7 +495,7 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
     // C2 and C4: one pitch class, so both land on the SAME node and the
     // core can't say which is which -- but they sound in different
     // octave slots, which is what keeps them tellable apart.
-    let scene = marked_scene(&[48, 72], HighlightExtremes::Both);
+    let scene = marked_scene(&[48, 72], true, true);
     let marked: Vec<_> = scene
         .nodes
         .iter()
@@ -529,7 +531,8 @@ fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
     tracker.handle_event(NoteEvent { time: 0.0, channel: 0, note: 72, kind: NoteEventKind::Off });
     let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
     let view = ViewConfig {
-        highlight_extremes: HighlightExtremes::Both,
+        mark_melody: true,
+        mark_bass: true,
         ..ViewConfig::default()
     };
     let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 1.0);
@@ -564,7 +567,8 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let view = ViewConfig {
-        highlight_extremes: HighlightExtremes::Both,
+        mark_melody: true,
+        mark_bass: true,
         ..ViewConfig::default()
     };
     let at = |now: f64| {
@@ -600,7 +604,8 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
     }
     tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 72, kind: NoteEventKind::Off });
     let view = ViewConfig {
-        highlight_extremes: HighlightExtremes::Both,
+        mark_melody: true,
+        mark_bass: true,
         ..ViewConfig::default()
     };
     // Long enough that the released C5 is still in the tracker, which is
@@ -640,7 +645,7 @@ fn held_extremes_never_names_a_released_voice() {
         note: 67,
         kind: NoteEventKind::Off,
     });
-    let (melody, bass) = held_extremes(&tracker, HighlightExtremes::Both);
+    let (melody, bass) = held_extremes(&tracker, true, true);
     assert_eq!(melody, Some((0, 60)), "the released G must not stay the melody");
     assert_eq!(bass, Some((0, 60)));
 
@@ -651,7 +656,7 @@ fn held_extremes_never_names_a_released_voice() {
         note: 60,
         kind: NoteEventKind::Off,
     });
-    assert_eq!(held_extremes(&tracker, HighlightExtremes::Both), (None, None));
+    assert_eq!(held_extremes(&tracker, true, true), (None, None));
 }
 
 #[test]

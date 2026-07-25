@@ -7,7 +7,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
-use lattice_scene::{HighlightExtremes, NodeStyle, OuterStyle, ViewConfig};
+use lattice_scene::{NodeStyle, OuterStyle, ViewConfig};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -133,29 +133,18 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// read at a glance.
 fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Melody / bass");
-    choice_row(
-        ui,
-        "Mark",
-        &mut view.highlight_extremes,
-        &[
-            (HighlightExtremes::Off, "Off", "No melody or bass mark"),
-            (HighlightExtremes::Melody, "Melody", "Mark the highest held note"),
-            (HighlightExtremes::Bass, "Bass", "Mark the lowest held note"),
-            (
-                HighlightExtremes::Both,
-                "Both",
-                "Mark both. Each ring takes its own note's color and \
-                 they are told apart by radius, so a note that is at \
-                 once the highest and the lowest -- a lone held note, \
-                 or a chord whose top and bottom share a pitch class -- \
-                 simply gets both",
-            ),
-        ],
-    );
+    // Two boxes, not a four-way row: the marks are independent, they are
+    // told apart by radius rather than by hue, and a note that is at once
+    // the highest and the lowest -- a lone held note, or a chord whose top
+    // and bottom share a pitch class -- simply gets both.
+    ui.checkbox(&mut view.mark_melody, "Melody")
+        .on_hover_text("Ring the highest held note, just inside the octave band");
+    ui.checkbox(&mut view.mark_bass, "Bass")
+        .on_hover_text("Ring the lowest held note, just outside the octave band");
     // The marks are full rings bracketing the octave band (melody
     // inside, bass outside), each slit either side of the octave
     // responsible so that stretch reads as its own piece.
-    ui.add_enabled_ui(view.highlight_extremes != HighlightExtremes::Off, |ui| {
+    ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
         ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Thickness")
             .show(ui)
             .on_hover_text(
