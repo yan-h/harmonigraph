@@ -328,76 +328,240 @@ const PLUS_INK_H: f32 = 0.386;
 /// lighter mark of the two; this is the size at which the pair looks like
 /// one system rather than a mark and a smaller mark.
 const SEPTIMAL_BULK: f32 = 1.25;
-/// One piece of a drawn mark. Pieces within a pass NEVER overlap each other,
-/// which is a correctness requirement and not tidiness: a label fades out by
-/// carrying its strength in the color's alpha, so two translucent shapes
-/// crossing would composite twice over the crossing and leave the join
-/// brighter than the arms it joins. A `+` drawn as a bar plus an upright
-/// goes patchy exactly as it fades, so it is drawn as a bar plus two stubs.
+/// One piece of a mark, in the mark bitmap's own pixel space.
+///
+/// These are never drawn to the screen. They describe a shape that gets
+/// rasterized ONCE into a coverage bitmap, so pieces may abut or overlap
+/// freely -- coverage is a max over pieces, not a composite of them, and
+/// none of the artifacts of drawing them separately can arise.
 enum MarkPiece {
     Bar(egui::Rect),
     Solid(Vec<egui::Pos2>),
     Line(Vec<egui::Pos2>, f32),
 }
 
-/// A mark's rect: plain geometry at the position it was given.
-///
-/// Nothing here is snapped to the pixel grid, and that is what makes a mark
-/// the same size on every node. The variation this went through two rounds
-/// of chasing was never about fractional sizes -- it was about ROUNDING
-/// them: snapping a rect's two edges independently quantizes its thickness
-/// along with its position, so one bar landed on two pixels and the next on
-/// two and a half. Left alone, a 1.49px bar is 1.49px everywhere, and the
-/// only thing that varies is which pixels it shades -- which is what every
-/// other continuously-positioned thing on the lattice already does.
-fn mark_rect(center: egui::Pos2, size: egui::Vec2) -> egui::Rect {
-    egui::Rect::from_center_size(center, size)
-}
-
-/// Draw one piece, displaced by `offset`.
-fn stamp(painter: &egui::Painter, piece: &MarkPiece, offset: egui::Vec2, paint: egui::Color32) {
-    match piece {
-        MarkPiece::Bar(rect) => {
-            painter.rect_filled(rect.translate(offset), 0.0, paint);
-        }
-        MarkPiece::Solid(points) => {
-            let points = points.iter().map(|p| *p + offset).collect();
-            painter.add(egui::Shape::convex_polygon(points, paint, egui::Stroke::NONE));
-        }
-        MarkPiece::Line(points, width) => {
-            let points = points.iter().map(|p| *p + offset).collect();
-            painter.add(egui::Shape::line(points, egui::Stroke::new(*width, paint)));
+impl MarkPiece {
+    /// Whether this piece covers a point, in bitmap pixel space.
+    fn covers(&self, p: egui::Pos2) -> bool {
+        match self {
+            MarkPiece::Bar(rect) => rect.contains(p),
+            MarkPiece::Solid(points) => {
+                // Convex, consistently wound: inside means the same side of
+                // every edge.
+                let mut neg = false;
+                let mut pos = false;
+                for i in 0..points.len() {
+                    let (a, b) = (points[i], points[(i + 1) % points.len()]);
+                    let cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+                    neg |= cross < 0.0;
+                    pos |= cross > 0.0;
+                }
+                !(neg && pos)
+            }
+            MarkPiece::Line(points, width) => points
+                .windows(2)
+                .any(|seg| point_to_segment(p, seg[0], seg[1]) <= width / 2.0),
         }
     }
 }
 
+/// Distance from `p` to the segment `a`-`b`.
+fn point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    let t = if len2 <= f32::EPSILON { 0.0 } else { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) };
+    ((p - a) - ab * t).length()
+}
+
+/// Which mark, at what size in physical pixels -- the identity of one
+/// rasterized bitmap, and its cache key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct MarkKey {
+    kind: MarkKind,
+    /// The mark's font size in whole physical pixels. Whole, because a
+    /// bitmap has to be rasterized at SOME integer size, exactly as a glyph
+    /// is; the on-screen size then steps by a pixel as the camera zooms,
+    /// which is what a glyph atlas does too.
+    size_px: u32,
+    /// Stroke weight in physical pixels x16, so the cache key stays integral
+    /// without quantizing the weight to something visible.
+    weight_16: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum MarkKind {
+    Minus,
+    Plus,
+    /// A septimal design, and whether it points up.
+    Septimal(SeptimalGlyph, bool),
+}
+
+/// A mark's geometry in its bitmap's pixel space, with the bitmap size.
+///
+/// Built once per (design, size, weight) on a canonical grid at the origin,
+/// which is what makes a mark's proportions IDENTICAL every time it is
+/// drawn. Building it in screen space instead let the two arms of a `+`
+/// land on different subpixel offsets and rasterize to different lengths --
+/// the lopsidedness that survived every attempt to fix it by snapping,
+/// because snapping the pieces is what made them disagree.
+fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
+    let size = key.size_px as f32;
+    let thick = key.weight_16 as f32 / 16.0;
+    let (w, h) = match key.kind {
+        MarkKind::Septimal(..) => (
+            MARK_INK_W * size * SEPTIMAL_BULK,
+            PLUS_INK_H * size * SEPTIMAL_BULK,
+        ),
+        _ => (MARK_INK_W * size, PLUS_INK_H * size),
+    };
+    // The bitmap is a whole number of pixels and the shape is centered in
+    // it, so a design and its mirror rasterize to mirror images.
+    let (bw, bh) = (w.ceil().max(1.0), h.ceil().max(1.0));
+    let c = egui::pos2(bw / 2.0, bh / 2.0);
+    let (hw, hh) = (w / 2.0, h / 2.0);
+    let pieces = match key.kind {
+        MarkKind::Minus => vec![MarkPiece::Bar(egui::Rect::from_center_size(
+            c,
+            egui::vec2(w, thick),
+        ))],
+        MarkKind::Plus => vec![
+            MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(w, thick))),
+            MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(thick, h))),
+        ],
+        MarkKind::Septimal(glyph, up) => {
+            // Point-toward-the-tip: -1 draws upward, +1 downward, so each
+            // design is written once and mirrored by arithmetic.
+            let dir = if up { -1.0 } else { 1.0 };
+            let tip = egui::pos2(c.x, c.y + dir * hh);
+            let base_l = egui::pos2(c.x - hw, c.y - dir * hh);
+            let base_r = egui::pos2(c.x + hw, c.y - dir * hh);
+            match glyph {
+                SeptimalGlyph::Triangle => vec![MarkPiece::Solid(vec![tip, base_l, base_r])],
+                SeptimalGlyph::Hollow => {
+                    vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick)]
+                }
+                SeptimalGlyph::Arrow => {
+                    // Head over the outer end, stem down the middle. They
+                    // may overlap freely: this is a coverage bitmap, so an
+                    // overlap costs nothing where a composite would show.
+                    let neck = c.y + dir * hh * 0.1;
+                    vec![
+                        MarkPiece::Bar(egui::Rect::from_center_size(c, egui::vec2(thick, h))),
+                        MarkPiece::Solid(vec![
+                            tip,
+                            egui::pos2(c.x - hw, neck),
+                            egui::pos2(c.x + hw, neck),
+                        ]),
+                    ]
+                }
+                SeptimalGlyph::Chevron => vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)],
+            }
+        }
+    };
+    (pieces, [bw as usize, bh as usize])
+}
+
+/// Supersampling grid used to turn a mark's outline into coverage. 4x4 is
+/// finer than the antialiasing a shape would have got from the tessellator
+/// and costs nothing: a mark bitmap is a dozen pixels square and is built
+/// once per size, not once per frame.
+const MARK_SUPERSAMPLE: usize = 4;
+
+/// Rasterize a mark to an alpha coverage image -- the same thing a font
+/// rasterizer hands the atlas for a glyph.
+fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
+    let (pieces, [w, h]) = mark_geometry(key);
+    let n = MARK_SUPERSAMPLE;
+    let step = 1.0 / n as f32;
+    let mut pixels = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let mut hits = 0;
+            for sy in 0..n {
+                for sx in 0..n {
+                    let p = egui::pos2(
+                        x as f32 + (sx as f32 + 0.5) * step,
+                        y as f32 + (sy as f32 + 0.5) * step,
+                    );
+                    // Coverage is a UNION over pieces, never a sum: two
+                    // pieces meeting cannot darken or brighten their join.
+                    if pieces.iter().any(|piece| piece.covers(p)) {
+                        hits += 1;
+                    }
+                }
+            }
+            let a = (255 * hits / (n * n)) as u8;
+            pixels.push(egui::Color32::from_white_alpha(a));
+        }
+    }
+    egui::ColorImage { size: [w, h], pixels, source_size: egui::vec2(w as f32, h as f32) }
+}
+
+/// How many mark bitmaps to keep before starting over. Zooming walks through
+/// sizes, and each one is its own bitmap; this is a ceiling on the churn,
+/// not a working-set estimate.
+const MARK_CACHE_LIMIT: usize = 96;
+
+/// The texture for one mark, rasterized on first use and kept in egui's own
+/// per-frame data store.
+fn mark_texture(ctx: &egui::Context, key: MarkKey) -> egui::TextureHandle {
+    type Cache = std::collections::HashMap<MarkKey, egui::TextureHandle>;
+    let cached = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<Cache>>(egui::Id::NULL));
+    if let Some(hit) = cached.as_ref().and_then(|c| c.get(&key)) {
+        return hit.clone();
+    }
+    // LINEAR, because a mark is placed at a subpixel position and resampled
+    // exactly as a glyph is. NEAREST would put the pixel grid back.
+    let handle = ctx.load_texture(
+        format!("mark{key:?}", key = key.size_px),
+        rasterize_mark(key),
+        egui::TextureOptions::LINEAR,
+    );
+    let mut next = cached.map(|c| (*c).clone()).unwrap_or_default();
+    if next.len() >= MARK_CACHE_LIMIT {
+        next.clear();
+    }
+    next.insert(key, handle.clone());
+    ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, std::sync::Arc::new(next)));
+    handle
+}
+
 /// Paint a mark with the rim the glyphs beside it carry -- the same rim, by
-/// the same arithmetic, not an imitation of it.
+/// the same arithmetic, over the same kind of thing.
 ///
-/// `lattice_render`'s text shader states the identity outright: a label's rim
-/// *is* the shape stamped around two rings, and the shader only moved that
-/// loop into the fragment stage because 20 copies of every glyph was most of
-/// the geometry in a busy frame. A mark is one to three rects, so the loop is
-/// affordable on this side, and running it is what makes the two identical:
-/// same radii, same sample counts, same per-stamp alpha, same
-/// `angle = 2*PI*i/samples` starting at zero.
+/// The mark is ONE textured quad of coverage, which is what a glyph is, so
+/// every difference that came of drawing it as separate shapes is gone by
+/// construction: no seam between pieces to feather twice, no join to
+/// composite twice, no arm to rasterize at its own subpixel offset. The
+/// quad lands wherever the label lands, and bilinear sampling resolves it
+/// the way it resolves a glyph.
 ///
-/// This replaces a single hard-edged expansion, which is why the rim used to
-/// read blocky: growing a rect gives it square corners at a uniform alpha,
-/// where stamping around a circle rounds them and grades the outer ring by
-/// how many stamps happen to overlap -- the "fade made of overlap" the ring
-/// alphas were tuned against.
+/// `lattice_render`'s text shader states the identity the rim rests on: a
+/// label's rim IS the shape stamped around two rings, and the shader only
+/// moved that loop into the fragment stage because 20 copies of every glyph
+/// was most of the geometry in a busy frame. A mark is one quad, so the
+/// loop is affordable here -- same radii, same sample counts, same
+/// per-stamp alpha, same `angle = 2*PI*i/samples`.
 ///
-/// Rim first for EVERY piece, then every fill, which is the order stamping
-/// had and the order the shader kept: otherwise one piece's rim darkens the
-/// ink of the piece beside it.
+/// Rim first, then the fill, which is the order stamping had and the order
+/// the shader kept.
 fn paint_mark(
     painter: &egui::Painter,
     ppp: f32,
-    pieces: &[MarkPiece],
+    key: MarkKey,
+    center: egui::Pos2,
     color: egui::Color32,
     outline: egui::Color32,
 ) {
+    let texture = mark_texture(painter.ctx(), key);
+    let [w, h] = texture.size();
+    // One texel per physical pixel: the bitmap was rasterized at this size,
+    // so it is placed at it and never scaled.
+    let rect = egui::Rect::from_center_size(
+        center,
+        egui::vec2(w as f32 / ppp, h as f32 / ppp),
+    );
+    let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
     for (radius, alpha, samples) in crate::text::RINGS {
         if samples == 0 {
             continue;
@@ -407,123 +571,25 @@ fn paint_mark(
         for i in 0..samples {
             let angle = std::f32::consts::TAU * i as f32 / samples as f32;
             let offset = egui::vec2(angle.cos(), angle.sin()) * radius;
-            for piece in pieces {
-                stamp(painter, piece, offset, paint);
-            }
+            painter.image(texture.id(), rect.translate(offset), uv, paint);
         }
     }
-    for piece in pieces {
-        stamp(painter, piece, egui::Vec2::ZERO, color);
-    }
+    painter.image(texture.id(), rect, uv, color);
 }
 
-/// One drawn mark's stroke weight, floored at a single PHYSICAL pixel.
+/// The key for one mark at the size a label is drawing at.
 ///
-/// The floor is the whole reason these marks are geometry: Iosevka's own
-/// bars are 70/1000 em, which is 0.58px at [`MARK_SIZE`], and a stroke
-/// thinner than a pixel spends all its contrast on partial coverage. One
-/// pixel of ink is the least that reads as a line.
-///
-/// A physical pixel, not a point -- a point is two pixels here, so flooring
-/// in points drew every small mark at twice the minimum and made the whole
-/// set look heavy.
-fn mark_thickness(size: f32, weight: f32, ppp: f32) -> f32 {
-    (weight * size).max(1.0 / ppp)
-}
-
-/// The syntonic comma's sign, as geometry: a bar, plus the two stubs that
-/// make it a `+`.
-///
-/// Drawn rather than typeset because Iosevka has no bar thick enough. Every
-/// horizontal it owns -- hyphen, minus, all four dashes, low line, overline
-/// -- is exactly 70/1000 em, which is 0.58px at [`MARK_SIZE`] and 0.35px on
-/// an off-sheet node, so a typeset `-` renders as a half-lit row of pixels
-/// beside a `+` whose upright is 3.18px. The pair has to read as two marks
-/// of one system, and no character in the font can make it.
-///
-/// The upright arrives as two stubs meeting the bar's snapped edges rather
-/// than as one rect crossing it: see [`MarkPiece`].
-fn comma_sign(center: egui::Pos2, size: f32, weight: f32, positive: bool, ppp: f32) -> Vec<MarkPiece> {
-    let thick = mark_thickness(size, weight, ppp);
-    let bar = mark_rect(center, egui::vec2(MARK_INK_W * size, thick));
-    let mut pieces = vec![MarkPiece::Bar(bar)];
-    if positive {
-        // The upright is as wide as the bar is thick, so the cross is one
-        // weight throughout; both come from the same quantized number.
-        let upright = mark_rect(center, egui::vec2(thick, PLUS_INK_H * size));
-        // The stubs start where the bar stops, so the three tile the cross
-        // without ever covering the same pixel twice.
-        //
-        // Drawn at ANY positive height, not only a whole pixel's worth: a
-        // heavy weight leaves short stubs, and dropping them turned the `+`
-        // into a `-` at the top of the weight range. A faint upright still
-        // says "plus"; no upright says something else entirely.
-        for (y0, y1) in [(upright.top(), bar.top()), (bar.bottom(), upright.bottom())] {
-            if y1 - y0 > 0.0 {
-                pieces.push(MarkPiece::Bar(egui::Rect::from_min_max(
-                    egui::pos2(upright.left(), y0),
-                    egui::pos2(upright.right(), y1),
-                )));
-            }
-        }
-    }
-    pieces
-}
-
-/// The septimal comma's mark, in whichever design is being tried. `up` is
-/// the direction it points, which is the sign of the comma count and NOT
-/// the direction of the lattice step: one step up the sevens axis lands a
-/// comma below its namesake, so it points down.
-fn septimal_shape(
-    center: egui::Pos2,
-    size: f32,
-    weight: f32,
-    up: bool,
-    glyph: SeptimalGlyph,
-    ppp: f32,
-) -> Vec<MarkPiece> {
-    let thick = mark_thickness(size, weight, ppp);
-    // Bigger than the `+` box it sits under, because a triangle covers half
-    // of its own bounding box where `+` covers most of one arm's length in
-    // both directions. Matching the boxes makes the septimal mark read as
-    // the lighter of the two; matching the apparent size is the point.
-    let hw = MARK_INK_W * size * SEPTIMAL_BULK / 2.0;
-    let hh = PLUS_INK_H * size * SEPTIMAL_BULK / 2.0;
-    // Point-toward-the-tip: -1 draws upward, +1 downward, so each design is
-    // written once and mirrored by arithmetic.
-    let dir = if up { -1.0 } else { 1.0 };
-    let (cx, cy) = (center.x, center.y);
-    let tip = egui::pos2(cx, cy + dir * hh);
-    let base_l = egui::pos2(cx - hw, cy - dir * hh);
-    let base_r = egui::pos2(cx + hw, cy - dir * hh);
-    match glyph {
-        SeptimalGlyph::Triangle => vec![MarkPiece::Solid(vec![tip, base_l, base_r])],
-        SeptimalGlyph::Hollow => {
-            vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick)]
-        }
-        SeptimalGlyph::Arrow => {
-            // The stem stops where the head starts rather than running under
-            // it: overlapping the two would go patchy on a fading label for
-            // the same reason a crossed `+` does.
-            let neck = cy + dir * hh * 0.1;
-            let span = egui::Rect::from_two_pos(
-                egui::pos2(cx, cy - dir * hh),
-                egui::pos2(cx, neck),
-            );
-            let stem = mark_rect(span.center(), egui::vec2(thick, span.height()));
-            vec![
-                MarkPiece::Bar(stem),
-                MarkPiece::Solid(vec![
-                    tip,
-                    egui::pos2(cx - hw, neck),
-                    egui::pos2(cx + hw, neck),
-                ]),
-            ]
-        }
-        SeptimalGlyph::Chevron => {
-            vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)]
-        }
-    }
+/// `size` is the mark font size in points; the bitmap is rasterized in
+/// physical pixels, so the size crosses into pixels here and is rounded --
+/// a bitmap has an integer size or it has none.
+fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
+    let size_px = (size * ppp).round().max(2.0);
+    // Floored at a whole physical pixel: the whole reason these marks are
+    // not type is that Iosevka's own bars are 70/1000 em, which is 0.58px
+    // at MARK_SIZE, and a stroke thinner than a pixel spends all of its
+    // contrast on partial coverage.
+    let thick = (weight * size * ppp).max(1.0);
+    MarkKey { kind, size_px: size_px as u32, weight_16: (thick * 16.0).round() as u32 }
 }
 
 /// A note name centered on `anchor`: the letter, then a column carrying its
@@ -625,10 +691,11 @@ pub(crate) fn draw_stacked_name(
     let mut draw_signed = |x: f32,
                            direction: f32,
                            count: &str,
-                           half_height: f32,
-                           pieces: &[MarkPiece]|
+                           kind: MarkKind|
      -> f32 {
-        paint_mark(painter, ppp, pieces, color, outline);
+        let key = mark_key(kind, mark_size, marks.weight, ppp);
+        let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
+        paint_mark(painter, ppp, key, center, color, outline);
         if !count.is_empty() {
             batch.text(
                 painter,
@@ -640,35 +707,29 @@ pub(crate) fn draw_stacked_name(
                 outline,
             );
         }
-        // Whichever reaches lower: the drawn shape from its own center, or
+        // Whichever reaches lower: the mark's own bitmap from its center, or
         // the count's digits from theirs.
-        let ink = half_height
+        let ink = (mark_geometry(key).1[1] as f32 / ppp / 2.0)
             .max(if count.is_empty() { 0.0 } else { ink_below(count, &mark_font, line) });
         direction * rise + ink
     };
 
     if name.syntonic_commas != 0 {
-        let center = egui::pos2(left + letter.x + cell / 2.0, anchor.y + rise);
-        let positive = name.syntonic_commas > 0;
-        let half = PLUS_INK_H * mark_size / 2.0;
-        bottom = bottom.max(draw_signed(
-            left + letter.x,
-            1.0,
-            &syntonic,
-            half,
-            &comma_sign(center, mark_size, marks.weight, positive, ppp),
-        ));
+        let kind =
+            if name.syntonic_commas > 0 { MarkKind::Plus } else { MarkKind::Minus };
+        bottom = bottom.max(draw_signed(left + letter.x, 1.0, &syntonic, kind));
     }
     if name.septimal_commas != 0 {
         let up = name.septimal_commas > 0;
         // Up marks sit high and down marks sit low, so the column's own
         // geometry says the same thing the shape does.
         let direction = if up { -1.0 } else { 1.0 };
-        let x = left + letter.x + column;
-        let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
-        let half = PLUS_INK_H * mark_size * SEPTIMAL_BULK / 2.0;
-        let pieces = septimal_shape(center, mark_size, marks.weight, up, marks.glyph, ppp);
-        bottom = bottom.max(draw_signed(x, direction, &septimal, half, &pieces));
+        bottom = bottom.max(draw_signed(
+            left + letter.x + column,
+            direction,
+            &septimal,
+            MarkKind::Septimal(marks.glyph, up),
+        ));
     }
     bottom
 }
@@ -718,98 +779,85 @@ mod tests {
     use super::*;
     use lattice_core::{NoteEvent, NoteEventKind};
 
-    /// Every rect of a drawn mark, at every rim radius it is painted at.
-    fn bars(pieces: Vec<MarkPiece>) -> Vec<egui::Rect> {
-        pieces
-            .into_iter()
-            .filter_map(|p| match p {
-                MarkPiece::Bar(rect) => Some(rect),
-                _ => None,
-            })
-            .collect()
+    /// The alpha at one pixel of a rasterized mark.
+    fn coverage(img: &egui::ColorImage, x: usize, y: usize) -> u8 {
+        img.pixels[y * img.size[0] + x].a()
     }
 
-    /// A `+` is three tiling rects, not a bar crossed by an upright.
+    /// A `+` rasterizes to its own mirror, both ways.
     ///
-    /// A label fades by carrying its strength in the color's alpha, so two
-    /// translucent rects crossing composite twice over the crossing and
-    /// leave the middle of the `+` brighter than its arms -- which is
-    /// visible precisely while a note fades, when the eye is on it.
+    /// The lopsidedness -- one arm visibly longer than the other -- came of
+    /// building the arms in SCREEN space, where each landed on its own
+    /// subpixel offset and rasterized to its own length. Built on the
+    /// bitmap's canonical grid, symmetry is structural.
     #[test]
-    fn the_plus_never_covers_a_pixel_twice() {
-        for ppp in [1.0, 2.0] {
-            for weight in [0.04, 0.12, 0.20] {
-                let rects = bars(comma_sign(egui::pos2(40.0, 40.0), 8.25, weight, true, ppp));
-                assert!(rects.len() >= 2, "a + is more than one rect (ppp {ppp}, w {weight})");
-                for (i, a) in rects.iter().enumerate() {
-                    for b in &rects[i + 1..] {
-                        let overlap = a.intersect(*b);
-                        assert!(
-                            overlap.width() <= 0.0 || overlap.height() <= 0.0,
-                            "pieces {a:?} and {b:?} overlap at ppp {ppp}, w {weight}"
-                        );
-                    }
+    fn a_plus_rasterizes_to_its_own_mirror() {
+        for size in [6.0_f32, 8.25, 13.0, 21.0] {
+            let img = rasterize_mark(mark_key(MarkKind::Plus, size, 0.12, 2.0));
+            let [w, h] = img.size;
+            for y in 0..h {
+                for x in 0..w {
+                    let a = coverage(&img, x, y);
+                    assert_eq!(a, coverage(&img, x, h - 1 - y), "top/bottom at {x},{y} @{size}");
+                    assert_eq!(a, coverage(&img, w - 1 - x, y), "left/right at {x},{y} @{size}");
                 }
             }
         }
     }
 
-    /// Drawn marks are placed where they were told, not rounded onto the
-    /// pixel grid -- the same as the labels beside them and the notes in the
-    /// roll (see `roll::tests::a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps`).
-    /// Snapping is what made a mark step against the node it belongs to.
+    /// The square where a `+`'s bar and upright cross is no brighter than
+    /// the bar itself.
+    ///
+    /// A mark is rasterized as COVERAGE, and coverage is a union over the
+    /// pieces -- so a join cannot be composited twice. Drawn as separate
+    /// translucent shapes it could, and did: the middle of a fading `+` lit
+    /// up against its own arms however carefully the pieces were made not to
+    /// overlap, because the tessellator feathers every edge and two abutting
+    /// edges feather over each other.
     #[test]
-    fn drawn_marks_are_not_snapped_to_the_pixel_grid() {
-        // An anchor deliberately off the grid: it has to come out off the
-        // grid, or something rounded it on the way.
-        let anchor = egui::pos2(40.31, 40.17);
-        let rects = bars(comma_sign(anchor, 8.25, 0.09, true, 2.0));
-        assert!(
-            rects.iter().any(|r| (r.left() * 2.0).fract().abs() > 1e-3),
-            "a mark was rounded onto the pixel grid: {rects:?}"
-        );
-        // The floor still holds: never thinner than one physical pixel.
-        for rect in &rects {
-            assert!(rect.width() >= 0.5 - 1e-3 && rect.height() >= 0.5 - 1e-3, "{rect:?}");
+    fn a_pluss_join_is_no_brighter_than_its_arms() {
+        let img = rasterize_mark(mark_key(MarkKind::Plus, 16.0, 0.12, 2.0));
+        let [w, h] = img.size;
+        let peak = img.pixels.iter().map(|p| p.a()).max().expect("a + has ink");
+        assert_eq!(coverage(&img, w / 2, h / 2), peak, "the join is not the brightest point");
+        // And it is not the ONLY point at that level: the arms reach it too,
+        // so the join does not read as a spot.
+        let at_peak = img.pixels.iter().filter(|p| p.a() == peak).count();
+        assert!(at_peak > w.min(h), "only {at_peak} pixels reach peak coverage of {w}x{h}");
+    }
+
+    /// A mark's bitmap is the same whatever subpixel position its node
+    /// projects to: the key rounds into whole physical pixels, and the
+    /// bitmap is placed rather than rebuilt.
+    #[test]
+    fn a_mark_is_one_bitmap_wherever_it_lands() {
+        // All within one rounding bucket: 8.25..8.37 points is 17 physical
+        // pixels at 2x. Sizes that straddle a bucket edge SHOULD differ --
+        // that is the bitmap stepping by a pixel as the camera zooms, the
+        // same thing a glyph atlas does.
+        let a = mark_key(MarkKind::Minus, 8.25, 0.12, 2.0);
+        for size in [8.25_f32, 8.26, 8.30, 8.36] {
+            assert_eq!(mark_key(MarkKind::Minus, size, 0.12, 2.0), a, "{size}");
+        }
+        // A minus is a single bar, so it too is its own mirror.
+        let img = rasterize_mark(a);
+        let [w, h] = img.size;
+        for y in 0..h {
+            for x in 0..w {
+                assert_eq!(coverage(&img, x, y), coverage(&img, x, h - 1 - y));
+            }
         }
     }
 
-    /// The SAME mark is the same size wherever its node happens to project
-    /// to. This is what "the minus looks different on different notes" was,
-    /// and the cause was ROUNDING sizes rather than fractional sizes: snap a
-    /// rect's two edges independently and its thickness quantizes along with
-    /// its position, 2px here and 2.5px there. Placed as plain geometry, a
-    /// 1.49px bar is 1.49px everywhere.
-    #[test]
-    fn a_mark_is_one_size_wherever_it_lands() {
-        let ppp = 2.0;
-        // Sweep a whole physical pixel, finer than the grid, on both axes.
-        let sizes: Vec<(f32, f32)> = (0..9)
-            .map(|i| {
-                let off = i as f32 * (1.0 / ppp) / 8.0;
-                let rect =
-                    bars(comma_sign(egui::pos2(40.0 + off, 40.0 + off), 8.25, 0.09, false, ppp))[0];
-                (rect.width(), rect.height())
-            })
-            .collect();
-        let first = sizes[0];
-        for size in &sizes {
-            assert!(
-                (size.0 - first.0).abs() < 1e-4 && (size.1 - first.1).abs() < 1e-4,
-                "a mark changed size with subpixel offset: {sizes:?}"
-            );
-        }
-    }
-
-    /// The floor is one PHYSICAL pixel, not one point. A point is two pixels
-    /// on this display, so flooring in points drew every small mark at twice
-    /// the minimum -- which is what made the whole set look heavy.
+    /// The stroke floor is one PHYSICAL pixel, not one point -- a point is
+    /// two pixels here, so flooring in points drew every small mark at twice
+    /// the minimum and made the whole set look heavy.
     #[test]
     fn the_weight_floor_is_a_physical_pixel() {
-        assert!((mark_thickness(4.0, 0.001, 2.0) - 0.5).abs() < 1e-6);
-        assert!((mark_thickness(4.0, 0.001, 1.0) - 1.0).abs() < 1e-6);
-        // Above the floor the weight is what decides it.
-        assert!((mark_thickness(20.0, 0.1, 2.0) - 2.0).abs() < 1e-6);
+        assert_eq!(mark_key(MarkKind::Minus, 4.0, 0.0001, 2.0).weight_16, 16);
+        assert_eq!(mark_key(MarkKind::Minus, 4.0, 0.0001, 1.0).weight_16, 16);
+        // Above the floor the weight is what decides it: 0.1 * 20 * 2 = 4px.
+        assert_eq!(mark_key(MarkKind::Minus, 20.0, 0.1, 2.0).weight_16, 64);
     }
 
     /// Draw the labels for a chord, with the camera at `distance`, and

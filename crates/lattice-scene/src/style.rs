@@ -213,7 +213,7 @@ pub enum SevensLabel {
 /// This enum exists to be DELETED. Four designs are hard to rank by
 /// reasoning about them and easy to rank by looking, so they ship together
 /// and the winner gets hardcoded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum SeptimalGlyph {
     /// Filled triangle. The most ink and the most robust silhouette: the
     /// direction is the whole shape, so nothing about it is a small detail
