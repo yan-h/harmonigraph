@@ -290,16 +290,34 @@ pub struct LatticeStats {
     /// GPU time of the lattice's passes, carrying the
     /// [`GPU_TIME_UNSUPPORTED`] / [`GPU_TIME_PENDING`] sentinels.
     pub gpu_ms: std::sync::atomic::AtomicU32,
-    /// Wall time of the whole `prepare` callback — buffer writes, offscreen
-    /// (re)creation, and the timestamp bookkeeping. egui-wgpu runs this from
+    /// Wall time of the whole `prepare` callback. egui-wgpu runs this from
     /// inside `update_buffers`, so it is billed to the frame's upload stage
     /// and is invisible from outside.
+    ///
+    /// "Prepare" undersells it, and the three fields below exist because the
+    /// name misled for a long time: this callback does not merely stage data.
+    /// It also ENCODES the lattice's whole scene pass and the four-pass bloom
+    /// chain onto egui's encoder — the largest piece of CPU work in the
+    /// frame, sitting inside a row the overlay calls "buf up".
     pub prepare_ms: std::sync::atomic::AtomicU32,
     /// Of that, the time in `device.poll` draining the timestamp readback:
     /// what the GPU measurement costs to take. Kept separate so the
     /// instrumentation can be caught spending the budget it exists to
     /// measure.
     pub poll_ms: std::sync::atomic::AtomicU32,
+    /// Of that, staging this frame's data: sizing the offscreen targets,
+    /// recreating them when the size moved, and the three `queue.write_buffer`
+    /// calls for instances, edges and uniforms.
+    pub write_ms: std::sync::atomic::AtomicU32,
+    /// Of that, encoding the scene pass and the bloom chain — five
+    /// `begin_render_pass` calls and the draws inside them. No GPU work
+    /// happens here; this is the cost of BUILDING the command stream.
+    ///
+    /// Split from `write_ms` because the two answer different questions and
+    /// move for different reasons. A cost that tracks the node count is
+    /// staging; a cost that does not is the encoder, and the fixes have
+    /// nothing in common.
+    pub scene_ms: std::sync::atomic::AtomicU32,
 }
 
 /// `stats` receives this pane's own measurements. Pass `None` for panes whose
@@ -1364,6 +1382,7 @@ impl CallbackTrait for LatticeCallback {
         // Offscreen pixel size: the callback rect at native resolution,
         // scaled by the render-scale view setting (clamped in from_scene).
         // The unscaled screen size drives the bloom chain.
+        let write_start = std::time::Instant::now();
         let max_dim = device.limits().max_texture_dimension_2d;
         let px_size = |scale: f32| {
             let px = screen_descriptor.pixels_per_point * scale;
@@ -1409,7 +1428,9 @@ impl CallbackTrait for LatticeCallback {
         }
 
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
+        let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
 
+        let scene_start = std::time::Instant::now();
         // The scene pass: draw into the pane's offscreen target, on the
         // encoder egui-wgpu executes before its own render pass. paint()
         // then just composites the finished texture.
@@ -1498,11 +1519,15 @@ impl CallbackTrait for LatticeCallback {
             }
         }
 
+        let scene_ms = scene_start.elapsed().as_secs_f32() * 1000.0;
+
         if let Some(stats) = &self.stats {
             use std::sync::atomic::Ordering::Relaxed;
             let prepare_ms = prepare_start.elapsed().as_secs_f32() * 1000.0;
             stats.prepare_ms.store(prepare_ms.to_bits(), Relaxed);
             stats.poll_ms.store(poll_ms.to_bits(), Relaxed);
+            stats.write_ms.store(write_ms.to_bits(), Relaxed);
+            stats.scene_ms.store(scene_ms.to_bits(), Relaxed);
         }
 
         Vec::new()
