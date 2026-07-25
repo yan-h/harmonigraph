@@ -12,32 +12,64 @@
 //! four sample decoders, against a workspace that documents every
 //! dependency it takes on.
 
-/// A decoded mono mixdown.
+/// A decoded file, channels intact.
+///
+/// Channels are kept, not averaged on the way in. The analyzer combines them
+/// in the POWER domain rather than mixing them
+/// ([`ChannelBank`](crate::spectrum::ChannelBank)), so averaging here would
+/// cancel anti-phase content before the analyzer ever saw it — and a render
+/// would show the summed picture whatever the live pane showed, which is the
+/// one difference between the two that cannot be explained away.
 pub struct Audio {
     pub sample_rate: f32,
-    /// Mono samples, channels averaged — what the analyzer wants.
+    /// Interleaved samples: `channels` per frame.
     pub samples: Vec<f32>,
+    pub channels: usize,
 }
 
 impl Audio {
+    /// Frames (not samples): what the timeline is measured in.
+    pub fn frames(&self) -> usize {
+        self.samples.len() / self.channels.max(1)
+    }
+
     pub fn seconds(&self) -> f64 {
         if self.sample_rate <= 0.0 {
             return 0.0;
         }
-        self.samples.len() as f64 / f64::from(self.sample_rate)
+        self.frames() as f64 / f64::from(self.sample_rate)
     }
 
-    /// The mono samples covering `[from, to)` seconds, clamped to what
+    /// The interleaved frames covering `[from, to)` seconds, clamped to what
     /// exists. Past the end this is empty, which reads to the analyzer as
     /// "the source stopped" — exactly right for a bounce that ends before
     /// the visual tail does.
+    ///
+    /// Cut on FRAME boundaries, so the slice starts on channel 0 however it is
+    /// clamped: a slice off by one sample would hand every channel the next
+    /// one's data.
     pub fn slice_seconds(&self, from: f64, to: f64) -> &[f32] {
-        let index = |t: f64| {
-            (t * f64::from(self.sample_rate)).round().clamp(0.0, self.samples.len() as f64)
-                as usize
+        let channels = self.channels.max(1);
+        let frame = |t: f64| {
+            (t * f64::from(self.sample_rate)).round().clamp(0.0, self.frames() as f64) as usize
         };
-        let (start, end) = (index(from), index(to));
-        &self.samples[start..end.max(start)]
+        let (start, end) = (frame(from), frame(to).max(frame(from)));
+        &self.samples[start * channels..end * channels]
+    }
+
+    /// The channels averaged into one signal, allocated on demand.
+    ///
+    /// For the things that genuinely want one envelope rather than a spectrum —
+    /// [`align`](crate::align), which correlates onsets. Phase cancellation is
+    /// not a concern there: it is looking for where the energy JUMPS, and a
+    /// transient is correlated across channels by nature.
+    pub fn mono(&self) -> Vec<f32> {
+        let channels = self.channels.max(1);
+        if channels == 1 {
+            return self.samples.clone();
+        }
+        let gain = 1.0 / channels as f32;
+        self.samples.chunks_exact(channels).map(|f| f.iter().sum::<f32>() * gain).collect()
     }
 }
 
@@ -125,21 +157,22 @@ pub fn decode(bytes: &[u8]) -> Result<Audio, String> {
     };
 
     let width = usize::from(bits / 8).max(1);
-    let frame = width * usize::from(channels);
+    let channels = usize::from(channels);
+    let frame = width * channels;
     let frames = data.len() / frame;
-    let gain = 1.0 / f32::from(channels);
-    let mut samples = Vec::with_capacity(frames);
+    // Interleaved, channels intact: the analyzer combines them itself (see
+    // `Audio`). Only whole frames are decoded, so a truncated file cannot leave
+    // a partial frame to shift every channel after it.
+    let mut samples = Vec::with_capacity(frames * channels);
     for f in 0..frames {
         let base = f * frame;
-        let mut sum = 0.0;
-        for c in 0..usize::from(channels) {
+        for c in 0..channels {
             let at = base + c * width;
-            sum += decode_one(&data[at..at + width]);
+            samples.push(decode_one(&data[at..at + width]));
         }
-        samples.push(sum * gain);
     }
 
-    Ok(Audio { sample_rate: rate as f32, samples })
+    Ok(Audio { sample_rate: rate as f32, samples, channels })
 }
 
 #[cfg(test)]
@@ -190,12 +223,48 @@ mod tests {
         out
     }
 
+    /// Channels come through INTACT — the analyzer combines them in the power
+    /// domain and cannot do that with an average it never saw
+    /// ([`ChannelBank`](crate::spectrum::ChannelBank)). The average is still
+    /// available, for the things that want one envelope rather than a spectrum.
     #[test]
-    fn float32_stereo_decodes_to_a_mono_average() {
+    fn float32_stereo_keeps_its_channels_and_averages_only_on_request() {
         let frames = vec![vec![1.0, 0.0], vec![-1.0, 1.0], vec![0.5, 0.5]];
         let audio = decode(&build(3, 32, 2, 48_000, &frames)).unwrap();
         assert_eq!(audio.sample_rate, 48_000.0);
-        assert_eq!(audio.samples, vec![0.5, 0.0, 0.5]);
+        assert_eq!(audio.channels, 2);
+        assert_eq!(audio.samples, vec![1.0, 0.0, -1.0, 1.0, 0.5, 0.5], "interleaved, as decoded");
+        assert_eq!(audio.frames(), 3, "frames, not samples");
+        assert_eq!(audio.mono(), vec![0.5, 0.0, 0.5]);
+        // The anti-phase frame is exactly what an averaging decoder would have
+        // erased before the analyzer could see it.
+        assert_eq!(audio.mono()[1], 0.0);
+    }
+
+    /// A slice has to start on channel 0 however its bounds are clamped: one
+    /// sample out and every channel reads the next one's data for the rest of
+    /// the slice — silent, and wrong in a way that looks like a phase problem.
+    #[test]
+    fn a_stereo_slice_is_cut_on_frame_boundaries() {
+        // L = 1, 2, 3, 4; R = -1, -2, -3, -4, at 4 Hz so a frame is 0.25 s.
+        let frames: Vec<Vec<f32>> =
+            (1..=4).map(|i| vec![i as f32, -(i as f32)]).collect();
+        let audio = Audio {
+            sample_rate: 4.0,
+            samples: frames.iter().flatten().copied().collect(),
+            channels: 2,
+        };
+        assert_eq!(audio.seconds(), 1.0);
+        assert_eq!(audio.slice_seconds(0.25, 0.75), vec![2.0, -2.0, 3.0, -3.0]);
+        // Every slice starts on a left sample, whatever the bounds do.
+        for (from, to) in [(0.0, 1.0), (0.1, 0.6), (-1.0, 0.3), (0.4, 9.0), (0.9, 0.1)] {
+            let slice = audio.slice_seconds(from, to);
+            assert_eq!(slice.len() % 2, 0, "[{from}, {to}) cut a frame in half");
+            assert!(
+                slice.chunks_exact(2).all(|f| f[0] > 0.0 && f[1] < 0.0),
+                "[{from}, {to}) swapped the channels: {slice:?}",
+            );
+        }
     }
 
     #[test]

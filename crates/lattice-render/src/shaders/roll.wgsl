@@ -35,14 +35,12 @@ struct VertexOut {
     @location(1) @interpolate(flat) half_extent: vec2<f32>,
     /// (shear, outline width, interior fill, spare).
     @location(2) @interpolate(flat) shape: vec4<f32>,
-    /// (black outline width, white keyline width, which edges the rim rides,
-    /// spare). Widths are in points, and either is zero when that band is
-    /// turned off. See [`rim_mask`] for the edge modes.
-    @location(3) @interpolate(flat) rim: vec4<f32>,
+    /// (white keyline width in points, which edges it rides). The width is
+    /// zero when Edge turns the keyline off. See [`rim_mask`] for the modes.
+    @location(3) @interpolate(flat) rim: vec2<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(4) @interpolate(flat) core: vec4<f32>,
-    @location(5) @interpolate(flat) border: vec4<f32>,
-    @location(6) @interpolate(flat) glow: vec4<f32>,
+    @location(5) @interpolate(flat) glow: vec4<f32>,
 };
 
 @vertex
@@ -51,10 +49,9 @@ fn vs_note(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shape: vec4<f32>,
-    @location(3) rim: vec4<f32>,
+    @location(3) rim: vec2<f32>,
     @location(4) core: vec4<f32>,
-    @location(5) border: vec4<f32>,
-    @location(6) glow: vec4<f32>,
+    @location(5) glow: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -64,9 +61,9 @@ fn vs_note(
 
     let slope = shape.x;
     // How far outside its own outline a note can paint: half the outline
-    // (the stroke is centered), the two rim bands standing outside that,
-    // and the antialiasing ramp.
-    let reach = shape.y * 0.5 + rim.x + rim.y + locals.feather;
+    // (the stroke is centered), the keyline standing outside that, and the
+    // antialiasing ramp.
+    let reach = shape.y * 0.5 + rim.x + locals.feather;
     // The quad is the note's bounding box grown by `reach` on every side.
     // Growing a box by a disc of radius r grows its bounds by exactly r,
     // so this covers the rim however the note is slanted; the shear term
@@ -91,7 +88,6 @@ fn vs_note(
     out.shape = shape;
     out.rim = rim;
     out.core = core;
-    out.border = border;
     out.glow = glow;
     return out;
 }
@@ -134,7 +130,7 @@ fn inside(d: f32, edge: f32) -> f32 {
 /// that straddles the boundary — so a rail runs the full length of the ink it
 /// edges rather than stopping short of it.
 fn rim_mask(in: VertexOut, across: f32, half_across: f32, inner: f32) -> f32 {
-    let mode = in.rim.z;
+    let mode = in.rim.y;
     if mode < 0.5 {
         return 1.0;
     }
@@ -166,20 +162,17 @@ fn note_color(in: VertexOut) -> vec4<f32> {
 
     // Reading outward from the note's own outline: its interior at whatever
     // Fill asks for (0 leaves it hollow and the spectrogram shows straight
-    // through), its color on the outline itself, then the solid black outline
-    // hugging that, then the white keyline riding the black's outer edge.
+    // through), its color on the outline itself, then the white keyline riding
+    // that outline's outer edge.
     //
-    // The two rim bands are windows on the same box filter as the outline, so
-    // they tile the distance without ever overlapping it — which is what keeps
-    // the rim OUTSIDE the note however thin the ribbon is.
+    // The keyline is a window on the same box filter as the outline, so the two
+    // tile the distance without ever overlapping — which is what keeps the rim
+    // OUTSIDE the note however thin the ribbon is.
     let inner = in.shape.y * 0.5;
-    let dark = inner + in.rim.x;
-    let light = dark + in.rim.y;
+    let light = inner + in.rim.x;
     var out = in.core * in.shape.z * inside(d, -inner);
     out += in.core * band(d, -inner, inner);
-    let mask = rim_mask(in, across, half_across, inner);
-    out += in.border * band(d, inner, dark) * mask;
-    out += in.glow * band(d, dark, light) * mask;
+    out += in.glow * band(d, inner, light) * rim_mask(in, across, half_across, inner);
     return out;
 }
 

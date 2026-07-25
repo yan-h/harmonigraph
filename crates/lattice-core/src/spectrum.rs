@@ -243,6 +243,123 @@ impl SpectrumAnalyzer {
     }
 }
 
+/// One [`SpectrumAnalyzer`] per input channel, combined into the single
+/// spectrum the display draws — see [`power_sum`](ChannelBank::power_sum).
+///
+/// The channels are analyzed SEPARATELY and combined afterwards, in the power
+/// domain, rather than mixed to mono first. Mixing first is a sum of waveforms,
+/// so anything out of phase between the channels partially or completely
+/// CANCELS: a wide pad, a Haas-delayed double, a decorrelated reverb tail —
+/// audible, and missing from the picture. In an analyzer whose whole job is to
+/// show which pitches are sounding, a partial that vanishes because of stereo
+/// phase is the worst available answer, so the mixdown is gone.
+///
+/// Any channel count works, one included (where this is exactly a bare
+/// `SpectrumAnalyzer`), so nothing has to branch on mono vs stereo.
+pub struct ChannelBank {
+    per_channel: Vec<SpectrumAnalyzer>,
+    /// One channel's samples, de-interleaved. Reused across pushes.
+    scratch: Vec<f32>,
+    sample_rate: f32,
+}
+
+impl ChannelBank {
+    /// A bank for `channels` channels (at least one).
+    pub fn new(sample_rate: f32, channels: usize) -> ChannelBank {
+        ChannelBank {
+            per_channel: (0..channels.max(1)).map(|_| SpectrumAnalyzer::new(sample_rate)).collect(),
+            scratch: Vec::new(),
+            sample_rate,
+        }
+    }
+
+    pub fn channels(&self) -> usize {
+        self.per_channel.len()
+    }
+
+    /// Match the bank to the incoming channel count. A change rebuilds the
+    /// analyzers, which empties their windows — the same reset a sample-rate or
+    /// window change causes, and for the same reason: samples from one layout
+    /// say nothing about the next.
+    pub fn set_channels(&mut self, channels: usize) {
+        let channels = channels.max(1);
+        if channels != self.per_channel.len() {
+            *self = ChannelBank::new(self.sample_rate, channels);
+        }
+    }
+
+    pub fn set_fft_size(&mut self, fft_size: usize) {
+        for analyzer in &mut self.per_channel {
+            analyzer.set_fft_size(fft_size);
+        }
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        for analyzer in &mut self.per_channel {
+            analyzer.set_sample_rate(sample_rate);
+        }
+    }
+
+    /// Append INTERLEAVED frames (`channels()` samples per frame, most recent
+    /// last). A partial frame at the end is ignored rather than shifting every
+    /// later channel by one, which would silently swap the channels for good.
+    pub fn push_frames(&mut self, interleaved: &[f32]) {
+        let n = self.per_channel.len();
+        if n == 1 {
+            // The common case, and no de-interleaving to do.
+            self.per_channel[0].push_samples(interleaved);
+            return;
+        }
+        let frames = interleaved.len() / n;
+        for (c, analyzer) in self.per_channel.iter_mut().enumerate() {
+            self.scratch.clear();
+            self.scratch.extend((0..frames).map(|f| interleaved[f * n + c]));
+            analyzer.push_samples(&self.scratch);
+        }
+    }
+
+    /// Seconds of audio one spectrum is measured over, and how far before the
+    /// newest frame it belongs on a time axis. Every channel shares a window, so
+    /// these are the bank's as much as any one analyzer's.
+    pub fn window_center_offset(&self) -> f64 {
+        self.per_channel[0].window_center_offset()
+    }
+
+    pub fn window_seconds(&self) -> f64 {
+        self.per_channel[0].window_seconds()
+    }
+
+    /// The channels' MEAN POWER per bucket — the total energy at each pitch,
+    /// wherever it sits in the stereo image — or None until every channel has
+    /// seen a full window.
+    ///
+    /// Mean and not sum, so the scale the whole display rests on does not
+    /// depend on the channel count: a full-scale sine centered in the image
+    /// reads 0 dB, and mono input reads exactly what a single analyzer reads.
+    /// A plain sum would lift everything 3 dB and put a centered full-scale
+    /// sine above the top of every range bar.
+    ///
+    /// What this buys, deliberately: level is independent of pan. A sine
+    /// panned hard left reads the same 3 dB below center that it would at any
+    /// other pan position, where a mono mixdown puts it 6 dB down — and an
+    /// anti-phase pair, which a mixdown erases entirely, reads at full level.
+    pub fn power_sum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
+        let mut total = [0.0f32; SPECTRUM_BINS];
+        for analyzer in &mut self.per_channel {
+            let channel = analyzer.pitch_spectrum()?;
+            for (sum, p) in total.iter_mut().zip(&channel) {
+                *sum += p;
+            }
+        }
+        let gain = 1.0 / self.per_channel.len() as f32;
+        for sum in &mut total {
+            *sum *= gain;
+        }
+        Some(total)
+    }
+}
+
 /// Iterative radix-2 Cooley-Tukey, in place. Lengths are compile-time
 /// powers of two here; debug_assert documents the requirement.
 fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
@@ -428,6 +545,84 @@ mod tests {
         // Setting the same size again is a no-op: the filled window survives.
         analyzer.set_fft_size(DEFAULT_FFT_SIZE * 2);
         assert!(analyzer.pitch_spectrum().is_some(), "no-op resize kept the window");
+    }
+
+    /// Feed a stereo pair through a bank and return the combined spectrum.
+    fn analyze_stereo(left: impl Fn(f32) -> f32, right: impl Fn(f32) -> f32) -> [f32; SPECTRUM_BINS] {
+        let sr = 48_000.0f32;
+        let mut bank = ChannelBank::new(sr, 2);
+        let interleaved: Vec<f32> = (0..DEFAULT_FFT_SIZE + 1234)
+            .flat_map(|i| {
+                let t = i as f32 / sr;
+                [left(t), right(t)]
+            })
+            .collect();
+        // Awkward chunk sizes, always whole frames, to exercise the seam.
+        for chunk in interleaved.chunks(700 * 2) {
+            bank.push_frames(chunk);
+        }
+        bank.power_sum().expect("both windows filled")
+    }
+
+    /// THE reason the channels are not mixed to mono before analysis: an
+    /// anti-phase pair is loud, and a waveform sum erases it completely. A
+    /// display whose job is to show which pitches are sounding cannot answer
+    /// "nothing" for a tone that is plainly audible.
+    #[test]
+    fn an_anti_phase_pair_reads_at_full_level_where_a_mixdown_would_see_silence() {
+        let a4 = 440.0;
+        let sine = move |t: f32| 0.8 * (std::f32::consts::TAU * a4 * t).sin();
+        let anti = analyze_stereo(sine, move |t| -sine(t));
+        let peak = peak_bucket(&anti);
+        assert!(
+            dist(peak, bucket_of_midi(69.0)) <= 1,
+            "the anti-phase tone should still peak at A4, got bucket {peak}",
+        );
+
+        // Same level as the in-phase pair: power adds, phase does not enter.
+        let together = analyze_stereo(sine, sine);
+        let (a, b) = (anti[peak], together[peak]);
+        assert!((a - b).abs() < b * 0.05, "anti-phase read {a}, in-phase {b}");
+
+        // And a mono mixdown of the same signal really is silence, so the test
+        // above is measuring the fix and not a property the old path also had.
+        let mixed = analyze(&[], 48_000.0); // silence: (sine + -sine) / 2
+        assert!(mixed[peak] < b * 1e-3, "the mixdown was not silent: {}", mixed[peak]);
+    }
+
+    /// The scale every range bar and dB floor rests on must not move: a
+    /// full-scale sine centered in the image still reads ~0 dB, exactly as it did
+    /// when this was one analyzer over a mono mixdown. What DOES change is that
+    /// level no longer depends on pan.
+    #[test]
+    fn the_power_sum_keeps_the_full_scale_calibration_and_drops_pan_from_it() {
+        let a4 = 440.0;
+        let sine = move |t: f32| 0.8 * (std::f32::consts::TAU * a4 * t).sin();
+        let silent = |_: f32| 0.0;
+
+        let centered = analyze_stereo(sine, sine);
+        let peak = peak_bucket(&centered);
+        assert!(
+            (0.5..=0.8).contains(&centered[peak]),
+            "amplitude 0.8 centered should read ~0.64 (0 dB), got {}",
+            centered[peak],
+        );
+
+        // Hard left: half the energy, i.e. 3 dB down, at any pan position. The
+        // old mixdown halved the AMPLITUDE instead and so read 6 dB down.
+        let left = analyze_stereo(sine, silent);
+        let ratio = left[peak] / centered[peak];
+        assert!((ratio - 0.5).abs() < 0.05, "hard left read {ratio:.3} of centered, want 0.50");
+
+        // A mono stream is untouched by any of this: one channel in, one
+        // analyzer, the same numbers it always produced.
+        let mono = analyze(&[(a4, 0.8)], 48_000.0);
+        assert!(
+            (mono[peak] - centered[peak]).abs() < centered[peak] * 0.01,
+            "mono {} vs centered stereo {}",
+            mono[peak],
+            centered[peak],
+        );
     }
 
     #[test]

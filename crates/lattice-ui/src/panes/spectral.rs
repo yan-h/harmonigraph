@@ -248,36 +248,24 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              With Fill up this just fattens the note; with Fill at 0 it is the \
              whole of it.",
         );
-    ValueBar::new(&mut cfg.roll_border_width, 0.0..=6.0, "Black")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text(
-            "Width of the solid black outline standing just outside a note — \
-             the crisp dark line that separates it from whatever the \
-             spectrogram is doing behind it. 0 draws none.",
-        );
-    ValueBar::new(&mut cfg.roll_keyline_width, 0.0..=6.0, "White")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text(
-            "Width of the white keyline riding outside the black; Edge (up in \
-             Spectrum) sets how bright it is. 0 draws none. Below a full point \
-             a bright line shimmers as the roll scrolls, its peak intensity \
-             wobbling with every sub-pixel step across the grid.",
-        );
     choice_row(
         ui,
         "Edges",
         &mut cfg.roll_edge,
         &[
-            (RollEdge::Around, "Around", "All the way around a note, corners included"),
+            (
+                RollEdge::Around,
+                "Around",
+                "All the way around a note, corners included. (Where the white \
+                 keyline rides; Edge, up in Spectrum, sets how bright it is.)",
+            ),
             (
                 RollEdge::Sides,
                 "Sides",
                 "The long edges only — above and below a note in Across, either \
-                 side of it in Upright. The rim never grows along time, so \
+                 side of it in Upright. The keyline never grows along time, so \
                  repeats of one key butt together cleanly instead of painting \
-                 their halos over each other",
+                 their highlights over each other",
             ),
             (
                 RollEdge::Ends,
@@ -1000,14 +988,9 @@ pub(crate) fn spectral_pane(
         }
     }
 
-    // Advance the analyzer up front (it throttles the FFT internally) so the
-    // spectrogram accumulates this frame's column even when the curve is
-    // hidden. The curve below calls display() again and gets the same result
-    // without re-running the FFT.
-    if cfg.show_audio || cfg.show_spectrogram {
-        let _ = state.spectrum.display(now, &cfg);
-    }
-
+    // Nothing to pump here: the analyzer runs off the samples the shell pushes
+    // (see `AudioSpectrum::push_samples`), so the spectrogram's columns arrive
+    // whether or not the curve is drawn — and whether or not this pane is.
     // The far share of the depth axis: a spectrogram heatmap of the audio
     // and/or the piano roll of what has been played, both on the same
     // `now`-anchored time axis. The spectrogram lays down first (it's a
@@ -1032,7 +1015,7 @@ pub(crate) fn spectral_pane(
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
     if cfg.show_audio && split > 0.0 {
-        if let Some((levels, peaks)) = state.spectrum.display(now, &cfg) {
+        if let Some((levels, peaks)) = state.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each taking the loudest bucket that
             // falls in it — not one slab per bucket. The axis holds thousands
@@ -1627,6 +1610,53 @@ mod tests {
         assert!(!cold.is_empty(), "the spectrogram drew no textured quad to cache");
         let hit = quad(&frame());
         assert_eq!(cold, hit, "the cached frame drew a different quad than the cold build");
+    }
+
+    /// The heatmap image is sized in DEVICE PIXELS, not points. It is stretched
+    /// over the pane by the GPU, so sizing it in points builds it at the
+    /// display's density divided by the scale factor and then upsamples — on a
+    /// Retina screen, half the resolution in each axis, for a heatmap visibly
+    /// softer than the pane around it. Same pane, twice the density, twice the
+    /// rows.
+    ///
+    /// (Rows and not columns: the time axis is also floored by `MIN_BUCKET`, so
+    /// how much of a density increase reaches it depends on the span.)
+    #[test]
+    fn the_heatmap_image_is_built_at_device_pixels() {
+        fn rows_at(ppp: f32) -> usize {
+            let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+            state.spectrum_config.show_spectrogram = true;
+            state.spectrum_config.roll_seconds = 10.0;
+            let mut bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
+            bins[lattice_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
+            for i in 0..40 {
+                state.spectrum.push_history(90.0 + f64::from(i) * 0.1, &bins);
+            }
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            ctx.set_pixels_per_point(ppp);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+            // Twice: `set_pixels_per_point` lands on the following frame.
+            for _ in 0..2 {
+                let _ = ctx.run_ui(
+                    egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                    |ui| {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                        spectral_pane(&mut child, &mut state, 94.0, 1.0, 0);
+                    },
+                );
+            }
+            state.spectrum.spectrogram_tex[0].as_ref().expect("a heatmap was uploaded").size()[1]
+        }
+
+        let (one, two) = (rows_at(1.0), rows_at(2.0));
+        assert!(one > 2, "no heatmap rows at 1x");
+        // Exactly double, give or take the rounding of one pixel row.
+        assert!(
+            two.abs_diff(one * 2) <= 1,
+            "{one} rows at 1x but {two} at 2x — the image is being sized in points",
+        );
     }
 
     /// A sounding note is marked by its own ribbon crossing the now-line, so
