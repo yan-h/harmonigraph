@@ -799,17 +799,9 @@ pub(crate) struct SpectrogramKey {
 /// [`SpectrogramSurface::tex`].
 pub(crate) struct SpectrogramCache {
     key: SpectrogramKey,
-    t_origin: f64,
-    tex_span: f64,
-    t0: f32,
-    tn: f32,
-    /// Texel x of the first visible slab, and the texture's full width.
-    ///
-    /// A full-width build puts the visible slabs at 0 and is `tex_w` wide, so
-    /// these fall out of the mapping; the ring parks them at a rotating offset
-    /// inside a wider texture, and the quad's `u` needs to know where.
-    x0: f32,
-    tex_w: f32,
+    /// Where the build put its slabs in the texture, kept exactly as it
+    /// computed them — a hit hands this straight back to the quad.
+    layout: crate::panes::spectrogram::TexLayout,
 }
 
 impl SpectrogramKey {
@@ -844,17 +836,11 @@ impl SpectrogramKey {
 }
 
 impl SpectrogramCache {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         key: SpectrogramKey,
-        t_origin: f64,
-        tex_span: f64,
-        t0: f32,
-        tn: f32,
-        x0: f32,
-        tex_w: f32,
+        layout: crate::panes::spectrogram::TexLayout,
     ) -> Self {
-        SpectrogramCache { key, t_origin, tex_span, t0, tn, x0, tex_w }
+        SpectrogramCache { key, layout }
     }
 
     /// Whether a freshly computed key matches this cached build's — i.e. the
@@ -865,14 +851,7 @@ impl SpectrogramCache {
 
     /// The scalars the scrolling quad needs.
     pub(crate) fn geometry(&self) -> crate::panes::spectrogram::TexLayout {
-        crate::panes::spectrogram::TexLayout {
-            t_origin: self.t_origin,
-            tex_span: self.tex_span,
-            t0: self.t0,
-            tn: self.tn,
-            x0: self.x0,
-            tex_w: self.tex_w,
-        }
+        self.layout
     }
 }
 
