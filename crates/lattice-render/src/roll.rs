@@ -11,20 +11,21 @@
 //! anti-aliased rounded rects — keyline, black outline, core — each a
 //! couple of hundred vertices once its corners and AA ring were subdivided.
 //!
-//! **What this does instead.** One quad per note segment, with a rounded-box
-//! signed distance field in the fragment shader ([`shaders/roll.wgsl`]).
-//! Core, black outline and white keyline are bands of that distance, so they
-//! cost a compare rather than a second and third shape. Four vertices per
+//! **What this does instead.** One quad per note segment, with a box signed
+//! distance field in the fragment shader ([`shaders/roll.wgsl`]). Fill, the
+//! note's own outline and the white keyline are bands of that distance, so
+//! they cost a compare rather than a second and third shape. Four vertices per
 //! note against several hundred: the upload stops mattering rather than
 //! getting cheaper.
 //!
 //! **Why the buffer is still rewritten every frame.** The obvious next step
 //! is an append-and-evict ring — settled notes never change, so they could
-//! be uploaded once. They are not, deliberately. At 52 bytes per note a busy
+//! be uploaded once. They are not, deliberately. At 48 bytes per note a busy
 //! roll is tens of kilobytes a frame against the megabytes that were the
 //! whole problem, so a ring would be optimizing three orders of magnitude
 //! below the cost it was built for, and it would have to carry the far-edge
 //! trap with it: a note crossing the window's oldest edge is TRUNCATED
+//! (as is, at the other end, one whose tail the Gap setting is shaving)
 //! there, rewriting its geometry every frame while it leaves (see
 //! `panes/roll.rs`), so any cache has to retire chunks before they reach it.
 //! Rebuilding per frame keeps the geometry a pure function of `now` — which
@@ -42,8 +43,8 @@ const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 #[cfg(test)]
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &["vs_note", "fs_note_gamma", "fs_note_linear"];
 
-/// One note segment: a rounded box in the pane's (pitch, depth) plane, its
-/// colors, and the two rim bands standing outside it.
+/// One note segment: a box in the pane's (pitch, depth) plane, its colors,
+/// and the keyline standing outside it.
 ///
 /// Screen geometry, in egui POINTS, already resolved through the pane's
 /// `Axes` — this crate never learns which way the pane is turned. Lengths
@@ -59,18 +60,25 @@ pub struct RollInstance {
     /// is drawn as a bare spine — the outline width alone then gives it its
     /// thickness, exactly as the hairline branch did with a line stroke.
     pub half_extent: [f32; 2],
-    /// `(shear, corner radius, outline width, spare)`.
+    /// `(shear, outline width, interior fill, spare)`.
     ///
     /// Shear is the center line's pitch drift per point of depth: 0 for a
     /// held note, non-zero for a glide, which makes the box a parallelogram
-    /// rather than needing a second shape.
+    /// rather than needing a second shape. Fill is how solidly the inside of
+    /// the outline is painted in the note's own color, 0 leaving it hollow.
+    ///
+    /// No corner radius: a note is a rectangle, always. Rounding was a setting
+    /// and is gone — on the notes short enough for it to show at all, it only
+    /// ever rounded a tapped key into a bead.
     pub shape: [f32; 4],
-    /// Thickness of the black outline and of the white keyline outside it,
-    /// in points. `[0, 0]` when the Edge setting is off.
+    /// `(keyline width, edge mode)`.
+    ///
+    /// The width is in points, and 0 when the keyline is turned off. The mode
+    /// says which of the note's edges it rides — around (0), its long sides
+    /// (1), or its ends (2); see `rim_mask` in the shader.
     pub rim: [f32; 2],
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
-    pub border: [u8; 4],
     pub glow: [u8; 4],
 }
 
@@ -84,8 +92,7 @@ impl RollInstance {
             2 => Float32x4, // shape
             3 => Float32x2, // rim
             4 => Unorm8x4,  // core
-            5 => Unorm8x4,  // border
-            6 => Unorm8x4,  // glow
+            5 => Unorm8x4,  // glow
         ],
     };
 }
@@ -449,19 +456,24 @@ mod tests {
     }
 
     /// A straight note centered in the frame: 24 points thick, 120 long, a
-    /// 4-point outline with a 2-point black band and a 2-point white one
-    /// standing outside it. Wide bands so a sample lands well inside one.
+    /// 4-point outline with a 2-point white keyline standing outside it,
+    /// hollow, and rimmed all the way around. A wide keyline so a sample lands
+    /// well inside it.
     fn centered_note() -> RollInstance {
         RollInstance {
             center: [128.0, 128.0],
             half_extent: [12.0, 60.0],
-            shape: [0.0, 0.0, 4.0, 0.0],
-            rim: [2.0, 2.0],
+            shape: [0.0, 4.0, 0.0, 0.0],
+            rim: [2.0, EDGE_AROUND],
             core: [255, 0, 0, 255],
-            border: [0, 0, 0, 255],
             glow: [255, 255, 255, 255],
         }
     }
+
+    /// The edge modes, as `rim.y` carries them (see `rim_mask` in the shader).
+    const EDGE_AROUND: f32 = 0.0;
+    const EDGE_SIDES: f32 = 1.0;
+    const EDGE_ENDS: f32 = 2.0;
 
     #[test]
     fn baked_roll_shader_validates() {
@@ -494,16 +506,16 @@ mod tests {
         let _resources = RollResources::new(&device, FORMAT);
     }
 
-    /// A note is a HOLLOW ribbon with its rim standing outside it: reading
-    /// outward from the middle — nothing (the spectrogram shows through),
-    /// the note's own color, a solid black outline, a white glow, nothing.
+    /// At Fill 0 a note is a HOLLOW ribbon with its keyline standing outside
+    /// it: reading outward from the middle — nothing (the spectrogram shows
+    /// through), the note's own color, the white keyline, nothing.
     ///
     /// This is the flood invariant, and the reason the bands are read off a
-    /// distance rather than drawn as three strokes of the same path: a
-    /// centered stroke grows inward exactly as much as outward, and on a
-    /// ribbon a few points thick the two long edges met in the middle and
-    /// painted the interior white. A band at distance 4..6 cannot reach
-    /// inside an outline that ends at 2.
+    /// distance rather than drawn as two strokes of the same path: a centered
+    /// stroke grows inward exactly as much as outward, and on a ribbon a few
+    /// points thick the two long edges met in the middle and painted the
+    /// interior white. A band at distance 2..4 cannot reach inside an outline
+    /// that ends at 2.
     #[test]
     fn a_note_is_hollow_and_its_rim_stands_outside_it() {
         let Some((device, queue)) = headless_device() else {
@@ -511,25 +523,133 @@ mod tests {
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
         // Distances outward from the outline's path (x = 140): the outline
-        // spans +-2, the black band 2..4, the glow 4..6.
+        // spans +-2, the keyline 2..4.
         let at = |x: u32| pixel(&frame, x, 128);
         assert!(near(at(128), BG), "the note's interior is not hollow: {:?}", at(128));
         assert!(near(at(134), BG), "the interior floods up to the outline: {:?}", at(134));
         assert!(near(at(140), [255, 0, 0, 255]), "no note color on its outline: {:?}", at(140));
-        assert!(near(at(143), [0, 0, 0, 255]), "no black outline outside it: {:?}", at(143));
         assert!(
-            near(at(145), [255, 255, 255, 255]),
-            "no white glow riding the black's edge: {:?}",
-            at(145),
+            near(at(143), [255, 255, 255, 255]),
+            "no white keyline riding the outline's edge: {:?}",
+            at(143),
         );
-        assert!(near(at(148), BG), "the rim reaches further than it should: {:?}", at(148));
+        assert!(near(at(146), BG), "the keyline reaches further than it should: {:?}", at(146));
     }
 
-    /// A ribbon too thin to bound is drawn as a bare spine, and the rim must
-    /// still stand OUTSIDE it: the note's own color at the middle, the black
-    /// and white bands beyond. This is the same invariant at the thickness
-    /// where it actually bit — a hairline has no interior to hollow out, so
-    /// a rim that grew inward would simply paint over the note.
+    /// Fill paints the note's INTERIOR in its own color, and only the
+    /// interior: the keyline outside it is untouched, so a filled note is the
+    /// hollow one with its middle painted in rather than a differently shaped
+    /// note.
+    ///
+    /// Partway is a real wash, not a switch — the whole point of the setting
+    /// is that a note can read as solid while a loud spectrogram cell still
+    /// ghosts through it.
+    #[test]
+    fn fill_paints_the_interior_and_nothing_else() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let solid = RollInstance { shape: [0.0, 4.0, 1.0, 0.0], ..centered_note() };
+        let frame = draw(&device, &queue, vec![solid], bg_color());
+        let at = |x: u32| pixel(&frame, x, 128);
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        assert!(near(at(128), RED), "the note's middle is still hollow: {:?}", at(128));
+        assert!(near(at(134), RED), "the fill stops short of the outline: {:?}", at(134));
+        assert!(
+            near(at(143), [255, 255, 255, 255]),
+            "the fill ate the keyline: {:?}",
+            at(143),
+        );
+        assert!(near(at(146), BG), "the fill reaches outside the note: {:?}", at(146));
+
+        // Half fill over an opaque background is half the note's color and half
+        // the picture behind it.
+        let wash = RollInstance { shape: [0.0, 4.0, 0.5, 0.0], ..centered_note() };
+        let frame = draw(&device, &queue, vec![wash], bg_color());
+        let middle = pixel(&frame, 128, 128);
+        let half = |a: u8, b: u8| ((u32::from(a) + u32::from(b)) / 2) as u8;
+        let want = [half(255, BG[0]), half(0, BG[1]), half(0, BG[2]), 255];
+        assert!(near(middle, want), "half fill read as {middle:?}, not {want:?}");
+    }
+
+    /// `Sides` keeps the rim on the note's long edges and cuts it at the ends;
+    /// `Ends` is the mirror image. The note's OWN outline is untouched either
+    /// way — it is the shape, not the rim.
+    ///
+    /// This is what stops repeats of one key painting their halos over each
+    /// other: the rim stands outside the note, and along the time axis a
+    /// note's outside is the next note.
+    #[test]
+    fn the_rim_can_be_held_to_one_pair_of_edges() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Reading out from the center: the outline spans 10..14 across pitch
+        // (x) and 58..62 along time (y), the keyline the 2 beyond that.
+        let look = |mode: f32| {
+            let note = RollInstance { rim: [2.0, mode], ..centered_note() };
+            let frame = draw(&device, &queue, vec![note], bg_color());
+            // (its own outline, the keyline) on a side, then on an end.
+            (
+                [pixel(&frame, 140, 128), pixel(&frame, 143, 128)],
+                [pixel(&frame, 128, 188), pixel(&frame, 128, 191)],
+            )
+        };
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        const WHITE: [u8; 4] = [255, 255, 255, 255];
+        let (side, end) = look(EDGE_AROUND);
+        assert!(near(side[1], WHITE), "Around lost the keyline on a side: {:?}", side[1]);
+        assert!(near(end[1], WHITE), "Around lost the keyline on an end: {:?}", end[1]);
+
+        let (side, end) = look(EDGE_SIDES);
+        assert!(near(side[0], RED), "Sides dropped the note's own outline: {:?}", side[0]);
+        assert!(near(side[1], WHITE), "Sides lost the rail: {:?}", side[1]);
+        assert!(near(end[0], RED), "Sides cut the note's own outline at its end: {:?}", end[0]);
+        assert!(near(end[1], BG), "Sides still rimmed the end: {:?}", end[1]);
+
+        let (side, end) = look(EDGE_ENDS);
+        assert!(near(end[1], WHITE), "Ends lost the cap: {:?}", end[1]);
+        assert!(near(side[0], RED), "Ends cut the note's own outline: {:?}", side[0]);
+        assert!(near(side[1], BG), "Ends still rimmed the side: {:?}", side[1]);
+    }
+
+    /// A note is a rectangle: its corners are square, right out to them.
+    ///
+    /// Rounding used to be a setting, and on the notes short enough for it to
+    /// show at all it only ever hurt — a tap is a few points long, the radius
+    /// clamps to its own half-length, and the note comes out a bead. A run of
+    /// them came out as a string of beads. Nothing rounds a note now, and this
+    /// samples the corner a radius would have taken off.
+    #[test]
+    fn a_notes_corners_are_square() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // 40 points across pitch, 6 along time — the shape of a tapped key on
+        // a thick ribbon. Filled and unrimmed, so the sample reads the shape
+        // alone.
+        let tap = RollInstance {
+            half_extent: [20.0, 3.0],
+            shape: [0.0, 0.0, 1.0, 0.0],
+            rim: [0.0, EDGE_AROUND],
+            ..centered_note()
+        };
+        let frame = draw(&device, &queue, vec![tap], bg_color());
+        // 19.5 points out along pitch and 2.5 along time: inside the square
+        // note, and outside any rounding of it (a radius clamped to the note's
+        // half-length would arc from 17 out, missing this by half a point).
+        let corner = pixel(&frame, 147, 130);
+        assert!(
+            near(corner, [255, 0, 0, 255]),
+            "the tap's corner is missing ({corner:?}) — something is rounding it off",
+        );
+    }
+
+    /// A ribbon too thin to bound is drawn as a bare spine, and the keyline
+    /// must still stand OUTSIDE it: the note's own color at the middle, the
+    /// white band beyond. This is the same invariant at the thickness where it
+    /// actually bit — a hairline has no interior to hollow out, so a rim that
+    /// grew inward would simply paint over the note.
     #[test]
     fn the_rim_does_not_paint_over_a_hairline_note() {
         let Some((device, queue)) = headless_device() else {
@@ -539,9 +659,8 @@ mod tests {
         let frame = draw(&device, &queue, vec![note], bg_color());
         let at = |x: u32| pixel(&frame, x, 128);
         assert!(near(at(128), [255, 0, 0, 255]), "the rim covered the spine: {:?}", at(128));
-        assert!(near(at(131), [0, 0, 0, 255]), "no black outline beside it: {:?}", at(131));
-        assert!(near(at(133), [255, 255, 255, 255]), "no white glow: {:?}", at(133));
-        assert!(near(at(136), BG), "the rim reaches further than it should: {:?}", at(136));
+        assert!(near(at(131), [255, 255, 255, 255]), "no keyline beside it: {:?}", at(131));
+        assert!(near(at(134), BG), "the rim reaches further than it should: {:?}", at(134));
     }
 
     /// The pane's orientation lives entirely in the uniform: turning the axes
@@ -581,27 +700,27 @@ mod tests {
     /// A glide's rim keeps its thickness instead of thinning with the angle.
     ///
     /// The shear that turns the box into the parallelogram a bent note
-    /// follows also stretches distances along the pitch axis, so the bands
-    /// have to be measured perpendicular to the edge they ride — that is the
-    /// division by the shear's length. Without it a 45-degree glide's black
-    /// outline comes out 1/sqrt(2) as thick as the same note held.
+    /// follows also stretches distances along the pitch axis, so the band has
+    /// to be measured perpendicular to the edge it rides — that is the
+    /// division by the shear's length. Without it a 45-degree glide's keyline
+    /// comes out 1/sqrt(2) as thick as the same note held.
     ///
-    /// Measured as total black coverage across one scanline, which for a
-    /// slanted band is `sqrt(1 + slope^2)` times its true thickness: 2.83
-    /// points for two 1-point bands at 45 degrees, against 2.0 held. An
-    /// unnormalized distance would read 2.0 for both.
+    /// Measured as total ink across one scanline, which for a slanted band is
+    /// `sqrt(1 + slope^2)` times its true thickness: 2.83 points for the two
+    /// 1-point flanks at 45 degrees, against 2.0 held. An unnormalized
+    /// distance would read 2.0 for both.
     #[test]
     fn a_glides_rim_keeps_its_thickness_instead_of_thinning_with_the_angle() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Only the black band paints: over a white background, its coverage
-        // is then exactly `1 - r/255` in every pixel it touched.
+        // Only the keyline paints, and in black: over a white background its
+        // coverage is then exactly `1 - r/255` in every pixel it touched.
         let bare = RollInstance {
             shape: [0.0, 0.0, 0.0, 0.0],
-            rim: [1.0, 0.0],
+            rim: [1.0, EDGE_AROUND],
             core: [0, 0, 0, 0],
-            glow: [0, 0, 0, 0],
+            glow: [0, 0, 0, 255],
             ..centered_note()
         };
         let white = wgpu::Color::WHITE;
@@ -613,7 +732,7 @@ mod tests {
         };
 
         let held = ink(bare);
-        assert!((held - 2.0).abs() < 0.2, "a held note's two 1-point bands measured {held}");
+        assert!((held - 2.0).abs() < 0.2, "a held note's two 1-point flanks measured {held}");
 
         let glide = ink(RollInstance { shape: [1.0, 0.0, 0.0, 0.0], ..bare });
         let expected = 2.0 * f32::sqrt(2.0);

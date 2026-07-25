@@ -456,6 +456,15 @@ fn frame(
 /// would trade a missing readout for a plugin that won't open. Where they
 /// aren't granted the overlay simply says "n/a", as it already does for
 /// memory on platforms that won't report it.
+///
+/// TRIED AND REVERTED: `surface.desired_maximum_frame_latency = Some(3)`,
+/// which egui-wgpu leaves unset (wgpu defaults it to 2, i.e. one frame of
+/// slack). The theory was that a deeper queue would let the CPU work through
+/// a delayed present instead of stalling in `get_current_texture`, which is
+/// where the overlay puts the time. It made no appreciable difference, and it
+/// costs a frame of latency (~7 ms at 144 Hz) on a picture meant to track
+/// what you just played — so it is not worth carrying. 3 was the whole knob
+/// anyway: wgpu-hal clamps to 2..=3 for `CAMetalLayer.maximumDrawableCount`.
 fn graphics_config() -> GraphicsConfig {
     use egui_baseview::WgpuSetup;
     use lattice_render::wgpu;
@@ -486,26 +495,61 @@ const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
 /// unsteady 70-100, and a 1.1x margin produced exactly that: 6.31 ms of timer
 /// against 6.94 ms of refresh leaves 9% for jitter to eat.
 ///
-/// 2x is deliberately generous, and generous is free. The surface presents
-/// with vsync (`AutoVsync`, which is Fifo here), so a tick arriving with the
-/// swapchain full blocks until a slot frees — and because it then presents,
-/// ticks per second equals refreshes per second whatever this constant says.
-/// Oversampling does not multiply the CPU work; it only makes sure a tick is
-/// ready whenever the display asks. There is nothing to win by tightening it.
+/// Why the margin has to be THIS large, which 2x got wrong. A repeating
+/// `CFRunLoopTimer` reschedules against its SCHEDULED fire times, not its
+/// actual ones: a firing that arrives while the handler is still running is
+/// coalesced away, and the next lands on the next grid point in the future.
+/// So tick start times are quantized to this interval — and the handler
+/// routinely overruns it, because the vsync wait happens INSIDE it
+/// (`get_current_texture`, between the uploads and egui's encode). At 2x on a
+/// 144 Hz display that grid is 3.47 ms, half a refresh: a tick returning just
+/// past a grid point idles for nearly half a refresh before it can start, and
+/// the frame it was aiming at is gone. Nothing pulls it back into phase — the
+/// grid is fixed and the panel's clock drifts against it — so the phase sweeps
+/// and there is a band where the miss is reliable. Measured: an uncapped
+/// 144 Hz display sitting at 110-120 fps, which is not a rate at all but a
+/// mixture of 6.94 ms and 13.9 ms intervals.
 ///
-/// What the margin is actually protecting against, now: the tick is a
-/// `CFRunLoopTimer` on the HOST'S main run loop, not on a thread of ours. The
-/// host's own UI work delays it by however long it likes, and no amount of
-/// making our frame cheaper touches that. Which is why the number stays where
-/// it is even though the frame got cheaper.
+/// MEASURED, and it is not the cause. 6x was tried, which puts the
+/// quantization at an eighth of a refresh instead of a half, and the frame
+/// rate did not move: still 110 fps, with the same drops under load. So the
+/// quantization above is real but is not what costs the refreshes — the
+/// overlay puts the time in `wait` (4 ms average, 16 ms peak) against an idle
+/// GPU and a frame whose own work fits the refresh with room to spare. The
+/// stall is in getting a drawable back, not in when the timer fires. Left at
+/// 2x accordingly; raising it buys nothing and is not free.
+///
+/// Not free, because the old "generous is free" note only held while
+/// PRESENTING: a tick that renders blocks in acquire, so ticks per second
+/// equals refreshes per second whatever this constant says. While IDLE it is
+/// false. `on_frame` gates only `render()` on a repaint being due; the full
+/// `run_ui` pass — the dock and every pane — runs on every tick regardless
+/// (vendored egui-baseview, `window.rs`). An idle editor repaints at 20 Hz
+/// but ticks at this rate, so raising the constant multiplies the UI build of
+/// a plugin that is only sitting in a project: 288 passes a second at 2x
+/// against 864 at 6x, nearly all for frames that will never be drawn.
+///
+/// In a HOST that idle path is nearly unreachable, so do not weigh it too
+/// heavily. `animating` includes `spectrum.is_flowing`, which only means
+/// samples arrived recently — and a DAW streams buffers continuously whether
+/// or not anything is playing, silence included. So with the Analyzer showing
+/// the spectrogram or the curve, which is the default, the editor stays
+/// legitimately live and presents every tick: `run_ui` runs at the refresh
+/// rate, not at this constant. Measured in Bitwig with nothing playing:
+/// "144 fps live", a 7 ms frame. The idle arithmetic above only applies with
+/// the Analyzer closed, where the cost is small anyway.
+///
+/// What the margin is also protecting against: the tick is on the HOST'S main
+/// run loop, not a thread of ours. The host's own UI work delays it by however
+/// long it likes, and no amount of making our frame cheaper touches that.
 ///
 /// HISTORICAL NOTE, because the original case for 2x no longer holds up. It
 /// blamed the 1.1x failure on "jitter and work spikes", and the spikes were
 /// real — but they were a bug, not a workload: every frame was reconfiguring
 /// the swapchain (see PATCHES.md, patch 9), which cost 0.5-3 ms wandering
-/// against 0.63 ms of margin. That is fixed. The constant survives on the
-/// run-loop argument above, not on the measurement that first chose it, and a
-/// tighter value might well hold today.
+/// against 0.63 ms of margin. That is fixed — but the conclusion drawn from
+/// it, that a TIGHTER value might hold today, had the sign backwards: the
+/// quantization above is what bites, and it wants a looser one.
 ///
 /// To re-test it, watch the overlay's `frame` PEAK, not the fps number. A
 /// missed refresh is not a slow frame, it is a DOUBLED interval, so peak at
@@ -515,7 +559,8 @@ const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
 /// something you could point at.
 ///
 /// The real fix is to stop guessing and drive frames from the display itself
-/// (`CVDisplayLink`), which is a much larger change to the vendored baseview.
+/// (`CVDisplayLink`), which is a much larger change to the vendored baseview —
+/// and which would retire the idle cost above along with the quantization.
 const DISPLAY_OVERSAMPLE: f64 = 2.0;
 
 /// The interval the window's frame timer should run at.
@@ -524,11 +569,22 @@ const DISPLAY_OVERSAMPLE: f64 = 2.0;
 /// actually present. A cap above the refresh rate buys nothing but wasted
 /// frames, and a display faster than the cap is exactly what the cap is for.
 ///
-/// KNOWN GAP: a binding cap throws [`DISPLAY_OVERSAMPLE`] away. `max` picks
-/// the cap, so a 30 fps cap on a 60 Hz display runs a bare 33.33 ms timer
-/// against a 16.67 ms refresh — zero margin, which is the same condition that
-/// made a 1.1x oversample unsteady. Any jitter and the frame slips to the
-/// third vsync: 20 fps for that frame, averaging out as an unsteady 20-30.
+/// Which one binds is decided on RATES, not on the intervals derived from
+/// them, because the two intervals are not the same kind of quantity: the
+/// display's is deliberately [`DISPLAY_OVERSAMPLE`] times faster than the
+/// refresh, and the cap's is the bare rate the user asked for. Comparing them
+/// with `max` — as this did — quietly conflates the two, and the bug only
+/// stays hidden while the oversample happens to be small enough that the
+/// display's interval is still the longer number. At 6x it is not: a 144 fps
+/// cap on a 60 Hz panel used to pace off the panel, and under `max` it would
+/// instead win with its bare 6.94 ms and throw the whole margin away. That is
+/// a cap the user set to mean "don't limit me" making the pacing worse.
+///
+/// KNOWN GAP: a BINDING cap still throws [`DISPLAY_OVERSAMPLE`] away. A 30 fps
+/// cap on a 60 Hz display runs a bare 33.33 ms timer against a 16.67 ms
+/// refresh — zero margin, which is the same condition that made a 1.1x
+/// oversample unsteady. Any jitter and the frame slips to the third vsync: 20
+/// fps for that frame, averaging out as an unsteady 20-30.
 ///
 /// Raising the constant cannot fix that, because capping is a different
 /// mechanism from pacing. Nothing throttles a slow timer TO the cap — vsync
@@ -536,14 +592,21 @@ const DISPLAY_OVERSAMPLE: f64 = 2.0;
 /// deliberately skipping presents, not a timer slow enough to land on the
 /// right refresh by luck.
 fn target_frame_interval(fps_cap: Option<f32>, display_max_fps: Option<f64>) -> f64 {
-    let from_display = match display_max_fps {
-        Some(hz) if hz.is_finite() && hz > 0.0 => 1.0 / (hz * DISPLAY_OVERSAMPLE),
-        _ => FALLBACK_FRAME_INTERVAL,
-    };
-    match fps_cap {
-        // Longer interval = slower rate, so `max` picks the binding bound.
-        Some(fps) if fps.is_finite() && fps > 0.0 => (1.0 / fps as f64).max(from_display),
-        _ => from_display,
+    let display_hz = display_max_fps.filter(|hz| hz.is_finite() && *hz > 0.0);
+    let cap = fps_cap.filter(|fps| fps.is_finite() && *fps > 0.0).map(|fps| fps as f64);
+    match (cap, display_hz) {
+        // The cap binds only when it asks for a SLOWER rate than the panel can
+        // show. Then it is itself the pacing mechanism, so it gets no
+        // oversample — see the known gap above.
+        (Some(fps), Some(hz)) if fps < hz => 1.0 / fps,
+        // A cap at or above the refresh rate does not bind at all; pace off
+        // the display exactly as if nothing were capped.
+        (_, Some(hz)) => 1.0 / (hz * DISPLAY_OVERSAMPLE),
+        // No usable refresh rate to compare against, so the cap is all there
+        // is — floored at the fallback, which is what an unknown display is
+        // assumed to manage.
+        (Some(fps), None) => (1.0 / fps).max(FALLBACK_FRAME_INTERVAL),
+        (None, None) => FALLBACK_FRAME_INTERVAL,
     }
 }
 
@@ -898,6 +961,36 @@ mod tests {
         let interval = target_frame_interval(Some(144.0), Some(60.0));
         let from_display = 1.0 / (60.0 * DISPLAY_OVERSAMPLE);
         assert!((interval - from_display).abs() < 1e-12, "got {interval}");
+    }
+
+    /// A cap that does not bind must not change the pacing AT ALL — picking
+    /// "144" on a 60 Hz panel has to be indistinguishable from "Uncapped".
+    ///
+    /// Its own test because the old `max` over the two intervals only got this
+    /// right by accident: the display's interval is oversampled and the cap's
+    /// is bare, so which one is numerically larger depends on
+    /// [`DISPLAY_OVERSAMPLE`]. At 2x the display's 8.33 ms still beat a 144 fps
+    /// cap's 6.94 ms and the cap looked ignored; at 6x it stopped winning and
+    /// a non-binding cap started halving the margin. Spelled against the
+    /// uncapped result so it cannot drift with the constant again.
+    #[test]
+    fn a_cap_above_the_refresh_rate_paces_exactly_as_if_uncapped() {
+        for hz in [60.0, 120.0, 144.0] {
+            for cap in [hz as f32, hz as f32 + 1.0, 240.0, 1000.0] {
+                assert_eq!(
+                    target_frame_interval(Some(cap), Some(hz)),
+                    target_frame_interval(None, Some(hz)),
+                    "a {cap} fps cap changed the pacing of a {hz} Hz display",
+                );
+            }
+        }
+        // And one that DOES bind still binds, so the guard above isn't just
+        // swallowing every cap.
+        assert!(
+            target_frame_interval(Some(30.0), Some(60.0))
+                > target_frame_interval(None, Some(60.0)),
+            "a binding cap must still slow the timer down",
+        );
     }
 
     #[test]

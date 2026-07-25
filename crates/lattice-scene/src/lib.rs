@@ -57,11 +57,20 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// Octave indicator slots (MIDI octaves 0..=9).
 pub const OCTAVE_SLOTS: usize = 10;
 
-/// Seconds an octave indicator eases in after note-on. Keeps a fresh
-/// octave's color GROWING into the gas swirl instead of instantly
-/// repainting its share of the disc (and softens glyph pop-in);
-/// short enough to still feel immediate.
-const OCTAVE_ATTACK_TIME: f64 = 0.15;
+/// Seconds an indicator on the outer layer eases in — the octave sectors
+/// and the melody/bass rings alike. Keeps a fresh octave's color GROWING
+/// into the gas swirl instead of instantly repainting its share of the disc
+/// (and softens glyph pop-in); short enough to still feel immediate.
+///
+/// ONE time for both, because a ring and the sector it links back to belong
+/// to the same note: easing them in at different rates would have the two
+/// halves of one arrival disagree about when it happened.
+///
+/// Note that this is an attack on the *appearance*, not on the note — a
+/// staccato note still reaches full brightness, since its release fades the
+/// envelope over `fade_time` while this ramp is still climbing, and the
+/// product peaks shortly after the key comes up.
+const ATTACK_TIME: f64 = 0.15;
 
 /// Samples in the pitch->color lookup the octave glyphs use to tint each
 /// slot by its own octave's pitch. The shader mirrors this length.
@@ -98,8 +107,9 @@ pub struct NodeInstance {
     /// node's size on screen changes.
     pub scale: f32,
     /// Width of the knockout gutter this node clears around itself, in quad
-    /// UV units (see [`ViewConfig::sevens_gutter`]). 0 on the home sheet,
-    /// and whenever the gutter is off.
+    /// UV units (see [`ViewConfig::sevens_gutter`]). Every sounding node
+    /// clears, the home sheet included and whatever depth the window holds;
+    /// 0 on a silent node, and whenever the gutter is off.
     pub gutter: f32,
     /// Signed cents from the home-sheet node this one SHARES A NAME with:
     /// `(threes - 2*(sevens - center), fives, center)`, which is the
@@ -129,10 +139,17 @@ pub struct NodeInstance {
     /// marks are drawn as rings at different radii, so that costs nothing:
     /// they simply both draw. See [`HighlightExtremes`].
     pub bass_slots: u32,
-    /// Envelope of each mark, 0..1, so a mark fades out with its note
-    /// instead of snapping off at release. Separate from `activation`
-    /// because the marked voice can be fading while a different, still-held
-    /// voice keeps the NODE at full — the mark has to follow its own note.
+    /// How far each mark has eased in, 0..1: a ring grows on over
+    /// [`ATTACK_TIME`] from the moment its note TOOK that end, rather than
+    /// appearing at full the frame it is claimed. Separate from
+    /// `activation` because a mark can be arriving while the node it sits
+    /// on has been fully lit for a while — the ring has to follow its own
+    /// note, not the disc's.
+    ///
+    /// Only the fade IN: a mark is held-only (see [`derive`]), so it still
+    /// comes off with the key rather than trailing the disc's release. The
+    /// voice's envelope rides along all the same, for the day a released
+    /// voice is allowed to keep an end.
     ///
     /// Per node rather than per slot because the mark is a ring around the
     /// whole node; the slots above only say which sector it links back to.

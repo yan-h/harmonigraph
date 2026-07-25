@@ -8,19 +8,20 @@ use crate::style::HighlightExtremes;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Scene, NODE_RADIUS_FACTOR,
-    OCTAVE_ATTACK_TIME, OCTAVE_SLOTS,
+    lattice_to_world, EdgeInstance, NodeInstance, Scene, ATTACK_TIME,
+    NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
-use lattice_core::{ChannelRole, LatticePos, NoteTracker, Tuning};
+use lattice_core::{ChannelRole, LatticePos, NoteTracker, Time, Tuning, VoiceState};
 
 /// Identifies one voice, matching `NoteTracker`'s own held-voice key.
 type VoiceKey = (u8, u8);
 
 /// A melody- or bass-ring accumulator for one node: which octave slots it
-/// marks, plus the color and envelope of the strongest marking voice seen so
-/// far. The `>=` in [`Mark::add`] means ties favor the later voice, so a
-/// release crossfading two voices lands on the newer color.
+/// marks, plus the color and drawn level of the strongest marking voice seen
+/// so far — the voice's envelope times how far its ring has eased in. The
+/// `>=` in [`Mark::add`] means ties favor the later voice, so a release
+/// crossfading two voices lands on the newer color.
 #[derive(Default)]
 struct Mark {
     slots: u32,
@@ -29,10 +30,10 @@ struct Mark {
 }
 
 impl Mark {
-    fn add(&mut self, slot: usize, envelope: f32, color: Vec4) {
+    fn add(&mut self, slot: usize, level: f32, color: Vec4) {
         self.slots |= 1 << slot;
-        if envelope >= self.level {
-            self.level = envelope;
+        if level >= self.level {
+            self.level = level;
             self.color = color;
         }
     }
@@ -93,6 +94,49 @@ fn marks(
     }
 }
 
+/// How far an indicator that arrived at `since` has eased in, 0..1:
+/// smoothstep over the first [`ATTACK_TIME`] seconds. Shared by the octave
+/// sectors and the melody/bass rings, so a note's whole outer layer arrives
+/// as one gesture.
+fn attack(now: Time, since: Time) -> f32 {
+    let t = ((now - since) / ATTACK_TIME).clamp(0.0, 1.0) as f32;
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// When the voice keyed `key` TOOK the end it now wears — the instant its
+/// ring should start easing in. Its own note-on, unless it INHERITED the
+/// end from a note that has since come off: then the moment that note was
+/// released, which is when this one became the outer voice. `outranks` says
+/// which direction beats it (a higher note for the melody, a lower one for
+/// the bass).
+///
+/// Without the inherited case, lifting the top of a held chord would drop
+/// the melody ring onto the note below at full strength in a single frame —
+/// the ring has moved, but the note it moved to is old, so its note-on is
+/// long past and there is nothing left to ease.
+///
+/// Read off the tracker rather than remembered between frames: a released
+/// voice sticks around for the whole of its fade, which outlasts this ramp
+/// unless the Fade param is turned down near zero — and at that setting
+/// nothing else eases either.
+fn end_taken_at(
+    tracker: &NoteTracker,
+    key: Option<VoiceKey>,
+    outranks: fn(f32, f32) -> bool,
+) -> Option<Time> {
+    let key = key?;
+    let voice = tracker.voices().find(|v| (v.channel, v.note) == key)?;
+    let mut taken = voice.on_time;
+    for other in tracker.voices() {
+        if let VoiceState::Released { at } = other.state {
+            if outranks(other.pitch, voice.pitch) && at > taken {
+                taken = at;
+            }
+        }
+    }
+    Some(taken)
+}
+
 /// Build the frame's scene. `hovered` comes from last frame's picking (the
 /// usual immediate-mode one-frame latency, invisible in practice).
 pub fn derive_scene(
@@ -112,6 +156,13 @@ pub fn derive_scene(
     let center = view.center();
     let node_idle = idle_color(view);
     let live_extremes = held_extremes(tracker, view.highlight_extremes);
+    // Each ring's ease-in, resolved once per frame: which note wears an end
+    // and how long it has worn it are properties of the CHORD, identical on
+    // every node the note lights.
+    let melody_attack = end_taken_at(tracker, live_extremes.0, |other, own| other > own)
+        .map_or(1.0, |taken| attack(now, taken));
+    let bass_attack = end_taken_at(tracker, live_extremes.1, |other, own| other < own)
+        .map_or(1.0, |taken| attack(now, taken));
     // Sanitized once, outside the node loop. Capped at 1: this axis makes
     // off-sheet nodes SMALLER, never larger, so the home sheet stays the
     // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
@@ -166,20 +217,18 @@ pub fn derive_scene(
                     seed = (voice.on_time % 256.0) as f32;
                 }
                 let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
-                // Smoothstep ease-in over the first OCTAVE_ATTACK_TIME;
-                // release still fades on the octave envelope.
-                let t = ((now - voice.on_time) / OCTAVE_ATTACK_TIME).clamp(0.0, 1.0) as f32;
-                let attack = t * t * (3.0 - 2.0 * t);
-                octaves[slot] = octaves[slot].max(envelope * attack);
+                // Eases in from note-on; release still fades on the octave
+                // envelope.
+                octaves[slot] = octaves[slot].max(envelope * attack(now, voice.on_time));
 
                 // Mark the outer notes in the slot they sound in. Set on
                 // every node the voice matches, exactly as its activation
                 // is, so the mark can't disagree with the lighting.
                 //
                 // The level is the strongest marking voice ON THIS NODE.
-                // Only held voices mark, so the ring is full while its end is
-                // held and gone the frame it is released — it never outlives
-                // the key, even as the disc keeps fading.
+                // Only held voices mark, so the ring eases in while its end
+                // is held and is gone the frame it is released — it never
+                // outlives the key, even as the disc keeps fading.
                 let (is_melody, is_bass) = marks(voice, live_extremes);
                 if is_melody || is_bass {
                     // The mark takes the marked note's OWN color — the very one
@@ -188,11 +237,16 @@ pub fn derive_scene(
                     // extra lift here. Strongest marking voice wins the color;
                     // the slots still collect every one of them, since a
                     // release crossfades two.
+                    //
+                    // The ring eases in on the SAME ramp as the octave
+                    // sector it links back to — from when the note took
+                    // the end, which is not always its note-on (see
+                    // `end_taken_at`).
                     if is_melody {
-                        melody.add(slot, envelope, voice_color);
+                        melody.add(slot, envelope * melody_attack, voice_color);
                     }
                     if is_bass {
-                        bass.add(slot, envelope, voice_color);
+                        bass.add(slot, envelope * bass_attack, voice_color);
                     }
                 }
             }
@@ -238,8 +292,13 @@ pub fn derive_scene(
         //
         // The home sheet's clearing cuts the grid lines as well as the
         // sheets behind it — a sounding node sits in a clean gap in the
-        // lattice rather than on top of it. Nothing to clear at all when
-        // the window holds no depth.
+        // lattice rather than on top of it. That is reason enough on its
+        // own, so it does NOT wait for depth: on a flat lattice there are
+        // no sheets to hide, but the grid is still there to be cut, and a
+        // gap in the lines is the look either way. (It was gated on the
+        // sevenths extent when the clearing was purely an inter-sheet
+        // device; a flat lattice then had to turn the gutter on by growing
+        // depth it didn't want.)
         //
         // The WIDTH is a constant of the view; the STRENGTH is the note's
         // envelope, applied in the shader against the same `activation` it
@@ -248,11 +307,7 @@ pub fn derive_scene(
         // clearing fully opaque for the whole release and only narrows its
         // soft edge, so the hole hangs around at full strength and then
         // vanishes the instant the voice is pruned.
-        let gutter = if activation > 0.0 && view.extent_sevens != 0 {
-            sevens_gutter
-        } else {
-            0.0
-        };
+        let gutter = if activation > 0.0 { sevens_gutter } else { 0.0 };
 
         nodes.push(NodeInstance {
             lattice_pos: pos,

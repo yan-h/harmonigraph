@@ -42,10 +42,32 @@ fn db_readout(db: f32) -> String {
     format!("{db:.0} dB")
 }
 
+/// A duration as the roll's Span bar reads it out, carrying its own unit
+/// rather than naming one in the label: the bar runs from a second to ten
+/// minutes, and "300" under a fixed "(s)" is a number you have to divide
+/// before it means anything. "5m 00s" is the same value already read.
+///
+/// Tenths under a minute, whole seconds above it. The scale is eased, so the
+/// short spans get most of the travel and are where a tenth is a visible
+/// step; a tenth of a second inside five minutes is not.
+fn span_readout(seconds: f32) -> String {
+    // Rounded to tenths BEFORE the branch, so a span that displays as a
+    // whole minute is written as one — 59.97s reads "1m 00s", never "60.0s".
+    let tenths = (seconds.max(0.0) * 10.0).round() as i64;
+    if tenths < 600 {
+        format!("{}.{}s", tenths / 10, tenths % 10)
+    } else {
+        let whole = (tenths + 5) / 10;
+        format!("{}m {:02}s", whole / 60, whole % 60)
+    }
+}
+
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow};
+    use crate::{
+        RollColor, RollEdge, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
+    };
 
     // ---- Layout ---------------------------------------------------------
     // Just the orientation now; drag the pane wherever you like (egui_dock
@@ -193,9 +215,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          Time runs away from the spectrum, so a note leaving the roll meets \
          the peak it is making.",
     );
-    ValueBar::new(&mut cfg.roll_seconds, 1.0..=600.0, "Span (s)")
+    ValueBar::new(&mut cfg.roll_seconds, 1.0..=600.0, "Span")
         .eased(true)
         .decimals(1)
+        .display(span_readout)
         .show(ui)
         .on_hover_text(
             "Seconds of history the roll spans end to end, up to 10 minutes. \
@@ -203,17 +226,63 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              of the travel. The spectrogram fills the most recent few minutes \
              of a long span; the notes span the whole of it.",
         );
-    ValueBar::new(&mut cfg.roll_thickness, 0.2..=4.0, "Note width")
+    ValueBar::new(&mut cfg.roll_thickness, 0.2..=8.0, "Note width")
         .show(ui)
-        .on_hover_text("Ribbon width in semitones of the pitch axis");
-    ValueBar::new(&mut cfg.roll_rounding, 0.0..=1.0, "Rounding")
+        .on_hover_text(
+            "Ribbon width in semitones of the pitch axis — so it holds its \
+             musical meaning as the pitch range is zoomed, and a note is as \
+             wide as the interval it would cover",
+        );
+    ValueBar::new(&mut cfg.roll_fill, 0.0..=1.0, "Fill")
         .show(ui)
-        .on_hover_text("Corner rounding of an unbent note (bent notes stay angular)");
+        .on_hover_text(
+            "How solidly a note's interior is painted in its own color. 0 \
+             leaves it a hollow outline with the spectrogram showing straight \
+             through; 1 fills it. In between is a wash the heatmap still reads \
+             through.",
+        );
     ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
         .show(ui)
         .on_hover_text(
-            "Stroke width of a note's outline. Notes are hollow, so the \
-             spectrogram shows through them; lattice bloom adds a glow.",
+            "Width of the band of the note's own color straddling its edge. \
+             With Fill up this just fattens the note; with Fill at 0 it is the \
+             whole of it.",
+        );
+    choice_row(
+        ui,
+        "Edges",
+        &mut cfg.roll_edge,
+        &[
+            (
+                RollEdge::Around,
+                "Around",
+                "All the way around a note, corners included. (Where the white \
+                 keyline rides; Edge, up in Spectrum, sets how bright it is.)",
+            ),
+            (
+                RollEdge::Sides,
+                "Sides",
+                "The long edges only — above and below a note in Across, either \
+                 side of it in Upright. The keyline never grows along time, so \
+                 repeats of one key butt together cleanly instead of painting \
+                 their highlights over each other",
+            ),
+            (
+                RollEdge::Ends,
+                "Ends",
+                "The onset and release only — a marker across each end of a \
+                 note, and nothing along its length",
+            ),
+        ],
+    );
+    ValueBar::new(&mut cfg.roll_gap, 0.0..=6.0, "Gap")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
+            "Points shaved off a released note's tail, so repeats at one pitch \
+             read as repeats instead of merging into one bar. The tail only: a \
+             held note still reaches the now-line, and no onset moves off the \
+             moment it was played.",
         );
     choice_row(
         ui,
@@ -1190,6 +1259,22 @@ mod tests {
     /// `power` for a level in dB, undoing the 10*log10 `loudness` applies.
     fn power_at(db: f32) -> f32 {
         10.0f32.powf(db / 10.0)
+    }
+
+    /// The Span readout carries its own unit, and switches to minutes at
+    /// the point where seconds alone stop reading — including the seam,
+    /// where a value that rounds up to a whole minute must be written as
+    /// one rather than as "60.0s".
+    #[test]
+    fn the_span_readout_names_its_own_unit() {
+        assert_eq!(span_readout(1.0), "1.0s");
+        assert_eq!(span_readout(12.34), "12.3s");
+        assert_eq!(span_readout(59.9), "59.9s");
+        assert_eq!(span_readout(59.97), "1m 00s", "rounds up ACROSS the seam");
+        assert_eq!(span_readout(60.0), "1m 00s");
+        assert_eq!(span_readout(65.4), "1m 05s", "seconds are padded, so the width holds");
+        assert_eq!(span_readout(90.0), "1m 30s");
+        assert_eq!(span_readout(600.0), "10m 00s", "the top of the bar's range");
     }
 
     /// The level range is a window with two ends: the floor reads as silence
