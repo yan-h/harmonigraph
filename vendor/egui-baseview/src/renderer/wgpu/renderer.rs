@@ -490,9 +490,26 @@ impl Renderer {
             bufs
         };
 
+        // The MSAA term is gated on MSAA actually being ON, which it is not by
+        // default: `RendererOptions::default()` sets `msaa_samples` to 0, and
+        // `resize_and_generate_msaa_view` only fills `msaa_texture_view` when
+        // that is above 1. So the view stayed `None` for the life of the
+        // window, this condition was true on EVERY frame, and every frame
+        // reconfigured the surface — tearing down and rebuilding the swapchain
+        // to arrive at the size it already had.
+        //
+        // That cost 0.5-3 ms a frame, wandering on a roughly one-second
+        // period, and it was invisible: it sits inside the renderer's upload
+        // reading without being an upload, so it read as "buffer uploads" on
+        // the perf overlay while `update_buffers` itself measured 0.3 ms. It
+        // also scaled with GPU load — reconfiguring while more work is in
+        // flight is slower — which is why collapsing the Lattice pane, and
+        // with it five render passes, appeared to make "uploads" cheap.
+        //
+        // `width`/`height` start at 0, so the first frame still configures.
         if self.width != canvas_width
             || self.height != canvas_height
-            || self.msaa_texture_view.is_none()
+            || (self.msaa_samples > 1 && self.msaa_texture_view.is_none())
         {
             self.resize_and_generate_msaa_view(canvas_width, canvas_height);
         }
