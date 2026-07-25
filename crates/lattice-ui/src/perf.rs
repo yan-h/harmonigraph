@@ -112,7 +112,7 @@ pub struct FrameCosts {
     /// re-aggregations of the window, and ring restarts BY REASON (see
     /// `panes::spectrogram::Restart`). CUMULATIVE, so the readout below can
     /// difference them into a rate without a dropped frame losing an event.
-    pub spectrogram_fallbacks: (u32, [u32; 3]),
+    pub spectrogram_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -276,7 +276,7 @@ pub struct PerfStats {
     /// none.
     spec_restart_reason: &'static str,
     /// The totals the rates were last differenced from.
-    last_fallbacks: (u32, [u32; 3]),
+    last_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it).
     ///
@@ -335,7 +335,7 @@ impl Default for PerfStats {
             roll_notes: 0,
             spec_fallbacks: (0.0, 0.0),
             spec_restart_reason: "",
-            last_fallbacks: (0, [0; 3]),
+            last_fallbacks: (0, [0; crate::panes::spectrogram::Restart::COUNT]),
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -944,7 +944,7 @@ mod tests {
             *now += 1.0 / 60.0;
             perf.record(
                 FrameCosts {
-                    spectrogram_fallbacks: (totals.0, [totals.1, 0, 0]),
+                    spectrogram_fallbacks: (totals.0, [totals.1, 0, 0, 0, 0, 0]),
                     ..Default::default()
                 },
                 *now,
@@ -980,9 +980,9 @@ mod tests {
         // restarts in the interval, which is the difference between "the image
         // changed", "the pane changed" and "the window jumped".
         assert_eq!(perf.spec_restart_reason, crate::panes::spectrogram::Restart::LABELS[0]);
-        let mut heavier = (totals.0, [totals.1, totals.1 + 200, totals.1]);
+        let mut heavier = (totals.0, [totals.1, totals.1 + 200, 0, 0, 0, 0]);
         for _ in 0..120 {
-            heavier = (heavier.0, [heavier.1[0], heavier.1[1] + 1, heavier.1[2]]);
+            heavier = (heavier.0, [heavier.1[0], heavier.1[1] + 1, 0, 0, 0, 0]);
             now += 1.0 / 60.0;
             perf.record(
                 FrameCosts { spectrogram_fallbacks: heavier, ..Default::default() },
@@ -1267,7 +1267,7 @@ mod tests {
             FrameCosts {
                 // Enough of both to lay out at their widest: the row carries
                 // two rates, so a build falling back hard is the long case.
-                spectrogram_fallbacks: (900, [300, 300, 300]),
+                spectrogram_fallbacks: (900, [150; crate::panes::spectrogram::Restart::COUNT]),
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,

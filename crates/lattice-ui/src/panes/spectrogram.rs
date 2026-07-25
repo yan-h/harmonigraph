@@ -243,20 +243,38 @@ pub(crate) struct TexLayout {
 /// instrumenting rather than by reasoning about it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Restart {
-    Style,
-    Capacity,
+    /// The image's shape: its rows (the pane's pitch side), or the width of a
+    /// slab (its time side, through the Span).
+    Rows,
+    Slab,
+    /// The pitch range the rows read, or the settings and params that colour
+    /// them.
+    Pitch,
+    Settings,
+    /// The ring's own size, which is the pane's time side.
+    Pane,
+    /// The run does not connect to what is painted — the window jumped, or
+    /// history was cleared.
     Gap,
 }
 
 impl Restart {
-    /// Where this one is counted, and what the overlay calls it.
-    pub(crate) const LABELS: [&'static str; 3] = ["style", "pane", "gap"];
+    /// Where each is counted, and what the overlay calls it. Named to the FIELD
+    /// rather than to the layer, because "the style changed" only narrows it to
+    /// six things and the whole value of the readout is not having to narrow it
+    /// by argument.
+    pub(crate) const LABELS: [&'static str; Self::COUNT] =
+        ["rows", "slab", "pitch", "settings", "pane", "gap"];
+    pub(crate) const COUNT: usize = 6;
 
     fn slot(self) -> usize {
         match self {
-            Restart::Style => 0,
-            Restart::Capacity => 1,
-            Restart::Gap => 2,
+            Restart::Rows => 0,
+            Restart::Slab => 1,
+            Restart::Pitch => 2,
+            Restart::Settings => 3,
+            Restart::Pane => 4,
+            Restart::Gap => 5,
         }
     }
 }
@@ -312,6 +330,24 @@ pub(crate) struct ColumnStyle {
 }
 
 impl ColumnStyle {
+    /// Which field of this differs from `other`, or `None` if none does — the
+    /// first found, since one is enough to say where to look.
+    fn differs(&self, other: &ColumnStyle) -> Option<Restart> {
+        if self.rows != other.rows {
+            Some(Restart::Rows)
+        } else if self.bucket_bits != other.bucket_bits {
+            Some(Restart::Slab)
+        } else if self.scale_min_bits != other.scale_min_bits
+            || self.scale_span_bits != other.scale_span_bits
+        {
+            Some(Restart::Pitch)
+        } else if self.cfg != other.cfg || self.frame != other.frame {
+            Some(Restart::Settings)
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn new(
         rows: usize,
         bucket: f64,
@@ -361,14 +397,14 @@ impl SpectrogramRing {
         first_key: i64,
         last_key: i64,
     ) -> Option<Restart> {
-        if self.style != *style {
+        if let Some(field) = self.style.differs(style) {
             // The image itself changed, so every column is wrong at once.
-            return Some(Restart::Style);
+            return Some(field);
         }
         if self.capacity != capacity {
             // A different capacity is a different texture: the slab a texel
             // stands for is `key mod capacity`, so the whole mapping moves.
-            return Some(Restart::Capacity);
+            return Some(Restart::Pane);
         }
         // The run has to CONNECT to what is painted at both ends. A run starting
         // past `written_through + 1`, or ending before `oldest_valid - 1`,
@@ -1260,7 +1296,7 @@ fn write_ring(
     // that it has to be built at all.
     let restart = match (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex) {
         (Some(ring), Some(_)) => ring.carries(capacity, &style, first_key, last_key),
-        _ => Some(Restart::Style),
+        _ => Some(Restart::Rows),
     };
 
     if let Some(why) = restart {
