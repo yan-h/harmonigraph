@@ -196,10 +196,33 @@ pub(super) fn note_instances(
     //   - entirely off the octave zoom (both endpoints outside and on the
     //     same side, so a note that merely crosses an edge still draws its
     //     visible part).
+    // A note paints past its own box: half its outline, the two rim bands and
+    // the antialiasing ramp (`reach` in roll.wgsl). The box is what the window
+    // is tested against, so a note used to vanish while that ink was still
+    // owed — the ribbon popped out of existence a few points short of the edge
+    // instead of sliding under it. In time that is the span divided by the
+    // pane's length, so it grows with the Span: 108 ms across 10 s, 650 ms
+    // across a minute.
+    //
+    // The far edge moves out by exactly that, for the cull AND for the clamp
+    // below, so the box overhangs and the pane's scissor takes the ink off as
+    // it leaves. Bounded on purpose — an unclamped overhang is what makes a
+    // ten-minute note a ten-minute quad.
+    //
+    // Not in whole-song mode: there the region's far end is the take's start,
+    // and overhanging it would paint into the spectrum curve above, which no
+    // scissor cuts.
+    let ink_px = cfg.roll_outline_width.clamp(0.5, 8.0) * 0.5 + BORDER_PX + KEYLINE_PX + 1.0;
+    let ink_seconds = if time.whole_song() {
+        0.0
+    } else {
+        f64::from(ink_px / axes.depth_len().max(1.0)) * time.window()
+    };
+    let edge = oldest - ink_seconds;
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| {
-            if note.stop(now) < oldest {
+            if note.stop(now) < edge {
                 return false;
             }
             let (a, b) = (note.start_pitch(), note.end_pitch());
@@ -219,11 +242,14 @@ pub(super) fn note_instances(
     let mut instances = Vec::with_capacity(notes.len());
     for note in notes {
         for ((t0, p0), (t1, p1)) in note.segments(now) {
-            let (t0, t1) = (t0.max(oldest), t1.max(oldest));
-            if t1 < oldest {
+            let (t0, t1) = (t0.max(edge), t1.max(edge));
+            if t1 < edge {
                 continue;
             }
-            let (d0, d1) = (time.depth_of(t0), time.depth_of(t1));
+            // Unclamped: `edge` already bounds how far past the region these
+            // can reach, and clamping is what squashed the leaving ribbon
+            // against the far end rather than letting it slide out.
+            let (d0, d1) = (time.depth_of_unclamped(t0), time.depth_of_unclamped(t1));
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
             // Notes always draw fully opaque — the ribbon is a hollow outline
@@ -387,6 +413,58 @@ mod tests {
     /// it is bounded rather than drawn as a bare spine.
     fn ribbon(keyline: f32) -> Vec<RollInstance> {
         ribbon_with_range(keyline, 12.0)
+    }
+
+    /// A note must stay on screen until the last of its INK is past the far
+    /// edge, not until the last of its box is.
+    ///
+    /// The shader paints half the outline, both rim bands and an antialiasing
+    /// ramp outside the box it is handed, so testing the box against the window
+    /// dropped the note while a few points of ribbon were still owed — it
+    /// popped short of the edge rather than sliding under it. The overhang is
+    /// screen-space, so in time it scales with the Span, which is why it reads
+    /// as "notes vanish early" more strongly the further out you zoom.
+    #[test]
+    fn a_note_keeps_drawing_until_its_outline_has_left_too() {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.roll_seconds = 10.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 1.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        state.tracker.handle_event(NoteEvent {
+            time: 1.5,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Off,
+        });
+
+        // The moment the note's BOX leaves: released at 1.5 with a 10 s window.
+        let box_gone = 11.5;
+        assert!(
+            !instances(&state, box_gone + 0.01).is_empty(),
+            "the note stopped drawing the instant its box left, with its outline \
+             and rim still owed",
+        );
+        // It does still go, and close behind: the ink is a few points, which at
+        // this span is a fraction of a second.
+        let mut last = box_gone;
+        let mut t = box_gone;
+        while t < box_gone + 2.0 {
+            if !instances(&state, t).is_empty() {
+                last = t;
+            }
+            t += 0.01;
+        }
+        assert!(
+            last > box_gone && last < box_gone + 0.5,
+            "the ink should outlast the box by a little, not by nothing ({last} vs {box_gone})",
+        );
     }
 
     fn one(rects: &[RollInstance]) -> &RollInstance {

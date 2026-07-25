@@ -819,7 +819,13 @@ impl WholeSong {
                 fed = end;
             }
             if let Some(power) = analyzer.pitch_spectrum() {
-                columns.push(SpectrogramColumn::from_power(time_origin + end as f64 / sr, &power));
+                // The middle of the window this spectrum measured, exactly as
+                // the live path stamps it — `end` is where that window ENDS.
+                // The take's notes are laid out from their own timestamps, so a
+                // render is where a half-window offset would show up most: the
+                // ribbons are placed perfectly and the heatmap would not be.
+                let center = time_origin + end as f64 / sr - analyzer.window_center_offset();
+                columns.push(SpectrogramColumn::from_power(center, &power));
             }
             if end >= total {
                 break;
@@ -927,7 +933,12 @@ impl AudioSpectrum {
                 // `display` would smear one column into the next). Retention is
                 // span-INDEPENDENT (see `push_history`): shrinking the span and
                 // widening it again must not lose the history in between.
-                self.push_history(now, &fresh);
+                //
+                // Stamped at the middle of the window it measured, not at the
+                // moment the FFT ran — see `window_center_offset`. This is what
+                // lets a ridge sit under the note ribbon that made it, which is
+                // the entire point of drawing the two on one time axis.
+                self.push_history(now - self.analyzer.window_center_offset(), &fresh);
                 self.last_fft = Some(now);
             }
         }
@@ -983,6 +994,19 @@ impl AudioSpectrum {
     /// smooth even when no MIDI is animating the frame. Reads true only while
     /// samples are actually arriving (the shell pushes them when the spectrum is
     /// shown), so it idles cleanly once audio stops.
+    /// How far behind `now` the newest column sits even when nothing is wrong:
+    /// half the analysis window, because that is where a spectrum belongs on a
+    /// time axis (see
+    /// [`window_center_offset`](lattice_core::spectrum::SpectrumAnalyzer::window_center_offset)).
+    ///
+    /// The heatmap's near edge has to allow for this or it reads a perfectly
+    /// healthy stream as stale and stops the strip short of the now-line — by
+    /// 171 ms on the Precise window, which is a visible gap that widens and
+    /// narrows as the window is changed.
+    pub fn column_lag(&self) -> f64 {
+        self.analyzer.window_center_offset()
+    }
+
     pub fn is_flowing(&self, now: f64) -> bool {
         self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS)
     }
