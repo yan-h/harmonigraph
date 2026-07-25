@@ -645,8 +645,8 @@ pub struct AudioSpectrum {
     /// Ring bookkeeping for the matching [`Self::spectrogram_tex`]: which
     /// slabs its columns currently hold, so a new one can be written on its
     /// own instead of repainting the whole heatmap. `None` whenever the
-    /// texture was built the full-width way (offline whole-song, or with
-    /// temporal smoothing on).
+    /// texture was built the full-width way, which now means only the offline
+    /// whole-song render.
     spectrogram_ring: [Option<crate::panes::spectrogram::SpectrogramRing>; 2],
 }
 
@@ -665,8 +665,8 @@ pub use lattice_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 /// Staleness-safe by construction — every way the image can change moves a
 /// field: a fresh column moves `newest_bits` (even in a saturated ring, where
 /// the count holds), the oldest column scrolling out of the window moves
-/// `first`, a resize/zoom moves the layout fields, and a palette/range/
-/// smoothing change moves `cfg`/`frame`. Floats compare by bit pattern so
+/// `first`, a resize/zoom moves the layout fields, and a palette, dB window or
+/// contrast change moves `cfg`/`frame`. Floats compare by bit pattern so
 /// equality is exact and free of NaN quirks.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpectrogramKey {
@@ -789,8 +789,9 @@ pub struct WholeSong {
 impl WholeSong {
     /// Analyze the entire `samples` buffer at the live FFT cadence, one raw
     /// column per hop, `time`-stamped in take time (`time_origin` is the take
-    /// time of sample 0). Raw and unsmoothed exactly like the live ring — the
-    /// spectrogram applies its own temporal smoothing when it draws.
+    /// time of sample 0). Raw, exactly like the live store: the heatmap reads
+    /// what was measured, and blurring one column into the next is not
+    /// something it has done since temporal smoothing was dropped.
     ///
     /// Pure: `(samples, rate, config)` in, columns out, no clock or RNG, so a
     /// render built on it stays byte-identical between runs.

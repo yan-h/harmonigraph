@@ -1130,8 +1130,8 @@ mod tests {
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 201, 5.0, false, cfg, frame)); // count
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 6.0, false, cfg, frame)); // newest
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, true, cfg, frame)); // whole
-        // And the color inputs: a palette/floor/smoothing change (cfg) or a
-        // gradient-range change (frame) would recolor every pixel.
+        // And the color inputs: a palette, dB window or contrast change (cfg)
+        // or a gradient-range change (frame) would recolor every pixel.
         let mut cfg2 = cfg;
         cfg2.spectrogram_gamma += 0.1;
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg2, frame));
@@ -1142,8 +1142,8 @@ mod tests {
 
     /// A column written on its own must be pixel-for-pixel what the
     /// whole-image build would have put in that column. If these two ever
-    /// disagree, the heatmap changes appearance the moment temporal smoothing
-    /// is switched on or off, since that is what picks between them.
+    /// disagree, the live heatmap and an offline render of the same audio stop
+    /// looking alike, since which one runs is exactly what tells them apart.
     #[test]
     fn one_column_matches_the_whole_image_build() {
         let cfg = SpectrumConfig::default();
