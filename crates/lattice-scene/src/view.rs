@@ -425,15 +425,18 @@ fn default_sevens_label() -> SevensLabel {
     SevensLabel::Name
 }
 
-/// A shade over the 0.07 em Iosevka gives its own bars — enough that the
-/// mark is a line rather than the grey smear a sub-pixel bar renders as,
-/// and not the heavy slab that twice Iosevka's weight turned out to be.
+/// Heavier than Iosevka's own 0.07 em, deliberately, because matching that
+/// number does NOT match the `♯` beside it.
 ///
-/// The floor does most of the work at small sizes and it is a PHYSICAL
-/// pixel, so this number is what decides the look on a big node and stops
-/// mattering on a small one.
+/// Iosevka Fixed draws one stroke weight for everything: measured off the
+/// outlines, `♯`'s verticals are 69 units and its bars 70, which is the
+/// same 70 the hyphen is. But `♯` spends that weight over 878 units of
+/// height where `+` has 386, so at equal stroke the sharp reads as the
+/// heavier mark by a wide margin. Small marks need relatively more weight
+/// to hold the same color on the page, which is ordinary optical sizing —
+/// and the freedom to say so is the point of drawing them.
 fn default_mark_weight() -> f32 {
-    0.09
+    0.12
 }
 
 /// The classic solid orb — the identity end of the solidity axis.

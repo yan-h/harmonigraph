@@ -354,46 +354,66 @@ fn mark_rect(center: egui::Pos2, size: egui::Vec2) -> egui::Rect {
     egui::Rect::from_center_size(center, size)
 }
 
-/// Paint a mark: the rim's rings widest-first, then the fill.
+/// Draw one piece, displaced by `offset`.
+fn stamp(painter: &egui::Painter, piece: &MarkPiece, offset: egui::Vec2, paint: egui::Color32) {
+    match piece {
+        MarkPiece::Bar(rect) => {
+            painter.rect_filled(rect.translate(offset), 0.0, paint);
+        }
+        MarkPiece::Solid(points) => {
+            let points = points.iter().map(|p| *p + offset).collect();
+            painter.add(egui::Shape::convex_polygon(points, paint, egui::Stroke::NONE));
+        }
+        MarkPiece::Line(points, width) => {
+            let points = points.iter().map(|p| *p + offset).collect();
+            painter.add(egui::Shape::line(points, egui::Stroke::new(*width, paint)));
+        }
+    }
+}
+
+/// Paint a mark with the rim the glyphs beside it carry -- the same rim, by
+/// the same arithmetic, not an imitation of it.
 ///
-/// `pieces_at` builds the geometry grown by a given radius rather than
-/// growing finished pieces, so each ring is itself a non-overlapping set --
-/// expanding the pieces of a `+` individually would put them back on top of
-/// one another however carefully the unexpanded ones avoided it.
+/// `lattice_render`'s text shader states the identity outright: a label's rim
+/// *is* the shape stamped around two rings, and the shader only moved that
+/// loop into the fragment stage because 20 copies of every glyph was most of
+/// the geometry in a busy frame. A mark is one to three rects, so the loop is
+/// affordable on this side, and running it is what makes the two identical:
+/// same radii, same sample counts, same per-stamp alpha, same
+/// `angle = 2*PI*i/samples` starting at zero.
 ///
-/// The rings are [`crate::text::RINGS`], the same two the per-pixel glyph
-/// rim uses: a wide faint one and a narrow opaque one. A single hard-edged
-/// expansion at full strength was what made these marks read as blockier and
-/// more opaque than the letter beside them.
+/// This replaces a single hard-edged expansion, which is why the rim used to
+/// read blocky: growing a rect gives it square corners at a uniform alpha,
+/// where stamping around a circle rounds them and grades the outer ring by
+/// how many stamps happen to overlap -- the "fade made of overlap" the ring
+/// alphas were tuned against.
+///
+/// Rim first for EVERY piece, then every fill, which is the order stamping
+/// had and the order the shader kept: otherwise one piece's rim darkens the
+/// ink of the piece beside it.
 fn paint_mark(
     painter: &egui::Painter,
     ppp: f32,
-    pieces_at: impl Fn(f32) -> Vec<MarkPiece>,
+    pieces: &[MarkPiece],
     color: egui::Color32,
     outline: egui::Color32,
 ) {
-    let rings = crate::text::RINGS;
-    // The same radii the glyph rim uses, from the same rounding, so a label
-    // does not carry one edge on its letter and a wider one on its marks.
-    let passes = [
-        (outline.gamma_multiply(rings[0].1), crate::text::ring_radius(rings[0].0, ppp)),
-        (outline.gamma_multiply(rings[1].1), crate::text::ring_radius(rings[1].0, ppp)),
-        (color, 0.0),
-    ];
-    for (paint, grow) in passes {
-        for piece in pieces_at(grow) {
-            match piece {
-                MarkPiece::Bar(rect) => {
-                    painter.rect_filled(rect, 0.0, paint);
-                }
-                MarkPiece::Solid(points) => {
-                    painter.add(egui::Shape::convex_polygon(points, paint, egui::Stroke::NONE));
-                }
-                MarkPiece::Line(points, width) => {
-                    painter.add(egui::Shape::line(points, egui::Stroke::new(width, paint)));
-                }
+    for (radius, alpha, samples) in crate::text::RINGS {
+        if samples == 0 {
+            continue;
+        }
+        let radius = crate::text::ring_radius(radius, ppp);
+        let paint = outline.gamma_multiply(alpha);
+        for i in 0..samples {
+            let angle = std::f32::consts::TAU * i as f32 / samples as f32;
+            let offset = egui::vec2(angle.cos(), angle.sin()) * radius;
+            for piece in pieces {
+                stamp(painter, piece, offset, paint);
             }
         }
+    }
+    for piece in pieces {
+        stamp(painter, piece, egui::Vec2::ZERO, color);
     }
 }
 
@@ -423,26 +443,23 @@ fn mark_thickness(size: f32, weight: f32, ppp: f32) -> f32 {
 ///
 /// The upright arrives as two stubs meeting the bar's snapped edges rather
 /// than as one rect crossing it: see [`MarkPiece`].
-fn comma_sign(
-    center: egui::Pos2,
-    size: f32,
-    weight: f32,
-    positive: bool,
-    grow: f32,
-    ppp: f32,
-) -> Vec<MarkPiece> {
-    let thick = mark_thickness(size, weight, ppp) + grow * 2.0;
-    let bar = mark_rect(center, egui::vec2(MARK_INK_W * size + grow * 2.0, thick));
+fn comma_sign(center: egui::Pos2, size: f32, weight: f32, positive: bool, ppp: f32) -> Vec<MarkPiece> {
+    let thick = mark_thickness(size, weight, ppp);
+    let bar = mark_rect(center, egui::vec2(MARK_INK_W * size, thick));
     let mut pieces = vec![MarkPiece::Bar(bar)];
     if positive {
-        let px = 1.0 / ppp;
         // The upright is as wide as the bar is thick, so the cross is one
         // weight throughout; both come from the same quantized number.
-        let upright = mark_rect(center, egui::vec2(thick, PLUS_INK_H * size + grow * 2.0));
+        let upright = mark_rect(center, egui::vec2(thick, PLUS_INK_H * size));
         // The stubs start where the bar stops, so the three tile the cross
         // without ever covering the same pixel twice.
+        //
+        // Drawn at ANY positive height, not only a whole pixel's worth: a
+        // heavy weight leaves short stubs, and dropping them turned the `+`
+        // into a `-` at the top of the weight range. A faint upright still
+        // says "plus"; no upright says something else entirely.
         for (y0, y1) in [(upright.top(), bar.top()), (bar.bottom(), upright.bottom())] {
-            if y1 - y0 >= px {
+            if y1 - y0 > 0.0 {
                 pieces.push(MarkPiece::Bar(egui::Rect::from_min_max(
                     egui::pos2(upright.left(), y0),
                     egui::pos2(upright.right(), y1),
@@ -463,7 +480,6 @@ fn septimal_shape(
     weight: f32,
     up: bool,
     glyph: SeptimalGlyph,
-    grow: f32,
     ppp: f32,
 ) -> Vec<MarkPiece> {
     let thick = mark_thickness(size, weight, ppp);
@@ -471,8 +487,8 @@ fn septimal_shape(
     // of its own bounding box where `+` covers most of one arm's length in
     // both directions. Matching the boxes makes the septimal mark read as
     // the lighter of the two; matching the apparent size is the point.
-    let hw = MARK_INK_W * size * SEPTIMAL_BULK / 2.0 + grow;
-    let hh = PLUS_INK_H * size * SEPTIMAL_BULK / 2.0 + grow;
+    let hw = MARK_INK_W * size * SEPTIMAL_BULK / 2.0;
+    let hh = PLUS_INK_H * size * SEPTIMAL_BULK / 2.0;
     // Point-toward-the-tip: -1 draws upward, +1 downward, so each design is
     // written once and mirrored by arithmetic.
     let dir = if up { -1.0 } else { 1.0 };
@@ -483,7 +499,7 @@ fn septimal_shape(
     match glyph {
         SeptimalGlyph::Triangle => vec![MarkPiece::Solid(vec![tip, base_l, base_r])],
         SeptimalGlyph::Hollow => {
-            vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick + grow * 2.0)]
+            vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick)]
         }
         SeptimalGlyph::Arrow => {
             // The stem stops where the head starts rather than running under
@@ -494,7 +510,7 @@ fn septimal_shape(
                 egui::pos2(cx, cy - dir * hh),
                 egui::pos2(cx, neck),
             );
-            let stem = mark_rect(span.center(), egui::vec2(thick + grow * 2.0, span.height()));
+            let stem = mark_rect(span.center(), egui::vec2(thick, span.height()));
             vec![
                 MarkPiece::Bar(stem),
                 MarkPiece::Solid(vec![
@@ -505,7 +521,7 @@ fn septimal_shape(
             ]
         }
         SeptimalGlyph::Chevron => {
-            vec![MarkPiece::Line(vec![base_l, tip, base_r], thick + grow * 2.0)]
+            vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)]
         }
     }
 }
@@ -610,9 +626,9 @@ pub(crate) fn draw_stacked_name(
                            direction: f32,
                            count: &str,
                            half_height: f32,
-                           pieces_at: &dyn Fn(f32) -> Vec<MarkPiece>|
+                           pieces: &[MarkPiece]|
      -> f32 {
-        paint_mark(painter, ppp, pieces_at, color, outline);
+        paint_mark(painter, ppp, pieces, color, outline);
         if !count.is_empty() {
             batch.text(
                 painter,
@@ -640,7 +656,7 @@ pub(crate) fn draw_stacked_name(
             1.0,
             &syntonic,
             half,
-            &|grow| comma_sign(center, mark_size, marks.weight, positive, grow, ppp),
+            &comma_sign(center, mark_size, marks.weight, positive, ppp),
         ));
     }
     if name.septimal_commas != 0 {
@@ -651,9 +667,8 @@ pub(crate) fn draw_stacked_name(
         let x = left + letter.x + column;
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
         let half = PLUS_INK_H * mark_size * SEPTIMAL_BULK / 2.0;
-        bottom = bottom.max(draw_signed(x, direction, &septimal, half, &|grow| {
-            septimal_shape(center, mark_size, marks.weight, up, marks.glyph, grow, ppp)
-        }));
+        let pieces = septimal_shape(center, mark_size, marks.weight, up, marks.glyph, ppp);
+        bottom = bottom.max(draw_signed(x, direction, &septimal, half, &pieces));
     }
     bottom
 }
@@ -723,17 +738,15 @@ mod tests {
     #[test]
     fn the_plus_never_covers_a_pixel_twice() {
         for ppp in [1.0, 2.0] {
-            for grow in [0.0, 1.0, 2.0] {
-                let pieces =
-                    comma_sign(egui::pos2(40.0, 40.0), 8.25, 0.09, true, grow, ppp);
-                let rects = bars(pieces);
-                assert!(rects.len() >= 2, "a + is more than one rect (ppp {ppp}, grow {grow})");
+            for weight in [0.04, 0.12, 0.20] {
+                let rects = bars(comma_sign(egui::pos2(40.0, 40.0), 8.25, weight, true, ppp));
+                assert!(rects.len() >= 2, "a + is more than one rect (ppp {ppp}, w {weight})");
                 for (i, a) in rects.iter().enumerate() {
                     for b in &rects[i + 1..] {
                         let overlap = a.intersect(*b);
                         assert!(
                             overlap.width() <= 0.0 || overlap.height() <= 0.0,
-                            "pieces {a:?} and {b:?} overlap at ppp {ppp}, grow {grow}"
+                            "pieces {a:?} and {b:?} overlap at ppp {ppp}, w {weight}"
                         );
                     }
                 }
@@ -750,7 +763,7 @@ mod tests {
         // An anchor deliberately off the grid: it has to come out off the
         // grid, or something rounded it on the way.
         let anchor = egui::pos2(40.31, 40.17);
-        let rects = bars(comma_sign(anchor, 8.25, 0.09, true, 0.0, 2.0));
+        let rects = bars(comma_sign(anchor, 8.25, 0.09, true, 2.0));
         assert!(
             rects.iter().any(|r| (r.left() * 2.0).fract().abs() > 1e-3),
             "a mark was rounded onto the pixel grid: {rects:?}"
@@ -774,14 +787,8 @@ mod tests {
         let sizes: Vec<(f32, f32)> = (0..9)
             .map(|i| {
                 let off = i as f32 * (1.0 / ppp) / 8.0;
-                let rect = bars(comma_sign(
-                    egui::pos2(40.0 + off, 40.0 + off),
-                    8.25,
-                    0.09,
-                    false,
-                    0.0,
-                    ppp,
-                ))[0];
+                let rect =
+                    bars(comma_sign(egui::pos2(40.0 + off, 40.0 + off), 8.25, 0.09, false, ppp))[0];
                 (rect.width(), rect.height())
             })
             .collect();
