@@ -191,8 +191,9 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          end), double-click for the full axis. The scale is logarithmic — \
          equal distances are equal musical intervals — so an octave is the \
          same width wherever it sits.\n\nOr set it on the display itself: drag \
-         the Analyzer pane to pan the range, scroll to zoom it around the \
-         pointer.",
+         the Analyzer pane across the pitch axis to pan the range, scroll to \
+         zoom it around the pointer. (Dragging the other way, along time, zooms \
+         the roll's Span instead.)",
     );
     choice_row(
         ui,
@@ -215,7 +216,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          Time runs away from the spectrum, so a note leaving the roll meets \
          the peak it is making.",
     );
-    ValueBar::new(&mut cfg.roll_seconds, 1.0..=600.0, "Span")
+    ValueBar::new(&mut cfg.roll_seconds, crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX, "Span")
         .eased(true)
         .decimals(1)
         .display(span_readout)
@@ -224,7 +225,9 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             "Seconds of history the roll spans end to end, up to 10 minutes. \
              The scale is logarithmic, so the short spans you live in get most \
              of the travel. The spectrogram fills the most recent few minutes \
-             of a long span; the notes span the whole of it.",
+             of a long span; the notes span the whole of it.\n\nOr set it on the \
+             display itself: drag the roll along the time axis, away from the \
+             now-line to zoom in.",
         );
     ValueBar::new(&mut cfg.roll_thickness, 0.2..=8.0, "Note width")
         .show(ui)
@@ -629,15 +632,40 @@ const DOCKED_SURFACE: usize = 0;
 /// finer stream lands proportionally.
 const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 
-/// Drag to pan the pitch range, wheel to zoom it: the pitch axis moved by
-/// grabbing the picture rather than by aiming the Analyzer tab's range bar at
-/// it. Both write [`low_midi`/`high_midi`](crate::SpectrumConfig), so a
-/// navigated range persists and reads back out on that bar.
+/// How much one point of drag along the time axis zooms the Span, as an
+/// exponent. Sized so the whole 1..600 s range is a comfortable sweep and back:
+/// from the 12 s default, ~410 points of drag toward the past reaches 1 s and
+/// ~650 the other way reaches 600 s.
+const TIME_ZOOM_PER_DRAG_POINT: f32 = 0.006;
+
+/// How far a drag must lean along the time axis before it is a Span zoom rather
+/// than a pitch pan, in points. Panning is the default — the axes do NOT both
+/// move at once, because the Span is a value being dialled in (it shows on the
+/// Analyzer tab's bar), and a pitch pan with a few points of horizontal slop in
+/// it would leave the time axis quietly breathing. The margin is small enough
+/// that the pitch the picture slides by before a zoom takes over is a fraction
+/// of a semitone.
+const TIME_ZOOM_LEAN: f32 = 4.0;
+
+/// Drag or scroll to navigate the picture instead of aiming the Analyzer tab's
+/// bars at it: across the pitch axis to pan the range, the wheel to zoom it,
+/// and along the time axis to zoom the Span. All three write
+/// [`SpectrumConfig`](crate::SpectrumConfig) — `low_midi`/`high_midi` and
+/// `roll_seconds` — so a navigated view persists and reads back out on those
+/// bars.
 ///
-/// Only the pitch RANGE moves. The time axis is deliberately untouched: the
-/// roll's Span is how much history the pane shows, which is a different
-/// question from which pitches it shows, and one gesture that changed both
-/// would leave neither settable on its own.
+/// The two axes carry DIFFERENT gestures because they are not the same kind of
+/// axis. The pitch range is a window that can sit anywhere on the analyzer's
+/// axis, so it pans and zooms. The time axis is anchored: its near edge is
+/// always `now`, so there is nothing to pan to — which leaves a drag along it
+/// free to mean zoom, and means the zoom is always about the now-line rather
+/// than about the pointer the way the pitch wheel is. Dragging toward the past
+/// therefore spreads the picture away from the now-line, i.e. zooms in.
+///
+/// A Span zoom is only taken from a drag that STARTED in the far region, where
+/// the time axis actually is. Over the spectrum's own share the depth axis is
+/// dB, not time, so a drag there would be moving something that isn't under the
+/// hand.
 ///
 /// Docked pane only. The Video tab draws this same pane as its preview, and
 /// that tab's body is a vertical `ScrollArea` — a wheel spent zooming there is
@@ -645,7 +673,7 @@ const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 /// that keeps its controls reachable when the preview squeezes it. (The
 /// divider is a different case and stays live in the preview: it is a handle
 /// you aim at, not a gesture over the whole surface.)
-fn drag_zoom_pitch(
+fn drag_zoom(
     ui: &egui::Ui,
     axes: &Axes,
     response: &egui::Response,
@@ -657,6 +685,10 @@ fn drag_zoom_pitch(
     if surface != DOCKED_SURFACE {
         return;
     }
+    // Where the far region begins, and so which drags have a time axis under
+    // them. At 1.0 there is no far region at all (both layers off, or the
+    // divider dragged shut) and the Span has nothing on screen to zoom.
+    let split = spectrum_share(&state.spectrum_config);
     let cfg = &mut state.spectrum_config;
     let mut low = cfg.low_midi;
     let mut span = (cfg.high_midi - cfg.low_midi).max(crate::PITCH_RANGE_MIN_SPAN);
@@ -687,16 +719,45 @@ fn drag_zoom_pitch(
         }
     }
 
-    // Grab the picture: the pitch under the pointer travels with it, so the
-    // range moves the opposite way. Per-frame deltas rather than the absolute
-    // tracking the divider uses — pushed against an end of the axis, an
-    // absolute anchor would keep accumulating off-screen and the range would
-    // sit still on the way back.
+    // Grab the picture. Per-frame deltas rather than the absolute tracking the
+    // divider uses — pushed against an end of an axis, an absolute anchor would
+    // keep accumulating off-screen and the view would sit still on the way back.
     if response.dragged() {
-        let along = response.drag_delta().dot(axes.dir_pitch());
-        low -= along / axes.pitch_len().max(1.0) * span;
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        moved = true;
+        let delta = response.drag_delta();
+        // Which axis this drag is on, decided from the TOTAL travel since the
+        // press: a per-frame decision would flip between the two on the jitter
+        // of a slow drag, and this way an L-shaped drag simply hands over once
+        // its second leg is the longer one.
+        let along_time = split < 1.0
+            && ui
+                .ctx()
+                .input(|i| i.pointer.press_origin())
+                .zip(response.interact_pointer_pos())
+                .is_some_and(|(from, at)| {
+                    let total = at - from;
+                    axes.depth_at(from) >= split
+                        && total.dot(axes.dir_depth()).abs()
+                            > total.dot(axes.dir_pitch()).abs() + TIME_ZOOM_LEAN
+                });
+        if along_time {
+            // Dragging toward the past pulls the picture away from the now-line
+            // it is anchored on, spreading it — so the seconds it spans shrink.
+            let along = delta.dot(axes.dir_depth());
+            cfg.roll_seconds = (cfg.roll_seconds * (-along * TIME_ZOOM_PER_DRAG_POINT).exp())
+                .clamp(crate::ROLL_SECONDS_MIN, crate::ROLL_SECONDS_MAX);
+            ui.ctx().set_cursor_icon(if axes.time_vertical {
+                egui::CursorIcon::ResizeVertical
+            } else {
+                egui::CursorIcon::ResizeHorizontal
+            });
+        } else {
+            // The pitch under the pointer travels with it, so the range moves
+            // the opposite way.
+            let along = delta.dot(axes.dir_pitch());
+            low -= along / axes.pitch_len().max(1.0) * span;
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            moved = true;
+        }
     }
 
     if !moved {
@@ -877,8 +938,9 @@ pub(crate) fn spectral_pane(
     use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
-    // Drag-sensing, so the pitch range can be panned by grabbing the picture
-    // (see `drag_zoom_pitch`). Registered BEFORE the divider's own band, which
+    // Drag-sensing, so the pitch range can be panned and the time Span zoomed
+    // by grabbing the picture (see `drag_zoom`). Registered BEFORE the
+    // divider's own band, which
     // is what leaves the divider on top where the two overlap: egui hands a
     // drag to the last widget registered over the pointer.
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
@@ -901,7 +963,7 @@ pub(crate) fn spectral_pane(
     // isn't drawn at all there.
     let divider = (!whole_song && (cfg.show_roll || cfg.show_spectrogram))
         .then(|| drag_split(ui, &axes, state, surface));
-    drag_zoom_pitch(ui, &axes, &response, state, surface);
+    drag_zoom(ui, &axes, &response, state, surface);
     // Re-snapshot: the two drags above just wrote `roll_fraction` and the pitch
     // range, and everything below has to be this frame's values, not the ones
     // from before the drag.
