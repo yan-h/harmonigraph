@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LabelRim, LegacyNodeBody, NodeStyle, OuterStyle,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
     SevensLabel,
 };
 use crate::trail::TrailMark;
@@ -109,11 +109,6 @@ pub struct ViewConfig {
     /// cents. Only meaningful while `show_labels` is on.
     #[serde(default = "default_true")]
     pub show_cents: bool,
-    /// How labels are lifted off what they land on (see [`LabelRim`]) — the
-    /// note names here and the analyzer's pitch labels, which have the same
-    /// problem over the spectrogram. Also the labels' whole cost.
-    #[serde(default)]
-    pub label_rim: LabelRim,
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
@@ -571,7 +566,6 @@ impl Default for ViewConfig {
             outer_style: OuterStyle::Slices,
             show_labels: true,
             show_cents: true,
-            label_rim: LabelRim::default(),
             node_style: NodeStyle::Steady,
             core_style: CoreStyle::default(),
             // A small, soft core inside a wide octave band with its silent
