@@ -99,26 +99,32 @@ pub struct Viewer<'a> {
     pub now: f64,
 }
 
+/// What a tab is called, wherever its name is drawn: its own tab, and the rail
+/// a folded pane leaves behind (see [`crate::fold`]).
+pub fn tab_title(tab: &Tab) -> &'static str {
+    match tab {
+        Tab::Lattice => "Lattice",
+        Tab::Tuning => "Tuning",
+        Tab::Nodes => "Nodes",
+        Tab::Scene => "Scene",
+        Tab::Console => "Console",
+        // Deliberately the same name as the settings tab below: the display
+        // and the settings for it are one feature, and they sit in different
+        // docks, so the pair reads as "the analyzer, and its knobs" rather
+        // than as two things to tell apart.
+        Tab::Spectral => "Analyzer",
+        Tab::Analyzer => "Analyzer",
+        Tab::Notes => "Notes",
+        Tab::Video => "Video",
+        Tab::Panel => "Panel",
+    }
+}
+
 impl egui_dock::TabViewer for Viewer<'_> {
     type Tab = Tab;
 
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
-        match tab {
-            Tab::Lattice => "Lattice".into(),
-            Tab::Tuning => "Tuning".into(),
-            Tab::Nodes => "Nodes".into(),
-            Tab::Scene => "Scene".into(),
-            Tab::Console => "Console".into(),
-            // Deliberately the same name as the settings tab below: the
-            // display and the settings for it are one feature, and they sit in
-            // different docks, so the pair reads as "the analyzer, and its
-            // knobs" rather than as two things to tell apart.
-            Tab::Spectral => "Analyzer".into(),
-            Tab::Analyzer => "Analyzer".into(),
-            Tab::Notes => "Notes".into(),
-            Tab::Video => "Video".into(),
-            Tab::Panel => "Panel".into(),
-        }
+        tab_title(tab).into()
     }
 
     /// Identify a tab by its VARIANT, never by its title.

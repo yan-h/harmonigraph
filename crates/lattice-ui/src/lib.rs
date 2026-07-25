@@ -11,6 +11,10 @@ pub mod widgets;
 mod panes;
 mod perf;
 
+/// Folding a pane sideways, which egui_dock's own collapse arrow only does
+/// downwards.
+mod fold;
+
 pub use layout::{Layout, Placement, PRESETS};
 
 use perf::PerfStats;
@@ -1295,6 +1299,9 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     reset_layout: bool,
     dock: DockState<panes::Tab>,
+    /// The split fractions the sideways folds are holding onto, so an unfolded
+    /// pane comes back the width it was (see [`fold`]).
+    folds: fold::Folds,
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
     /// by the render callback and read by the performance overlay. 0 means no
     /// reading — the device didn't grant timestamp queries, or none has landed
@@ -1483,6 +1490,7 @@ impl SharedState {
             whole_song: None,
             reset_layout: false,
             dock,
+            folds: fold::Folds::default(),
             lattice_stats: {
                 let stats = lattice_render::LatticeStats::default();
                 stats
@@ -1530,6 +1538,7 @@ impl SharedState {
         ron::to_string(&UiPersist {
             version: UI_PERSIST_VERSION,
             dock: self.dock.clone(),
+            folds: self.folds.clone(),
             camera: self.camera,
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
@@ -1568,6 +1577,10 @@ impl SharedState {
             self.dock = if persist.version < UI_PERSIST_VERSION {
                 default_dock()
             } else {
+                // The folds go with the dock they were measured against: a
+                // fresh arrangement has no folded panes, and the remembered
+                // fractions would name splits in a tree that is gone.
+                self.folds = persist.folds;
                 persist.dock
             };
             self.camera = persist.camera;
@@ -1604,6 +1617,10 @@ struct UiPersist {
     #[serde(default)]
     version: u32,
     dock: DockState<panes::Tab>,
+    /// serde(default) keeps pre-sideways-fold blobs loadable (as nothing
+    /// folded, which is what they were).
+    #[serde(default)]
+    folds: fold::Folds,
     camera: Camera,
     view: ViewConfig,
     /// serde(default) keeps pre-preset persisted blobs loadable.
@@ -1712,12 +1729,17 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
+    // Before the dock lays out: a pane collapsed inside a horizontal split
+    // folds sideways to a rail, which is a split fraction, which is layout's
+    // input. egui_dock's own vertical folds need nothing from us.
+    state.folds.apply(&mut dock, &dock_style);
     // Time the whole dock build — every pane's layout and the scene
     // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
     // is submitted inside and finishes off-thread, so this is CPU, not GPU.
     let cpu_start = std::time::Instant::now();
     DockArea::new(&mut dock)
-        .style(dock_style)
+        // Cloned because the rails are painted from the same style afterwards.
+        .style(dock_style.clone())
         // The pane set is fixed, so closing chrome stays off — but the
         // collapse arrow earns its pixels: the Lattice and Spectral panes
         // fold down to their tab bar when screen space is tight.
@@ -1726,11 +1748,15 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_leaf_collapse_buttons(true)
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
+    // After it: the rails the folds left behind, which only this frame's
+    // rectangles can place.
+    fold::paint(ui, &dock, &dock_style);
     state.dock = dock;
     // Deferred from the Panel pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
         state.dock = default_dock();
+        state.folds.clear();
     }
 
     // Render continuously only while something is animating (sounding or
