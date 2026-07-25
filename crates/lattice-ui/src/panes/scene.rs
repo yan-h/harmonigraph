@@ -7,7 +7,7 @@ use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::SharedState;
 use lattice_core::NoteTracker;
-use lattice_scene::{IdleMarker, LabelRim, TrailMark, ViewConfig};
+use lattice_scene::{IdleMarker, TrailMark, ViewConfig};
 
 /// The scene-wide look, top to bottom: the always-drawn Home grid, the Labels
 /// on nodes, the Trail of visited nodes, then Effects layered over everything.
@@ -93,36 +93,6 @@ fn labels_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         view.show_labels,
         egui::Checkbox::new(&mut view.show_cents, "Cents"),
     );
-    // Also the labels' whole cost, which is why the options say what they
-    // cost: the rim is the same text drawn again once per sample, and on a
-    // busy lattice the labels are most of the geometry in the frame.
-    ui.add_enabled_ui(view.show_labels, |ui| {
-        choice_row(
-            ui,
-            "Rim",
-            &mut view.label_rim,
-            &[
-                (
-                    LabelRim::Halo,
-                    "Halo",
-                    "A soft dark pool around the text. Reads over anything, \
-                     including a node at full brightness. 32 stamps a label.",
-                ),
-                (
-                    LabelRim::Outline,
-                    "Outline",
-                    "A crisp dark line hugging the glyphs, no pool. Keeps the \
-                     separation for about a quarter of the cost. 8 stamps.",
-                ),
-                (
-                    LabelRim::Off,
-                    "Off",
-                    "The glyphs alone — the cheapest labels there are. Fine \
-                     wherever what is behind them stays dark.",
-                ),
-            ],
-        );
-    });
 }
 
 /// Trail: where the music has already been. Rides the IDLE layer only -- a
