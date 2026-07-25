@@ -725,6 +725,19 @@ impl TimeAxis {
         }
     }
 
+    /// Depth for take time `t`, WITHOUT clamping it into the region.
+    ///
+    /// For geometry that is meant to overhang the region's edge and be cut off
+    /// by the pane's scissor rather than squashed against it — a note ribbon
+    /// leaving the far end still owes its outline and rim, and clamping paints
+    /// those as a blob sitting on the edge instead of sliding out under it.
+    /// Only safe for times the caller has already bounded: an unbounded one
+    /// gives an unbounded depth, and a note that started ten minutes ago would
+    /// become a quad ten minutes long.
+    pub(super) fn depth_of_unclamped(&self, t: f64) -> f32 {
+        self.split + self.frac(t) as f32 * self.depth_span
+    }
+
     /// Depth for take time `t`, clamped into the region.
     pub(super) fn depth_of(&self, t: f64) -> f32 {
         self.split + self.frac(t).clamp(0.0, 1.0) as f32 * self.depth_span
