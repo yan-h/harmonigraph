@@ -551,6 +551,75 @@ fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
 }
 
 #[test]
+fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
+    // A ring used to arrive at full the frame its note claimed an end,
+    // which made it the jumpiest thing on the node — the octave sector
+    // underneath it was already easing in. Both ride the one ramp now, so
+    // a note's outer layer arrives as a single gesture.
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60, // C4: the origin node, in octave slot 4
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    let view = ViewConfig {
+        highlight_extremes: HighlightExtremes::Both,
+        ..ViewConfig::default()
+    };
+    let at = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
+        let n = origin_node(&scene);
+        (n.melody_level, n.bass_level, n.octaves[4])
+    };
+
+    assert_eq!(at(0.0), (0.0, 0.0, 0.0), "nothing has arrived on the frame itself");
+
+    let (melody, bass, octave) = at(ATTACK_TIME * 0.5);
+    assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
+    assert_eq!(melody, bass, "a lone note's two ends arrive together");
+    assert_eq!(melody, octave, "the ring rides the sector's own ramp");
+
+    assert_eq!(at(ATTACK_TIME), (1.0, 1.0, 1.0), "full by the end of the attack");
+}
+
+#[test]
+fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
+    // Hold C4 and C5, then lift the top: the melody drops to C4, whose own
+    // note-on is long past. Easing from THAT would be no ease at all — the
+    // ring has to grow from the moment it moved. C4's bass ring never
+    // changed hands, so it stays at full right through the handoff.
+    let mut tracker = NoteTracker::new();
+    for note in [60u8, 72] {
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    tracker.handle_event(NoteEvent { time: 1.0, channel: 0, note: 72, kind: NoteEventKind::Off });
+    let view = ViewConfig {
+        highlight_extremes: HighlightExtremes::Both,
+        ..ViewConfig::default()
+    };
+    // Long enough that the released C5 is still in the tracker, which is
+    // where the handoff moment is read from.
+    let frame = FrameParams { fade_time: 2.0, ..FrameParams::default() };
+    let at = |now: f64| {
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, now);
+        let n = origin_node(&scene);
+        (n.melody_level, n.bass_level)
+    };
+
+    assert_eq!(at(1.0), (0.0, 1.0), "the melody has only just moved");
+    let (melody, bass) = at(1.0 + ATTACK_TIME * 0.5);
+    assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
+    assert_eq!(bass, 1.0, "the end that never moved does not re-attack");
+    assert_eq!(at(1.0 + ATTACK_TIME), (1.0, 1.0));
+}
+
+#[test]
 fn held_extremes_never_names_a_released_voice() {
     // A released voice wears no mark at all (above), and it is likewise out
     // of the running for the LIVE ends: letting it stay "the melody" would
@@ -904,7 +973,7 @@ fn held_note_lights_matching_nodes() {
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let tuning = Tuning::default(); // 12-TET: origin node matches C exactly
-    // Sampled after OCTAVE_ATTACK_TIME: the octave indicator eases in,
+    // Sampled after ATTACK_TIME: the octave indicator eases in,
     // so at the note-on instant itself it is still at zero.
     let scene = scene_of(
         &tracker,

@@ -90,18 +90,23 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 //
 // Per node, not per view: assuming the ring is always there made every
 // clearing as wide as the widest node's, so a node with no ring sat in a
-// gap visibly bigger than itself. The ring comes off the instant its key
-// does (marks are held-only), so the rim steps in at the same moment the
-// thing it was accounting for disappears.
-fn node_rim(has_bass: bool) -> f32 {
+// gap visibly bigger than itself.
+//
+// Scaled by how far the ring has EASED IN rather than switched on the
+// moment it is claimed: the rim sets how wide this node clears the sheets
+// behind it, and a rim that jumped to its full reach ahead of the ring left
+// the hole in the lattice popping open around a ring still fading up. It
+// still steps in the instant the key comes up, because that is when the
+// ring itself goes (marks are held-only).
+fn node_rim(bass: f32) -> f32 {
     let ring = max(u.misc5.z, 0.0) + u.misc5.w;
-    return u.misc3.z + select(0.0, ring, has_bass && u.misc5.w > 0.0);
+    return u.misc3.z + select(0.0, ring * bass, u.misc5.w > 0.0);
 }
 
-// Whether this node wears the outer (bass) ring: it needs both a slot to
-// link back to and a level to draw at.
-fn wears_bass_ring(marks: vec2<u32>, params: vec4<f32>) -> bool {
-    return marks.y != 0u && params.z > 0.0;
+// How much of the outer (bass) ring this node is wearing, 0..1: it needs
+// both a slot to link back to and a level to draw at.
+fn bass_ring_level(marks: vec2<u32>, params: vec4<f32>) -> f32 {
+    return select(0.0, clamp(params.z, 0.0, 1.0), marks.y != 0u);
 }
 
 // How far the billboard has to reach, in uv, for a clearing of reach `g` to
@@ -156,8 +161,10 @@ struct Instance {
     @location(0) world_pos: vec3<f32>,
     @location(1) color: vec4<f32>,
     // x: activation 0..1, w: outlined 0/1 (channel-14 voices render as a
-    // ring, not a disc). y/z: the melody and bass marks' own fade levels,
-    // which follow the marked voice rather than this node's activation.
+    // ring, not a disc). y/z: the melody and bass marks' own levels, which
+    // follow the marked voice rather than this node's activation — each
+    // ring eases in over the scene layer's attack when its note takes that
+    // end, and drops to 0 the frame the key comes up.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
@@ -243,7 +250,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     // by the scale converts the setting from "of this node" back to "of a
     // full-size node", i.e. one fixed distance everywhere.
     let gutter_uv = max(inst.sevens.y, 0.0) / scale;
-    let rim = node_rim(wears_bass_ring(inst.marks, inst.params));
+    let rim = node_rim(bass_ring_level(inst.marks, inst.params));
     // ...which can want more room than the standard billboard has, on the
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
