@@ -38,6 +38,19 @@ If the range is trivially small (one or two merges touching disjoint
 files), say so and stop — the audit is not free and there is nothing for
 it to find.
 
+## Who does the reading
+
+Delegate the survey to the **`merge-auditor`** subagent. The combined diff of
+a night's merges runs to five figures of insertions, and reading it in the
+main thread spends context on material that is never needed again; the agent
+returns findings only. It is read-only on purpose — it hands back candidates,
+and the fix and its failing test are written here, which is what keeps the
+proof step from being skipped.
+
+For a range spanning more than one subsystem, run one agent per subsystem
+rather than one over everything: each gets a smaller diff and a sharper
+prompt, and they run concurrently.
+
 ## What to look for, in priority order
 
 1. **Two branches touching the same file.** `git log --format='%h %s'
@@ -56,6 +69,20 @@ it to find.
 5. **Tests that pass for the wrong reason.** A test whose fixture is too
    small to reach the new code path — in #85 the aggregator test pushed 14
    columns into a tier holding 2048, so no test ever reached a tier merge.
+6. **Agent prompts that have gone stale.** `.claude/agents/*.md` assert
+   invariants about the code they describe, and nothing in the build notices
+   when those stop being true. For each agent file, check whether the range
+   changed what it describes:
+
+   ```sh
+   git diff --name-only <since>..HEAD -- crates/ | sed 's|.*|&|'
+   ```
+
+   Cross-reference against the paths each agent names. A prompt carrying last
+   month's invariants is the same defect class as a cache with a missing
+   invalidation key — it is just one whose consumer is a future session
+   rather than a frame. Report drift as a finding; the fix is an edit to the
+   agent file in the audit PR.
 
 ## The bar for reporting something
 

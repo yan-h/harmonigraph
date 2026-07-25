@@ -139,6 +139,26 @@ bugs, both of them a cache whose missing input arrived in a *different* PR.
 The command reads the combined diff and keeps a `last-merge-audit` tag so
 consecutive audits do not re-read the same range.
 
+### The agents in `.claude/agents/`
+
+`merge-auditor` does the reading for `/audit-merges` — read-only, so it hands
+back candidate findings and the fix is written in the calling session. That
+split is the point: a read-only auditor cannot skip from "this looks wrong"
+to a commit without the failing test in between.
+
+`spectral` carries the retention and aggregation invariants of the
+spectrogram path, which is the subsystem that has shipped the same bug class
+twice. It states what is stable (`lattice-core`) and points at what is moving
+(the pane) rather than quoting it, because a prompt that quotes volatile code
+goes stale silently and is then believed.
+
+**An agent prompt is a cache of facts about the code, so it needs an
+invalidation key like any other.** Here that is two habits: a PR changing a
+subsystem updates the agent that describes it, in the same PR; and
+`/audit-merges` checks the range for that drift and reports it as a finding.
+Nothing in the build can catch a stale prompt, so it has to be caught by the
+same pass that catches stale caches.
+
 The corollary is a dispatch rule: **before running sessions in parallel,
 check whether they will touch the same files.** Parallelism buys wall-clock
 only when the work is disjoint; when three sessions converge on
