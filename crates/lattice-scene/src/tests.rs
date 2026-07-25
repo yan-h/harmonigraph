@@ -807,7 +807,6 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
     // A radius of 0 turns the core off (passes through as 0).
     let view = ViewConfig {
         core_radius: 0.0,
-        outer_style: OuterStyle::Slices,
         outer_inner: 0.8,
         outer_outer: 0.3,
         ..ViewConfig::default()
@@ -819,7 +818,6 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         &FrameParams::default(),
         0.0,
     );
-    assert_eq!(scene.outer_style, OuterStyle::Slices);
     assert_eq!(scene.core_radius, 0.0, "radius 0 = core off");
     assert_eq!(scene.outer_inner, 0.8);
     assert!(scene.outer_outer > scene.outer_inner);
@@ -881,20 +879,13 @@ fn legacy_core_modes_fold_onto_radius_and_solidity() {
 fn legacy_node_body_folds_into_core_and_outer() {
     // Blobs from the one-build NodeBody experiment: an octave-only body
     // becomes the core glow (solidity 0, the old core-off under-glow) +
-    // the outer layer with the backdrop on. Each body once had its own
-    // matching glyph shape, but only slices survives, so all three land
-    // there; what still has to hold is that the blob PARSES and the core
-    // drops to the glow end. Disc leaves defaults alone.
-    for (body, outer) in [
-        (LegacyNodeBody::Slices, OuterStyle::Slices),
-        (LegacyNodeBody::Rings, OuterStyle::Slices),
-        (LegacyNodeBody::Beads, OuterStyle::Slices),
-    ] {
+    // the outer layer's backdrop on. What has to hold is that the blob
+    // PARSES and the core drops to the glow end. Disc leaves defaults alone.
+    for body in [LegacyNodeBody::Slices, LegacyNodeBody::Rings, LegacyNodeBody::Beads] {
         let mut view = ViewConfig { node_body: body, ..ViewConfig::default() };
         view.migrate_legacy();
         assert_eq!(view.core_solidity, 0.0, "{body:?}");
         assert!(view.core_radius > 0.0, "{body:?} still on");
-        assert_eq!(view.outer_style, outer, "{body:?}");
         assert_eq!(view.outer_backdrop, 1.0, "{body:?}");
         assert_eq!(view.node_body, LegacyNodeBody::Disc, "shim consumed");
     }
@@ -902,7 +893,7 @@ fn legacy_node_body_folds_into_core_and_outer() {
     let mut view = ViewConfig { node_body: LegacyNodeBody::Disc, ..ViewConfig::default() };
     view.migrate_legacy();
     assert_eq!(view.core_solidity, ViewConfig::default().core_solidity);
-    assert_eq!(view.outer_style, ViewConfig::default().outer_style);
+    assert_eq!(view.outer_backdrop, ViewConfig::default().outer_backdrop);
 }
 
 #[test]

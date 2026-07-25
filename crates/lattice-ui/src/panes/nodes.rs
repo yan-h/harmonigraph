@@ -7,7 +7,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
-use lattice_scene::{NodeStyle, OuterStyle, ViewConfig};
+use lattice_scene::{NodeStyle, ViewConfig};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -70,63 +70,50 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
-    // One glyph shape (ring sectors) — the alternatives were
-    // switchable for live comparison and have been settled — so this
-    // is just whether the layer draws. The bool goes through the
-    // OuterStyle enum the persist and the shader still speak.
-    let mut show = view.outer_style != OuterStyle::Off;
-    if ui
-        .checkbox(&mut show, "Show octaves")
+    // No on/off: the layer is what says which octaves are sounding, which
+    // is the node's whole outer half, and Band already reaches every size
+    // from a hairline to the quad edge.
+    //
+    // Inner and outer radius are one control: the band is the ring between
+    // them. Drag either edge, or drag between to slide the ring at a fixed
+    // width; the min span keeps it from collapsing.
+    ui.label("Band");
+    RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
+        .min_span(0.05)
+        .show(ui)
         .on_hover_text(
-            "Ring sectors spanning the band, one per sounding octave, \
-             each at its own pitch's angle; band inner 0 = pie wedges",
-        )
-        .changed()
-    {
-        view.outer_style = if show { OuterStyle::Slices } else { OuterStyle::Off };
-    }
-    ui.add_enabled_ui(show, |ui| {
-        // Inner and outer radius are one control: the band is the ring between
-        // them. Drag either edge, or drag between to slide the ring at a fixed
-        // width; the min span keeps it from collapsing.
-        ui.label("Band");
-        RangeBar::new(&mut view.outer_inner, &mut view.outer_outer, 0.0..=1.0)
-            .min_span(0.05)
-            .show(ui)
-            .on_hover_text(
-                "The octave band's inner and outer radius. Inner 0 reaches the \
-                 node center (pie wedges); drag between the handles to move the \
-                 whole ring in or out.",
-            );
-        ValueBar::new(&mut view.outer_solidity, 0.0..=1.0, "Solidity")
-            .show(ui)
-            .on_hover_text(
-                "0 = soft glowy octave marks, 1 = the crisp classic \
-                 shapes; only softens the glyph edges, shapes and \
-                 angles stay put",
-            );
-        // One padding for the whole layer: between sectors, and
-        // between the band and the melody/bass rings.
-        ValueBar::new(&mut view.outer_gap, 0.0..=0.4, "Gap")
-            .show(ui)
-            .on_hover_text(
-                "Padding inside the octave layer: between one octave \
-                 and the next, and between the band and the \
-                 melody/bass rings. 0 closes the octaves into a solid \
-                 annulus and seats the rings against it. Wide values \
-                 push the bass ring in toward the core -- raise Band \
-                 inner to make room",
-            );
-        // Backdrop: draw the silent octaves faintly so a lone octave
-        // still reads as a whole note.
-        ValueBar::new(&mut view.outer_backdrop, 0.0..=1.0, "Backdrop")
-            .show(ui)
-            .on_hover_text(
-                "Complete the octave ring: draw the silent octaves \
-                 faintly behind the sounding sectors, so a lone octave \
-                 still reads as a whole note. 0 = off",
-            );
-    });
+            "The octave band's inner and outer radius. Inner 0 reaches the \
+             node center (pie wedges); drag between the handles to move the \
+             whole ring in or out.",
+        );
+    ValueBar::new(&mut view.outer_solidity, 0.0..=1.0, "Solidity")
+        .show(ui)
+        .on_hover_text(
+            "0 = soft glowy octave marks, 1 = the crisp classic \
+             shapes; only softens the glyph edges, shapes and \
+             angles stay put",
+        );
+    // One padding for the whole layer: between sectors, and
+    // between the band and the melody/bass rings.
+    ValueBar::new(&mut view.outer_gap, 0.0..=0.4, "Gap")
+        .show(ui)
+        .on_hover_text(
+            "Padding inside the octave layer: between one octave \
+             and the next, and between the band and the \
+             melody/bass rings. 0 closes the octaves into a solid \
+             annulus and seats the rings against it. Wide values \
+             push the bass ring in toward the core -- raise Band \
+             inner to make room",
+        );
+    // Backdrop: draw the silent octaves faintly so a lone octave
+    // still reads as a whole note.
+    ValueBar::new(&mut view.outer_backdrop, 0.0..=1.0, "Backdrop")
+        .show(ui)
+        .on_hover_text(
+            "Complete the octave ring: draw the silent octaves \
+             faintly behind the sounding sectors, so a lone octave \
+             still reads as a whole note. 0 = off",
+        );
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line

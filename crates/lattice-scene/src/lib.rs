@@ -32,8 +32,7 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
-    SevensLabel,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SevensLabel,
 };
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
@@ -217,7 +216,6 @@ pub struct Scene {
     pub time: f32,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
-    pub outer_style: OuterStyle,
     pub node_style: NodeStyle,
     /// The core's radius in quad UV units; `0` turns the core off (nothing
     /// at all). Sizes both the disc and its glow; the shader reads solidity

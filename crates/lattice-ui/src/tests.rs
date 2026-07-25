@@ -10,7 +10,6 @@ fn persist_round_trips_camera_and_view() {
     state.view.extent_sevens = 3;
     // Non-default values throughout, so the fields prove they
     // round-trip rather than matching the defaults by luck.
-    state.view.outer_style = lattice_scene::OuterStyle::Off;
     // Radius 0 is the off state; this proves it (and solidity) persist.
     state.view.core_radius = 0.0;
     state.view.core_solidity = 0.4;
@@ -42,7 +41,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.camera.yaw, 1.23);
     assert_eq!(restored.camera.distance, 42.0);
     assert_eq!(restored.view.extent_sevens, 3);
-    assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Off);
     assert_eq!(restored.view.core_radius, 0.0, "off (radius 0) round-trips");
     assert_eq!(restored.view.core_solidity, 0.4);
     assert_eq!(restored.view.outer_inner, 0.1);
@@ -82,28 +80,26 @@ fn removed_node_styles_in_old_persist_blobs_load_as_steady() {
 }
 
 #[test]
-fn removed_octave_styles_in_old_persist_blobs_load_as_slices() {
-    // Dots and Rings joined Petals/Flares/Bumps as removed styles: one
-    // glyph shape is left, so none of these exist as variants and serde
-    // aliases must absorb each. Without them an old blob doesn't just lose
-    // its style, it fails to parse and drops the WHOLE persist (layout,
-    // camera and all). Inject the dead tokens as strings, since the enum
-    // can no longer name them.
-    for removed in ["Dots", "Rings", "Petals", "Flares", "Bumps"] {
+fn an_old_blobs_octave_style_key_is_ignored_rather_than_fatal() {
+    // The octave layer had a style setting (Off, and the Dots/Rings/Petals/
+    // Flares/Bumps glyph shapes trimmed before it) until the layer became
+    // unconditional. Every one of those tokens still sits in saved blobs, and
+    // an unknown key must be SKIPPED — a failed parse drops the whole persist,
+    // camera and layout with it, which is a far worse trade than losing a
+    // setting that no longer exists.
+    for removed in ["Off", "Slices", "Dots", "Rings", "Petals", "Flares", "Bumps"] {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.view.outer_style = lattice_scene::OuterStyle::Slices;
+        state.camera.yaw = 1.23;
+        state.view.outer_inner = 0.25;
         let saved = state
             .save_persist()
-            .replace("outer_style:Slices", &format!("outer_style:{removed}"));
-        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
+            .replace("outer_inner:", &format!("outer_style:{removed},outer_inner:"));
+        assert_ne!(saved, state.save_persist(), "injection must have hit for {removed}");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
-        assert_eq!(
-            restored.view.outer_style,
-            lattice_scene::OuterStyle::Slices,
-            "{removed} folds to the one surviving style"
-        );
+        assert_eq!(restored.camera.yaw, 1.23, "{removed} took the persist down");
+        assert_eq!(restored.view.outer_inner, 0.25, "{removed}");
     }
 }
 
@@ -140,23 +136,20 @@ fn a_pre_split_melody_bass_blob_loads_as_the_two_flags() {
 
 #[test]
 fn pre_rename_octave_style_and_slice_band_fields_still_load() {
-    // The outer layer's fields were renamed (octave_style ->
-    // outer_style, slice_inner/outer -> outer_inner/outer); aliases
-    // must keep blobs with the old names loading.
+    // The outer layer's band fields were renamed (slice_inner/outer ->
+    // outer_inner/outer); aliases must keep blobs with the old names
+    // loading, alongside the octave_style key that era also wrote.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.view.outer_style = lattice_scene::OuterStyle::Slices;
     state.view.outer_inner = 0.25;
     state.view.outer_outer = 0.85;
     let saved = state
         .save_persist()
-        .replace("outer_style:", "octave_style:")
-        .replace("outer_inner:", "slice_inner:")
+        .replace("outer_inner:", "octave_style:Slices,slice_inner:")
         .replace("outer_outer:", "slice_outer:");
     assert_ne!(saved, state.save_persist(), "replacements must have hit");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
-    assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Slices);
     assert_eq!(restored.view.outer_inner, 0.25);
     assert_eq!(restored.view.outer_outer, 0.85);
 }
@@ -310,7 +303,7 @@ fn pre_radius_off_core_modes_fold_onto_radius_and_solidity() {
 }
 
 #[test]
-fn node_body_experiment_blobs_fold_into_core_and_outer() {
+fn node_body_experiment_blobs_fold_into_the_core_and_backdrop() {
     // Blobs saved by the one-build NodeBody experiment carry a
     // node_body field the current layout no longer writes; loading one
     // must both parse and fold the body into the core/outer split
@@ -326,7 +319,6 @@ fn node_body_experiment_blobs_fold_into_core_and_outer() {
     restored.load_persist(&saved);
     assert_eq!(restored.view.core_solidity, 0.0, "octave-only body is the glow end");
     assert!(restored.view.core_radius > 0.0, "still on");
-    assert_eq!(restored.view.outer_style, lattice_scene::OuterStyle::Slices);
     assert_eq!(
         restored.view.outer_backdrop, 1.0,
         "Beads' cohesion device rides the backdrop, at full strength"

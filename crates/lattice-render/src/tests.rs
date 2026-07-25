@@ -214,7 +214,6 @@ fn parity_scene() -> Scene {
         background: lattice_scene::skin::panel_color(),
         sevens_soft: 0.24,
         node_radius: 0.34,
-        outer_style: Default::default(),
         mark_thickness: 0.09,
         node_style: Default::default(),
         core_radius: 0.46,

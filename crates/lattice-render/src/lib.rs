@@ -481,7 +481,7 @@ impl LatticeCallback {
                 misc: [
                     scene.time,
                     scene.node_radius,
-                    scene.outer_style.shader_index() as f32,
+                    0.0,
                     scene.node_style.shader_index() as f32,
                 ],
                 misc2: [

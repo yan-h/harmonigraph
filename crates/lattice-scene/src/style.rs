@@ -2,34 +2,6 @@
 //! shader indices they map to. Adding a style means touching this file and
 //! the matching branch in `lattice.wgsl`.
 
-/// The OUTER layer: whether a node shows which octaves its pitch class is
-/// sounding in. The glyphs draw inside the radial band between the view's
-/// `outer_inner` and `outer_outer` radii, from the per-node octave bitmask.
-///
-/// Only ONE glyph shape remains. This started as a set of switchable looks
-/// (dots, rings, and several trimmed earlier) for live comparison; slices
-/// won, so the choice is now just whether the layer draws at all. The dead
-/// names are kept as serde aliases, not variants — an old blob naming one
-/// loads as slices rather than dropping the whole persist.
-///
-/// Fully independent of the CORE layer ([`CoreStyle`]): the glyphs draw
-/// the same whatever the core does. [`ViewConfig::outer_backdrop`] — its
-/// own outer-layer setting, not the core's business — ghosts the silent
-/// slots in the note color, completing the circle so a single sounding
-/// octave still reads as one whole note.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum OuterStyle {
-    /// No octave indication.
-    Off,
-    /// Annular pizza-slice sectors spanning the band, with
-    /// constant-thickness gaps between neighbors. Each sector's angle
-    /// tracks absolute pitch: middle C straight up, 45deg clockwise per
-    /// octave, pitch class within the octave included.
-    #[default]
-    #[serde(alias = "Dots", alias = "Rings", alias = "Petals", alias = "Flares", alias = "Bumps")]
-    Slices,
-}
-
 /// How the core orb is painted while notes sound (inert when there is no
 /// orb, i.e. [`ViewConfig::core_radius`](crate::ViewConfig::core_radius)
 /// is 0). All styles share the same instance data
@@ -93,18 +65,6 @@ impl NodeStyle {
     /// the pattern. Mirrors `is_field_style` in lattice.wgsl; keep in sync.
     pub fn is_field_style(self) -> bool {
         !matches!(self, NodeStyle::Steady)
-    }
-}
-
-impl OuterStyle {
-    /// Index used by the shader (uniform `misc.z`). Now only "off" or
-    /// "on" — the shader has one glyph shape left — but kept as the
-    /// original index so the slices branch stays byte-for-byte unchanged.
-    pub fn shader_index(self) -> u32 {
-        match self {
-            OuterStyle::Off => 0,
-            OuterStyle::Slices => 5,
-        }
     }
 }
 

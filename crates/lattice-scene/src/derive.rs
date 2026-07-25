@@ -360,7 +360,6 @@ pub fn derive_scene(
         camera,
         time: (now % 3600.0) as f32,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
-        outer_style: view.outer_style,
         node_style: view.node_style,
         core_radius,
         core_solidity,

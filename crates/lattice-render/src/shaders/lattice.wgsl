@@ -15,8 +15,7 @@ struct Uniforms {
     //    instance age/seed, which stay small and precise however long the
     //    session runs.
     // y: base node radius (world units),
-    // z: outer octave layer (0 off, 5 on — one glyph shape is left, and
-    //    its original index is kept; see OuterStyle::shader_index),
+    // z: unused,
     // w: node style — the core orb's paint (0 steady, 3 vortex,
     //    11 pinwheel, 12 spiral, 13 checker). Indices are sparse: they
     //    are preserved from the original 15-style set so the kept styles'
@@ -988,9 +987,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // its own envelope. Whichever element covers a pixel most strongly owns
     // its color there: sounding glyphs are tinted by their own pitch;
     // ghosts and the rest use the whitened node color.
-    // The outer layer is on or off; there is one glyph shape (see
-    // OuterStyle), whose index the scene still passes through misc.z.
-    let outer_on = u.misc.z > 0.5;
+    // The octave layer always draws — one glyph shape, no on/off. Which
+    // octaves it shows is the per-node bitmask, and how much of the band it
+    // covers is the band radii; there is nothing left for a switch to say.
     let node_glyph_rgb = mix(in.color.rgb, vec3<f32>(1.0, 1.0, 1.0), 0.55);
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
@@ -1019,44 +1018,41 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let lim = QUAD_MARGIN - 0.02;
     let outer_in = min(band_out + ring_gap, lim);
     let inner_out = band_in - ring_gap;
-    if outer_on {
-        // Sounding slots draw bright, tinted by their own pitch, each
-        // fading on its own envelope. The backdrop opacity (its own
-        // outer-layer setting, independent of the core) fades in the
-        // layer's cohesion device: the silent slots drawn as ghosts in the
-        // loop below.
-        let ghosted = has_backdrop;
-        for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-            let level = octave_level(in.octaves, i);
-            if level <= 0.0 && !(ghosted && presence > 0.0) {
-                continue;
-            }
-            let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
-            // Ghosts complete the circle silhouette in the note's own
-            // color; a sounding slot never dips below its ghost, so a
-            // fading octave hands off to it instead of leaving a hole.
-            var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
-            var slot_rgb = node_glyph_rgb;
-            if level > 0.0 {
-                // Straight off the octave's own envelope, so the glyph eases
-                // in over the attack and ends at nothing on release. The
-                // max() hands a backdrop slot off to its ghost as the lit
-                // coverage sinks through it.
-                cov = max(cov, shape * level);
-                // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
-                // this node's pitch class for the glyph's true pitch.
-                let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
-                // Exactly the color that pitch lights everywhere else. The LUT
-                // is the pitch ramp, which is defined already lightened
-                // (pitch_ramp_lch / NOTE_LIGHTEN in lattice-scene), and the
-                // core disc and the piano roll sample that same ramp — so all
-                // three read as one color. No separate white mix here anymore.
-                slot_rgb = pitch_lut_color(pitch);
-            }
-            if cov > glyph {
-                glyph = cov;
-                glyph_rgb = slot_rgb;
-            }
+    // Sounding slots draw bright, tinted by their own pitch, each fading on
+    // its own envelope. The backdrop opacity (its own outer-layer setting,
+    // independent of the core) fades in the layer's cohesion device: the
+    // silent slots drawn as ghosts in the loop below.
+    let ghosted = has_backdrop;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        let level = octave_level(in.octaves, i);
+        if level <= 0.0 && !(ghosted && presence > 0.0) {
+            continue;
+        }
+        let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
+        // Ghosts complete the circle silhouette in the note's own color; a
+        // sounding slot never dips below its ghost, so a fading octave hands
+        // off to it instead of leaving a hole.
+        var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
+        var slot_rgb = node_glyph_rgb;
+        if level > 0.0 {
+            // Straight off the octave's own envelope, so the glyph eases in
+            // over the attack and ends at nothing on release. The max() hands
+            // a backdrop slot off to its ghost as the lit coverage sinks
+            // through it.
+            cov = max(cov, shape * level);
+            // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add this
+            // node's pitch class for the glyph's true pitch.
+            let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
+            // Exactly the color that pitch lights everywhere else. The LUT is
+            // the pitch ramp, which is defined already lightened
+            // (pitch_ramp_lch / NOTE_LIGHTEN in lattice-scene), and the core
+            // disc and the piano roll sample that same ramp — so all three
+            // read as one color. No separate white mix here anymore.
+            slot_rgb = pitch_lut_color(pitch);
+        }
+        if cov > glyph {
+            glyph = cov;
+            glyph_rgb = slot_rgb;
         }
     }
     // Fade a soft (low-solidity) glyph out across the billboard's margin

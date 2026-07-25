@@ -4,8 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, OuterStyle,
-    SevensLabel,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SevensLabel,
 };
 use crate::trail::TrailMark;
 use lattice_core::{coords, LatticePos};
@@ -102,10 +101,6 @@ pub struct ViewConfig {
     /// Only meaningful while `show_labels` is on.
     #[serde(default = "default_sevens_label")]
     pub sevens_label: SevensLabel,
-    /// Outer octave layer style. The alias keeps pre-rename blobs (field
-    /// `octave_style`) loading; the default covers even older blobs.
-    #[serde(default, alias = "octave_style")]
-    pub outer_style: OuterStyle,
     /// Draw note-name labels on hovered and sounding nodes.
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
@@ -548,7 +543,6 @@ impl ViewConfig {
             LegacyNodeBody::Slices | LegacyNodeBody::Rings | LegacyNodeBody::Beads => {}
         }
         self.core_solidity = 0.0;
-        self.outer_style = OuterStyle::Slices;
         self.outer_backdrop = 1.0;
     }
 }
@@ -591,7 +585,6 @@ impl Default for ViewConfig {
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
             sevens_label: SevensLabel::Comma,
-            outer_style: OuterStyle::Slices,
             show_labels: true,
             show_cents: true,
             node_style: NodeStyle::Steady,
