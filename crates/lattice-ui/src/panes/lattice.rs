@@ -184,7 +184,14 @@ pub(super) fn draw_node_labels(
         if !rect.expand(LABEL_REACH * scale).contains(center) {
             continue;
         }
-        let outline = theme::well().gamma_multiply(strength);
+        // A transparent rim is how "no halo" travels: `outlined_text` skips
+        // the whole ring when the outline it is handed cannot paint, so the
+        // setting costs nothing to carry and nothing to check.
+        let outline = if view.label_halo {
+            theme::well().gamma_multiply(strength)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
         // Off-sheet nodes draw at their own size (ViewConfig::sevens_size),
         // and their text goes with them — a full-size label on a half-size
         // node reads as a label with a node attached. Floored so the
@@ -421,6 +428,15 @@ pub(super) fn outlined_text(
     let pos = align.anchor_size(anchor, galley.size()).min;
     let ppp = painter.ctx().pixels_per_point();
     let snap = |pt: f32| (pt * ppp).round().max(1.0) / ppp;
+    // An outline that cannot paint still costs 32 stamps of the galley, and
+    // the label's rim is the single biggest thing the pane hands the
+    // tessellator. So the rings are skipped rather than drawn in nothing:
+    // that is what makes the Halo setting cheap, and it also drops the rim
+    // of a label that has faded past the last visible alpha.
+    if outline.a() == 0 {
+        painter.galley(pos, galley, color);
+        return;
+    }
     // Soft ring first so the crisp ring and fill paint over it. Stamp
     // alpha is well below the intended rim alpha because neighboring
     // stamps overlap and accumulate.
@@ -443,8 +459,17 @@ mod tests {
     /// Paint the Lattice pane into `rect` with the camera at `distance`, and
     /// report every galley the labels emitted.
     fn label_galleys(rect: egui::Rect, distance: f32) -> Vec<egui::epaint::TextShape> {
+        label_galleys_with(rect, distance, true)
+    }
+
+    fn label_galleys_with(
+        rect: egui::Rect,
+        distance: f32,
+        halo: bool,
+    ) -> Vec<egui::epaint::TextShape> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.camera.distance = distance;
+        state.view.label_halo = halo;
         // A chord spread across the lattice, so nodes land all over the pane
         // and (zoomed in) well outside it.
         for note in [55u8, 60, 62, 64, 67, 69, 71] {
@@ -472,6 +497,26 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Turning the halo off has to cost the halo, not just hide it: the rim
+    /// is the label's text stamped 32 more times, and drawing those stamps
+    /// in a transparent color would keep every one of them. One galley per
+    /// piece of text is the whole point of the setting.
+    #[test]
+    fn turning_the_halo_off_stops_stamping_it() {
+        let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, 400.0));
+        let haloed = label_galleys_with(rect, 14.0, true);
+        let plain = label_galleys_with(rect, 14.0, false);
+        assert!(!plain.is_empty(), "the labels stopped drawing altogether");
+        // 33 stamps a piece become 1, so anything near the haloed count means
+        // the rings are still being built.
+        assert!(
+            plain.len() * 16 < haloed.len(),
+            "halo off still laid out {} galleys against {} with it on",
+            plain.len(),
+            haloed.len(),
+        );
     }
 
     /// A label is laid out only if it can land on the pane.

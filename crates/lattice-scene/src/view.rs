@@ -109,6 +109,16 @@ pub struct ViewConfig {
     /// cents. Only meaningful while `show_labels` is on.
     #[serde(default = "default_true")]
     pub show_cents: bool,
+    /// Ring each label in the pane's own dark surface color, so it reads
+    /// over whatever it lands on. Only meaningful while `show_labels` is on.
+    ///
+    /// A setting because it is also the labels' whole cost: the rim is the
+    /// label's text stamped 32 times around two rings (see `outlined_text`),
+    /// which is 97% of the geometry a label puts in the frame. On a lattice
+    /// dark enough — or a note count low enough — that the text reads
+    /// without it, turning it off is the cheapest label there is.
+    #[serde(default = "default_true")]
+    pub label_halo: bool,
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
@@ -566,6 +576,7 @@ impl Default for ViewConfig {
             outer_style: OuterStyle::Slices,
             show_labels: true,
             show_cents: true,
+            label_halo: true,
             node_style: NodeStyle::Steady,
             core_style: CoreStyle::default(),
             // A small, soft core inside a wide octave band with its silent

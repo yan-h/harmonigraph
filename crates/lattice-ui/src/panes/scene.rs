@@ -93,6 +93,13 @@ fn labels_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         view.show_labels,
         egui::Checkbox::new(&mut view.show_cents, "Cents"),
     );
+    ui.add_enabled(view.show_labels, egui::Checkbox::new(&mut view.label_halo, "Halo"))
+        .on_hover_text(
+            "Ring each label in the panel's dark color so it stays readable \
+             over a lit node. Also the labels' whole cost — the rim is the \
+             text drawn 32 more times — so turning it off is the cheapest \
+             way to make a busy lattice cheaper, if the labels still read.",
+        );
 }
 
 /// Trail: where the music has already been. Rides the IDLE layer only -- a
