@@ -282,12 +282,6 @@ const OCTAVE_SLOTS: u32 = 10u;
 // and the `pitch_lut` array in Uniforms).
 const PITCH_LUT_N: u32 = 16u;
 
-// Dimmest-visible convention, shared with the UI panes (visibility_floor
-// in lattice-ui): quiet elements sit at 35% and scale up to full.
-fn level_floor(level: f32) -> f32 {
-    return 0.35 + 0.65 * level;
-}
-
 // Coverage of `x` inside the threshold `edge`, with a screen-constant
 // soft band: `w` is ~a pixel expressed in `x`'s units (from fwidth at
 // the call site — taken at the top of the fragment fn, outside any
@@ -952,7 +946,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     }
     glow = glow * core_on;
 
-    let brightness = level_floor(activation);
+    let brightness = activation;
     // Every sounding octave's color, blended by angle — each hue laid in
     // its dot's direction (see octave_glow_color). This is the node's
     // multi-color fill: Steady shows it directly on the disc (so a chord's
@@ -1048,14 +1042,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
             var slot_rgb = node_glyph_rgb;
             if level > 0.0 {
-                // The 35% dimmest-visible floor is right while the octave
-                // sounds, but a released glyph must END at nothing: without
-                // this taper it holds 35% brightness all the way down the
-                // fade and then pops off. Ease the last 15% of the envelope
-                // to zero instead (the max() hands a backdrop slot off to
-                // its ghost as the lit coverage sinks through it).
-                let tail = smoothstep(0.0, 0.15, level);
-                cov = max(cov, shape * level_floor(level) * tail);
+                // Straight off the octave's own envelope, so the glyph eases
+                // in over the attack and ends at nothing on release. The
+                // max() hands a backdrop slot off to its ghost as the lit
+                // coverage sinks through it.
+                cov = max(cov, shape * level);
                 // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add
                 // this node's pitch class for the glyph's true pitch.
                 let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;

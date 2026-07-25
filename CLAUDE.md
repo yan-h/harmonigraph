@@ -47,6 +47,34 @@ loadable. After a swap, rescan/restart the plugin in Bitwig to pick it up.
   topmost workspace and builds main. These scripts exist to sidestep this;
   see `update-plugin.sh`'s header comment.
 
+### Every build says which build it is
+
+The performance overlay's bottom line reads `build  <branch> @<sha>` — the
+branch with its `worktree-` prefix stripped, so it is exactly the argument
+`./load-plugin.sh <branch>` takes. It is stamped at compile time by
+`crates/lattice-ui/build.rs` and is on by default, so it needs nothing from
+Yan but a look at the corner of the Analyzer pane.
+
+This exists because a swap can silently not have happened: no rescan, a build
+that landed in a different worktree, the wrong branch named, or a build that
+never finished. Two builds are otherwise indistinguishable from inside the
+DAW, and a look that is judged against the wrong binary costs a whole round
+trip to discover.
+
+**Sessions, when you hand over a build: say what tag it will show.** Not
+"loadable via `./load-plugin.sh <branch>`" alone — name the tag too, so the
+first thing Yan can do is confirm the swap took. It is
+`<branch minus worktree- prefix> @<short sha of your last commit>`; `git log
+--oneline -1` gives you the sha. This matters most when you hand over MORE
+THAN ONE build to compare (variants of a look, an A/B of a fix): with several
+near-identical builds in play, "which one am I looking at?" is the whole
+question, and the tag is the only answer that cannot be fooled.
+
+The tag names the last COMMIT, not the working tree — a build made with
+uncommitted edits carries the commit it sits on, exactly as
+`load-plugin.sh`'s freshness column does. So commit before you build if you
+want the tag to distinguish your work.
+
 ## Reading the plugin's live settings back out of Bitwig
 
 When Yan has dialed in a look in the DAW and wants it captured (new

@@ -168,7 +168,9 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          between them to slide the whole range (it squishes when it meets an \
          end), double-click for the full axis. The scale is logarithmic — \
          equal distances are equal musical intervals — so an octave is the \
-         same width wherever it sits.",
+         same width wherever it sits.\n\nOr set it on the display itself: drag \
+         the Analyzer pane to pan the range, scroll to zoom it around the \
+         pointer.",
     );
     choice_row(
         ui,
@@ -535,6 +537,106 @@ fn drag_split(
     response
 }
 
+/// The `surface` that is the real, docked Analyzer pane. Slot 1 is the Video
+/// tab's preview and the offline renderer never has a pointer, so this is the
+/// one copy of the pane a person can actually navigate.
+const DOCKED_SURFACE: usize = 0;
+
+/// How much one point of scroll zooms, as an exponent — a full notch of a
+/// mouse wheel (~50 points) closes the range by about a third, and a trackpad's
+/// finer stream lands proportionally.
+const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
+
+/// Drag to pan the pitch range, wheel to zoom it: the pitch axis moved by
+/// grabbing the picture rather than by aiming the Analyzer tab's range bar at
+/// it. Both write [`low_midi`/`high_midi`](crate::SpectrumConfig), so a
+/// navigated range persists and reads back out on that bar.
+///
+/// Only the pitch RANGE moves. The time axis is deliberately untouched: the
+/// roll's Span is how much history the pane shows, which is a different
+/// question from which pitches it shows, and one gesture that changed both
+/// would leave neither settable on its own.
+///
+/// Docked pane only. The Video tab draws this same pane as its preview, and
+/// that tab's body is a vertical `ScrollArea` — a wheel spent zooming there is
+/// a wheel the tab can no longer be scrolled with, which is the only thing
+/// that keeps its controls reachable when the preview squeezes it. (The
+/// divider is a different case and stays live in the preview: it is a handle
+/// you aim at, not a gesture over the whole surface.)
+fn drag_zoom_pitch(
+    ui: &egui::Ui,
+    axes: &Axes,
+    response: &egui::Response,
+    state: &mut SharedState,
+    surface: usize,
+) {
+    use lattice_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+
+    if surface != DOCKED_SURFACE {
+        return;
+    }
+    let cfg = &mut state.spectrum_config;
+    let mut low = cfg.low_midi;
+    let mut span = (cfg.high_midi - cfg.low_midi).max(crate::PITCH_RANGE_MIN_SPAN);
+    // Nothing is written unless a gesture actually moved something. The range
+    // is also the Analyzer tab's range bar, and rewriting it every frame would
+    // put this function's rounding between that bar and the value it shows.
+    let mut moved = false;
+
+    // Zoom about the pitch under the pointer, so the note being looked at
+    // stays put while the range closes in on it. `contains_pointer` rather
+    // than `hovered()`: the divider sits on top of the pane, and the wheel
+    // should keep zooming while the pointer crosses it.
+    if response.contains_pointer() {
+        // Wheel and trackpad pinch both zoom. egui routes ctrl+wheel and pinch
+        // into `zoom_delta` and zeroes the scroll for them, so the two can't
+        // double up here.
+        let (scroll, pinch) = ui.ctx().input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+        let factor = (scroll * ZOOM_PER_SCROLL_POINT).exp() * pinch;
+        if (factor - 1.0).abs() > 1e-4 {
+            let anchor = ui
+                .ctx()
+                .pointer_hover_pos()
+                .map_or(0.5, |p| axes.pitch_at(p).clamp(0.0, 1.0));
+            let held = low + anchor * span;
+            span = (span / factor).clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
+            low = held - anchor * span;
+            moved = true;
+        }
+    }
+
+    // Grab the picture: the pitch under the pointer travels with it, so the
+    // range moves the opposite way. Per-frame deltas rather than the absolute
+    // tracking the divider uses — pushed against an end of the axis, an
+    // absolute anchor would keep accumulating off-screen and the range would
+    // sit still on the way back.
+    if response.dragged() {
+        let along = response.drag_delta().dot(axes.dir_pitch());
+        low -= along / axes.pitch_len().max(1.0) * span;
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        moved = true;
+    }
+
+    if !moved {
+        return;
+    }
+    // Land inside the axis the analyzer actually covers. Same invariant
+    // `SpectrumConfig::migrate_legacy` enforces on load: a range past the axis
+    // draws a band with no buckets behind it. The upper bound takes a `max`
+    // because at the full span the two ends meet, and float rounding is enough
+    // to cross them — which `clamp` answers with a panic.
+    let span = span.clamp(crate::PITCH_RANGE_MIN_SPAN, widest_span());
+    cfg.low_midi = low.clamp(SPECTRUM_MIN_MIDI, (SPECTRUM_MAX_MIDI - span).max(SPECTRUM_MIN_MIDI));
+    cfg.high_midi = cfg.low_midi + span;
+}
+
+/// The whole axis the analyzer covers, as a span — the widest the pitch range
+/// can be zoomed out to.
+fn widest_span() -> f32 {
+    use lattice_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+    SPECTRUM_MAX_MIDI - SPECTRUM_MIN_MIDI
+}
+
 /// Where a pitch sits on the pane's axis: the pitch range, as a mapping.
 #[derive(Clone, Copy)]
 pub(super) struct PitchScale {
@@ -683,7 +785,11 @@ pub(crate) fn spectral_pane(
     // The rim the pane's own labels wear; a view setting, like the note
     // names' (see `LabelRim`).
     let cfg_rim = state.view.label_rim;
-    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    // Drag-sensing, so the pitch range can be panned by grabbing the picture
+    // (see `drag_zoom_pitch`). Registered BEFORE the divider's own band, which
+    // is what leaves the divider on top where the two overlap: egui hands a
+    // drag to the last widget registered over the pointer.
+    let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::drag());
     if rect.width() < 10.0 || rect.height() < 10.0 {
         return;
     }
@@ -691,17 +797,6 @@ pub(crate) fn spectral_pane(
     painter.rect_filled(rect, 0.0, theme::well());
 
     let axes = Axes::new(rect, &cfg);
-    // The axis: absolute pitch, linear in MIDI note = logarithmic in
-    // frequency, so every octave gets equal room and every note draws at
-    // its actual pitch. The displayed range is the Analyzer tab's pitch
-    // range, which is free to start anywhere — it is not snapped to C.
-    let min_midi = cfg.low_midi;
-    // Never trust the pair to be ordered. A zero or negative span divides by
-    // zero in PitchScale and paints NaN geometry, which egui panics on — and
-    // a panic here takes the plugin's editor down inside the host. The range
-    // bar can't produce one; a hand-edited state blob can.
-    let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
-    let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
 
     // Offline playhead render: the whole take laid out statically with a
     // sweeping playhead. It takes the whole pane (split = 0), which also drops
@@ -714,10 +809,24 @@ pub(crate) fn spectral_pane(
     // isn't drawn at all there.
     let divider = (!whole_song && (cfg.show_roll || cfg.show_spectrogram))
         .then(|| drag_split(ui, &axes, state, surface));
-    // Re-snapshot: a drag just wrote `roll_fraction`, and the split below has
-    // to be this frame's, not the one from before the drag.
+    drag_zoom_pitch(ui, &axes, &response, state, surface);
+    // Re-snapshot: the two drags above just wrote `roll_fraction` and the pitch
+    // range, and everything below has to be this frame's values, not the ones
+    // from before the drag.
     let cfg = state.spectrum_config;
     let split = if whole_song { 0.0 } else { spectrum_share(&cfg) };
+
+    // The axis: absolute pitch, linear in MIDI note = logarithmic in
+    // frequency, so every octave gets equal room and every note draws at
+    // its actual pitch. The displayed range is the Analyzer tab's pitch
+    // range, which is free to start anywhere — it is not snapped to C.
+    let min_midi = cfg.low_midi;
+    // Never trust the pair to be ordered. A zero or negative span divides by
+    // zero in PitchScale and paints NaN geometry, which egui panics on — and
+    // a panic here takes the plugin's editor down inside the host. The range
+    // bar can't produce one; a hand-edited state blob can.
+    let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
+    let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
     // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
     // the conventional reference slope (negative), so the display

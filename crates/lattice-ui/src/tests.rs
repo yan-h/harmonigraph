@@ -1016,6 +1016,181 @@ fn the_spectral_divider_drags_through_the_dock() {
     );
 }
 
+/// A harness that runs the REAL dock — `root_ui`, egui_dock, tab bodies and
+/// all — one frame per call, so a pane's pointer handling is tested through
+/// every layer that sits between it and the mouse.
+struct DockHarness {
+    ctx: egui::Context,
+    backend: RecordingBackend,
+    screen: egui::Rect,
+    t: f64,
+}
+
+impl DockHarness {
+    fn new() -> Self {
+        DockHarness {
+            ctx: egui::Context::default(),
+            backend: RecordingBackend::default(),
+            screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0)),
+            t: 0.0,
+        }
+    }
+
+    fn frame(&mut self, state: &mut SharedState, events: Vec<egui::Event>) {
+        self.t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(self.screen),
+            time: Some(self.t),
+            events,
+            ..Default::default()
+        };
+        let t = self.t;
+        let backend = &self.backend;
+        let _ = self.ctx.run_ui(raw, |ui| root_ui(ui, state, backend, t));
+    }
+
+    /// Two warm-ups: egui resolves the top widget at the pointer from the
+    /// previous pass, so a widget has to exist before the press.
+    fn settle(&mut self, state: &mut SharedState) {
+        self.frame(state, vec![]);
+        self.frame(state, vec![]);
+    }
+
+    /// A point inside the Spectral pane's picture, mid-pitch and deep into the
+    /// roll/spectrogram region — clear of the divider, which sits at 45% of
+    /// the depth axis by default and would otherwise take the drag.
+    fn spectral_grab(&self, state: &SharedState) -> egui::Pos2 {
+        // The perf overlay already answers "where is the Spectral pane's
+        // body", and falls back to the whole window when it isn't on screen.
+        let rect = perf_overlay_area(state, self.screen);
+        assert_ne!(rect, self.screen, "the Spectral pane should be visible in the default dock");
+        rect.lerp_inside(egui::vec2(0.8, 0.5))
+    }
+}
+
+fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    }
+}
+
+/// Dragging the Spectral pane's picture pans the pitch range, through the real
+/// dock. Panning DOWN the axis (dragging toward higher pitch) has to bring
+/// lower pitches into view, the way grabbing any picture does.
+#[test]
+fn dragging_the_spectral_picture_pans_the_pitch_range() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Start zoomed in, so there is room to pan in both directions.
+    state.spectrum_config.low_midi = 48.0;
+    state.spectrum_config.high_midi = 84.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    let grab = h.spectral_grab(&state);
+    let before = state.spectrum_config;
+    // Across (the default orientation) climbs in pitch UP the screen, so a
+    // drag toward higher pitch is a drag toward smaller y.
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    let target = grab + egui::vec2(0.0, -60.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+
+    let after = state.spectrum_config;
+    assert!(
+        after.low_midi < before.low_midi - 1.0,
+        "the range should have followed the pointer down the axis ({} -> {})",
+        before.low_midi,
+        after.low_midi,
+    );
+    assert!(
+        ((after.high_midi - after.low_midi) - (before.high_midi - before.low_midi)).abs() < 1e-3,
+        "a pan moves the range without resizing it",
+    );
+}
+
+/// The wheel zooms the pitch range, and touches NOTHING else — in particular
+/// not the roll's time Span, which is the other thing a wheel over this pane
+/// could plausibly have meant.
+#[test]
+fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.low_midi = 36.0;
+    state.spectrum_config.high_midi = 96.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    let over = h.spectral_grab(&state);
+    let before = state.spectrum_config;
+    h.frame(&mut state, vec![egui::Event::PointerMoved(over)]);
+    // Several notches, so the assertion isn't riding on egui's scroll smoothing
+    // having fully caught up in one frame.
+    for _ in 0..4 {
+        h.frame(
+            &mut state,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 40.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+    }
+
+    let after = state.spectrum_config;
+    let (was, now) = (before.high_midi - before.low_midi, after.high_midi - after.low_midi);
+    assert!(now < was - 1.0, "scrolling up should have zoomed in ({was} -> {now})");
+    assert_eq!(
+        after.roll_seconds, before.roll_seconds,
+        "the wheel is the pitch range's, not the time axis's",
+    );
+    // Zoom is anchored on the pointer, which is the middle of the pane here,
+    // so the pitch under it should not have moved.
+    let mid = |c: &crate::SpectrumConfig| 0.5 * (c.low_midi + c.high_midi);
+    assert!(
+        (mid(&after) - mid(&before)).abs() < 1.0,
+        "the pitch under the pointer should stay put ({} -> {})",
+        mid(&before),
+        mid(&after),
+    );
+}
+
+/// The pane now senses drags over its whole surface, which is exactly what
+/// could have swallowed the divider's. It must not: the divider registers
+/// after the pane, so egui leaves it on top, and a drag that starts on the
+/// handle still resizes the split and does NOT pan the pitch.
+#[test]
+fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    let handle = egui::Id::new(("spectral-split", 0usize));
+    let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
+    let grab = band.center();
+    let before = state.spectrum_config;
+
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    // A drag with a pitch-axis component, so a pane that stole it would show
+    // up as a moved range rather than as nothing happening.
+    let target = grab + egui::vec2(40.0, -30.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+
+    let after = state.spectrum_config;
+    assert!(
+        (after.roll_fraction - before.roll_fraction).abs() > 0.01,
+        "the divider should still have moved",
+    );
+    assert_eq!(
+        (after.low_midi, after.high_midi),
+        (before.low_midi, before.high_midi),
+        "dragging the divider must not pan the pitch range as well",
+    );
+}
+
 #[test]
 fn frame_interval_converts_a_cap_to_a_spacing() {
     assert_eq!(frame_interval(None), None, "uncapped asks for no spacing");
@@ -1307,6 +1482,33 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         (hud.right() - area.right()).abs() < 12.0 && (hud.top() - area.top()).abs() < 12.0,
         "the HUD should hug the pane's top-RIGHT corner: {hud:?} in {area:?}",
     );
+    // The build tag, which is why the HUD is worth looking at before any of
+    // its numbers: Bitwig loads ONE bundle and every session builds into its
+    // own worktree, so "am I even looking at the build I just loaded?" has a
+    // wrong answer available. Asserted as painted TEXT, because a tag that is
+    // computed and not drawn would verify nothing.
+    //
+    // Wrapping means the tag can span two galleys, so this looks for the
+    // branch name rather than the whole line.
+    let branch = perf::BUILD_TAG.split(" @").next().unwrap_or(perf::BUILD_TAG);
+    assert!(
+        output.shapes.iter().any(|clipped| matches!(
+            &clipped.shape,
+            egui::Shape::Text(text) if text.galley.text().contains(branch)
+        )),
+        "the overlay should name the build it is ({}), so a reload can be checked",
+        perf::BUILD_TAG,
+    );
+    // ...and naming it must not have pushed the HUD out of its pane. The tag
+    // is a branch name, so it is arbitrarily long; `draw_overlay` wraps it to
+    // the width the numbers already need. Without that, a long enough branch
+    // silently widens the HUD past the pane — which the assertion above on
+    // `contains_rect` catches, but only on a branch that happens to be long.
+    assert!(
+        hud.width() < area.width(),
+        "the build tag must wrap, not widen the HUD: {hud:?} in {area:?}",
+    );
+
     assert!(screen.contains_rect(area), "the analyzer pane is inside the editor");
     // Right of the lattice and left of the settings column: the Spectral pane
     // as `default_dock` places it.
