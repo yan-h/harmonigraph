@@ -5,7 +5,7 @@ use super::{display_note_name, learn_pulse};
 use crate::{theme, SharedState};
 use egui::Sense;
 use lattice_render::lattice_paint_callback;
-use lattice_scene::{derive_scene, Camera, Projection, SevensLabel, TrailMark};
+use lattice_scene::{derive_scene, Camera, Projection, SeptimalGlyph, SevensLabel, TrailMark};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -236,6 +236,7 @@ pub(crate) fn draw_node_labels(
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
+                    MarkStyle { glyph: view.septimal_glyph, weight: view.mark_weight },
                 );
                 if sevens == SevensLabel::Comma {
                     // The signed distance to the home-sheet node wearing
@@ -303,18 +304,181 @@ const MARK_SCALE: f32 = 0.55;
 /// The size the marks are actually laid out at.
 pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
 
-/// A note name centered on `anchor`, with its accidental stacked above its
-/// syntonic-comma mark in a single column after the letter (`♯` riding high
-/// like a superscript, `+` low like a subscript). Both marks are counted
-/// rather than repeated (see [`lattice_core::NoteName`]), so even a name
-/// deep in the lattice stays roughly two characters wide instead of
-/// sprawling off its node.
+/// Which of the drawn septimal designs to use, and how heavy to draw every
+/// mark that is geometry rather than type. Both are being compared rather
+/// than settled; see [`SeptimalGlyph`].
+#[derive(Clone, Copy)]
+pub(crate) struct MarkStyle {
+    pub glyph: SeptimalGlyph,
+    pub weight: f32,
+}
+
+/// Iosevka Fixed's advance, as a fraction of the em: every cell is half an
+/// em wide. A drawn mark claims exactly this, so it sits in the same column
+/// grid as the typeset accidental above it.
+const MARK_ADVANCE: f32 = 0.5;
+/// The ink width Iosevka gives `+` and `-` within that cell (372/1000 em).
+/// Matching it is what keeps a drawn sign from reading as a different size
+/// of mark than the `♯` stacked over it.
+const MARK_INK_W: f32 = 0.372;
+/// And the height of `+`'s upright (386/1000 em).
+const PLUS_INK_H: f32 = 0.386;
+/// How much larger the septimal shape draws than that `+` box. A triangle
+/// covers half its bounding box, so drawn to the same box it reads as the
+/// lighter mark of the two; this is the size at which the pair looks like
+/// one system rather than a mark and a smaller mark.
+const SEPTIMAL_BULK: f32 = 1.25;
+/// How far the halo reaches past a drawn mark, in points. The text rim's
+/// crisp ring is 1.2 (see [`crate::text::RINGS`]); a drawn mark carries the
+/// same, so a label does not have one kind of edge on its letter and
+/// another on its marks.
+const MARK_HALO: f32 = 1.2;
+
+/// One piece of a drawn mark, before it knows what color it is: the halo
+/// pass and the fill pass draw the same geometry twice.
+enum MarkPiece {
+    Bar(egui::Rect),
+    Solid(Vec<egui::Pos2>),
+    Line(Vec<egui::Pos2>, f32),
+}
+
+/// Paint a mark's pieces, halo first and then fill.
 ///
-/// Returns how far the lowest glyph drawn reaches below `anchor.y` -- the
-/// name's ink, not its box -- which is what the cents readout hangs off.
+/// Two passes rather than one halo per piece: a `+` is two overlapping bars,
+/// and haloing each as it is drawn cuts a dark line across the other's arm.
+/// Growing every piece by the halo, then filling every piece, gives the
+/// union of the shapes one outline -- which is what the per-pixel rim does
+/// for a glyph.
+fn paint_mark(
+    painter: &egui::Painter,
+    pieces: &[MarkPiece],
+    color: egui::Color32,
+    outline: egui::Color32,
+) {
+    for (paint, grow) in [(outline, MARK_HALO), (color, 0.0)] {
+        for piece in pieces {
+            match piece {
+                MarkPiece::Bar(rect) => {
+                    painter.rect_filled(rect.expand(grow), 0.0, paint);
+                }
+                // A stroke in the fill's own color grows a shape by half its
+                // width, which is how a polygon takes the same halo a rect
+                // gets from `expand`.
+                MarkPiece::Solid(points) => {
+                    painter.add(egui::Shape::convex_polygon(
+                        points.clone(),
+                        paint,
+                        egui::Stroke::new(grow * 2.0, paint),
+                    ));
+                }
+                MarkPiece::Line(points, width) => {
+                    painter.add(egui::Shape::line(
+                        points.clone(),
+                        egui::Stroke::new(width + grow * 2.0, paint),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The syntonic comma's sign, as geometry: a bar, plus an upright when it
+/// is a `+`.
+///
+/// Drawn rather than typeset because Iosevka has no bar thick enough. Every
+/// horizontal it owns -- hyphen, minus, all four dashes, low line, overline
+/// -- is exactly 70/1000 em, which is 0.58px at [`MARK_SIZE`] and 0.35px on
+/// an off-sheet node, so a typeset `-` renders as a half-lit row of pixels
+/// beside a `+` whose upright is 3.18px. The pair has to read as two marks
+/// of one system, and no character in the font can make it.
+fn comma_sign(center: egui::Pos2, size: f32, weight: f32, positive: bool) -> Vec<MarkPiece> {
+    // Floored at a whole point: below that, antialiasing spends the mark's
+    // entire contrast on partial coverage, which is the failure being fixed.
+    let thick = (weight * size).max(1.0);
+    let mut pieces =
+        vec![MarkPiece::Bar(egui::Rect::from_center_size(center, egui::vec2(MARK_INK_W * size, thick)))];
+    if positive {
+        pieces.push(MarkPiece::Bar(egui::Rect::from_center_size(
+            center,
+            egui::vec2(thick, PLUS_INK_H * size),
+        )));
+    }
+    pieces
+}
+
+/// The septimal comma's mark, in whichever design is being tried. `up` is
+/// the direction it points, which is the sign of the comma count and NOT
+/// the direction of the lattice step: one step up the sevens axis lands a
+/// comma below its namesake, so it points down.
+fn septimal_shape(
+    center: egui::Pos2,
+    size: f32,
+    weight: f32,
+    up: bool,
+    glyph: SeptimalGlyph,
+) -> Vec<MarkPiece> {
+    let thick = (weight * size).max(1.0);
+    // Bigger than the `+` box it sits under, because a triangle covers half
+    // of its own bounding box where `+` covers most of one arm's length in
+    // both directions. Matching the boxes makes the septimal mark read as
+    // the lighter of the two; matching the apparent size is the point.
+    let hw = MARK_INK_W * size * SEPTIMAL_BULK / 2.0;
+    let hh = PLUS_INK_H * size * SEPTIMAL_BULK / 2.0;
+    // Point-toward-the-tip: +1 draws upward, -1 downward, so each design is
+    // written once and mirrored by arithmetic.
+    let dir = if up { -1.0 } else { 1.0 };
+    let tip = egui::pos2(center.x, center.y + dir * hh);
+    let base_l = egui::pos2(center.x - hw, center.y - dir * hh);
+    let base_r = egui::pos2(center.x + hw, center.y - dir * hh);
+    match glyph {
+        SeptimalGlyph::Triangle => vec![MarkPiece::Solid(vec![tip, base_l, base_r])],
+        SeptimalGlyph::Hollow => {
+            vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick)]
+        }
+        SeptimalGlyph::Arrow => {
+            // Head over the outer third, stem down the middle: the head is
+            // sized for a mark rather than for running text, which is the
+            // one thing a typeset arrow could not give.
+            let neck = center.y + dir * hh * 0.1;
+            vec![
+                MarkPiece::Bar(egui::Rect::from_center_size(
+                    egui::pos2(center.x, center.y),
+                    egui::vec2(thick, hh * 2.0),
+                )),
+                MarkPiece::Solid(vec![
+                    tip,
+                    egui::pos2(center.x - hw, neck),
+                    egui::pos2(center.x + hw, neck),
+                ]),
+            ]
+        }
+        SeptimalGlyph::Chevron => vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)],
+    }
+}
+
+/// A note name centered on `anchor`: the letter, then a column carrying its
+/// accidental above its syntonic-comma sign, then a column for the septimal
+/// mark (`♯` riding high like a superscript, `+` low like a subscript).
+/// Every mark is counted rather than repeated (see [`lattice_core::NoteName`]),
+/// so a name deep in the lattice -- or five modulations out along the sevens
+/// axis -- stays a couple of characters wide instead of sprawling off its node.
+///
+/// The two comma signs are DRAWN and the accidental is typeset, which is not
+/// an inconsistency but the point: `♯` and `♭` are real musical symbols with
+/// 878 and 818 units of ink, and they survive the size. The comma signs are
+/// bars, and Iosevka has no bar thicker than 70 units. See [`comma_sign`].
+///
+/// The septimal mark takes its direction twice over -- from the shape it is
+/// drawn as, and from which end of the column it sits at. The second cue is
+/// free (the column already offsets its marks) and it is the one that
+/// survives when the node is small enough that the shape is four pixels.
+///
+/// Returns how far the lowest thing drawn reaches below `anchor.y` -- ink,
+/// not boxes -- which is what the cents readout hangs off.
 ///
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_stacked_name(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
@@ -323,9 +487,11 @@ pub(crate) fn draw_stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
+    marks: MarkStyle,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
+    let mark_size = MARK_SIZE * scale;
     let measure = |text: &str, font: &egui::FontId| {
         painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size()
     };
@@ -334,17 +500,30 @@ pub(crate) fn draw_stacked_name(
     let ink_below = |text: &str, font: &egui::FontId, size: egui::Vec2| {
         painter_ink(painter, text, font).max.y - size.y / 2.0
     };
-
-    let accidental = (name.accidental_mark(), -1.0);
-    let comma = (name.comma_mark(), 1.0);
-    let letter = measure(&name.letter.to_string(), &name_font);
-    let mark_size = |(text, _): &(String, f32)| measure(text, &mark_font);
-    // The two marks share one column, so it is as wide as the wider of them
-    // -- and zero wide for a plain name, which then centers as before.
-    let column = mark_size(&accidental).x.max(mark_size(&comma).x);
-    let left = anchor.x - (letter.x + column) / 2.0;
+    // Past one, a mark carries its count as a digit beside the sign. One is
+    // common enough that the digit would be noise, so it stays bare.
+    let count_text = |n: i32| if n.abs() > 1 { n.abs().to_string() } else { String::new() };
 
     let letter_text = name.letter.to_string();
+    let letter = measure(&letter_text, &name_font);
+    // Every mark sits on one line of the mark font, so they all rise by the
+    // same amount -- including the drawn ones, which have no galley to ask.
+    let line = measure("0", &mark_font);
+    let rise = (letter.y - line.y) / 2.0;
+    let cell = MARK_ADVANCE * mark_size;
+
+    let accidental = name.accidental_mark();
+    let syntonic = count_text(name.syntonic_commas);
+    let septimal = count_text(name.septimal_commas);
+    // A drawn sign claims one cell; its count follows in the same column.
+    let signed_width =
+        |count: &str, present: bool| if present { cell + measure(count, &mark_font).x } else { 0.0 };
+    let column = measure(&accidental, &mark_font)
+        .x
+        .max(signed_width(&syntonic, name.syntonic_commas != 0));
+    let septimal_column = signed_width(&septimal, name.septimal_commas != 0);
+    let left = anchor.x - (letter.x + column + septimal_column) / 2.0;
+
     batch.text(
         painter,
         egui::pos2(left, anchor.y),
@@ -355,29 +534,60 @@ pub(crate) fn draw_stacked_name(
         outline,
     );
     let mut bottom = ink_below(&letter_text, &name_font, letter);
-    for mark in [&accidental, &comma] {
-        let (text, direction) = mark;
-        if text.is_empty() {
-            continue;
-        }
-        // Push each mark out until its own outer edge is flush with the
-        // letter's, which is as far as it can go without standing proud of
-        // the name. That the pair then meets near the middle is what makes
-        // it read as a super/subscript stack rather than two loose glyphs.
-        let size = mark_size(mark);
-        let rise = (letter.y - size.y) / 2.0;
+
+    // The accidental rides high, flush with the top of the letter.
+    if !accidental.is_empty() {
         batch.text(
             painter,
-            egui::pos2(left + letter.x, anchor.y + direction * rise),
+            egui::pos2(left + letter.x, anchor.y - rise),
             egui::Align2::LEFT_CENTER,
-            text.clone(),
+            accidental.clone(),
             mark_font.clone(),
             color,
             outline,
         );
-        // The comma hangs below the letter's baseline, so it -- not the
-        // letter -- is what the cents readout has to clear.
-        bottom = bottom.max(direction * rise + ink_below(text, &mark_font, size));
+        bottom = bottom.max(-rise + ink_below(&accidental, &mark_font, line));
+    }
+
+    // Drawn sign, then its count: same column, same line, so the pair reads
+    // as one mark rather than as a glyph with a number after it.
+    let mut draw_signed =
+        |x: f32, direction: f32, count: &str, half_height: f32, pieces: Vec<MarkPiece>| -> f32 {
+            paint_mark(painter, &pieces, color, outline);
+            if !count.is_empty() {
+                batch.text(
+                    painter,
+                    egui::pos2(x + cell, anchor.y + direction * rise),
+                    egui::Align2::LEFT_CENTER,
+                    count.to_owned(),
+                    mark_font.clone(),
+                    color,
+                    outline,
+                );
+            }
+            // Whichever reaches lower: the drawn shape from its own center,
+            // or the count's digits from theirs.
+            let ink = half_height
+                .max(if count.is_empty() { 0.0 } else { ink_below(count, &mark_font, line) });
+            direction * rise + ink
+        };
+
+    if name.syntonic_commas != 0 {
+        let center = egui::pos2(left + letter.x + cell / 2.0, anchor.y + rise);
+        let pieces = comma_sign(center, mark_size, marks.weight, name.syntonic_commas > 0);
+        let half = PLUS_INK_H * mark_size / 2.0;
+        bottom = bottom.max(draw_signed(left + letter.x, 1.0, &syntonic, half, pieces));
+    }
+    if name.septimal_commas != 0 {
+        let up = name.septimal_commas > 0;
+        // Up marks sit high and down marks sit low, so the column's own
+        // geometry says the same thing the shape does.
+        let direction = if up { -1.0 } else { 1.0 };
+        let x = left + letter.x + column;
+        let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
+        let pieces = septimal_shape(center, mark_size, marks.weight, up, marks.glyph);
+        let half = PLUS_INK_H * mark_size * SEPTIMAL_BULK / 2.0;
+        bottom = bottom.max(draw_signed(x, direction, &septimal, half, pieces));
     }
     bottom
 }

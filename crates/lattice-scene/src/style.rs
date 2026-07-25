@@ -200,3 +200,33 @@ pub enum SevensLabel {
     /// without.
     None,
 }
+
+/// Which shape the septimal mark is DRAWN as.
+///
+/// It is drawn rather than typeset because no character in the bundled
+/// Iosevka subset can carry it: the subset holds exactly four arrow glyphs
+/// (`←↑→↓`) and no triangles, and an arrow puts its direction in the head --
+/// a 1px detail at the size a mark actually renders, which is `MARK_SIZE`
+/// (8.25pt) times the off-sheet floor. Geometry lets the weight be chosen in
+/// pixels instead of inherited from a typeface designed for body text.
+///
+/// This enum exists to be DELETED. Four designs are hard to rank by
+/// reasoning about them and easy to rank by looking, so they ship together
+/// and the winner gets hardcoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum SeptimalGlyph {
+    /// Filled triangle. The most ink and the most robust silhouette: the
+    /// direction is the whole shape, so nothing about it is a small detail
+    /// that can blur away.
+    #[default]
+    Triangle,
+    /// The triangle's outline only. Lighter beside the letter, at the cost
+    /// of an interior that closes up as it shrinks.
+    Hollow,
+    /// Stem plus a solid head -- an arrow, but with the head sized for this
+    /// use rather than for a text face.
+    Arrow,
+    /// The head alone, as a stroked V. The lightest of the four, and the
+    /// only one whose weight reads like the `+`/`-` beside it.
+    Chevron,
+}

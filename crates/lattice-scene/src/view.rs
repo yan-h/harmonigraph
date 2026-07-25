@@ -4,7 +4,8 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SevensLabel,
+    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SeptimalGlyph,
+    SevensLabel,
 };
 use crate::trail::TrailMark;
 use lattice_core::{coords, LatticePos};
@@ -101,6 +102,21 @@ pub struct ViewConfig {
     /// Only meaningful while `show_labels` is on.
     #[serde(default = "default_sevens_label")]
     pub sevens_label: SevensLabel,
+    /// Which shape the drawn septimal mark takes (see [`SeptimalGlyph`]).
+    /// Temporary: it is here to be compared and then decided.
+    #[serde(default)]
+    pub septimal_glyph: SeptimalGlyph,
+    /// Stroke weight of the DRAWN label marks (`+`, `-`, and the septimal
+    /// shape), as a fraction of the mark's own font size.
+    ///
+    /// It has a setting because it is the whole reason those marks stopped
+    /// being text. Iosevka draws every horizontal bar it has at 70/1000 em
+    /// -- 0.58px at `MARK_SIZE` -- so a typeset `-` is a sub-pixel smear
+    /// next to a `+` whose upright is 3.18px, and no character in the font
+    /// is thicker. Drawn, the weight is chosen here and floored at a whole
+    /// pixel, which is the only way this mark is ever crisp.
+    #[serde(default = "default_mark_weight")]
+    pub mark_weight: f32,
     /// Draw note-name labels on hovered and sounding nodes.
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
@@ -409,6 +425,13 @@ fn default_sevens_label() -> SevensLabel {
     SevensLabel::Name
 }
 
+/// Twice the 0.07 em Iosevka gives its own bars, which is what it takes for
+/// the mark to clear a whole pixel at `MARK_SIZE` on a 1x display rather
+/// than landing at 0.58 of one and rendering as a grey smear.
+fn default_mark_weight() -> f32 {
+    0.14
+}
+
 /// The classic solid orb — the identity end of the solidity axis.
 fn default_core_solidity() -> f32 {
     1.0
@@ -585,6 +608,8 @@ impl Default for ViewConfig {
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
             sevens_label: SevensLabel::Comma,
+            septimal_glyph: SeptimalGlyph::Triangle,
+            mark_weight: default_mark_weight(),
             show_labels: true,
             show_cents: true,
             node_style: NodeStyle::Steady,

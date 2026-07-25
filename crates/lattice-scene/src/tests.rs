@@ -1639,10 +1639,10 @@ fn a_releasing_note_keeps_its_gutters_width() {
 
 #[test]
 fn the_comma_measures_the_node_against_its_own_namesake() {
-    // `note_name` walks the fifths with `threes + fives*4 - sevens*2` and
-    // adds no septimal mark, so a sevens step spells exactly like two
-    // fifths down. The comma is the distance to THAT node — the septimal
-    // comma, 64/63, ~27 cents at just intonation.
+    // `note_name` walks the fifths with `threes + fives*4 - sevens*2`, so a
+    // sevens step lands on the LETTER two fifths down. The comma is the
+    // distance to that node — the septimal comma, 64/63, ~27 cents at just
+    // intonation.
     let view = ViewConfig { extent_sevens: 1, ..ViewConfig::default() };
     let tuning = Tuning::just();
     let scene =
@@ -1650,8 +1650,13 @@ fn the_comma_measures_the_node_against_its_own_namesake() {
 
     let seventh = LatticePos::new(0, 0, 1);
     let namesake = LatticePos::new(-2, 0, 0);
-    // The premise: the two really do carry the same name.
-    assert_eq!(seventh.note_name().to_string(), namesake.note_name().to_string());
+    // The premise: the two share a letter and an accidental, which is what
+    // makes one the other's namesake. They are no longer the same NAME —
+    // the septimal mark is what tells them apart, and this comma is the
+    // distance that mark stands for.
+    let (a, b) = (seventh.note_name(), namesake.note_name());
+    assert_eq!((a.letter, a.accidental_mark()), (b.letter, b.accidental_mark()));
+    assert_ne!(a.to_string(), b.to_string());
     let comma = node_at(&scene, seventh).comma;
     assert!(
         (comma - -27.26).abs() < 0.05,

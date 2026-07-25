@@ -14,6 +14,7 @@ use crate::{CameraPreset, SharedState};
 use super::normalize_deg;
 use lattice_scene::Camera;
 use lattice_scene::Projection;
+use lattice_scene::SeptimalGlyph;
 use lattice_scene::SevensLabel;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
@@ -246,4 +247,44 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             ],
         );
     });
+    choice_row(
+        ui,
+        "Septimal mark",
+        &mut state.view.septimal_glyph,
+        &[
+            (
+                SeptimalGlyph::Triangle,
+                "Triangle",
+                "Filled. The most ink, and its direction is the whole \
+                 silhouette rather than a detail that can blur away",
+            ),
+            (
+                SeptimalGlyph::Hollow,
+                "Hollow",
+                "The triangle's outline only -- lighter beside the letter, \
+                 at the cost of an interior that closes up as it shrinks",
+            ),
+            (
+                SeptimalGlyph::Arrow,
+                "Arrow",
+                "Stem plus a solid head, with the head sized for a mark \
+                 rather than for running text",
+            ),
+            (
+                SeptimalGlyph::Chevron,
+                "Chevron",
+                "The head alone. The lightest of the four, and the only one \
+                 whose weight matches the +/- beside it",
+            ),
+        ],
+    );
+    ValueBar::new(&mut state.view.mark_weight, 0.06..=0.30, "Mark weight")
+        .show(ui)
+        .on_hover_text(
+            "How heavy the DRAWN label marks are (+, -, and the septimal \
+             shape), as a fraction of the mark's font size. Iosevka draws \
+             every bar it has at 0.07 -- which is why these are geometry \
+             and not type. Floored at a whole pixel, so the bottom of the \
+             range stops mattering on a small node",
+        );
 }
