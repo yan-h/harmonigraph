@@ -703,6 +703,86 @@ fn spectrogram_history_stays_bounded() {
     assert!(spec.history().is_empty());
 }
 
+/// The live path stamps its columns the same way the offline one does, and
+/// the near-edge grace knows about the lag that creates. Two halves of one
+/// thing: a column half a window old is not a stale column, it is the newest
+/// there can be, and the heatmap must still reach the now-line.
+#[test]
+fn a_live_column_is_stamped_at_the_middle_of_its_window() {
+    let mut spectrum = AudioSpectrum::default();
+    let config = SpectrumConfig::default();
+    let sine: Vec<f32> = (0..9_000)
+        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+        .collect();
+    let now = 5.0;
+    spectrum.push_samples(&sine, 48_000.0, now);
+    spectrum.display(now, &config).expect("audio is flowing");
+
+    let window = f64::from(config.window.samples() as u32) / 48_000.0;
+    let stamped = spectrum.history().back().expect("a column was kept").time;
+    assert!(
+        (stamped - (now - window * 0.5)).abs() < 1e-9,
+        "a column measured over [{:.3}, {now}] was stamped {stamped}, not its middle",
+        now - window,
+    );
+    // And the pane's own idea of that lag agrees, which is what keeps the
+    // strip's near edge on the now-line rather than half a window short.
+    assert!((spectrum.column_lag() - window * 0.5).abs() < 1e-9);
+}
+
+/// A spectrum is measured over a WINDOW, not at an instant, so where it lands
+/// on the time axis is a choice — and the only defensible one is the middle of
+/// what it measured. Stamping it when the FFT ran (the end of that window) drew
+/// every sound half a window late: at the default 8192 that is 85 ms, so a note
+/// ribbon sat 85 ms further from the now-line than the energy it made, and
+/// reached the far edge — and vanished — that much before its own audio did.
+///
+/// Checked where it is measurable rather than argued: a tone that starts at a
+/// known moment must light the heatmap at that moment.
+#[test]
+fn a_tones_energy_lands_at_the_time_the_tone_started() {
+    use lattice_core::spectrum::midi_to_hz;
+    let sr = 48_000.0f32;
+    let onset = 1.0f64; // silence before this, a steady A4 after
+    let seconds = 3.0;
+    let freq = midi_to_hz(69.0);
+    let samples: Vec<f32> = (0..(sr as f64 * seconds) as usize)
+        .map(|i| {
+            let t = f64::from(i as u32) / f64::from(sr);
+            if t < onset {
+                0.0
+            } else {
+                0.8 * (std::f32::consts::TAU * freq * i as f32 / sr).sin()
+            }
+        })
+        .collect();
+    let cfg = SpectrumConfig::default();
+    let ws = WholeSong::precompute(&samples, sr, 0.0, 0.0, seconds, &cfg);
+
+    // The bin the tone sits in, and how loud it reads once fully sounding.
+    let a4 = ((69.0 - lattice_core::spectrum::SPECTRUM_MIN_MIDI)
+        * lattice_core::spectrum::BINS_PER_SEMITONE as f32)
+        .round() as usize;
+    let loudest = ws.columns.iter().map(|c| c.power[a4]).fold(0.0f32, f32::max);
+    assert!(loudest > 0.1, "the tone should read loudly at its own bin, got {loudest}");
+
+    // Where the ridge reaches half power is what the eye reads as the onset:
+    // the window is Hann-weighted, so it crosses half when it is half over the
+    // start of the tone. That must be the moment the tone started.
+    let half = ws
+        .columns
+        .iter()
+        .find(|c| c.power[a4] >= loudest * 0.5)
+        .expect("the tone must reach half power somewhere");
+    let window = f64::from(cfg.window.samples() as u32) / f64::from(sr);
+    assert!(
+        (half.time - onset).abs() < window * 0.25,
+        "the tone starts at {onset} s but its energy reads as starting at {} s \
+         (a {window:.3} s window; half of one late would be the old end-stamping)",
+        half.time,
+    );
+}
+
 #[test]
 fn whole_song_precompute_lays_the_take_out_deterministically() {
     use lattice_core::spectrum::{midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};

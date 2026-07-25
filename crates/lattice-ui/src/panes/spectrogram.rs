@@ -390,8 +390,14 @@ pub(super) fn draw_spectrogram(
         // region edge to edge; only the playhead moves.
         (time.depth_of(layout.t_origin), time.depth_of(layout.t_origin + layout.tex_span))
     } else {
+        // Plus the lag every healthy column has by construction: it is stamped
+        // at the middle of the window it measured, so the newest one is always
+        // half a window old. Without that term the strip stops short of the
+        // now-line whenever the window is long, and the gap changes size with
+        // the window setting.
         const FRESH: f64 = 0.12;
-        let near = if now - newest <= FRESH { split } else { time.depth_of(newest) };
+        let stale_after = FRESH + spectrum.column_lag();
+        let near = if now - newest <= stale_after { split } else { time.depth_of(newest) };
         (near, time.depth_of(layout.t_origin))
     };
 

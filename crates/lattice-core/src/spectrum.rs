@@ -113,6 +113,29 @@ impl SpectrumAnalyzer {
         }
     }
 
+    /// Seconds of audio one spectrum is measured over.
+    ///
+    /// A spectrum is not an instant: it is everything that happened across
+    /// this much time, Hann-weighted toward the middle. Anything placing a
+    /// spectrum on a time axis has to know how wide it is — see
+    /// [`window_center_offset`](Self::window_center_offset).
+    pub fn window_seconds(&self) -> f64 {
+        f64::from(self.fft_size as u32) / f64::from(self.sample_rate)
+    }
+
+    /// How far BEFORE the newest sample the spectrum it produces belongs on a
+    /// time axis: half the window.
+    ///
+    /// The analyzer always looks BACKWARD — `pitch_spectrum` reads the most
+    /// recent `fft_size` samples — so a spectrum taken at time `t` describes
+    /// `[t - window, t]`, and the Hann window weights the middle of that most.
+    /// Stamping it `t` would draw every sound half a window later than it
+    /// happened, which is the whole of its energy placed at the moment the
+    /// LAST of it arrived.
+    pub fn window_center_offset(&self) -> f64 {
+        0.5 * self.window_seconds()
+    }
+
     /// Change the sample rate (host renegotiation). A change empties the
     /// buffer: mixing samples from two clocks would smear every peak.
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
