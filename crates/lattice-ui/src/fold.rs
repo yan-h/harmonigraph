@@ -207,13 +207,17 @@ fn horizontal_fraction(
 }
 
 /// Draw what a sideways fold needs and egui_dock cannot know it wants: the
-/// rail's own surface, the folded pane's name up it, and a collapse arrow that
-/// points along the axis the pane actually folds on.
+/// rail's own surface, the folded pane's name up it, and an arrow pointing at
+/// the space that pane will take when it comes back.
 ///
 /// Runs AFTER the dock, so it works from this frame's rectangles and paints
-/// over the parts of the tab bar it is replacing. Everything it draws sits in
-/// the tab bar's own color, so a rail and the separator beside it read as one
-/// band rather than as a strip of leftover pane.
+/// over the parts of the tab bar it is replacing.
+///
+/// A rail is drawn as the pane's own TAB — the tab's fill, the tab title's type
+/// and color — because that is what it has become: a pane too narrow to hold
+/// anything but the tab that names it. The tab bar's darker well stays where it
+/// always is, in the collapse button's square and the separator beside the
+/// rail, so a rail still ends where a pane's edge would.
 pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
     let rail = style.tab_bar.height;
     // Frameless mode hides every tab bar, which takes the arrow with it: a
@@ -228,16 +232,6 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
         };
         for node in 0..tree.len() {
             let node = NodeIndex(node);
-            // A pane still open beside its sibling: only its arrow needs
-            // turning, and only if THIS pane is the one that folds left/right.
-            // One nested in a vertical split still folds downwards, and
-            // egui_dock's own arrow already says so.
-            if let Some(leaf) = tree[node].get_leaf() {
-                let horizontal = node.parent().is_some_and(|parent| tree[parent].is_horizontal());
-                if horizontal && !leaf.collapsed && leaf.rect.is_positive() {
-                    paint_arrow(ui, leaf.rect, node.is_left(), false, style);
-                }
-            }
             // A folded side: the rail it left behind, and the arrow that
             // brings it back. Read from the SPLIT rather than from each leaf,
             // because a whole column can fold into one rail — and then the
@@ -263,12 +257,13 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
                 let mut body = leaf.rect;
                 body.min.y += rail;
                 if body.is_positive() {
-                    ui.painter().rect_filled(body, egui::CornerRadius::ZERO, style.tab_bar.bg_fill);
+                    let fill = style.tab.active.bg_fill;
+                    ui.painter().rect_filled(body, egui::CornerRadius::ZERO, fill);
                     if let Some(tab) = leaf.tabs.get(leaf.active.0) {
-                        paint_name(ui.painter(), body, crate::panes::tab_title(tab));
+                        paint_name(ui, body, crate::panes::tab_title(tab), style);
                     }
                 }
-                paint_arrow(ui, leaf.rect, side == Side::Left, true, style);
+                paint_arrow(ui, leaf.rect, side, style);
             }
             deaden_separator(ui, rect, side, style);
         }
@@ -317,15 +312,20 @@ fn deaden_separator(ui: &egui::Ui, rail: egui::Rect, side: Side, style: &egui_do
 /// rail can still say about which pane it is, and the difference between a
 /// fold and a gap.
 ///
+/// Set as the pane's own tab title would be, in the same type and color, since
+/// that is what it stands in for: a rail is the tab of a pane too narrow to
+/// hold one, and `TextStyle::Button` is what egui_dock lays a tab title out in.
+///
 /// Skipped rather than clipped when the rail is too short for the whole name:
 /// half a word up the side of the window says less than the arrow above it
 /// already does.
-fn paint_name(painter: &egui::Painter, rail: egui::Rect, name: &str) {
+fn paint_name(ui: &egui::Ui, rail: egui::Rect, name: &str, style: &egui_dock::Style) {
     const PAD: f32 = 8.0;
+    let painter = ui.painter();
     let galley = painter.layout_no_wrap(
         name.to_owned(),
-        egui::FontId::proportional(11.0),
-        crate::theme::text_dim(),
+        egui::TextStyle::Button.resolve(ui.style()),
+        style.tab.active.text_color,
     );
     if galley.size().x + 2.0 * PAD > rail.height() {
         return;
@@ -338,27 +338,27 @@ fn paint_name(painter: &egui::Painter, rail: egui::Rect, name: &str) {
         rail.center().y + galley.size().x * 0.5,
     );
     painter.add(
-        egui::epaint::TextShape::new(anchor, galley, crate::theme::text_dim())
+        egui::epaint::TextShape::new(anchor, galley, style.tab.active.text_color)
             .with_angle(-std::f32::consts::FRAC_PI_2),
     );
 }
 
-/// Repaint the collapse arrow to point along the axis this pane folds on:
-/// outwards, at the edge it is about to fold into, and back inwards at the
-/// space it will take once it unfolds.
+/// Repaint a rail's collapse arrow to point at the space its pane will take
+/// when it comes back: rightwards out of a rail on the left, leftwards out of
+/// one on the right.
 ///
-/// egui_dock draws it as a disclosure triangle (down for open, right for
-/// collapsed), which only reads correctly for a pane that folds downwards. The
-/// button underneath is left alone and keeps handling the click; this is paint
-/// over paint, including the hover fill, which is why it has to run after the
-/// dock rather than before it.
-fn paint_arrow(
-    ui: &egui::Ui,
-    leaf: egui::Rect,
-    left_child: bool,
-    folded: bool,
-    style: &egui_dock::Style,
-) {
+/// Only a rail gets this. An open pane keeps egui_dock's disclosure triangle
+/// (down for open, right for collapsed), which claims no direction at all and
+/// therefore cannot disagree with the pane next to it — and two open panes DO
+/// fold opposite ways, since each shrinks toward its own outer edge, so a
+/// direction there is a mismatch on display for no gain: the tab title beside
+/// it already says which pane it is. A rail has no title, and which way its
+/// pane returns is the only thing left to say.
+///
+/// The button underneath is left alone and keeps handling the click; this is
+/// paint over paint, including the hover fill, which is why it has to run after
+/// the dock rather than before it.
+fn paint_arrow(ui: &egui::Ui, leaf: egui::Rect, side: Side, style: &egui_dock::Style) {
     let button =
         egui::Rect::from_min_size(leaf.left_top(), egui::vec2(ARROW_BUTTON, style.tab_bar.height));
     let hovered = ui.rect_contains_pointer(button);
@@ -376,11 +376,8 @@ fn paint_arrow(
     // The same glyph size egui_dock uses (its `TAB_COLLAPSE_ARROW_SIZE`), so
     // the sideways arrow is the one the dock would have drawn, turned.
     let arrow = egui::Rect::from_center_size(button.center(), egui::Vec2::splat(10.0));
-    // A left-hand pane folds to the left and unfolds to the right; a
-    // right-hand one does the opposite.
-    let rightwards = left_child == folded;
     painter.add(egui::Shape::convex_polygon(
-        if rightwards {
+        if side == Side::Left {
             vec![arrow.left_top(), arrow.right_center(), arrow.left_bottom()]
         } else {
             vec![arrow.right_top(), arrow.left_center(), arrow.right_bottom()]
