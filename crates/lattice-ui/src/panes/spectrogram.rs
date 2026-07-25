@@ -30,9 +30,13 @@ use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 /// Raising this is not free: the store's tiers have to keep up with it (see
 /// [`SpectrumHistory::COARSE_COLUMNS`](lattice_core::SpectrumHistory::COARSE_COLUMNS),
 /// which must be at least as large), so 512 -> 1024 took the store from 17 to
-/// 30 MB. What it buys is the DEFAULT span: 12 s over 512 slabs is a 23 ms slab,
-/// well above [`MIN_BUCKET`], so the cap and not the data was setting the
-/// resolution of the span the pane actually opens on.
+/// 30 MB. What it buys is the DEFAULT span: at 512 the pane would open on a
+/// 32 ms slab where 1024 gives it 16 ms, so the cap and not the data was setting
+/// the resolution of the span the pane actually opens on.
+///
+/// It is a CEILING on the count, not the count itself: [`live_slab`] picks the
+/// finest rung of its ladder that fits a window inside this many slabs, so the
+/// image holds between half of them and all of them.
 pub(crate) const LIVE_SLAB_CAP: f32 = 1024.0;
 /// The same for the offline whole-song build, which spans an entire take rather
 /// than a scrolling window and so wants more of them.
@@ -44,11 +48,65 @@ pub(crate) const WHOLE_SONG_SLAB_CAP: f32 = 4096.0;
 pub(crate) const COLUMNS_PER_SLAB: f64 = 1.6;
 /// Never subdivide finer than the data arrives. A shorter bucket leaves empty
 /// buckets between columns, and the texture's linear time axis assumes
-/// evenly-spaced slabs — gaps there stretch the edge columns into flat streaks
-/// (short spans). Derived from the FFT rate rather than restated, because the
-/// two must move together and a stale copy of this number is exactly the bug
-/// that shows up as duplicated columns scrolling past.
+/// evenly-spaced slabs — gaps there stretch the edge columns into flat streaks.
+/// Derived from the FFT rate rather than restated, because the two must move
+/// together and a stale copy of this number is exactly the bug that shows up as
+/// duplicated columns scrolling past.
+///
+/// The WHOLE-SONG build's floor. The live grid gets the same guarantee from
+/// [`live_slab`]'s ladder, whose lowest rung is two analysis intervals, so this
+/// no longer floors it.
 pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_PER_SLAB;
+
+/// The live grid's finest rung, in analysis intervals — see [`live_slab`].
+///
+/// TWO, not one: the column grid and the slab grid share a period on the ladder
+/// but not a phase (columns land on a sample counter, slabs on absolute time),
+/// so at one column per slab a boundary falling mid-interval leaves some slabs
+/// empty, and the texture's uniform time axis then stretches the columns either
+/// side of an empty slab into a flat streak. At two, a phase offset costs a slab
+/// one of its columns and never both. It is [`COLUMNS_PER_SLAB`]'s job, done by
+/// the ladder instead of by a margin.
+const LADDER_FLOOR_COLUMNS: f64 = 2.0;
+
+/// The slab width a LIVE window is cut into: the analysis interval, doubled
+/// until the window fits in `target_cols` slabs.
+///
+/// A ladder rather than `window / target_cols`, and specifically the ladder
+/// [`SpectrumHistory`](lattice_core::SpectrumHistory) merges its columns on —
+/// every rung is a power of two analysis intervals. Two things follow.
+///
+/// **The grid holds still.** A slab width taken straight from the window moves
+/// on every frame of a Span drag, and a moved slab width re-lays the
+/// aggregator's grid and re-blanks the ring's texture — the entire per-frame
+/// rebuild, for as long as the drag lasts. On the ladder it moves only when the
+/// Span crosses a doubling.
+///
+/// **The store is structurally fine enough to fill it.** A column of age `a`
+/// sits in a tier spaced at most `a / LIVE_SLAB_CAP`, and a window that reaches
+/// that column is at least `a` long, so its slabs are at least that wide. The
+/// two were already the same relation — that is why
+/// [`COARSE_COLUMNS`](lattice_core::SpectrumHistory::COARSE_COLUMNS) has to be
+/// at least [`LIVE_SLAB_CAP`] — but as an inequality between constants chosen
+/// apart, kept true by a test. On one shared ladder they round to the same rung.
+///
+/// The cost is resolution that steps rather than tracks: within a rung a wider
+/// pane buys nothing, so the image can hold half the slabs the depth axis has
+/// pixels. That is well under what the analysis resolves — at the default Span a
+/// slab is 16 ms against a 171 ms analysis window — so what it gives up is
+/// detail the FFT never had.
+pub(crate) fn live_slab(window: f64, target_cols: usize) -> f64 {
+    let mut bucket = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
+    // The Span reaches ten minutes and the pane can be a sliver, so walk the
+    // ladder under a bound rather than trusting the ratio to be sane.
+    for _ in 0..64 {
+        if window / bucket <= target_cols as f64 {
+            break;
+        }
+        bucket *= 2.0;
+    }
+    bucket
+}
 
 /// A run of empty slabs this short is a seam in the sample stream rather than a
 /// stall in the analyzer, and holds the previous column instead of reading as
@@ -69,7 +127,7 @@ const JITTER_SLABS: i64 = 1;
 /// the roll's `depth_of` time mapping so its columns register with the notes.
 ///
 /// Builds the heatmap into a `[time slab x pitch bin]` image, (re)uploads it
-/// to `spectrum.spectrogram_tex`, then stretches it over the region as a
+/// to the surface's texture, then stretches it over the region as a
 /// single bilinear-filtered quad — smooth in both axes, and opaque (silence is
 /// the ramp's dark end, not transparent) so the plane is a filled image rather
 /// than bright patches floating on the background.
@@ -135,6 +193,11 @@ impl RowRead {
 /// has no idea which built it.
 #[derive(Clone, Copy)]
 pub(crate) struct TexLayout {
+    /// Seconds one slab spans — one texel of the time axis. Carried here
+    /// because every mapping below reads it alongside the rest: a texel's width
+    /// is part of describing where the slabs sit, not a separate fact about
+    /// them.
+    pub(crate) bucket: f64,
     /// Absolute time at the left edge of the first visible slab.
     pub(crate) t_origin: f64,
     /// Seconds the visible slabs span.
@@ -168,23 +231,54 @@ pub(crate) struct SpectrogramRing {
     capacity: usize,
     /// Everything that decides a pixel's colour, or which buckets a row reads.
     /// A change to any of it invalidates every column at once.
-    style: RingStyle,
+    style: ColumnStyle,
     /// Newest slab key written, and the oldest still valid.
     written_through: i64,
     oldest_valid: i64,
 }
 
-/// The part of [`crate::SpectrogramKey`] that outlives a scroll: everything
-/// except which columns are in the window. Two builds sharing a `RingStyle`
-/// can share columns; anything else has to start over.
-#[derive(Clone, PartialEq)]
-struct RingStyle {
+/// Everything that decides a column's pixels: how tall the image is, how wide a
+/// slab is, which buckets a row reads, and how a bucket is coloured. A change to
+/// any of it invalidates every column at once.
+///
+/// It is the part of [`crate::SpectrogramKey`] that outlives a SCROLL —
+/// the key is this plus which columns are in the window — and the ring compares
+/// exactly this to decide whether it can carry its texture forward. One
+/// definition for both, because they are one question asked at two
+/// granularities, and as two hand-kept lists in two files they were one list to
+/// forget: a pixel-affecting input added to the key alone leaves the ring
+/// carrying forward columns painted under the old setting, which is a WRONG
+/// picture rather than a slow one. `the_key_is_sensitive_to_every_input` covers
+/// both because there is only one to cover.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ColumnStyle {
     rows: usize,
     bucket_bits: u64,
     scale_min_bits: u32,
     scale_span_bits: u32,
     cfg: SpectrumConfig,
     frame: FrameParams,
+}
+
+impl ColumnStyle {
+    pub(crate) fn new(
+        rows: usize,
+        bucket: f64,
+        scale_min: f32,
+        scale_span: f32,
+        cfg: SpectrumConfig,
+        frame: FrameParams,
+    ) -> ColumnStyle {
+        // Floats as bit patterns, so equality is exact and free of NaN quirks.
+        ColumnStyle {
+            rows,
+            bucket_bits: bucket.to_bits(),
+            scale_min_bits: scale_min.to_bits(),
+            scale_span_bits: scale_span.to_bits(),
+            cfg,
+            frame,
+        }
+    }
 }
 
 impl SpectrogramRing {
@@ -203,7 +297,7 @@ impl SpectrogramRing {
     /// and repaints every column — so this is the predicate the ring's whole
     /// value rests on, and `no_cache_layer_falls_back_as_the_window_scrolls`
     /// holds it to yes for every Span the pane offers.
-    fn carries(&self, capacity: usize, style: &RingStyle, first_key: i64) -> bool {
+    fn carries(&self, capacity: usize, style: &ColumnStyle, first_key: i64) -> bool {
         self.capacity == capacity
             && self.style == *style
             && first_key >= self.oldest_valid
@@ -213,7 +307,7 @@ impl SpectrogramRing {
     /// A ring with nothing written yet, for a run starting at `first_key` — so
     /// its caller paints every visible slab rather than trusting a column that
     /// was never uploaded.
-    fn restarted(capacity: usize, style: RingStyle, first_key: i64) -> SpectrogramRing {
+    fn restarted(capacity: usize, style: ColumnStyle, first_key: i64) -> SpectrogramRing {
         SpectrogramRing { capacity, style, written_through: first_key - 1, oldest_valid: first_key }
     }
 
@@ -224,6 +318,294 @@ impl SpectrogramRing {
         self.written_through = last_key;
         self.oldest_valid = self.oldest_valid.max(last_key - self.capacity as i64 + 2);
     }
+}
+
+/// The pane's geometry and settings for one frame — half of a [`Plan`]'s
+/// inputs, the half that has nothing to do with the store.
+///
+/// Sized in PIXELS, not points: [`Axes`] is laid out in egui points and this
+/// image is stretched over that rect by the GPU, so sizing it in points builds
+/// it at the display's density divided by the scale factor and then upsamples —
+/// half the resolution in each axis on a 2x screen, for a heatmap softer than
+/// the pane it sits in. The label glyphs oversample by the same factor for the
+/// same reason (see `text::draw_glyphs`).
+struct PaneView {
+    /// Physical pixels per egui point.
+    ppp: f32,
+    /// The tallest image the GPU will take.
+    max_rows: usize,
+    /// Points across the pitch axis, and across the heatmap's SHARE of the
+    /// depth axis (the roll owns the rest).
+    pitch_len: f32,
+    depth_len: f32,
+    /// Seconds the depth axis spans.
+    window: f64,
+    scale: PitchScale,
+    cfg: SpectrumConfig,
+    frame: FrameParams,
+    /// The whole-song (offline playhead) layout rather than the live window.
+    whole: bool,
+}
+
+/// Which stored columns a frame draws — the other half of a [`Plan`]'s inputs.
+struct Columns {
+    /// The oldest in-window column; it advances as the window scrolls one off
+    /// the far end. Whole-song draws its entire fixed set, so 0.
+    first: usize,
+    len: usize,
+    /// The newest column's time, which moves whenever a fresh column arrives —
+    /// catching one even in a saturated store, where the count holds steady.
+    newest: f64,
+}
+
+/// What this frame's heatmap needs built: the image's shape, and the key that
+/// says whether the uploaded one already IS it.
+///
+/// Pure, and deliberately so. Every cliff this pipeline has fallen off has been
+/// in this arithmetic — a slab against the analyzer's lag, a window against the
+/// store's finest tier — and deciding it apart from the build means it can be
+/// checked without a GPU, a texture or a frame. See
+/// `no_cache_layer_falls_back_as_the_window_scrolls`.
+struct Plan {
+    /// One row per pixel of the pitch axis, never taller than the GPU takes.
+    rows: usize,
+    /// A time slab's width, in seconds.
+    bucket: f64,
+    /// Slabs the ring holds, and so the most the aggregator keeps folded.
+    ///
+    /// Sized off the PANE rather than off the window, which is what makes it
+    /// hold still: the widest run a window can have at this slab width is
+    /// `target_cols` of them, whatever the Span is doing inside that rung, so a
+    /// drag never resizes the texture. Unused by the whole-song build, which
+    /// owns its texture outright.
+    capacity: usize,
+    first: usize,
+    key: crate::SpectrogramKey,
+}
+
+impl Plan {
+    fn new(view: &PaneView, columns: &Columns) -> Plan {
+        let rows = ((view.pitch_len * view.ppp).round() as usize).clamp(2, view.max_rows);
+        // One image column per output depth pixel; whole-song spans an entire
+        // take, so it needs a higher cap than the live window.
+        let col_cap = if view.whole { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
+        let target_cols = (view.depth_len * view.ppp).round().clamp(2.0, col_cap) as usize;
+        let bucket = if view.whole {
+            // The offline build draws its own fixed column set rather than the
+            // live store's, so it shares no ladder with it and has nothing to
+            // hold still — its grid is laid out once and cached for the render.
+            (view.window / target_cols as f64).max(MIN_BUCKET)
+        } else {
+            live_slab(view.window, target_cols)
+        };
+        // The heatmap's pixels are a pure function of these; if none has moved
+        // since the uploaded texture was built, building it again is dead work.
+        let style = ColumnStyle::new(
+            rows,
+            bucket,
+            view.scale.min_midi,
+            view.scale.span,
+            view.cfg,
+            view.frame,
+        );
+        let key = crate::SpectrogramKey::new(
+            style,
+            columns.first,
+            columns.len,
+            columns.newest,
+            view.whole,
+        );
+        Plan { rows, bucket, capacity: target_cols + RING_HEADROOM, first: columns.first, key }
+    }
+}
+
+/// The image's rows for a plan of `rows` over `scale`.
+///
+/// A row's pitch span maps back to the source buckets under it, read by MAX or
+/// by interpolation depending on which of the two is finer — see [`RowRead`]. A
+/// bucket of slack on each side lets the filtering carry the visible range
+/// cleanly to its edges.
+fn bins_for(rows: usize, scale: &PitchScale) -> Vec<Bin> {
+    let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
+    let margin = (bin_semis / scale.span).min(0.5);
+    let bucket_of = |t: f32| {
+        let midi = scale.min_midi + t * scale.span;
+        (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).floor() as isize)
+            .clamp(0, SPECTRUM_BINS as isize - 1) as usize
+    };
+    (0..rows)
+        .map(|r| {
+            // The row's own slice of the visible pitch range, widened by the
+            // margin so the edge rows reach past the range like the buckets did.
+            let span = 1.0 + 2.0 * margin;
+            let t0 = -margin + span * r as f32 / rows as f32;
+            let t1 = -margin + span * (r + 1) as f32 / rows as f32;
+            let (idx, last) = (bucket_of(t0), bucket_of(t1));
+            let t = 0.5 * (t0 + t1);
+            let midi = scale.min_midi + t * scale.span;
+            let read = if last > idx {
+                RowRead::Max { from: idx, to: (last + 1).min(SPECTRUM_BINS) }
+            } else {
+                // Narrower than a bucket: read between the two whose centers
+                // straddle this row's center. A bucket's center sits half a
+                // bucket above where `bucket_of` divides them, which is the 0.5.
+                let x = (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
+                let lo = (x.floor() as isize).clamp(0, SPECTRUM_BINS as isize - 2) as usize;
+                RowRead::Lerp { lo, f: (x - lo as f32).clamp(0.0, 1.0) }
+            };
+            Bin { read, midi, t }
+        })
+        .collect()
+}
+
+/// Build the image a [`Plan`] describes into the surface's texture, and record
+/// the build in its cache. Returns where the visible slabs sit in the texture,
+/// or `None` if the plan came out too small to draw.
+///
+/// The only step here that touches the GPU — everything it needs decided was
+/// decided in [`Plan::new`].
+fn build(
+    ctx: &egui::Context,
+    spectrum: &mut crate::AudioSpectrum,
+    whole: Option<&crate::WholeSong>,
+    surface: usize,
+    plan: &Plan,
+    view: &PaneView,
+    bins: &[Bin],
+) -> Option<TexLayout> {
+    let (bucket, cfg) = (plan.bucket, view.cfg);
+    // Aggregate the in-window columns into one image column per depth pixel by
+    // a FIXED time grid, MAX within each slab (which keeps a short note's peak
+    // and pins it against the scroll — see `aggregate_rows`).
+    let reads: Vec<RowRead> = bins.iter().map(|b| b.read).collect();
+    let (centers, power) = match whole {
+        // Offline whole-song: a fixed column set, already cached after the first
+        // frame — a plain batch aggregate.
+        Some(ws) => aggregate_rows(ws.columns.iter(), &reads, bucket),
+        // Live: fold only the new column(s) into the kept slab grid instead of
+        // rescanning the whole window every rebuild. `history` and the
+        // aggregator are disjoint fields of `spectrum`.
+        None => {
+            let hist = &spectrum.history;
+            let agg = spectrum.spectrogram[surface].agg.get_or_insert_with(SpectrogramAgg::new);
+            agg.window(hist, plan.first, bucket, &reads, plan.capacity)
+        }
+    };
+    let (w, h) = (centers.len(), bins.len());
+    if w < 2 {
+        return None;
+    }
+    // The image covers absolute time `[t_origin, t_origin + w*bucket]` — the
+    // oldest slab's start to the newest slab's end. Its texel centers sit at the
+    // slab centers, so `u = (t - t_origin) / span` places time exactly.
+    let t_origin = centers[0] - 0.5 * bucket;
+    let tex_span = w as f64 * bucket;
+    let (t0, tn) = (bins[0].t, bins[h - 1].t);
+    if tex_span < 1e-9 || (tn - t0).abs() < 1e-6 {
+        return None;
+    }
+    let first_key = (centers[0] / bucket).floor() as i64;
+
+    // The offline whole-song build keeps the full-width path: its column set is
+    // fixed and already cached after the first frame, so there is nothing for a
+    // ring to save.
+    let layout = if whole.is_none() {
+        // The key's own style, not a second copy of it: the ring is asking the
+        // same question about the same columns.
+        let style = plan.key.style().clone();
+        let capacity = ring_capacity(plan.capacity, w);
+        write_ring(ctx, spectrum, surface, style, capacity, &cfg, bins, &power, first_key, w);
+        let ring = spectrum.spectrogram[surface].ring.as_ref();
+        let x0 = ring.map_or(0.0, |r| r.x_of(first_key) as f32);
+        let tex_w = ring.map_or(w as f32, |r| (r.capacity * 2) as f32);
+        TexLayout { bucket, t_origin, tex_span, t0, tn, x0, tex_w }
+    } else {
+        // The full-width build owns the whole texture, so any ring bookkeeping
+        // describing it is now a lie about which slabs its columns hold.
+        spectrum.spectrogram[surface].ring = None;
+        // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
+        let pixels = fill_pixels(&cfg, w, bins, &power);
+        let image = egui::ColorImage::new([w, h], pixels);
+        let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
+        match &mut spectrum.spectrogram[surface].tex {
+            Some(handle) => handle.set(image, opts),
+            slot => *slot = Some(ctx.load_texture("spectrogram", image, opts)),
+        }
+        TexLayout { bucket, t_origin, tex_span, t0, tn, x0: 0.0, tex_w: w as f32 }
+    };
+    spectrum.spectrogram[surface].cache =
+        Some(crate::SpectrogramCache::new(plan.key.clone(), layout));
+    Some(layout)
+}
+
+/// The scrolling quads over the uploaded texture, from `d_near` to `d_far`.
+///
+/// Pure geometry, which is what lets the UV rule below be checked at all: these
+/// are VERTEX UVs, so the scale every fragment samples at is interpolated
+/// between a quad's corners.
+///
+/// Map a screen depth to the texture's time axis CONTINUOUSLY, through the
+/// roll's own `now`-anchored depth<->time relation (unclamped, the inverse of
+/// `depth_of`), so `u` slides with `now` frame to frame exactly as a note ribbon
+/// at the same depth does. Pinning it to the slab endpoints instead jumps a
+/// whole slab at a time, which is both the image losing the notes it is meant to
+/// register with and a per-slab stutter. `v` maps pitch to the bin rows.
+///
+/// Slabs occupy texels `x0 .. x0 + visible` of a `tex_w`-wide texture; for a
+/// full-width build that is the whole thing and this collapses to the plain
+/// `(t - t_origin) / tex_span`.
+fn heatmap_mesh(
+    tex: egui::TextureId,
+    axes: &Axes,
+    time: &TimeAxis,
+    layout: &TexLayout,
+    opacity: f32,
+    d_near: f32,
+    d_far: f32,
+) -> egui::Mesh {
+    // Straight in time out to the newest column the texture holds, then HELD
+    // there — see [`u_drawn`], and the mesh is split at that corner so no
+    // fragment ever interpolates across it.
+    let u_at = |d: f32| u_drawn(layout, time.time_at(d));
+    let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
+    let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
+    let vert = |p: f32, d: f32| egui::epaint::Vertex {
+        pos: axes.at(p, d),
+        uv: egui::pos2(u_at(d), v_at(p)),
+        color: tint,
+    };
+
+    // Quads over pitch [0,1] x a depth span; the GPU bilinear-samples them.
+    let mut mesh = egui::Mesh::with_texture(tex);
+    let quad = |mesh: &mut egui::Mesh, near: f32, far: f32| {
+        let i = mesh.vertices.len() as u32;
+        mesh.vertices.push(vert(0.0, far)); // far, low
+        mesh.vertices.push(vert(1.0, far)); // far, high
+        mesh.vertices.push(vert(1.0, near)); // near, high
+        mesh.vertices.push(vert(0.0, near)); // near, low
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    };
+
+    // Split at the corner in `u_drawn`: one quad whose UVs are straight in time
+    // (the data) and one whose UVs are CONSTANT (the sliver past the newest
+    // column — leading for the live window, trailing for the whole-song build,
+    // which is the only reason `d_hold` is clamped into the pair rather than
+    // assumed to sit inside it).
+    //
+    // Letting one quad span the corner instead is what the vertex-UV rule
+    // forbids: a vertex sitting mid-bend rescales the whole image, and the bend
+    // crosses each slab, so it would rescale it once per slab — the jitter.
+    // Split here, the data quad's two ends are both straight in time, so it
+    // holds exactly one texel per slab forever; all that changes over a slab is
+    // how long the flat sliver is, and its colour matches the data at the seam
+    // (both sample the newest texel's centre), so the join is invisible.
+    let d_hold = time.depth_of(hold_time(layout)).max(d_near).min(d_far);
+    if d_hold > d_near {
+        quad(&mut mesh, d_near, d_hold);
+    }
+    quad(&mut mesh, d_hold, d_far);
+    mesh
 }
 
 pub(super) fn draw_spectrogram(
@@ -248,7 +630,7 @@ pub(super) fn draw_spectrogram(
     let spectrum = &mut state.spectrum;
     let opacity = cfg.spectrogram_opacity.clamp(0.0, 1.0);
     // Columns come from the precomputed whole-take set (playhead mode) or the
-    // live ring.
+    // live store.
     let enough = match whole {
         Some(ws) => ws.columns.len() >= 2,
         None => spectrum.history().len() >= 2,
@@ -256,212 +638,54 @@ pub(super) fn draw_spectrogram(
     if opacity <= 0.0 || !enough {
         return;
     }
-    let depth_span = 1.0 - split;
-    let window = time.window();
-    let oldest = time.oldest();
 
-    // ---- Layout the image is built on (rows x time-slabs) --------------------
-    // Both feed the cache key below AND the rebuild, so they're computed up
-    // front. `rows` is one per pitch pixel; `bucket` is the time-slab width.
-    //
-    // PIXEL, not point: `Axes` is laid out in egui points, and this image is
-    // stretched over that rect by the GPU, so sizing it in points builds it at
-    // the display's density divided by the scale factor and then upsamples —
-    // half the resolution in each axis on a 2x screen, for a heatmap that is
-    // softer than the pane it sits in. The label glyphs oversample by the same
-    // factor for the same reason (see `text::draw_glyphs`).
-    let ppp = painter.ctx().pixels_per_point().max(1.0);
-    let max_rows = painter.ctx().input(|i| i.max_texture_side).max(64);
-    let rows = ((axes.pitch_len() * ppp).round() as usize).clamp(2, max_rows);
-    // One image column per output depth pixel; whole-song spans the entire take,
-    // so it needs a higher cap than the live window.
-    let col_cap = if whole.is_some() { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
-    let target_cols = (depth_span * axes.depth_len() * ppp).round().clamp(2.0, col_cap) as usize;
-    let bucket = (window / target_cols as f64).max(MIN_BUCKET);
-
-    // ---- Data identity -------------------------------------------------------
-    // `first` is the oldest in-window column (live); it advances as the window
-    // scrolls a column off the far end. `newest` moves whenever a fresh column
-    // arrives — catching it even in a saturated ring, where the count holds
-    // steady. Whole-song draws the entire fixed set, so `first` is 0.
-    let (first, cols_len, newest) = match whole {
-        Some(ws) => (0, ws.columns.len(), ws.columns.last().map_or(now, |c| c.time)),
-        None => {
-            let hist = spectrum.history();
-            let first = hist.partition_point(|c| c.time < oldest).saturating_sub(1);
-            (first, hist.len(), hist.back().map_or(now, |c| c.time))
-        }
-    };
-
-    // The heatmap pixels are a pure function of these; if none has changed since
-    // the uploaded texture was built, the whole rebuild below is dead work.
-    let key = crate::SpectrogramKey::new(
-        rows,
-        bucket,
-        scale.min_midi,
-        scale.span,
-        first,
-        cols_len,
-        newest,
-        whole.is_some(),
+    let view = PaneView {
+        ppp: painter.ctx().pixels_per_point().max(1.0),
+        max_rows: painter.ctx().input(|i| i.max_texture_side).max(64),
+        pitch_len: axes.pitch_len(),
+        depth_len: (1.0 - split) * axes.depth_len(),
+        window: time.window(),
+        scale: *scale,
         cfg,
         frame,
-    );
+        whole: whole.is_some(),
+    };
+    let columns = match whole {
+        Some(ws) => Columns {
+            first: 0,
+            len: ws.columns.len(),
+            newest: ws.columns.last().map_or(now, |c| c.time),
+        },
+        None => {
+            let hist = spectrum.history();
+            Columns {
+                first: hist.partition_point(|c| c.time < time.oldest()).saturating_sub(1),
+                len: hist.len(),
+                newest: hist.back().map_or(now, |c| c.time),
+            }
+        }
+    };
+    let plan = Plan::new(&view, &columns);
 
     // Fast path: the built image is still valid — reuse the uploaded texture and
     // its geometry; only the scrolling quad below is recomputed (with `now`).
-    let reused = match &spectrum.spectrogram_cache[surface] {
-        Some(c) if c.matches(&key) && spectrum.spectrogram_tex[surface].is_some() => Some(c.geometry()),
+    let surf = &spectrum.spectrogram[surface];
+    let reused = match &surf.cache {
+        Some(c) if c.matches(&plan.key) && surf.tex.is_some() => Some(c.geometry()),
         _ => None,
     };
-
     let layout = match reused {
         Some(layout) => layout,
         None => {
-            // The image's rows: one per pixel of the pitch axis, never a taller
-            // image than the GPU will take. A row's pitch span maps back to the
-            // source buckets under it, read by MAX or by interpolation depending
-            // on which of the two is finer — see [`RowRead`]. A bucket of slack
-            // on each side lets the filtering carry the visible range cleanly to
-            // its edges.
-            let bin_semis = 1.0 / BINS_PER_SEMITONE as f32;
-            let margin = (bin_semis / scale.span).min(0.5);
-            let bucket_of = |t: f32| {
-                let midi = scale.min_midi + t * scale.span;
-                (((midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).floor() as isize)
-                    .clamp(0, SPECTRUM_BINS as isize - 1) as usize
-            };
-            let bins: Vec<Bin> = (0..rows)
-                .map(|r| {
-                    // The row's own slice of the visible pitch range, widened by
-                    // the margin so the edge rows reach past the range like the
-                    // buckets did.
-                    let span = 1.0 + 2.0 * margin;
-                    let t0 = -margin + span * r as f32 / rows as f32;
-                    let t1 = -margin + span * (r + 1) as f32 / rows as f32;
-                    let (idx, last) = (bucket_of(t0), bucket_of(t1));
-                    let t = 0.5 * (t0 + t1);
-                    let midi = scale.min_midi + t * scale.span;
-                    let read = if last > idx {
-                        RowRead::Max { from: idx, to: (last + 1).min(SPECTRUM_BINS) }
-                    } else {
-                        // Narrower than a bucket: read between the two whose
-                        // centers straddle this row's center. A bucket's center
-                        // sits half a bucket above where `bucket_of` divides
-                        // them, which is the 0.5 below.
-                        let x = (midi - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32 - 0.5;
-                        let lo = (x.floor() as isize).clamp(0, SPECTRUM_BINS as isize - 2) as usize;
-                        RowRead::Lerp { lo, f: (x - lo as f32).clamp(0.0, 1.0) }
-                    };
-                    Bin { read, midi, t }
-                })
-                .collect();
-
-            // Aggregate the in-window columns into one image column per depth
-            // pixel by a FIXED time grid, MAX within each slab (keeps a short
-            // note's peak and pins it against the scroll — see `aggregate_rows`).
-            let reads: Vec<RowRead> = bins.iter().map(|b| b.read).collect();
-            let (centers, power) = match whole {
-                // Offline whole-song: fixed column set, already cached after the
-                // first frame — a plain batch aggregate.
-                Some(ws) => aggregate_rows(ws.columns.iter(), &reads, bucket),
-                // Live: fold only the new column(s) into the kept slab grid
-                // instead of rescanning the whole window every rebuild. `hist`
-                // and the aggregator are disjoint fields of `spectrum`.
-                None => {
-                    let hist = &spectrum.history;
-                    let agg = spectrum.spectrogram_agg[surface].get_or_insert_with(SpectrogramAgg::new);
-                    agg.window(hist, first, bucket, &reads)
-                }
-            };
-            let (w, h) = (centers.len(), bins.len());
-            if w < 2 {
-                return;
+            let bins = bins_for(plan.rows, scale);
+            match build(painter.ctx(), spectrum, whole, surface, &plan, &view, &bins) {
+                Some(layout) => layout,
+                None => return,
             }
-            // The image covers absolute time `[t_origin, t_origin + w*bucket]` —
-            // the oldest slab's start to the newest slab's end. Its texel
-            // centers sit at the slab centers, so `u = (t - t_origin) / span`
-            // places time exactly.
-            let t_origin = centers[0] - 0.5 * bucket;
-            let tex_span = w as f64 * bucket;
-            let (t0, tn) = (bins[0].t, bins[h - 1].t);
-            if tex_span < 1e-9 || (tn - t0).abs() < 1e-6 {
-                return;
-            }
-
-            // The offline whole-song build keeps the full-width path: its
-            // column set is fixed and already cached after the first frame, so
-            // there is nothing for a ring to save.
-            let ring_able = whole.is_none();
-            let layout = if ring_able {
-                let style = RingStyle {
-                    rows: h,
-                    bucket_bits: bucket.to_bits(),
-                    scale_min_bits: scale.min_midi.to_bits(),
-                    scale_span_bits: scale.span.to_bits(),
-                    cfg,
-                    frame,
-                };
-                let capacity = ring_capacity(window, bucket, w);
-                write_ring(
-                    painter.ctx(),
-                    spectrum,
-                    surface,
-                    style,
-                    capacity,
-                    &cfg,
-                    &bins,
-                    &power,
-                    (centers[0] / bucket).floor() as i64,
-                    w,
-                );
-                let ring = spectrum.spectrogram_ring[surface].as_ref();
-                let x0 = ring.map_or(0.0, |r| r.x_of((centers[0] / bucket).floor() as i64) as f32);
-                let tex_w = ring.map_or(w as f32, |r| (r.capacity * 2) as f32);
-                TexLayout { t_origin, tex_span, t0, tn, x0, tex_w }
-            } else {
-                // The full-width build owns the whole texture, so any ring
-                // bookkeeping describing it is now a lie about which slabs its
-                // columns hold.
-                spectrum.spectrogram_ring[surface] = None;
-                // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
-                let pixels = fill_pixels(&cfg, w, &bins, &power);
-                let image = egui::ColorImage::new([w, h], pixels);
-                let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-                match &mut spectrum.spectrogram_tex[surface] {
-                    Some(handle) => handle.set(image, opts),
-                    slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
-                }
-                TexLayout { t_origin, tex_span, t0, tn, x0: 0.0, tex_w: w as f32 }
-            };
-            spectrum.spectrogram_cache[surface] = Some(crate::SpectrogramCache::new(
-                key, t_origin, tex_span, t0, tn, layout.x0, layout.tex_w,
-            ));
-            layout
         }
     };
 
-    let Some(tex) = &spectrum.spectrogram_tex[surface] else { return };
-
-    // Map a screen depth to the texture's time axis CONTINUOUSLY, through the
-    // roll's own `now`-anchored depth<->time relation (unclamped, the inverse
-    // of `depth_of`), so `u` slides with `now` frame to frame exactly as a note
-    // ribbon at the same depth does. Pinning it to the slab endpoints instead
-    // jumps a whole slab at a time, which is both the image losing the notes it
-    // is meant to register with and a per-slab stutter. `v` maps pitch to the
-    // bin rows.
-    // Slabs occupy texels `x0 .. x0 + visible` of a `tex_w`-wide texture; for a
-    // full-width build that is the whole thing and this collapses to the plain
-    // `(t - t_origin) / tex_span`.
-    //
-    // Straight in time out to the newest column the texture holds, then HELD
-    // there — see [`u_drawn`], and the mesh below is split at that corner so no
-    // fragment ever interpolates across it.
-    let u_at = |d: f32| u_drawn(&layout, time.time_at(d), bucket);
-    let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
-    let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
-    let vert =
-        |p: f32, d: f32| egui::epaint::Vertex { pos: axes.at(p, d), uv: egui::pos2(u_at(d), v_at(p)), color: tint };
+    let Some(tex) = &spectrum.spectrogram[surface].tex else { return };
 
     // The quad only spans the depths the data actually reaches, so the drawn
     // strip GROWS from the now-line as history accumulates rather than being
@@ -488,41 +712,13 @@ pub(super) fn draw_spectrogram(
         // the window setting.
         const FRESH: f64 = 0.12;
         let stale_after = FRESH + spectrum.column_lag();
-        let near = if now - newest <= stale_after { split } else { time.depth_of(newest) };
+        let near =
+            if now - columns.newest <= stale_after { split } else { time.depth_of(columns.newest) };
         (near, time.depth_of(layout.t_origin))
     };
 
-    // Quads over pitch [0,1] x a depth span; the GPU bilinear-samples them.
-    let mut mesh = egui::Mesh::with_texture(tex.id());
-    let quad = |mesh: &mut egui::Mesh, near: f32, far: f32| {
-        let i = mesh.vertices.len() as u32;
-        mesh.vertices.push(vert(0.0, far)); // far, low
-        mesh.vertices.push(vert(1.0, far)); // far, high
-        mesh.vertices.push(vert(1.0, near)); // near, high
-        mesh.vertices.push(vert(0.0, near)); // near, low
-        mesh.add_triangle(i, i + 1, i + 2);
-        mesh.add_triangle(i, i + 2, i + 3);
-    };
-
-    // Split at the corner in `u_drawn`: one quad whose UVs are straight in time
-    // (the data) and one whose UVs are CONSTANT (the sliver past the newest
-    // column — leading for the live window, trailing for the whole-song build,
-    // which is the only reason `d_hold` is clamped into the pair rather than
-    // assumed to sit inside it).
-    //
-    // Letting one quad span the corner instead is what the vertex-UV rule
-    // forbids: the fragment scale is interpolated between the corners, so a
-    // vertex sitting mid-bend rescales the whole image, and the bend crosses
-    // each slab, so it would rescale it once per slab — the jitter. Split here,
-    // the data quad's two ends are both straight in time, so it holds exactly
-    // one texel per slab forever; all that changes over a slab is how long the
-    // flat sliver is, and its colour matches the data at the seam (both sample
-    // the newest texel's centre), so the join is invisible.
-    let d_hold = time.depth_of(hold_time(&layout, bucket)).max(d_near).min(d_far);
-    if d_hold > d_near {
-        quad(&mut mesh, d_near, d_hold);
-    }
-    quad(&mut mesh, d_hold, d_far);
+    let mesh =
+        heatmap_mesh(tex.id(), axes, &time, &layout, opacity, d_near, d_far);
     painter.add(egui::Shape::mesh(mesh));
 }
 
@@ -677,18 +873,27 @@ pub(crate) struct SpectrogramAgg {
     /// to fall back — so without a count, a guard that quietly always fires
     /// would still pass every correctness test here and simply hand back the
     /// `aggregate_rows` cost this exists to avoid.
-    #[cfg(test)]
+    ///
+    /// Compiled in rather than test-only, and read out by the performance
+    /// overlay: a fallback is invisible from inside the DAW, where the picture
+    /// is correct and only the frame rate says otherwise — and a frame rate has
+    /// other suspects. Twice this pane has cost a round trip of measurement to
+    /// learn what this number would have said at a glance.
     rebuilds: u32,
 }
 
 impl SpectrogramAgg {
+    /// Full rebuilds taken since this aggregator was made — see the field.
+    pub(crate) fn rebuilds(&self) -> u32 {
+        self.rebuilds
+    }
+
     fn new() -> Self {
         SpectrogramAgg {
             grid: SlabGrid::default(),
             bucket_bits: 0,
             reads: Vec::new(),
             last_time: f64::NEG_INFINITY,
-            #[cfg(test)]
             rebuilds: 0,
         }
     }
@@ -701,10 +906,7 @@ impl SpectrogramAgg {
         bucket: f64,
         reads: &[RowRead],
     ) {
-        #[cfg(test)]
-        {
-            self.rebuilds += 1;
-        }
+        self.rebuilds += 1;
         self.grid = SlabGrid::default();
         for col in history.iter_from(first) {
             self.grid.fold(col, reads, bucket);
@@ -725,6 +927,7 @@ impl SpectrogramAgg {
         first: usize,
         bucket: f64,
         reads: &[RowRead],
+        keep: usize,
     ) -> (Vec<f64>, Vec<BucketDb>) {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
@@ -761,21 +964,8 @@ impl SpectrogramAgg {
                 self.rebuild(history, first, bucket, reads);
             }
         }
-        self.view(history, first, bucket, reads, target)
+        self.view(history, first, bucket, reads, target, keep)
     }
-
-    /// Slabs kept IN FRONT of the window's first, rather than trimmed away the
-    /// moment they scroll out.
-    ///
-    /// The window's first slab is `floor(history[first].time / bucket)`, and
-    /// that column's time is not fixed: once it ages past the finest tier it is
-    /// replaced by a merged column standing at its pair's MIDPOINT, which is
-    /// EARLIER. So the window's first slab can step BACK a slab, and a grid
-    /// trimmed flush to it would no longer contain what it is being asked for —
-    /// a rebuild, once per merge at the window's edge. A merge moves a time by
-    /// at most half the spacing of the tier it lands in, so a slab or two of
-    /// slack covers any Span; the cost of holding them is a few unread columns.
-    const FRONT_SLACK: i64 = 4;
 
     /// The window as the display reads it, taken from the kept grid: every slab
     /// from the window's first on, with that one — the only PARTIAL slab —
@@ -786,11 +976,25 @@ impl SpectrogramAgg {
     /// slab must not count, and the grid MAXed one in while it was still in
     /// window. It is a handful of columns, so still O(1) per frame.
     ///
-    /// Everything before the window's first slab stays in the grid (see
-    /// [`FRONT_SLACK`](Self::FRONT_SLACK)) and is sliced off here rather than
-    /// dropped, so the pruning above cannot reach a slab that is about to become
-    /// an interior one — an interior slab must hold every column that landed in
-    /// it, in-window or not.
+    /// The grid keeps what the RING keeps — `keep` slabs, sized off the pane —
+    /// rather than only what the window currently shows, and everything before
+    /// the window's first slab is sliced off here rather than dropped. Two
+    /// things need that slack.
+    ///
+    /// A Span GROWING reaches back to slabs it did not want a frame ago. Trimmed
+    /// flush to the window, every frame of a widening drag would ask for a slab
+    /// just discarded and rebuild; holding what the texture can hold means the
+    /// whole rung is already folded.
+    ///
+    /// And the window's first column is not fixed in time: once it ages past the
+    /// finest tier it is replaced by a merged column standing at its pair's
+    /// MIDPOINT, which is EARLIER, so the window's first slab can step BACK. A
+    /// merge moves a time by at most half a slab at any Span the pane offers,
+    /// which the same slack covers.
+    ///
+    /// Slicing rather than dropping also keeps the pruning below off a slab that
+    /// is about to become an interior one — an interior slab must hold every
+    /// column that landed in it, in-window or not.
     fn view(
         &mut self,
         history: &crate::SpectrumHistory,
@@ -798,6 +1002,7 @@ impl SpectrogramAgg {
         bucket: f64,
         reads: &[RowRead],
         target: Option<i64>,
+        keep: usize,
     ) -> (Vec<f64>, Vec<BucketDb>) {
         let nb = reads.len();
         let (Some(t), Some(&front_center)) = (target, self.grid.centers.first()) else {
@@ -805,11 +1010,11 @@ impl SpectrogramAgg {
         };
         let front = (front_center / bucket).floor() as i64;
 
-        // Drop what has scrolled out, keeping the slack. Centers run one per
-        // slab with no gaps (`fold` gives an empty slab its row too), so a slab
-        // key indexes the grid directly.
+        // Drop what has fallen out of the ring's reach. Centers run one per slab
+        // with no gaps (`fold` gives an empty slab its row too), so a slab key
+        // indexes the grid directly and the count IS the reach.
         let last = self.grid.centers.len().saturating_sub(1);
-        let drop = (t - Self::FRONT_SLACK - front).clamp(0, last as i64) as usize;
+        let drop = self.grid.centers.len().saturating_sub(keep.max(1)).min(last);
         if drop > 0 {
             self.grid.centers.drain(0..drop);
             self.grid.power.drain(0..drop * nb);
@@ -846,8 +1051,8 @@ impl SpectrogramAgg {
 /// image's scale, and doing it for only part of each slab — which is what
 /// clamping to the edge texel does, since `now` crosses the last texel center
 /// mid-slab — makes the heatmap twitch once per slab.
-fn u_of(layout: &TexLayout, t: f64, bucket: f64) -> f32 {
-    let slabs = ((t - layout.t_origin) / bucket) as f32;
+fn u_of(layout: &TexLayout, t: f64) -> f32 {
+    let slabs = ((t - layout.t_origin) / layout.bucket) as f32;
     (layout.x0 + slabs) / layout.tex_w
 }
 
@@ -860,8 +1065,8 @@ fn u_of(layout: &TexLayout, t: f64, bucket: f64) -> f32 {
 /// and it lands in a slab that then has to finish before the next begins. What
 /// fills that sliver has to come from the newest column, because it is the only
 /// thing the analyzer has said about the stretch.
-fn hold_time(layout: &TexLayout, bucket: f64) -> f64 {
-    layout.t_origin + layout.tex_span - 0.5 * bucket
+fn hold_time(layout: &TexLayout) -> f64 {
+    layout.t_origin + layout.tex_span - 0.5 * layout.bucket
 }
 
 /// Texture `u` for a time on the DRAWN strip: [`u_of`] out to
@@ -873,39 +1078,43 @@ fn hold_time(layout: &TexLayout, bucket: f64) -> f64 {
 /// leading sliver would then be a stale copy of the far end of the window: dark
 /// while something is playing, bright after it stopped. A guard column just
 /// outside the run covers a texel of that and no more, and the overrun here is
-/// the analyzer's lag, which is roughly six texels once the window is short
-/// enough for slabs to sit at [`MIN_BUCKET`] — so the sliver is filled by
+/// the analyzer's lag, which is several texels once the window is short enough
+/// for slabs to sit on [`live_slab`]'s lowest rung — so the sliver is filled by
 /// pinning `u`, and the guard is left to the far end, which really does overrun
 /// by only half a texel.
 ///
 /// Pinning is safe HERE, at a corner the mesh is split on, and nowhere else:
 /// see the split in [`draw_spectrogram`] for why a bend inside a quad is not.
-fn u_drawn(layout: &TexLayout, t: f64, bucket: f64) -> f32 {
-    u_of(layout, t.min(hold_time(layout, bucket)), bucket)
+fn u_drawn(layout: &TexLayout, t: f64) -> f32 {
+    u_of(layout, t.min(hold_time(layout)))
 }
 
-/// Slabs the ring holds, for a window of `window` seconds cut into `bucket`
-/// slabs, currently showing `visible` of them.
+/// Slabs the ring holds: what the [`Plan`] sized off the pane, floored by the
+/// run it is actually being asked to show.
 ///
-/// Sized off the WINDOW, not off how much history has arrived: a capacity that
-/// tracked the visible run would change as the run breathed against the slab
-/// grid, and every change reallocates the texture and repaints every column —
-/// rebuilding the very thing the ring caches.
+/// Sized off the PANE, not off the window and not off how much history has
+/// arrived: a capacity that tracked either would change as they moved, and
+/// every change reallocates the texture and repaints every column — rebuilding
+/// the very thing the ring caches. At a fixed slab width the pane's own column
+/// count is the widest run any Span can produce, so this holds still across a
+/// whole Span drag and only moves when the pane does.
 ///
 /// The run does not sit still at `window / bucket` slabs. It reaches from the
 /// last column BEFORE the window's far edge (up to a column's spacing further
 /// back) to the newest column (which lags the now-line by half an analysis
 /// window), and both ends are floored onto the slab grid, so it breathes by a
-/// slab or two as the window scrolls. The headroom covers that breathing: with
-/// only the run's own `+ 2`, a long Span — where a slab is WIDER than the
-/// analyzer's lag, so the run reaches the far end instead of stopping short of
-/// it — flipped between two capacities several times a second, and each flip
-/// cost a full-texture reallocation and a repaint of every column.
-fn ring_capacity(window: f64, bucket: f64, visible: usize) -> usize {
+/// slab or two as the window scrolls. The headroom covers that breathing: when
+/// this was `(window / bucket).ceil() + 2`, a long Span — where a slab is WIDER
+/// than the analyzer's lag, so the run reaches the far end instead of stopping
+/// short of it — flipped between two capacities seventeen times a second, and
+/// each flip cost a full-texture reallocation and a repaint of every column.
+fn ring_capacity(planned: usize, visible: usize) -> usize {
     // The max is the correctness floor — the run must fit, with the far end's
-    // guard column outside it — and the headroom is what keeps it from binding,
-    // so the answer is a function of the window alone.
-    ((window / bucket).ceil() as usize + RING_HEADROOM).max(visible + 2)
+    // guard column outside it. It never binds: a window at this slab width is
+    // at most `target_cols` slabs and the run overruns it by two, against the
+    // headroom's eight. That it never binds is the point, and what
+    // `no_cache_layer_falls_back_as_the_window_scrolls` holds it to.
+    planned.max(visible + 2)
 }
 
 /// Slabs of headroom [`ring_capacity`] holds past the window's own width. Four
@@ -927,7 +1136,7 @@ fn write_ring(
     ctx: &egui::Context,
     spectrum: &mut crate::AudioSpectrum,
     surface: usize,
-    style: RingStyle,
+    style: ColumnStyle,
     capacity: usize,
     cfg: &SpectrumConfig,
     bins: &[Bin],
@@ -943,24 +1152,28 @@ fn write_ring(
     // A ring with no texture under it describes nothing, whatever its
     // bookkeeping says.
     let usable = matches!(
-        (&spectrum.spectrogram_ring[surface], &spectrum.spectrogram_tex[surface]),
+        (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex),
         (Some(ring), Some(_)) if ring.carries(capacity, &style, first_key),
     );
 
     if !usable {
+        // Counted for the same reason the aggregator counts its rebuilds: a
+        // restart re-blanks the texture and repaints every column, and nothing
+        // about the picture says it happened.
+        spectrum.spectrogram[surface].restarts += 1;
         // A fresh texture starts black, so a column never written reads as
         // silence rather than as whatever the allocation happened to contain.
         let blank = egui::ColorImage::new([tex_w, h], vec![Color32::BLACK; tex_w * h]);
-        match &mut spectrum.spectrogram_tex[surface] {
+        match &mut spectrum.spectrogram[surface].tex {
             Some(handle) => handle.set(blank, opts),
             slot => *slot = Some(ctx.load_texture("spectrogram", blank, opts)),
         }
-        spectrum.spectrogram_ring[surface] =
+        spectrum.spectrogram[surface].ring =
             Some(SpectrogramRing::restarted(capacity, style, first_key));
     }
 
     let (Some(ring), Some(tex)) =
-        (&mut spectrum.spectrogram_ring[surface], &mut spectrum.spectrogram_tex[surface])
+        (&mut spectrum.spectrogram[surface].ring, &mut spectrum.spectrogram[surface].tex)
     else {
         return;
     };
@@ -1098,6 +1311,12 @@ fn ramp(t: f32, stops: &[[u8; 3]]) -> [u8; 3] {
 mod tests {
     use super::*;
     use lattice_core::spectrum::SPECTRUM_BINS;
+
+    /// Slabs an aggregator is told to keep, where the test is about the values
+    /// it produces rather than about what it retains: larger than any of these
+    /// windows holds, so the trim never enters into it. The sweep and the drag
+    /// test below pass the real, pane-sized retention instead.
+    const KEEP: usize = 1 << 20;
 
     /// A column at `time` with the given (bin, power) energy, rest silent.
     fn col(time: f64, energy: &[(usize, f32)]) -> crate::SpectrogramColumn {
@@ -1344,7 +1563,7 @@ mod tests {
             history.trim_older_than(t - (window_span + 0.5));
             let oldest = t - window_span;
             let first = history.partition_point(|c| c.time < oldest).saturating_sub(1);
-            let inc = agg.window(&history, first, bucket, &reads);
+            let inc = agg.window(&history, first, bucket, &reads, KEEP);
             let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
             assert_eq!(inc, bat, "incremental != batch at step {i} (t={t})");
         }
@@ -1352,7 +1571,7 @@ mod tests {
         // A layout change (new bucket) must fall back to a rebuild — still exact.
         let now = *times.last().unwrap();
         let first = history.partition_point(|c| c.time < now - window_span).saturating_sub(1);
-        let inc = agg.window(&history, first, 0.4, &reads);
+        let inc = agg.window(&history, first, 0.4, &reads, KEEP);
         let bat = aggregate_rows(history.iter_from(first), &reads, 0.4);
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
     }
@@ -1400,7 +1619,7 @@ mod tests {
             raw.push(col(t, &energy));
 
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-            let inc = agg.window(&history, first, bucket, &reads);
+            let inc = agg.window(&history, first, bucket, &reads, KEEP);
             // Comparing every step would be O(columns^2); check often enough to
             // catch the crossing itself, and either side of it.
             let near_merge = i + 8 >= crate::SpectrumHistory::FINE_COLUMNS;
@@ -1448,7 +1667,7 @@ mod tests {
             let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
             history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-            let (centers, power) = agg.window(&history, first, bucket, &reads);
+            let (centers, power) = agg.window(&history, first, bucket, &reads, KEEP);
             // The window it serves is still the right shape and length.
             assert_eq!(power.len(), centers.len() * reads.len(), "grid shape at column {i}");
             assert!(
@@ -1484,7 +1703,7 @@ mod tests {
             history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
 
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
-            let inc = agg.window(&history, first, bucket, &reads);
+            let inc = agg.window(&history, first, bucket, &reads, KEEP);
             if i % 256 == 0 || i + 1 == columns {
                 let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
                 assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
@@ -1494,6 +1713,85 @@ mod tests {
         // merges and all. Anything more means the guard is firing on windows it
         // has no reason to touch.
         assert_eq!(agg.rebuilds, 1, "the fast path stopped carrying a short window");
+    }
+
+    /// The layout arithmetic every rebuild rides on, decided without a frame.
+    ///
+    /// This is where the pipeline's cliffs live — a slab against the analyzer's
+    /// lag, a slab against the column rate, an image against what the GPU will
+    /// allocate — and until [`Plan`] was split out of the draw it could only be
+    /// exercised through an `egui::Context` with a real texture, which is to say
+    /// not at all. Each assertion below is a bug this pane has actually had.
+    #[test]
+    fn the_plan_decides_the_layout_without_a_frame() {
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let view = |ppp: f32, pitch_len: f32, depth_len: f32, window: f64, whole: bool| PaneView {
+            ppp,
+            max_rows: 8192,
+            pitch_len,
+            depth_len,
+            window,
+            scale,
+            cfg: SpectrumConfig::default(),
+            frame: FrameParams::default(),
+            whole,
+        };
+        let columns = Columns { first: 3, len: 400, newest: 12.0 };
+        let plan = |v: &PaneView| Plan::new(v, &columns);
+
+        // Rows are PIXELS, not points: on a 2x screen the image is built at the
+        // density it will be drawn at, rather than upsampled from half of it.
+        assert_eq!(plan(&view(1.0, 300.0, 800.0, 12.0, false)).rows, 300);
+        assert_eq!(plan(&view(2.0, 300.0, 800.0, 12.0, false)).rows, 600);
+        // And never a taller image than the GPU will take.
+        let mut small = view(2.0, 4000.0, 800.0, 12.0, false);
+        small.max_rows = 2048;
+        assert_eq!(plan(&small).rows, 2048, "an image taller than the GPU allocates");
+
+        // A slab is never finer than the columns arrive, whatever the pane's
+        // width asks for: a shorter one leaves empty slabs between columns, and
+        // the uniform time axis then stretches the edge columns into flat
+        // streaks. Two columns to a slab, since the grids share the ladder's
+        // period but not its phase.
+        let floor = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
+        let dense = plan(&view(2.0, 300.0, 4000.0, 1.0, false));
+        assert!(dense.bucket >= floor, "slab {} is finer than the data", dense.bucket);
+        // And it is always ON the ladder, so it lands on the store's own grid.
+        for window in [1.0f64, 12.0, 30.0, 600.0] {
+            let steps = (plan(&view(2.0, 300.0, 4000.0, window, false)).bucket / floor).log2();
+            assert!((steps - steps.round()).abs() < 1e-9, "a {window} s Span fell off the ladder");
+        }
+
+        // And the live image is never cut into more slabs than the store can
+        // keep up with — the cap `SpectrumHistory::COARSE_COLUMNS` is sized
+        // against.
+        for window in [1.0f64, 12.0, 60.0, 600.0] {
+            let p = plan(&view(2.0, 300.0, 4000.0, window, false));
+            let slabs = window / p.bucket;
+            assert!(
+                slabs <= LIVE_SLAB_CAP as f64 + 1.0,
+                "a {window} s Span asks for {slabs} slabs, past the {LIVE_SLAB_CAP} cap",
+            );
+        }
+        // The whole-song build spans an entire take rather than a window, so it
+        // is allowed the higher cap.
+        let take = plan(&view(2.0, 300.0, 4000.0, 600.0, true));
+        assert!(
+            600.0 / take.bucket > LIVE_SLAB_CAP as f64,
+            "the offline build should out-resolve the live cap",
+        );
+
+        // A wider pane buys finer slabs, up to the cap — the pane's size is an
+        // INPUT to the grid, which is why resizing rebuilds it.
+        let narrow = plan(&view(1.0, 300.0, 200.0, 30.0, false));
+        let wide = plan(&view(1.0, 300.0, 900.0, 30.0, false));
+        assert!(wide.bucket < narrow.bucket, "a wider pane should resolve time more finely");
+
+        // The key travels with the plan, so a cache hit means THIS layout.
+        let at_1x = plan(&view(1.0, 300.0, 800.0, 12.0, false)).key;
+        let at_2x = plan(&view(2.0, 300.0, 800.0, 12.0, false)).key;
+        assert_eq!(at_1x, plan(&view(1.0, 300.0, 800.0, 12.0, false)).key);
+        assert_ne!(at_1x, at_2x, "a density change must not hit the cache");
     }
 
     /// **Every cache layer must stay on its fast path across the whole REGIME
@@ -1528,7 +1826,7 @@ mod tests {
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
         let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let style = RingStyle {
+        let style = ColumnStyle {
             rows: reads.len(),
             bucket_bits: 0,
             scale_min_bits: 0,
@@ -1554,7 +1852,8 @@ mod tests {
                 // ring behaviour turns on — plus the Span the pane opens on.
                 let crossing = lag * cols;
                 for span in [12.0f64, crossing * 0.6, crossing * 1.4] {
-                    let bucket = (span / cols).max(MIN_BUCKET);
+                    let planned = cols as usize + RING_HEADROOM;
+                    let bucket = live_slab(span, cols as usize);
                     let at = format!("{algo} window, {pane} pane, {span:.1} s Span");
 
                     let mut agg = SpectrogramAgg::new();
@@ -1574,10 +1873,11 @@ mod tests {
                         // Exactly what `draw_spectrogram` asks for each frame.
                         let first =
                             history.partition_point(|c| c.time < now - span).saturating_sub(1);
-                        let (centers, _) = agg.window(&history, first, bucket, &reads);
+                        let (centers, _) =
+                            agg.window(&history, first, bucket, &reads, planned);
                         let visible = centers.len();
                         let first_key = (centers[0] / bucket).floor() as i64;
-                        let capacity = ring_capacity(span, bucket, visible);
+                        let capacity = ring_capacity(planned, visible);
 
                         // And exactly what `write_ring` then decides.
                         if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key)) {
@@ -1601,36 +1901,142 @@ mod tests {
         }
     }
 
-    /// The cache reuses the uploaded texture only while its key matches, so the
-    /// key must move for EVERY input the pixels depend on — otherwise a change
-    /// would leave a stale image on screen. Identical inputs must compare equal
-    /// (the common case, a cache hit); each varied input must not.
+    /// Dragging the Span must not re-lay the grid on every frame of the drag.
+    ///
+    /// This is what [`live_slab`]'s ladder is for. A slab width taken straight
+    /// from the window moves whenever the window does, and a moved slab width is
+    /// a different grid AND a different texture — so a drag used to pay the full
+    /// rebuild, every frame, for as long as it lasted. On the ladder the width
+    /// holds across a whole rung, the ring is sized off the pane so it holds too,
+    /// and the aggregator keeps what the ring keeps so a WIDENING Span finds its
+    /// slabs already folded rather than asking for ones just trimmed.
+    ///
+    /// Swept in both directions: widening is the harder one, since it reaches
+    /// back to slabs the window did not want a frame ago.
     #[test]
-    fn spectrogram_key_is_sensitive_to_every_input() {
+    fn dragging_the_span_holds_the_grid_between_ladder_steps() {
+        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let interval = crate::AudioSpectrum::FFT_INTERVAL;
+        let lag = 0.5 * 8192.0 / 48000.0;
+        let cols = LIVE_SLAB_CAP as usize;
+        let planned = cols + RING_HEADROOM;
+        let style = ColumnStyle {
+            rows: reads.len(),
+            bucket_bits: 0,
+            scale_min_bits: 0,
+            scale_span_bits: 0,
+            cfg: SpectrumConfig::default(),
+            frame: FrameParams::default(),
+        };
+        // One rung, end to end: at the 1024-slab cap a width holds while the
+        // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
+        // 32.8 s. The sweep stops just inside both ends, since crossing a rung
+        // is a real re-layout and not what this is about.
+        let rung = live_slab(30.0, cols);
+        let (lo, hi) = (rung * 520.0, rung * 1010.0);
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history = crate::SpectrumHistory::default();
+        let mut ring: Option<SpectrogramRing> = None;
+        let (mut restarts, mut widths) = (0u32, std::collections::BTreeSet::new());
+
+        // Fill past the widest Span in the sweep, so every frame of it is asking
+        // for a window the store can actually cover.
+        let settled = hi + 10.0;
+        let frames = ((settled + 40.0) / interval) as usize;
+        let mut dragged = 0u32;
+        for i in 0..frames {
+            let t = i as f64 * interval;
+            history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+            let now = t + lag;
+            // Once the store is deep enough, sweep the Span down and back up,
+            // a frame at a time as a drag delivers it.
+            let span = if now < settled {
+                hi
+            } else {
+                dragged += 1;
+                let phase = (dragged as f64 / 600.0).min(2.0);
+                if phase <= 1.0 { hi - (hi - lo) * phase } else { lo + (hi - lo) * (phase - 1.0) }
+            };
+
+            let bucket = live_slab(span, cols);
+            widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
+            let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
+            let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
+            let first_key = (centers[0] / bucket).floor() as i64;
+            let capacity = ring_capacity(planned, centers.len());
+            if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key)) {
+                restarts += 1;
+                ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
+            }
+            ring.as_mut().expect("just restarted").wrote(first_key + centers.len() as i64 - 1);
+        }
+
+        assert!(dragged > 1000, "the sweep never ran: {dragged} frames");
+        assert_eq!(
+            widths.len(),
+            1,
+            "the slab width took {} values inside one rung ({:?} us) — every one of them \
+             re-lays the grid and re-blanks the texture",
+            widths.len(),
+            (widths.first(), widths.last()),
+        );
+        assert_eq!(agg.rebuilds, 1, "the drag rescanned the window");
+        assert_eq!(restarts, 1, "the drag reallocated the ring");
+    }
+
+    /// The cache reuses the uploaded texture only while its key matches, and
+    /// the RING carries its columns forward only while the key's style matches,
+    /// so both must move for every input the pixels depend on — otherwise a
+    /// change leaves a stale image on screen, or worse, a texture whose newest
+    /// column was painted under the new setting and whose other thousand were
+    /// not.
+    ///
+    /// Those used to be two hand-kept lists in two files with a test on one of
+    /// them. They are one list now, so this covers both.
+    #[test]
+    fn the_key_is_sensitive_to_every_input() {
         let cfg = SpectrumConfig::default();
         let frame = FrameParams::default();
-        let base =
-            || crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame);
+        let style = |rows, bucket, min, span, cfg, frame| {
+            ColumnStyle::new(rows, bucket, min, span, cfg, frame)
+        };
+        let base_style = || style(100, 0.1, 40.0, 48.0, cfg, frame);
+        let base = || crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, false);
         // Same inputs -> equal: this is the hit that skips the rebuild.
         assert_eq!(base(), base());
-        // Every layout / data field participates.
-        let vary = |k: crate::SpectrogramKey| assert_ne!(base(), k);
-        vary(crate::SpectrogramKey::new(101, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // rows
-        vary(crate::SpectrogramKey::new(100, 0.2, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // bucket
-        vary(crate::SpectrogramKey::new(100, 0.1, 41.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // scale min
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 49.0, 3, 200, 5.0, false, cfg, frame)); // scale span
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 4, 200, 5.0, false, cfg, frame)); // first (scroll)
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 201, 5.0, false, cfg, frame)); // count
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 6.0, false, cfg, frame)); // newest
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, true, cfg, frame)); // whole
-        // And the color inputs: a palette, dB window or contrast change (cfg)
-        // or a gradient-range change (frame) would recolor every pixel.
+        assert_eq!(*base().style(), base_style());
+
+        // Every field of the STYLE recolours or re-reads every column, so the
+        // ring cannot carry a texture across a change to any of them.
+        let styled = |s: ColumnStyle| {
+            assert_ne!(s, base_style(), "the ring would carry a stale texture forward");
+            assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
+        };
+        styled(style(101, 0.1, 40.0, 48.0, cfg, frame)); // rows
+        styled(style(100, 0.2, 40.0, 48.0, cfg, frame)); // slab width
+        styled(style(100, 0.1, 41.0, 48.0, cfg, frame)); // pitch range, low end
+        styled(style(100, 0.1, 40.0, 49.0, cfg, frame)); // pitch range, span
+        // A palette, dB window or contrast change (cfg), or a gradient-range
+        // change (frame), recolours every pixel without moving a column.
         let mut cfg2 = cfg;
         cfg2.spectrogram_gamma += 0.1;
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg2, frame));
+        styled(style(100, 0.1, 40.0, 48.0, cfg2, frame));
         let mut frame2 = frame;
         frame2.brightest_pitch += 1.0;
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame2));
+        styled(style(100, 0.1, 40.0, 48.0, cfg, frame2));
+
+        // And every field that says WHICH columns were drawn. These move as the
+        // window scrolls, which the ring is built to survive — so they must move
+        // the key without moving the style.
+        let windowed = |k: crate::SpectrogramKey| {
+            assert_ne!(k, base(), "a scrolled window would reuse the built image");
+            assert_eq!(*k.style(), base_style(), "a scroll must not restyle the ring");
+        };
+        windowed(crate::SpectrogramKey::new(base_style(), 4, 200, 5.0, false)); // scrolled
+        windowed(crate::SpectrogramKey::new(base_style(), 3, 201, 5.0, false)); // count
+        windowed(crate::SpectrogramKey::new(base_style(), 3, 200, 6.0, false)); // fresh column
+        windowed(crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, true)); // whole-song
     }
 
     /// A column written on its own must be pixel-for-pixel what the
@@ -1668,7 +2074,7 @@ mod tests {
         let capacity = 8;
         let ring = SpectrogramRing {
             capacity,
-            style: RingStyle {
+            style: ColumnStyle {
                 rows: 3,
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
@@ -1704,7 +2110,7 @@ mod tests {
     fn slab_keys_before_zero_still_land_inside_the_texture() {
         let ring = SpectrogramRing {
             capacity: 8,
-            style: RingStyle {
+            style: ColumnStyle {
                 rows: 3,
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
@@ -1730,13 +2136,14 @@ mod tests {
     #[test]
     fn the_leading_sliver_holds_the_newest_column_instead_of_reading_round_the_ring() {
         // A live window at the settings that make the sliver widest: a short
-        // span, so slabs sit at MIN_BUCKET and the analyzer's lag spans several
-        // of them.
-        let bucket = MIN_BUCKET;
+        // span, so slabs sit on the ladder's lowest rung and the analyzer's lag
+        // spans several of them.
+        let bucket = crate::AudioSpectrum::FFT_INTERVAL * LADDER_FLOOR_COLUMNS;
         let window = 2.0;
         let visible = (window / bucket) as usize; // 62 slabs
         let capacity = visible + 2;
         let layout = TexLayout {
+            bucket,
             t_origin: 400.0,
             tex_span: visible as f64 * bucket,
             t0: 0.0,
@@ -1752,7 +2159,7 @@ mod tests {
 
         // What the run holds: `visible` columns, a guard column before them,
         // and past their newest a whole window of other laps' columns.
-        let newest = texel(u_drawn(&layout, now, bucket));
+        let newest = texel(u_drawn(&layout, now));
         assert!(
             newest <= visible as f32 - 0.5 + 1e-4,
             "the sliver sampled {newest} texels in, past the newest column at {}",
@@ -1762,7 +2169,7 @@ mod tests {
         assert!(newest >= visible as f32 - 0.5 - 1e-4, "held short of the newest column");
         // Worth pinning for, because an unheld mapping runs well past anything
         // a guard column or two could cover.
-        let unheld = texel(u_of(&layout, now, bucket));
+        let unheld = texel(u_of(&layout, now));
         assert!(unheld > visible as f32 + 4.0, "expected a multi-texel overrun, got {unheld}");
     }
 
@@ -1773,6 +2180,7 @@ mod tests {
     fn holding_the_sliver_leaves_the_data_mapping_alone() {
         let bucket = 0.05;
         let layout = TexLayout {
+            bucket,
             t_origin: 10.0,
             tex_span: 20.0 * bucket,
             t0: 0.0,
@@ -1780,18 +2188,18 @@ mod tests {
             x0: 3.0,
             tex_w: 44.0,
         };
-        let hold = hold_time(&layout, bucket);
+        let hold = hold_time(&layout);
         assert!((hold - (layout.t_origin + layout.tex_span - 0.5 * bucket)).abs() < 1e-9);
         let mut t = layout.t_origin - 2.0 * bucket;
         while t <= hold {
-            assert_eq!(u_drawn(&layout, t, bucket), u_of(&layout, t, bucket), "bent at {t}");
+            assert_eq!(u_drawn(&layout, t), u_of(&layout, t), "bent at {t}");
             t += bucket / 8.0;
         }
         // Past it, pinned — however far past, and however long the analyzer
         // stalls for.
-        let pinned = u_of(&layout, hold, bucket);
+        let pinned = u_of(&layout, hold);
         for t in [hold + 1e-6, hold + bucket, hold + 10.0] {
-            assert_eq!(u_drawn(&layout, t, bucket), pinned, "ran on at {t}");
+            assert_eq!(u_drawn(&layout, t), pinned, "ran on at {t}");
         }
     }
 
@@ -1806,6 +2214,7 @@ mod tests {
     fn the_time_to_texture_mapping_is_a_straight_line() {
         let bucket = 0.08;
         let layout = TexLayout {
+            bucket,
             t_origin: 100.0,
             tex_span: 8.0 * bucket,
             t0: 0.0,
@@ -1815,7 +2224,7 @@ mod tests {
             tex_w: 16.0,
         };
         let step = bucket / 4.0;
-        let at = |i: i32| u_of(&layout, layout.t_origin + i as f64 * step, bucket);
+        let at = |i: i32| u_of(&layout, layout.t_origin + i as f64 * step);
 
         // Equal steps in time, equal steps in u — everywhere, including past
         // BOTH ends of the run where the quad reaches for its slivers.
