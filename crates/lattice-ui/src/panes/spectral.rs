@@ -321,7 +321,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         &mut cfg.spectrogram_color,
         &[
             (SpectrogramColor::Mono, "Mono", "Grayscale; the most neutral over the roll"),
-            (SpectrogramColor::Heat, "Heat", "Black-red-orange-yellow-white"),
             (SpectrogramColor::Ice, "Ice", "Black-blue-cyan-white"),
             (SpectrogramColor::Aurora, "Aurora", "Violet-teal-green-yellow (even ramp)"),
             (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),

@@ -167,25 +167,26 @@ pub enum SpectrogramColor {
     /// Grayscale: black to white. The classic, and the most neutral over
     /// the roll's own colors.
     Mono,
-    /// Black → deep red → orange → yellow → white. The familiar "heat"
-    /// spectrogram; reads loudest as hottest.
-    ///
-    /// The aliases absorb palettes that used to exist — Pitch, which tinted
-    /// each cell with the lattice's own low-to-high pitch color, and Paper,
-    /// an inverted ramp for light backgrounds. Without them a blob still
-    /// naming one wouldn't just lose its palette: the parse would fail and
-    /// drop the WHOLE persist, layout and camera with it.
-    #[default]
-    #[serde(alias = "Pitch", alias = "Paper")]
-    Heat,
-    /// Black → navy → blue → cyan → white. Cool counterpart to Heat.
+    /// Black → navy → blue → cyan → white. The cool ramp.
     Ice,
     /// Black → violet → teal → green → yellow. A perceptually even ramp
-    /// (viridis-like) where every step reads as an equal change.
+    /// (viridis-like) where every step reads as an equal change — the
+    /// default, because an even ramp is the one that reads a heatmap's
+    /// quiet detail honestly.
+    #[default]
     Aurora,
-    /// Black → indigo → magenta → orange → cream. Warmer than [`Self::Aurora`]
-    /// and evenly stepped like it, where Heat spends most of its range in the
-    /// reds.
+    /// Black → indigo → magenta → orange → cream. Warmer than
+    /// [`Self::Aurora`] and evenly stepped like it.
+    ///
+    /// The aliases absorb palettes that used to exist: Heat (the familiar
+    /// black-red-orange-yellow-white spectrogram, dropped for spending most
+    /// of its range in the reds — Magma is that warmth evenly stepped),
+    /// Pitch, which tinted each cell with the lattice's own low-to-high
+    /// pitch color, and Paper, an inverted ramp for light backgrounds.
+    /// Without them a blob still naming one wouldn't just lose its palette:
+    /// the parse would fail and drop the WHOLE persist, layout and camera
+    /// with it.
+    #[serde(alias = "Heat", alias = "Pitch", alias = "Paper")]
     Magma,
 }
 

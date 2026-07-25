@@ -1734,12 +1734,13 @@ fn heatmap_contrast_bends_the_level_without_clipping_it() {
 }
 
 /// Palettes that no longer exist must still PARSE. Serde aliases fold them
-/// onto the default; without them the failed parse would drop the whole
-/// persist — layout, camera and every view setting with it — not just the
-/// palette. Injected as strings, since the enum can no longer name them.
+/// onto Magma, the nearest surviving ramp; without them the failed parse
+/// would drop the whole persist — layout, camera and every view setting with
+/// it — not just the palette. Injected as strings, since the enum can no
+/// longer name them.
 #[test]
-fn removed_spectrogram_palettes_load_as_heat() {
-    for removed in ["Pitch", "Paper"] {
+fn removed_spectrogram_palettes_load_as_magma() {
+    for removed in ["Heat", "Pitch", "Paper"] {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
         state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
         state.view.extent_sevens = 3;
@@ -1752,8 +1753,8 @@ fn removed_spectrogram_palettes_load_as_heat() {
         restored.load_persist(&saved);
         assert_eq!(
             restored.spectrum_config.spectrogram_color,
-            crate::SpectrogramColor::Heat,
-            "{removed} should fold onto the default",
+            crate::SpectrogramColor::Magma,
+            "{removed} should fold onto the nearest surviving ramp",
         );
         assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
     }
