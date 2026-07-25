@@ -68,59 +68,74 @@ const LINE_HEIGHT: f32 = 1.3;
 const LABEL_PAD: f32 = 1.5;
 
 /// Clear time a name demands beyond its own box, in points along the time
-/// axis, before the next name may take a place.
+/// axis, before the next name at that pitch may take a place.
 ///
 /// Without it, successive names at one pitch are allowed to butt together, and
 /// a run of repeats reads as a word rather than as a name on each of several
 /// notes. This is the "certain span" the greedy leaves between the instance it
 /// picks and the next one it will take.
-///
-/// Along the TIME axis only. Across pitch, two names may sit as close as the
-/// type allows: they are different notes, and the pitch axis is the one thing
-/// separating them already.
 const REPEAT_GAP: f32 = 6.0;
 
-/// Screen cell for the occupancy grid, in points — comfortably wider than a
-/// name, so a candidate can only ever touch the few cells around it.
-const CELL: f32 = 24.0;
-
-/// The names placed so far, bucketed on a coarse screen grid.
+/// Which stretches of the time axis are already spoken for, at each pitch.
 ///
-/// The placement is greedy over every note on the pane, and a plain sweep
-/// tests each candidate against every name already placed — quadratic, over a
-/// set that reaches four thousand notes at a ten-minute Span, and worst at
-/// exactly the density where almost every test fails. The grid makes it a
-/// handful of comparisons instead: a name is a dozen points across and a cell
-/// is wider than that, so a candidate can only touch the cells it overlaps.
+/// Thinning happens along TIME and within ONE PITCH only. A repeat waits for
+/// clear room after whichever instance took the name; a name at one pitch never
+/// suppresses a name at another, however close on screen the two land.
+///
+/// Overlap across pitch is therefore accepted, deliberately and for now: at a
+/// wide zoom a chord's names do land on each other, and refusing them is the
+/// worse of the two failures — a name you can read through a collision is
+/// worth more than a clean gap where a name should have been. A better answer
+/// than either (nudging them apart, stacking them, thinning by loudness) is
+/// deferred rather than guessed at.
+///
+/// A plain list per pitch, because the list is short by construction: within a
+/// pitch the placed stretches are disjoint and each is a name plus its gap
+/// wide, so a pane of finite width holds only so many however many notes are
+/// offered to it.
 #[derive(Default)]
 struct Occupancy {
-    cells: HashMap<(i32, i32), Vec<egui::Rect>>,
+    pitches: HashMap<i32, Vec<(f32, f32)>>,
 }
 
 impl Occupancy {
-    fn cells_of(rect: egui::Rect) -> impl Iterator<Item = (i32, i32)> {
-        let cell = |v: f32| (v / CELL).floor() as i32;
-        let (x0, x1) = (cell(rect.min.x), cell(rect.max.x));
-        let (y0, y1) = (cell(rect.min.y), cell(rect.max.y));
-        (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
-    }
-
-    /// Whether `rect` — a candidate's box already grown by the clear space it
-    /// demands — touches nothing placed.
-    fn free(&self, rect: egui::Rect) -> bool {
-        Self::cells_of(rect).all(|cell| match self.cells.get(&cell) {
-            Some(placed) => !placed.iter().any(|other| other.intersects(rect)),
+    /// Whether `span` — a candidate's reach along the time axis, already grown
+    /// by the clear room it demands — meets nothing placed at this pitch.
+    fn free(&self, pitch: i32, span: (f32, f32)) -> bool {
+        match self.pitches.get(&pitch) {
+            Some(taken) => !taken.iter().any(|t| span.0 < t.1 && t.0 < span.1),
             None => true,
-        })
+        }
     }
 
-    /// Record a name's own box. The gap it demands is added to whatever is
-    /// TESTED against this, not stored here, so the clear space between two
+    /// Record a name's own reach. The gap it demands is added to whatever is
+    /// TESTED against this, not stored here, so the clear room between two
     /// names is one gap rather than two.
-    fn insert(&mut self, rect: egui::Rect) {
-        for cell in Self::cells_of(rect) {
-            self.cells.entry(cell).or_default().push(rect);
-        }
+    fn insert(&mut self, pitch: i32, span: (f32, f32)) {
+        self.pitches.entry(pitch).or_default().push(span);
+    }
+}
+
+/// A pitch as an occupancy key: hundredths of a semitone, so two presses of
+/// one key under one tuning are the same pitch and float noise cannot split
+/// them. Anything further apart than that is two pitches, and two pitches do
+/// not thin each other at all.
+fn pitch_key(midi: f32) -> i32 {
+    (midi * 100.0).round() as i32
+}
+
+/// Where a name lies along the TIME axis, in screen points.
+///
+/// The depth direction is axis-aligned — the screen's x on a pane laid out
+/// along its long side, its y on an upright one — so the reach is one of the
+/// box's two extents, chosen by which way that axis points rather than by
+/// naming a screen side.
+fn depth_span(axes: &Axes, rect: egui::Rect) -> (f32, f32) {
+    let depth = axes.dir_depth();
+    if depth.x.abs() > depth.y.abs() {
+        (rect.min.x, rect.max.x)
+    } else {
+        (rect.min.y, rect.max.y)
     }
 }
 
@@ -224,26 +239,17 @@ pub(super) fn plan(
             placed.push(NoteLabel { name, rect });
             continue;
         }
-        // Everything else has to find room — including room for the gap it
-        // will demand of whoever comes next.
-        if !occupied.free(keep_out(axes, rect)) {
+        // Everything else has to find clear time at its own pitch — including
+        // the room it will demand of whoever comes next.
+        let (near, far) = depth_span(axes, rect);
+        let key = pitch_key(pitch);
+        if !occupied.free(key, (near - REPEAT_GAP, far + REPEAT_GAP)) {
             continue;
         }
-        occupied.insert(rect);
+        occupied.insert(key, (near, far));
         placed.push(NoteLabel { name, rect });
     }
     placed
-}
-
-/// A name's box grown by the clear space it demands of its neighbours: the
-/// [`REPEAT_GAP`] along the time axis, and nothing across pitch.
-///
-/// Directional without naming a screen side — the depth axis is the screen's x
-/// on a pane laid out along its long side and its y on an upright one, so the
-/// gap is projected onto it rather than added to a named edge.
-fn keep_out(axes: &Axes, rect: egui::Rect) -> egui::Rect {
-    let depth = axes.dir_depth();
-    rect.expand2(egui::vec2(REPEAT_GAP * depth.x.abs(), REPEAT_GAP * depth.y.abs()))
 }
 
 /// The depth of a ribbon's LEADING edge — the end of it that comes first in
@@ -647,23 +653,27 @@ mod tests {
         }
     }
 
-    /// Names that would land on top of each other are dropped rather than
-    /// stacked — but the LINES are not what is being thinned, only the names.
+    /// A name at one pitch never suppresses a name at another, however close on
+    /// screen the two land — the thinning is along TIME, within one pitch.
+    ///
+    /// Overlap across pitch is accepted for now. At a wide zoom a chord's names
+    /// do land on each other, and refusing them is the worse of the two
+    /// failures: a name you can read through a collision is worth more than a
+    /// clean gap where a name should have been. A better answer than either is
+    /// deferred rather than guessed at.
     #[test]
-    fn names_too_crowded_to_read_are_dropped() {
+    fn names_at_different_pitches_never_thin_each_other() {
         let mut state = state(24.0, 10.0);
         // Six chromatic neighbours struck together, and released, so none of
         // them takes the held-note exception: at 100 points across two octaves
-        // they are four points apart, where a name is ten tall.
+        // they are four points apart, where a name is a dozen tall. Every one
+        // of them is still named.
         for note in 60..66 {
             state.tracker.handle_event(on(5.0, note));
             state.tracker.handle_event(off(5.2, note));
         }
-        let placed = labels(&state, 5.5);
-        assert!(!placed.is_empty(), "the least crowded still gets its name");
-        assert!(placed.len() < 6, "but not all six fit: {:?}", said(&placed));
-
-        // The same six with room for all of them keep all their names.
+        assert_eq!(labels(&state, 5.5).len(), 6, "all six, overlap and all");
+        // ...and on a pane with room to draw them apart, unchanged.
         assert_eq!(labels_in(&state, 5.5, BIG).len(), 6);
     }
 
@@ -674,35 +684,28 @@ mod tests {
     /// under your finger is the note you are most likely to be asking about,
     /// so whether it is named must not depend on what the rest of the picture
     /// happens to be doing around it.
+    /// Two presses of ONE pitch, hard on each other's heels — the sweep gives
+    /// the name to the first and refuses the second. Unless the second is
+    /// being held, which is the exception.
     #[test]
     fn a_held_note_is_named_however_crowded_it_is() {
-        let mut state = state(24.0, 10.0);
-        // Two notes a semitone apart and all but on top of each other: at 100
-        // points across two octaves they are four points of pitch axis apart,
-        // where a name is a dozen tall. Only one of the two can be named.
-        //
-        // The neighbour is the OLDER, so the plain sweep gives it the name and
-        // middle C — struck later, and held — is the one that would lose. (The
-        // lattice spells that neighbour D♭, not C♯; the name comes from the
-        // node, not from a piano keyboard.)
-        state.tracker.handle_event(on(1.0, 61));
-        state.tracker.handle_event(off(1.9, 61));
-        state.tracker.handle_event(on(1.5, 60));
+        // The same pitch twice, the second following close enough that its
+        // name has nowhere clear to go.
+        let strike = |held: bool| {
+            let mut state = state(24.0, 10.0);
+            state.tracker.handle_event(on(1.0, 60));
+            state.tracker.handle_event(off(1.9, 60));
+            state.tracker.handle_event(on(1.95, 60));
+            if !held {
+                state.tracker.handle_event(off(2.0, 60));
+            }
+            state
+        };
+        assert_eq!(labels(&strike(false), 2.0).len(), 1, "released, the second is refused");
+        assert_eq!(labels(&strike(true), 2.0).len(), 2, "held, it is named regardless");
 
-        // Both are named: the older keeps the place the sweep gave it, and the
-        // held one takes its own regardless. Held names are drawn last, so
-        // where they do overlap it is the held one on top.
-        assert_eq!(said(&labels(&state, 2.0)), ["D\u{266D}", "C"], "held, it is named regardless");
-
-        // ...and keeps it for as long as it is held, however the picture
-        // around it moves.
-        assert!(said(&labels(&state, 3.0)).contains(&"C".to_owned()));
-
-        // Released at the same instant it is asked about, so it stands in
-        // exactly the place it did while held: now it takes its chances with
-        // the sweep like everything else, and the older note wins.
-        state.tracker.handle_event(off(2.0, 60));
-        assert_eq!(said(&labels(&state, 2.0)), ["D\u{266D}"], "released, it is one of the crowd");
+        // ...and it keeps the name for as long as it is held.
+        assert_eq!(labels(&strike(true), 2.4).len(), 2);
     }
 
     /// A held note takes NOTHING out of the running for anyone else — its name
@@ -715,24 +718,44 @@ mod tests {
     /// it back once they parted — names blinking out and in, for as long as
     /// the key is down. Exempting a name from refusal but not from refusing
     /// only trades one arbitrary gap for a moving one.
+    ///
+    /// Stated as the property rather than as a placement, so it holds however
+    /// the sweep is later ordered: whatever would be named with no key down is
+    /// still named with one down.
     #[test]
     fn a_held_note_takes_no_name_away_from_an_older_one() {
-        let mut state = state(24.0, 10.0);
-        state.tracker.handle_event(on(1.0, 61));
-        state.tracker.handle_event(off(1.9, 61));
-        assert_eq!(said(&labels(&state, 2.0)), ["D\u{266D}"], "alone, it is named");
+        let played = |hold: bool| {
+            let mut state = state(24.0, 10.0);
+            // A run at one pitch, dense enough that the sweep is already
+            // refusing most of it.
+            for i in 0..20 {
+                let t = i as f64 * 0.09;
+                state.tracker.handle_event(on(t, 60));
+                state.tracker.handle_event(off(t + 0.04, 60));
+            }
+            if hold {
+                // ...and the same pitch pressed and held, right at the
+                // now-line where its name would sweep across all of them.
+                state.tracker.handle_event(on(1.9, 60));
+            }
+            state
+        };
 
-        // Press middle C right beside it and hold. The two names are close
-        // enough that the sweep would refuse the second of them — but the held
-        // note is not in the sweep, so neither name is withheld.
-        state.tracker.handle_event(on(1.95, 60));
-        assert_eq!(
-            said(&labels(&state, 2.0)),
-            ["D\u{266D}", "C"],
-            "the older name must not blink out because something is being held beside it",
-        );
-        // Still both, a moment later, as the older one starts to draw away.
-        assert_eq!(said(&labels(&state, 2.2)), ["D\u{266D}", "C"]);
+        // Every name shown with nothing held is still shown with a key down,
+        // at each of a series of moments as the picture scrolls past it.
+        for now in [2.0, 2.3, 2.6, 3.0, 4.0] {
+            let alone = labels(&played(false), now);
+            let holding = labels(&played(true), now);
+            let places: Vec<f32> = holding.iter().map(|l| l.rect.min.x).collect();
+            for label in &alone {
+                assert!(
+                    places.contains(&label.rect.min.x),
+                    "at {now}s a name blinked out because a key was down: {:?} vs {places:?}",
+                    alone.iter().map(|l| l.rect.min.x).collect::<Vec<_>>(),
+                );
+            }
+            assert!(holding.len() > alone.len(), "and the held note is named too");
+        }
     }
 
     /// Per-note tuning, which is what this plugin is for: a note is named by
@@ -816,10 +839,12 @@ mod tests {
     /// how many are looked at — so the names that survive are spread across
     /// the whole window rather than bunched at whichever end a cap kept.
     ///
-    /// This is what the occupancy grid buys. The obvious bound — consider only
-    /// the newest N — is the wrong shape for a greedy that names from the far
-    /// end inward: it would leave the older half of the pane bare however much
-    /// room was going spare there.
+    /// The obvious bound — consider only the newest N — is the wrong shape for
+    /// a greedy that names from the far end inward: it would leave the older
+    /// half of the pane bare however much room was going spare there. What
+    /// bounds the work instead is that the placed stretches at one pitch are
+    /// disjoint, so however many notes are offered, there are only ever a
+    /// pane's width of them to test against.
     #[test]
     fn a_wall_of_notes_is_thinned_by_the_room_there_is_for_names() {
         let mut state = state(24.0, 600.0);
