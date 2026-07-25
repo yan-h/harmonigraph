@@ -539,9 +539,10 @@ impl eframe::App for App {
         // Spectral pane's audio overlay is demoable without a DAW.
         if self.state.spectrum_config.show_audio {
             self.synth.render(&self.state.tracker, now, &mut self.synth_buf);
+            let config = self.state.spectrum_config;
             self.state
                 .spectrum
-                .push_samples(&self.synth_buf, SYNTH_RATE as f32, now);
+                .push_samples(&self.synth_buf, 1, SYNTH_RATE as f32, now, &config);
         } else {
             self.synth.reset();
         }

@@ -17,9 +17,9 @@
 //!   byte stays and the toggle went.
 //! - **Old columns are merged as they age.** The heatmap draws a window ending
 //!   at `now`, so a column of age `a` is only ever on screen when the window is
-//!   at least `a` long — and the window is cut into at most a few hundred time
-//!   slabs, which puts a floor of roughly `a / 512` on the slab a column of that
-//!   age can land in. Keeping 20 ms columns from ten minutes ago is therefore
+//!   at least `a` long — and the window is cut into at most a thousand-odd time
+//!   slabs, which puts a floor of roughly `a / 1024` on the slab a column of
+//!   that age can land in. Keeping 8 ms columns from ten minutes ago is therefore
 //!   paying to store detail that no window can ever resolve. [`SpectrumHistory`]
 //!   keeps the recent stretch at full rate and MAX-merges pairs as they fall
 //!   past each tier, so resolution decays with age exactly as fast as the
@@ -132,15 +132,28 @@ impl SpectrumHistory {
     /// Columns kept at the analyzer's own rate — the stretch the display can
     /// still ask for at full time resolution (a window this short is cut into
     /// slabs no finer than the analysis interval anyway).
+    ///
+    /// Must be at least TWICE [`COARSE_COLUMNS`](Self::COARSE_COLUMNS): tier 1
+    /// stores two analysis intervals apart, so the fine tier has to reach an age
+    /// where a slab is that wide before the merging starts.
     pub const FINE_COLUMNS: usize = 2048;
     /// Columns per coarser tier. Each tier doubles the reach of the one before
     /// it for this many more columns, which is what makes the reach/memory
     /// trade logarithmic — a longer span costs a tier, not a proportion.
-    pub const COARSE_COLUMNS: usize = 512;
+    ///
+    /// Must be at least the display's slab cap
+    /// (`lattice_ui::panes::spectrogram::LIVE_SLAB_CAP`). Every tier doubles its
+    /// spacing but only ages the store forward by `COARSE_COLUMNS` of that
+    /// spacing, so a tier narrower than the cap falls behind what the finest
+    /// window reaching it can resolve — one tier per doubling only keeps up
+    /// while these two match. The UI test
+    /// `stored_columns_stay_finer_than_the_slabs_they_are_drawn_into` is what
+    /// says so; the two constants move together or not at all.
+    pub const COARSE_COLUMNS: usize = 1024;
     /// Total tiers, the fine one included.
-    pub const TIERS: usize = 6;
-    /// The most columns ever held. At 20 ms per column this reaches ~11 minutes
-    /// (see [`reach`](Self::reach)) for about 18 MB.
+    pub const TIERS: usize = 7;
+    /// The most columns ever held. At 8 ms per column this reaches ~17 minutes
+    /// (see [`reach`](Self::reach)) for about 30 MB.
     pub const MAX_COLUMNS: usize = Self::FINE_COLUMNS + (Self::TIERS - 1) * Self::COARSE_COLUMNS;
 
     /// How many columns tier `k` holds before it merges into the next.

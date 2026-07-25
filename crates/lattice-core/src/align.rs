@@ -160,8 +160,8 @@ fn best_lag(template: &[f32], template_norm: f64, haystack: &[f32]) -> (usize, f
 /// `reference_start`). Returns `None` when either file is too short to
 /// correlate.
 pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<Alignment> {
-    let reference_onsets = onset_strength(&envelope(&reference.samples, reference.sample_rate));
-    let clean_onsets = onset_strength(&envelope(&clean.samples, clean.sample_rate));
+    let reference_onsets = onset_strength(&envelope(&reference.mono(), reference.sample_rate));
+    let clean_onsets = onset_strength(&envelope(&clean.mono(), clean.sample_rate));
     align_onsets(&reference_onsets, reference_start, &clean_onsets)
 }
 
@@ -177,7 +177,7 @@ pub fn align(reference: &Audio, reference_start: f64, clean: &Audio) -> Option<A
 /// is better nudged by eye.
 pub fn align_to_notes(onsets: &[(f64, f32)], span: f64, clean: &Audio) -> Option<Alignment> {
     let reference_onsets = note_onset_envelope(onsets, span);
-    let clean_onsets = onset_strength(&envelope(&clean.samples, clean.sample_rate));
+    let clean_onsets = onset_strength(&envelope(&clean.mono(), clean.sample_rate));
     // The note train is on the take clock, so its frame 0 is take-time 0.
     align_onsets(&reference_onsets, 0.0, &clean_onsets)
 }
@@ -305,6 +305,7 @@ mod tests {
                 span - clean_start + 1.0,
                 clean_rate,
             ),
+            channels: 1,
         };
 
         let ref_rate = 44_100.0;
@@ -323,7 +324,7 @@ mod tests {
                 *sample += 0.7 * lcg.next_unit().signum();
             }
         }
-        let reference = Audio { sample_rate: ref_rate, samples: ref_samples };
+        let reference = Audio { sample_rate: ref_rate, samples: ref_samples, channels: 1 };
         (reference, clean)
     }
 
@@ -378,7 +379,7 @@ mod tests {
 
     #[test]
     fn too_little_audio_declines_rather_than_guessing() {
-        let tiny = Audio { sample_rate: 48_000.0, samples: vec![0.0; 32] };
+        let tiny = Audio { sample_rate: 48_000.0, samples: vec![0.0; 32], channels: 1 };
         assert!(align(&tiny, 0.0, &tiny).is_none());
     }
 
@@ -399,6 +400,7 @@ mod tests {
             let clean = Audio {
                 sample_rate: 48_000.0,
                 samples: clicks(&bounce_events, span - offset + 1.0, 48_000.0),
+                channels: 1,
             };
             let a = align_to_notes(&onsets, span, &clean).expect("enough signal");
             assert!(
