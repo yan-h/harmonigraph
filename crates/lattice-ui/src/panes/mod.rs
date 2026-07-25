@@ -197,11 +197,6 @@ pub(super) fn scene_color(c: glam::Vec4, alpha: f32) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(byte(c.x), byte(c.y), byte(c.z), byte(alpha))
 }
 
-/// The dimmest-visible convention shared with the shader (level_floor in
-/// lattice.wgsl): quiet elements sit at 35% and scale up to full.
-pub(super) fn visibility_floor(level: f32) -> f32 {
-    0.35 + 0.65 * level
-}
 
 /// A channel in the [`PitchGradient`](lattice_core::ChannelRole::PitchGradient)
 /// role, used to borrow the lattice's low-to-high color ramp for the `Pitch`
