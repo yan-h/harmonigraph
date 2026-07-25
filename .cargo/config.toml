@@ -3,3 +3,22 @@
 # xtask runs in release mode so serde etc. aren't compiled twice.
 xtask = "run --package xtask --release --"
 xtask-debug = "run --package xtask --"
+
+# Every worktree gets its own `target/`, so without a shared cache each new
+# session recompiles all ~465 dependencies from scratch: 4m31s for a cold
+# release build plus 5m20s for a cold `cargo test` compile. The dependency set
+# barely moves between branches, so sccache serves those objects from one
+# ~/Library/Caches/Mozilla.sccache store and only our own crates recompile.
+#
+# Per-worktree `target/` dirs stay, which is the point: parallel sessions never
+# serialise on a shared target lock, they just share the compiled deps.
+#
+# Cargo builds workspace crates incrementally and sccache cannot cache those —
+# it forwards them to rustc uncached, which is fine, they are the ones that
+# change. Leaving incremental on keeps the warm edit-rebuild loop fast.
+#
+# This needs `sccache` on PATH (`brew install sccache`). If it is ever missing
+# every build fails with "could not execute process sccache" — comment this
+# line out to fall back to plain rustc.
+[build]
+rustc-wrapper = "sccache"
