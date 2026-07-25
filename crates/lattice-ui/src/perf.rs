@@ -110,6 +110,13 @@ pub struct FrameCosts {
     /// Of that, the `device.poll` the GPU timing needs: what the measurement
     /// costs to take.
     pub poll_ms: f32,
+    /// Of that, staging the frame: offscreen sizing and the three buffer
+    /// writes.
+    pub write_ms: f32,
+    /// Of that, encoding the scene pass and the bloom chain. Despite living
+    /// under a row called "buf up", this is the frame's largest single piece
+    /// of CPU work whenever the lattice is on screen.
+    pub scene_ms: f32,
     pub encode_ms: f32,
     pub submit_ms: f32,
 }
@@ -147,7 +154,7 @@ impl Default for Workload {
 /// windows' maxima, and the two numbers currently printed for it.
 ///
 /// A struct per metric rather than the parallel lists of `x_ms` and
-/// `shown_x_ms` fields this replaced. The overlay tracks sixteen costs, and
+/// `shown_x_ms` fields this replaced. The overlay tracks eighteen costs, and
 /// with two flat lists every new row meant touching five places — declare,
 /// default, accumulate, latch, print — any one of which could be forgotten
 /// without the compiler minding.
@@ -174,7 +181,7 @@ impl Window {
     }
 
     /// Close this window and open the next. `slot` is shared by every metric,
-    /// so all sixteen roll their peak history over on the same latch.
+    /// so all eighteen roll their peak history over on the same latch.
     fn latch(&mut self, slot: usize) {
         // A window with no frames in it holds the printed mean rather than
         // dropping the row to zero. The lattice GPU row only gets a sample on
@@ -217,6 +224,10 @@ pub struct PerfStats {
     buf_up: Window,
     prepare: Window,
     poll: Window,
+    /// The two halves of `prepare` worth telling apart: staging the frame's
+    /// data, and encoding the scene pass plus the bloom chain.
+    write: Window,
+    scene: Window,
     /// Blocked acquiring the surface: the vsync wait, which is not work.
     acquire: Window,
     encode: Window,
@@ -274,6 +285,8 @@ impl Default for PerfStats {
             buf_up: w,
             prepare: w,
             poll: w,
+            write: w,
+            scene: w,
             acquire: w,
             encode: w,
             submit: w,
@@ -324,6 +337,8 @@ impl PerfStats {
             roll_notes,
             prepare_ms,
             poll_ms,
+            write_ms,
+            scene_ms,
             encode_ms,
             submit_ms,
         } = costs;
@@ -347,6 +362,8 @@ impl PerfStats {
         self.buf_up.record((upload_ms - texture_ms).max(0.0));
         self.prepare.record(prepare_ms);
         self.poll.record(poll_ms);
+        self.write.record(write_ms);
+        self.scene.record(scene_ms);
         self.acquire.record(acquire_ms);
         self.encode.record(encode_ms);
         self.submit.record(submit_ms);
@@ -398,7 +415,7 @@ impl PerfStats {
     /// Every window the overlay averages, so a latch cannot quietly miss one.
     /// Borrowing sixteen disjoint fields at once is fine; forgetting to latch
     /// a new row, which is what the flat list of fields invited, was not.
-    fn windows_mut(&mut self) -> [&mut Window; 16] {
+    fn windows_mut(&mut self) -> [&mut Window; 18] {
         [
             &mut self.frame_ms,
             &mut self.tick,
@@ -411,6 +428,8 @@ impl PerfStats {
             &mut self.buf_up,
             &mut self.prepare,
             &mut self.poll,
+            &mut self.write,
+            &mut self.scene,
             &mut self.acquire,
             &mut self.encode,
             &mut self.submit,
@@ -539,7 +558,9 @@ pub(crate) fn draw_overlay(
             timed(2, "tex up", &perf.texture),
             timed(2, "buf up", &perf.buf_up),
             timed(3, "prep", &perf.prepare),
-            timed(3, "poll", &perf.poll),
+            timed(4, "poll", &perf.poll),
+            timed(4, "write", &perf.write),
+            timed(4, "scene", &perf.scene),
             timed(2, "wait", &perf.acquire),
             timed(2, "encode", &perf.encode),
             timed(2, "submit", &perf.submit),
@@ -1097,6 +1118,8 @@ mod tests {
                 roll_notes: 0,
                 prepare_ms: 1.0,
                 poll_ms: 0.5,
+                write_ms: 0.25,
+                scene_ms: 0.25,
                 encode_ms: 10.0,
                 submit_ms: 11.0,
             },

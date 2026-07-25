@@ -1574,6 +1574,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             poll_ms: f32::from_bits(
                 state.lattice_stats.poll_ms.load(std::sync::atomic::Ordering::Relaxed),
             ),
+            write_ms: f32::from_bits(
+                state.lattice_stats.write_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            scene_ms: f32::from_bits(
+                state.lattice_stats.scene_ms.load(std::sync::atomic::Ordering::Relaxed),
+            ),
             acquire_ms: state.acquire_ms,
             tick_ms: state.tick_ms,
             render_ms: state.render_ms,
