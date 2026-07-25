@@ -42,6 +42,26 @@ fn db_readout(db: f32) -> String {
     format!("{db:.0} dB")
 }
 
+/// A duration as the roll's Span bar reads it out, carrying its own unit
+/// rather than naming one in the label: the bar runs from a second to ten
+/// minutes, and "300" under a fixed "(s)" is a number you have to divide
+/// before it means anything. "5m 00s" is the same value already read.
+///
+/// Tenths under a minute, whole seconds above it. The scale is eased, so the
+/// short spans get most of the travel and are where a tenth is a visible
+/// step; a tenth of a second inside five minutes is not.
+fn span_readout(seconds: f32) -> String {
+    // Rounded to tenths BEFORE the branch, so a span that displays as a
+    // whole minute is written as one — 59.97s reads "1m 00s", never "60.0s".
+    let tenths = (seconds.max(0.0) * 10.0).round() as i64;
+    if tenths < 600 {
+        format!("{}.{}s", tenths / 10, tenths % 10)
+    } else {
+        let whole = (tenths + 5) / 10;
+        format!("{}m {:02}s", whole / 60, whole % 60)
+    }
+}
+
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
@@ -193,9 +213,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          Time runs away from the spectrum, so a note leaving the roll meets \
          the peak it is making.",
     );
-    ValueBar::new(&mut cfg.roll_seconds, 1.0..=600.0, "Span (s)")
+    ValueBar::new(&mut cfg.roll_seconds, 1.0..=600.0, "Span")
         .eased(true)
         .decimals(1)
+        .display(span_readout)
         .show(ui)
         .on_hover_text(
             "Seconds of history the roll spans end to end, up to 10 minutes. \
@@ -1195,6 +1216,22 @@ mod tests {
     /// `power` for a level in dB, undoing the 10*log10 `loudness` applies.
     fn power_at(db: f32) -> f32 {
         10.0f32.powf(db / 10.0)
+    }
+
+    /// The Span readout carries its own unit, and switches to minutes at
+    /// the point where seconds alone stop reading — including the seam,
+    /// where a value that rounds up to a whole minute must be written as
+    /// one rather than as "60.0s".
+    #[test]
+    fn the_span_readout_names_its_own_unit() {
+        assert_eq!(span_readout(1.0), "1.0s");
+        assert_eq!(span_readout(12.34), "12.3s");
+        assert_eq!(span_readout(59.9), "59.9s");
+        assert_eq!(span_readout(59.97), "1m 00s", "rounds up ACROSS the seam");
+        assert_eq!(span_readout(60.0), "1m 00s");
+        assert_eq!(span_readout(65.4), "1m 05s", "seconds are padded, so the width holds");
+        assert_eq!(span_readout(90.0), "1m 30s");
+        assert_eq!(span_readout(600.0), "10m 00s", "the top of the bar's range");
     }
 
     /// The level range is a window with two ends: the floor reads as silence
