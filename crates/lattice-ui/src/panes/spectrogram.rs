@@ -370,12 +370,7 @@ pub(super) fn draw_spectrogram(
                     cfg,
                     frame,
                 };
-                // Sized off the WINDOW, not off how much history has arrived:
-                // a capacity that grew with the column count would change on
-                // almost every frame and rebuild the very thing it caches.
-                // +2 so the far end's guard column fits outside the visible run
-                // without overwriting a column the run still needs.
-                let capacity = ((window / bucket).ceil() as usize + 2).max(w + 2);
+                let capacity = ring_capacity(window, bucket, w);
                 write_ring(
                     painter.ctx(),
                     spectrum,
@@ -856,6 +851,36 @@ fn hold_time(layout: &TexLayout, bucket: f64) -> f64 {
 fn u_drawn(layout: &TexLayout, t: f64, bucket: f64) -> f32 {
     u_of(layout, t.min(hold_time(layout, bucket)), bucket)
 }
+
+/// Slabs the ring holds, for a window of `window` seconds cut into `bucket`
+/// slabs, currently showing `visible` of them.
+///
+/// Sized off the WINDOW, not off how much history has arrived: a capacity that
+/// tracked the visible run would change as the run breathed against the slab
+/// grid, and every change reallocates the texture and repaints every column —
+/// rebuilding the very thing the ring caches.
+///
+/// The run does not sit still at `window / bucket` slabs. It reaches from the
+/// last column BEFORE the window's far edge (up to a column's spacing further
+/// back) to the newest column (which lags the now-line by half an analysis
+/// window), and both ends are floored onto the slab grid, so it breathes by a
+/// slab or two as the window scrolls. The headroom covers that breathing: with
+/// only the run's own `+ 2`, a long Span — where a slab is WIDER than the
+/// analyzer's lag, so the run reaches the far end instead of stopping short of
+/// it — flipped between two capacities several times a second, and each flip
+/// cost a full-texture reallocation and a repaint of every column.
+fn ring_capacity(window: f64, bucket: f64, visible: usize) -> usize {
+    // The max is the correctness floor — the run must fit, with the far end's
+    // guard column outside it — and the headroom is what keeps it from binding,
+    // so the answer is a function of the window alone.
+    ((window / bucket).ceil() as usize + RING_HEADROOM).max(visible + 2)
+}
+
+/// Slabs of headroom [`ring_capacity`] holds past the window's own width. Four
+/// covers the breathing described there (a column's spacing at the far edge is
+/// at most one slab, plus a floor at each end); the rest is margin, and costs
+/// one texel column of texture each.
+const RING_HEADROOM: usize = 8;
 
 /// Bring the ring's texture up to date for the visible slabs, allocating or
 /// restarting it when it cannot be carried forward.
@@ -1452,6 +1477,57 @@ mod tests {
         // merges and all. Anything more means the guard is firing on windows it
         // has no reason to touch.
         assert_eq!(agg.rebuilds, 1, "the fast path stopped carrying a short window");
+    }
+
+    /// The ring exists so a scrolling window writes ONE column per frame. Its
+    /// capacity is what decides whether it can be carried forward at all — a
+    /// different capacity is a different texture, so every change re-blanks it
+    /// and repaints every column, which at a full window is the whole cost the
+    /// ring was built to avoid, several times a second.
+    ///
+    /// The trap is that the visible run breathes against the slab grid: it
+    /// reaches from the last column BEFORE the far edge to the newest column,
+    /// and both ends are floored onto slabs. Where a slab is WIDER than the
+    /// analyzer's lag — a long Span — the run reaches the near end too, so it
+    /// can be as long as the window itself, and a capacity that tracked it
+    /// flipped back and forth. This walks a real window across a real store and
+    /// holds the capacity to ONE value.
+    #[test]
+    fn the_ring_capacity_holds_still_as_the_window_scrolls() {
+        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let interval = 0.008;
+        // Half an analysis window, the lag every healthy column has: the
+        // default Balanced window is 8192 samples at 48 kHz.
+        let lag = 0.5 * 8192.0 / 48000.0;
+
+        // Either side of the slab-vs-lag crossing, and out to ROLL_SECONDS_MAX.
+        for window in [12.0f64, 30.0, 60.0, 120.0, 300.0, 600.0] {
+            let bucket = (window / LIVE_SLAB_CAP as f64).max(MIN_BUCKET);
+            let mut agg = SpectrogramAgg::new();
+            let mut history = crate::SpectrumHistory::default();
+            let mut caps: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+            let columns = ((window + 20.0) / interval) as usize;
+            for i in 0..columns {
+                let t = i as f64 * interval;
+                history.push(col(t, &[(4, 0.5), (10, 1.0)]));
+                // The shell clock: the newest column is always half an analysis
+                // window old.
+                let now = t + lag;
+                let first =
+                    history.partition_point(|c| c.time < now - window).saturating_sub(1);
+                let (centers, _) = agg.window(&history, first, bucket, &reads);
+                // Steady state only — the run really does grow while the window
+                // is still filling.
+                if now > window + 5.0 {
+                    caps.insert(ring_capacity(window, bucket, centers.len()));
+                }
+            }
+            assert_eq!(
+                caps.len(),
+                1,
+                "a {window} s Span reallocates the ring as it scrolls: capacities {caps:?}",
+            );
+        }
     }
 
     /// The cache reuses the uploaded texture only while its key matches, so the
