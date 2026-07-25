@@ -329,10 +329,6 @@ pub struct SpectrumConfig {
     /// its baseline with pitch ascending, so there is nothing to flip.
     #[serde(default)]
     pub orientation: SpectralOrientation,
-    /// Analyze and overlay the shell's audio (plugin: the input bus;
-    /// standalone: a synth on the held notes).
-    #[serde(default = "default_true")]
-    pub show_audio: bool,
     pub window: SpectrumWindow,
     /// Bottom of the dB height scale: what reads as silence. A full-scale
     /// sine sits at 0 dB.
@@ -633,7 +629,6 @@ impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
             orientation: SpectralOrientation::Horizontal,
-            show_audio: true,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             ceiling_db: default_ceiling_db(),

@@ -303,12 +303,10 @@ impl EditorShared {
         while let Ok(sample) = self.audio_consumer.pop() {
             self.audio_buf.push(sample);
         }
-        // Feed it when EITHER the curve or the spectrogram is shown — both read
-        // from this one analyzer, so a spectrogram with the curve off still
-        // needs samples (and, via `is_flowing`, still drives smooth repaint).
-        let shown =
-            self.ui.spectrum_config.show_audio || self.ui.spectrum_config.show_spectrogram;
-        if shown && !self.audio_buf.is_empty() {
+        // The curve and the spectrogram read this one analyzer, and the curve
+        // is always drawn, so it is always fed (which, via `is_flowing`, also
+        // drives smooth repaint).
+        if !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
             let channels = self.audio_channels();
             let config = self.ui.spectrum_config;

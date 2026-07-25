@@ -632,7 +632,6 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
 #[test]
 fn spectrum_config_round_trips_through_persist() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.spectrum_config.show_audio = true;
     state.spectrum_config.floor_db = -48.0;
     state.spectrum_config.ceiling_db = -12.0;
     state.spectrum_config.window = SpectrumWindow::Precise;
@@ -649,7 +648,6 @@ fn spectrum_config_round_trips_through_persist() {
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
-    assert!(restored.spectrum_config.show_audio);
     assert_eq!(restored.spectrum_config.floor_db, -48.0);
     assert_eq!(restored.spectrum_config.ceiling_db, -12.0);
     assert_eq!(restored.spectrum_config.window, SpectrumWindow::Precise);

@@ -98,13 +98,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     );
 
     // ---- Audio spectrum -------------------------------------------------
+    // Always analyzed: the pane IS the analyzer, the spectrogram reads the
+    // same buckets, and giving the whole depth axis to the roll is what the
+    // divider is for.
     section(ui, "Spectrum");
-    ui.checkbox(&mut cfg.show_audio, "Audio spectrum").on_hover_text(
-        "Analyze and overlay the audio's spectrum, every partial at its \
-         actual pitch (plugin: the input bus; standalone: a synth on the \
-         held notes)",
-    );
-
     button_row(ui, |ui| {
         ui.label("Window");
         for (window, label) in [
@@ -1081,7 +1078,7 @@ pub(crate) fn spectral_pane(
     // Audio spectrum: the FFT of the shell's audio source, every partial
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
-    if cfg.show_audio && split > 0.0 {
+    if split > 0.0 {
         if let Some((levels, peaks)) = state.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each taking the loudest bucket that
