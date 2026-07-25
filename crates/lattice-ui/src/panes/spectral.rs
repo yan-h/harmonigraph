@@ -1558,16 +1558,15 @@ mod tests {
     /// geometry. A stale or mis-cached build would move the quad.
     #[test]
     fn a_cached_spectrogram_frame_matches_the_cold_build() {
-        // The textured quad's per-vertex position + uv. The spectrogram is the
-        // pane's only 4-vertex textured mesh (notes are paths, labels are text),
-        // so its geometry is what these shapes carry.
+        // The textured strip's per-vertex position + uv. The spectrogram is the
+        // pane's only mesh (notes are paths, labels are text), so its geometry
+        // is what these shapes carry — however many quads it is split into.
         fn quad(out: &egui::FullOutput) -> Vec<[f32; 4]> {
             let mut v = Vec::new();
             for c in &out.shapes {
                 if let egui::Shape::Mesh(m) = &c.shape {
-                    if m.vertices.len() == 4 && m.indices.len() == 6 {
-                        v.extend(m.vertices.iter().map(|x| [x.pos.x, x.pos.y, x.uv.x, x.uv.y]));
-                    }
+                    assert_eq!(m.indices.len(), m.vertices.len() / 4 * 6, "quads, please");
+                    v.extend(m.vertices.iter().map(|x| [x.pos.x, x.pos.y, x.uv.x, x.uv.y]));
                 }
             }
             v
@@ -1610,6 +1609,66 @@ mod tests {
         assert!(!cold.is_empty(), "the spectrogram drew no textured quad to cache");
         let hit = quad(&frame());
         assert_eq!(cold, hit, "the cached frame drew a different quad than the cold build");
+    }
+
+    /// The strip reaches the now-line, but the newest column is older than that
+    /// — half an analysis window, by construction — so its leading sliver has
+    /// no data of its own and holds the newest column instead. Inside the live
+    /// ring the texels past the newest one hold what they carried a lap ago (a
+    /// column from a whole window back), so a `u` that ran on would paint that
+    /// sliver with the far end of the window.
+    ///
+    /// Where `u` stops, the mesh SPLITS: a quad spanning the corner would
+    /// interpolate it across itself, and since these are vertex UVs that
+    /// rescales the whole image, once per slab as the corner crosses it. So the
+    /// drawn strip is a flat leading quad (one `u` on all four corners) joined
+    /// to the data quad at that same `u`.
+    #[test]
+    fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.show_spectrogram = true;
+        state.spectrum_config.roll_seconds = 2.0; // zoomed in: the sliver is widest
+        let mut bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
+        bins[lattice_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
+        for i in 0..100 {
+            state.spectrum.push_history(90.0 + f64::from(i) * 0.02, &bins);
+        }
+        // The now-line, an analysis window's half-lag past the newest column.
+        let now = 91.98 + 0.171;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(500.0, 500.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(&mut child, &mut state, now, 1.0, 0);
+            },
+        );
+        let mesh = out
+            .shapes
+            .iter()
+            .find_map(|c| match &c.shape {
+                egui::Shape::Mesh(m) => Some(m.clone()),
+                _ => None,
+            })
+            .expect("the spectrogram drew no textured strip");
+
+        assert_eq!(mesh.vertices.len(), 8, "two quads, split where `u` stops");
+        let mut us: Vec<f32> = mesh.vertices.iter().map(|v| v.uv.x).collect();
+        us.sort_by(f32::total_cmp);
+        // Two values only — the corner, shared by the flat quad's four vertices
+        // and the data quad's leading two, and the far end of the data.
+        let (far, hold) = (us[0], us[7]);
+        assert!(far < hold, "the data quad spans no time at all");
+        assert_eq!(us.iter().filter(|u| **u == hold).count(), 6, "not one flat leading quad: {us:?}");
+        assert_eq!(us.iter().filter(|u| **u == far).count(), 2, "the data quad bends: {us:?}");
     }
 
     /// The heatmap image is sized in DEVICE PIXELS, not points. It is stretched
