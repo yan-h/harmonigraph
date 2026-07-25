@@ -233,6 +233,34 @@ pub(crate) struct TexLayout {
     pub(crate) tex_w: f32,
 }
 
+/// Why a ring could not be carried forward.
+///
+/// Worth telling apart, and reported separately by the performance overlay,
+/// because each says something different about what to go and look at: a style
+/// is the image changing, a capacity is the PANE changing, and a gap is the
+/// window having moved somewhere the texture cannot reach from. Twice now the
+/// question "which of these is it?" has been the whole diagnosis, answered by
+/// instrumenting rather than by reasoning about it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Restart {
+    Style,
+    Capacity,
+    Gap,
+}
+
+impl Restart {
+    /// Where this one is counted, and what the overlay calls it.
+    pub(crate) const LABELS: [&'static str; 3] = ["style", "pane", "gap"];
+
+    fn slot(self) -> usize {
+        match self {
+            Restart::Style => 0,
+            Restart::Capacity => 1,
+            Restart::Gap => 2,
+        }
+    }
+}
+
 /// Which slabs the uploaded texture's columns currently hold.
 ///
 /// The heatmap's columns are indexed by SLAB KEY — `floor(time / bucket)`, a
@@ -326,18 +354,31 @@ impl SpectrogramRing {
     /// and repaints every column — so this is the predicate the ring's whole
     /// value rests on, and `no_cache_layer_falls_back_as_the_window_scrolls`
     /// holds it to yes for every Span the pane offers.
-    fn carries(&self, capacity: usize, style: &ColumnStyle, first_key: i64, last_key: i64) -> bool {
-        self.capacity == capacity
-            && self.style == *style
-            // The run has to CONNECT to what is painted at both ends. A run
-            // starting past `written_through + 1`, or ending before
-            // `oldest_valid - 1`, leaves never-written texels inside itself, and
-            // painting at the edges cannot reach them.
-            && first_key <= self.written_through + 1
+    fn carries(
+        &self,
+        capacity: usize,
+        style: &ColumnStyle,
+        first_key: i64,
+        last_key: i64,
+    ) -> Option<Restart> {
+        if self.style != *style {
+            // The image itself changed, so every column is wrong at once.
+            return Some(Restart::Style);
+        }
+        if self.capacity != capacity {
+            // A different capacity is a different texture: the slab a texel
+            // stands for is `key mod capacity`, so the whole mapping moves.
+            return Some(Restart::Capacity);
+        }
+        // The run has to CONNECT to what is painted at both ends. A run starting
+        // past `written_through + 1`, or ending before `oldest_valid - 1`,
+        // leaves never-written texels inside itself, and painting at the edges
+        // cannot reach them. It also has to fit in a lap with its far guard, or
+        // painting the far end would overwrite the near one.
+        let connects = first_key <= self.written_through + 1
             && last_key >= self.oldest_valid - 1
-            // And it has to fit in a lap with its far guard, or painting the far
-            // end would overwrite the near one.
-            && last_key - first_key + 2 <= capacity as i64
+            && last_key - first_key + 2 <= capacity as i64;
+        (!connects).then_some(Restart::Gap)
     }
 
     /// A ring with nothing written yet, for a run starting at `first_key` — so
@@ -1215,17 +1256,18 @@ fn write_ring(
     let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
 
     // A ring with no texture under it describes nothing, whatever its
-    // bookkeeping says.
-    let usable = matches!(
-        (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex),
-        (Some(ring), Some(_)) if ring.carries(capacity, &style, first_key, last_key),
-    );
+    // bookkeeping says — and there is no more specific reason to report than
+    // that it has to be built at all.
+    let restart = match (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex) {
+        (Some(ring), Some(_)) => ring.carries(capacity, &style, first_key, last_key),
+        _ => Some(Restart::Style),
+    };
 
-    if !usable {
+    if let Some(why) = restart {
         // Counted for the same reason the aggregator counts its rebuilds: a
         // restart re-blanks the texture and repaints every column, and nothing
         // about the picture says it happened.
-        spectrum.spectrogram[surface].restarts += 1;
+        spectrum.spectrogram[surface].restarts[why.slot()] += 1;
         // A fresh texture starts black, so a column never written reads as
         // silence rather than as whatever the allocation happened to contain.
         let blank = egui::ColorImage::new([tex_w, h], vec![Color32::BLACK; tex_w * h]);
@@ -1959,10 +2001,9 @@ mod tests {
                         let capacity = ring_capacity(planned, visible);
 
                         // And exactly what `write_ring` then decides.
-                        if !ring
-                            .as_ref()
-                            .is_some_and(|r| r.carries(capacity, &style, first_key, last_key))
-                        {
+                        if ring.as_ref().is_none_or(|r| {
+                            r.carries(capacity, &style, first_key, last_key).is_some()
+                        }) {
                             restarts += 1;
                             ring = Some(SpectrogramRing::restarted(
                                 capacity,
@@ -2053,7 +2094,9 @@ mod tests {
                 let first_key = (centers[0] / bucket).floor() as i64;
                 let last_key = first_key + centers.len() as i64 - 1;
                 let capacity = ring_capacity(planned, centers.len());
-                if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key, last_key))
+                if ring
+                    .as_ref()
+                    .is_none_or(|r| r.carries(capacity, &style, first_key, last_key).is_some())
                 {
                     restarts += 1;
                     ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
@@ -2197,7 +2240,10 @@ mod tests {
             let first_key = (centers[0] / bucket).floor() as i64;
             let last_key = first_key + centers.len() as i64 - 1;
             let capacity = ring_capacity(planned, centers.len());
-            if !ring.as_ref().is_some_and(|r| r.carries(capacity, &style, first_key, last_key)) {
+            if ring
+                .as_ref()
+                .is_none_or(|r| r.carries(capacity, &style, first_key, last_key).is_some())
+            {
                 restarts += 1;
                 ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
             }

@@ -746,11 +746,12 @@ pub(crate) struct SpectrogramSurface {
     /// the offline whole-song render.
     ring: Option<crate::panes::spectrogram::SpectrogramRing>,
     /// Times the ring has been restarted — re-blanked and every column
-    /// repainted. Kept HERE rather than on the ring, which does not survive its
-    /// own restart. Read out by the performance overlay beside the
-    /// aggregator's rebuild count; see
+    /// repainted — by [`Restart`](crate::panes::spectrogram::Restart) reason.
+    /// Kept HERE rather than on the ring, which does not survive its own
+    /// restart. Read out by the performance overlay beside the aggregator's
+    /// rebuild count; see
     /// [`SpectrogramAgg::rebuilds`](crate::panes::spectrogram::SpectrogramAgg::rebuilds).
-    restarts: u32,
+    restarts: [u32; 3],
 }
 
 impl SpectrogramSurface {
@@ -1188,9 +1189,12 @@ impl AudioSpectrum {
     /// they draw the right picture at many times the cost, so nothing on screen
     /// distinguishes a working cache from one that has quietly stopped. The
     /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
-    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, u32) {
-        self.spectrogram.iter().fold((0, 0), |(rebuilds, restarts), s| {
-            (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), restarts + s.restarts)
+    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, [u32; 3]) {
+        self.spectrogram.iter().fold((0, [0; 3]), |(rebuilds, mut restarts), s| {
+            for (total, surface) in restarts.iter_mut().zip(s.restarts) {
+                *total += surface;
+            }
+            (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), restarts)
         })
     }
 
