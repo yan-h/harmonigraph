@@ -29,6 +29,13 @@ use std::collections::HashMap;
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lattice_scene::Scene;
 
+/// The piano roll's own callback — a different picture with the same
+/// problem, solved the same way. It shares this crate's wgpu version and
+/// buffer helpers and nothing else; the lattice's offscreen target, depth
+/// buffer and bloom chain are all beside the point for a flat ribbon.
+mod roll;
+pub use roll::{roll_paint_callback, RollAxes, RollInstance};
+
 // Shells name texture formats through this re-export so every crate agrees
 // on the wgpu version.
 pub use egui_wgpu::wgpu;

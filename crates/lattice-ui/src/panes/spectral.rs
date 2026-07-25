@@ -367,7 +367,7 @@ pub(super) struct Axes {
 }
 
 impl Axes {
-    fn new(rect: egui::Rect, cfg: &crate::SpectrumConfig) -> Axes {
+    pub(super) fn new(rect: egui::Rect, cfg: &crate::SpectrumConfig) -> Axes {
         Axes { rect, time_vertical: cfg.orientation.is_time_vertical(rect) }
     }
 
@@ -401,12 +401,12 @@ impl Axes {
     }
 
     /// Which way the pitch axis points on screen (unit vector).
-    fn dir_pitch(&self) -> egui::Vec2 {
+    pub(super) fn dir_pitch(&self) -> egui::Vec2 {
         (self.at(1.0, 0.0) - self.at(0.0, 0.0)).normalized()
     }
 
     /// Which way the depth axis points on screen (unit vector).
-    fn dir_depth(&self) -> egui::Vec2 {
+    pub(super) fn dir_depth(&self) -> egui::Vec2 {
         (self.at(0.0, 1.0) - self.at(0.0, 0.0)).normalized()
     }
 
@@ -482,7 +482,7 @@ impl Axes {
 /// that equality is what keeps the voice bars and the curve calibrated
 /// against each other. The spectrogram shares the roll's region and time
 /// axis, so it carves out the same share.
-fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
+pub(super) fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
     if cfg.show_roll || cfg.show_spectrogram {
         (1.0 - cfg.roll_fraction).clamp(0.0, 1.0)
     } else {
@@ -782,6 +782,9 @@ pub(crate) fn spectral_pane(
     use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
+    // The rim the pane's own labels wear; a view setting, like the note
+    // names' (see `LabelRim`).
+    let cfg_rim = state.view.label_rim;
     // Drag-sensing, so the pitch range can be panned by grabbing the picture
     // (see `drag_zoom_pitch`). Registered BEFORE the divider's own band, which
     // is what leaves the divider on top where the two overlap: egui hands a
@@ -1062,7 +1065,7 @@ pub(crate) fn spectral_pane(
     // ribbon does. (Its ribbons occupy the far side of the split and the
     // spectrum the near side, so this only changes what happens ON the line.)
     if split < 1.0 && cfg.show_roll {
-        super::roll::draw_roll(&painter, &axes, &scale, state, split, now);
+        super::roll::draw_roll(&painter, &axes, &scale, state, split, now, surface);
     }
 
     // Axis labels last, riding on top of the spectrogram, spectrum, and
@@ -1083,6 +1086,9 @@ pub(crate) fn spectral_pane(
             egui::FontId::monospace(10.0 * label_scale),
             theme::text_dim(),
             theme::well(),
+            // The same setting the note names follow: these sit over the
+            // spectrogram, which is a picture too.
+            cfg_rim,
         );
     }
 
@@ -1138,6 +1144,7 @@ pub(crate) fn spectral_pane(
             egui::FontId::monospace(10.5 * label_scale),
             theme::text(),
             theme::well(),
+            cfg_rim,
         );
     }
 }
@@ -1528,15 +1535,18 @@ mod tests {
             },
         );
         // The now-line is the one hairline-colored segment clean across the
-        // pitch axis; the note is drawn as a rounded outline (or, when thin, a
-        // segment) and must come after it.
+        // pitch axis; the roll is one paint callback (its notes are instanced
+        // quads, not shapes) and must come after it — paint callbacks keep
+        // their place in egui's draw order, which is what puts the roll over
+        // the line and under the axis labels.
         let hairline = out.shapes.iter().position(|s| {
             matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
                 if stroke.color == theme::hairline())
         });
-        let note = out.shapes.iter().rposition(|s| {
-            matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.width > 0.0)
-        });
+        let note = out
+            .shapes
+            .iter()
+            .rposition(|s| matches!(&s.shape, egui::Shape::Callback(_)));
         let (Some(hairline), Some(note)) = (hairline, note) else {
             panic!("expected both a now-line and a note ribbon in the frame");
         };

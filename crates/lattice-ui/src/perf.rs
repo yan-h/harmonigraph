@@ -80,6 +80,11 @@ pub struct FrameCosts {
     /// The volume the upload had to move, rather than how long it took.
     pub prims: u32,
     pub verts: u32,
+    /// Note segments the roll drew through its paint callback. NOT part of
+    /// `verts`: the roll owns its instance buffer, so its geometry never
+    /// reaches egui's. Four vertices each, against the several hundred a
+    /// stroked rounded rect used to cost.
+    pub roll_notes: u32,
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -143,6 +148,7 @@ pub struct PerfStats {
     texture_ms: f32,
     prims: u32,
     verts: u32,
+    roll_notes: u32,
     prepare_ms: f32,
     poll_ms: f32,
     encode_ms: f32,
@@ -204,6 +210,7 @@ impl Default for PerfStats {
             texture_ms: 0.0,
             prims: 0,
             verts: 0,
+            roll_notes: 0,
             prepare_ms: 0.0,
             poll_ms: 0.0,
             encode_ms: 0.0,
@@ -262,6 +269,7 @@ impl PerfStats {
             texture_ms,
             prims,
             verts,
+            roll_notes,
             prepare_ms,
             poll_ms,
             encode_ms,
@@ -288,6 +296,7 @@ impl PerfStats {
         self.texture_ms += (texture_ms - self.texture_ms) * alpha;
         self.prims = prims;
         self.verts = verts;
+        self.roll_notes = roll_notes;
         self.prepare_ms += (prepare_ms - self.prepare_ms) * alpha;
         self.poll_ms += (poll_ms - self.poll_ms) * alpha;
         self.encode_ms += (encode_ms - self.encode_ms) * alpha;
@@ -472,6 +481,9 @@ pub(crate) fn draw_overlay(
     }));
     if detail {
         rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims)));
+        // The roll's geometry, which `verts` can no longer see: it goes to the
+        // GPU as instances on the roll's own buffer, four vertices a note.
+        rows.push((1, "roll", format!("{} notes", perf.roll_notes)));
     }
     rows.extend([
         (0, "memory", memory_readout(perf.rss_bytes)),
@@ -839,6 +851,7 @@ mod tests {
                 texture_ms: 8.5,
                 prims: 0,
                 verts: 0,
+                roll_notes: 0,
                 prepare_ms: 1.0,
                 poll_ms: 0.5,
                 encode_ms: 10.0,

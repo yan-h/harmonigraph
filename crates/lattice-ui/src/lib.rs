@@ -1098,6 +1098,20 @@ pub struct SharedState {
     /// Runtime-only, never persisted, and never read by the offline renderer —
     /// which also never asks for the feature, so it has no timer to begin with.
     pub(crate) lattice_stats: std::sync::Arc<lattice_render::LatticeStats>,
+    /// How many note segments the docked roll handed its paint callback last
+    /// frame — the geometry that USED to show up in the `verts` readout, four
+    /// vertices at a time instead of several hundred.
+    ///
+    /// Reported so the roll's load stays visible after moving off egui's
+    /// vertex buffer: without it the overlay would show the cost vanish with
+    /// nothing standing in its place, and "is the roll drawing at all" would
+    /// have no answer. An atomic for the same reason `lattice_stats` is one —
+    /// the roll draws from a `&SharedState`.
+    ///
+    /// Only the docked pane (surface 0) publishes; the Render preview is a
+    /// second roll on screen and reporting its count as THE count would be
+    /// wrong, exactly as it is for the preview's lattice.
+    pub(crate) roll_notes: std::sync::atomic::AtomicU32,
     /// Milliseconds the shell spent tessellating egui's shapes last frame,
     /// or 0 where the shell doesn't measure it (the standalone's eframe loop
     /// isn't ours to instrument). Set by the shell before `root_ui`.
@@ -1257,6 +1271,7 @@ impl SharedState {
                     .store(lattice_render::GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
                 std::sync::Arc::new(stats)
             },
+            roll_notes: std::sync::atomic::AtomicU32::new(0),
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
             shell_ms: 0.0,
@@ -1402,6 +1417,11 @@ pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     begin_frame(state, params, now);
 
+    // Cleared before the panes run, so a frame with the roll hidden (or the
+    // Spectral pane not on screen at all) reports zero notes rather than
+    // whatever the last frame that had one reported.
+    state.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
+
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
     // meet with no chrome between them — clean for captures). The pane
     // separators keep their regular width, so the spacing between windows
@@ -1494,6 +1514,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             texture_ms: state.texture_ms,
             prims: state.prims,
             verts: state.verts,
+            roll_notes: state.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
             encode_ms: state.encode_ms,
             submit_ms: state.submit_ms,
         },

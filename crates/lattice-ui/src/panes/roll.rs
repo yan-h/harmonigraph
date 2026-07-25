@@ -15,6 +15,7 @@
 
 use egui::Color32;
 use lattice_core::RollNote;
+use lattice_render::{RollAxes, RollInstance};
 use lattice_scene::channel_color;
 
 use super::spectral::{Axes, PitchScale, TimeAxis};
@@ -106,6 +107,17 @@ pub(super) fn border(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32>
 /// Draw every remembered note that falls inside the pane's time window and
 /// pitch range. `split` is the depth fraction the roll starts at; `now` is
 /// the shell clock, the same one the tracker's events are stamped with.
+/// `surface` names the roll (0 the docked pane / offline render, 1 the
+/// Render preview), so two live copies get their own instance buffer.
+///
+/// One paint callback for the whole roll, drawing one instanced quad per
+/// note segment — NOT a stack of stroked rounded rects through egui's
+/// tessellator, which is what this used to be. The roll is a scrolling
+/// picture of immutable content, and immediate mode re-uploaded every
+/// vertex of it every frame: 100k+ vertices, 4-5 ms of pure upload, the
+/// dominant cost of the frame. Four vertices a note and a distance field
+/// for the bands costs neither. See `lattice_render::roll` for the
+/// measurement and the shape of the fix.
 pub(super) fn draw_roll(
     painter: &egui::Painter,
     axes: &Axes,
@@ -113,7 +125,49 @@ pub(super) fn draw_roll(
     state: &SharedState,
     split: f32,
     now: f64,
+    surface: usize,
 ) {
+    let notes = note_instances(axes, scale, state, split, now);
+    if surface == 0 {
+        // What the roll now costs, for the performance overlay: this geometry
+        // stopped passing through egui's vertex buffer, so the `verts` row
+        // can no longer see it. The Render preview is a second roll and does
+        // not publish (see `SharedState::roll_notes`).
+        state
+            .roll_notes
+            .store(notes.len() as u32, std::sync::atomic::Ordering::Relaxed);
+    }
+    if notes.is_empty() {
+        return;
+    }
+    let dir = |v: egui::Vec2| [v.x, v.y];
+    painter.add(lattice_render::roll_paint_callback(
+        axes.rect,
+        notes,
+        RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) },
+        state.target_format,
+        surface as u64,
+    ));
+}
+
+/// Every visible note segment as one GPU instance, in paint order.
+///
+/// The whole geometry of the roll, and the only place it is decided — the
+/// shader turns an instance into pixels but invents nothing. Split out from
+/// [`draw_roll`] so the geometry can be read back in tests without a GPU.
+///
+/// Rebuilt from scratch every frame, deliberately: see the note on
+/// append-and-evict in `lattice_render::roll`. It also keeps the far-edge
+/// truncation below honest — a note crossing the window's oldest edge has
+/// its geometry rewritten while it leaves, so it is not the immutable thing
+/// a cache would need it to be.
+pub(super) fn note_instances(
+    axes: &Axes,
+    scale: &PitchScale,
+    state: &SharedState,
+    split: f32,
+    now: f64,
+) -> Vec<RollInstance> {
     let cfg = &state.spectrum_config;
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
     // the whole take laid out statically (offline playhead mode).
@@ -123,10 +177,10 @@ pub(super) fn draw_roll(
     let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
     let ribbon_px = 2.0 * half * axes.pitch_len();
 
-    // Draw in a stable order (the live notes come out of a HashMap, whose
-    // iteration order varies per run): with translucent glows the paint order
-    // of overlapping notes is visible, and the offline render must be
-    // byte-identical between runs.
+    // Build in a stable order (the live notes come out of a HashMap, whose
+    // iteration order varies per run): instances rasterize in buffer order,
+    // so where two notes overlap the paint order is visible, and the offline
+    // render must be byte-identical between runs.
     // Whole-song (offline playhead): the render lays the whole take out at once
     // from a full roll built up front. Live: the causal tracker's rolling
     // window, filling in as notes arrive.
@@ -159,6 +213,10 @@ pub(super) fn draw_roll(
             .then(a.channel.cmp(&b.channel))
             .then(a.note.cmp(&b.note))
     });
+
+    // One segment per note is the common case (a note is bent rarely), so the
+    // note count is the right first guess at how many instances this makes.
+    let mut instances = Vec::with_capacity(notes.len());
     for note in notes {
         for ((t0, p0), (t1, p1)) in note.segments(now) {
             let (t0, t1) = (t0.max(oldest), t1.max(oldest));
@@ -174,135 +232,88 @@ pub(super) fn draw_roll(
             // not here.
             let alpha = 1.0;
             let pitch = (p0 + p1) * 0.5;
-            let width = cfg.roll_outline_width.clamp(0.5, 8.0);
-            let body = |a: f32| note_color(note, cfg, state, pitch, a);
-            // Everything around the outline is drawn as a band standing
-            // OUTSIDE it, never as a wider stroke of the same path.
-            //
-            // A centered stroke grows inward exactly as much as outward, and a
-            // note is only a few pixels thick at the pitch ranges this pane is
-            // actually used at. The keyline was a stroke of `width + 2px`, so
-            // it reached ~1.75px inward from BOTH long edges — they met in the
-            // middle, painted the hollow interior white, and painted it twice
-            // where they overlapped. The note stopped reading as a ribbon with
-            // a light edge and read as a translucent white box instead.
-            //
-            // Each band is (standoff from the outline's outer edge, thickness,
-            // color), outermost first. At most four (two bloom, glow, border),
-            // so a stack array avoids a heap allocation per segment per frame.
-            // Bands don't overlap, so for the shapes that can be expanded the
-            // order is cosmetic; it matters only in the hairline branch, where
-            // there is no interior to stand outside of and the bands go under
-            // the spine widest-first.
-            // The roll's bands used to include two more, approximating the
-            // lattice's bloom from the same `bloom_strength` so the panes
-            // shared a look. They are gone: a note is a hollow outline over
-            // the heatmap, and the halo cost two extra stroked rounded rects
-            // EVERY NOTE, every frame — 40% of the roll's geometry, on the
-            // stage that turned out to dominate the frame (vertex upload; see
-            // the `verts` readout). Bloom is now the lattice's alone, which is
-            // also where it belongs: there it is a real post-process pass, not
-            // four hand-placed bands standing in for one.
-            let mut bands: [(f32, f32, Color32); 2] = [(0.0, 0.0, Color32::TRANSPARENT); 2];
-            let mut nb = 0;
-            let rim = glow(cfg, alpha).zip(border(cfg, alpha));
-            if let Some((light, dark)) = rim {
-                // Reading outward: the note's color, a solid black outline
-                // hugging it, then the bright white glow riding the black's
-                // outer edge, then whatever the spectrogram is doing. The black
-                // gives the note a crisp separation; the glow is the highlight.
-                bands[nb] = (BORDER_PX, KEYLINE_PX, light);
-                bands[nb + 1] = (0.0, BORDER_PX, dark);
-                nb += 2;
-            }
-            let bands = &bands[..nb];
             // The crisp outline is the note's TRUE color, so it matches the
-            // same note on the lattice. It goes on top of everything.
-            let core = body(alpha);
+            // same note on the lattice.
+            let core = note_color(note, cfg, state, pitch, alpha);
+            // Reading outward: the note's color, a solid black outline hugging
+            // it, then the bright white glow riding the black's outer edge,
+            // then whatever the spectrogram is doing. The black gives the note
+            // a crisp separation; the glow is the highlight.
+            //
+            // Both stand entirely OUTSIDE the note's own outline, never as a
+            // wider stroke of the same path — a centered stroke grows inward
+            // exactly as much as outward, and a note is only a few pixels thick
+            // at the pitch ranges this pane is actually used at, so the two
+            // long edges met in the middle and flooded the hollow interior
+            // white. Here that is structural: the shader reads the bands off
+            // the DISTANCE to the outline, and a band at distance 1..2 cannot
+            // reach back inside it whatever the ribbon's thickness.
+            //
+            // The rim used to carry two more bands approximating the lattice's
+            // bloom. They are gone: a note is a hollow outline over the
+            // heatmap, and the halo cost two extra stroked rounded rects every
+            // note, every frame. Bloom is the lattice's alone, which is where
+            // it belongs — there it is a real post-process pass, not four
+            // hand-placed bands standing in for one.
+            let (rim, dark, light) = match glow(cfg, alpha).zip(border(cfg, alpha)) {
+                Some((light, dark)) => ([BORDER_PX, KEYLINE_PX], dark, light),
+                // Off is off: no rim at all, not a hairline that can't be
+                // cleared.
+                None => ([0.0, 0.0], Color32::TRANSPARENT, Color32::TRANSPARENT),
+            };
 
-            if ribbon_px < MIN_RIBBON_PX {
-                // Too thin to bound: the note IS its spine. A line has no
-                // interior to flood, so here a band really is just a wider
-                // stroke underneath — widest first.
-                let spine = [axes.at(a0, d0), axes.at(a1, d1)];
-                let core_w = width.max(MIN_RIBBON_PX);
-                for &(out, thick, color) in bands {
-                    painter.line_segment(
-                        spine,
-                        egui::Stroke::new(core_w + 2.0 * (out + thick), color),
-                    );
-                }
-                painter.line_segment(spine, egui::Stroke::new(core_w, core));
-            } else if p0 == p1 {
-                // Unbent: a hollow axis-aligned rectangle (the only shape egui
-                // will round the corners of).
-                let rect = egui::Rect::from_two_pos(axes.at(a0 - half, d0), axes.at(a1 + half, d1));
-                let radius = cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5;
-                // NOT snapped to whole pixels, which egui does to rects by
-                // default (TessellationOptions::round_rects_to_pixels) to keep
-                // static chrome crisp. These rects scroll: snapping holds a
-                // note still until it has drifted a whole pixel and then jumps
-                // it, so the roll advanced in steps while the spectrogram — a
-                // mesh, never snapped — slid smoothly underneath, and the notes
-                // read as jittering against it. Sub-pixel placement costs a
-                // little edge softness and buys motion that matches.
-                let stroked = |rect: egui::Rect, radius: f32, thick: f32, color| {
-                    egui::epaint::RectShape::stroke(
-                        rect,
-                        egui::CornerRadius::same(radius.min(127.0) as u8),
-                        egui::Stroke::new(thick, color),
-                        egui::StrokeKind::Middle,
-                    )
-                    .with_round_to_pixels(false)
-                };
-                for &(out, thick, color) in bands {
-                    // Grow the RECT by the band's distance and keep the stroke
-                    // thin, rather than growing the stroke on the same rect:
-                    // the shape moves outward, and nothing reaches back inside.
-                    // The corner radius grows with it, or the rim would round
-                    // tighter than the note it wraps.
-                    let e = width * 0.5 + out + thick * 0.5;
-                    painter.add(stroked(rect.expand(e), radius + e, thick, color));
-                }
-                painter.add(stroked(rect, radius, width, core));
+            // Geometry in the pane's own two axes, which is all the shader is
+            // told: `Axes` maps those onto perpendicular screen axes, so
+            // nothing here names a screen side either.
+            //
+            // NOT snapped to whole pixels, which egui does to rects by default
+            // (TessellationOptions::round_rects_to_pixels) to keep static
+            // chrome crisp. These scroll: snapping holds a note still until it
+            // has drifted a whole pixel and then jumps it, so the roll advanced
+            // in steps while the spectrogram — a mesh, never snapped — slid
+            // smoothly underneath, and the notes read as jittering against it.
+            // A distance field has no pixel grid to snap to, so the sub-pixel
+            // placement is now simply what it does.
+            let center = axes.at((a0 + a1) * 0.5, (d0 + d1) * 0.5);
+            let depth_px = (d1 - d0) * axes.depth_len();
+            // How far the note's center line drifts along the pitch axis per
+            // point of depth: 0 for a held note, non-zero for a glide, which
+            // shears the box into the parallelogram the ribbon follows. Guarded
+            // because a segment can have no duration at all — a note pressed
+            // this frame is one — and a slope is meaningless there.
+            let slope =
+                if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
+            let width = cfg.roll_outline_width.clamp(0.5, 8.0);
+            let (half_pitch, width, radius) = if ribbon_px < MIN_RIBBON_PX {
+                // Too thin to bound: the note IS its spine. It has no interior
+                // to hollow out, so the outline width alone carries it (at
+                // hairline width a filled shape disappears, a line does not),
+                // and the rim stands outside that.
+                (0.0, width.max(MIN_RIBBON_PX), 0.0)
             } else {
-                // Bent: a hollow quad following the glide. Wound consistently so
-                // egui's convex-polygon stays valid whichever way the axes run.
-                //
-                // Grown in the (pitch, depth) plane, where the ribbon's own
-                // half-width already lives: `Axes` maps those two onto
-                // perpendicular screen axes, so `e` pixels of standoff is
-                // exactly `e / pitch_len` and `e / depth_len` there, whichever
-                // way round the pane is.
-                let quad = |e: f32| {
-                    let ep = e / axes.pitch_len().max(1.0);
-                    // Away from the other end, so the ends grow outward rather
-                    // than the segment sliding along itself.
-                    let ed = e / axes.depth_len().max(1.0) * (d1 - d0).signum();
-                    vec![
-                        axes.at(a0 - half - ep, d0 - ed),
-                        axes.at(a0 + half + ep, d0 - ed),
-                        axes.at(a1 + half + ep, d1 + ed),
-                        axes.at(a1 - half - ep, d1 + ed),
-                    ]
+                // Corners round only where the ribbon runs straight. A glide's
+                // segments butt end to end, and rounding those ends would pinch
+                // the ribbon at every breakpoint.
+                let radius = if p0 == p1 {
+                    cfg.roll_rounding.clamp(0.0, 1.0) * ribbon_px * 0.5
+                } else {
+                    0.0
                 };
-                for &(out, thick, color) in bands {
-                    let e = width * 0.5 + out + thick * 0.5;
-                    painter.add(egui::Shape::convex_polygon(
-                        quad(e),
-                        Color32::TRANSPARENT,
-                        egui::Stroke::new(thick, color),
-                    ));
-                }
-                painter.add(egui::Shape::convex_polygon(
-                    quad(0.0),
-                    Color32::TRANSPARENT,
-                    egui::Stroke::new(width, core),
-                ));
-            }
+                (half * axes.pitch_len(), width, radius)
+            };
+
+            instances.push(RollInstance {
+                center: [center.x, center.y],
+                half_extent: [half_pitch, depth_px.abs() * 0.5],
+                shape: [slope, radius, width, 0.0],
+                rim,
+                core: core.to_array(),
+                border: dark.to_array(),
+                glow: light.to_array(),
+            });
         }
     }
-
+    instances
 }
 
 /// The color of a note at `pitch`, per the Color setting.
@@ -333,19 +344,29 @@ mod tests {
     use crate::{SharedState, SpectralOrientation};
     use lattice_core::{NoteEvent, NoteEventKind};
 
-    /// One rect the roll emitted: its stroke width and color, and the
-    /// rectangle the stroke is centered on.
-    struct Ribbon {
-        width: f32,
-        color: Color32,
-        rect: egui::Rect,
+    /// The pane the tests paint into: 300 points along the time axis, 100
+    /// across pitch.
+    const PANE: egui::Rect =
+        egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
+
+    /// The roll's geometry for `state`, derived exactly the way
+    /// [`spectral_pane`](super::super::spectral::spectral_pane) derives it
+    /// before handing over — same axes, same pitch scale, same split.
+    fn instances(state: &SharedState, now: f64) -> Vec<RollInstance> {
+        let cfg = &state.spectrum_config;
+        let axes = Axes::new(PANE, cfg);
+        let min_midi = cfg.low_midi;
+        let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
+        let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
+        let split = super::super::spectral::spectrum_share(cfg);
+        note_instances(&axes, &scale, state, split, now)
     }
 
-    /// Paint one held note and report every rect the roll emitted. `range` is
-    /// the pitch span in semitones — the pane is 100px across the pitch axis,
-    /// so a wide range makes a thin ribbon, which is where the rim geometry is
-    /// under the most pressure.
-    fn ribbon_with_range(keyline: f32, range: f32) -> Vec<Ribbon> {
+    /// One held note, and the instances the roll would draw for it. `range`
+    /// is the pitch span in semitones — the pane is 100 points across the
+    /// pitch axis, so a wide range makes a thin ribbon, which is where the
+    /// rim geometry is under the most pressure.
+    fn ribbon_with_range(keyline: f32, range: f32) -> Vec<RollInstance> {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
@@ -353,54 +374,159 @@ mod tests {
         state.spectrum_config.roll_outline_width = 2.0;
         state.spectrum_config.roll_thickness = 2.0;
         state.spectrum_config.keyline = keyline;
-        state.view.bloom_strength = 0.0;
         state.tracker.handle_event(NoteEvent {
             time: 0.0,
             channel: 0,
             note: 60,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-        let rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
-            },
-        );
-        out.shapes
-            .into_iter()
-            .filter_map(|s| match s.shape {
-                egui::Shape::Rect(r) => {
-                    Some(Ribbon { width: r.stroke.width, color: r.stroke.color, rect: r.rect })
-                }
-                _ => None,
-            })
-            .collect()
+        instances(&state, 0.05)
     }
 
-    /// The note is a rect 12 semitones tall (a thick ribbon), so the rim has
-    /// room and the geometry is easy to read.
-    fn ribbon(keyline: f32) -> Vec<Ribbon> {
+    /// The note is 12 semitones across a 100-point axis (a thick ribbon), so
+    /// it is bounded rather than drawn as a bare spine.
+    fn ribbon(keyline: f32) -> Vec<RollInstance> {
         ribbon_with_range(keyline, 12.0)
     }
 
-    /// Note rects opt OUT of egui's pixel snapping, which is on by default
-    /// for rects so that static chrome stays crisp. These scroll: snapping
-    /// holds a note still until it has drifted a whole pixel and then jumps
-    /// it, while the spectrogram — a mesh, never snapped — slides smoothly
-    /// underneath. The notes read as jittering against it.
+    fn one(rects: &[RollInstance]) -> &RollInstance {
+        assert_eq!(rects.len(), 1, "expected one note segment, got {}", rects.len());
+        &rects[0]
+    }
+
+    /// The rim is a fixed pixel thickness whatever the note's own width — an
+    /// outline should not thin out just because the ribbon it wraps did — and
+    /// it is expressed as a DISTANCE OUTSIDE the note's outline, never as a
+    /// wider stroke of it.
+    ///
+    /// That distinction is the flood fix, and it is now structural: the
+    /// shader reads the black outline off distances `w/2 .. w/2 + border` and
+    /// the glow off the band beyond it, so neither can reach back inside the
+    /// ribbon however thin it is. What is left to check here is that the two
+    /// thicknesses are handed over unscaled.
     #[test]
-    fn note_rects_are_not_snapped_to_whole_pixels() {
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
+    fn the_rim_is_the_same_thickness_at_any_note_width() {
+        let thick = ribbon_with_range(0.5, 12.0);
+        // ~120 semitones over 100 points: the ribbon is under 2 points thick,
+        // which is where the old centered strokes met in the middle and
+        // painted the hollow interior white.
+        let thin = ribbon_with_range(0.5, 120.0);
+        assert_eq!(one(&thick).rim, [BORDER_PX, KEYLINE_PX]);
+        assert_eq!(one(&thin).rim, one(&thick).rim, "the rim thinned with the note");
+        assert!(
+            one(&thin).half_extent[0] < one(&thick).half_extent[0],
+            "the two notes are the same thickness; the comparison is vacuous",
+        );
+    }
+
+    /// The black outline is solid (opaque at the note's opacity) and the
+    /// white glow is bright and grid-stable: reading outward, color, a crisp
+    /// black line, then a punchy highlight. The glow reads stronger than the
+    /// raw Edge fraction — that boost is the "more intense" ask — and it is a
+    /// full logical pixel wide, so a bright line does not shimmer as the note
+    /// scrolls across the pixel grid.
+    ///
+    /// Edge off is off: no rim at all, not a hairline that can't be cleared.
+    #[test]
+    fn the_black_outline_is_solid_and_the_glow_is_bright_and_grid_stable() {
+        // A modest Edge, below the point where the boosted glow clips to
+        // full, so "brighter than the fraction" is a real comparison.
+        let edge = 0.3;
+        let lit = ribbon(edge);
+        let note = one(&lit);
+        assert_eq!(note.border, Color32::BLACK.to_array(), "the black outline is not solid");
+        let glow_alpha = f32::from(note.glow[3]) / 255.0;
+        assert!(
+            glow_alpha > edge + 0.05,
+            "the glow ({glow_alpha}) is no brighter than the Edge fraction {edge}",
+        );
+        assert!(
+            note.rim[1] >= 1.0,
+            "the glow ({}) is sub-pixel and will shimmer when scrolling",
+            note.rim[1],
+        );
+        assert!(
+            note.rim[1] <= note.rim[0],
+            "the glow ({}) is bolder than the black outline ({})",
+            note.rim[1],
+            note.rim[0],
+        );
+
+        let dark = ribbon(0.0);
+        let note = one(&dark);
+        assert_eq!(note.rim, [0.0, 0.0], "Edge 0 still drew a rim");
+        assert_eq!(note.glow[3], 0, "Edge 0 left a glow color behind");
+        assert_eq!(note.border[3], 0, "Edge 0 left an outline color behind");
+    }
+
+    /// A ribbon too thin to bound is drawn as a bare spine: no pitch
+    /// half-extent at all, and the outline width alone carries it, floored so
+    /// it stays visible. A filled shape disappears at hairline width; a line
+    /// does not.
+    #[test]
+    fn a_hairline_ribbon_becomes_a_bare_spine() {
+        let thick = ribbon_with_range(0.5, 12.0);
+        let note = one(&thick);
+        assert!(note.half_extent[0] > 0.0, "a bounded ribbon lost its thickness");
+        assert_eq!(note.shape[2], 2.0, "a bounded ribbon should use the outline width as set");
+
+        let thin = ribbon_with_range(0.5, 600.0);
+        let note = one(&thin);
+        assert_eq!(note.half_extent[0], 0.0, "a hairline ribbon still claims a half-width");
+        assert!(
+            note.shape[2] >= MIN_RIBBON_PX,
+            "a hairline spine ({}) is thinner than it can be seen at",
+            note.shape[2],
+        );
+    }
+
+    /// A glide is the same instance sheared, not a second kind of shape: the
+    /// note's center line drifts along pitch as it runs down the depth axis.
+    /// Its corners stay square — a glide's segments butt end to end, and
+    /// rounding those ends would pinch the ribbon at every breakpoint.
+    #[test]
+    fn a_glide_shears_the_note_rather_than_needing_another_shape() {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
-        // Zoomed in enough that the ribbon is a rect rather than a bare
-        // spine — the thin branch has no rect to snap.
+        state.spectrum_config.low_midi = 55.0;
+        state.spectrum_config.high_midi = 67.0;
+        state.spectrum_config.roll_rounding = 1.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let held = instances(&state, 1.0);
+        assert_eq!(one(&held).shape[0], 0.0, "a held note should not be sheared");
+        assert!(one(&held).shape[1] > 0.0, "a held note should round its corners");
+
+        // Bend it a semitone up over the next second.
+        state.tracker.handle_event(NoteEvent {
+            time: 1.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: 1.0 },
+        });
+        let bent = instances(&state, 2.0);
+        let glide = bent
+            .iter()
+            .find(|n| n.shape[0] != 0.0)
+            .expect("the bent segment should be sheared");
+        assert_eq!(glide.shape[1], 0.0, "a glide's ends should stay square");
+    }
+
+    /// Notes are placed sub-pixel, and that is load-bearing. egui snaps rects
+    /// to whole pixels by default (`round_rects_to_pixels`) to keep static
+    /// chrome crisp; these scroll, and snapping held a note still until it had
+    /// drifted a whole pixel and then jumped it, while the spectrogram — a
+    /// mesh, never snapped — slid smoothly underneath, so the notes read as
+    /// jittering against it. Four frames a fraction of a pixel apart must
+    /// move the note by that same fraction each time, not by 0 then 1.
+    #[test]
+    fn a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps() {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
         state.tracker.handle_event(NoteEvent {
@@ -409,183 +535,27 @@ mod tests {
             note: 60,
             kind: NoteEventKind::On { velocity: 1.0 },
         });
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-        let rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
-        let out = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-            |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
-            },
-        );
-        let stroked: Vec<_> = out
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Rect(r) if r.stroke.width > 0.0 => Some(r.round_to_pixels),
-                _ => None,
-            })
+        // A step that scrolls the roll by well under one point.
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let window = f64::from(state.spectrum_config.roll_seconds);
+        let step = 0.3 * window / f64::from(axes.depth_len());
+        let at = |now: f64| {
+            let notes = instances(&state, now);
+            let note = one(&notes);
+            egui::pos2(note.center[0], note.center[1])
+        };
+        let moves: Vec<f32> = (0..4)
+            .map(|i| at(1.0 + step * (i + 1) as f64) - at(1.0 + step * i as f64))
+            .map(|d| d.length())
             .collect();
-        assert!(!stroked.is_empty(), "the note drew no ribbon to check");
-        assert!(
-            stroked.iter().all(|&r| r == Some(false)),
-            "a scrolling note rect is still pixel-snapped: {stroked:?}",
-        );
-    }
-
-    /// The crisp outline: the widest stroke, in the note's own color.
-    fn core_of(rects: &[Ribbon]) -> &Ribbon {
-        rects.iter().max_by(|a, b| a.width.total_cmp(&b.width)).expect("no ribbon drawn")
-    }
-
-    /// The white glow and the solid black outline, told apart by brightness
-    /// among the note's rects — the two rim bands are neutral grey (r==g==b),
-    /// bright for the glow and dark for the outline. Identified this way rather
-    /// than by an exact color so tuning the glow's intensity leaves the
-    /// geometry tests alone. The core is excluded by width: it is the widest
-    /// stroke, and carries the note's own (hued) color anyway.
-    fn rim_of(rects: &[Ribbon]) -> (Option<&Ribbon>, Option<&Ribbon>) {
-        let core_w = core_of(rects).width;
-        let grey = |r: &&Ribbon| {
-            let c = r.color;
-            c.a() > 0 && c.r() == c.g() && c.g() == c.b() && r.width < core_w - 0.01
-        };
-        let white = rects.iter().filter(grey).find(|r| r.color.r() >= 128);
-        let black = rects.iter().filter(grey).find(|r| r.color.r() < 128);
-        (white, black)
-    }
-
-    /// The filled span of a stroked rect: the rectangle it is drawn on, grown
-    /// and shrunk by half the (centered) stroke width. Painted pixels lie
-    /// between `inner` and `outer`.
-    fn outer(r: &Ribbon) -> egui::Rect {
-        r.rect.expand(r.width * 0.5)
-    }
-    fn inner(r: &Ribbon) -> egui::Rect {
-        r.rect.shrink(r.width * 0.5)
-    }
-
-    /// A tolerant `contains`, since the geometry is built from floats.
-    fn encloses(outer: egui::Rect, inner: egui::Rect) -> bool {
-        outer.min.x <= inner.min.x + 0.01
-            && outer.min.y <= inner.min.y + 0.01
-            && outer.max.x >= inner.max.x - 0.01
-            && outer.max.y >= inner.max.y - 0.01
-    }
-
-    /// The Edge rim is a solid black outline hugging the note with a white glow
-    /// riding its outer edge, and BOTH stand entirely outside the note's own
-    /// outline. This is the flood fix: they used to be wider strokes of the same
-    /// rectangle, so on a thin note they grew inward and painted the hollow
-    /// interior — the note read as a translucent box instead of an edged ribbon.
-    /// The invariant is that each rim band's INNER (filled) edge still encloses
-    /// the outline's OUTER edge, so no rim pixel lands on the note's interior.
-    #[test]
-    fn the_edge_rim_stands_outside_the_note_never_inside_it() {
-        let rects = ribbon(0.5);
-        let core_outer = outer(core_of(&rects));
-        let (Some(glow), Some(black)) = rim_of(&rects) else {
-            panic!("expected a glow and a black outline, got {} rects", rects.len());
-        };
-        for (name, band) in [("glow", glow), ("black outline", black)] {
+        for step in &moves {
             assert!(
-                encloses(inner(band), core_outer),
-                "the {name} reaches inside the note rather than sitting outside it",
+                *step > 0.0 && *step < 0.5,
+                "a sub-pixel scroll moved the note by {step} points: {moves:?}",
             );
         }
-        // The white glow rides the OUTSIDE of the black outline.
-        assert!(
-            encloses(inner(glow), outer(black)),
-            "the white glow should sit outside the black outline it rides",
-        );
-
-        // Off is off: no rim at all, not a hairline that can't be cleared.
-        let none = ribbon(0.0);
-        let (g, b) = rim_of(&none);
-        assert!(g.is_none() && b.is_none(), "Edge 0 still drew a rim");
-    }
-
-    /// The same invariant at the pitch range where the bug actually bit: the
-    /// whole analyzer axis, where a note is a couple of pixels thick. A centered
-    /// stroke would have painted straight across the interior here — the band's
-    /// inner edge would collapse or invert and stop enclosing the outline.
-    /// Thickness-independent by construction, so it holds regardless.
-    #[test]
-    fn the_rim_does_not_flood_a_thin_note() {
-        // ~120 semitones over 100px: the ribbon is under 2px thick.
-        let rects = ribbon_with_range(0.5, 120.0);
-        let core_outer = outer(core_of(&rects));
-        let (Some(glow), Some(black)) = rim_of(&rects) else {
-            panic!("a lit thin note drew no rim to check");
-        };
-        for band in [glow, black] {
-            assert!(
-                encloses(inner(band), core_outer),
-                "the rim floods the thin note's interior instead of edging it",
-            );
-        }
-    }
-
-    /// The rim is a fixed pixel thickness whatever the note's own width — an
-    /// outline should not thin out just because the ribbon it wraps did. The
-    /// black outline and the white glow each draw the same width on a thin note
-    /// as on a thick one.
-    #[test]
-    fn the_rim_is_the_same_thickness_at_any_note_width() {
-        // Same Edge, very different ribbon thickness (wide vs narrow pitch span).
-        let thick = ribbon_with_range(0.5, 12.0);
-        let thin = ribbon_with_range(0.5, 120.0);
-        let (Some(gw_t), Some(bk_t)) = rim_of(&thick) else { panic!("no rim on the thick note") };
-        let (Some(gw_n), Some(bk_n)) = rim_of(&thin) else { panic!("no rim on the thin note") };
-        assert!(
-            (gw_t.width - gw_n.width).abs() < 0.001,
-            "the glow thinned with the note: {} vs {}",
-            gw_t.width,
-            gw_n.width,
-        );
-        assert!(
-            (bk_t.width - bk_n.width).abs() < 0.001,
-            "the black outline thinned with the note: {} vs {}",
-            bk_t.width,
-            bk_n.width,
-        );
-    }
-
-    /// The black outline is solid (opaque at the note's opacity) and the white
-    /// glow is bright and grid-stable: reading outward, color, a crisp black
-    /// line, then a punchy highlight. The glow reads stronger than the raw Edge
-    /// fraction — that boost is the "more intense" ask — and it is a full
-    /// logical pixel wide, so a bright line does not shimmer as the note
-    /// scrolls across the pixel grid.
-    #[test]
-    fn the_black_outline_is_solid_and_the_glow_is_bright_and_grid_stable() {
-        // A modest Edge, below the point where the boosted glow clips to full,
-        // so "brighter than the fraction" is a real comparison.
-        let edge = 0.3;
-        let rects = ribbon(edge);
-        let (Some(glow), Some(black)) = rim_of(&rects) else {
-            panic!("no rim drawn");
-        };
-        // Solid: opaque at the note's own opacity (1.0 here).
-        assert_eq!(black.color.a(), 255, "the black outline is not solid");
-        // Bright: the glow's alpha clears the raw Edge fraction by a margin.
-        assert!(
-            f32::from(glow.color.a()) / 255.0 > edge + 0.05,
-            "the glow ({}) is no brighter than the Edge fraction {edge}",
-            glow.color.a(),
-        );
-        // Grid-stable: a full logical pixel, so a bright moving line holds its
-        // peak instead of twinkling. It never reads bolder than the outline.
-        assert!(
-            glow.width >= 1.0 - 1e-3,
-            "the glow ({}) is sub-pixel and will shimmer when scrolling",
-            glow.width,
-        );
-        assert!(
-            glow.width <= black.width + 1e-3,
-            "the glow ({}) is bolder than the black outline ({})",
-            glow.width,
-            black.width,
-        );
+        let spread = moves.iter().fold(0.0f32, |a, &b| a.max(b))
+            - moves.iter().fold(f32::MAX, |a, &b| a.min(b));
+        assert!(spread < 1e-3, "the note scrolled unevenly (snapped?): {moves:?}");
     }
 }

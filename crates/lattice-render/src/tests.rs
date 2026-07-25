@@ -64,7 +64,7 @@ fn pipelines_build_against_a_headless_device() {
         LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
 }
 
-fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+pub(crate) fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -248,7 +248,7 @@ fn parity_scene() -> Scene {
 
 /// Render into a fresh texture cleared to `clear`, handing the pass to
 /// `draw`, and return the texture for readback.
-fn render_to_texture(
+pub(crate) fn render_to_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     size: [u32; 2],
@@ -297,7 +297,7 @@ fn render_to_texture(
     texture
 }
 
-fn readback(
+pub(crate) fn readback(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
@@ -816,5 +816,109 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
                 "{projection:?}: a sheet behind is drawn after one in front: {pair:?}"
             );
         }
+    }
+}
+
+/// Every node idle: no note, no marks, no octaves — the state most of a
+/// lattice is in most of the time, and the one the fragment shader's idle
+/// branch takes. Markers and trails ON, since they are the only thing an
+/// idle node paints and therefore the only thing that branch has to get
+/// right.
+fn idle_scene() -> Scene {
+    let mut scene = parity_scene();
+    for (i, node) in scene.nodes.iter_mut().enumerate() {
+        node.activation = 0.0;
+        node.octaves = [0.0; lattice_scene::OCTAVE_SLOTS];
+        node.melody_slots = 0;
+        node.bass_slots = 0;
+        node.melody_level = 0.0;
+        node.bass_level = 0.0;
+        node.hovered = false;
+        node.on_home = i % 2 == 0;
+        node.trail = if i % 2 == 0 { 0.8 } else { 0.0 };
+    }
+    scene.idle_marker = lattice_scene::IdleMarker::Circle;
+    scene.idle_radius = 0.24;
+    scene.trail_mark = lattice_scene::TrailMark::Ring;
+    scene.trail_strength = 1.0;
+    scene
+}
+
+/// The fragment shader's early-outs — skipping the fragments outside
+/// anything a node can paint, and the whole note path for an idle node —
+/// must be exactly that: an optimization. Same scene through the real
+/// shader and through one compiled with `EARLY_OUT` off, pixel for pixel.
+///
+/// Worth a GPU test rather than a reading of the code, because the bound in
+/// `paint_reach` is a claim about EVERY layer's falloff at once: add a layer
+/// that reaches further, or widen one's soft edge past its radius, and the
+/// only symptom is a quietly clipped halo somewhere off the node.
+#[test]
+fn the_fragment_early_outs_do_not_change_a_pixel() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let reference_src = SHADER_SRC.replace(
+        "const EARLY_OUT: bool = true;",
+        "const EARLY_OUT: bool = false;",
+    );
+    assert_ne!(
+        reference_src, SHADER_SRC,
+        "the EARLY_OUT switch was renamed; this test is no longer comparing anything",
+    );
+
+    for (name, scene) in [("lit", parity_scene()), ("idle", idle_scene())] {
+        let cb = LatticeCallback::from_scene(
+            &scene,
+            egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+            format,
+            11,
+            None,
+        );
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+
+        let res: &LatticeResources = resources.get().expect("prepare created resources");
+        let (fast, _) = create_pipelines(&device, SHADER_SRC, format, &res.bind_group_layout, false);
+        let (slow, _) =
+            create_pipelines(&device, &reference_src, format, &res.bind_group_layout, false);
+        let pane = res.panes.get(&11).expect("prepare created the pane");
+
+        let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
+        let draw = |pipeline: &wgpu::RenderPipeline| {
+            let texture = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.draw(0..4, 0..pane.instance_count);
+            });
+            readback(&device, &queue, &texture, SIZE)
+        };
+        let with_early_out = draw(&fast);
+        let without = draw(&slow);
+
+        // Guard against a vacuous pass: the nodes must have drawn something
+        // over the clear color.
+        let bg = [18u8, 20, 23, 255];
+        assert!(
+            without.chunks(4).any(|px| px.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 8)),
+            "the {name} scene drew nothing; the comparison is vacuous",
+        );
+
+        let differing = with_early_out
+            .iter()
+            .zip(&without)
+            .enumerate()
+            .find(|(_, (&a, &b))| a != b);
+        assert!(
+            differing.is_none(),
+            "the {name} scene changed when the early-outs were enabled: byte {:?}",
+            differing.map(|(i, (a, b))| (i, *a, *b)),
+        );
     }
 }
