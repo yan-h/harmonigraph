@@ -781,16 +781,16 @@ pub use lattice_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 /// equality is exact and free of NaN quirks.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpectrogramKey {
-    rows: usize,
-    bucket_bits: u64,
-    scale_min_bits: u32,
-    scale_span_bits: u32,
+    /// Everything that decides a column's PIXELS, shared with the ring — which
+    /// asks the same question about the same columns, one scroll at a time. See
+    /// [`ColumnStyle`](crate::panes::spectrogram::ColumnStyle).
+    style: crate::panes::spectrogram::ColumnStyle,
+    /// ...and which columns are in the WINDOW, which is what a scroll changes
+    /// and the ring survives.
     first: usize,
     cols_len: usize,
     newest_bits: u64,
     whole: bool,
-    cfg: SpectrumConfig,
-    frame: lattice_scene::FrameParams,
 }
 
 /// A validated spectrogram build: its [`SpectrogramKey`] plus the scalars the
@@ -805,33 +805,22 @@ pub(crate) struct SpectrogramCache {
 }
 
 impl SpectrogramKey {
-    /// Pack the image's inputs into a key. Floats are stored as bit patterns so
+    /// Pack the image's inputs into a key: the style every column shares, plus
+    /// which columns this build drew. `newest` is stored as a bit pattern so
     /// equality is exact.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        rows: usize,
-        bucket: f64,
-        scale_min: f32,
-        scale_span: f32,
+        style: crate::panes::spectrogram::ColumnStyle,
         first: usize,
         cols_len: usize,
         newest: f64,
         whole: bool,
-        cfg: SpectrumConfig,
-        frame: lattice_scene::FrameParams,
     ) -> Self {
-        SpectrogramKey {
-            rows,
-            bucket_bits: bucket.to_bits(),
-            scale_min_bits: scale_min.to_bits(),
-            scale_span_bits: scale_span.to_bits(),
-            first,
-            cols_len,
-            newest_bits: newest.to_bits(),
-            whole,
-            cfg,
-            frame,
-        }
+        SpectrogramKey { style, first, cols_len, newest_bits: newest.to_bits(), whole }
+    }
+
+    /// What the ring compares — the part of this key a scroll leaves alone.
+    pub(crate) fn style(&self) -> &crate::panes::spectrogram::ColumnStyle {
+        &self.style
     }
 }
 

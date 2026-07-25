@@ -231,23 +231,54 @@ pub(crate) struct SpectrogramRing {
     capacity: usize,
     /// Everything that decides a pixel's colour, or which buckets a row reads.
     /// A change to any of it invalidates every column at once.
-    style: RingStyle,
+    style: ColumnStyle,
     /// Newest slab key written, and the oldest still valid.
     written_through: i64,
     oldest_valid: i64,
 }
 
-/// The part of [`crate::SpectrogramKey`] that outlives a scroll: everything
-/// except which columns are in the window. Two builds sharing a `RingStyle`
-/// can share columns; anything else has to start over.
-#[derive(Clone, PartialEq)]
-struct RingStyle {
+/// Everything that decides a column's pixels: how tall the image is, how wide a
+/// slab is, which buckets a row reads, and how a bucket is coloured. A change to
+/// any of it invalidates every column at once.
+///
+/// It is the part of [`crate::SpectrogramKey`] that outlives a SCROLL —
+/// the key is this plus which columns are in the window — and the ring compares
+/// exactly this to decide whether it can carry its texture forward. One
+/// definition for both, because they are one question asked at two
+/// granularities, and as two hand-kept lists in two files they were one list to
+/// forget: a pixel-affecting input added to the key alone leaves the ring
+/// carrying forward columns painted under the old setting, which is a WRONG
+/// picture rather than a slow one. `the_key_is_sensitive_to_every_input` covers
+/// both because there is only one to cover.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ColumnStyle {
     rows: usize,
     bucket_bits: u64,
     scale_min_bits: u32,
     scale_span_bits: u32,
     cfg: SpectrumConfig,
     frame: FrameParams,
+}
+
+impl ColumnStyle {
+    pub(crate) fn new(
+        rows: usize,
+        bucket: f64,
+        scale_min: f32,
+        scale_span: f32,
+        cfg: SpectrumConfig,
+        frame: FrameParams,
+    ) -> ColumnStyle {
+        // Floats as bit patterns, so equality is exact and free of NaN quirks.
+        ColumnStyle {
+            rows,
+            bucket_bits: bucket.to_bits(),
+            scale_min_bits: scale_min.to_bits(),
+            scale_span_bits: scale_span.to_bits(),
+            cfg,
+            frame,
+        }
+    }
 }
 
 impl SpectrogramRing {
@@ -266,7 +297,7 @@ impl SpectrogramRing {
     /// and repaints every column — so this is the predicate the ring's whole
     /// value rests on, and `no_cache_layer_falls_back_as_the_window_scrolls`
     /// holds it to yes for every Span the pane offers.
-    fn carries(&self, capacity: usize, style: &RingStyle, first_key: i64) -> bool {
+    fn carries(&self, capacity: usize, style: &ColumnStyle, first_key: i64) -> bool {
         self.capacity == capacity
             && self.style == *style
             && first_key >= self.oldest_valid
@@ -276,7 +307,7 @@ impl SpectrogramRing {
     /// A ring with nothing written yet, for a run starting at `first_key` — so
     /// its caller paints every visible slab rather than trusting a column that
     /// was never uploaded.
-    fn restarted(capacity: usize, style: RingStyle, first_key: i64) -> SpectrogramRing {
+    fn restarted(capacity: usize, style: ColumnStyle, first_key: i64) -> SpectrogramRing {
         SpectrogramRing { capacity, style, written_through: first_key - 1, oldest_valid: first_key }
     }
 
@@ -369,17 +400,20 @@ impl Plan {
         };
         // The heatmap's pixels are a pure function of these; if none has moved
         // since the uploaded texture was built, building it again is dead work.
-        let key = crate::SpectrogramKey::new(
+        let style = ColumnStyle::new(
             rows,
             bucket,
             view.scale.min_midi,
             view.scale.span,
+            view.cfg,
+            view.frame,
+        );
+        let key = crate::SpectrogramKey::new(
+            style,
             columns.first,
             columns.len,
             columns.newest,
             view.whole,
-            view.cfg,
-            view.frame,
         );
         Plan { rows, bucket, capacity: target_cols + RING_HEADROOM, first: columns.first, key }
     }
@@ -476,14 +510,9 @@ fn build(
     // fixed and already cached after the first frame, so there is nothing for a
     // ring to save.
     let layout = if whole.is_none() {
-        let style = RingStyle {
-            rows: h,
-            bucket_bits: bucket.to_bits(),
-            scale_min_bits: view.scale.min_midi.to_bits(),
-            scale_span_bits: view.scale.span.to_bits(),
-            cfg,
-            frame: view.frame,
-        };
+        // The key's own style, not a second copy of it: the ring is asking the
+        // same question about the same columns.
+        let style = plan.key.style().clone();
         let capacity = ring_capacity(plan.capacity, w);
         write_ring(ctx, spectrum, surface, style, capacity, &cfg, bins, &power, first_key, w);
         let ring = spectrum.spectrogram[surface].ring.as_ref();
@@ -1101,7 +1130,7 @@ fn write_ring(
     ctx: &egui::Context,
     spectrum: &mut crate::AudioSpectrum,
     surface: usize,
-    style: RingStyle,
+    style: ColumnStyle,
     capacity: usize,
     cfg: &SpectrumConfig,
     bins: &[Bin],
@@ -1787,7 +1816,7 @@ mod tests {
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
         let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let style = RingStyle {
+        let style = ColumnStyle {
             rows: reads.len(),
             bucket_bits: 0,
             scale_min_bits: 0,
@@ -1881,7 +1910,7 @@ mod tests {
         let lag = 0.5 * 8192.0 / 48000.0;
         let cols = LIVE_SLAB_CAP as usize;
         let planned = cols + RING_HEADROOM;
-        let style = RingStyle {
+        let style = ColumnStyle {
             rows: reads.len(),
             bucket_bits: 0,
             scale_min_bits: 0,
@@ -1946,36 +1975,58 @@ mod tests {
         assert_eq!(restarts, 1, "the drag reallocated the ring");
     }
 
-    /// The cache reuses the uploaded texture only while its key matches, so the
-    /// key must move for EVERY input the pixels depend on — otherwise a change
-    /// would leave a stale image on screen. Identical inputs must compare equal
-    /// (the common case, a cache hit); each varied input must not.
+    /// The cache reuses the uploaded texture only while its key matches, and
+    /// the RING carries its columns forward only while the key's style matches,
+    /// so both must move for every input the pixels depend on — otherwise a
+    /// change leaves a stale image on screen, or worse, a texture whose newest
+    /// column was painted under the new setting and whose other thousand were
+    /// not.
+    ///
+    /// Those used to be two hand-kept lists in two files with a test on one of
+    /// them. They are one list now, so this covers both.
     #[test]
-    fn spectrogram_key_is_sensitive_to_every_input() {
+    fn the_key_is_sensitive_to_every_input() {
         let cfg = SpectrumConfig::default();
         let frame = FrameParams::default();
-        let base =
-            || crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame);
+        let style = |rows, bucket, min, span, cfg, frame| {
+            ColumnStyle::new(rows, bucket, min, span, cfg, frame)
+        };
+        let base_style = || style(100, 0.1, 40.0, 48.0, cfg, frame);
+        let base = || crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, false);
         // Same inputs -> equal: this is the hit that skips the rebuild.
         assert_eq!(base(), base());
-        // Every layout / data field participates.
-        let vary = |k: crate::SpectrogramKey| assert_ne!(base(), k);
-        vary(crate::SpectrogramKey::new(101, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // rows
-        vary(crate::SpectrogramKey::new(100, 0.2, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // bucket
-        vary(crate::SpectrogramKey::new(100, 0.1, 41.0, 48.0, 3, 200, 5.0, false, cfg, frame)); // scale min
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 49.0, 3, 200, 5.0, false, cfg, frame)); // scale span
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 4, 200, 5.0, false, cfg, frame)); // first (scroll)
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 201, 5.0, false, cfg, frame)); // count
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 6.0, false, cfg, frame)); // newest
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, true, cfg, frame)); // whole
-        // And the color inputs: a palette, dB window or contrast change (cfg)
-        // or a gradient-range change (frame) would recolor every pixel.
+        assert_eq!(*base().style(), base_style());
+
+        // Every field of the STYLE recolours or re-reads every column, so the
+        // ring cannot carry a texture across a change to any of them.
+        let styled = |s: ColumnStyle| {
+            assert_ne!(s, base_style(), "the ring would carry a stale texture forward");
+            assert_ne!(crate::SpectrogramKey::new(s, 3, 200, 5.0, false), base());
+        };
+        styled(style(101, 0.1, 40.0, 48.0, cfg, frame)); // rows
+        styled(style(100, 0.2, 40.0, 48.0, cfg, frame)); // slab width
+        styled(style(100, 0.1, 41.0, 48.0, cfg, frame)); // pitch range, low end
+        styled(style(100, 0.1, 40.0, 49.0, cfg, frame)); // pitch range, span
+        // A palette, dB window or contrast change (cfg), or a gradient-range
+        // change (frame), recolours every pixel without moving a column.
         let mut cfg2 = cfg;
         cfg2.spectrogram_gamma += 0.1;
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg2, frame));
+        styled(style(100, 0.1, 40.0, 48.0, cfg2, frame));
         let mut frame2 = frame;
         frame2.brightest_pitch += 1.0;
-        vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg, frame2));
+        styled(style(100, 0.1, 40.0, 48.0, cfg, frame2));
+
+        // And every field that says WHICH columns were drawn. These move as the
+        // window scrolls, which the ring is built to survive — so they must move
+        // the key without moving the style.
+        let windowed = |k: crate::SpectrogramKey| {
+            assert_ne!(k, base(), "a scrolled window would reuse the built image");
+            assert_eq!(*k.style(), base_style(), "a scroll must not restyle the ring");
+        };
+        windowed(crate::SpectrogramKey::new(base_style(), 4, 200, 5.0, false)); // scrolled
+        windowed(crate::SpectrogramKey::new(base_style(), 3, 201, 5.0, false)); // count
+        windowed(crate::SpectrogramKey::new(base_style(), 3, 200, 6.0, false)); // fresh column
+        windowed(crate::SpectrogramKey::new(base_style(), 3, 200, 5.0, true)); // whole-song
     }
 
     /// A column written on its own must be pixel-for-pixel what the
@@ -2013,7 +2064,7 @@ mod tests {
         let capacity = 8;
         let ring = SpectrogramRing {
             capacity,
-            style: RingStyle {
+            style: ColumnStyle {
                 rows: 3,
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
@@ -2049,7 +2100,7 @@ mod tests {
     fn slab_keys_before_zero_still_land_inside_the_texture() {
         let ring = SpectrogramRing {
             capacity: 8,
-            style: RingStyle {
+            style: ColumnStyle {
                 rows: 3,
                 bucket_bits: 0.1f64.to_bits(),
                 scale_min_bits: 40.0f32.to_bits(),
