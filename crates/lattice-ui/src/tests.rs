@@ -965,15 +965,20 @@ fn spectrum_history_reaches_the_retention_cap() {
 ///
 /// This is the test to look at if the tier sizes, the FFT rate, or the slab cap
 /// ever move: they are three legs of one stool.
+///
+/// The display now picks its slab off the same power-of-two ladder the tiers
+/// merge on (`live_slab`), so the two round to the same rung rather than merely
+/// bounding each other — but the bargain is what makes that ladder the right
+/// one, so it is still worth stating against the real function.
 #[test]
 fn stored_columns_stay_finer_than_the_slabs_they_are_drawn_into() {
-    use crate::panes::spectrogram::{LIVE_SLAB_CAP, MIN_BUCKET};
+    use crate::panes::spectrogram::{live_slab, LIVE_SLAB_CAP};
     let mut age = 0.0f64; // youngest age the tier holds
     let mut spacing = AudioSpectrum::FFT_INTERVAL;
     for tier in 0..SpectrumHistory::TIERS {
         // The finest slab any window that reaches this tier's youngest columns
         // can use — the tightest the tier is ever asked to be.
-        let finest = (age / f64::from(LIVE_SLAB_CAP)).max(MIN_BUCKET);
+        let finest = live_slab(age, LIVE_SLAB_CAP as usize);
         assert!(
             spacing <= finest,
             "tier {tier} stores {spacing:.3} s apart but can be drawn into \

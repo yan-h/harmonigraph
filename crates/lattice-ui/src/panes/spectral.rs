@@ -1740,8 +1740,8 @@ mod tests {
     /// softer than the pane around it. Same pane, twice the density, twice the
     /// rows.
     ///
-    /// (Rows and not columns: the time axis is also floored by `MIN_BUCKET`, so
-    /// how much of a density increase reaches it depends on the span.)
+    /// (Rows and not columns: the time axis picks its slab off `live_slab`'s
+    /// ladder, so how much of a density increase reaches it depends on the span.)
     #[test]
     fn the_heatmap_image_is_built_at_device_pixels() {
         fn rows_at(ppp: f32) -> usize {

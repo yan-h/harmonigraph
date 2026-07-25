@@ -991,7 +991,8 @@ impl AudioSpectrum {
     /// is untouched, so what a column RESOLVES is unchanged, and overlapping
     /// that same window more finely just draws the time axis at 2.5x the
     /// resolution 20 ms reaches (via
-    /// [`MIN_BUCKET`](crate::panes::spectrogram::MIN_BUCKET), which tracks this).
+    /// [`live_slab`](crate::panes::spectrogram::live_slab), whose ladder is
+    /// rungs of THIS interval, so the picture's grid tracks it).
     /// It costs 0.37 ms of FFT per column — 4.7% of a core, against 1.9% at
     /// 20 ms — and one more [`SpectrumHistory`] tier to hold the same reach.
     pub(crate) const FFT_INTERVAL: f64 = 0.008;
