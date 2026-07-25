@@ -434,19 +434,43 @@ fn frame(
     }
 }
 
-/// The wgpu setup, which is `GraphicsConfig::default()` plus a request for
-/// timestamp queries so the performance overlay can report GPU time.
+/// How many frames the swapchain may have in flight.
 ///
-/// Requested only where the adapter already advertises them, because
-/// `request_device` FAILS on an unsupported feature — asking unconditionally
-/// would trade a missing readout for a plugin that won't open. Where they
-/// aren't granted the overlay simply says "n/a", as it already does for
-/// memory on platforms that won't report it.
+/// egui-wgpu leaves this unset, which takes wgpu's default of 2 — and 2 is
+/// only one frame of slack, so anything that delays a present stalls the CPU
+/// in `get_current_texture` immediately, with no queued frame to cover the
+/// gap. That is the shape of the stall the overlay actually shows: an idle
+/// GPU (0.2 ms for the whole scene), a frame's own work well inside the
+/// refresh (~4.5 ms of 6.94 ms), and the time going into a `wait` averaging
+/// 4 ms and peaking at 16. Nothing we compute is slow; we are blocked waiting
+/// for a drawable to come back, and a deeper queue is what lets the CPU keep
+/// working through that.
+///
+/// 3 is the most Metal will give: wgpu-hal clamps this to 2..=3 on the way to
+/// `CAMetalLayer.maximumDrawableCount`, so this is the whole of the knob.
+///
+/// The cost is latency — one more frame between drawing and showing, about
+/// 7 ms at 144 Hz. That is a real trade for a plugin whose picture is meant to
+/// track what you just played, which is why it is spelled out here rather than
+/// buried: if the stalls turn out to come from somewhere else, this should go
+/// back to the default rather than stay as a free-looking win.
+const MAX_FRAME_LATENCY: u32 = 3;
+
+/// The wgpu setup: `GraphicsConfig::default()`, plus a request for timestamp
+/// queries so the performance overlay can report GPU time, plus a deeper
+/// swapchain (see [`MAX_FRAME_LATENCY`]).
+///
+/// Timestamps are requested only where the adapter already advertises them,
+/// because `request_device` FAILS on an unsupported feature — asking
+/// unconditionally would trade a missing readout for a plugin that won't open.
+/// Where they aren't granted the overlay simply says "n/a", as it already does
+/// for memory on platforms that won't report it.
 fn graphics_config() -> GraphicsConfig {
     use egui_baseview::WgpuSetup;
     use lattice_render::wgpu;
 
     let mut config = GraphicsConfig::default();
+    config.wgpu_options.surface.desired_maximum_frame_latency = Some(MAX_FRAME_LATENCY);
     if let WgpuSetup::CreateNew(setup) = &mut config.wgpu_options.wgpu_setup {
         let base = setup.device_descriptor.clone();
         setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
@@ -485,18 +509,26 @@ const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
 /// grid is fixed and the panel's clock drifts against it — so the phase sweeps
 /// and there is a band where the miss is reliable. Measured: an uncapped
 /// 144 Hz display sitting at 110-120 fps, which is not a rate at all but a
-/// mixture of 6.94 ms and 13.9 ms intervals. 6x puts the quantization at an
-/// eighth of a refresh, comfortably under the jitter it has to absorb.
+/// mixture of 6.94 ms and 13.9 ms intervals.
 ///
-/// The cost, which the old "generous is free" note missed. Free WHILE
+/// MEASURED, and it is not the cause. 6x was tried, which puts the
+/// quantization at an eighth of a refresh instead of a half, and the frame
+/// rate did not move: still 110 fps, with the same drops under load. So the
+/// quantization above is real but is not what costs the refreshes — the
+/// overlay puts the time in `wait` (4 ms average, 16 ms peak) against an idle
+/// GPU and a frame whose own work fits the refresh with room to spare. The
+/// stall is in getting a drawable back, not in when the timer fires. Left at
+/// 2x accordingly; raising it buys nothing and is not free.
+///
+/// Not free, because the old "generous is free" note only held while
 /// PRESENTING: a tick that renders blocks in acquire, so ticks per second
-/// equals refreshes per second whatever this constant says. NOT free while
-/// idle. `on_frame` gates only `render()` on a repaint being due; the full
+/// equals refreshes per second whatever this constant says. While IDLE it is
+/// false. `on_frame` gates only `render()` on a repaint being due; the full
 /// `run_ui` pass — the dock and every pane — runs on every tick regardless
 /// (vendored egui-baseview, `window.rs`). An idle editor repaints at 20 Hz
 /// but ticks at this rate, so raising the constant multiplies the UI build of
-/// a plugin that is only sitting in a project. Until a tick that will not
-/// present is made cheap, this number is a trade and not a free win.
+/// a plugin that is only sitting in a project: 288 passes a second at 2x
+/// against 864 at 6x, nearly all for frames that will never be drawn.
 ///
 /// What the margin is also protecting against: the tick is on the HOST'S main
 /// run loop, not a thread of ours. The host's own UI work delays it by however
@@ -520,7 +552,7 @@ const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
 /// The real fix is to stop guessing and drive frames from the display itself
 /// (`CVDisplayLink`), which is a much larger change to the vendored baseview —
 /// and which would retire the idle cost above along with the quantization.
-const DISPLAY_OVERSAMPLE: f64 = 6.0;
+const DISPLAY_OVERSAMPLE: f64 = 2.0;
 
 /// The interval the window's frame timer should run at.
 ///
