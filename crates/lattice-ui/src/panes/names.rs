@@ -67,18 +67,62 @@ const GLYPH_ADVANCE: f32 = 0.62;
 const LINE_HEIGHT: f32 = 1.3;
 const LABEL_PAD: f32 = 1.5;
 
-/// Most notes considered for a name in one frame, newest first.
+/// Clear time a name demands beyond its own box, in points along the time
+/// axis, before the next name may take a place.
 ///
-/// A bound on the placement, which is quadratic in what it accepts: every
-/// candidate is tested against every name already placed. The Span reaches ten
-/// minutes and the roll remembers four thousand notes, so without this a long
-/// span would spend milliseconds proving that a wall of notes is too dense to
-/// label — the most work at exactly the zoom where the fewest names fit.
+/// Without it, successive names at one pitch are allowed to butt together, and
+/// a run of repeats reads as a word rather than as a name on each of several
+/// notes. This is the "certain span" the greedy leaves between the instance it
+/// picks and the next one it will take.
 ///
-/// Newest first because that is where the reading happens: the notes at the
-/// now-line are the ones being played, so a name that lost its place to
-/// something older would be the wrong one to drop.
-const MAX_CANDIDATES: usize = 384;
+/// Along the TIME axis only. Across pitch, two names may sit as close as the
+/// type allows: they are different notes, and the pitch axis is the one thing
+/// separating them already.
+const REPEAT_GAP: f32 = 6.0;
+
+/// Screen cell for the occupancy grid, in points — comfortably wider than a
+/// name, so a candidate can only ever touch the few cells around it.
+const CELL: f32 = 24.0;
+
+/// The names placed so far, bucketed on a coarse screen grid.
+///
+/// The placement is greedy over every note on the pane, and a plain sweep
+/// tests each candidate against every name already placed — quadratic, over a
+/// set that reaches four thousand notes at a ten-minute Span, and worst at
+/// exactly the density where almost every test fails. The grid makes it a
+/// handful of comparisons instead: a name is a dozen points across and a cell
+/// is wider than that, so a candidate can only touch the cells it overlaps.
+#[derive(Default)]
+struct Occupancy {
+    cells: HashMap<(i32, i32), Vec<egui::Rect>>,
+}
+
+impl Occupancy {
+    fn cells_of(rect: egui::Rect) -> impl Iterator<Item = (i32, i32)> {
+        let cell = |v: f32| (v / CELL).floor() as i32;
+        let (x0, x1) = (cell(rect.min.x), cell(rect.max.x));
+        let (y0, y1) = (cell(rect.min.y), cell(rect.max.y));
+        (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
+    }
+
+    /// Whether `rect` — a candidate's box already grown by the clear space it
+    /// demands — touches nothing placed.
+    fn free(&self, rect: egui::Rect) -> bool {
+        Self::cells_of(rect).all(|cell| match self.cells.get(&cell) {
+            Some(placed) => !placed.iter().any(|other| other.intersects(rect)),
+            None => true,
+        })
+    }
+
+    /// Record a name's own box. The gap it demands is added to whatever is
+    /// TESTED against this, not stored here, so the clear space between two
+    /// names is one gap rather than two.
+    fn insert(&mut self, rect: egui::Rect) {
+        for cell in Self::cells_of(rect) {
+            self.cells.entry(cell).or_default().push(rect);
+        }
+    }
+}
 
 /// One name, placed: what it says and the box it was measured into.
 #[derive(Clone, Copy, Debug)]
@@ -120,16 +164,28 @@ pub(super) fn plan(
         .notes()
         .filter(|note| note.stop(now) >= oldest && scale.contains(note.settled_pitch()))
         .collect();
-    // Newest first, and a total order: the offline render must not depend on
-    // the order the roll happened to hand them back, and a name's place is
-    // decided first-come.
+    // Held notes first, then the rest oldest first — and a total order within
+    // each, since the offline render must not depend on the order the roll
+    // happened to hand them back and a name's place is decided first-come.
+    //
+    // OLDEST first is what makes the picture hold still while you play. The
+    // greedy gives a name to the first instance of a note it reaches and then
+    // to the next one with room after it, so the names are decided from the
+    // far end of the window inward — and a note arriving at the now-line is
+    // last in the order, so it fits in around what is already named instead of
+    // evicting it. Newest-first reshuffles the whole pane on every note played,
+    // which is precisely when you are trying to read it.
+    //
+    // Held notes are the exception, and they are placed BEFORE the sweep, not
+    // merely early in it: a note you are holding down is the one you are most
+    // likely to be asking about, so its name is not the greedy's to refuse.
     notes.sort_unstable_by(|a, b| {
-        b.start
-            .total_cmp(&a.start)
+        b.is_live()
+            .cmp(&a.is_live())
+            .then(a.start.total_cmp(&b.start))
             .then(a.channel.cmp(&b.channel))
             .then(a.note.cmp(&b.note))
     });
-    notes.truncate(MAX_CANDIDATES);
 
     let size = LABEL_PT * label_scale;
 
@@ -137,6 +193,7 @@ pub(super) fn plan(
     // visible lattice node looking for the match that spells best, and a
     // passage is the same handful of classes over and over.
     let mut names: HashMap<i32, NoteName> = HashMap::new();
+    let mut occupied = Occupancy::default();
     let mut placed: Vec<NoteLabel> = Vec::new();
     for note in notes {
         let pitch = note.settled_pitch();
@@ -146,12 +203,27 @@ pub(super) fn plan(
             .or_insert_with(|| note_name(&state.view, &state.tuning, pitch));
         let lead = leading_depth(&time, note, now);
         let rect = label_rect(axes, scale.t_of(pitch), lead, &name, size);
-        if placed.iter().any(|other| other.rect.intersects(rect)) {
+        // A held note takes its place whatever is already there; everything
+        // else has to find room, including room for the gap it will demand of
+        // whoever comes next.
+        if !note.is_live() && !occupied.free(keep_out(axes, rect)) {
             continue;
         }
+        occupied.insert(rect);
         placed.push(NoteLabel { name, rect });
     }
     placed
+}
+
+/// A name's box grown by the clear space it demands of its neighbours: the
+/// [`REPEAT_GAP`] along the time axis, and nothing across pitch.
+///
+/// Directional without naming a screen side — the depth axis is the screen's x
+/// on a pane laid out along its long side and its y on an upright one, so the
+/// gap is projected onto it rather than added to a named edge.
+fn keep_out(axes: &Axes, rect: egui::Rect) -> egui::Rect {
+    let depth = axes.dir_depth();
+    rect.expand2(egui::vec2(REPEAT_GAP * depth.x.abs(), REPEAT_GAP * depth.y.abs()))
 }
 
 /// The depth of a ribbon's LEADING edge — the end of it that comes first in
@@ -518,22 +590,54 @@ mod tests {
         state.tracker.handle_event(on(8.0, 67));
         state.tracker.handle_event(off(8.5, 67));
 
-        assert_eq!(said(&labels(&state, 9.0)), ["G", "C"], "newest first, both on the pane");
+        assert_eq!(said(&labels(&state, 9.0)), ["C", "G"], "oldest first, both on the pane");
         // now = 12: the first note ended at 0.5, a window and more ago.
         assert_eq!(said(&labels(&state, 12.0)), ["G"]);
     }
 
-    /// Names that would land on top of each other are dropped rather than
-    /// stacked, and the NEWEST note keeps its place — the notes at the
-    /// now-line are the ones being played, so a name losing its place to
-    /// something older would be the wrong one to drop.
+    /// Among repeats of one note, the FIRST instance the sweep reaches gets
+    /// the name, and the next one only once there is clear room after it.
+    ///
+    /// The order is what keeps the picture still while you play: names are
+    /// decided from the far end of the window inward, so a note arriving at
+    /// the now-line fits in around what is already named instead of evicting
+    /// it. Deciding newest-first reshuffles the whole pane on every note
+    /// played, which is precisely when you are trying to read it.
     #[test]
-    fn a_crowded_name_gives_way_to_the_newer_note() {
+    fn the_first_instance_takes_the_name_and_the_next_waits_for_room() {
         let mut state = state(24.0, 10.0);
-        // Six chromatic neighbours struck together: at 100 points across two
-        // octaves they are four points apart, where a name is ten tall.
+        // A run of one pitch, far too fast for every name to fit: the roll is
+        // 300 points wide over 10 seconds, so a tenth of a second is 3 points
+        // where a name plus its gap is a dozen.
+        for i in 0..40 {
+            let t = i as f64 * 0.1;
+            state.tracker.handle_event(on(t, 60));
+            state.tracker.handle_event(off(t + 0.05, 60));
+        }
+        let placed = labels(&state, 4.5);
+        assert!(placed.len() > 1, "several of them are named");
+        assert!(placed.len() < 20, "but nothing like all forty: {}", placed.len());
+
+        // Named from the far (oldest) end inward, and never touching: each
+        // name sits clear of the one before it by at least the gap.
+        let mut xs: Vec<f32> = placed.iter().map(|l| l.rect.min.x).collect();
+        xs.sort_by(f32::total_cmp);
+        for pair in xs.windows(2) {
+            assert!(pair[1] - pair[0] >= REPEAT_GAP, "names crowd at {pair:?}");
+        }
+    }
+
+    /// Names that would land on top of each other are dropped rather than
+    /// stacked — but the LINES are not what is being thinned, only the names.
+    #[test]
+    fn names_too_crowded_to_read_are_dropped() {
+        let mut state = state(24.0, 10.0);
+        // Six chromatic neighbours struck together, and released, so none of
+        // them takes the held-note exception: at 100 points across two octaves
+        // they are four points apart, where a name is ten tall.
         for note in 60..66 {
             state.tracker.handle_event(on(5.0, note));
+            state.tracker.handle_event(off(5.2, note));
         }
         let placed = labels(&state, 5.5);
         assert!(!placed.is_empty(), "the least crowded still gets its name");
@@ -541,6 +645,41 @@ mod tests {
 
         // The same six with room for all of them keep all their names.
         assert_eq!(labels_in(&state, 5.5, BIG).len(), 6);
+    }
+
+    /// A note you are HOLDING is named whatever else is in the way, and keeps
+    /// its name until it is released.
+    ///
+    /// The one exception to the greedy, and the reason there is one: a note
+    /// under your finger is the note you are most likely to be asking about,
+    /// so whether it is named must not depend on what the rest of the picture
+    /// happens to be doing around it.
+    #[test]
+    fn a_held_note_is_named_however_crowded_it_is() {
+        let mut state = state(24.0, 10.0);
+        // Two notes a semitone apart and all but on top of each other: at 100
+        // points across two octaves they are four points of pitch axis apart,
+        // where a name is a dozen tall. Only one of the two can be named.
+        //
+        // The neighbour is the OLDER, so the plain sweep gives it the name and
+        // middle C — struck later, and held — is the one that would lose. (The
+        // lattice spells that neighbour D♭, not C♯; the name comes from the
+        // node, not from a piano keyboard.)
+        state.tracker.handle_event(on(1.0, 61));
+        state.tracker.handle_event(off(1.9, 61));
+        state.tracker.handle_event(on(1.5, 60));
+
+        assert_eq!(said(&labels(&state, 2.0)), ["C"], "held, it takes the place regardless");
+
+        // ...and keeps it for as long as it is held, however the picture
+        // around it moves.
+        assert!(said(&labels(&state, 3.0)).contains(&"C".to_owned()));
+
+        // Released at the same instant it is asked about, so it stands in
+        // exactly the place it did while held: now it takes its chances with
+        // the sweep like everything else, and the older note wins.
+        state.tracker.handle_event(off(2.0, 60));
+        assert_eq!(said(&labels(&state, 2.0)), ["D\u{266D}"], "released, it is one of the crowd");
     }
 
     /// Per-note tuning, which is what this plugin is for: a note is named by
@@ -620,21 +759,35 @@ mod tests {
         assert!(labels(&state, 1.0).is_empty());
     }
 
-    /// The placement is quadratic in what it accepts, and the Span reaches ten
-    /// minutes over a roll that remembers four thousand notes — so what it
-    /// accepts is bounded, and bounded at the END that is being read.
+    /// A wall of notes is thinned by the pane's own geometry, not by a cap on
+    /// how many are looked at — so the names that survive are spread across
+    /// the whole window rather than bunched at whichever end a cap kept.
+    ///
+    /// This is what the occupancy grid buys. The obvious bound — consider only
+    /// the newest N — is the wrong shape for a greedy that names from the far
+    /// end inward: it would leave the older half of the pane bare however much
+    /// room was going spare there.
     #[test]
-    fn a_dense_span_considers_a_bounded_number_of_notes() {
+    fn a_wall_of_notes_is_thinned_by_the_room_there_is_for_names() {
         let mut state = state(24.0, 600.0);
-        // Two thousand notes at one pitch, a fifth of a second apart — every
-        // one of them inside the window at the moment asked about.
-        for i in 0..2000 {
+        // Three thousand notes at one pitch, a fifth of a second apart, filling
+        // the whole ten-minute window at the moment asked about.
+        for i in 0..3000 {
             let t = i as f64 * 0.2;
             state.tracker.handle_event(on(t, 60));
             state.tracker.handle_event(off(t + 0.1, 60));
         }
-        let placed = labels(&state, 400.0);
-        assert!(placed.len() <= MAX_CANDIDATES, "bounded: {}", placed.len());
-        assert!(!placed.is_empty(), "and the newest of them are still named");
+        let placed = labels(&state, 600.0);
+        assert!(!placed.is_empty());
+        // The roll is 300 points wide and a name plus its gap is a dozen or so,
+        // so what fits is tens, not thousands.
+        assert!(placed.len() < 40, "thinned to what fits: {}", placed.len());
+
+        // Spread across the window, not gathered at one end: the oldest and
+        // newest names are nearly the whole pane apart.
+        let xs: Vec<f32> = placed.iter().map(|l| l.rect.center().x).collect();
+        let lo = xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(hi - lo > 250.0, "names span the window: {lo}..{hi}");
     }
 }
