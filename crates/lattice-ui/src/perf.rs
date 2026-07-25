@@ -96,6 +96,10 @@ pub struct FrameCosts {
     pub upload_ms: f32,
     /// Of the uploads, the texture half.
     pub texture_ms: f32,
+    /// Of the uploads, `update_buffers` itself. What the upload reading spans
+    /// BESIDES this call — the command encoder, the renderer's write lock, the
+    /// MSAA resize — is the difference, and it is not nothing.
+    pub ubuf_ms: f32,
     /// The volume the upload had to move, rather than how long it took.
     pub prims: u32,
     pub verts: u32,
@@ -154,7 +158,7 @@ impl Default for Workload {
 /// windows' maxima, and the two numbers currently printed for it.
 ///
 /// A struct per metric rather than the parallel lists of `x_ms` and
-/// `shown_x_ms` fields this replaced. The overlay tracks eighteen costs, and
+/// `shown_x_ms` fields this replaced. The overlay tracks twenty costs, and
 /// with two flat lists every new row meant touching five places — declare,
 /// default, accumulate, latch, print — any one of which could be forgotten
 /// without the compiler minding.
@@ -181,7 +185,7 @@ impl Window {
     }
 
     /// Close this window and open the next. `slot` is shared by every metric,
-    /// so all eighteen roll their peak history over on the same latch.
+    /// so all twenty roll their peak history over on the same latch.
     fn latch(&mut self, slot: usize) {
         // A window with no frames in it holds the printed mean rather than
         // dropping the row to zero. The lattice GPU row only gets a sample on
@@ -222,6 +226,9 @@ pub struct PerfStats {
     /// The texture half of the uploads, and everything else in them.
     texture: Window,
     buf_up: Window,
+    /// `update_buffers` itself, and everything the upload spans around it.
+    ubuf: Window,
+    around: Window,
     prepare: Window,
     poll: Window,
     /// The two halves of `prepare` worth telling apart: staging the frame's
@@ -283,6 +290,8 @@ impl Default for PerfStats {
             tess: w,
             texture: w,
             buf_up: w,
+            ubuf: w,
+            around: w,
             prepare: w,
             poll: w,
             write: w,
@@ -332,6 +341,7 @@ impl PerfStats {
             render_ms,
             upload_ms,
             texture_ms,
+            ubuf_ms,
             prims,
             verts,
             roll_notes,
@@ -360,6 +370,10 @@ impl PerfStats {
         self.tess.record(tess_ms);
         self.texture.record(texture_ms);
         self.buf_up.record((upload_ms - texture_ms).max(0.0));
+        self.ubuf.record(ubuf_ms);
+        // What the upload spans outside `update_buffers`: creating the command
+        // encoder, taking the renderer's write lock, and the MSAA resize.
+        self.around.record((upload_ms - texture_ms - ubuf_ms).max(0.0));
         self.prepare.record(prepare_ms);
         self.poll.record(poll_ms);
         self.write.record(write_ms);
@@ -415,7 +429,7 @@ impl PerfStats {
     /// Every window the overlay averages, so a latch cannot quietly miss one.
     /// Borrowing sixteen disjoint fields at once is fine; forgetting to latch
     /// a new row, which is what the flat list of fields invited, was not.
-    fn windows_mut(&mut self) -> [&mut Window; 18] {
+    fn windows_mut(&mut self) -> [&mut Window; 20] {
         [
             &mut self.frame_ms,
             &mut self.tick,
@@ -426,6 +440,8 @@ impl PerfStats {
             &mut self.tess,
             &mut self.texture,
             &mut self.buf_up,
+            &mut self.ubuf,
+            &mut self.around,
             &mut self.prepare,
             &mut self.poll,
             &mut self.write,
@@ -557,10 +573,12 @@ pub(crate) fn draw_overlay(
             timed(2, "tess", &perf.tess),
             timed(2, "tex up", &perf.texture),
             timed(2, "buf up", &perf.buf_up),
-            timed(3, "prep", &perf.prepare),
+            timed(3, "ubuf", &perf.ubuf),
+            timed(4, "prep", &perf.prepare),
             timed(4, "poll", &perf.poll),
             timed(4, "write", &perf.write),
             timed(4, "scene", &perf.scene),
+            timed(3, "around", &perf.around),
             timed(2, "wait", &perf.acquire),
             timed(2, "encode", &perf.encode),
             timed(2, "submit", &perf.submit),
@@ -1118,6 +1136,7 @@ mod tests {
                 roll_notes: 0,
                 prepare_ms: 1.0,
                 poll_ms: 0.5,
+                ubuf_ms: 1.2,
                 write_ms: 0.25,
                 scene_ms: 0.25,
                 encode_ms: 10.0,

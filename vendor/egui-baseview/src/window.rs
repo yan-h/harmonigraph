@@ -97,6 +97,7 @@ pub struct Queue<'a> {
     tick_ms: f32,
     render_ms: f32,
     upload_ms: f32,
+    ubuf_ms: f32,
     texture_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
@@ -118,6 +119,7 @@ impl<'a> Queue<'a> {
         tick_ms: f32,
         render_ms: f32,
         upload_ms: f32,
+        ubuf_ms: f32,
         texture_ms: f32,
         encode_ms: f32,
         submit_ms: f32,
@@ -139,6 +141,7 @@ impl<'a> Queue<'a> {
             tick_ms,
             render_ms,
             upload_ms,
+            ubuf_ms,
             texture_ms,
             encode_ms,
             submit_ms,
@@ -166,6 +169,12 @@ impl<'a> Queue<'a> {
     /// finish + submit + present.
     pub fn upload_ms(&self) -> f32 {
         self.upload_ms
+    }
+
+    /// Of that, `update_buffers` itself. See the renderer's accessor for why
+    /// the two are not the same number.
+    pub fn ubuf_ms(&self) -> f32 {
+        self.ubuf_ms
     }
 
     pub fn encode_ms(&self) -> f32 {
@@ -319,6 +328,7 @@ where
     /// The renderer half of it, and its stages.
     render_ms: f32,
     upload_ms: f32,
+    ubuf_ms: f32,
     texture_ms: f32,
     encode_ms: f32,
     submit_ms: f32,
@@ -399,6 +409,10 @@ where
             &mut key_capture,
             &mut frame_interval,
             window.display_max_fps(),
+            // No frame has been measured yet: tess, egui gpu, acquire, tick,
+            // render, upload, ubuf, texture, encode, submit, then the two
+            // geometry counts.
+            0.0,
             0.0,
             0.0,
             0.0,
@@ -465,6 +479,7 @@ where
             tick_ms: 0.0,
             render_ms: 0.0,
             upload_ms: 0.0,
+            ubuf_ms: 0.0,
             texture_ms: 0.0,
             encode_ms: 0.0,
             prims: 0,
@@ -588,6 +603,7 @@ where
             self.tick_ms,
             self.render_ms,
             self.upload_ms,
+            self.ubuf_ms,
             self.texture_ms,
             self.encode_ms,
             self.submit_ms,
@@ -693,6 +709,7 @@ where
             self.egui_gpu_ms = self.renderer.last_gpu_ms();
             self.acquire_ms = self.renderer.last_acquire_ms();
             self.upload_ms = self.renderer.last_upload_ms();
+            self.ubuf_ms = self.renderer.last_ubuf_ms();
             self.texture_ms = self.renderer.last_texture_ms();
             self.prims = self.renderer.last_prims();
             self.verts = self.renderer.last_verts();

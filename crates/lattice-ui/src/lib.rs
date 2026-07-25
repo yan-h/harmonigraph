@@ -1168,6 +1168,10 @@ pub struct SharedState {
     /// The renderer's stages. `upload_ms` also covers paint callbacks'
     /// `prepare`, so the lattice's own buffer writes are inside it.
     pub upload_ms: f32,
+    /// Of that, `update_buffers` itself. The difference is the command-encoder
+    /// creation, the renderer's write lock and the MSAA resize, which the
+    /// upload reading also spans.
+    pub ubuf_ms: f32,
     /// Of the uploads, the TEXTURE half — the rest is buffer uploads, and
     /// with them the paint callbacks' `prepare`.
     pub texture_ms: f32,
@@ -1293,6 +1297,7 @@ impl SharedState {
             tick_ms: 0.0,
             render_ms: 0.0,
             upload_ms: 0.0,
+            ubuf_ms: 0.0,
             texture_ms: 0.0,
             prims: 0,
             verts: 0,
@@ -1584,6 +1589,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             tick_ms: state.tick_ms,
             render_ms: state.render_ms,
             upload_ms: state.upload_ms,
+            ubuf_ms: state.ubuf_ms,
             texture_ms: state.texture_ms,
             prims: state.prims,
             verts: state.verts,

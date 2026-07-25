@@ -416,6 +416,7 @@ fn frame(
     shared.ui.tick_ms = queue.tick_ms();
     shared.ui.render_ms = queue.render_ms();
     shared.ui.upload_ms = queue.upload_ms();
+    shared.ui.ubuf_ms = queue.ubuf_ms();
     shared.ui.texture_ms = queue.texture_ms();
     shared.ui.prims = queue.prims();
     shared.ui.verts = queue.verts();
