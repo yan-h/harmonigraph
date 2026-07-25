@@ -878,8 +878,9 @@ fn ring_capacity(window: f64, bucket: f64, visible: usize) -> usize {
 
 /// Slabs of headroom [`ring_capacity`] holds past the window's own width. Four
 /// covers the breathing described there (a column's spacing at the far edge is
-/// at most one slab, plus a floor at each end); the rest is margin, and costs
-/// one texel column of texture each.
+/// at most one slab, plus a floor at each end); the rest is margin. Each costs
+/// TWO texel columns, since every column is written twice (see
+/// [`SpectrogramRing`]) — six spare slabs on a 2048-wide texture.
 const RING_HEADROOM: usize = 8;
 
 /// Bring the ring's texture up to date for the visible slabs, allocating or
