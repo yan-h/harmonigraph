@@ -246,10 +246,10 @@ pub(crate) enum Restart {
     /// slab (its time side, through the Span).
     Rows,
     Slab,
-    /// The pitch range the rows read, or the settings and params that colour
-    /// them.
+    /// The pitch range the rows read, or the dB window, tilt, contrast and
+    /// ramp that colour them.
     Pitch,
-    Settings,
+    Colour,
     /// The ring's own size, which is the pane's time side.
     Pane,
     /// The run does not connect to what is painted — the window jumped, or
@@ -263,7 +263,7 @@ impl Restart {
     /// six things and the whole value of the readout is not having to narrow it
     /// by argument.
     pub(crate) const LABELS: [&'static str; Self::COUNT] =
-        ["rows", "slab", "pitch", "settings", "pane", "gap"];
+        ["rows", "slab", "pitch", "colour", "pane", "gap"];
     pub(crate) const COUNT: usize = 6;
 
     fn slot(self) -> usize {
@@ -271,7 +271,7 @@ impl Restart {
             Restart::Rows => 0,
             Restart::Slab => 1,
             Restart::Pitch => 2,
-            Restart::Settings => 3,
+            Restart::Colour => 3,
             Restart::Pane => 4,
             Restart::Gap => 5,
         }
@@ -393,8 +393,8 @@ impl ColumnStyle {
             || self.scale_span_bits != other.scale_span_bits
         {
             Some(Restart::Pitch)
-        } else if self.cfg != other.cfg || self.frame != other.frame {
-            Some(Restart::Settings)
+        } else if self.color != other.color {
+            Some(Restart::Colour)
         } else {
             None
         }
@@ -1509,6 +1509,22 @@ mod tests {
     /// test below pass the real, pane-sized retention instead.
     const KEEP: usize = 1 << 20;
 
+    /// The pitch range the ring sweeps hold fixed while they move time.
+    const SWEEP_SCALE: PitchScale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+
+    /// The style the pane would build for a window of `span` seconds.
+    ///
+    /// `cfg.roll_seconds` moves WITH the span, because in the pane they are the
+    /// same number — `TimeAxis::new` reads the window straight out of the
+    /// config. A fixture that leaves it at its default makes them independent,
+    /// and then a style keyed on the config looks stable across a Span drag
+    /// when in the pane it is being rewritten every frame. That is exactly how
+    /// the drag bug survived a test named after the drag.
+    fn style_for(rows: usize, bucket: f64, span: f64, scale: &PitchScale) -> ColumnStyle {
+        let cfg = SpectrumConfig { roll_seconds: span as f32, ..SpectrumConfig::default() };
+        ColumnStyle::new(rows, bucket, scale.min_midi, scale.span, &cfg)
+    }
+
     /// A column at `time` with the given (bin, power) energy, rest silent.
     fn col(time: f64, energy: &[(usize, f32)]) -> crate::SpectrogramColumn {
         let mut power = [0.0f32; SPECTRUM_BINS];
@@ -2025,13 +2041,6 @@ mod tests {
     fn no_cache_layer_falls_back_as_the_window_scrolls() {
         let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let interval = crate::AudioSpectrum::FFT_INTERVAL;
-        let style = ColumnStyle {
-            rows: reads.len(),
-            bucket_bits: 0,
-            scale_min_bits: 0,
-            scale_span_bits: 0,
-            color: ColumnColor::new(&SpectrumConfig::default()),
-        };
 
         // Every FFT window the pane offers, by the lag it gives a column: a
         // column is stamped at the middle of the window it measured.
@@ -2077,6 +2086,7 @@ mod tests {
                         let first_key = (centers[0] / bucket).floor() as i64;
                         let last_key = first_key + visible as i64 - 1;
                         let capacity = ring_capacity(planned, visible);
+                        let style = style_for(reads.len(), bucket, span, &SWEEP_SCALE);
 
                         // And exactly what `write_ring` then decides.
                         if ring.as_ref().is_none_or(|r| {
@@ -2159,14 +2169,7 @@ mod tests {
                 frames += 1;
 
                 let bucket = live_slab(span, cols);
-                let style = ColumnStyle::new(
-                    rows,
-                    bucket,
-                    scale.min_midi,
-                    scale.span,
-                    SpectrumConfig::default(),
-                    FrameParams::default(),
-                );
+                let style = style_for(rows, bucket, span, &scale);
                 let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
                 let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
                 let first_key = (centers[0] / bucket).floor() as i64;
@@ -2217,7 +2220,6 @@ mod tests {
             window: 30.0,
             scale,
             cfg: SpectrumConfig::default(),
-            frame: FrameParams::default(),
             whole: false,
         };
         let columns = Columns { first: 3, len: 4000, newest: 12.0 };
@@ -2272,13 +2274,6 @@ mod tests {
         let lag = 0.5 * 8192.0 / 48000.0;
         let cols = LIVE_SLAB_CAP as usize;
         let planned = cols + RING_HEADROOM;
-        let style = ColumnStyle {
-            rows: reads.len(),
-            bucket_bits: 0,
-            scale_min_bits: 0,
-            scale_span_bits: 0,
-            color: ColumnColor::new(&SpectrumConfig::default()),
-        };
         // One rung, end to end: at the 1024-slab cap a width holds while the
         // Span runs from 512 of them to 1024 of them, which here is 16.4 s to
         // 32.8 s. The sweep stops just inside both ends, since crossing a rung
@@ -2290,6 +2285,11 @@ mod tests {
         let mut history = crate::SpectrumHistory::default();
         let mut ring: Option<SpectrogramRing> = None;
         let (mut restarts, mut widths) = (0u32, std::collections::BTreeSet::new());
+        // Which reason, if it does — a Span drag must not restyle at all now
+        // that the style holds only what reaches a texel, so anything but the
+        // opening build is a real bug and this says which.
+        let mut reasons: std::collections::BTreeSet<&'static str> =
+            std::collections::BTreeSet::new();
 
         // Fill past the widest Span in the sweep, so every frame of it is asking
         // for a window the store can actually cover.
@@ -2311,17 +2311,17 @@ mod tests {
             };
 
             let bucket = live_slab(span, cols);
+            let style = style_for(reads.len(), bucket, span, &SWEEP_SCALE);
             widths.insert((bucket * 1e6).round() as i64); // microseconds, to compare exactly
             let first = history.partition_point(|c| c.time < now - span).saturating_sub(1);
             let (centers, _) = agg.window(&history, first, bucket, &reads, planned);
             let first_key = (centers[0] / bucket).floor() as i64;
             let last_key = first_key + centers.len() as i64 - 1;
             let capacity = ring_capacity(planned, centers.len());
-            if ring
-                .as_ref()
-                .is_none_or(|r| r.carries(capacity, &style, first_key, last_key).is_some())
-            {
+            let why = ring.as_ref().map(|r| r.carries(capacity, &style, first_key, last_key));
+            if why.is_none_or(|w| w.is_some()) {
                 restarts += 1;
+                reasons.extend(why.flatten().map(|w| Restart::LABELS[w.slot()]));
                 ring = Some(SpectrogramRing::restarted(capacity, style.clone(), first_key));
             }
             ring.as_mut().expect("just restarted").wrote(first_key, last_key);
@@ -2337,6 +2337,10 @@ mod tests {
             (widths.first(), widths.last()),
         );
         assert_eq!(agg.rebuilds, 1, "the drag rescanned the window");
+        // The opening build and nothing else. A reason here names the field
+        // that moved, which since the style holds only what reaches a texel is
+        // a real bug rather than a cost.
+        assert!(reasons.is_empty(), "the drag restarted the ring: {reasons:?}");
         assert_eq!(restarts, 1, "the drag reallocated the ring");
     }
 
