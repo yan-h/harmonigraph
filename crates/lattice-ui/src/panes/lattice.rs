@@ -328,62 +328,98 @@ const PLUS_INK_H: f32 = 0.386;
 /// lighter mark of the two; this is the size at which the pair looks like
 /// one system rather than a mark and a smaller mark.
 const SEPTIMAL_BULK: f32 = 1.25;
-/// How far the halo reaches past a drawn mark, in points. The text rim's
-/// crisp ring is 1.2 (see [`crate::text::RINGS`]); a drawn mark carries the
-/// same, so a label does not have one kind of edge on its letter and
-/// another on its marks.
-const MARK_HALO: f32 = 1.2;
-
-/// One piece of a drawn mark, before it knows what color it is: the halo
-/// pass and the fill pass draw the same geometry twice.
+/// One piece of a drawn mark. Pieces within a pass NEVER overlap each other,
+/// which is a correctness requirement and not tidiness: a label fades out by
+/// carrying its strength in the color's alpha, so two translucent shapes
+/// crossing would composite twice over the crossing and leave the join
+/// brighter than the arms it joins. A `+` drawn as a bar plus an upright
+/// goes patchy exactly as it fades, so it is drawn as a bar plus two stubs.
 enum MarkPiece {
     Bar(egui::Rect),
     Solid(Vec<egui::Pos2>),
     Line(Vec<egui::Pos2>, f32),
 }
 
-/// Paint a mark's pieces, halo first and then fill.
+/// Round to whole physical pixels, as [`crate::text`] does for every glyph
+/// it places.
 ///
-/// Two passes rather than one halo per piece: a `+` is two overlapping bars,
-/// and haloing each as it is drawn cuts a dark line across the other's arm.
-/// Growing every piece by the halo, then filling every piece, gives the
-/// union of the shapes one outline -- which is what the per-pixel rim does
-/// for a glyph.
+/// Without this a mark's edges land wherever its node projected to, so the
+/// same bar covers two pixels faintly on one node and one pixel solidly on
+/// the next -- which reads as marks of different widths rather than as marks
+/// at different subpixel offsets. The text path has always snapped; drawn
+/// geometry has to snap with it or the two disagree on the same label.
+fn snap(v: f32, ppp: f32) -> f32 {
+    (v * ppp).round() / ppp
+}
+
+/// A rect on whole physical pixels, never thinner than one of them.
+fn snap_rect(rect: egui::Rect, ppp: f32) -> egui::Rect {
+    let px = 1.0 / ppp;
+    let (left, top) = (snap(rect.left(), ppp), snap(rect.top(), ppp));
+    egui::Rect::from_min_max(
+        egui::pos2(left, top),
+        egui::pos2(
+            snap(rect.right(), ppp).max(left + px),
+            snap(rect.bottom(), ppp).max(top + px),
+        ),
+    )
+}
+
+/// Paint a mark: the rim's rings widest-first, then the fill.
+///
+/// `pieces_at` builds the geometry grown by a given radius rather than
+/// growing finished pieces, so each ring is itself a non-overlapping set --
+/// expanding the pieces of a `+` individually would put them back on top of
+/// one another however carefully the unexpanded ones avoided it.
+///
+/// The rings are [`crate::text::RINGS`], the same two the per-pixel glyph
+/// rim uses: a wide faint one and a narrow opaque one. A single hard-edged
+/// expansion at full strength was what made these marks read as blockier and
+/// more opaque than the letter beside them.
 fn paint_mark(
     painter: &egui::Painter,
-    pieces: &[MarkPiece],
+    ppp: f32,
+    pieces_at: impl Fn(f32) -> Vec<MarkPiece>,
     color: egui::Color32,
     outline: egui::Color32,
 ) {
-    for (paint, grow) in [(outline, MARK_HALO), (color, 0.0)] {
-        for piece in pieces {
+    let rings = crate::text::RINGS;
+    let passes = [
+        // Radii snapped for the same reason the glyph rim snaps its own:
+        // a sub-pixel radius reads as a lumpy outline on a high-DPI display.
+        (outline.gamma_multiply(rings[0].1), snap(rings[0].0, ppp)),
+        (outline.gamma_multiply(rings[1].1), snap(rings[1].0, ppp)),
+        (color, 0.0),
+    ];
+    for (paint, grow) in passes {
+        for piece in pieces_at(grow) {
             match piece {
                 MarkPiece::Bar(rect) => {
-                    painter.rect_filled(rect.expand(grow), 0.0, paint);
+                    painter.rect_filled(rect, 0.0, paint);
                 }
-                // A stroke in the fill's own color grows a shape by half its
-                // width, which is how a polygon takes the same halo a rect
-                // gets from `expand`.
                 MarkPiece::Solid(points) => {
-                    painter.add(egui::Shape::convex_polygon(
-                        points.clone(),
-                        paint,
-                        egui::Stroke::new(grow * 2.0, paint),
-                    ));
+                    painter.add(egui::Shape::convex_polygon(points, paint, egui::Stroke::NONE));
                 }
                 MarkPiece::Line(points, width) => {
-                    painter.add(egui::Shape::line(
-                        points.clone(),
-                        egui::Stroke::new(width + grow * 2.0, paint),
-                    ));
+                    painter.add(egui::Shape::line(points, egui::Stroke::new(width, paint)));
                 }
             }
         }
     }
 }
 
-/// The syntonic comma's sign, as geometry: a bar, plus an upright when it
-/// is a `+`.
+/// One drawn mark's stroke weight, floored at a single PHYSICAL pixel.
+///
+/// A point is two pixels on this display, so flooring at one point drew
+/// every small mark at twice the minimum and made the whole set look heavy.
+/// The floor exists to stop a stroke dissolving into partial coverage, and
+/// one pixel is exactly what that takes.
+fn mark_thickness(size: f32, weight: f32, ppp: f32) -> f32 {
+    (weight * size).max(1.0 / ppp)
+}
+
+/// The syntonic comma's sign, as geometry: a bar, plus the two stubs that
+/// make it a `+`.
 ///
 /// Drawn rather than typeset because Iosevka has no bar thick enough. Every
 /// horizontal it owns -- hyphen, minus, all four dashes, low line, overline
@@ -391,17 +427,39 @@ fn paint_mark(
 /// an off-sheet node, so a typeset `-` renders as a half-lit row of pixels
 /// beside a `+` whose upright is 3.18px. The pair has to read as two marks
 /// of one system, and no character in the font can make it.
-fn comma_sign(center: egui::Pos2, size: f32, weight: f32, positive: bool) -> Vec<MarkPiece> {
-    // Floored at a whole point: below that, antialiasing spends the mark's
-    // entire contrast on partial coverage, which is the failure being fixed.
-    let thick = (weight * size).max(1.0);
-    let mut pieces =
-        vec![MarkPiece::Bar(egui::Rect::from_center_size(center, egui::vec2(MARK_INK_W * size, thick)))];
+///
+/// The upright arrives as two stubs meeting the bar's snapped edges rather
+/// than as one rect crossing it: see [`MarkPiece`].
+fn comma_sign(
+    center: egui::Pos2,
+    size: f32,
+    weight: f32,
+    positive: bool,
+    grow: f32,
+    ppp: f32,
+) -> Vec<MarkPiece> {
+    let thick = mark_thickness(size, weight, ppp) + grow * 2.0;
+    let bar = snap_rect(
+        egui::Rect::from_center_size(center, egui::vec2(MARK_INK_W * size + grow * 2.0, thick)),
+        ppp,
+    );
+    let mut pieces = vec![MarkPiece::Bar(bar)];
     if positive {
-        pieces.push(MarkPiece::Bar(egui::Rect::from_center_size(
-            center,
-            egui::vec2(thick, PLUS_INK_H * size),
-        )));
+        let px = 1.0 / ppp;
+        let left = snap(center.x - thick / 2.0, ppp);
+        let right = snap(center.x + thick / 2.0, ppp).max(left + px);
+        let top = snap(center.y - (PLUS_INK_H * size + grow * 2.0) / 2.0, ppp);
+        let bottom = snap(center.y + (PLUS_INK_H * size + grow * 2.0) / 2.0, ppp);
+        // The stubs start where the bar stops, so the three tile the cross
+        // without ever covering the same pixel twice.
+        for (y0, y1) in [(top, bar.top()), (bar.bottom(), bottom)] {
+            if y1 - y0 >= px {
+                pieces.push(MarkPiece::Bar(egui::Rect::from_min_max(
+                    egui::pos2(left, y0),
+                    egui::pos2(right, y1),
+                )));
+            }
+        }
     }
     pieces
 }
@@ -416,43 +474,53 @@ fn septimal_shape(
     weight: f32,
     up: bool,
     glyph: SeptimalGlyph,
+    grow: f32,
+    ppp: f32,
 ) -> Vec<MarkPiece> {
-    let thick = (weight * size).max(1.0);
+    let thick = mark_thickness(size, weight, ppp);
     // Bigger than the `+` box it sits under, because a triangle covers half
     // of its own bounding box where `+` covers most of one arm's length in
     // both directions. Matching the boxes makes the septimal mark read as
     // the lighter of the two; matching the apparent size is the point.
-    let hw = MARK_INK_W * size * SEPTIMAL_BULK / 2.0;
-    let hh = PLUS_INK_H * size * SEPTIMAL_BULK / 2.0;
-    // Point-toward-the-tip: +1 draws upward, -1 downward, so each design is
+    let hw = MARK_INK_W * size * SEPTIMAL_BULK / 2.0 + grow;
+    let hh = PLUS_INK_H * size * SEPTIMAL_BULK / 2.0 + grow;
+    // Point-toward-the-tip: -1 draws upward, +1 downward, so each design is
     // written once and mirrored by arithmetic.
     let dir = if up { -1.0 } else { 1.0 };
-    let tip = egui::pos2(center.x, center.y + dir * hh);
-    let base_l = egui::pos2(center.x - hw, center.y - dir * hh);
-    let base_r = egui::pos2(center.x + hw, center.y - dir * hh);
+    let cx = snap(center.x, ppp);
+    let cy = snap(center.y, ppp);
+    let tip = egui::pos2(cx, cy + dir * hh);
+    let base_l = egui::pos2(cx - hw, cy - dir * hh);
+    let base_r = egui::pos2(cx + hw, cy - dir * hh);
     match glyph {
         SeptimalGlyph::Triangle => vec![MarkPiece::Solid(vec![tip, base_l, base_r])],
         SeptimalGlyph::Hollow => {
-            vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick)]
+            vec![MarkPiece::Line(vec![tip, base_l, base_r, tip], thick + grow * 2.0)]
         }
         SeptimalGlyph::Arrow => {
-            // Head over the outer third, stem down the middle: the head is
-            // sized for a mark rather than for running text, which is the
-            // one thing a typeset arrow could not give.
-            let neck = center.y + dir * hh * 0.1;
+            // The stem stops where the head starts rather than running under
+            // it: overlapping the two would go patchy on a fading label for
+            // the same reason a crossed `+` does.
+            let neck = cy + dir * hh * 0.1;
+            let stem = snap_rect(
+                egui::Rect::from_two_pos(
+                    egui::pos2(cx - thick / 2.0 - grow, cy - dir * hh),
+                    egui::pos2(cx + thick / 2.0 + grow, neck),
+                ),
+                ppp,
+            );
             vec![
-                MarkPiece::Bar(egui::Rect::from_center_size(
-                    egui::pos2(center.x, center.y),
-                    egui::vec2(thick, hh * 2.0),
-                )),
+                MarkPiece::Bar(stem),
                 MarkPiece::Solid(vec![
                     tip,
-                    egui::pos2(center.x - hw, neck),
-                    egui::pos2(center.x + hw, neck),
+                    egui::pos2(cx - hw, neck),
+                    egui::pos2(cx + hw, neck),
                 ]),
             ]
         }
-        SeptimalGlyph::Chevron => vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)],
+        SeptimalGlyph::Chevron => {
+            vec![MarkPiece::Line(vec![base_l, tip, base_r], thick + grow * 2.0)]
+        }
     }
 }
 
@@ -492,6 +560,7 @@ pub(crate) fn draw_stacked_name(
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
     let mark_size = MARK_SIZE * scale;
+    let ppp = painter.ctx().pixels_per_point();
     let measure = |text: &str, font: &egui::FontId| {
         painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER).size()
     };
@@ -551,32 +620,42 @@ pub(crate) fn draw_stacked_name(
 
     // Drawn sign, then its count: same column, same line, so the pair reads
     // as one mark rather than as a glyph with a number after it.
-    let mut draw_signed =
-        |x: f32, direction: f32, count: &str, half_height: f32, pieces: Vec<MarkPiece>| -> f32 {
-            paint_mark(painter, &pieces, color, outline);
-            if !count.is_empty() {
-                batch.text(
-                    painter,
-                    egui::pos2(x + cell, anchor.y + direction * rise),
-                    egui::Align2::LEFT_CENTER,
-                    count.to_owned(),
-                    mark_font.clone(),
-                    color,
-                    outline,
-                );
-            }
-            // Whichever reaches lower: the drawn shape from its own center,
-            // or the count's digits from theirs.
-            let ink = half_height
-                .max(if count.is_empty() { 0.0 } else { ink_below(count, &mark_font, line) });
-            direction * rise + ink
-        };
+    let mut draw_signed = |x: f32,
+                           direction: f32,
+                           count: &str,
+                           half_height: f32,
+                           pieces_at: &dyn Fn(f32) -> Vec<MarkPiece>|
+     -> f32 {
+        paint_mark(painter, ppp, pieces_at, color, outline);
+        if !count.is_empty() {
+            batch.text(
+                painter,
+                egui::pos2(x + cell, anchor.y + direction * rise),
+                egui::Align2::LEFT_CENTER,
+                count.to_owned(),
+                mark_font.clone(),
+                color,
+                outline,
+            );
+        }
+        // Whichever reaches lower: the drawn shape from its own center, or
+        // the count's digits from theirs.
+        let ink = half_height
+            .max(if count.is_empty() { 0.0 } else { ink_below(count, &mark_font, line) });
+        direction * rise + ink
+    };
 
     if name.syntonic_commas != 0 {
         let center = egui::pos2(left + letter.x + cell / 2.0, anchor.y + rise);
-        let pieces = comma_sign(center, mark_size, marks.weight, name.syntonic_commas > 0);
+        let positive = name.syntonic_commas > 0;
         let half = PLUS_INK_H * mark_size / 2.0;
-        bottom = bottom.max(draw_signed(left + letter.x, 1.0, &syntonic, half, pieces));
+        bottom = bottom.max(draw_signed(
+            left + letter.x,
+            1.0,
+            &syntonic,
+            half,
+            &|grow| comma_sign(center, mark_size, marks.weight, positive, grow, ppp),
+        ));
     }
     if name.septimal_commas != 0 {
         let up = name.septimal_commas > 0;
@@ -585,9 +664,10 @@ pub(crate) fn draw_stacked_name(
         let direction = if up { -1.0 } else { 1.0 };
         let x = left + letter.x + column;
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
-        let pieces = septimal_shape(center, mark_size, marks.weight, up, marks.glyph);
         let half = PLUS_INK_H * mark_size * SEPTIMAL_BULK / 2.0;
-        bottom = bottom.max(draw_signed(x, direction, &septimal, half, pieces));
+        bottom = bottom.max(draw_signed(x, direction, &septimal, half, &|grow| {
+            septimal_shape(center, mark_size, marks.weight, up, marks.glyph, grow, ppp)
+        }));
     }
     bottom
 }
@@ -636,6 +716,76 @@ fn painter_ink(painter: &egui::Painter, text: &str, font: &egui::FontId) -> egui
 mod tests {
     use super::*;
     use lattice_core::{NoteEvent, NoteEventKind};
+
+    /// Every rect of a drawn mark, at every rim radius it is painted at.
+    fn bars(pieces: Vec<MarkPiece>) -> Vec<egui::Rect> {
+        pieces
+            .into_iter()
+            .filter_map(|p| match p {
+                MarkPiece::Bar(rect) => Some(rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A `+` is three tiling rects, not a bar crossed by an upright.
+    ///
+    /// A label fades by carrying its strength in the color's alpha, so two
+    /// translucent rects crossing composite twice over the crossing and
+    /// leave the middle of the `+` brighter than its arms -- which is
+    /// visible precisely while a note fades, when the eye is on it.
+    #[test]
+    fn the_plus_never_covers_a_pixel_twice() {
+        for ppp in [1.0, 2.0] {
+            for grow in [0.0, 1.0, 2.0] {
+                let pieces =
+                    comma_sign(egui::pos2(40.0, 40.0), 8.25, 0.09, true, grow, ppp);
+                let rects = bars(pieces);
+                assert!(rects.len() >= 2, "a + is more than one rect (ppp {ppp}, grow {grow})");
+                for (i, a) in rects.iter().enumerate() {
+                    for b in &rects[i + 1..] {
+                        let overlap = a.intersect(*b);
+                        assert!(
+                            overlap.width() <= 0.0 || overlap.height() <= 0.0,
+                            "pieces {a:?} and {b:?} overlap at ppp {ppp}, grow {grow}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drawn marks land on whole physical pixels, as every glyph beside them
+    /// does. Unsnapped, the same bar covers two pixels faintly on one node
+    /// and one solidly on the next, which reads as marks of different widths.
+    #[test]
+    fn drawn_marks_snap_to_physical_pixels() {
+        let ppp = 2.0;
+        // An anchor deliberately off the pixel grid: the snapping has to come
+        // from the drawing, not from the caller happening to be aligned.
+        for rect in bars(comma_sign(egui::pos2(40.31, 40.17), 8.25, 0.09, true, 0.0, ppp)) {
+            for edge in [rect.left(), rect.right(), rect.top(), rect.bottom()] {
+                assert!(
+                    (edge * ppp - (edge * ppp).round()).abs() < 1e-3,
+                    "{edge} is not on a physical pixel ({rect:?})"
+                );
+            }
+            // ...and never thinner than one, which is the floor that stops a
+            // stroke dissolving into partial coverage.
+            assert!(rect.width() >= 1.0 / ppp - 1e-3 && rect.height() >= 1.0 / ppp - 1e-3);
+        }
+    }
+
+    /// The floor is one PHYSICAL pixel, not one point. A point is two pixels
+    /// on this display, so flooring in points drew every small mark at twice
+    /// the minimum -- which is what made the whole set look heavy.
+    #[test]
+    fn the_weight_floor_is_a_physical_pixel() {
+        assert!((mark_thickness(4.0, 0.001, 2.0) - 0.5).abs() < 1e-6);
+        assert!((mark_thickness(4.0, 0.001, 1.0) - 1.0).abs() < 1e-6);
+        // Above the floor the weight is what decides it.
+        assert!((mark_thickness(20.0, 0.1, 2.0) - 2.0).abs() < 1e-6);
+    }
 
     /// Draw the labels for a chord, with the camera at `distance`, and
     /// report the pieces of text that were laid out.

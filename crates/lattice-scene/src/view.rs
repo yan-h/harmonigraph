@@ -425,11 +425,15 @@ fn default_sevens_label() -> SevensLabel {
     SevensLabel::Name
 }
 
-/// Twice the 0.07 em Iosevka gives its own bars, which is what it takes for
-/// the mark to clear a whole pixel at `MARK_SIZE` on a 1x display rather
-/// than landing at 0.58 of one and rendering as a grey smear.
+/// A shade over the 0.07 em Iosevka gives its own bars — enough that the
+/// mark is a line rather than the grey smear a sub-pixel bar renders as,
+/// and not the heavy slab that twice Iosevka's weight turned out to be.
+///
+/// The floor does most of the work at small sizes and it is a PHYSICAL
+/// pixel, so this number is what decides the look on a big node and stops
+/// mattering on a small one.
 fn default_mark_weight() -> f32 {
-    0.14
+    0.09
 }
 
 /// The classic solid orb — the identity end of the solidity axis.

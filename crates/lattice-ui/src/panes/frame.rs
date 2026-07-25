@@ -278,7 +278,7 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             ),
         ],
     );
-    ValueBar::new(&mut state.view.mark_weight, 0.06..=0.30, "Mark weight")
+    ValueBar::new(&mut state.view.mark_weight, 0.04..=0.20, "Mark weight")
         .show(ui)
         .on_hover_text(
             "How heavy the DRAWN label marks are (+, -, and the septimal \
