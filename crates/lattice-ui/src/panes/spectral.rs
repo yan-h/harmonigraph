@@ -281,6 +281,14 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             .show(ui)
             .on_hover_text("The heatmap's own dB window: silence at the low end, brightest at the high");
     }
+    ui.checkbox(&mut cfg.spectrogram_fine_levels, "Fine levels").on_hover_text(
+        "A/B for the heatmap's stored precision: off draws each cell from a \
+         byte of dB (half a dB per step), on draws it from the full stored \
+         value. Flip it while the picture is still to see whether the coarse \
+         grid bands smooth washes — it repaints the whole history both ways. \
+         Temporary: once that question is answered the store is sized for the \
+         answer and this goes away.",
+    );
     button_row(ui, |ui| {
         if ui
             .button("Clear spectrogram")

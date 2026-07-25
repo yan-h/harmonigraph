@@ -717,9 +717,11 @@ fn spectrum_history_reaches_the_retention_cap() {
         AudioSpectrum::HISTORY_MAX_SECONDS,
     );
     // And it fits in a budget worth calling an optimization: the fixed-rate
-    // f32 ring needed 160 MB to reach a third as far.
+    // f32 ring needed 160 MB to reach a third as far. The bound allows for the
+    // store being twice as wide as it needs to be while the Fine levels A/B
+    // runs — it halves again when that resolves to a byte per bucket.
     let megabytes = SpectrumHistory::max_bytes() as f64 / (1024.0 * 1024.0);
-    assert!(megabytes < 24.0, "the full store is {megabytes:.1} MB");
+    assert!(megabytes < 40.0, "the full store is {megabytes:.1} MB");
 }
 
 /// The bargain the tiers are struck on: a column of age `a` is only ever drawn

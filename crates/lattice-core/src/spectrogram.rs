@@ -7,11 +7,14 @@
 //! plugin is open. Two decisions do the work, and both come from what the
 //! display can actually show:
 //!
-//! - **A bucket is stored as a byte of dB, not a float of power.** The heatmap
+//! - **A bucket is stored as quantized dB, not a float of power.** The heatmap
 //!   maps a bucket through `10*log10` into a colour ramp, so dB is the domain it
-//!   is read in and a byte resolves it to half a dB — a fraction of one step of
-//!   the ramp. MAX (which is all the aggregation ever does) is order-preserving
-//!   under a monotone encoding, so nothing downstream has to decode first.
+//!   is read in, and a grid over it costs a quarter of what a float does at a
+//!   byte per bucket. MAX (which is all the aggregation ever does) is
+//!   order-preserving under a monotone encoding, so nothing downstream has to
+//!   decode first. Whether a byte's half a dB is fine enough to be invisible is
+//!   what [`coarsen`] and the pane's Fine levels toggle are for; until that is
+//!   settled the store is sixteen bits and the toggle picks the picture.
 //! - **Old columns are merged as they age.** The heatmap draws a window ending
 //!   at `now`, so a column of age `a` is only ever on screen when the window is
 //!   at least `a` long — and the window is cut into at most a few hundred time
@@ -30,39 +33,64 @@ use std::collections::VecDeque;
 
 use crate::spectrum::SPECTRUM_BINS;
 
-/// One stored bucket: power in dB, quantized to a byte. See [`quantize`].
-pub type BucketDb = u8;
+/// One stored bucket: power in dB, quantized onto a fixed grid. See
+/// [`quantize`].
+///
+/// Sixteen bits while the [`coarsen`] A/B is in place — the question it exists
+/// to answer is whether the eight-bit grid's half a dB is visible as banding,
+/// and that can only be judged against the finer picture. Once it is answered
+/// this goes back to `u8` (and [`coarsen`] goes away), or stays and the toggle
+/// does.
+pub type BucketDb = u16;
 
 /// One stored column's worth of buckets.
 pub type ColumnDb = [BucketDb; SPECTRUM_BINS];
 
-/// The dB a stored `0` byte stands for, and the step between bytes.
+/// The dB a stored `0` stands for, and the step between stored values.
 ///
-/// The pair covers -120 dB to +7.5 dB. The floor is exactly where the display's
+/// The pair covers -120 dB to +11 dB. The floor is exactly where the display's
 /// own mapping bottoms out (`loudness` clamps power at 1e-12) and exactly where
 /// the heatmap's range bar stops, so the quietest cell the UI can ask to see is
-/// the quietest byte there is — the encoding adds no floor of its own, and
+/// the quietest value there is — the encoding adds no floor of its own, and
 /// nothing fades out early against one. The ceiling sits above a full-scale
 /// sine's 0 dB, which is already saturated white at any range the bars allow,
 /// so nothing visible clips against it either.
 pub const DB_FLOOR: f32 = -120.0;
-pub const DB_STEP: f32 = 0.5;
+pub const DB_STEP: f32 = 0.002;
+
+/// The step an eight-bit store would have had, and what [`coarsen`] rounds to.
+///
+/// An exact multiple of [`DB_STEP`], so coarsening lands on grid points and
+/// reproduces the byte-per-bucket picture exactly rather than approximating it.
+pub const COARSE_DB_STEP: f32 = 0.5;
+
+/// Round a stored value onto the eight-bit grid — the A/B's coarse side.
+///
+/// Applied when the heatmap DRAWS, not when a column is stored, so flipping the
+/// toggle re-renders the whole accumulated history at the chosen depth instead
+/// of only what arrives next. Comparing two pictures of the same audio is the
+/// entire point; comparing a picture against the seam where the setting changed
+/// would answer nothing.
+pub fn coarsen(bucket: BucketDb) -> BucketDb {
+    let per_step = (COARSE_DB_STEP / DB_STEP).round(); // 250
+    ((bucket as f32 / per_step).round() * per_step) as BucketDb
+}
 
 /// Power at or below [`DB_FLOOR`] — the many empty buckets of a typical
 /// spectrum, which [`quantize`] answers without reaching for a `log10`.
 const POWER_FLOOR: f32 = 1e-12;
 
 /// Store a bucket's absolute power (as [`crate::spectrum::SpectrumAnalyzer`]
-/// reports it) as a byte of dB.
+/// reports it) on the dB grid.
 pub fn quantize(power: f32) -> BucketDb {
     if power <= POWER_FLOOR {
         return 0;
     }
     let db = 10.0 * power.log10();
-    ((db - DB_FLOOR) / DB_STEP).round().clamp(0.0, 255.0) as BucketDb
+    ((db - DB_FLOOR) / DB_STEP).round().clamp(0.0, BucketDb::MAX as f32) as BucketDb
 }
 
-/// The dB a stored byte stands for — the inverse of [`quantize`], to within
+/// The dB a stored value stands for — the inverse of [`quantize`], to within
 /// half a step.
 pub fn db_of(bucket: BucketDb) -> f32 {
     DB_FLOOR + bucket as f32 * DB_STEP
@@ -71,9 +99,9 @@ pub fn db_of(bucket: BucketDb) -> f32 {
 /// One column of the spectrogram: the raw spectrum at a moment, on the shell
 /// clock, so it can be placed on the roll's time axis.
 ///
-/// Stored in dB bytes (see the module docs), which is also the domain the
+/// Stored as quantized dB (see the module docs), which is also the domain the
 /// heatmap colours from — so a column is read straight through without a decode
-/// step, and a merge is a byte-wise MAX.
+/// step, and a merge is an element-wise MAX.
 pub struct SpectrogramColumn {
     pub time: f64,
     pub db: Box<ColumnDb>,
@@ -82,7 +110,7 @@ pub struct SpectrogramColumn {
 impl SpectrogramColumn {
     /// Quantize a freshly analyzed power spectrum into a stored column.
     pub fn from_power(time: f64, power: &[f32; SPECTRUM_BINS]) -> SpectrogramColumn {
-        let mut db = Box::new([0u8; SPECTRUM_BINS]);
+        let mut db = Box::new([0; SPECTRUM_BINS]);
         for (out, &p) in db.iter_mut().zip(power.iter()) {
             *out = quantize(p);
         }
@@ -137,7 +165,8 @@ impl SpectrumHistory {
     /// Total tiers, the fine one included.
     pub const TIERS: usize = 6;
     /// The most columns ever held. At 20 ms per column this reaches ~11 minutes
-    /// (see [`reach`](Self::reach)) for about 18 MB.
+    /// (see [`reach`](Self::reach)) — about 18 MB a byte per bucket, double
+    /// that while the [`coarsen`] A/B keeps the store sixteen bits wide.
     pub const MAX_COLUMNS: usize = Self::FINE_COLUMNS + (Self::TIERS - 1) * Self::COARSE_COLUMNS;
 
     /// How many columns tier `k` holds before it merges into the next.
@@ -164,7 +193,7 @@ impl SpectrumHistory {
     /// Bytes the columns themselves occupy when full (the per-column bookkeeping
     /// on top is a timestamp and a pointer).
     pub const fn max_bytes() -> usize {
-        Self::MAX_COLUMNS * SPECTRUM_BINS
+        Self::MAX_COLUMNS * SPECTRUM_BINS * std::mem::size_of::<BucketDb>()
     }
 
     /// Append a column (callers push in time order).
@@ -333,12 +362,36 @@ mod tests {
             assert!((back - db).abs() <= DB_STEP * 0.5 + 1e-3, "{db} dB came back as {back} dB");
         }
         // Out of range in both directions saturates rather than wrapping. The
-        // top is 7.5 dB — five times a full-scale sine, and far above any
-        // ceiling the bars offer, so what saturates there was already white.
+        // top is well above a full-scale sine, and far above any ceiling the
+        // bars offer, so what saturates there was already white.
         assert_eq!(quantize(0.0), 0);
         assert_eq!(quantize(1e-30), 0);
-        assert_eq!(quantize(1e9), 255);
-        assert!(db_of(255) >= 6.0, "no headroom left above a full-scale sine");
+        assert_eq!(quantize(1e9), BucketDb::MAX);
+        assert!(db_of(BucketDb::MAX) >= 6.0, "no headroom left above a full-scale sine");
+    }
+
+    /// The A/B's coarse side has to be exactly the picture a byte-per-bucket
+    /// store would have given — the same set of representable dB values, hit
+    /// by rounding, not by drifting near them. Otherwise the comparison it
+    /// exists for is between the fine picture and something that is neither.
+    #[test]
+    fn coarsening_lands_on_the_eight_bit_grid() {
+        let per_step = (COARSE_DB_STEP / DB_STEP).round() as u32;
+        for raw in (0..=u32::from(BucketDb::MAX)).step_by(37) {
+            let raw = raw as BucketDb;
+            let coarse = coarsen(raw);
+            assert_eq!(u32::from(coarse) % per_step, 0, "{raw} coarsened to an off-grid {coarse}");
+            let moved = (db_of(coarse) - db_of(raw)).abs();
+            assert!(
+                moved <= COARSE_DB_STEP * 0.5 + 1e-3,
+                "{raw} moved {moved} dB, over half a coarse step",
+            );
+        }
+        // A value already on the grid must not move at all.
+        for k in [0u32, 1, 100, 255] {
+            let on_grid = (k * per_step) as BucketDb;
+            assert_eq!(coarsen(on_grid), on_grid, "a grid point moved");
+        }
     }
 
     /// The flat view has to behave exactly like the single queue it replaced:

@@ -14,7 +14,7 @@
 //! [`loudness`](super::spectral::loudness) so "loud" means the same in both.
 
 use egui::Color32;
-use lattice_core::spectrogram::{db_of, BucketDb};
+use lattice_core::spectrogram::{coarsen, db_of, BucketDb};
 use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 use lattice_scene::FrameParams;
 
@@ -788,6 +788,11 @@ fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[BucketDb]) -> Vec<Col
 /// was cut the ramp off at -90 dB — the faintest colour dropping straight to
 /// black, with the whole quiet end of a wide window missing behind the cliff.
 fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
+    // The A/B: draw from the full stored precision, or from what a byte per
+    // bucket would have held. Rounding HERE rather than at the store means
+    // flipping it repaints the whole accumulated history either way, which is
+    // the only way to compare two pictures of the same audio.
+    let bucket = if cfg.spectrogram_fine_levels { bucket } else { coarsen(bucket) };
     spectrogram_level_db(cfg, db_of(bucket), midi)
 }
 
@@ -962,7 +967,7 @@ mod tests {
             Bin { idx: 11, end: 12, midi: 41.0, t: 0.2 },
             Bin { idx: 12, end: 13, midi: 42.0, t: 0.3 },
         ];
-        let mut power = vec![0u8; w * bins.len()]; // row-major [slab][bin]
+        let mut power = vec![0; w * bins.len()]; // row-major [slab][bin]
         power[bins.len() + 2] = q(1.0); // slab 1, bin 2 loud
         let px = fill_pixels(&cfg, w, &bins, &power);
         let lum = |c: Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
@@ -976,28 +981,37 @@ mod tests {
         }
     }
 
-    /// Storing a bucket as a byte of dB is a memory decision, and it is only
-    /// allowed to be one: the colour a cell ends up must be the colour the
-    /// power itself would have produced, to within the quantizer's own half a
-    /// step. Anything wider would be a look change wearing an optimization's
-    /// clothes.
+    /// Quantizing a bucket is a memory decision, and it is only allowed to be
+    /// one: the colour a cell ends up must be the colour the power itself would
+    /// have produced, to within the grid it was put on. Checked on BOTH sides
+    /// of the Fine levels A/B, since each is a candidate for what ships — the
+    /// coarse side to half its 0.5 dB step, the fine side to essentially
+    /// nothing. Anything wider would be a look change wearing an
+    /// optimization's clothes.
     #[test]
-    fn storing_a_bucket_as_a_byte_does_not_move_its_colour() {
+    fn quantizing_a_bucket_does_not_move_its_colour() {
         use super::super::spectral::{power_db, spectrogram_level_db};
+        use lattice_core::spectrogram::{COARSE_DB_STEP, DB_STEP};
         let mut cfg = SpectrumConfig::default();
-        for own_range in [false, true] {
-            cfg.spectrogram_own_range = own_range;
-            for tilt in [0.0, 3.0, -3.0] {
-                cfg.tilt = tilt;
-                for midi in [20.0f32, 60.0, 100.0, 130.0] {
-                    for power in [1e-8f32, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 1.0, 4.0] {
-                        let exact = spectrogram_level_db(&cfg, power_db(power), midi);
-                        let stored = bin_level(&cfg, q(power), midi);
-                        assert!(
-                            (stored - exact).abs() < 0.005,
-                            "power {power} at MIDI {midi} (tilt {tilt}, own range {own_range}): \
-                             {exact} exact vs {stored} stored",
-                        );
+        for fine in [false, true] {
+            cfg.spectrogram_fine_levels = fine;
+            // Half the grid step, as a fraction of the dB window it is drawn in.
+            let step = if fine { DB_STEP } else { COARSE_DB_STEP };
+            let tolerance = 0.5 * step / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
+            for own_range in [false, true] {
+                cfg.spectrogram_own_range = own_range;
+                for tilt in [0.0, 3.0, -3.0] {
+                    cfg.tilt = tilt;
+                    for midi in [20.0f32, 60.0, 100.0, 130.0] {
+                        for power in [1e-8f32, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 1.0, 4.0] {
+                            let exact = spectrogram_level_db(&cfg, power_db(power), midi);
+                            let stored = bin_level(&cfg, q(power), midi);
+                            assert!(
+                                (stored - exact).abs() <= tolerance,
+                                "power {power} at MIDI {midi} (tilt {tilt}, own range \
+                                 {own_range}, fine {fine}): {exact} exact vs {stored} stored",
+                            );
+                        }
                     }
                 }
             }
@@ -1017,29 +1031,39 @@ mod tests {
     /// move the level by more than the step between them.
     #[test]
     fn the_quiet_end_of_the_ramp_fades_instead_of_cutting_off() {
+        use lattice_core::spectrogram::{COARSE_DB_STEP, DB_STEP};
         let mut cfg = SpectrumConfig {
             spectrogram_own_range: true,
             spectrogram_ceiling_db: 0.0,
             ..SpectrumConfig::default()
         };
-        for floor in [-60.0f32, -90.0, -100.0, -120.0] {
-            cfg.spectrogram_floor_db = floor;
-            // One byte of dB, as a fraction of the window it is drawn in; the
-            // levels either side of any byte may differ by that and no more.
-            let step = lattice_core::spectrogram::DB_STEP / (cfg.spectrogram_ceiling_db - floor);
-            for bucket in 0..u8::MAX {
-                let (here, next) = (bin_level(&cfg, bucket, 60.0), bin_level(&cfg, bucket + 1, 60.0));
-                assert!(
-                    next - here <= step * 1.001 && next >= here,
-                    "floor {floor}: byte {bucket} ({}) -> {} jumps by {}, one step is {step}",
-                    here,
-                    next,
-                    next - here,
-                );
+        for fine in [false, true] {
+            cfg.spectrogram_fine_levels = fine;
+            for floor in [-60.0f32, -90.0, -100.0, -120.0] {
+                cfg.spectrogram_floor_db = floor;
+                // One grid step, as a fraction of the window it is drawn in; the
+                // levels either side of any stored value may differ by that and
+                // no more, whichever grid the A/B is currently drawing from.
+                let db_step = if fine { DB_STEP } else { COARSE_DB_STEP };
+                let step = db_step / (cfg.spectrogram_ceiling_db - floor);
+                for bucket in 0..BucketDb::MAX {
+                    let here = bin_level(&cfg, bucket, 60.0);
+                    let next = bin_level(&cfg, bucket + 1, 60.0);
+                    // A few percent of slack: `db_of` accumulates f32 rounding
+                    // across 65k grid points, and the claim here is "no cliff",
+                    // not "no rounding".
+                    assert!(
+                        next - here <= step * 1.05 + 1e-6 && next >= here,
+                        "floor {floor}, fine {fine}: {bucket} ({here}) -> {next} jumps by {}, \
+                         one step is {step}",
+                        next - here,
+                    );
+                }
+                // And the bottom of the range is black at every window, so
+                // silence still recedes into the region's bed rather than
+                // glowing.
+                assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "floor {floor}: silence must be black");
             }
-            // And the bottom byte is black at every window, so silence still
-            // recedes into the region's bed rather than glowing.
-            assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "floor {floor}: silence must be black");
         }
     }
 
