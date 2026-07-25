@@ -608,13 +608,36 @@ impl SlabGrid {
 /// the newly-arrived column(s) and drops the scrolled-out front, so its cost is
 /// O(new columns), independent of how much history has accumulated.
 ///
-/// It reproduces `aggregate_rows` EXACTLY: the shared [`SlabGrid::fold`] gives
-/// identical slab values, and the front is trimmed to the same first slab batch
-/// would start at. A layout change (bucket/bins), a backward transport jump, or
-/// a window that jumped outside the kept grid falls back to a full rebuild —
-/// each of which is just `aggregate_rows` again, so correctness never rides on
-/// the fast path alone. The offline whole-song path does NOT use this (its
-/// column set is fixed and already cached after the first frame).
+/// It reproduces `aggregate_rows` over the columns AS THEY ARRIVED: the shared
+/// [`SlabGrid::fold`] gives identical slab values, and the window is served from
+/// the same first slab batch would start at. A layout change (bucket/bins), a
+/// backward transport jump, or a window that jumped outside the kept grid falls
+/// back to a full rebuild — each of which is just `aggregate_rows` again, so
+/// correctness never rides on the fast path alone. The offline whole-song path
+/// does NOT use this (its column set is fixed and already cached after the first
+/// frame).
+///
+/// **A folded slab is never recomputed, even when the store re-writes the
+/// columns behind it.** Columns arrive in time order, so no future column can
+/// land in a slab the newest one has already passed: the slab is FINAL the
+/// moment it is behind the front. What is not final is the STORE — past
+/// `SpectrumHistory`'s finest tier, columns are MAX-merged in pairs and re-timed
+/// to their midpoint as they age. Re-deriving an old slab from the merged store
+/// therefore answers a slightly different question than folding the raw columns
+/// did (a merged pair lands in one slab rather than straddling two, and a
+/// [`RowRead::Lerp`] row interpolating across a maxed-together pair is not the
+/// max of the two interpolations) — so the two disagree, and this keeps what it
+/// folded from the finer data rather than re-reading the coarser.
+///
+/// That is also what the offline renderer sees: [`crate::WholeSong`] analyses a
+/// take into raw columns and never merges them, so a grid built from raw columns
+/// is the picture the live heatmap is meant to match.
+///
+/// Treating the merge as a reason to fall back instead is what this replaced,
+/// and it was not a small cost: it fired on every frame at any Span past the
+/// finest tier's ~16 s reach, once playback had run long enough for the merging
+/// to start — turning a 0.04 ms fold into a multi-millisecond rescan of the
+/// whole window that stayed until the plugin was reloaded.
 pub(crate) struct SpectrogramAgg {
     grid: SlabGrid,
     bucket_bits: u64,
@@ -679,26 +702,13 @@ impl SpectrogramAgg {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
         let layout_same = self.bucket_bits == bucket.to_bits() && self.reads == reads;
-        // Every in-window column has to still be the one that was folded. Past
-        // [`SpectrumHistory::finest_start`] that holds — the finest tier only
-        // grows at the back and shrinks at the front. BEFORE it, columns have
-        // been MAX-merged in pairs and moved to their midpoint time, so batch
-        // re-reads something the grid never saw: energy in a slab it was not
-        // folded into, and a `RowRead::Lerp` row interpolating across a pair of
-        // buckets that the merge has already maxed together (which is not the
-        // max of the two interpolations). The finest tier holds
-        // `FINE_COLUMNS` at the 125 Hz column rate, about 16 s, so this is the
-        // guard that decides long Spans — and dropping to a rebuild there is
-        // just `aggregate_rows`, the cost this cache saves on shorter ones.
-        let window_unmerged = first >= history.finest_start();
         // The fast path is valid only when: the layout is unchanged, we have a
-        // prior grid, time hasn't gone backwards, the window holds no merged
-        // columns, and the window's first slab still sits inside the grid we
-        // kept (front..=back). Anything else is a full rebuild, always correct.
+        // prior grid, time hasn't gone backwards, and the window's first slab
+        // still sits inside the grid we kept (front..=back). Anything else is a
+        // full rebuild, always correct.
         let can_increment = layout_same
             && self.grid.cur_key.is_some()
             && newest >= self.last_time
-            && window_unmerged
             && target.zip(self.grid.centers.first()).zip(self.grid.cur_key).is_some_and(
                 |((t, &front_center), back)| {
                     let front = (front_center / bucket).floor() as i64;
@@ -722,40 +732,81 @@ impl SpectrogramAgg {
             if !forward {
                 // A mid-stream backward jump broke the grid; rebuild clean.
                 self.rebuild(history, first, bucket, reads);
-            } else if let Some(t) = target {
-                let nb = reads.len();
-                // Drop front slabs that have scrolled out of the window, leaving
-                // the same first slab batch would produce.
-                while self.grid.centers.len() > 1 {
-                    let front = (self.grid.centers[0] / bucket).floor() as i64;
-                    if front >= t {
-                        break;
-                    }
-                    self.grid.centers.remove(0);
-                    self.grid.power.drain(0..nb);
-                }
-                // The window's first slab is PARTIAL: batch folds only columns
-                // from `first` onward, so an earlier column sharing this slab —
-                // which we MAXed in before it fell behind `first` as the window
-                // scrolled — must not count. Recompute just this one slab from
-                // the in-window columns (a handful, so still O(1) per frame).
-                for v in &mut self.grid.power[0..nb] {
-                    *v = 0;
-                }
-                for c in history.iter_from(first) {
-                    if (c.time / bucket).floor() as i64 != t {
-                        break;
-                    }
-                    for (k, read) in reads.iter().enumerate() {
-                        let v = read.of(&c.db);
-                        if v > self.grid.power[k] {
-                            self.grid.power[k] = v;
-                        }
-                    }
+            }
+        }
+        self.view(history, first, bucket, reads, target)
+    }
+
+    /// Slabs kept IN FRONT of the window's first, rather than trimmed away the
+    /// moment they scroll out.
+    ///
+    /// The window's first slab is `floor(history[first].time / bucket)`, and
+    /// that column's time is not fixed: once it ages past the finest tier it is
+    /// replaced by a merged column standing at its pair's MIDPOINT, which is
+    /// EARLIER. So the window's first slab can step BACK a slab, and a grid
+    /// trimmed flush to it would no longer contain what it is being asked for —
+    /// a rebuild, once per merge at the window's edge. A merge moves a time by
+    /// at most half the spacing of the tier it lands in, so a slab or two of
+    /// slack covers any Span; the cost of holding them is a few unread columns.
+    const FRONT_SLACK: i64 = 4;
+
+    /// The window as the display reads it, taken from the kept grid: every slab
+    /// from the window's first on, with that one — the only PARTIAL slab —
+    /// recomputed from the in-window columns alone.
+    ///
+    /// The recompute is what keeps this equal to batch at the far edge. Batch
+    /// folds only columns from `first` onward, so an earlier column sharing that
+    /// slab must not count, and the grid MAXed one in while it was still in
+    /// window. It is a handful of columns, so still O(1) per frame.
+    ///
+    /// Everything before the window's first slab stays in the grid (see
+    /// [`FRONT_SLACK`](Self::FRONT_SLACK)) and is sliced off here rather than
+    /// dropped, so the pruning above cannot reach a slab that is about to become
+    /// an interior one — an interior slab must hold every column that landed in
+    /// it, in-window or not.
+    fn view(
+        &mut self,
+        history: &crate::SpectrumHistory,
+        first: usize,
+        bucket: f64,
+        reads: &[RowRead],
+        target: Option<i64>,
+    ) -> (Vec<f64>, Vec<BucketDb>) {
+        let nb = reads.len();
+        let (Some(t), Some(&front_center)) = (target, self.grid.centers.first()) else {
+            return (self.grid.centers.clone(), self.grid.power.clone());
+        };
+        let front = (front_center / bucket).floor() as i64;
+
+        // Drop what has scrolled out, keeping the slack. Centers run one per
+        // slab with no gaps (`fold` gives an empty slab its row too), so a slab
+        // key indexes the grid directly.
+        let last = self.grid.centers.len().saturating_sub(1);
+        let drop = (t - Self::FRONT_SLACK - front).clamp(0, last as i64) as usize;
+        if drop > 0 {
+            self.grid.centers.drain(0..drop);
+            self.grid.power.drain(0..drop * nb);
+        }
+
+        let kept = self.grid.centers.len().saturating_sub(1) as i64;
+        let start = (t - (front + drop as i64)).clamp(0, kept) as usize;
+        let centers = self.grid.centers[start..].to_vec();
+        let mut power = self.grid.power[start * nb..].to_vec();
+        for v in &mut power[0..nb] {
+            *v = 0;
+        }
+        for c in history.iter_from(first) {
+            if (c.time / bucket).floor() as i64 != t {
+                break;
+            }
+            for (k, read) in reads.iter().enumerate() {
+                let v = read.of(&c.db);
+                if v > power[k] {
+                    power[k] = v;
                 }
             }
         }
-        (self.grid.centers.clone(), self.grid.power.clone())
+        (centers, power)
     }
 }
 
@@ -1264,27 +1315,26 @@ mod tests {
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
     }
 
-    /// The same exactness, but reaching back past a TIER MERGE — which the
-    /// step-for-step test above never does, because it pushes 14 columns and
-    /// tier 0 holds [`crate::SpectrumHistory::FINE_COLUMNS`] of them.
+    /// Reaching back past a TIER MERGE — which the step-for-step test above
+    /// never does, because it pushes 14 columns and tier 0 holds
+    /// [`crate::SpectrumHistory::FINE_COLUMNS`] of them.
     ///
     /// Once tier 0 overflows, its two oldest columns are MAX-merged into one at
-    /// their MIDPOINT time (`SpectrogramColumn::absorb`). Both halves of that
-    /// rewrite history the incremental grid has ALREADY folded, so batch — which
-    /// re-reads the store as it now stands — can see something else entirely:
+    /// their MIDPOINT time (`SpectrogramColumn::absorb`), which rewrites history
+    /// the grid has ALREADY folded. Batch over the store AS IT NOW STANDS can
+    /// therefore see something else entirely — the merged column falls in a slab
+    /// neither original was folded into, and a [`RowRead::Lerp`] row reads ACROSS
+    /// two buckets that the merge has already maxed together
+    /// (`max(lerp(a), lerp(b)) != lerp(max(a, b))`) — so THAT is not the
+    /// comparison to hold this to.
     ///
-    /// - the merged column sits at a time neither original had, which can fall
-    ///   in a different slab than the one its energy was folded into; and
-    /// - a [`RowRead::Lerp`] row reads ACROSS two buckets, and a per-bin MAX does
-    ///   not commute with that interpolation —
-    ///   `max(lerp(a), lerp(b)) != lerp(max(a, b))`.
-    ///
-    /// At the 125 Hz column rate (`SpectrumState::FFT_INTERVAL`) tier 0 holds
-    /// only ~16.4 s, so every Span past that draws from merged columns — and the
-    /// live heatmap would drift from the offline render, which does not use this
-    /// aggregator at all.
+    /// What it must equal is batch over the columns AS THEY ARRIVED, which is
+    /// both the finer answer and the one [`crate::WholeSong`] gives the offline
+    /// renderer from its raw, never-merged columns. The window's first slab is
+    /// the exception: it is pruned to the in-window columns, which by then are
+    /// the merged ones the store holds, so the comparison starts past it.
     #[test]
-    fn incremental_aggregation_matches_batch_across_a_tier_merge() {
+    fn incremental_aggregation_matches_the_raw_columns_across_a_tier_merge() {
         let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
         let bucket = 0.25;
         let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
@@ -1295,13 +1345,17 @@ mod tests {
 
         let mut agg = SpectrogramAgg::new();
         let mut history = crate::SpectrumHistory::default();
+        // The same columns the store was given, kept unmerged as the reference.
+        let mut raw: Vec<crate::SpectrogramColumn> = Vec::new();
         for i in 0..columns {
             let t = i as f64 * interval;
             // Adjacent buckets alternate, so the Lerp row's two inputs are never
             // loud in the same column — exactly the case a per-bin MAX across a
             // merge collapses into one loud pair.
             let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
-            history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
+            let energy = [(4, 0.5), (10, a), (11, b)];
+            history.push(col(t, &energy));
+            raw.push(col(t, &energy));
 
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
             let inc = agg.window(&history, first, bucket, &reads);
@@ -1309,10 +1363,59 @@ mod tests {
             // catch the crossing itself, and either side of it.
             let near_merge = i + 8 >= crate::SpectrumHistory::FINE_COLUMNS;
             if near_merge || i % 256 == 0 || i + 1 == columns {
-                let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
-                assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
+                let t0 = history.get(first).map_or(0, |c| (c.time / bucket).floor() as i64);
+                let in_window = raw.iter().filter(|c| (c.time / bucket).floor() as i64 >= t0);
+                let want = aggregate_rows(in_window, &reads, bucket);
+                assert_eq!(inc.0, want.0, "slab centers diverged at column {i} (t={t})");
+                let nb = reads.len();
+                assert_eq!(
+                    inc.1[nb..],
+                    want.1[nb..],
+                    "incremental != the raw columns at column {i} (t={t})",
+                );
             }
         }
+        // And it did it WITHOUT falling back: the merging behind the window is
+        // exactly what used to force a rescan on every frame at long Spans.
+        assert_eq!(agg.rebuilds, 1, "a merge behind the window forced a rebuild");
+    }
+
+    /// The bug this guards: a Span LONGER than the finest tier's ~16 s reach
+    /// used to drop to a from-scratch rescan on every frame, for as long as the
+    /// plugin stayed open — the fold is O(new columns), but the rescan is
+    /// O(columns in window), which at a 30 s Span is thousands of columns times
+    /// hundreds of rows, per frame. It survived every value assertion (a rescan
+    /// is still correct) and showed up only as the analyzer dropping to 60 fps
+    /// after half a minute of playback and never coming back.
+    #[test]
+    fn a_long_window_keeps_the_fast_path_once_the_store_starts_merging() {
+        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let interval = 0.008;
+        // Past the finest tier's reach (FINE_COLUMNS * interval, ~16.4 s), which
+        // is the line the old guard broke at, and out to a Span the pane really
+        // offers (up to ROLL_SECONDS_MAX, 600 s).
+        let window_span = 30.0;
+        let bucket = window_span / LIVE_SLAB_CAP as f64;
+        // Long enough that the window is full AND the merging is continuous.
+        let columns = ((window_span + 20.0) / interval) as usize;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history = crate::SpectrumHistory::default();
+        for i in 0..columns {
+            let t = i as f64 * interval;
+            let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+            history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
+            let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
+            let (centers, power) = agg.window(&history, first, bucket, &reads);
+            // The window it serves is still the right shape and length.
+            assert_eq!(power.len(), centers.len() * reads.len(), "grid shape at column {i}");
+            assert!(
+                centers.len() <= LIVE_SLAB_CAP as usize + 2,
+                "the served window grew past the Span at column {i}: {} slabs",
+                centers.len(),
+            );
+        }
+        assert_eq!(agg.rebuilds, 1, "a long Span fell back to a rescan");
     }
 
     /// The merge guard must not cost the fast path on the windows that use it.
