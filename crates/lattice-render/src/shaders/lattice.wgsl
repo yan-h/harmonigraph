@@ -47,8 +47,7 @@ struct Uniforms {
     // (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
-    // y: opacity of the part of a melody/bass ring cut off from the octave
-    // that owns it (see mark_ring_alpha).
+    // y: unused.
     // z: padding inside the octave layer, in quad UV units — the gap
     // between neighbouring sectors AND between the band and the mark
     // rings. w: melody/bass ring thickness, same units; 0 = no rings.
@@ -784,22 +783,22 @@ const MARK_RING_MIN_AA: f32 = 1.5;
 // would scale both the width and the blur by the ring's radius over the
 // band's, which reads as a wider, softer cut.
 //
-// Those slits leave the stretch of ring beside the marked sector separated
-// from the remainder of the circle. That stretch always draws full; `rest`
-// fades everything else, from a whole ring (1) down to just that arc (0).
+// The slits are the whole of the link now. An `Unlinked` opacity used to fade
+// the stretch of ring on the far side of them, down to just the arc over the
+// marked sector; it is pinned at full, so the ring is a whole circle that the
+// slits merely break -- which is what says which octave without spending the
+// shape to say it.
 //
 // The dot gate throws away the antipode: a boundary line runs through the
 // origin, so it passes just as close on the far side of the node and would
-// otherwise cut the ring twice. The ownership test needs no such gate --
-// its two smoothsteps disagree in sign there and it falls to zero.
+// otherwise cut the ring twice.
 //
 // A slot mask can name more than one sector: releasing the top of a chord
 // leaves the old melody fading on its slot while the new one takes another,
 // and both are the melody for as long as that lasts.
-fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, rest: f32, aa: f32) -> f32 {
+fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
     let half = slice_gap_half();
     let hb = RAD_PER_OCTAVE * 0.5;
-    var own = 0.0;
     var slit = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         if (slots & (1u << i)) != 0u {
@@ -809,27 +808,18 @@ fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, rest: f32, aa: f32) ->
             let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
             let c1 = uv.x * b1.y - uv.y * b1.x;
             let c2 = uv.x * b2.y - uv.y * b2.x;
-            own = max(own, smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2));
             let facing = step(0.0, dot(uv, vec2<f32>(cos(ang), sin(ang))));
             let cut = max(aa_inside(half, abs(c1), aa), aa_inside(half, abs(c2), aa));
             slit = max(slit, cut * facing);
         }
     }
-    return mix(rest, 1.0, own) * (1.0 - slit);
+    return 1.0 - slit;
 }
 
 // Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
 // derived so the bass ring (outside the band) and the melody ring (inside)
 // can share this one body.
-fn mark_ring(
-    slots: u32,
-    cents: f32,
-    uv: vec2<f32>,
-    r_in: f32,
-    r_out: f32,
-    rest: f32,
-    aa: f32,
-) -> f32 {
+fn mark_ring(slots: u32, cents: f32, uv: vec2<f32>, r_in: f32, r_out: f32, aa: f32) -> f32 {
     // No room for this ring: the band's inner radius can be dialed to 0
     // (pie wedges), which leaves the inner ring nothing to sit in.
     if r_out <= 0.0 || r_out <= r_in {
@@ -837,7 +827,7 @@ fn mark_ring(
     }
     let d = length(uv);
     let ring = aa_inside(r_out, d, aa) * (1.0 - aa_inside(max(r_in, 0.0), d, aa));
-    return ring * mark_ring_alpha(slots, cents, uv, rest, aa);
+    return ring * mark_ring_alpha(slots, cents, uv, aa);
 }
 
 // How much of the destination a node's knockout clears at radius `d`.
@@ -1022,7 +1012,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let ring_thick = u.misc5.w;
     let ring_w = select(max(ring_thick, outer_aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
     let ring_gap = slice_gap_half() * 2.0;
-    let mark_rest = clamp(u.misc5.y, 0.0, 1.0);
     // Headroom: the band's outer radius can be dialed to 1.0, so the outer
     // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
     // circle of radius QUAD_MARGIN fits the square quad) and ease it off
@@ -1085,12 +1074,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let melody_cov = mark_ring(
         in.marks.x, in.cents, in.uv,
         inner_out - ring_w, inner_out,
-        mark_rest, outer_aa,
+        outer_aa,
     ) * in.params.y;
     let bass_cov = mark_ring(
         in.marks.y, in.cents, in.uv,
         outer_in, min(outer_in + ring_w, lim),
-        mark_rest, outer_aa,
+        outer_aa,
     ) * in.params.z;
     // Disjoint radii, so at most one of the two covers any given pixel.
     var mark = max(melody_cov, bass_cov);

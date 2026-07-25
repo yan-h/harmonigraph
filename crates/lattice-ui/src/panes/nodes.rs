@@ -154,9 +154,7 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     );
     // The marks are full rings bracketing the octave band (melody
     // inside, bass outside), each slit either side of the octave
-    // responsible so that stretch reads as its own piece. This
-    // fades everything BUT that stretch, from a whole ring down to
-    // just the arc over the marked octave.
+    // responsible so that stretch reads as its own piece.
     ui.add_enabled_ui(view.highlight_extremes != HighlightExtremes::Off, |ui| {
         ValueBar::new(&mut view.mark_thickness, 0.0..=0.3, "Thickness")
             .show(ui)
@@ -165,16 +163,6 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  the band radii and Gap. 0 turns the rings off; thick \
                  values grow the bass ring in over the core, so raise \
                  Band inner to make room",
-            );
-        ValueBar::new(&mut view.mark_unlinked, 0.0..=1.0, "Unlinked")
-            .show(ui)
-            .on_hover_text(
-                "Opacity of the rest of the ring -- the part cut off \
-                 from the marked octave's sector. The stretch beside \
-                 that sector always draws full. 1 keeps the whole \
-                 circle, 0 leaves only the arc over the marked octave. \
-                 The slits come from Gap, so Gap 0 leaves nothing to \
-                 separate and this does nothing",
             );
     });
 }

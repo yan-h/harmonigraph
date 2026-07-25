@@ -215,26 +215,18 @@ pub struct ViewConfig {
     /// octave of one note lands on the same node, differing only by slot.
     #[serde(default)]
     pub highlight_extremes: HighlightExtremes,
-    /// Opacity of the part of a mark ring that is cut off from the octave
-    /// responsible for it, 0..1.
-    ///
-    /// Each ring is slit at that octave's two sector boundaries — the slit
-    /// IS the gap between two octaves, continued outward — which leaves the
-    /// stretch of ring belonging to the marked octave separated from the
-    /// remainder of the circle. That stretch always draws at full strength;
-    /// this fades everything else. 1 keeps the whole circle (the ring reads
-    /// as a ring, merely broken); 0 leaves only the arc over the marked
-    /// octave, which says WHICH octave loudly at the cost of the shape.
-    ///
-    /// A Gap of 0 leaves no slit, so there is nothing to separate and this
-    /// has no effect.
-    #[serde(default = "default_mark_unlinked")]
-    pub mark_unlinked: f32,
     /// How thick each melody/bass ring is, in quad UV units — the same
     /// units as the band radii and [`outer_gap`](Self::outer_gap), so the
     /// three read against each other directly. One thickness for both
     /// rings: they are one mark seen at two radii, and letting them differ
     /// would say something that isn't true.
+    ///
+    /// A ring is a whole circle, slit at the two sector boundaries of the
+    /// octave responsible for it — the slit IS the gap between two octaves,
+    /// continued outward, so the ring says which octave without giving up
+    /// the shape. (An `Unlinked` opacity used to fade everything but that
+    /// arc; it is fixed at full now, which is the ring reading as a ring.)
+    /// A [`outer_gap`](Self::outer_gap) of 0 leaves no slit to draw.
     ///
     /// 0 turns the rings off, as a radius of 0 turns the core off. Was
     /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
@@ -399,12 +391,6 @@ fn default_core_solidity() -> f32 {
 /// Crisp octave glyphs by default (the classic look, identity end of the
 /// outer solidity axis).
 fn default_outer_solidity() -> f32 {
-    1.0
-}
-
-/// The whole circle at full strength: the ring reads as a ring, and the
-/// slits alone say which octave owns it.
-fn default_mark_unlinked() -> f32 {
     1.0
 }
 
@@ -596,11 +582,7 @@ impl Default for ViewConfig {
             idle_radius: 0.1,
             node_body: LegacyNodeBody::Disc,
             highlight_extremes: HighlightExtremes::default(),
-            // The mark rings are thin, and mostly cut away: only the arc
-            // over the marked octave draws at full strength, the rest of
-            // the circle at about a third. Says WHICH octave loudly, at
-            // some cost to reading as a ring.
-            mark_unlinked: 0.371_107_28,
+            // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.070_653_12,
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,

@@ -281,10 +281,6 @@ pub struct Scene {
     /// the grid color's RGB at full alpha, so the idle structure reads as
     /// one layer. The renderer hands this to the shader.
     pub node_idle: Vec4,
-    /// Opacity of the part of each mark ring cut off from the octave that
-    /// owns it (see [`ViewConfig::mark_unlinked`]). Already clamped. Which
-    /// NOTES are marked is baked into each node's `melody_slots`/`bass_slots`.
-    pub mark_unlinked: f32,
     /// Melody/bass ring thickness in quad UV units, 0 = off (see
     /// [`ViewConfig::mark_thickness`]). Already clamped.
     pub mark_thickness: f32,

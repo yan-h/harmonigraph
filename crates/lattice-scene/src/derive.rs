@@ -378,7 +378,6 @@ pub fn derive_scene(
         node_idle,
         trail_mark: view.trail_mark,
         trail_strength: view.trail_strength.clamp(0.0, 1.0),
-        mark_unlinked: view.mark_unlinked.clamp(0.0, 1.0),
         mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),
