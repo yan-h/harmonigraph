@@ -1158,11 +1158,14 @@ fn ring_capacity(planned: usize, visible: usize) -> usize {
     planned.max(visible + 2)
 }
 
-/// Slabs of headroom [`ring_capacity`] holds past the window's own width. Four
-/// covers the breathing described there (a column's spacing at the far edge is
-/// at most one slab, plus a floor at each end); the rest is margin. Each costs
-/// TWO texel columns, since every column is written twice (see
-/// [`SpectrogramRing`]) — six spare slabs on a 2048-wide texture.
+/// Slabs of headroom [`ring_capacity`] holds past the PANE's own column count
+/// — `target_cols`, which is what the capacity is now sized off, so it holds
+/// still across a Span drag. Four covers the breathing described there (a
+/// column's spacing at the far edge is at most one slab, plus a floor at each
+/// end); the rest is margin, and `ring_capacity`'s body leans on the whole
+/// eight. Each costs TWO texel columns, since every column is written twice
+/// (see [`SpectrogramRing`]) — so a full-width pane's texture is
+/// `2 * (1024 + 8)` = 2064 texels across.
 const RING_HEADROOM: usize = 8;
 
 /// Bring the ring's texture up to date for the visible slabs, allocating or
