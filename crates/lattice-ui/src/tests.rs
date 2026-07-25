@@ -538,14 +538,14 @@ fn learn_leaves_meantone_unchanged_without_a_third() {
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
     let mut spectrum = AudioSpectrum::default();
     let config = SpectrumConfig::default();
-    assert!(spectrum.display(0.0, &config).is_none(), "no audio yet");
+    assert!(spectrum.display(0.0).is_none(), "no audio yet");
 
     // A 440 Hz sine, long enough to fill the analysis window.
     let sine: Vec<f32> = (0..9_000)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
-    spectrum.push_samples(&sine, 48_000.0, 1.0);
-    let (levels, _peaks) = spectrum.display(1.0, &config).expect("audio is flowing");
+    spectrum.push_samples(&sine, 48_000.0, 1.0, &config);
+    let (levels, _peaks) = spectrum.display(1.0).expect("audio is flowing");
     let peak = levels
         .iter()
         .enumerate()
@@ -558,7 +558,7 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
     assert!((peak - a4).abs() <= 1, "440 Hz should peak at A4 (bucket {a4}), got {peak}");
 
     // Once samples stop, the curve hides instead of freezing.
-    assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1, &config).is_none());
+    assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());
 }
 
 #[test]
@@ -731,12 +731,19 @@ fn spectrogram_history_stays_bounded() {
 fn a_live_column_is_stamped_at_the_middle_of_its_window() {
     let mut spectrum = AudioSpectrum::default();
     let config = SpectrumConfig::default();
-    let sine: Vec<f32> = (0..9_000)
+    // A WHOLE number of hops, so the last column's window ends exactly at `now`
+    // and the stamp can be checked exactly. A spectrum is taken every
+    // FFT_INTERVAL of audio (see `push_samples`), so a batch ending mid-hop
+    // leaves its newest column up to one hop further back than this — correctly,
+    // since that is where the window it measured ends.
+    let hop = (AudioSpectrum::FFT_INTERVAL * 48_000.0).round() as usize;
+    let samples = hop * (9_000 / hop + 1); // enough to fill the 8192 window
+    let sine: Vec<f32> = (0..samples)
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
     let now = 5.0;
-    spectrum.push_samples(&sine, 48_000.0, now);
-    spectrum.display(now, &config).expect("audio is flowing");
+    spectrum.push_samples(&sine, 48_000.0, now, &config);
+    spectrum.display(now).expect("audio is flowing");
 
     let window = f64::from(config.window.samples() as u32) / 48_000.0;
     let stamped = spectrum.history().back().expect("a column was kept").time;
@@ -748,6 +755,55 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
     // And the pane's own idea of that lag agrees, which is what keeps the
     // strip's near edge on the now-line rather than half a window short.
     assert!((spectrum.column_lag() - window * 0.5).abs() < 1e-9);
+}
+
+/// The column grid is a function of the SAMPLES, not of when the shell happened
+/// to hand them over — which is the whole reason the FFT moved into
+/// `push_samples`. A shell drains its audio ring on frame boundaries while the
+/// ring fills in audio blocks, so batch sizes swing by a block and the frame
+/// clock wobbles against the audio clock by several ms; the old frame-gated FFT
+/// passed all of that into the picture. It could only fire ON a frame, so a
+/// 20 ms interval on a 60 Hz display fired every 33.3 ms — wider than the slabs
+/// the heatmap cuts the window into, which then went empty and were painted by
+/// duplicating a neighbour.
+///
+/// Hence the second assertion, which is the one the eye sees: no gap wider than
+/// `MIN_BUCKET` means no slab is ever empty, at any frame rate or cap.
+#[test]
+fn columns_are_evenly_spaced_however_the_shell_batches_them() {
+    use crate::panes::spectrogram::MIN_BUCKET;
+    let sr = 48_000.0f32;
+    let config = SpectrumConfig::default();
+    let mut spectrum = AudioSpectrum::default();
+    let mut written = 0usize;
+    for batch in 0..48 {
+        // Sizes a block apart, and a frame clock that leads and lags the audio
+        // it is dating by 4 ms — twice what it takes to lose a column.
+        let n = [512usize, 256, 1024, 128, 768][batch % 5];
+        let chunk: Vec<f32> = (0..n)
+            .map(|k| {
+                let t = (written + k) as f32 / sr;
+                0.5 * (std::f32::consts::TAU * 440.0 * t).sin()
+            })
+            .collect();
+        written += n;
+        let now = f64::from(written as u32) / f64::from(sr)
+            + if batch % 2 == 0 { 0.004 } else { -0.004 };
+        spectrum.push_samples(&chunk, sr, now, &config);
+    }
+
+    let times: Vec<f64> = spectrum.history().iter().map(|c| c.time).collect();
+    assert!(times.len() > 20, "only {} columns for 48 batches", times.len());
+    let hop = AudioSpectrum::FFT_INTERVAL;
+    for pair in times.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!(
+            (gap - hop).abs() < hop * 0.25,
+            "columns {:.4} s apart, not {hop} — the batching is reaching the grid",
+            gap,
+        );
+        assert!(gap < MIN_BUCKET, "a {gap:.4} s gap can leave a {MIN_BUCKET} s slab empty");
+    }
 }
 
 /// A spectrum is measured over a WINDOW, not at an instant, so where it lands
@@ -822,8 +878,14 @@ fn spectrum_history_reaches_the_retention_cap() {
     );
     // And it fits in a budget worth calling an optimization: the fixed-rate
     // f32 ring needed 160 MB to reach a third as far.
+    //
+    // 15 -> 30 MB was bought deliberately, and by the DISPLAY rather than by
+    // reach: `LIVE_SLAB_CAP` doubled to 1024 so the default 12 s span is cut
+    // into slabs as fine as the data, and the tiers have to keep up with the cap
+    // (see COARSE_COLUMNS) — so the cap, the tier size, and this number are one
+    // decision. Reach came along for free.
     let megabytes = SpectrumHistory::max_bytes() as f64 / (1024.0 * 1024.0);
-    assert!(megabytes < 24.0, "the full store is {megabytes:.1} MB");
+    assert!(megabytes < 32.0, "the full store is {megabytes:.1} MB");
 }
 
 /// The bargain the tiers are struck on: a column of age `a` is only ever drawn

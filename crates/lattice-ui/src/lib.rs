@@ -615,9 +615,24 @@ pub struct AudioSpectrum {
     display: SpectrumBuckets,
     /// Decaying per-bucket maxima for the peak-hold outline.
     peaks: SpectrumBuckets,
-    /// When the FFT last ran, on the shell clock. The FFT is throttled
-    /// well below frame rate — it feeds a meter, not an oscilloscope.
-    last_fft: Option<f64>,
+    /// Samples pushed since this analyzer was made, and the count at which the
+    /// next FFT falls due. The column grid is a function of these two and
+    /// nothing else — see [`push_samples`](AudioSpectrum::push_samples).
+    samples_seen: u64,
+    next_hop: u64,
+    /// Shell time of sample 0: what turns a sample count into a timestamp.
+    ///
+    /// Smoothed rather than taken fresh, on exactly the reasoning behind the
+    /// plugin's own `ClockMapper` (and with its constants). A shell drains its
+    /// audio ring on frame boundaries but the ring fills in audio BLOCKS, so the
+    /// number of samples a frame brings swings by a block either way while `now`
+    /// advances by a frame — several ms of wobble in what any one batch implies
+    /// about where sample 0 was. Stamping columns from a fresh estimate would
+    /// pass that wobble straight into their spacing, which is what the sample
+    /// grid exists to remove: at an 8 ms hop, +-5 ms of it is enough to leave a
+    /// 12.8 ms slab empty. Smoothed, the grid is exactly even and still follows
+    /// the shell clock.
+    anchor: Option<f64>,
     /// When samples last arrived; the curve hides once the source stops
     /// (closed input bus, switched-off synth) rather than freezing.
     last_samples: Option<f64>,
@@ -789,11 +804,21 @@ pub struct WholeSong {
 }
 
 impl WholeSong {
-    /// Analyze the entire `samples` buffer at the live FFT cadence, one raw
-    /// column per hop, `time`-stamped in take time (`time_origin` is the take
-    /// time of sample 0). Raw, exactly like the live store: the heatmap reads
-    /// what was measured, and blurring one column into the next is not
-    /// something it has done since temporal smoothing was dropped.
+    /// Analyze the entire `samples` buffer, one raw column per hop,
+    /// `time`-stamped in take time (`time_origin` is the take time of sample 0).
+    /// Raw, exactly like the live store: the heatmap reads what was measured,
+    /// and blurring one column into the next is not something it has done since
+    /// temporal smoothing was dropped.
+    ///
+    /// The hop is the live one, EXCEPT that a long take stretches it: this build
+    /// spans the whole song rather than a scrolling window, so its time axis is
+    /// cut into `span / WHOLE_SONG_SLAB_CAP` slabs at best, and columns finer
+    /// than that are aggregated away by the MAX the moment they are drawn. A
+    /// three-minute take at the live rate would hold 22 500 columns (86 MB) to
+    /// display 4096 of them. Scaling the hop to the slab keeps the same
+    /// [`COLUMNS_PER_SLAB`](crate::panes::spectrogram::COLUMNS_PER_SLAB) margin
+    /// the live path has — every slab still gets a column, none goes empty — for
+    /// a quarter of the memory.
     ///
     /// Pure: `(samples, rate, config)` in, columns out, no clock or RNG, so a
     /// render built on it stays byte-identical between runs.
@@ -808,7 +833,9 @@ impl WholeSong {
         let mut analyzer = lattice_core::spectrum::SpectrumAnalyzer::new(sample_rate);
         analyzer.set_fft_size(config.window.samples());
         let sr = (sample_rate as f64).max(1.0);
-        let hop = AudioSpectrum::FFT_INTERVAL;
+        let hop = (span / crate::panes::spectrogram::WHOLE_SONG_SLAB_CAP as f64
+            / crate::panes::spectrogram::COLUMNS_PER_SLAB)
+            .max(AudioSpectrum::FFT_INTERVAL);
         let total = samples.len();
         let mut columns = Vec::new();
         // Feed the buffer in one-hop chunks; once the window has filled every
@@ -846,7 +873,9 @@ impl Default for AudioSpectrum {
             analyzer: lattice_core::spectrum::SpectrumAnalyzer::new(48_000.0),
             display: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
-            last_fft: None,
+            samples_seen: 0,
+            next_hop: 0,
+            anchor: None,
             last_samples: None,
             history: SpectrumHistory::default(),
             spectrogram_tex: [None, None],
@@ -873,78 +902,162 @@ impl AudioSpectrum {
         self.spectrogram_ring = [None, None];
     }
 
-    /// Seconds between FFTs (50 Hz refresh).
+    /// Seconds of AUDIO between FFTs (125 columns a second), measured in
+    /// samples rather than on the shell clock — see
+    /// [`push_samples`](Self::push_samples).
     ///
-    /// Raised from 50 ms once the heatmap stopped repainting itself for every
-    /// column (see `write_ring`): the cost of a column is now O(pitch pixels)
-    /// rather than O(pitch pixels x slabs), so the rate buys smoothness at the
-    /// newest edge almost for free. It used to cost REACH as well, back when
-    /// the ring kept every column at this rate forever; the store now coarsens
-    /// with age (see [`SpectrumHistory`]), so the rate sets the resolution of
-    /// the recent stretch and barely touches how far back the heatmap goes.
-    const FFT_INTERVAL: f64 = 0.02;
+    /// Raised from 50 ms to 20 ms once the heatmap stopped repainting itself for
+    /// every column (see `write_ring`): the cost of a column is now O(pitch
+    /// pixels) rather than O(pitch pixels x slabs), so the rate buys smoothness
+    /// at the newest edge almost for free. It used to cost REACH as well, back
+    /// when the ring kept every column at this rate forever; the store now
+    /// coarsens with age (see [`SpectrumHistory`]), so the rate sets the
+    /// resolution of the recent stretch and barely touches how far back the
+    /// heatmap goes.
+    ///
+    /// Raised again to 8 ms, which is a picture change and not an analysis one:
+    /// the window is untouched, so what a column RESOLVES is exactly what it
+    /// was, and overlapping the same window more finely just draws the time
+    /// axis at 2.5x the resolution it could reach before (via
+    /// [`MIN_BUCKET`](crate::panes::spectrogram::MIN_BUCKET), which tracks this).
+    /// It costs 0.37 ms of FFT per column — 4.7% of a core, against 1.9% at
+    /// 20 ms — and one more [`SpectrumHistory`] tier to hold the same reach.
+    pub(crate) const FFT_INTERVAL: f64 = 0.008;
     /// How long after the last samples the curve keeps drawing.
     const HOLD_SECONDS: f64 = 0.5;
+    /// Per-batch gain and restart threshold for the sample-count anchor (see
+    /// the field). The plugin's `ClockMapper` solves the same problem for MIDI
+    /// event times with the same two numbers.
+    const ANCHOR_SMOOTHING: f64 = 0.05;
+    const ANCHOR_SNAP: f64 = 1.0;
     /// Peak-hold half-life in seconds.
     const PEAK_HALF_LIFE: f64 = 1.2;
 
-    /// Feed mono samples from the shell. `now` is the shell clock also
-    /// passed to [`root_ui`].
-    pub fn push_samples(&mut self, samples: &[f32], sample_rate: f32, now: f64) {
+    /// Feed mono samples from the shell, analyzing one spectrum per
+    /// [`FFT_INTERVAL`](Self::FFT_INTERVAL) of audio in them. `now` is the shell
+    /// clock also passed to [`root_ui`], and dates the NEWEST sample of the
+    /// batch — which is what a shell draining its audio ring at frame time
+    /// means by it.
+    ///
+    /// The FFT runs here, on a grid of sample counts, rather than in
+    /// [`display`](Self::display) on a grid of frames. That is the whole point:
+    /// the old gate (`now - last_fft >= FFT_INTERVAL`, evaluated once per UI
+    /// pass) could only fire ON a frame boundary, so a 20 ms interval on a 60 Hz
+    /// display fired every 33.3 ms — SLOWER than the 32 ms slabs the heatmap was
+    /// cutting the window into. Slabs went empty and were filled by duplicating
+    /// their neighbour (`JITTER_SLABS`), so a held column scrolled past about
+    /// once a second; the columns that did arrive sat at a phase inside their
+    /// slab that drifted with the frame clock; and capping the frame rate
+    /// coarsened the picture in proportion. Counting samples makes the column
+    /// grid exact, evenly spaced, and independent of how often — or how evenly —
+    /// the shell draws.
+    ///
+    /// The smoothing and peak-hold decay of the CURVE moved here with it, for
+    /// the same reason: both are per-column, so leaving them on the frame clock
+    /// would have made their time constants frame-rate dependent.
+    ///
+    /// One call therefore costs as many FFTs as the audio it is handed contains
+    /// hops, where the old one cost exactly one. Normally that is a frame's
+    /// worth (two or three), and the worst case is a batch as large as the
+    /// shell's audio ring — 1.37 s in the plugin, 170 columns, ~60 ms — reachable
+    /// only by an editor that has been closed or stalled for that long, which
+    /// then gets its heatmap back-filled with audio that really did happen.
+    pub fn push_samples(
+        &mut self,
+        samples: &[f32],
+        sample_rate: f32,
+        now: f64,
+        config: &SpectrumConfig,
+    ) {
         if samples.is_empty() {
             return;
         }
+        // Either change empties the analyzer's ring, so nothing comes out until
+        // it has refilled. The hop grid keeps its phase across that gap rather
+        // than restarting on it.
+        self.analyzer.set_fft_size(config.window.samples());
         self.analyzer.set_sample_rate(sample_rate);
-        self.analyzer.push_samples(samples);
         self.last_samples = Some(now);
+
+        let sr = f64::from(sample_rate.max(1.0));
+        let hop = ((Self::FFT_INTERVAL * sr).round() as u64).max(1);
+        // Columns fall on multiples of `hop` samples from the start of the
+        // stream. Left at zero the first boundary would be sample 1 and every
+        // one after it a sample early, which is harmless but makes the grid
+        // impossible to state (or to test) in whole hops.
+        if self.next_hop == 0 {
+            self.next_hop = hop;
+        }
+
+        // Re-anchor the sample count on the shell clock: the last sample of this
+        // batch is at `now`. Smoothed, so the columns below are evenly spaced;
+        // snapped when the estimate moves further than any wobble could, which
+        // is a stream that restarted — a transport jump, a sample-rate change
+        // (the count is re-divided by a different rate, so the anchor moves by
+        // minutes), or the first batch after the pane was switched on.
+        let total = self.samples_seen + samples.len() as u64;
+        let candidate = now - total.saturating_sub(1) as f64 / sr;
+        let anchor = match self.anchor {
+            Some(prev) if (candidate - prev).abs() <= Self::ANCHOR_SNAP => {
+                prev + (candidate - prev) * Self::ANCHOR_SMOOTHING
+            }
+            _ => candidate,
+        };
+        self.anchor = Some(anchor);
+
+        let mut fed = 0usize;
+        while fed < samples.len() {
+            // Feed exactly up to the next hop boundary, so a spectrum is taken
+            // at every multiple of `hop` samples and nowhere else. `max(1)`
+            // keeps the loop moving if a sample-rate change ever leaves the
+            // boundary behind us; the next line puts the grid back on its feet.
+            let want = self.next_hop.saturating_sub(self.samples_seen).max(1) as usize;
+            let take = want.min(samples.len() - fed);
+            self.analyzer.push_samples(&samples[fed..fed + take]);
+            self.samples_seen += take as u64;
+            fed += take;
+            if self.samples_seen < self.next_hop {
+                break; // The batch ran out before the boundary.
+            }
+            self.next_hop = self.samples_seen + hop;
+            let Some(fresh) = self.analyzer.pitch_spectrum() else { continue };
+
+            let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
+            let decay = 0.5f32.powf((Self::FFT_INTERVAL / Self::PEAK_HALF_LIFE) as f32);
+            for ((shown, peak), new) in self.display.iter_mut().zip(&mut self.peaks).zip(&fresh) {
+                *shown += (new - *shown) * alpha;
+                *peak = if config.peak_hold {
+                    (*peak * decay).max(*shown)
+                } else {
+                    // Track the live level while off, so switching the
+                    // outline on starts from now, not stale maxima.
+                    *shown
+                };
+            }
+            // Keep the RAW spectrum for the spectrogram (the smoothed
+            // `display` would smear one column into the next). Retention is
+            // span-INDEPENDENT (see `push_history`): shrinking the span and
+            // widening it again must not lose the history in between.
+            //
+            // Stamped at the middle of the window it measured, not at the
+            // boundary itself — see `window_center_offset`. This is what lets a
+            // ridge sit under the note ribbon that made it, which is the entire
+            // point of drawing the two on one time axis. The boundary is where
+            // the newest sample fed so far sits on the anchored grid, so
+            // consecutive columns are exactly `hop` samples apart.
+            let boundary = anchor + self.samples_seen.saturating_sub(1) as f64 / sr;
+            self.push_history(boundary - self.analyzer.window_center_offset(), &fresh);
+        }
     }
 
-    /// Advance the display (runs the FFT at most every FFT_INTERVAL under
-    /// the config's window/smoothing) and return (levels, peak-holds) to
-    /// draw, or None while no audio is flowing.
-    pub fn display(
-        &mut self,
-        now: f64,
-        config: &SpectrumConfig,
-    ) -> Option<(&SpectrumBuckets, &SpectrumBuckets)> {
-        // A window change mid-stream just refills the ring; the display
-        // holds its last values until the new window fills.
-        self.analyzer.set_fft_size(config.window.samples());
-
-        if !self.last_samples.is_some_and(|t| now - t <= Self::HOLD_SECONDS) {
-            return None;
-        }
-        if self.last_fft.is_none_or(|t| now - t >= Self::FFT_INTERVAL) {
-            if let Some(fresh) = self.analyzer.pitch_spectrum() {
-                let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
-                let dt = self.last_fft.map_or(Self::FFT_INTERVAL, |t| now - t);
-                let decay = 0.5f32.powf((dt / Self::PEAK_HALF_LIFE) as f32);
-                for ((shown, peak), new) in
-                    self.display.iter_mut().zip(&mut self.peaks).zip(&fresh)
-                {
-                    *shown += (new - *shown) * alpha;
-                    *peak = if config.peak_hold {
-                        (*peak * decay).max(*shown)
-                    } else {
-                        // Track the live level while off, so switching the
-                        // outline on starts from now, not stale maxima.
-                        *shown
-                    };
-                }
-                // Keep the RAW spectrum for the spectrogram (the smoothed
-                // `display` would smear one column into the next). Retention is
-                // span-INDEPENDENT (see `push_history`): shrinking the span and
-                // widening it again must not lose the history in between.
-                //
-                // Stamped at the middle of the window it measured, not at the
-                // moment the FFT ran — see `window_center_offset`. This is what
-                // lets a ridge sit under the note ribbon that made it, which is
-                // the entire point of drawing the two on one time axis.
-                self.push_history(now - self.analyzer.window_center_offset(), &fresh);
-                self.last_fft = Some(now);
-            }
-        }
-        Some((&self.display, &self.peaks))
+    /// The curve to draw — (levels, peak-holds) — or None while no audio is
+    /// flowing. Both are maintained per column by
+    /// [`push_samples`](Self::push_samples); this only decides whether they are
+    /// still live.
+    pub fn display(&self, now: f64) -> Option<(&SpectrumBuckets, &SpectrumBuckets)> {
+        self.last_samples
+            .is_some_and(|t| now - t <= Self::HOLD_SECONDS)
+            .then_some((&self.display, &self.peaks))
     }
 
     /// The most history ever kept, span-independent: the longest span the roll
@@ -956,11 +1069,11 @@ impl AudioSpectrum {
     /// a memory backstop that bound first — 160 MB bought only ~3.5 minutes at
     /// 50 Hz, so a long span drew a heatmap over the recent stretch and bare
     /// roll beyond it. Storing a bucket as a byte of dB and coarsening old
-    /// columns (see [`SpectrumHistory`]) made the full span cost about 17 MB,
+    /// columns (see [`SpectrumHistory`]) made the full span cost about 30 MB,
     /// so the cap can simply be the span again.
     ///
     /// Raising it is cheap and no longer linear: another
-    /// [`SpectrumHistory::COARSE_COLUMNS`] (~2 MB) doubles the reach. The unit
+    /// [`SpectrumHistory::COARSE_COLUMNS`] (~4 MB) doubles the reach. The unit
     /// test `spectrum_history_reaches_the_retention_cap` is what keeps the
     /// structure sized for whatever this says.
     const HISTORY_MAX_SECONDS: f64 = 610.0;

@@ -298,7 +298,8 @@ impl EditorShared {
             self.ui.spectrum_config.show_audio || self.ui.spectrum_config.show_spectrogram;
         if shown && !self.audio_buf.is_empty() {
             let sample_rate = self.sample_rate();
-            self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now);
+            let config = self.ui.spectrum_config;
+            self.ui.spectrum.push_samples(&self.audio_buf, sample_rate, now, &config);
         }
     }
 }

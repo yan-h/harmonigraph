@@ -131,12 +131,15 @@ pub fn render(
         replay.advance_to(&mut state, now);
         if let Some(audio) = audio {
             // Exactly one frame's worth of samples, taken from where the
-            // bounce actually is at `now`. The analyzer's own throttling
-            // and smoothing key off the `now` we hand it, so this makes
-            // the spectrum as deterministic as everything else.
+            // bounce actually is at `now`. The analyzer counts the samples it
+            // is given and stamps its columns off `now`, both of which come
+            // from the frame index — so the spectrum is as deterministic as
+            // everything else, and its column rate no longer depends on the
+            // render's fps the way a frame-clock throttle made it.
             let chunk = audio.slice_seconds(now - settings.audio_start, now + step - settings.audio_start);
             if !chunk.is_empty() {
-                state.spectrum.push_samples(chunk, audio.sample_rate, now);
+                let config = state.spectrum_config;
+                state.spectrum.push_samples(chunk, audio.sample_rate, now, &config);
             }
         }
         begin_frame(&mut state, &replay.params, now);
