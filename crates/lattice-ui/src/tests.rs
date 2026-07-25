@@ -667,6 +667,26 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
     assert!(!restored.spectrum_config.show_spectrogram);
 }
 
+/// A field that has since been REMOVED must not take the whole blob down with
+/// it. `spectrogram_fine_levels` existed only while the heatmap's stored
+/// precision was being judged by eye, so any project saved during that window
+/// carries it — and a blob that fails to parse loses the entire UI state, not
+/// just the stale key.
+#[test]
+fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+    // Put the departed field back, exactly as that build wrote it.
+    let stale = saved
+        .replace("spectrogram_gamma:", "spectrogram_fine_levels:true,spectrogram_gamma:");
+    assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&stale);
+    assert_eq!(restored.view.extent_sevens, 3, "an unknown field must not sink the blob");
+}
+
 #[test]
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
@@ -677,27 +697,27 @@ fn spectrogram_history_stays_bounded() {
     // within HISTORY_MAX_SECONDS is kept no matter what the span is doing.
     let mut spec = AudioSpectrum::default();
     for i in 0..300 {
-        spec.push_history(i as f64, bins);
+        spec.push_history(i as f64, &bins);
     }
     assert_eq!(spec.history().front().unwrap().time, 0.0, "no column within the cap is dropped");
     assert_eq!(spec.history().back().unwrap().time, 299.0, "newest kept");
 
-    // The retention never exceeds the hard age cap — the ceiling on both
-    // history and memory.
+    // The retention never exceeds the hard age cap — the ceiling on how far
+    // back the heatmap can read.
     let mut spec = AudioSpectrum::default();
     for i in 0..800 {
-        spec.push_history(i as f64, bins);
+        spec.push_history(i as f64, &bins);
     }
     let cutoff = 799.0 - AudioSpectrum::HISTORY_MAX_SECONDS;
     assert!(spec.history().front().unwrap().time >= cutoff, "capped at HISTORY_MAX_SECONDS");
 
-    // Count cap holds even when every column shares one timestamp (so the
-    // age trim never fires) — the backstop against an unbounded ring.
+    // Memory holds even when every column shares one timestamp, so the age trim
+    // never fires — the store's own tier caps are the backstop.
     let mut spec = AudioSpectrum::default();
-    for _ in 0..(AudioSpectrum::HISTORY_MAX + 50) {
-        spec.push_history(0.0, bins);
+    for _ in 0..(SpectrumHistory::MAX_COLUMNS + 50) {
+        spec.push_history(0.0, &bins);
     }
-    assert!(spec.history().len() <= AudioSpectrum::HISTORY_MAX, "count capped");
+    assert!(spec.history().len() <= SpectrumHistory::MAX_COLUMNS, "column count capped");
 
     spec.clear_history();
     assert!(spec.history().is_empty());
@@ -760,19 +780,23 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
     let ws = WholeSong::precompute(&samples, sr, 0.0, 0.0, seconds, &cfg);
 
     // The bin the tone sits in, and how loud it reads once fully sounding.
+    // Columns are stored as bytes of dB, so "half power" is 3 dB down from the
+    // peak rather than half its stored value.
+    use lattice_core::spectrogram::{db_of, DB_STEP};
     let a4 = ((69.0 - lattice_core::spectrum::SPECTRUM_MIN_MIDI)
         * lattice_core::spectrum::BINS_PER_SEMITONE as f32)
         .round() as usize;
-    let loudest = ws.columns.iter().map(|c| c.power[a4]).fold(0.0f32, f32::max);
-    assert!(loudest > 0.1, "the tone should read loudly at its own bin, got {loudest}");
+    let loudest = ws.columns.iter().map(|c| c.db[a4]).max().expect("columns");
+    assert!(db_of(loudest) > -10.0, "the tone should read loudly at its own bin");
 
     // Where the ridge reaches half power is what the eye reads as the onset:
     // the window is Hann-weighted, so it crosses half when it is half over the
     // start of the tone. That must be the moment the tone started.
+    let half_power = loudest.saturating_sub((3.01 / DB_STEP).round() as u8);
     let half = ws
         .columns
         .iter()
-        .find(|c| c.power[a4] >= loudest * 0.5)
+        .find(|c| c.db[a4] >= half_power)
         .expect("the tone must reach half power somewhere");
     let window = f64::from(cfg.window.samples() as u32) / f64::from(sr);
     assert!(
@@ -781,6 +805,54 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
          (a {window:.3} s window; half of one late would be the old end-stamping)",
         half.time,
     );
+}
+
+/// The store has to be sized for the retention policy above it: every second
+/// inside `HISTORY_MAX_SECONDS` must have columns to draw, or a long span shows
+/// a heatmap that stops partway and bare roll beyond it (which is exactly what
+/// the old fixed-rate ring did — 160 MB bought 3.5 minutes of a 10 minute
+/// span). Raising the cap means adding a tier; this is what says so.
+#[test]
+fn spectrum_history_reaches_the_retention_cap() {
+    let reach = SpectrumHistory::reach(AudioSpectrum::FFT_INTERVAL);
+    assert!(
+        reach >= AudioSpectrum::HISTORY_MAX_SECONDS,
+        "history reaches {reach:.0} s, retention asks for {:.0} s — add a tier",
+        AudioSpectrum::HISTORY_MAX_SECONDS,
+    );
+    // And it fits in a budget worth calling an optimization: the fixed-rate
+    // f32 ring needed 160 MB to reach a third as far.
+    let megabytes = SpectrumHistory::max_bytes() as f64 / (1024.0 * 1024.0);
+    assert!(megabytes < 24.0, "the full store is {megabytes:.1} MB");
+}
+
+/// The bargain the tiers are struck on: a column of age `a` is only ever drawn
+/// when the window is at least `a` long, and a window is cut into at most
+/// `LIVE_SLAB_CAP` slabs — so nothing needs storing finer than `a / cap`. Every
+/// tier must stay on the right side of that, or its columns land more than a
+/// slab apart and the heatmap grows stripes of false silence between them.
+///
+/// This is the test to look at if the tier sizes, the FFT rate, or the slab cap
+/// ever move: they are three legs of one stool.
+#[test]
+fn stored_columns_stay_finer_than_the_slabs_they_are_drawn_into() {
+    use crate::panes::spectrogram::{LIVE_SLAB_CAP, MIN_BUCKET};
+    let mut age = 0.0f64; // youngest age the tier holds
+    let mut spacing = AudioSpectrum::FFT_INTERVAL;
+    for tier in 0..SpectrumHistory::TIERS {
+        // The finest slab any window that reaches this tier's youngest columns
+        // can use — the tightest the tier is ever asked to be.
+        let finest = (age / f64::from(LIVE_SLAB_CAP)).max(MIN_BUCKET);
+        assert!(
+            spacing <= finest,
+            "tier {tier} stores {spacing:.3} s apart but can be drawn into \
+             {finest:.3} s slabs (from age {age:.1} s)",
+        );
+        let columns =
+            if tier == 0 { SpectrumHistory::FINE_COLUMNS } else { SpectrumHistory::COARSE_COLUMNS };
+        age += columns as f64 * spacing;
+        spacing *= 2.0;
+    }
 }
 
 #[test]
@@ -811,7 +883,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     // A steady tone lands its energy at A4's bin.
     let a4 = ((69.0 - SPECTRUM_MIN_MIDI) * BINS_PER_SEMITONE as f32).round() as usize;
     let mid = &ws.columns[ws.columns.len() / 2];
-    let peak = (0..SPECTRUM_BINS).max_by(|&a, &b| mid.power[a].total_cmp(&mid.power[b])).unwrap();
+    let peak = (0..SPECTRUM_BINS).max_by_key(|&b| mid.db[b]).unwrap();
     assert!(peak.abs_diff(a4) <= 1, "peak bin {peak} should be A4 (bin {a4})");
 
     // `time_origin` shifts every column onto the take's timeline.
@@ -827,7 +899,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     assert_eq!(ws.columns.len(), again.columns.len());
     for (a, b) in ws.columns.iter().zip(&again.columns) {
         assert_eq!(a.time, b.time);
-        assert_eq!(a.power, b.power, "precompute is deterministic");
+        assert_eq!(a.db, b.db, "precompute is deterministic");
     }
 }
 
@@ -1322,9 +1394,17 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
 }
 
+/// The heatmap's level for a bucket given as POWER. The pane itself reads the
+/// dB its history already stores; these tests are about the mapping, which is
+/// easier to state in the power a partial actually has.
+fn spectrogram_level(cfg: &SpectrumConfig, power: f32, midi: f32) -> f32 {
+    use crate::panes::spectral::{power_db, spectrogram_level_db};
+    spectrogram_level_db(cfg, power_db(power), midi)
+}
+
 #[test]
 fn the_heatmap_follows_the_curve_until_given_its_own_range() {
-    use crate::panes::spectral::{loudness, spectrogram_level};
+    use crate::panes::spectral::loudness;
     let mut cfg = SpectrumConfig::default();
     let (power, midi) = (1e-4, 60.0);
 
@@ -1342,7 +1422,6 @@ fn the_heatmap_follows_the_curve_until_given_its_own_range() {
 
 #[test]
 fn heatmap_contrast_bends_the_level_without_clipping_it() {
-    use crate::panes::spectral::spectrogram_level;
     let mut cfg = SpectrumConfig::default();
     // A power that lands mid-range, so there is room to bend either way.
     let (power, midi) = (1e-4, 60.0);

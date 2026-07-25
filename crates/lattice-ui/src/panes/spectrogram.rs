@@ -14,15 +14,28 @@
 //! [`loudness`](super::spectral::loudness) so "loud" means the same in both.
 
 use egui::Color32;
+use lattice_core::spectrogram::{db_of, BucketDb};
 use lattice_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 use lattice_scene::FrameParams;
 
-use super::spectral::{spectrogram_level, Axes, PitchScale, TimeAxis};
+use super::spectral::{spectrogram_level_db, Axes, PitchScale, TimeAxis};
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
-/// Bin power at or below this is treated as flat silence — skips the `log10`
-/// in the intensity map for the many empty buckets, without changing the look.
-const NEAR_ZERO: f32 = 1e-9;
+/// Most time slabs a live window is ever cut into, whatever the pane's size —
+/// and so, with the window, the FINEST slab any given moment can be drawn into.
+/// That is what [`SpectrumHistory`](lattice_core::SpectrumHistory) sizes its
+/// tiers against: a column of age `a` is only on screen when the window is at
+/// least `a` long, so it never needs storing finer than `a / LIVE_SLAB_CAP`.
+pub(crate) const LIVE_SLAB_CAP: f32 = 512.0;
+/// The same for the offline whole-song build, which spans an entire take rather
+/// than a scrolling window and so wants more of them.
+const WHOLE_SONG_SLAB_CAP: f32 = 4096.0;
+/// Never subdivide finer than the data arrives (~20 ms FFT period, plus a
+/// little for frame jitter). A shorter bucket leaves empty buckets between
+/// columns, and the texture's linear time axis assumes evenly-spaced slabs —
+/// gaps there stretch the edge columns into flat streaks (short spans).
+/// Tracks `AudioSpectrum::FFT_INTERVAL` at the same 1.6x ratio it always had.
+pub(crate) const MIN_BUCKET: f64 = 0.032;
 
 /// A run of empty slabs this short is sampling jitter rather than a stall in
 /// the analyzer, and holds the previous column instead of reading as silence.
@@ -171,14 +184,8 @@ pub(super) fn draw_spectrogram(
     let rows = (axes.pitch_len().round() as usize).clamp(2, max_rows);
     // One image column per output depth pixel; whole-song spans the entire take,
     // so it needs a higher cap than the live window.
-    let col_cap = if whole.is_some() { 4096.0 } else { 512.0 };
+    let col_cap = if whole.is_some() { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
     let target_cols = (depth_span * axes.depth_len()).round().clamp(2.0, col_cap) as usize;
-    // Never subdivide finer than the data arrives (~20 ms FFT period, plus a
-    // little for frame jitter). A shorter bucket leaves empty buckets between
-    // columns, and the texture's linear time axis assumes evenly-spaced slabs —
-    // gaps there stretch the edge columns into flat streaks (short spans).
-    // Tracks AudioSpectrum::FFT_INTERVAL at the same 1.6x ratio it always had.
-    const MIN_BUCKET: f64 = 0.032;
     let bucket = (window / target_cols as f64).max(MIN_BUCKET);
 
     // ---- Data identity -------------------------------------------------------
@@ -430,7 +437,7 @@ fn aggregate_rows<'a>(
     columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
     bin_idx: &[(usize, usize)],
     bucket: f64,
-) -> (Vec<f64>, Vec<f32>) {
+) -> (Vec<f64>, Vec<BucketDb>) {
     let mut grid = SlabGrid::default();
     for col in columns {
         grid.fold(col, bin_idx, bucket);
@@ -443,10 +450,14 @@ fn aggregate_rows<'a>(
 /// grid (`slab * nb + bin`). [`fold`](SlabGrid::fold) is the single per-column
 /// step both [`aggregate_rows`] (batch, from scratch) and [`SpectrogramAgg`]
 /// (incremental, live) drive — so the two can never disagree.
+///
+/// Held in the same dB bytes the columns are stored in: MAX is order-preserving
+/// under the encoding, so aggregating in it is exact, and the grid — which is
+/// rebuilt and cloned every frame — stays a quarter the size.
 #[derive(Default, Clone)]
 struct SlabGrid {
     centers: Vec<f64>,
-    power: Vec<f32>,
+    power: Vec<BucketDb>,
     cur_key: Option<i64>,
 }
 
@@ -481,11 +492,11 @@ impl SlabGrid {
                         // across the display for the rest of the window.
                         self.power.extend_from_within(self.power.len() - nb..);
                     } else {
-                        self.power.resize(self.power.len() + nb, 0.0);
+                        self.power.resize(self.power.len() + nb, 0);
                     }
                 }
                 self.centers.push((key as f64 + 0.5) * bucket);
-                self.power.resize(self.power.len() + nb, 0.0);
+                self.power.resize(self.power.len() + nb, 0);
                 self.cur_key = Some(key);
                 true
             }
@@ -495,7 +506,7 @@ impl SlabGrid {
             other => {
                 self.cur_key = Some(key);
                 self.centers.push((key as f64 + 0.5) * bucket);
-                self.power.resize(self.power.len() + nb, 0.0);
+                self.power.resize(self.power.len() + nb, 0);
                 other.is_none()
             }
         };
@@ -503,8 +514,8 @@ impl SlabGrid {
         for (k, &(from, to)) in bin_idx.iter().enumerate() {
             let mut p = self.power[base + k];
             for src in from..to {
-                if col.power[src] > p {
-                    p = col.power[src];
+                if col.db[src] > p {
+                    p = col.db[src];
                 }
             }
             self.power[base + k] = p;
@@ -549,13 +560,13 @@ impl SpectrogramAgg {
     /// Re-fold the whole window from scratch (== `aggregate_rows(history[first..])`).
     fn rebuild(
         &mut self,
-        history: &std::collections::VecDeque<crate::SpectrogramColumn>,
+        history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
         bin_idx: &[(usize, usize)],
     ) {
         self.grid = SlabGrid::default();
-        for col in history.iter().skip(first) {
+        for col in history.iter_from(first) {
             self.grid.fold(col, bin_idx, bucket);
         }
         self.bucket_bits = bucket.to_bits();
@@ -570,11 +581,11 @@ impl SpectrogramAgg {
     /// where batch would start.
     fn window(
         &mut self,
-        history: &std::collections::VecDeque<crate::SpectrogramColumn>,
+        history: &crate::SpectrumHistory,
         first: usize,
         bucket: f64,
         bin_idx: &[(usize, usize)],
-    ) -> (Vec<f64>, Vec<f32>) {
+    ) -> (Vec<f64>, Vec<BucketDb>) {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
         let layout_same = self.bucket_bits == bucket.to_bits() && self.bin_idx == bin_idx;
@@ -598,7 +609,7 @@ impl SpectrogramAgg {
             // Fold only columns newer than the last we folded.
             let start = history.partition_point(|c| c.time <= self.last_time);
             let mut forward = true;
-            for col in history.iter().skip(start) {
+            for col in history.iter_from(start) {
                 if !self.grid.fold(col, bin_idx, bucket) {
                     forward = false;
                     break;
@@ -626,16 +637,16 @@ impl SpectrogramAgg {
                 // scrolled — must not count. Recompute just this one slab from
                 // the in-window columns (a handful, so still O(1) per frame).
                 for v in &mut self.grid.power[0..nb] {
-                    *v = 0.0;
+                    *v = 0;
                 }
-                for c in history.iter().skip(first) {
+                for c in history.iter_from(first) {
                     if (c.time / bucket).floor() as i64 != t {
                         break;
                     }
                     for (k, &(from, to)) in bin_idx.iter().enumerate() {
                         for src in from..to {
-                            if c.power[src] > self.grid.power[k] {
-                                self.grid.power[k] = c.power[src];
+                            if c.db[src] > self.grid.power[k] {
+                                self.grid.power[k] = c.db[src];
                             }
                         }
                     }
@@ -676,7 +687,7 @@ fn write_ring(
     capacity: usize,
     cfg: &SpectrumConfig,
     bins: &[Bin],
-    power: &[f32],
+    power: &[BucketDb],
     first_key: i64,
     visible: usize,
 ) {
@@ -764,33 +775,39 @@ fn write_ring(
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
 /// [`fill_pixels`] would put in that column, for a build that writes columns
 /// one at a time.
-fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[f32]) -> Vec<Color32> {
+fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[BucketDb]) -> Vec<Color32> {
     bins.iter()
         .zip(slab)
-        .map(|(bin, &p)| {
-            let level = if p <= NEAR_ZERO { 0.0 } else { spectrogram_level(cfg, p, bin.midi) };
-            cell_color(cfg.spectrogram_color, level)
-        })
+        .map(|(bin, &p)| cell_color(cfg.spectrogram_color, bin_level(cfg, p, bin.midi)))
         .collect()
+}
+
+/// One cell's 0..1 loudness from its stored byte.
+///
+/// Deliberately unguarded. There used to be a shortcut here — anything under
+/// -90 dB was answered as flat silence without consulting the mapping, on the
+/// grounds that it "would land at 0 anyway" and it saved a `log10` for the many
+/// empty buckets of a typical spectrum. Both halves of that stopped being true:
+/// the dB window became draggable down to -120 dB, which makes -90 dB a
+/// perfectly visible tenth of the way up the ramp, and the columns became dB
+/// already, so there is no `log10` left to skip. What the shortcut actually did
+/// was cut the ramp off at -90 dB — the faintest colour dropping straight to
+/// black, with the whole quiet end of a wide window missing behind the cliff.
+fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
+    spectrogram_level_db(cfg, db_of(bucket), midi)
 }
 
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
 /// with `y = 0` the lowest bin. `power` is the flat `w * bins.len()` grid from
 /// [`aggregate_rows`]. Opaque throughout — silence is the ramp's dark end, so
 /// the plane is filled rather than see-through.
-fn fill_pixels(
-    cfg: &SpectrumConfig,
-    w: usize,
-    bins: &[Bin],
-    power: &[f32],
-) -> Vec<Color32> {
+fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb]) -> Vec<Color32> {
     let h = bins.len();
     let mut pixels = vec![Color32::BLACK; w * h];
     for x in 0..w {
         let base = x * h;
         for (y, bin) in bins.iter().enumerate() {
-            let p = power[base + y];
-            let level = if p <= NEAR_ZERO { 0.0 } else { spectrogram_level(cfg, p, bin.midi) };
+            let level = bin_level(cfg, power[base + y], bin.midi);
             pixels[y * w + x] = cell_color(cfg.spectrogram_color, level);
         }
     }
@@ -851,11 +868,17 @@ mod tests {
 
     /// A column at `time` with the given (bin, power) energy, rest silent.
     fn col(time: f64, energy: &[(usize, f32)]) -> crate::SpectrogramColumn {
-        let mut power = Box::new([0.0f32; SPECTRUM_BINS]);
+        let mut power = [0.0f32; SPECTRUM_BINS];
         for &(i, p) in energy {
             power[i] = p;
         }
-        crate::SpectrogramColumn { time, power }
+        crate::SpectrogramColumn::from_power(time, &power)
+    }
+
+    /// The stored byte a power lands on — what the aggregation compares, and
+    /// so what the aggregation tests below assert against.
+    fn q(power: f32) -> BucketDb {
+        lattice_core::spectrogram::quantize(power)
     }
 
     #[test]
@@ -870,7 +893,7 @@ mod tests {
         ];
         let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 1.0);
         assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
-        assert_eq!(power[0], 1.0, "the short note's peak survives");
+        assert_eq!(power[0], q(1.0), "the short note's peak survives");
     }
 
     /// A stall in the analyzer leaves a hole in the column stream — switching
@@ -887,9 +910,9 @@ mod tests {
         let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
         let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 0.25);
         assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
-        assert_eq!(power[0], 1.0, "the column before the gap");
-        assert_eq!(&power[1..4], [0.0, 0.0, 0.0], "the gap reads as silence, not as a smear");
-        assert_eq!(power[4], 0.5, "the column after it");
+        assert_eq!(power[0], q(1.0), "the column before the gap");
+        assert_eq!(&power[1..4], [0, 0, 0], "the gap reads as silence, not as a smear");
+        assert_eq!(power[4], q(0.5), "the column after it");
         // Evenly spaced centers are exactly what the texture mapping assumes.
         for pair in centers.windows(2) {
             assert!((pair[1] - pair[0] - 0.25).abs() < 1e-9, "slabs must stay uniform: {centers:?}");
@@ -906,8 +929,8 @@ mod tests {
         let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
         let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 0.25);
         assert_eq!(centers.len(), 3, "the empty slab still gets its row");
-        assert_eq!(power[1], 1.0, "and holds the column before it");
-        assert_eq!(power[2], 0.5);
+        assert_eq!(power[1], q(1.0), "and holds the column before it");
+        assert_eq!(power[2], q(0.5));
     }
 
     /// Time running backwards (a transport jump) starts a fresh row rather
@@ -918,7 +941,7 @@ mod tests {
         let cols = [col(10.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
         let (centers, power) = aggregate_rows(cols.iter(), &[(5, 6)], 0.25);
         assert_eq!(centers.len(), 2);
-        assert_eq!(power[1], 0.5, "the rewound column landed in its own row");
+        assert_eq!(power[1], q(0.5), "the rewound column landed in its own row");
     }
 
     #[test]
@@ -945,8 +968,8 @@ mod tests {
             Bin { idx: 11, end: 12, midi: 41.0, t: 0.2 },
             Bin { idx: 12, end: 13, midi: 42.0, t: 0.3 },
         ];
-        let mut power = vec![0.0f32; w * bins.len()]; // row-major [slab][bin]
-        power[bins.len() + 2] = 1.0; // slab 1, bin 2 loud
+        let mut power = vec![0; w * bins.len()]; // row-major [slab][bin]
+        power[bins.len() + 2] = q(1.0); // slab 1, bin 2 loud
         let px = fill_pixels(&cfg, w, &bins, &power);
         let lum = |c: Color32| c.r() as u32 + c.g() as u32 + c.b() as u32;
         let loud = px[2 * w + 1]; // y=2, x=1
@@ -956,6 +979,77 @@ mod tests {
             if i != 2 * w + 1 {
                 assert_eq!(lum(c), 0, "pixel {i} should be dark, got {c:?}");
             }
+        }
+    }
+
+    /// Storing a bucket as a byte of dB is a memory decision, and it is only
+    /// allowed to be one: the colour a cell ends up must be the colour the
+    /// power itself would have produced, to within half the grid step it was
+    /// put on. Anything wider would be a look change wearing an optimization's
+    /// clothes. (The step itself was judged by eye against a sixteen-bit store
+    /// and found invisible; this is what keeps it from drifting after.)
+    #[test]
+    fn quantizing_a_bucket_does_not_move_its_colour() {
+        use super::super::spectral::{power_db, spectrogram_level_db};
+        let mut cfg = SpectrumConfig::default();
+        let tolerance =
+            0.5 * lattice_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
+        for own_range in [false, true] {
+            cfg.spectrogram_own_range = own_range;
+            for tilt in [0.0, 3.0, -3.0] {
+                cfg.tilt = tilt;
+                for midi in [20.0f32, 60.0, 100.0, 130.0] {
+                    for power in [1e-8f32, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 1.0, 4.0] {
+                        let exact = spectrogram_level_db(&cfg, power_db(power), midi);
+                        let stored = bin_level(&cfg, q(power), midi);
+                        assert!(
+                            (stored - exact).abs() <= tolerance,
+                            "power {power} at MIDI {midi} (tilt {tilt}, own range \
+                             {own_range}): {exact} exact vs {stored} stored",
+                        );
+                    }
+                }
+            }
+        }
+        // And silence stays exactly silent rather than creeping up off the
+        // quantizer's floor, whatever the dB window is set to.
+        cfg.spectrogram_own_range = true;
+        cfg.spectrogram_floor_db = -120.0;
+        assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "an empty bucket must read as silence");
+    }
+
+    /// The quiet end of the ramp must FADE to black, not fall off a cliff into
+    /// it. A shortcut used to answer everything under -90 dB as silence, which
+    /// was invisible while the dB window bottomed out above that and became a
+    /// hard edge — faintest colour straight to black — the moment the window
+    /// could be dragged below it. Nothing between two adjacent stored bytes may
+    /// move the level by more than the step between them.
+    #[test]
+    fn the_quiet_end_of_the_ramp_fades_instead_of_cutting_off() {
+        let mut cfg = SpectrumConfig {
+            spectrogram_own_range: true,
+            spectrogram_ceiling_db: 0.0,
+            ..SpectrumConfig::default()
+        };
+        for floor in [-60.0f32, -90.0, -100.0, -120.0] {
+            cfg.spectrogram_floor_db = floor;
+            // One stored step, as a fraction of the window it is drawn in; the
+            // levels either side of any stored byte may differ by that and no
+            // more.
+            let step = lattice_core::spectrogram::DB_STEP / (cfg.spectrogram_ceiling_db - floor);
+            for bucket in 0..BucketDb::MAX {
+                let here = bin_level(&cfg, bucket, 60.0);
+                let next = bin_level(&cfg, bucket + 1, 60.0);
+                assert!(
+                    next - here <= step * 1.001 && next >= here,
+                    "floor {floor}: byte {bucket} ({here}) -> {next} jumps by {}, \
+                     one step is {step}",
+                    next - here,
+                );
+            }
+            // And the bottom byte is black at every window, so silence still
+            // recedes into the region's bed rather than glowing.
+            assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "floor {floor}: silence must be black");
         }
     }
 
@@ -991,7 +1085,6 @@ mod tests {
     /// bucket change (a forced rebuild), comparing byte-for-byte each step.
     #[test]
     fn incremental_aggregation_matches_batch_step_for_step() {
-        use std::collections::VecDeque;
         let bin_idx = [(4usize, 6usize), (6, 10), (10, 11)]; // 3 rows, varied ranges
         let bucket = 0.25;
         let window_span = 1.0;
@@ -1002,20 +1095,18 @@ mod tests {
         ];
 
         let mut agg = SpectrogramAgg::new();
-        let mut history: VecDeque<crate::SpectrogramColumn> = VecDeque::new();
+        let mut history = crate::SpectrumHistory::default();
         for (i, &t) in times.iter().enumerate() {
             // Per-column, per-bin energy, so a wrong slab or a stale hold surfaces
             // as a value mismatch, not just a shape one.
             let e = [(4, 0.1 * (i as f32 + 1.0)), (7, 0.05 * i as f32), (10, 1.0 - 0.03 * i as f32)];
-            history.push_back(col(t, &e));
-            // Trim the ring, so `first` indices shift under the aggregator.
-            while history.front().is_some_and(|c| c.time < t - (window_span + 0.5)) {
-                history.pop_front();
-            }
+            history.push(col(t, &e));
+            // Trim the store, so `first` indices shift under the aggregator.
+            history.trim_older_than(t - (window_span + 0.5));
             let oldest = t - window_span;
             let first = history.partition_point(|c| c.time < oldest).saturating_sub(1);
             let inc = agg.window(&history, first, bucket, &bin_idx);
-            let bat = aggregate_rows(history.iter().skip(first), &bin_idx, bucket);
+            let bat = aggregate_rows(history.iter_from(first), &bin_idx, bucket);
             assert_eq!(inc, bat, "incremental != batch at step {i} (t={t})");
         }
 
@@ -1023,7 +1114,7 @@ mod tests {
         let now = *times.last().unwrap();
         let first = history.partition_point(|c| c.time < now - window_span).saturating_sub(1);
         let inc = agg.window(&history, first, 0.4, &bin_idx);
-        let bat = aggregate_rows(history.iter().skip(first), &bin_idx, 0.4);
+        let bat = aggregate_rows(history.iter_from(first), &bin_idx, 0.4);
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
     }
 
@@ -1049,8 +1140,8 @@ mod tests {
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 201, 5.0, false, cfg, frame)); // count
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 6.0, false, cfg, frame)); // newest
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, true, cfg, frame)); // whole
-        // And the color inputs: a palette/floor/smoothing change (cfg) or a
-        // gradient-range change (frame) would recolor every pixel.
+        // And the color inputs: a palette, dB window or contrast change (cfg)
+        // or a gradient-range change (frame) would recolor every pixel.
         let mut cfg2 = cfg;
         cfg2.spectrogram_gamma += 0.1;
         vary(crate::SpectrogramKey::new(100, 0.1, 40.0, 48.0, 3, 200, 5.0, false, cfg2, frame));
@@ -1061,8 +1152,8 @@ mod tests {
 
     /// A column written on its own must be pixel-for-pixel what the
     /// whole-image build would have put in that column. If these two ever
-    /// disagree, the heatmap changes appearance the moment temporal smoothing
-    /// is switched on or off, since that is what picks between them.
+    /// disagree, the live heatmap and an offline render of the same audio stop
+    /// looking alike, since which one runs is exactly what tells them apart.
     #[test]
     fn one_column_matches_the_whole_image_build() {
         let cfg = SpectrumConfig::default();
@@ -1073,7 +1164,7 @@ mod tests {
         ];
         let h = bins.len();
         // Two slabs of three bins, slab-major: [slab][bin].
-        let power = [1e-3, 0.0, 1e-6, 4e-2, 1e-5, 0.0];
+        let power = [q(1e-3), q(0.0), q(1e-6), q(4e-2), q(1e-5), q(0.0)];
         let w = power.len() / h;
 
         let whole = fill_pixels(&cfg, w, &bins, &power);
