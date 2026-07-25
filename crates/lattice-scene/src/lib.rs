@@ -70,7 +70,7 @@ pub const OCTAVE_SLOTS: usize = 10;
 /// staccato note still reaches full brightness, since its release fades the
 /// envelope over `fade_time` while this ramp is still climbing, and the
 /// product peaks shortly after the key comes up.
-const ATTACK_TIME: f64 = 0.25;
+const ATTACK_TIME: f64 = 0.15;
 
 /// Samples in the pitch->color lookup the octave glyphs use to tint each
 /// slot by its own octave's pitch. The shader mirrors this length.

@@ -634,8 +634,8 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
             Camera::default(),
             None,
             // Past ATTACK_TIME: the octave glyphs and the mark rings both
-            // ease in over the first quarter second, so at t=0 there is
-            // deliberately nothing on that layer yet.
+            // ease in over the first 0.15s, so at t=0 there is deliberately
+            // nothing on that layer yet.
             0.5,
         )
     };
