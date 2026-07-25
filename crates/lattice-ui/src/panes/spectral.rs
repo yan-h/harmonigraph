@@ -1768,7 +1768,7 @@ mod tests {
                     },
                 );
             }
-            state.spectrum.spectrogram_tex[0].as_ref().expect("a heatmap was uploaded").size()[1]
+            state.spectrum.spectrogram[0].tex.as_ref().expect("a heatmap was uploaded").size()[1]
         }
 
         let (one, two) = (rows_at(1.0), rows_at(2.0));

@@ -69,7 +69,7 @@ const JITTER_SLABS: i64 = 1;
 /// the roll's `depth_of` time mapping so its columns register with the notes.
 ///
 /// Builds the heatmap into a `[time slab x pitch bin]` image, (re)uploads it
-/// to `spectrum.spectrogram_tex`, then stretches it over the region as a
+/// to the surface's texture, then stretches it over the region as a
 /// single bilinear-filtered quad — smooth in both axes, and opaque (silence is
 /// the ramp's dark end, not transparent) so the plane is a filled image rather
 /// than bright patches floating on the background.
@@ -310,8 +310,8 @@ pub(super) fn draw_spectrogram(
 
     // Fast path: the built image is still valid — reuse the uploaded texture and
     // its geometry; only the scrolling quad below is recomputed (with `now`).
-    let reused = match &spectrum.spectrogram_cache[surface] {
-        Some(c) if c.matches(&key) && spectrum.spectrogram_tex[surface].is_some() => Some(c.geometry()),
+    let reused = match &spectrum.spectrogram[surface].cache {
+        Some(c) if c.matches(&key) && spectrum.spectrogram[surface].tex.is_some() => Some(c.geometry()),
         _ => None,
     };
 
@@ -370,7 +370,7 @@ pub(super) fn draw_spectrogram(
                 // and the aggregator are disjoint fields of `spectrum`.
                 None => {
                     let hist = &spectrum.history;
-                    let agg = spectrum.spectrogram_agg[surface].get_or_insert_with(SpectrogramAgg::new);
+                    let agg = spectrum.spectrogram[surface].agg.get_or_insert_with(SpectrogramAgg::new);
                     agg.window(hist, first, bucket, &reads)
                 }
             };
@@ -415,7 +415,7 @@ pub(super) fn draw_spectrogram(
                     (centers[0] / bucket).floor() as i64,
                     w,
                 );
-                let ring = spectrum.spectrogram_ring[surface].as_ref();
+                let ring = spectrum.spectrogram[surface].ring.as_ref();
                 let x0 = ring.map_or(0.0, |r| r.x_of((centers[0] / bucket).floor() as i64) as f32);
                 let tex_w = ring.map_or(w as f32, |r| (r.capacity * 2) as f32);
                 TexLayout { t_origin, tex_span, t0, tn, x0, tex_w }
@@ -423,25 +423,25 @@ pub(super) fn draw_spectrogram(
                 // The full-width build owns the whole texture, so any ring
                 // bookkeeping describing it is now a lie about which slabs its
                 // columns hold.
-                spectrum.spectrogram_ring[surface] = None;
+                spectrum.spectrogram[surface].ring = None;
                 // Build and upload the image (pixel (x = slab, y = bin), y = 0 low pitch).
                 let pixels = fill_pixels(&cfg, w, &bins, &power);
                 let image = egui::ColorImage::new([w, h], pixels);
                 let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
-                match &mut spectrum.spectrogram_tex[surface] {
+                match &mut spectrum.spectrogram[surface].tex {
                     Some(handle) => handle.set(image, opts),
                     slot => *slot = Some(painter.ctx().load_texture("spectrogram", image, opts)),
                 }
                 TexLayout { t_origin, tex_span, t0, tn, x0: 0.0, tex_w: w as f32 }
             };
-            spectrum.spectrogram_cache[surface] = Some(crate::SpectrogramCache::new(
+            spectrum.spectrogram[surface].cache = Some(crate::SpectrogramCache::new(
                 key, t_origin, tex_span, t0, tn, layout.x0, layout.tex_w,
             ));
             layout
         }
     };
 
-    let Some(tex) = &spectrum.spectrogram_tex[surface] else { return };
+    let Some(tex) = &spectrum.spectrogram[surface].tex else { return };
 
     // Map a screen depth to the texture's time axis CONTINUOUSLY, through the
     // roll's own `now`-anchored depth<->time relation (unclamped, the inverse
@@ -943,7 +943,7 @@ fn write_ring(
     // A ring with no texture under it describes nothing, whatever its
     // bookkeeping says.
     let usable = matches!(
-        (&spectrum.spectrogram_ring[surface], &spectrum.spectrogram_tex[surface]),
+        (&spectrum.spectrogram[surface].ring, &spectrum.spectrogram[surface].tex),
         (Some(ring), Some(_)) if ring.carries(capacity, &style, first_key),
     );
 
@@ -951,16 +951,16 @@ fn write_ring(
         // A fresh texture starts black, so a column never written reads as
         // silence rather than as whatever the allocation happened to contain.
         let blank = egui::ColorImage::new([tex_w, h], vec![Color32::BLACK; tex_w * h]);
-        match &mut spectrum.spectrogram_tex[surface] {
+        match &mut spectrum.spectrogram[surface].tex {
             Some(handle) => handle.set(blank, opts),
             slot => *slot = Some(ctx.load_texture("spectrogram", blank, opts)),
         }
-        spectrum.spectrogram_ring[surface] =
+        spectrum.spectrogram[surface].ring =
             Some(SpectrogramRing::restarted(capacity, style, first_key));
     }
 
     let (Some(ring), Some(tex)) =
-        (&mut spectrum.spectrogram_ring[surface], &mut spectrum.spectrogram_tex[surface])
+        (&mut spectrum.spectrogram[surface].ring, &mut spectrum.spectrogram[surface].tex)
     else {
         return;
     };
