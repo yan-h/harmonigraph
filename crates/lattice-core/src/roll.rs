@@ -125,20 +125,17 @@ impl RollNote {
     }
 
     /// Append a bend, folding it into the last breakpoint once
-    /// [`MAX_BENDS`](Self::MAX_BENDS) is reached. Returns whether it moved
-    /// [`settled_pitch`](Self::settled_pitch) — which only a bend still inside
-    /// the settle window can do.
-    fn bend(&mut self, at: Time, pitch: f32) -> bool {
+    /// [`MAX_BENDS`](Self::MAX_BENDS) is reached.
+    fn bend(&mut self, at: Time, pitch: f32) {
         let last = self.bends.len() - 1;
         if self.bends[last].1 == pitch {
-            return false;
+            return;
         }
         if self.bends.len() >= Self::MAX_BENDS {
             self.bends[last] = (at, pitch);
         } else {
             self.bends.push((at, pitch));
         }
-        at <= self.start + Self::SETTLE
     }
 }
 
@@ -150,9 +147,6 @@ pub struct NoteRoll {
     /// Still-sounding notes, keyed the way the tracker keys its held
     /// voices. Bounded by the number of keys, so never trimmed.
     live: HashMap<(u8, u8), RollNote>,
-    /// Bumped whenever a note joins or leaves — see
-    /// [`revision`](Self::revision).
-    revision: u64,
 }
 
 impl NoteRoll {
@@ -172,7 +166,6 @@ impl NoteRoll {
             (channel, note),
             RollNote { channel, note, velocity, start: at, end: None, bends: vec![(at, pitch)] },
         );
-        self.revision += 1;
     }
 
     pub fn note_off(&mut self, channel: u8, note: u8, at: Time) {
@@ -183,14 +176,7 @@ impl NoteRoll {
     /// are ignored (the bend arrived after the note-off).
     pub fn bend(&mut self, channel: u8, note: u8, at: Time, pitch: f32) {
         if let Some(note) = self.live.get_mut(&(channel, note)) {
-            // A bend inside the settle window is still part of the onset —
-            // it is how a retuned note reaches its actual pitch — so it moves
-            // what the note IS, which is a change to report. A later one is a
-            // glide, and reporting those would put every consumer's derived
-            // state back on the per-frame budget for the length of the gesture.
-            if note.bend(at, pitch) {
-                self.revision += 1;
-            }
+            note.bend(at, pitch);
         }
     }
 
@@ -214,7 +200,6 @@ impl NoteRoll {
     fn enforce_cap(&mut self) {
         while self.past.len() > Self::MAX_NOTES {
             self.past.pop_front();
-            self.revision += 1;
         }
     }
 
@@ -224,30 +209,7 @@ impl NoteRoll {
         let cutoff = now - Self::MAX_AGE;
         while self.past.front().is_some_and(|n| n.end.is_some_and(|e| e < cutoff)) {
             self.past.pop_front();
-            self.revision += 1;
         }
-    }
-
-    /// A counter that moves whenever this roll gains or loses a note, or one
-    /// of them settles on a different pitch than it was pressed at.
-    ///
-    /// For a display that derives something from the WHOLE roll and would
-    /// otherwise re-derive it on every frame: hold the derived thing against
-    /// the revision it was taken at, and re-derive only when the number moves.
-    /// The Spectral pane's pitch lanes are that — the earliest onset at each
-    /// distinct pitch, which is a scan of every remembered note (see
-    /// `panes::lanes::LaneCache`).
-    ///
-    /// So it covers exactly the two things a note's identity is made of: that
-    /// it is here, and which pitch it is. It deliberately does NOT move for a
-    /// note-off, which finishes a note without changing which notes are here,
-    /// or for a bend past [`RollNote::SETTLE`], which moves where a note is
-    /// SOUNDING and not which note it is. Both of those are continuous —
-    /// `trim` runs every frame and an MPE gesture sends bends as fast as the
-    /// host will carry them — so a counter that moved for them would put every
-    /// consumer back on the per-frame scan this exists to remove.
-    pub fn revision(&self) -> u64 {
-        self.revision
     }
 
     /// Every remembered note, finished ones first. Not sorted by start
@@ -285,7 +247,6 @@ impl NoteRoll {
     pub fn clear(&mut self) {
         self.past.clear();
         self.live.clear();
-        self.revision += 1;
     }
 }
 
@@ -474,53 +435,6 @@ mod tests {
         let note = tracker.roll().notes().next().unwrap();
         assert!((note.settled_pitch() - 63.863).abs() < 1e-4);
         assert_eq!(note.end_pitch(), 66.0);
-    }
-
-    /// The revision moves for every change to which notes are here and to
-    /// which pitch each of them is, and holds still for the two that are
-    /// neither: a note-off (the same notes, one of them now finished) and a
-    /// glide (the same note, sounding somewhere else).
-    ///
-    /// Both halves are load-bearing. A revision that missed a press, or a
-    /// tuning landing behind one, would let a display keep a lane set with the
-    /// pitch missing or at the wrong height; one that moved on every note-off
-    /// — or on the per-frame `trim`, or on every bend of an MPE gesture —
-    /// would have every consumer re-deriving constantly, which is the entire
-    /// cost the counter exists to remove.
-    #[test]
-    fn the_revision_moves_for_the_notes_and_their_pitches_and_nothing_else() {
-        let mut tracker = NoteTracker::new();
-        let rev = |t: &NoteTracker| t.roll().revision();
-
-        let empty = rev(&tracker);
-        tracker.handle_event(on(0.0, 60));
-        let pressed = rev(&tracker);
-        assert_ne!(pressed, empty, "a press adds a note");
-
-        tracker.handle_event(bend(0.01, 60, 0.3));
-        let tuned = rev(&tracker);
-        assert_ne!(tuned, pressed, "a tuning at the onset changes which pitch it is");
-
-        tracker.handle_event(bend(0.5, 60, 1.0));
-        assert_eq!(rev(&tracker), tuned, "a glide moves a pitch, not a note");
-
-        tracker.handle_event(off(1.0, 60));
-        assert_eq!(rev(&tracker), tuned, "a release finishes a note without removing it");
-
-        tracker.prune(2.0, 1.0);
-        assert_eq!(rev(&tracker), tuned, "and trimming nothing changes nothing");
-
-        tracker.handle_event(on(2.0, 64));
-        let two = rev(&tracker);
-        assert_ne!(two, tuned);
-
-        // Past MAX_AGE the finished note is dropped, which IS a change.
-        tracker.prune(NoteRoll::MAX_AGE + 10.0, 1.0);
-        assert_ne!(rev(&tracker), two, "an eviction removes a note");
-
-        let before_clear = rev(&tracker);
-        tracker.clear_roll();
-        assert_ne!(rev(&tracker), before_clear, "and a clear removes all of them");
     }
 
     #[test]

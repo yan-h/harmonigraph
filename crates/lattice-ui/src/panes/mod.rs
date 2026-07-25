@@ -16,10 +16,11 @@ use crate::widgets::{RangeBar, ValueBar};
 use crate::SharedState;
 
 pub mod frame;
-/// The Spectral pane's pitch lanes. Like [`roll`] and [`spectrogram`], a
-/// layer of [`spectral`]'s far depth region rather than a pane of its own.
-pub mod lanes;
 pub mod lattice;
+/// The names written over the Spectral pane's note ribbons. Like [`roll`] and
+/// [`spectrogram`], a layer of [`spectral`]'s far depth region rather than a
+/// pane of its own.
+pub mod names;
 pub mod nodes;
 pub mod notes;
 pub mod panel;

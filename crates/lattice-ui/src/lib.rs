@@ -122,32 +122,6 @@ impl SpectralOrientation {
     }
 }
 
-/// How the Spectral pane marks the pitches that have been played.
-///
-/// The heatmap's own problem, and the roll's to a lesser degree: a band of
-/// energy sits at some height on a pitch axis that is continuous in cents, and
-/// the only fixed marks on that axis are C gridlines an octave apart — so
-/// naming the band means counting semitones by eye, on a scrolling picture.
-/// Color cannot answer it, because [`RollColor`] has already spent color on
-/// pitch height and a second pitch-keyed scheme over the first is two things
-/// to read where there was one.
-///
-/// See [`panes::lanes`] for how a lane is placed and why it is placed there.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum PitchLanes {
-    /// Nothing but the C gridlines.
-    Off,
-    /// A hairline at each played pitch, from where that pitch was first played
-    /// to now. What is left once you know which lane is which and only want
-    /// the levels back.
-    Lines,
-    /// ...and the pitch's name at the end its line starts from, spelled and
-    /// drawn exactly as the lattice spells and draws that node — so the two
-    /// read as one label in two places.
-    #[default]
-    Named,
-}
-
 /// What colors a note in the piano roll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RollColor {
@@ -425,12 +399,12 @@ pub struct SpectrumConfig {
     pub roll_gap: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
-    /// Mark the pitches that have been played with a lane across the roll's
-    /// region — see [`PitchLanes`]. A bare `serde(default)` is right here
-    /// because the enum's own default IS what a fresh install gets, so a blob
-    /// saved before the field existed and a new one agree.
-    #[serde(default)]
-    pub pitch_lanes: PitchLanes,
+    /// Write each note's name over its ribbon, at the moment it was struck —
+    /// see [`panes::names`]. `default_true`, not `default`, or a state blob
+    /// saved before this field existed would load with them off, contradicting
+    /// the struct's own default, which is what a fresh install gets.
+    #[serde(default = "default_true")]
+    pub note_names: bool,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
@@ -632,7 +606,7 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
-            pitch_lanes: PitchLanes::default(),
+            note_names: true,
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
@@ -1274,11 +1248,6 @@ pub struct SharedState {
     pub take_status: String,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
-    /// The distinct pitches the roll holds, for the Spectral pane's pitch
-    /// lanes — derived from the roll and re-derived only when it changes (see
-    /// [`panes::lanes::LaneCache`]). Runtime-only: it is a view of the roll,
-    /// and the roll is not persisted either.
-    pub(crate) lanes: panes::lanes::LaneCache,
     /// The Spectral pane's settings (Analyzer tab; persisted).
     pub spectrum_config: SpectrumConfig,
     /// Offline playhead render: the whole take's spectrogram laid out
@@ -1478,7 +1447,6 @@ impl SharedState {
             render_config: RenderConfig::default(),
             take_status: String::new(),
             spectrum: AudioSpectrum::default(),
-            lanes: panes::lanes::LaneCache::default(),
             spectrum_config: SpectrumConfig::default(),
             whole_song: None,
             reset_layout: false,

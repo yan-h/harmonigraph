@@ -9,7 +9,7 @@
 
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
-use super::{lanes, nearest_visible_node, section, KEY_NAMES};
+use super::{names, nearest_visible_node, section, KEY_NAMES};
 use lattice_core::notes::display_octave_of;
 use egui::Sense;
 
@@ -66,8 +66,7 @@ fn span_readout(seconds: f32) -> String {
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     use crate::{
-        PitchLanes, RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels,
-        SpectrumWindow,
+        RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
     };
 
     // ---- Axes -----------------------------------------------------------
@@ -260,32 +259,15 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (RollColor::Accent, "Accent", "One flat color; the lattice leads"),
         ],
     );
-    choice_row(
-        ui,
-        "Pitch lanes",
-        &mut cfg.pitch_lanes,
-        &[
-            (
-                PitchLanes::Named,
-                "Names",
-                "A hairline at every pitch played, from where that pitch was \
-                 FIRST played to now, named at the end it starts from. For \
-                 reading the heatmap: a band of energy sits at some height on \
-                 an axis marked only every octave, and this puts a named \
-                 level under it — so a repeat lands on a line that was named \
-                 when the material was introduced.\n\nNames are the lattice's \
-                 own, in its own hand: the node's spelling, with its \
-                 accidental and comma mark. Works with Note history off, \
-                 which is how to read the heatmap alone.",
-            ),
-            (
-                PitchLanes::Lines,
-                "Lines",
-                "The lanes without their names — once you know which is \
-                 which, the levels are the part still doing the work",
-            ),
-            (PitchLanes::Off, "Off", "Nothing but the C gridlines"),
-        ],
+    ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
+        "Write each note's name over its own ribbon, at the moment it was \
+         struck. For reading the heatmap: a band of energy sits at some \
+         height on an axis marked only every octave, and the ribbon over that \
+         band is the same note — so naming the ribbon names the band.\n\n\
+         Names are the lattice's own, in its own hand: the node's spelling \
+         with its accidental and comma mark, so a just third reads E- rather \
+         than as an E and a cents offset. Where they would land on top of \
+         each other the newer note keeps its name.",
     );
     button_row(ui, |ui| {
         if ui
@@ -1058,14 +1040,6 @@ pub(crate) fn spectral_pane(
         super::spectrogram::draw_spectrogram(&painter, &axes, &scale, state, split, now, surface);
     }
 
-    // Pitch lanes: a hairline at each pitch that has been played, running from
-    // where that pitch was first played to now, named at the end it starts
-    // from. Over the heatmap — which is what they are there to let you read —
-    // and under everything that carries meaning of its own, so the names are
-    // held back and drawn with the axis labels at the end.
-    let lane_marks = lanes::plan(state, &axes, &scale, split, now, label_scale);
-    lanes::draw_lines(&painter, &axes, &lane_marks);
-
     // The playhead: in whole-song mode, the one moving mark sweeping across the
     // static spectrogram and roll (it replaces the roll's fixed now-line).
     if whole_song {
@@ -1230,9 +1204,11 @@ pub(crate) fn spectral_pane(
             theme::well(),
         );
     }
-    // The lane names ride in the same batch, and so land over the same
-    // pictures: a name that could be buried by a loud slab names nothing.
-    lanes::push_labels(&painter, &axes, &lane_marks, label_scale, &mut labels);
+    // Each note's own name, over the ribbon it belongs to. In the same batch
+    // as the axis labels, and so over the same pictures: a name that could be
+    // buried by a loud slab — or by the ribbon it is naming — names nothing.
+    let note_names = names::plan(state, &axes, &scale, split, now, label_scale);
+    names::draw(&painter, &note_names, label_scale, &mut labels);
     // Flushed here rather than with the readout below: the divider draws
     // between them, and a batch is drawn where it is flushed.
     labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
