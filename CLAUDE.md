@@ -1,5 +1,17 @@
 # CLAUDE.md
 
+## Builds go through sccache
+
+`.cargo/config.toml` sets `rustc-wrapper = "sccache"`, so **`sccache` must be
+on PATH or every build dies with "could not execute process sccache"**
+(`brew install sccache`). To rule it out as the cause of a build failure,
+`RUSTC_WRAPPER="" cargo build ...` bypasses it.
+
+Each worktree still keeps its own `target/` — parallel sessions never
+serialise on a shared target lock, they only share compiled dependencies. That
+is what the cache is for: a release build in a brand-new worktree takes 1m28s
+instead of 3m36s. `sccache --show-stats` reports the hit rate.
+
 ## Pausing = a loadable build exists (sessions build, Yan loads)
 
 Bitwig loads exactly ONE plugin build: the main checkout's
