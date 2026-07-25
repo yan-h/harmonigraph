@@ -363,7 +363,9 @@ pub struct SpectrumConfig {
     /// Keep a slowly decaying outline at each bucket's recent maximum.
     pub peak_hold: bool,
     /// Strength of the light edge drawn along the spectrum's profile and
-    /// around each note ribbon, 0 = none. See `panes::roll::keyline`.
+    /// around each note ribbon, 0 = none. On a roll note it is the whole of
+    /// the rim — how bright the keyline is, and whether it is drawn at all.
+    /// See `panes::roll::keyline`.
     #[serde(default = "default_keyline")]
     pub keyline: f32,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
@@ -421,27 +423,7 @@ pub struct SpectrumConfig {
     /// it. In between it is a wash the heatmap still reads through.
     #[serde(default = "default_roll_fill")]
     pub roll_fill: f32,
-    /// Width of the solid black outline standing just outside a note, in
-    /// points. 0 draws none.
-    ///
-    /// The structural rim: the crisp dark line that separates the note's
-    /// color from whatever the spectrogram is doing behind it. Independent of
-    /// the note's own thickness — an outline is an outline whether the ribbon
-    /// it wraps is fat or a hairline.
-    #[serde(default = "default_roll_border_width")]
-    pub roll_border_width: f32,
-    /// Width of the white keyline riding outside the black, in points. 0
-    /// draws none; [`keyline`](Self::keyline) sets how bright it is.
-    ///
-    /// A full point is the floor worth using, and that is a grid-stability
-    /// bargain rather than taste: the keyline is the brightest thing on a
-    /// note, and a *bright* sub-point line shimmers as the roll scrolls, its
-    /// peak intensity wobbling with every sub-pixel step across the grid
-    /// (worst on a Hi-DPI display, where 0.6 points is barely over one
-    /// physical pixel). At a full point the coverage stays put.
-    #[serde(default = "default_roll_keyline_width")]
-    pub roll_keyline_width: f32,
-    /// Which of a note's edges the black outline and white keyline ride.
+    /// Which of a note's edges the white keyline rides.
     #[serde(default)]
     pub roll_edge: RollEdge,
     /// Points shaved off a released note's tail, so repeated notes at one
@@ -610,15 +592,6 @@ fn default_roll_fill() -> f32 {
     0.8
 }
 
-fn default_roll_border_width() -> f32 {
-    1.0
-}
-
-/// See [`SpectrumConfig::roll_keyline_width`] for why a full point.
-fn default_roll_keyline_width() -> f32 {
-    1.0
-}
-
 /// A hairline of background between repeats — enough to read two taps as
 /// two, little enough that a note's length is still its length.
 fn default_roll_gap() -> f32 {
@@ -663,8 +636,6 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_outline_width: default_roll_outline_width(),
             roll_fill: default_roll_fill(),
-            roll_border_width: default_roll_border_width(),
-            roll_keyline_width: default_roll_keyline_width(),
             roll_edge: RollEdge::default(),
             roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
