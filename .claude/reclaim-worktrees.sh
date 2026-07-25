@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
 # Remove Claude worktrees that are provably finished, so their per-worktree Rust
-# `target/` dirs (1.5-8 GB each; no sccache, no shared CARGO_TARGET_DIR) stop
-# filling the disk. On 2026-07-19 thirty worktrees held 99 GB and the volume hit
-# 100% — a disk-full mid-build fails every concurrent agent, not just the newest.
+# `target/` dirs stop filling the disk. sccache shares COMPILED OUTPUT between
+# worktrees (see CLAUDE.md) but there is still no shared CARGO_TARGET_DIR, so
+# every worktree keeps its own full `target/` — ~2 GB debug since dependency
+# debuginfo was dropped, several more for a release build. On 2026-07-19 thirty
+# worktrees held 99 GB and the volume hit 100% — a disk-full mid-build fails
+# every concurrent agent, not just the newest.
 #
 # A worktree is removed only when ALL of these hold:
 #   - it lives under .claude/worktrees/ (never touch a hand-made worktree)
