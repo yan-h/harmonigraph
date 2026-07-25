@@ -479,10 +479,18 @@ impl SpectrogramRing {
     ///
     /// Anything older than a full lap has been overwritten by it; the far guard
     /// sits one before the run, so it is the oldest texel in use.
+    ///
+    /// The floor is `first_key` and NOT the oldest run ever painted, because
+    /// the guard destroys exactly that slack. [`write_ring`] duplicates the
+    /// run's oldest column into the texel of `first_key - 1`, so that key stops
+    /// being its own; as the window scrolls the guard walks forward a key per
+    /// frame, and remembering a band below `first_key` would be remembering the
+    /// keys it has just walked over. A widen still costs only the slabs it
+    /// reveals — `back` runs from the new `first_key` up to this floor, which
+    /// is where the previous frame's guard sat.
     fn wrote(&mut self, first_key: i64, last_key: i64) {
         self.written_through = self.written_through.max(last_key);
-        self.oldest_valid =
-            self.oldest_valid.min(first_key).max(last_key - self.capacity as i64 + 2);
+        self.oldest_valid = first_key.max(last_key - self.capacity as i64 + 2);
     }
 }
 
@@ -2495,6 +2503,76 @@ mod tests {
             for (y, pixel) in column.iter().enumerate() {
                 assert_eq!(*pixel, whole[y * w + slab], "slab {slab}, bin {y}");
             }
+        }
+    }
+
+    /// A key the far guard has overwritten is not that key's own column any
+    /// more, so the ring must stop calling it valid.
+    ///
+    /// [`write_ring`] duplicates the run's OLDEST column into the texel of
+    /// `first_key - 1`, to fill the half texel the quad overruns at the far
+    /// edge. That texel then holds the wrong slab. As the window scrolls the
+    /// guard walks forward one key per frame, so after N frames the keys
+    /// `[first_key - N, first_key - 1]` all hold their neighbour's column —
+    /// and `wrote`'s `oldest_valid.min(first_key)` kept every one of them
+    /// inside the range the ring reports as painted.
+    ///
+    /// Nothing then repairs them: [`carries`](SpectrogramRing::carries) sees a
+    /// run that connects and orders no restart, and `back` stops AT
+    /// `oldest_valid`, so a Span widen that reaches into the guarded band
+    /// paints none of it and draws each revealed slab one slab late.
+    ///
+    /// This is an integration bug and neither PR owns it. While the ring's
+    /// style still held the whole `SpectrumConfig`, `roll_seconds` was in it,
+    /// so every frame of a Span drag restarted the ring and wiped the guarded
+    /// band before anything could sample it — the carry-forward path was
+    /// unreachable for the one gesture that reaches backwards. Narrowing the
+    /// style is what made a widen carry, and made the band reachable.
+    #[test]
+    fn a_guarded_key_stops_counting_as_painted() {
+        let scale = SWEEP_SCALE;
+        let style = style_for(64, 0.016, 12.0, &scale);
+        let capacity = 1032;
+        // A run of 500 slabs, as a live window holds, starting well away from
+        // zero so the wrap is in play.
+        let visible = 500i64;
+        let start = 3000i64;
+        let mut ring = SpectrogramRing::restarted(capacity, style.clone(), start);
+        ring.wrote(start, start + visible - 1);
+
+        // Scroll forward a slab at a time, exactly as `now` advancing does.
+        for first in start + 1..=start + 40 {
+            let last = first + visible - 1;
+            assert!(
+                ring.carries(capacity, &style, first, last).is_none(),
+                "a one-slab scroll must not restart the ring",
+            );
+            ring.wrote(first, last);
+            assert!(
+                ring.oldest_valid >= first,
+                "the guard overwrote the texel of key {}, but the ring still \
+                 reports everything from {} as painted",
+                first - 1,
+                ring.oldest_valid,
+            );
+        }
+
+        // Now widen the Span inside the same rung, which is what #93's
+        // narrowing made carry rather than restart. Every slab the widen
+        // reveals has to be repainted, and `back` is what would do it.
+        let first = start + 10;
+        let last = start + 40 + visible - 1;
+        assert!(
+            ring.carries(capacity, &style, first, last).is_none(),
+            "the widen is meant to carry — that is the whole point of the ring",
+        );
+        let back = first..ring.oldest_valid.min(last + 1);
+        for revealed in first..start + 40 {
+            assert!(
+                back.contains(&revealed),
+                "slab {revealed} is drawn from a texel holding its neighbour's \
+                 column, and `back` ({back:?}) does not repaint it",
+            );
         }
     }
 
