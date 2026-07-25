@@ -89,8 +89,16 @@ strip = "symbols"
 
 # Plugin GUIs are unusable in unoptimized debug builds; opt-level 2 keeps
 # dev iteration usable while still compiling fast-ish.
+#
+# Debuginfo is the other half of what a dev build costs. Under the default
+# `debug = true` a populated `target/debug` runs to 19 GB, and with a target
+# dir per worktree that is the single biggest consumer of the disk. Line
+# tables are all the panic backtraces in our own crates need; dependency
+# debuginfo is bulk nobody steps through, so it goes entirely.
 [profile.dev]
 opt-level = 2
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
