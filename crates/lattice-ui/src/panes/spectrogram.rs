@@ -873,18 +873,27 @@ pub(crate) struct SpectrogramAgg {
     /// to fall back — so without a count, a guard that quietly always fires
     /// would still pass every correctness test here and simply hand back the
     /// `aggregate_rows` cost this exists to avoid.
-    #[cfg(test)]
+    ///
+    /// Compiled in rather than test-only, and read out by the performance
+    /// overlay: a fallback is invisible from inside the DAW, where the picture
+    /// is correct and only the frame rate says otherwise — and a frame rate has
+    /// other suspects. Twice this pane has cost a round trip of measurement to
+    /// learn what this number would have said at a glance.
     rebuilds: u32,
 }
 
 impl SpectrogramAgg {
+    /// Full rebuilds taken since this aggregator was made — see the field.
+    pub(crate) fn rebuilds(&self) -> u32 {
+        self.rebuilds
+    }
+
     fn new() -> Self {
         SpectrogramAgg {
             grid: SlabGrid::default(),
             bucket_bits: 0,
             reads: Vec::new(),
             last_time: f64::NEG_INFINITY,
-            #[cfg(test)]
             rebuilds: 0,
         }
     }
@@ -897,10 +906,7 @@ impl SpectrogramAgg {
         bucket: f64,
         reads: &[RowRead],
     ) {
-        #[cfg(test)]
-        {
-            self.rebuilds += 1;
-        }
+        self.rebuilds += 1;
         self.grid = SlabGrid::default();
         for col in history.iter_from(first) {
             self.grid.fold(col, reads, bucket);
@@ -1151,6 +1157,10 @@ fn write_ring(
     );
 
     if !usable {
+        // Counted for the same reason the aggregator counts its rebuilds: a
+        // restart re-blanks the texture and repaints every column, and nothing
+        // about the picture says it happened.
+        spectrum.spectrogram[surface].restarts += 1;
         // A fresh texture starts black, so a column never written reads as
         // silence rather than as whatever the allocation happened to contain.
         let blank = egui::ColorImage::new([tex_w, h], vec![Color32::BLACK; tex_w * h]);

@@ -741,6 +741,12 @@ pub(crate) struct SpectrogramSurface {
     /// whenever the texture was built the full-width way, which now means only
     /// the offline whole-song render.
     ring: Option<crate::panes::spectrogram::SpectrogramRing>,
+    /// Times the ring has been restarted — re-blanked and every column
+    /// repainted. Kept HERE rather than on the ring, which does not survive its
+    /// own restart. Read out by the performance overlay beside the
+    /// aggregator's rebuild count; see
+    /// [`SpectrogramAgg::rebuilds`](crate::panes::spectrogram::SpectrogramAgg::rebuilds).
+    restarts: u32,
 }
 
 impl SpectrogramSurface {
@@ -1169,6 +1175,19 @@ impl AudioSpectrum {
     /// The spectrogram columns, oldest first. Empty until audio has flowed.
     pub fn history(&self) -> &SpectrumHistory {
         &self.history
+    }
+
+    /// Fallbacks taken across both surfaces since the plugin was opened: full
+    /// re-aggregations of the window, and ring restarts.
+    ///
+    /// Both are CORRECT and both are expensive, which is the whole problem —
+    /// they draw the right picture at many times the cost, so nothing on screen
+    /// distinguishes a working cache from one that has quietly stopped. The
+    /// overlay turns them into a rate, where "climbing" is the entire diagnosis.
+    pub(crate) fn spectrogram_fallbacks(&self) -> (u32, u32) {
+        self.spectrogram.iter().fold((0, 0), |(rebuilds, restarts), s| {
+            (rebuilds + s.agg.as_ref().map_or(0, |a| a.rebuilds()), restarts + s.restarts)
+        })
     }
 
     /// Forget the spectrogram history (paired with clearing the roll).
@@ -1787,6 +1806,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             prims: state.prims,
             verts: state.verts,
             roll_notes: state.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
+            spectrogram_fallbacks: state.spectrum.spectrogram_fallbacks(),
             encode_ms: state.encode_ms,
             submit_ms: state.submit_ms,
         },

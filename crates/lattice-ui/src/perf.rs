@@ -108,6 +108,11 @@ pub struct FrameCosts {
     /// reaches egui's. Four vertices each, against the several hundred a
     /// stroked rounded rect costs.
     pub roll_notes: u32,
+    /// The spectrogram's cache fallbacks since the plugin opened: full
+    /// re-aggregations of the window, and ring restarts. CUMULATIVE, so the
+    /// readout below can difference them into a rate without a dropped frame
+    /// losing an event.
+    pub spectrogram_fallbacks: (u32, u32),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -257,6 +262,17 @@ pub struct PerfStats {
     prims: u32,
     verts: u32,
     roll_notes: u32,
+    /// The spectrogram's fallbacks PER SECOND — window re-aggregations and ring
+    /// restarts — latched with everything else.
+    ///
+    /// A rate and not a total, because the total climbs by one whenever the
+    /// layout legitimately changes and would read the same as a cache that has
+    /// stopped working. What tells those apart is how FAST it climbs: both of
+    /// this pane's silent performance bugs sat at hundreds a second while a
+    /// healthy build sits at zero.
+    spec_fallbacks: (f32, f32),
+    /// The totals the rates were last differenced from.
+    last_fallbacks: (u32, u32),
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it).
     ///
@@ -313,6 +329,8 @@ impl Default for PerfStats {
             prims: 0,
             verts: 0,
             roll_notes: 0,
+            spec_fallbacks: (0.0, 0.0),
+            last_fallbacks: (0, 0),
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -353,6 +371,7 @@ impl PerfStats {
             prims,
             verts,
             roll_notes,
+            spectrogram_fallbacks,
             prepare_ms,
             poll_ms,
             write_ms,
@@ -416,6 +435,19 @@ impl PerfStats {
                 window.latch(slot);
             }
             self.peak_slot = (slot + 1) % PEAK_WINDOWS;
+            // Per second over the interval just closed. `last_readout` starts
+            // at -inf, so the first latch spans forever and reads zero rather
+            // than reporting the opening build as an infinite rate.
+            let elapsed = now - self.last_readout;
+            if elapsed.is_finite() && elapsed > 0.0 {
+                let rate =
+                    |total: u32, then: u32| (total.saturating_sub(then) as f64 / elapsed) as f32;
+                self.spec_fallbacks = (
+                    rate(spectrogram_fallbacks.0, self.last_fallbacks.0),
+                    rate(spectrogram_fallbacks.1, self.last_fallbacks.1),
+                );
+            }
+            self.last_fallbacks = spectrogram_fallbacks;
             self.last_readout = now;
         }
         self.workload = workload;
@@ -613,6 +645,17 @@ pub(crate) fn draw_overlay(
         // The roll's geometry, which `verts` does not see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
         rows.push((1, "roll", format!("{} notes", perf.roll_notes), None));
+        // What the spectrogram's two caches are NOT absorbing. Both should read
+        // zero while a window merely scrolls; anything else is a layer that has
+        // fallen back to redrawing the whole heatmap, which costs milliseconds
+        // and looks exactly like a correct picture.
+        let (folds, rings) = perf.spec_fallbacks;
+        rows.push((
+            1,
+            "spec",
+            format!("{folds:.0}/s refold · {rings:.0}/s ring"),
+            None,
+        ));
     }
     rows.extend([
         (0, "memory", memory_readout(perf.rss_bytes), None),
@@ -859,6 +902,54 @@ mod tests {
                 Workload::default(),
             );
         }
+    }
+
+    /// The readout that would have caught both of the spectrogram's silent
+    /// performance bugs: a cache that has stopped absorbing scrolls redraws the
+    /// whole heatmap every frame, which is CORRECT and so invisible on screen.
+    ///
+    /// A rate, not a total. A total climbs by one whenever the layout
+    /// legitimately changes — a resize, a palette change — and would read the
+    /// same as a cache that has stopped working; what tells them apart is how
+    /// fast it climbs.
+    #[test]
+    fn the_overlay_reports_cache_fallbacks_as_a_rate() {
+        let mut perf = PerfStats::default();
+        let mut now = 0.0;
+        let mut totals = (0u32, 0u32);
+        let mut tick = |perf: &mut PerfStats, now: &mut f64, folds: u32, rings: u32| {
+            totals = (totals.0 + folds, totals.1 + rings);
+            *now += 1.0 / 60.0;
+            perf.record(
+                FrameCosts { spectrogram_fallbacks: totals, ..Default::default() },
+                *now,
+                Workload::default(),
+            );
+        };
+
+        // A healthy build: the caches absorb every frame, so nothing is counted
+        // and the rate stays at zero however long it runs.
+        for _ in 0..120 {
+            tick(&mut perf, &mut now, 0, 0);
+        }
+        assert_eq!(perf.spec_fallbacks, (0.0, 0.0), "an idle build must read zero");
+
+        // One legitimate re-layout — a resize, say. A total would now read
+        // "1 forever"; the rate returns to zero once it is past.
+        tick(&mut perf, &mut now, 1, 1);
+        for _ in 0..120 {
+            tick(&mut perf, &mut now, 0, 0);
+        }
+        assert_eq!(perf.spec_fallbacks, (0.0, 0.0), "a one-off re-layout must not linger");
+
+        // And the failure this exists to show: a layer falling back on every
+        // frame, at 60 Hz.
+        for _ in 0..120 {
+            tick(&mut perf, &mut now, 1, 1);
+        }
+        let (folds, rings) = perf.spec_fallbacks;
+        assert!((folds - 60.0).abs() < 5.0, "a per-frame refold read as {folds}/s, not ~60");
+        assert!((rings - 60.0).abs() < 5.0, "a per-frame restart read as {rings}/s, not ~60");
     }
 
     #[test]
@@ -1129,6 +1220,9 @@ mod tests {
         // placeholder and hides the widest case.
         perf.record(
             FrameCosts {
+                // Enough of both to lay out at their widest: the row carries
+                // two rates, so a build falling back hard is the long case.
+                spectrogram_fallbacks: (900, 900),
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,
