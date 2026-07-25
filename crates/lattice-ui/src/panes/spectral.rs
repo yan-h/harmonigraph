@@ -165,8 +165,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         }
     });
 
-    ui.checkbox(&mut cfg.peak_hold, "Peak hold")
-        .on_hover_text("Keep a decaying outline at each pitch's recent maximum");
     ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Edge").show(ui).on_hover_text(
         "A light rim along the spectrum's profile and around each note \
          ribbon. Both sit over the spectrogram, whose colors run from black \
@@ -1079,7 +1077,7 @@ pub(crate) fn spectral_pane(
     // at its actual pitch. Fundamentals line up under their voice bars;
     // the harmonic series marches up the axis from each note.
     if split > 0.0 {
-        if let Some((levels, peaks)) = state.spectrum.display(now) {
+        if let Some(levels) = state.spectrum.display(now) {
             // Only the buckets inside the pitch range.
             // One slab per pitch PIXEL, each taking the loudest bucket that
             // falls in it — not one slab per bucket. The axis holds thousands
@@ -1093,17 +1091,16 @@ pub(crate) fn spectral_pane(
                     .clamp(0, levels.len() as isize - 1) as usize
             };
             let cols = (axes.pitch_len().round() as usize).clamp(2, 4096);
-            let visible: Vec<(f32, f32, f32, f32)> = (0..cols)
+            let visible: Vec<(f32, f32, f32)> = (0..cols)
                 .map(|c| {
                     let edge = |i: usize| scale.min_midi + scale.span * i as f32 / cols as f32;
                     let (b0, b1) = (bucket_at(edge(c)), bucket_at(edge(c + 1)));
-                    let (mut level, mut peak) = (0.0f32, 0.0f32);
+                    let mut level = 0.0f32;
                     for b in b0..=b1.max(b0) {
                         level = level.max(levels[b]);
-                        peak = peak.max(peaks[b]);
                     }
                     let t = (c as f32 + 0.5) / cols as f32;
-                    (scale.min_midi + t * scale.span, t, level, peak)
+                    (scale.min_midi + t * scale.span, t, level)
                 })
                 .collect();
 
@@ -1123,7 +1120,7 @@ pub(crate) fn spectral_pane(
             // enough to read as a solid fill; densely packed, their tops make
             // the shape's edge (no separate line to fray).
             let slab = axes.pitch_len() / cols as f32 + 0.5;
-            for &(midi, t, level, _) in &visible {
+            for &(midi, t, level) in &visible {
                 let d = d_of(level, midi);
                 if d * axes.depth_len() > 0.5 {
                     painter.line_segment(
@@ -1142,17 +1139,9 @@ pub(crate) fn spectral_pane(
             if let Some(edge) = super::roll::keyline(&cfg, 1.0) {
                 let top: Vec<egui::Pos2> = visible
                     .iter()
-                    .map(|&(midi, t, level, _)| axes.at(t, sd(d_of(level, midi))))
+                    .map(|&(midi, t, level)| axes.at(t, sd(d_of(level, midi))))
                     .collect();
                 painter.add(egui::Shape::line(top, egui::Stroke::new(1.0, edge)));
-            }
-            if cfg.peak_hold {
-                // The one remaining line: a decaying trace of recent maxima,
-                // in the palette's loud color.
-                let loud = super::spectrogram::cell_color(cfg.spectrogram_color, 1.0);
-                let pts: Vec<egui::Pos2> =
-                    visible.iter().map(|&(m, t, _, pk)| axes.at(t, sd(d_of(pk, m)))).collect();
-                painter.add(egui::Shape::line(pts, egui::Stroke::new(1.0, tint(loud, 150))));
             }
         }
     }

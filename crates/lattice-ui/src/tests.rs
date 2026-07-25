@@ -613,7 +613,7 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
         .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
         .collect();
     spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
-    let (levels, _peaks) = spectrum.display(1.0).expect("audio is flowing");
+    let levels = spectrum.display(1.0).expect("audio is flowing");
     let peak = levels
         .iter()
         .enumerate()

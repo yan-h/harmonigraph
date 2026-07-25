@@ -359,8 +359,6 @@ pub struct SpectrumConfig {
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
     pub labels: SpectrumLabels,
-    /// Keep a slowly decaying outline at each bucket's recent maximum.
-    pub peak_hold: bool,
     /// Strength of the light edge drawn along the spectrum's profile and
     /// around each note ribbon, 0 = none. On a roll note it is the whole of
     /// the rim — how bright the keyline is, and whether it is drawn at all.
@@ -635,7 +633,6 @@ impl Default for SpectrumConfig {
             smoothing: 0.55,
             tilt: default_tilt(),
             labels: SpectrumLabels::Notes,
-            peak_hold: false,
             keyline: default_keyline(),
             low_midi: default_low_midi(),
             high_midi: default_high_midi(),
@@ -675,8 +672,6 @@ pub struct AudioSpectrum {
     analyzer: lattice_core::spectrum::ChannelBank,
     /// Smoothed display buckets (power; the pane maps to height).
     display: SpectrumBuckets,
-    /// Decaying per-bucket maxima for the peak-hold outline.
-    peaks: SpectrumBuckets,
     /// FRAMES pushed since this analyzer was made, and the count at which the
     /// next FFT falls due. The column grid is a function of these two and
     /// nothing else — see [`push_samples`](AudioSpectrum::push_samples).
@@ -954,7 +949,6 @@ impl Default for AudioSpectrum {
         AudioSpectrum {
             analyzer: lattice_core::spectrum::ChannelBank::new(48_000.0, 1),
             display: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
-            peaks: [0.0; lattice_core::spectrum::SPECTRUM_BINS],
             frames_seen: 0,
             next_hop: 0,
             anchor: None,
@@ -1002,8 +996,6 @@ impl AudioSpectrum {
     /// event times with the same two numbers.
     const ANCHOR_SMOOTHING: f64 = 0.05;
     const ANCHOR_SNAP: f64 = 1.0;
-    /// Peak-hold half-life in seconds.
-    const PEAK_HALF_LIFE: f64 = 1.2;
 
     /// Feed mono samples from the shell, analyzing one spectrum per
     /// [`FFT_INTERVAL`](Self::FFT_INTERVAL) of audio in them. `now` is the shell
@@ -1105,16 +1097,8 @@ impl AudioSpectrum {
             let Some(fresh) = self.analyzer.power_sum() else { continue };
 
             let alpha = 1.0 - config.smoothing.clamp(0.0, 0.95);
-            let decay = 0.5f32.powf((Self::FFT_INTERVAL / Self::PEAK_HALF_LIFE) as f32);
-            for ((shown, peak), new) in self.display.iter_mut().zip(&mut self.peaks).zip(&fresh) {
+            for (shown, new) in self.display.iter_mut().zip(&fresh) {
                 *shown += (new - *shown) * alpha;
-                *peak = if config.peak_hold {
-                    (*peak * decay).max(*shown)
-                } else {
-                    // Track the live level while off, so switching the
-                    // outline on starts from now, not stale maxima.
-                    *shown
-                };
             }
             // Keep the RAW spectrum for the spectrogram (the smoothed
             // `display` would smear one column into the next). Retention is
@@ -1132,14 +1116,13 @@ impl AudioSpectrum {
         }
     }
 
-    /// The curve to draw — (levels, peak-holds) — or None while no audio is
-    /// flowing. Both are maintained per column by
-    /// [`push_samples`](Self::push_samples); this only decides whether they are
-    /// still live.
-    pub fn display(&self, now: f64) -> Option<(&SpectrumBuckets, &SpectrumBuckets)> {
+    /// The curve to draw, or None while no audio is flowing. The levels are
+    /// maintained per column by [`push_samples`](Self::push_samples); this
+    /// only decides whether they are still live.
+    pub fn display(&self, now: f64) -> Option<&SpectrumBuckets> {
         self.last_samples
             .is_some_and(|t| now - t <= Self::HOLD_SECONDS)
-            .then_some((&self.display, &self.peaks))
+            .then_some(&self.display)
     }
 
     /// The most history ever kept, span-independent: the longest span the roll
