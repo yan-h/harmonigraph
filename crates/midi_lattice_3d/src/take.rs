@@ -835,7 +835,7 @@ mod tests {
 
     #[test]
     fn a_finished_take_always_renders() {
-        // Auto-render is no longer gated: stopping a take always kicks off a
+        // Auto-render is not gated: stopping a take always kicks off a
         // render (recorded audio + playhead), so from_config is always `Some`.
         let config = RenderConfig { auto_render: false, ..Default::default() };
         assert!(RenderRequest::from_config(&config).is_some());

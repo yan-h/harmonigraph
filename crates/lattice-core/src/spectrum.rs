@@ -15,11 +15,11 @@
 /// in MIDI pitch, i.e. logarithmic in frequency, so every octave gets equal
 /// width.
 ///
-/// Deliberately NOT whole octaves from a C. It used to be MIDI 12..132, ten
-/// octaves C to C, which made the C gridlines land on the axis ends — tidy,
-/// but it stopped at 16.7 kHz and left the top third of an octave of the
-/// audible band unanalyzed. There is no C anywhere near 20 kHz (the next one
-/// is 44 kHz), so covering the band means giving that tidiness up.
+/// Deliberately NOT whole octaves from a C. MIDI 12..132 — ten octaves C to
+/// C — would land the C gridlines on the axis ends, which is tidy, but it
+/// stops at 16.7 kHz and leaves the top third of an octave of the audible
+/// band unanalyzed. There is no C anywhere near 20 kHz (the next one is
+/// 44 kHz), so covering the band means giving that tidiness up.
 pub const SPECTRUM_MIN_MIDI: f32 = 15.486_82; // 20 Hz
 pub const SPECTRUM_MAX_MIDI: f32 = 135.076_23; // 20 kHz
 /// Axis resolution: 32 buckets per semitone (3.125 cents).

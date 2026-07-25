@@ -599,9 +599,9 @@ const SPLIT_GRAB_HALF: f32 = 6.0;
 /// panes detach, which this divider must not). Instead the handle drags
 /// [`roll_fraction`](crate::SpectrumConfig::roll_fraction) directly, so the
 /// drag persists with the rest of the UI state. It is the only way to set the
-/// split: the Analyzer tab used to carry a "Roll share" bar for the same
-/// field, which the divider made redundant — dragging the boundary you can
-/// see beats aiming a number at it.
+/// split: a "Roll share" bar on the Analyzer tab would be a second control for
+/// the same field, and dragging the boundary you can see beats aiming a number
+/// at it.
 ///
 /// Returns the handle's response so the caller can paint its highlight last,
 /// over the plots. `surface` keeps the docked pane and the Video preview from
@@ -653,7 +653,7 @@ const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 ///
 /// Docked pane only. The Video tab draws this same pane as its preview, and
 /// that tab's body is a vertical `ScrollArea` — a wheel spent zooming there is
-/// a wheel the tab can no longer be scrolled with, which is the only thing
+/// a wheel the tab cannot be scrolled with, which is the only thing
 /// that keeps its controls reachable when the preview squeezes it. (The
 /// divider is a different case and stays live in the preview: it is a handle
 /// you aim at, not a gesture over the whole surface.)
@@ -872,10 +872,10 @@ impl TimeAxis {
 /// the spectrum peak it is making.
 ///
 /// Hovering a pitch here highlights the matching lattice node (if one is in
-/// view) and reads the pitch out. Nothing comes back the other way: a band
-/// used to light up here for the lattice-hovered pitch class, in every
-/// octave, and a stripe across the whole picture was too loud an answer to
-/// a pointer resting somewhere else.
+/// view) and reads the pitch out. Nothing comes back the other way: lighting
+/// a band here for the lattice-hovered pitch class, in every octave, puts a
+/// stripe across the whole picture — too loud an answer to a pointer resting
+/// somewhere else.
 pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
@@ -1147,12 +1147,12 @@ pub(crate) fn spectral_pane(
     }
 
     // The now-line, where the roll hands over to the spectrum — drawn here,
-    // after both things it divides, rather than at the end of the roll where
-    // it used to be. It marks the boundary between two pictures, so it has to
-    // sit ON them: from inside the roll it went down before the spectrum curve
-    // and the curve's fill painted over it, and the spectrogram's quad reaches
-    // the same line from the other side. Either one eating into it left a
-    // divider that flickered with the music instead of holding still.
+    // after both things it divides, rather than at the end of the roll. It
+    // marks the boundary between two pictures, so it has to sit ON them: from
+    // inside the roll it goes down before the spectrum curve and the curve's
+    // fill paints over it, and the spectrogram's quad reaches the same line
+    // from the other side. Either one eating into it leaves a divider that
+    // flickers with the music instead of holding still.
     //
     // Whole-song mode sweeps a playhead across a static layout instead, and
     // draws its own mark above. Always drawn (there is no setting): a note
@@ -1222,11 +1222,10 @@ pub(crate) fn spectral_pane(
     if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
         // Cents from C, measured from MIDI 0 (which IS a C) rather than from
-        // the range's own start: the range used to be a pair of octave numbers
-        // and so always began on a C, but it is continuous now and generally
-        // does not. Measuring from it offset every hovered pitch class by
-        // wherever the zoom happened to start, so hovering the spectrum lit up
-        // the wrong lattice node.
+        // the range's own start: the range is continuous and generally does
+        // not begin on a C. Measuring from it offsets every hovered pitch
+        // class by wherever the zoom happened to start, so hovering the
+        // spectrum lights up the wrong lattice node.
         let pc_cents = midi.rem_euclid(12.0) * 100.0;
         state.hovered = nearest_visible_node(
             &state.view,
@@ -1766,9 +1765,8 @@ mod tests {
         assert!(hz_readout(khz - 0.1).ends_with(" Hz"));
     }
 
-    /// A C gridline has to land on a C. The range used to be a pair of octave
-    /// numbers, so its start WAS a C and stepping twelves from it worked; now
-    /// it can start anywhere.
+    /// A C gridline has to land on a C. The range is continuous and can start
+    /// anywhere, so stepping twelves from its start does not work.
     #[test]
     fn c_gridlines_land_on_cs_wherever_the_range_starts() {
         assert_eq!(first_c_at_or_above(48.0), 48, "a range already on a C keeps it");

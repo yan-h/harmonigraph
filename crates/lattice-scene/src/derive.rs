@@ -416,7 +416,7 @@ const GRID_LIT_OPACITY: f32 = 0.85;
 /// from a FLOATING sounding off-sheet note down to the home sheet — so a
 /// note on another sheet hangs from something visible instead of floating.
 /// That is about ONE note's depth, not a relationship between two: in-plane
-/// lines no longer brighten because the notes at both ends happen to sound.
+/// lines do not brighten because the notes at both ends happen to sound.
 ///
 /// A chain runs only through silence, and stops at the first sounding note
 /// under it: a note already sitting over a sounding one is connected to it

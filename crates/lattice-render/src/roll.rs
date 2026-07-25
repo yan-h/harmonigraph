@@ -622,11 +622,11 @@ mod tests {
 
     /// A note is a rectangle: its corners are square, right out to them.
     ///
-    /// Rounding used to be a setting, and on the notes short enough for it to
-    /// show at all it only ever hurt — a tap is a few points long, the radius
-    /// clamps to its own half-length, and the note comes out a bead. A run of
-    /// them came out as a string of beads. Nothing rounds a note now, and this
-    /// samples the corner a radius would have taken off.
+    /// Nothing rounds a note, and this samples the corner a radius would
+    /// take off. On the notes short enough for rounding to show at all it
+    /// only hurts — a tap is a few points long, the radius clamps to its own
+    /// half-length, and the note comes out a bead. A run of them comes out as
+    /// a string of beads.
     #[test]
     fn a_notes_corners_are_square() {
         let Some((device, queue)) = headless_device() else {

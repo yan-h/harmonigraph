@@ -381,7 +381,7 @@ fn the_grid_color_drives_the_idle_nodes_too() {
 #[test]
 fn grid_color_and_dashes_come_from_the_view() {
     // The color (and its alpha, the idle line opacity) is a view
-    // setting now; it used to be readable only from the skin.
+    // setting, not read from the skin.
     let tinted = [0.9f32, 0.1, 0.4, 0.25];
     let grid = grid_of(&ViewConfig { grid_color: tinted, ..grid_view() });
     let unlit = grid
@@ -474,8 +474,8 @@ fn melody_and_bass_mark_the_outer_held_notes() {
 fn a_lone_held_note_is_marked_as_both_ends() {
     // One note is at once the highest and the lowest held, and is marked
     // as both. The shader splits such a mark between the two colors (see
-    // mark_paint) rather than blanking it, which is what it used to do --
-    // an outline that vanished exactly when two things were true at once.
+    // mark_paint) rather than blanking it -- blanking gives an outline that
+    // vanishes exactly when two things are true at once.
     let scene = marked_scene(&[60], HighlightExtremes::Both);
     let mut seen = false;
     for n in &scene.nodes {
@@ -552,10 +552,10 @@ fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
 
 #[test]
 fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
-    // A ring used to arrive at full the frame its note claimed an end,
-    // which made it the jumpiest thing on the node — the octave sector
-    // underneath it was already easing in. Both ride the one ramp now, so
-    // a note's outer layer arrives as a single gesture.
+    // A ring arriving at full the frame its note claims an end is the
+    // jumpiest thing on the node, since the octave sector underneath it
+    // eases in. Both ride the one ramp, so a note's outer layer arrives
+    // as a single gesture.
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent {
         time: 0.0,
@@ -902,12 +902,12 @@ fn legacy_node_body_folds_into_core_and_outer() {
 
 #[test]
 fn grid_lines_never_light_between_played_neighbors() {
-    // In-plane grid lines used to brighten and take the notes' color when
-    // the notes at BOTH ends sounded, drawing a chord's intervals as
-    // geometry. It read as noise rather than structure and is gone; the
-    // grid is now purely the idle structure, and the only thing that still
-    // lights is a sevens-axis chain (see the off-sheet test above), which
-    // is about one note's depth rather than a pair.
+    // In-plane grid lines must not brighten and take the notes' color when
+    // the notes at BOTH ends sound. Drawing a chord's intervals as geometry
+    // reads as noise rather than structure; the grid is purely the idle
+    // structure, and the only thing that lights is a sevens-axis chain (see
+    // the off-sheet test above), which is about one note's depth rather
+    // than a pair.
     //
     // Just intonation and a small window so pitch classes stay unique.
     let tuning = Tuning { tolerance: lattice_core::tuning::microcents(5.0), ..Tuning::just() };
@@ -1579,9 +1579,9 @@ fn a_flat_lattice_still_clears_its_grid() {
     // the clearing is not only an inter-sheet device: it cuts the grid
     // lines, so a sounding node sits in a clean gap in the lattice rather
     // than on top of it. That reading is wanted at any depth, so the home
-    // sheet clears on a flat lattice exactly as it does on a deep one — it
-    // used to be gated on the extent, which made the look reachable only by
-    // growing depth the view didn't want.
+    // sheet clears on a flat lattice exactly as it does on a deep one.
+    // Gating it on the extent would make the look reachable only by growing
+    // depth the view doesn't want.
     let view = ViewConfig { extent_sevens: 0, sevens_gutter: 0.2, ..ViewConfig::default() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &FrameParams::default(), 0.0);
     let mut lit = 0;

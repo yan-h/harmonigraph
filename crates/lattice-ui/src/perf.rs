@@ -12,14 +12,14 @@
 /// plain mean of the frames measured over this long, recomputed from scratch
 /// each time and printed unchanged until the next window closes.
 ///
-/// A window mean rather than the exponential moving average this used to be,
-/// which was the wrong filter for the question the HUD gets asked. An EMA has
-/// unbounded memory, so one stalled frame lifted every row for the best part
-/// of a second, and a steady 2 ms was indistinguishable from 0.8 ms plus a
-/// hiccup — the two want completely different fixes. Worse, keeping it
-/// frame-rate-independent meant deriving its blend factor from the frame
-/// interval, which made that factor COMMON to every row: when pacing turned
-/// ragged the whole HUD lurched at once and read as correlated cost that was
+/// A window mean rather than an exponential moving average, which is the
+/// wrong filter for the question the HUD gets asked. An EMA has unbounded
+/// memory, so one stalled frame lifts every row for the best part of a
+/// second, and a steady 2 ms is indistinguishable from 0.8 ms plus a
+/// hiccup — the two want completely different fixes. Worse, keeping one
+/// frame-rate-independent means deriving its blend factor from the frame
+/// interval, which makes that factor COMMON to every row: when pacing turns
+/// ragged the whole HUD lurches at once and reads as correlated cost that is
 /// not there. A window mean has no memory to smear and no shared term to
 /// couple the rows. What a row shows happened inside that window and nowhere
 /// else.
@@ -106,7 +106,7 @@ pub struct FrameCosts {
     /// Note segments the roll drew through its paint callback. NOT part of
     /// `verts`: the roll owns its instance buffer, so its geometry never
     /// reaches egui's. Four vertices each, against the several hundred a
-    /// stroked rounded rect used to cost.
+    /// stroked rounded rect costs.
     pub roll_notes: u32,
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
@@ -260,8 +260,8 @@ pub struct PerfStats {
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it).
     ///
-    /// Still smoothed where the frame costs no longer are, because it is a
-    /// different kind of signal: a slow-moving LEVEL read once a second, not a
+    /// Smoothed where the frame costs are not, because it is a different
+    /// kind of signal: a slow-moving LEVEL read once a second, not a
     /// per-frame cost. There is no spike here for a filter to smear across
     /// time — raw RSS simply wanders by megabytes between reads as the host
     /// and the GPU driver take memory and give it back.
@@ -368,9 +368,9 @@ impl PerfStats {
             self.frame_ms.record(dt * 1000.0);
         }
         self.tick.record(tick_ms);
-        // Clamped at zero for the same reason the old subtraction was: these
-        // are two independent readings of nested spans, and measurement noise
-        // can put the inner one a hair above the outer.
+        // Clamped at zero because these are two independent readings of
+        // nested spans, and measurement noise can put the inner one a hair
+        // above the outer.
         self.egui.record((tick_ms - render_ms).max(0.0));
         self.shell.record(shell_ms);
         self.ui.record(cpu_ms);
@@ -610,7 +610,7 @@ pub(crate) fn draw_overlay(
     }, None));
     if detail {
         rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims), None));
-        // The roll's geometry, which `verts` can no longer see: it goes to the
+        // The roll's geometry, which `verts` does not see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
         rows.push((1, "roll", format!("{} notes", perf.roll_notes), None));
     }
@@ -656,10 +656,10 @@ pub(crate) fn draw_overlay(
     // the first, means RIGHT-aligned in the second and peaks in the third, so
     // the digits and the unit line up down the list.
     //
-    // The label column used to be a hardcoded seven characters, which was
-    // fine until a row was called "lattice gpu" — eleven characters, and the
-    // value column started underneath it. Sizing from the widest label
-    // actually present cannot drift out of step with the rows again.
+    // The label column is sized from the widest label actually present, not
+    // a hardcoded width: a fixed seven characters fits until a row is called
+    // "lattice gpu" — eleven characters, with the value column starting
+    // underneath it. Measuring cannot drift out of step with the rows.
     const COL_GAP: f32 = 10.0;
     // Between the labels and the means: the peak answers a different question
     // from the cost beside it, and reading it as a second opinion on that cost

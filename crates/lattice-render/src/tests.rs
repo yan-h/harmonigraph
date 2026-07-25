@@ -241,7 +241,7 @@ fn parity_scene() -> Scene {
         darkest_pitch: 24.0,
         brightest_pitch: 108.0,
         render_scale: 1.0,
-        // Parity with the old direct renderer requires bloom off.
+        // Parity with the direct-to-egui-pass reference requires bloom off.
         bloom_strength: 0.0,
     }
 }
@@ -566,10 +566,10 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     assert_eq!(changed_px(&off), 0, "an unmarked node must draw no mark");
 
     // A note claimed by BOTH ends -- a lone held note, or a chord whose top
-    // and bottom share a pitch class -- used to be blanked, so the mark
-    // vanished exactly when two things were true at once. The two ends are
-    // now rings at DIFFERENT radii, so both simply draw: the result must
-    // cover at least as much as one end alone. This guards that.
+    // and bottom share a pitch class -- must not be blanked: that vanishes
+    // the mark exactly when two things are true at once. The two ends are
+    // rings at DIFFERENT radii, so both simply draw: the result must cover
+    // at least as much as one end alone. This guards that.
     let split = shot(&single_marked_node(1, 1), 45);
     let split_px = changed_px(&split);
     eprintln!("split mark {split_px} px of {node_px}");

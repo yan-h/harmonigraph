@@ -37,8 +37,8 @@ const MIN_SIZE: (u32, u32) = (400, 300);
 
 /// Maps audio-clock timestamps (seconds on the plugin's sample clock)
 /// onto the GUI clock. A smoothed offset estimate preserves the relative
-/// spacing of events - re-stamping on arrival (the old approach) squashed
-/// every event in a batch onto the same GUI frame time.
+/// spacing of events - re-stamping on arrival would squash every event in a
+/// batch onto the same GUI frame time.
 pub(crate) struct ClockMapper {
     /// Estimated `gui_time - audio_time` (includes average delivery
     /// latency, which is fine: it's constant-ish, so spacing survives).
@@ -559,12 +559,12 @@ const DISPLAY_OVERSAMPLE: f64 = 2.0;
 /// them, because the two intervals are not the same kind of quantity: the
 /// display's is deliberately [`DISPLAY_OVERSAMPLE`] times faster than the
 /// refresh, and the cap's is the bare rate the user asked for. Comparing them
-/// with `max` — as this did — quietly conflates the two, and the bug only
-/// stays hidden while the oversample happens to be small enough that the
-/// display's interval is still the longer number. At 6x it is not: a 144 fps
-/// cap on a 60 Hz panel used to pace off the panel, and under `max` it would
-/// instead win with its bare 6.94 ms and throw the whole margin away. That is
-/// a cap the user set to mean "don't limit me" making the pacing worse.
+/// with `max` quietly conflates the two, and the bug only stays hidden while
+/// the oversample happens to be small enough that the display's interval is
+/// still the longer number. At 6x it is not: a 144 fps cap on a 60 Hz panel
+/// should pace off the panel, and under `max` it would instead win with its
+/// bare 6.94 ms and throw the whole margin away. That is a cap the user set
+/// to mean "don't limit me" making the pacing worse.
 ///
 /// KNOWN GAP: a BINDING cap still throws [`DISPLAY_OVERSAMPLE`] away. A 30 fps
 /// cap on a 60 Hz display runs a bare 33.33 ms timer against a 16.67 ms
@@ -923,7 +923,7 @@ mod tests {
     #[test]
     fn a_cap_sets_the_interval_it_names() {
         // 30 fps on a 144 Hz display: the cap binds, exactly, with no
-        // rounding to whatever the timer used to tick at.
+        // rounding to whatever the timer happens to tick at.
         let interval = target_frame_interval(Some(30.0), Some(144.0));
         assert!((interval - 1.0 / 30.0).abs() < 1e-12, "got {interval}");
     }

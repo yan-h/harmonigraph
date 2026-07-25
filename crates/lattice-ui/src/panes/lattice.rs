@@ -467,8 +467,8 @@ mod tests {
 
     /// One quad per glyph, whatever the rim is doing.
     ///
-    /// This is the whole point of drawing labels ourselves: the rim used to
-    /// multiply a label's geometry by twenty-one, so every new label was a
+    /// This is the whole point of drawing labels ourselves: stamping the rim
+    /// as geometry multiplies a label by twenty-one, making every new label a
     /// cost decision. Here the rim is arithmetic in the fragment shader and
     /// a piece of text costs its own glyphs and nothing else.
     #[test]
