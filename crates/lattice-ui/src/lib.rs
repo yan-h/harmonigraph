@@ -1584,12 +1584,14 @@ impl SharedState {
             // aliases), which is what lets the settings below survive — but the
             // arrangement itself is stale, so refresh it to the new default.
             // Everything else the user dialed in is kept.
+            // The folds go with the dock they were measured against: they name
+            // splits by index, so a fresh arrangement has to start with none
+            // rather than with fractions pointing into a tree that is gone.
+            // Same reason "Reset layout" clears them.
             self.dock = if persist.version < UI_PERSIST_VERSION {
+                self.folds.clear();
                 default_dock()
             } else {
-                // The folds go with the dock they were measured against: a
-                // fresh arrangement has no folded panes, and the remembered
-                // fractions would name splits in a tree that is gone.
                 self.folds = persist.folds;
                 persist.dock
             };

@@ -189,6 +189,13 @@ impl Folds {
     pub fn clear(&mut self) {
         self.0.clear();
     }
+
+    /// Whether anything is being remembered. Nothing in the draw needs this —
+    /// it is how a test says "this dock was replaced, so the fractions that
+    /// named its splits are gone too".
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl Fold {
