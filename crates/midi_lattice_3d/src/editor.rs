@@ -434,43 +434,28 @@ fn frame(
     }
 }
 
-/// How many frames the swapchain may have in flight.
+/// The wgpu setup, which is `GraphicsConfig::default()` plus a request for
+/// timestamp queries so the performance overlay can report GPU time.
 ///
-/// egui-wgpu leaves this unset, which takes wgpu's default of 2 — and 2 is
-/// only one frame of slack, so anything that delays a present stalls the CPU
-/// in `get_current_texture` immediately, with no queued frame to cover the
-/// gap. That is the shape of the stall the overlay actually shows: an idle
-/// GPU (0.2 ms for the whole scene), a frame's own work well inside the
-/// refresh (~4.5 ms of 6.94 ms), and the time going into a `wait` averaging
-/// 4 ms and peaking at 16. Nothing we compute is slow; we are blocked waiting
-/// for a drawable to come back, and a deeper queue is what lets the CPU keep
-/// working through that.
+/// Requested only where the adapter already advertises them, because
+/// `request_device` FAILS on an unsupported feature — asking unconditionally
+/// would trade a missing readout for a plugin that won't open. Where they
+/// aren't granted the overlay simply says "n/a", as it already does for
+/// memory on platforms that won't report it.
 ///
-/// 3 is the most Metal will give: wgpu-hal clamps this to 2..=3 on the way to
-/// `CAMetalLayer.maximumDrawableCount`, so this is the whole of the knob.
-///
-/// The cost is latency — one more frame between drawing and showing, about
-/// 7 ms at 144 Hz. That is a real trade for a plugin whose picture is meant to
-/// track what you just played, which is why it is spelled out here rather than
-/// buried: if the stalls turn out to come from somewhere else, this should go
-/// back to the default rather than stay as a free-looking win.
-const MAX_FRAME_LATENCY: u32 = 3;
-
-/// The wgpu setup: `GraphicsConfig::default()`, plus a request for timestamp
-/// queries so the performance overlay can report GPU time, plus a deeper
-/// swapchain (see [`MAX_FRAME_LATENCY`]).
-///
-/// Timestamps are requested only where the adapter already advertises them,
-/// because `request_device` FAILS on an unsupported feature — asking
-/// unconditionally would trade a missing readout for a plugin that won't open.
-/// Where they aren't granted the overlay simply says "n/a", as it already does
-/// for memory on platforms that won't report it.
+/// TRIED AND REVERTED: `surface.desired_maximum_frame_latency = Some(3)`,
+/// which egui-wgpu leaves unset (wgpu defaults it to 2, i.e. one frame of
+/// slack). The theory was that a deeper queue would let the CPU work through
+/// a delayed present instead of stalling in `get_current_texture`, which is
+/// where the overlay puts the time. It made no appreciable difference, and it
+/// costs a frame of latency (~7 ms at 144 Hz) on a picture meant to track
+/// what you just played — so it is not worth carrying. 3 was the whole knob
+/// anyway: wgpu-hal clamps to 2..=3 for `CAMetalLayer.maximumDrawableCount`.
 fn graphics_config() -> GraphicsConfig {
     use egui_baseview::WgpuSetup;
     use lattice_render::wgpu;
 
     let mut config = GraphicsConfig::default();
-    config.wgpu_options.surface.desired_maximum_frame_latency = Some(MAX_FRAME_LATENCY);
     if let WgpuSetup::CreateNew(setup) = &mut config.wgpu_options.wgpu_setup {
         let base = setup.device_descriptor.clone();
         setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
