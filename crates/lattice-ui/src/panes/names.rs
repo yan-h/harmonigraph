@@ -52,6 +52,12 @@ const LABEL_PT: f32 = 9.5;
 
 /// Points the name is set in from the ribbon's leading edge, along the time
 /// axis. Enough that the letter is not touching the end it starts from.
+///
+/// Scaled with the type, like every other length here. The offline render
+/// draws at three times the docked pane's `label_scale`, so a spacing left in
+/// fixed points would be a third of the clear air there that it is here — the
+/// render diverging from the pane the look was dialled in on, which is the one
+/// thing this codebase most wants it not to do.
 const LABEL_INSET: f32 = 2.0;
 
 /// What a monospace glyph advances, and a line box stands, as fractions of the
@@ -116,12 +122,25 @@ impl Occupancy {
     }
 }
 
-/// A pitch as an occupancy key: hundredths of a semitone, so two presses of
-/// one key under one tuning are the same pitch and float noise cannot split
-/// them. Anything further apart than that is two pitches, and two pitches do
-/// not thin each other at all.
+/// How far apart two pitches must be, in cents, to be different lanes for
+/// thinning.
+///
+/// A tenth of a semitone. Not finer: at a two-octave zoom on a docked pane a
+/// point is about four cents, so a grain of one cent would call pitches
+/// different lanes that share a pixel row — and any material whose tuning
+/// drifts between repeats (adaptive tuning, MPE expression that lands a hair
+/// off where the last one did) would get no thinning at all, every note being
+/// its own lane. That is the failure precisely in the material this plugin
+/// exists for. Not coarser: a syntonic comma is 21.5 cents and must stay two
+/// lanes, since two nodes a comma apart are two different notes.
+///
+/// It grades the THINNING only. A name is still chosen from the exact pitch,
+/// so what a lane is called is not rounded — only whether two of them compete.
+const LANE_CENTS: f32 = 10.0;
+
+/// A pitch as an occupancy key — see [`LANE_CENTS`].
 fn pitch_key(midi: f32) -> i32 {
-    (midi * 100.0).round() as i32
+    (midi * 100.0 / LANE_CENTS).round() as i32
 }
 
 /// Where a name lies along the TIME axis, in screen points.
@@ -160,7 +179,12 @@ pub(super) fn plan(
     label_scale: f32,
 ) -> Vec<NoteLabel> {
     let cfg = &state.spectrum_config;
-    if !cfg.note_names || split >= 1.0 {
+    // Names label RIBBONS, so they need ribbons. With the roll hidden there is
+    // nothing under them to name and they would be text floating over the
+    // heatmap at whatever pitches notes happened to have — which is not the
+    // same picture at all, and would come from a checkbox in the roll's own
+    // section that appeared not to turn them off.
+    if !cfg.note_names || !cfg.show_roll || split >= 1.0 {
         return Vec::new();
     }
     let time = TimeAxis::new(state, split, now);
@@ -174,10 +198,18 @@ pub(super) fn plan(
     // Cull to what is on the pane before anything else: the roll remembers
     // thousands of notes while a handful are in the window, and everything
     // below is per-candidate work.
+    //
+    // Culled on the pitch the name will be DRAWN at, not on the note's pitch
+    // in general — the two differ for a bent note, and it is the name that has
+    // to be on the pane.
     let oldest = time.oldest();
-    let mut notes: Vec<&RollNote> = roll
+    let mut notes: Vec<(&RollNote, Edge)> = roll
         .notes()
-        .filter(|note| note.stop(now) >= oldest && scale.contains(note.settled_pitch()))
+        .filter(|note| note.stop(now) >= oldest)
+        .filter_map(|note| {
+            let edge = leading_edge(&time, note, now);
+            scale.contains(edge.pitch).then_some((note, edge))
+        })
         .collect();
     // Oldest first — and a total order, since the offline render must not
     // depend on the order the roll happened to hand them back and a name's
@@ -191,34 +223,42 @@ pub(super) fn plan(
     // evicting it. Newest-first reshuffles the whole pane on every note played,
     // which is precisely when you are trying to read it.
     //
-    // Held notes go LAST, and step outside the sweep entirely (see below).
-    // Last so that where one does overlap something, it is the held name that
-    // lands on top — they are drawn in this order, and it is the note under
-    // your finger that has to stay readable.
+    // Oldest first, whether held or not: the sweep's order is about which
+    // instance of a note takes the name, and a held note is no earlier a note
+    // for being held. Held notes are lifted out for DRAWING afterwards, which
+    // is a separate question from where they sit in the sweep — keeping the
+    // two apart is what leaves the held-note exemption below with any teeth.
     notes.sort_unstable_by(|a, b| {
-        a.is_live()
-            .cmp(&b.is_live())
-            .then(a.start.total_cmp(&b.start))
-            .then(a.channel.cmp(&b.channel))
-            .then(a.note.cmp(&b.note))
+        a.0.start
+            .total_cmp(&b.0.start)
+            .then(a.0.channel.cmp(&b.0.channel))
+            .then(a.0.note.cmp(&b.0.note))
     });
 
     let size = LABEL_PT * label_scale;
+    let gap = REPEAT_GAP * label_scale;
 
     // One naming per pitch CLASS rather than per note. Naming walks every
     // visible lattice node looking for the match that spells best, and a
     // passage is the same handful of classes over and over.
+    //
+    // Keyed at the LANE grain, which is what bounds this: there are only ever
+    // `1200 / LANE_CENTS` classes an octave, so the walk is paid at most that
+    // many times a frame however many notes are on the pane. At a one-cent
+    // grain it was paid per NOTE for any material whose tuning drifts between
+    // repeats — thousands of walks a frame, in exactly the microtonal case
+    // this plugin is for.
     let mut names: HashMap<i32, NoteName> = HashMap::new();
+    let naming = |pitch: f32, names: &mut HashMap<i32, NoteName>| {
+        let class = (pitch.rem_euclid(12.0) * 100.0 / LANE_CENTS).round() as i32;
+        *names.entry(class).or_insert_with(|| note_name(&state.view, &state.tuning, pitch))
+    };
+
     let mut occupied = Occupancy::default();
     let mut placed: Vec<NoteLabel> = Vec::new();
-    for note in notes {
-        let pitch = note.settled_pitch();
-        let class = (pitch.rem_euclid(12.0) * 100.0).round() as i32;
-        let name = *names
-            .entry(class)
-            .or_insert_with(|| note_name(&state.view, &state.tuning, pitch));
-        let lead = leading_depth(&time, note, now);
-        let rect = label_rect(axes, scale.t_of(pitch), lead, &name, size);
+    let mut held: Vec<NoteLabel> = Vec::new();
+    for (note, edge) in notes {
+        let p = scale.t_of(edge.pitch);
         // A held note stands outside the sweep in BOTH directions: it is named
         // whatever is already there, and it is not recorded, so it takes
         // nothing out of the running for anyone else.
@@ -229,39 +269,60 @@ pub(super) fn plan(
         // older name in turn as the two came level and hand it back once they
         // parted, which reads as names blinking out and in for as long as the
         // key is down. Exempting a name from refusal but not from refusing
-        // trades one arbitrary gap for a moving one.
+        // trades one arbitrary gap for a moving one, and a moving one is the
+        // worse of the two: an absent name reads as "no room", one that comes
+        // and goes reads as a fault.
         //
         // What it costs is that a held name can overlap another. Briefly, and
-        // it lands on top (the order above), and it is the note being played:
-        // of the three ways to break the tie, this is the one that never
-        // withholds a name that could have been shown.
+        // it lands on top (held names are appended last, and drawn in order),
+        // and it is the note being played: of the three ways to break the tie,
+        // this is the only one that never withholds a name that could have
+        // been shown.
         if note.is_live() {
-            placed.push(NoteLabel { name, rect });
+            let name = naming(edge.pitch, &mut names);
+            let rect = label_rect(axes, p, edge.depth, &name, size, label_scale);
+            // Two keys sounding one pitch — a doubled MIDI source, a layered
+            // MPE part — would otherwise stamp the same name on the same
+            // points once per voice. The name still appears; it is drawn once.
+            if !held.iter().any(|l| l.name == name && l.rect == rect) {
+                held.push(NoteLabel { name, rect });
+            }
             continue;
         }
         // Everything else has to find clear time at its own pitch — including
         // the room it will demand of whoever comes next.
+        let name = naming(edge.pitch, &mut names);
+        let rect = label_rect(axes, p, edge.depth, &name, size, label_scale);
         let (near, far) = depth_span(axes, rect);
-        let key = pitch_key(pitch);
-        if !occupied.free(key, (near - REPEAT_GAP, far + REPEAT_GAP)) {
+        let key = pitch_key(edge.pitch);
+        if !occupied.free(key, (near - gap, far + gap)) {
             continue;
         }
         occupied.insert(key, (near, far));
         placed.push(NoteLabel { name, rect });
     }
+    // Held names last, so that where one overlaps another it is the note under
+    // your finger that stays readable.
+    placed.append(&mut held);
     placed
 }
 
-/// The depth of a ribbon's LEADING edge — the end of it that comes first in
-/// reading order, which is the low-depth end in either layout and in either
-/// orientation (the left of a pane laid out along its long side, the top of an
-/// upright one).
+/// A ribbon's LEADING edge: where it is, and what pitch the ribbon has THERE.
+#[derive(Clone, Copy)]
+struct Edge {
+    depth: f32,
+    pitch: f32,
+}
+
+/// The end of a ribbon that comes first in reading order — the low-depth end
+/// in either layout and either orientation (the left of a pane laid out along
+/// its long side, the top of an upright one) — and the pitch it sits at.
 ///
-/// Taken as a minimum rather than by naming an end, because which end of a
-/// note that is differs between the two layouts and the arithmetic does not:
-/// live, time runs from the now-line outward, so a note's leading edge is
-/// where it most recently sounded; whole-song lays the take out in reading
-/// order, so it is the onset.
+/// Found by comparing the two ends rather than by naming one, because which
+/// end it is differs between the layouts and the arithmetic does not: live,
+/// time runs from the now-line outward, so a ribbon's leading edge is where it
+/// most recently sounded; whole-song lays the take out in reading order, so it
+/// is the onset.
 ///
 /// What this buys live is the behaviour a held note ought to have. While the
 /// key is down the note keeps reaching the present, so its leading edge IS the
@@ -272,10 +333,29 @@ pub(super) fn plan(
 /// whole time it was being played — which is exactly when you are looking at
 /// it.
 ///
-/// Both ends are CLAMPED into the region on the way, so a note that reaches
-/// past either edge is named at the last of it still on the pane.
-fn leading_depth(time: &TimeAxis, note: &RollNote, now: f64) -> f32 {
-    time.depth_of(note.start).min(time.depth_of(note.stop(now)))
+/// **The pitch has to come from the same end as the depth**, which is the
+/// whole reason this returns a pair. A bent note is at a different pitch at
+/// each end: `settled_pitch` is where it began once its tuning had landed,
+/// `end_pitch` where it is sounding now. Taking the depth from one end and the
+/// pitch from the other puts the name off the ribbon entirely — a semitone off
+/// for a modest bend, a quarter of the pitch axis for a wide glide, and over
+/// some other note's lane wherever it lands. A held-and-bent note shows it
+/// worst: the name parks at the now-line while the ribbon head slides out from
+/// under it, and a held note is the one always named.
+///
+/// Both ends are CLAMPED into the region on the way, so a note reaching past
+/// either edge is named at the last of it still on the pane.
+fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
+    let start = time.depth_of(note.start);
+    let stop = time.depth_of(note.stop(now));
+    if stop <= start {
+        Edge { depth: stop, pitch: note.end_pitch() }
+    } else {
+        // The onset end, so the pitch the note SETTLED on rather than the key
+        // it was pressed at — a retuned note reaches its real pitch a moment
+        // after its note-on, and the ribbon is drawn from there.
+        Edge { depth: start, pitch: note.settled_pitch() }
+    }
 }
 
 /// The screen box a name covers on a ribbon at pitch `p` whose leading edge is
@@ -288,16 +368,24 @@ fn leading_depth(time: &TimeAxis, note: &RollNote, now: f64) -> f32 {
 ///
 /// Along the time axis it grows from the leading edge INTO the note, so a name
 /// lies over its own ribbon rather than over the picture in front of it.
-fn label_rect(axes: &Axes, p: f32, d: f32, name: &NoteName, size: f32) -> egui::Rect {
-    let est = name_extent(name, size);
+fn label_rect(
+    axes: &Axes,
+    p: f32,
+    d: f32,
+    name: &NoteName,
+    size: f32,
+    label_scale: f32,
+) -> egui::Rect {
+    let extent = name_extent(name, size);
     let depth = axes.dir_depth();
     // How far the box reaches along the depth axis: text always runs across
     // the screen, so that is its width on a pane laid out along its long side
     // and its height on an upright one. Projecting answers both without naming
     // a screen side.
-    let along_depth = (est.x * depth.x).abs() + (est.y * depth.y).abs();
-    let centre = axes.at(p, d) + depth * (LABEL_INSET + along_depth * 0.5);
-    egui::Rect::from_center_size(centre, est).expand(LABEL_PAD)
+    let along_depth = (extent.x * depth.x).abs() + (extent.y * depth.y).abs();
+    let inset = LABEL_INSET * label_scale;
+    let centre = axes.at(p, d) + depth * (inset + along_depth * 0.5);
+    egui::Rect::from_center_size(centre, extent).expand(LABEL_PAD * label_scale)
 }
 
 /// What a name covers, estimated from the sizes its pieces are laid out at.
@@ -307,12 +395,12 @@ fn label_rect(axes: &Axes, p: f32, d: f32, name: &NoteName, size: f32) -> egui::
 /// mark, and its height is the letter's line box, which the marks are sized to
 /// stay inside.
 fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
-    let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
     let marks = name
         .accidental_mark()
         .chars()
         .count()
         .max(name.comma_mark().chars().count());
+    let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
     egui::vec2((size + marks as f32 * mark_size) * GLYPH_ADVANCE, size * LINE_HEIGHT)
 }
 
@@ -371,19 +459,30 @@ fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<Lat
 }
 
 /// How hard a spelling is to read, worst first: comma marks, then
-/// accidentals, then how far out the node sits.
+/// accidentals, then how far out the node sits, then which side of the origin
+/// it sits on.
 ///
-/// In that order because that is the order the marks cost a reader. Four
-/// fifths up from C and one just third up from C are the same pitch in an
-/// equal temperament, and they spell `E` and `E-`; the plain letter is the
-/// name for it, even though the comma'd node is nearer the origin. The final
-/// term only settles what the marks cannot, and keeps the answer from moving
-/// with the view.
-fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32) {
+/// The first three are in that order because that is the order the marks cost
+/// a reader. Four fifths up from C and one just third up from C are the same
+/// pitch in an equal temperament, and they spell `E` and `E-`; the plain
+/// letter is the name for it, even though the comma'd node is nearer the
+/// origin.
+///
+/// The last term settles what the first three cannot, and exists because there
+/// is a real tie they cannot reach: in an equal temperament the tritone is six
+/// fifths up (`F♯`) and six fifths down (`G♭`), which cost the same on every
+/// other count. Left unbroken, `min_by_key` returns whichever the node
+/// iteration happened to reach first — so the spelling of every tritone on the
+/// pane would hang on the order `positions_within` walks its ranges, and would
+/// flip silently if that were ever changed for an unrelated reason. Sharps are
+/// preferred, which is a convention rather than a deduction; what matters is
+/// that it is written down here and not implied by a loop elsewhere.
+fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32, i32) {
     (
         name.syntonic_commas.abs(),
         name.sharps.abs(),
         pos.threes.abs() + pos.fives.abs() + pos.sevens.abs(),
+        -pos.threes,
     )
 }
 
@@ -478,9 +577,13 @@ mod tests {
     /// A state whose pane shows `range` semitones around middle C over a
     /// `span`-second window, with the whole depth axis given to the roll.
     fn state(range: f32, span: f32) -> SharedState {
+        turned(range, span, SpectralOrientation::Horizontal)
+    }
+
+    fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> SharedState {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config = SpectrumConfig {
-            orientation: SpectralOrientation::Horizontal,
+            orientation,
             low_midi: 60.0 - range * 0.5,
             high_midi: 60.0 + range * 0.5,
             roll_seconds: span,
@@ -508,6 +611,13 @@ mod tests {
 
     fn said(labels: &[NoteLabel]) -> Vec<String> {
         labels.iter().map(|l| l.name.to_string()).collect()
+    }
+
+    fn scale_of(state: &SharedState) -> PitchScale {
+        let cfg = &state.spectrum_config;
+        let min_midi = cfg.low_midi;
+        let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
+        PitchScale { min_midi, max_midi, span: max_midi - min_midi }
     }
 
     /// Every note is named, repeats of one pitch included — that is the whole
@@ -642,15 +752,151 @@ mod tests {
         }
         let placed = labels(&state, 4.5);
         assert!(placed.len() > 1, "several of them are named");
-        assert!(placed.len() < 20, "but nothing like all forty: {}", placed.len());
+        assert!(placed.len() <= 10, "but nothing like all forty: {}", placed.len());
 
-        // Named from the far (oldest) end inward, and never touching: each
-        // name sits clear of the one before it by at least the gap.
+        // Never touching, and spaced by more than their own boxes: a literal
+        // rather than REPEAT_GAP itself, since a threshold taken from the
+        // constant under test would hold at any value of it — and one only as
+        // wide as a name's box is met by the box alone, with the gap at zero.
         let mut xs: Vec<f32> = placed.iter().map(|l| l.rect.min.x).collect();
         xs.sort_by(f32::total_cmp);
         for pair in xs.windows(2) {
-            assert!(pair[1] - pair[0] >= REPEAT_GAP, "names crowd at {pair:?}");
+            assert!(pair[1] - pair[0] >= 12.0, "names crowd at {pair:?}");
+            // ...and by ONE gap, not two: the room a name demands is added to
+            // whoever is tested against it, never stored on both sides.
+            assert!(pair[1] - pair[0] < 20.0, "names sit twice as far apart as asked: {pair:?}");
         }
+    }
+
+    /// Names that are already placed HOLD THEIR PLACE as new notes arrive.
+    ///
+    /// This is the property the oldest-first sweep is for, and the reason it
+    /// is not merely a taste: deciding newest-first lets every note played
+    /// evict names anywhere on the pane, so the picture reshuffles under you
+    /// at exactly the moment you are reading it. Asserted as the property, not
+    /// as an ordering, so it keeps its teeth however the sort is later spelled.
+    #[test]
+    fn arriving_notes_do_not_move_the_names_already_placed() {
+        let played = |extra: Option<f64>| {
+            let mut state = state(24.0, 10.0);
+            for i in 0..12 {
+                let t = i as f64 * 0.25;
+                state.tracker.handle_event(on(t, 60));
+                state.tracker.handle_event(off(t + 0.1, 60));
+            }
+            if let Some(t) = extra {
+                state.tracker.handle_event(on(t, 60));
+                state.tracker.handle_event(off(t + 0.1, 60));
+            }
+            state
+        };
+        let xs = |state: &SharedState| -> Vec<f32> {
+            labels(state, 4.0).iter().map(|l| l.rect.min.x).collect()
+        };
+        let before = xs(&played(None));
+        // One more note struck at the now-line, after all of them.
+        let after = xs(&played(Some(3.8)));
+        assert!(before.len() > 2, "there are names to disturb: {}", before.len());
+        for x in &before {
+            assert!(
+                after.contains(x),
+                "a placed name moved when a note arrived: {before:?} -> {after:?}",
+            );
+        }
+    }
+
+    /// The pane turns, and the names turn with it: nothing here names a screen
+    /// side, so an upright pane places them by the same arithmetic with the
+    /// axes swapped.
+    #[test]
+    fn names_place_the_same_way_on_an_upright_pane() {
+        // Upright: pitch runs left to right, time runs DOWN, so the leading
+        // edge is the top of a ribbon and names grow downward from it.
+        let mut state = turned(24.0, 10.0, SpectralOrientation::Vertical);
+        for i in 0..6 {
+            let t = i as f64 * 1.2;
+            state.tracker.handle_event(on(t, 60));
+            state.tracker.handle_event(off(t + 0.2, 60));
+        }
+        let tall = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(110.0, 320.0) };
+        let placed = labels_in(&state, 6.0, tall);
+        assert!(placed.len() > 1, "several names: {}", placed.len());
+
+        let axes = Axes::new(tall, &state.spectrum_config);
+        // Every name sits on middle C's line, which upright is an x.
+        let lane = axes.at(scale_of(&state).t_of(60.0), 0.0).x;
+        for label in &placed {
+            assert!((label.rect.center().x - lane).abs() < 1.0, "off the ribbon's line");
+        }
+        // ...and they are spread along the TIME axis, which upright is y.
+        let mut ys: Vec<f32> = placed.iter().map(|l| l.rect.min.y).collect();
+        ys.sort_by(f32::total_cmp);
+        for pair in ys.windows(2) {
+            assert!(pair[1] - pair[0] >= 12.0, "names crowd along time at {pair:?}");
+        }
+    }
+
+    /// The offline whole-song layout lays the take out in reading order, so a
+    /// ribbon's leading edge is its ONSET there rather than its release — the
+    /// one place the two layouts disagree about which end that is.
+    #[test]
+    fn whole_song_names_a_ribbon_at_its_onset() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(2.0, 60));
+        state.tracker.handle_event(off(6.0, 60));
+        let roll = state.tracker.roll().clone();
+        state.whole_song = Some(crate::WholeSong {
+            columns: Vec::new(),
+            roll,
+            start: 0.0,
+            span: 10.0,
+        });
+
+        let placed = labels(&state, 4.0);
+        assert_eq!(said(&placed), ["C"]);
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        // Laid out statically from the near edge: the onset at 2 s of 10 is a
+        // fifth of the way along, and the name starts there and grows later.
+        let onset = axes.at(scale_of(&state).t_of(60.0), 0.2);
+        assert!(placed[0].rect.min.x >= onset.x, "named at the onset, growing into the note");
+        assert!(placed[0].rect.min.x < onset.x + 8.0);
+
+        // ...and the static layout does not move as the playhead sweeps.
+        let later = labels(&state, 9.0);
+        assert_eq!(later[0].rect.min.x, placed[0].rect.min.x);
+    }
+
+    /// The tiebreak's stated job is to keep a name from moving when the view
+    /// is panned. In a collapsed tuning many nodes answer to one pitch, and
+    /// which of them the iteration reaches first changes with the view — so
+    /// without a rule the name changes with it too.
+    #[test]
+    fn panning_the_lattice_does_not_rename_a_pitch() {
+        let equal = lattice_core::Tuning::default();
+        let named = |centre: i32| {
+            let view = lattice_scene::ViewConfig {
+                center_threes: centre,
+                ..lattice_scene::ViewConfig::default()
+            };
+            note_name(&view, &equal, 60.0).to_string()
+        };
+        assert_eq!(named(0), "C");
+        for centre in [-2, -1, 1, 2] {
+            assert_eq!(named(centre), "C", "panned to {centre}, middle C is still C");
+        }
+    }
+
+    /// The tritone is a genuine tie — six fifths up spells F♯, six down spells
+    /// G♭, and in an equal temperament they are one pitch costing the same on
+    /// every count that reads. Something has to break it, and it has to be
+    /// written down: left to `min_by_key` it falls to whichever the node
+    /// iteration reaches first, so the spelling of every tritone on the pane
+    /// would hang on the order a range walk happens to take.
+    #[test]
+    fn a_tie_between_two_spellings_is_broken_by_a_rule_not_by_iteration_order() {
+        let view = lattice_scene::ViewConfig::default();
+        let equal = lattice_core::Tuning::default();
+        assert_eq!(note_name(&view, &equal, 66.0).to_string(), "F\u{266F}");
     }
 
     /// A name at one pitch never suppresses a name at another, however close on
@@ -824,15 +1070,88 @@ mod tests {
         assert_eq!(equal_tempered_name(63.9).to_string(), "E");
     }
 
-    /// The setting turns them off outright.
+    /// The setting turns them off — and so does hiding the thing they label.
+    ///
+    /// A name labels a RIBBON. With the roll hidden and the heatmap on, the
+    /// pane still keeps a far region, so nothing geometric stops the names
+    /// drawing — they would just be text floating over the heatmap, from a
+    /// checkbox in the roll's own section that appeared not to turn them off.
     #[test]
-    fn the_setting_turns_them_off() {
+    fn the_setting_turns_them_off_and_so_does_hiding_the_roll() {
         let mut state = state(24.0, 10.0);
         state.tracker.handle_event(on(0.0, 60));
         assert_eq!(labels(&state, 1.0).len(), 1);
 
         state.spectrum_config.note_names = false;
         assert!(labels(&state, 1.0).is_empty());
+
+        state.spectrum_config.note_names = true;
+        state.spectrum_config.show_roll = false;
+        state.spectrum_config.show_spectrogram = true;
+        state.spectrum_config.roll_fraction = 0.55;
+        assert!(labels(&state, 1.0).is_empty(), "no ribbons, so nothing to name");
+    }
+
+    /// With the far region shut there is nowhere to draw, and `plan` says so
+    /// rather than collapsing every name onto the edge.
+    #[test]
+    fn a_shut_roll_region_draws_no_names() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(0.0, 60));
+        // The divider dragged all the way over: the spectrum owns everything.
+        state.spectrum_config.roll_fraction = 0.0;
+        assert!(labels(&state, 1.0).is_empty());
+    }
+
+    /// A BENT note's name follows the ribbon. The name's pitch and its depth
+    /// have to come from the same end of the note, or they describe two
+    /// different moments and the name floats off the thing it names.
+    ///
+    /// Live, the leading edge is where the note is sounding NOW, so that is
+    /// the pitch the name sits at — `settled_pitch` is where the note began,
+    /// which for a glide is somewhere else entirely. Taken from the onset, a
+    /// note glided two semitones would put its name two semitones off the
+    /// ribbon head, over another note's lane; a wide glide puts it a quarter
+    /// of the pitch axis away, on a lane with no ribbon near it at all.
+    ///
+    /// Held-and-bent is the worst of it, and the case the design goes out of
+    /// its way to always name: the name parks at the now-line while the ribbon
+    /// head slides out from under it.
+    #[test]
+    fn a_bent_notes_name_rides_the_ribbon_rather_than_its_onset() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60));
+        // Glided up a fifth over a second, and still held.
+        state.tracker.handle_event(tuning(2.0, 60, 7.0));
+
+        let placed = labels(&state, 3.0);
+        assert_eq!(placed.len(), 1);
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        // Sounding G at the leading edge (the now-line), not the C it began on.
+        let sounding = axes.at(scale_of(&state).t_of(67.0), 0.0);
+        assert!(
+            (placed[0].rect.center().y - sounding.y).abs() < 1.0,
+            "the name sits on the ribbon head at {}, not at {}",
+            placed[0].rect.center().y,
+            sounding.y,
+        );
+        assert_eq!(said(&placed), ["G"], "and it says what is sounding there");
+    }
+
+    /// A note glided clean out of the pitch zoom takes its name with it, and
+    /// one glided INTO the zoom is named once it arrives — the cull has to ask
+    /// about the pitch the name would be drawn at, not the note in general.
+    #[test]
+    fn the_cull_follows_the_name_not_the_notes_onset() {
+        let mut out = state(12.0, 10.0); // 54..66
+        out.tracker.handle_event(on(1.0, 60));
+        out.tracker.handle_event(tuning(1.5, 60, 30.0)); // gone to MIDI 90
+        assert!(labels(&out, 3.0).is_empty(), "its name left with it");
+
+        let mut into = state(12.0, 10.0);
+        into.tracker.handle_event(on(1.0, 30));
+        into.tracker.handle_event(tuning(1.5, 30, 30.0)); // arrived at MIDI 60
+        assert_eq!(said(&labels(&into, 3.0)), ["C"], "and arrives with it");
     }
 
     /// A wall of notes is thinned by the pane's own geometry, not by a cap on

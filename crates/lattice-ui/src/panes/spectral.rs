@@ -260,14 +260,17 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         ],
     );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
-        "Write each note's name over its own ribbon, at the moment it was \
-         struck. For reading the heatmap: a band of energy sits at some \
-         height on an axis marked only every octave, and the ribbon over that \
-         band is the same note — so naming the ribbon names the band.\n\n\
+        "Write each note's name on its own ribbon, at the leading edge — so a \
+         held note's name waits at the now-line and travels off with the note \
+         when you let go. For reading the heatmap: a band of energy sits at \
+         some height on an axis marked only every octave, and the ribbon over \
+         that band is the same note, so naming the ribbon names the band.\n\n\
          Names are the lattice's own, in its own hand: the node's spelling \
          with its accidental and comma mark, so a just third reads E- rather \
-         than as an E and a cents offset. Where they would land on top of \
-         each other the newer note keeps its name.",
+         than as an E and a cents offset.\n\nWhere repeats of a note come too \
+         fast to name each one, the first keeps its name and the next waits \
+         for clear room — except a note you are holding, which is always \
+         named. Needs Note history on: a name labels a ribbon.",
     );
     button_row(ui, |ui| {
         if ui
