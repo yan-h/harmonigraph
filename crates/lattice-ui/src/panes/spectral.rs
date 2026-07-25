@@ -65,7 +65,9 @@ fn span_readout(seconds: f32) -> String {
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow};
+    use crate::{
+        RollColor, RollEdge, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
+    };
 
     // ---- Layout ---------------------------------------------------------
     // Just the orientation now; drag the pane wherever you like (egui_dock
@@ -224,17 +226,75 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              of the travel. The spectrogram fills the most recent few minutes \
              of a long span; the notes span the whole of it.",
         );
-    ValueBar::new(&mut cfg.roll_thickness, 0.2..=4.0, "Note width")
+    ValueBar::new(&mut cfg.roll_thickness, 0.2..=8.0, "Note width")
         .show(ui)
-        .on_hover_text("Ribbon width in semitones of the pitch axis");
-    ValueBar::new(&mut cfg.roll_rounding, 0.0..=1.0, "Rounding")
+        .on_hover_text(
+            "Ribbon width in semitones of the pitch axis — so it holds its \
+             musical meaning as the pitch range is zoomed, and a note is as \
+             wide as the interval it would cover",
+        );
+    ValueBar::new(&mut cfg.roll_fill, 0.0..=1.0, "Fill")
         .show(ui)
-        .on_hover_text("Corner rounding of an unbent note (bent notes stay angular)");
+        .on_hover_text(
+            "How solidly a note's interior is painted in its own color. 0 \
+             leaves it a hollow outline with the spectrogram showing straight \
+             through; 1 fills it. In between is a wash the heatmap still reads \
+             through.",
+        );
     ValueBar::new(&mut cfg.roll_outline_width, 0.5..=6.0, "Outline")
         .show(ui)
         .on_hover_text(
-            "Stroke width of a note's outline. Notes are hollow, so the \
-             spectrogram shows through them; lattice bloom adds a glow.",
+            "Width of the band of the note's own color straddling its edge. \
+             With Fill up this just fattens the note; with Fill at 0 it is the \
+             whole of it.",
+        );
+    ValueBar::new(&mut cfg.roll_border_width, 0.0..=6.0, "Black")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
+            "Width of the solid black outline standing just outside a note — \
+             the crisp dark line that separates it from whatever the \
+             spectrogram is doing behind it. 0 draws none.",
+        );
+    ValueBar::new(&mut cfg.roll_keyline_width, 0.0..=6.0, "White")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
+            "Width of the white keyline riding outside the black; Edge (up in \
+             Spectrum) sets how bright it is. 0 draws none. Below a full point \
+             a bright line shimmers as the roll scrolls, its peak intensity \
+             wobbling with every sub-pixel step across the grid.",
+        );
+    choice_row(
+        ui,
+        "Edges",
+        &mut cfg.roll_edge,
+        &[
+            (RollEdge::Around, "Around", "All the way around a note, corners included"),
+            (
+                RollEdge::Sides,
+                "Sides",
+                "The long edges only — above and below a note in Across, either \
+                 side of it in Upright. The rim never grows along time, so \
+                 repeats of one key butt together cleanly instead of painting \
+                 their halos over each other",
+            ),
+            (
+                RollEdge::Ends,
+                "Ends",
+                "The onset and release only — a marker across each end of a \
+                 note, and nothing along its length",
+            ),
+        ],
+    );
+    ValueBar::new(&mut cfg.roll_gap, 0.0..=6.0, "Gap")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
+            "Points shaved off a released note's tail, so repeats at one pitch \
+             read as repeats instead of merging into one bar. The tail only: a \
+             held note still reaches the now-line, and no onset moves off the \
+             moment it was played.",
         );
     choice_row(
         ui,
