@@ -97,12 +97,12 @@ pub(super) fn tuning_pane(
         }
     });
 
-    // Hovering a lattice node deliberately reports NOTHING here. This pane
-    // used to grow a "Hovered: (t, f, s) = pitch" line whenever the pointer
-    // was over a node, which meant the controls below it jumped down and back
-    // as the pointer crossed the lattice — a readout in one pane moving
-    // another pane's buttons. `state.hovered` still drives the lattice's own
-    // highlight, which is where a hover belongs.
+    // Hovering a lattice node deliberately reports NOTHING here. Growing a
+    // "Hovered: (t, f, s) = pitch" line whenever the pointer is over a node
+    // makes the controls below it jump down and back as the pointer crosses
+    // the lattice — a readout in one pane moving another pane's buttons.
+    // `state.hovered` drives the lattice's own highlight, which is where a
+    // hover belongs.
 
     // How the lattice is framed: the other half of "what am I looking at".
     section(ui, "Frame");

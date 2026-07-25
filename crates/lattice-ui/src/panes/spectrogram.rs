@@ -845,15 +845,15 @@ fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[BucketDb]) -> Vec<Col
 
 /// One cell's 0..1 loudness from its stored byte.
 ///
-/// Deliberately unguarded. There used to be a shortcut here — anything under
-/// -90 dB was answered as flat silence without consulting the mapping, on the
-/// grounds that it "would land at 0 anyway" and it saved a `log10` for the many
-/// empty buckets of a typical spectrum. Both halves of that stopped being true:
-/// the dB window became draggable down to -120 dB, which makes -90 dB a
-/// perfectly visible tenth of the way up the ramp, and the columns became dB
-/// already, so there is no `log10` left to skip. What the shortcut actually did
-/// was cut the ramp off at -90 dB — the faintest colour dropping straight to
-/// black, with the whole quiet end of a wide window missing behind the cliff.
+/// Deliberately unguarded. A shortcut here — answering anything under -90 dB
+/// as flat silence without consulting the mapping — is tempting on the grounds
+/// that it "would land at 0 anyway" and that it saves a `log10` for the many
+/// empty buckets of a typical spectrum. Neither half holds: the dB window
+/// drags down to -120 dB, which makes -90 dB a perfectly visible tenth of the
+/// way up the ramp, and the columns are dB already, so there is no `log10` to
+/// skip. What such a shortcut actually does is cut the ramp off at -90 dB —
+/// the faintest colour dropping straight to black, with the whole quiet end of
+/// a wide window missing behind the cliff.
 fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
     spectrogram_level_db(cfg, db_of(bucket), midi)
 }
@@ -1084,10 +1084,10 @@ mod tests {
     }
 
     /// The quiet end of the ramp must FADE to black, not fall off a cliff into
-    /// it. A shortcut used to answer everything under -90 dB as silence, which
-    /// was invisible while the dB window bottomed out above that and became a
-    /// hard edge — faintest colour straight to black — the moment the window
-    /// could be dragged below it. Nothing between two adjacent stored bytes may
+    /// it. A shortcut answering everything under -90 dB as silence is
+    /// invisible while the dB window bottoms out above that, and becomes a
+    /// hard edge — faintest colour straight to black — as soon as the window
+    /// can be dragged below it. Nothing between two adjacent stored bytes may
     /// move the level by more than the step between them.
     #[test]
     fn the_quiet_end_of_the_ramp_fades_instead_of_cutting_off() {

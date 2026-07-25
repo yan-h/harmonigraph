@@ -222,8 +222,8 @@ pub enum LegacyNodeBody {
 /// not merely uninformative; it asserts something false.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum SevensLabel {
-    /// The same name the home sheet gets, ambiguity and all. What every
-    /// build before this drew, and what a view saved by one keeps.
+    /// The same name the home sheet gets, ambiguity and all. What a view
+    /// saved before this setting existed keeps.
     #[default]
     Name,
     /// The pitch class in cents under the current tuning, alone. Says what

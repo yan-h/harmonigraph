@@ -2,16 +2,16 @@
 //! [`lattice_render::text`].
 //!
 //! Text on either picture pane needs to be lifted off what it lands on —
-//! note names over lit nodes, pitch labels over the spectrogram — and the
-//! rim that does it used to be the whole label stamped around two rings,
-//! twenty more copies of every glyph. That was most of the geometry in a
-//! busy frame, so labels were a budget: every new one cost twenty-one draws
+//! note names over lit nodes, pitch labels over the spectrogram. Stamping
+//! that rim as geometry, the whole label repeated around two rings, is
+//! twenty more copies of every glyph: most of the geometry in a busy frame,
+//! and it makes labels a budget where every new one costs twenty-one draws
 //! of its own text.
 //!
-//! Now a piece of text becomes one quad per glyph and the rim is computed
+//! So a piece of text becomes one quad per glyph and the rim is computed
 //! per pixel from the same offsets (see `lattice_render::text` for why the
-//! two are the same arithmetic). What a label costs stopped depending on
-//! its rim, which is what makes labels something to place where they help
+//! two are the same arithmetic). What a label costs does not depend on its
+//! rim, which is what makes labels something to place where they help
 //! rather than something to ration.
 //!
 //! egui still lays the text out. A [`TextBatch`] collects the glyphs of
@@ -118,7 +118,7 @@ impl TextBatch {
         // egui rounds a galley onto a whole physical pixel before drawing it
         // (`round_text_to_pixels`), and its glyphs are already snapped
         // relative to that. Both have to happen here too, or the text lands
-        // a fraction of a pixel off what it used to and every glyph softens.
+        // a fraction of a pixel off where egui puts it and every glyph softens.
         let pos = align.anchor_size(anchor, galley.size()).min;
         let pos = egui::pos2(round(pos.x), round(pos.y));
 

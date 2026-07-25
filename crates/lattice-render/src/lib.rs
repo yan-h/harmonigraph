@@ -14,9 +14,9 @@
 //! makes the render-scale option (super/sub-sampling) possible, and gives
 //! post-processing (bloom etc.) a texture to read; the depth buffer is
 //! written (pass-through `Always` test, so draw order still composites
-//! exactly like the pre-offscreen renderer) but not yet read by anything.
-//! `offscreen_composite_matches_direct_draw` in the tests pins down that
-//! this path reproduces the old direct-to-egui-pass output.
+//! exactly as it would without the offscreen pass) but not yet read by
+//! anything. `offscreen_composite_matches_direct_draw` in the tests pins
+//! down that this path matches drawing straight into the egui pass.
 //!
 //! With the `hot-reload` feature (enabled by the standalone harness), the
 //! .wgsl file is watched on disk and the pipeline rebuilds on save —
@@ -415,16 +415,15 @@ impl LatticeCallback {
 
         // The grid belongs to the home sheet — that is the only sheet that
         // draws one — so its place in the order is between the sheets behind
-        // it and the home sheet itself. Under it, as it used to be, a node
-        // on a sheet BEHIND the home one punches its clearing through the
-        // home grid, putting a hole in the layer that is supposed to be
-        // hiding it.
+        // it and the home sheet itself. Under it, a node on a sheet BEHIND
+        // the home one punches its clearing through the home grid, putting
+        // a hole in the layer that is supposed to be hiding it.
         //
         // The home sheet then draws after the grid, so a home node's
         // clearing cuts the grid lines as well as the sheets behind — the
         // node sits in a clean gap in the lattice rather than on top of it.
-        // (An earlier cut drew the home clearings in a pass of their own
-        // ahead of the grid to spare the lines; the lines are wanted cut.)
+        // (Drawing the home clearings in a pass of their own ahead of the
+        // grid would spare the lines; the lines are wanted cut.)
         //
         // World z is measured from the home sheet, so its whole run sits at
         // sheet depth 0 — behind it is positive, in front negative. Sorting
@@ -977,8 +976,8 @@ impl Offscreen {
 ///
 /// `depth` is true for the production pipelines, which render into the
 /// offscreen pass and must declare its depth attachment. The parity test
-/// builds depthless variants to reproduce the old draw-directly-into-the-
-/// egui-pass renderer as its reference.
+/// builds depthless variants that draw straight into the egui pass, as its
+/// reference.
 fn create_pipeline(
     device: &wgpu::Device,
     shader_src: &str,

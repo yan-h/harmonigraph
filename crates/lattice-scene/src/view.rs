@@ -42,7 +42,7 @@ pub struct ViewConfig {
     // is the picture.
     /// How much smaller a node draws for each step it sits off the home
     /// sheet: the factor is `sevens_size^|sevens - center_sevens|`. 1 keeps
-    /// every sheet the same size, which is what every build before this drew.
+    /// every sheet the same size.
     ///
     /// Smaller in BOTH directions, deliberately, even though a positive
     /// sevens step is the one nearer the camera — this is not perspective.
@@ -87,9 +87,9 @@ pub struct ViewConfig {
     #[serde(default)]
     pub sevens_gutter: f32,
     /// How wide the clearing's fade is, same units — and deliberately NOT
-    /// derived from the reach above. The two used to be one number (the
-    /// fade was twice the reach), so widening the gap also blurred it and
-    /// there was no way to ask for a wide crisp one or a narrow soft one.
+    /// derived from the reach above. Tying the two into one number (fade
+    /// pinned to twice the reach) means widening the gap also blurs it,
+    /// with no way to ask for a wide crisp one or a narrow soft one.
     ///
     /// The clearing is solid out to `reach - fade` past the node's rim and
     /// gone by `reach`, so the reach is exactly where it ends whatever the
@@ -244,8 +244,8 @@ pub struct ViewConfig {
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
-    // Its look used to be fixed: the skin's color, a hardcoded inset, a
-    // hardcoded thickness, dashes reserved for the sevens links.
+    // Color, inset, thickness and dashing are all settings; the fields
+    // below are the whole of its look.
     /// Color of the whole idle structure, linear RGBA: the grid lines AND
     /// the idle node markers, which are one visual layer — what carries
     /// the lattice's shape when nothing is playing — and so share a color.
@@ -268,8 +268,8 @@ pub struct ViewConfig {
     /// How far a grid segment stops short of each node center, as a factor
     /// of the node radius — the padding between a line end and the
     /// dot/circle drawn there. 0 runs the lines right into the centers;
-    /// the old fixed 1.05 sat slightly wider than the disc's visual radius,
-    /// so the gap fully contained a sounding note's circle.
+    /// 1.05 sits slightly wider than the disc's visual radius, so the gap
+    /// fully contains a sounding note's circle.
     ///
     #[serde(default = "default_grid_inset")]
     pub grid_inset: f32,
@@ -539,14 +539,14 @@ impl Default for ViewConfig {
         ViewConfig {
             spacing: 1.0,
             // A tall window of fifths and a wide band of thirds, and one
-            // sevens sheet either side of the home one. Depth used to start
-            // collapsed (extent 0) because a second sheet at full size made
-            // the picture unreadable — nothing said which sheet a node was
-            // on and an off-sheet label landed on top of its neighbours.
-            // The sevens layer settings below are the answer to that, and
-            // they only do anything when there is depth to draw, so opening
-            // flat now hides the feature rather than protecting anyone from
-            // it.
+            // sevens sheet either side of the home one. Depth opens at one
+            // sheet rather than collapsed (extent 0): a second sheet at full
+            // size makes the picture unreadable — nothing says which sheet a
+            // node is on and an off-sheet label lands on top of its
+            // neighbours — but the sevens layer settings below are the
+            // answer to that, and they only do anything when there is depth
+            // to draw. Opening flat hides the feature rather than protecting
+            // anyone from it.
             extent_threes: 10,
             extent_fives: 6,
             extent_sevens: 1,
@@ -563,8 +563,7 @@ impl Default for ViewConfig {
             sevens_size: 0.55,
             // Reach and fade equal, which puts the clearing at full strength
             // exactly to the node's rim and gone a quarter of a node-width
-            // past it — the shape the pair reproduced back when the fade was
-            // pinned to twice the reach.
+            // past it.
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
             sevens_label: SevensLabel::Comma,

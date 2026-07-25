@@ -135,8 +135,8 @@ pub fn render(
             // bounce actually is at `now`. The analyzer counts the samples it
             // is given and stamps its columns off `now`, both of which come
             // from the frame index — so the spectrum is as deterministic as
-            // everything else, and its column rate no longer depends on the
-            // render's fps the way a frame-clock throttle made it.
+            // everything else, and its column rate does not depend on the
+            // render's fps the way a frame-clock throttle would make it.
             let chunk = audio.slice_seconds(now - settings.audio_start, now + step - settings.audio_start);
             if !chunk.is_empty() {
                 let config = state.spectrum_config;

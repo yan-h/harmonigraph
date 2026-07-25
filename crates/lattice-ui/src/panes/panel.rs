@@ -1,7 +1,7 @@
 //! The Panel pane: the plugin's own knobs rather than the lattice's — how
 //! sharply and how hard it renders, and how the panes are arranged. None of
-//! this is part of the picture; it's what surrounds it. Pulled out of the
-//! Frame pane, where it used to sit at the bottom looking like a view setting.
+//! this is part of the picture; it's what surrounds it. Kept out of the
+//! Frame pane, where it would sit at the bottom looking like a view setting.
 
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};

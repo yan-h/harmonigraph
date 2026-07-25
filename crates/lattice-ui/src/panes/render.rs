@@ -84,9 +84,9 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     // takes the panel color, so it reads as inert chrome rather than part of
     // the shot; the aspect box takes the render's OWN frame background — the
     // color the offline renderer shows in its margins and inter-pane gaps — so
-    // the box is exactly the pixels the video will contain. Before this the
-    // padding and the pane fills were both `well()`, and you couldn't tell
-    // where the frame ended.
+    // the box is exactly the pixels the video will contain. Painting the
+    // padding and the pane fills both `well()` leaves no way to tell where
+    // the frame ends.
     let bg = layout.background;
     ui.painter().rect_filled(outer, 0.0, theme::panel());
     ui.painter().rect_filled(box_rect, 0.0, egui::Color32::from_rgb(bg.0, bg.1, bg.2));
@@ -203,9 +203,9 @@ fn frame_chrome(ui: &egui::Ui, box_rect: egui::Rect, pad: f32) {
 /// That render lays the take's whole spectrogram out at once from recorded
 /// audio and sweeps a playhead across it. The live preview has neither the
 /// audio nor the layout, so anything it drew here would be a different picture
-/// from the render — better to show nothing and name it. (It used to draw the
-/// live scrolling spectrogram under a small "Playhead" pill in the corner,
-/// which read as an odd label stuck on an otherwise trustworthy preview.)
+/// from the render — better to show nothing and name it. (Drawing the live
+/// scrolling spectrogram under a small "Playhead" pill in the corner reads as
+/// an odd label stuck on an otherwise trustworthy preview.)
 fn playhead_placeholder(ui: &egui::Ui, rect: egui::Rect) {
     let p = ui.painter_at(rect);
     // The pane's own background, so the region still reads as the spectral

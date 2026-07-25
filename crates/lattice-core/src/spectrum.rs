@@ -15,11 +15,11 @@
 /// in MIDI pitch, i.e. logarithmic in frequency, so every octave gets equal
 /// width.
 ///
-/// Deliberately NOT whole octaves from a C. It used to be MIDI 12..132, ten
-/// octaves C to C, which made the C gridlines land on the axis ends — tidy,
-/// but it stopped at 16.7 kHz and left the top third of an octave of the
-/// audible band unanalyzed. There is no C anywhere near 20 kHz (the next one
-/// is 44 kHz), so covering the band means giving that tidiness up.
+/// Deliberately NOT whole octaves from a C. MIDI 12..132 — ten octaves C to
+/// C — would land the C gridlines on the axis ends, which is tidy, but it
+/// stops at 16.7 kHz and leaves the top third of an octave of the audible
+/// band unanalyzed. There is no C anywhere near 20 kHz (the next one is
+/// 44 kHz), so covering the band means giving that tidiness up.
 pub const SPECTRUM_MIN_MIDI: f32 = 15.486_82; // 20 Hz
 pub const SPECTRUM_MAX_MIDI: f32 = 135.076_23; // 20 kHz
 /// Axis resolution: 32 buckets per semitone (3.125 cents).
@@ -334,16 +334,16 @@ impl ChannelBank {
     /// wherever it sits in the stereo image — or None until every channel has
     /// seen a full window.
     ///
-    /// Mean and not sum, so the scale the whole display rests on is the one it
-    /// always had: a full-scale sine centered in the image still reads 0 dB, and
-    /// mono input reads exactly what it read when this was a single analyzer. A
-    /// plain sum would lift everything 3 dB and put a centered full-scale sine
-    /// above the top of every range bar.
+    /// Mean and not sum, so the scale the whole display rests on does not
+    /// depend on the channel count: a full-scale sine centered in the image
+    /// reads 0 dB, and mono input reads exactly what a single analyzer reads.
+    /// A plain sum would lift everything 3 dB and put a centered full-scale
+    /// sine above the top of every range bar.
     ///
-    /// What DOES change, deliberately: level is now independent of pan. A sine
+    /// What this buys, deliberately: level is independent of pan. A sine
     /// panned hard left reads the same 3 dB below center that it would at any
-    /// other pan position, where the old mono mixdown put it 6 dB down — and an
-    /// anti-phase pair, which the mixdown erased entirely, reads at full level.
+    /// other pan position, where a mono mixdown puts it 6 dB down — and an
+    /// anti-phase pair, which a mixdown erases entirely, reads at full level.
     pub fn power_sum(&mut self) -> Option<[f32; SPECTRUM_BINS]> {
         let mut total = [0.0f32; SPECTRUM_BINS];
         for analyzer in &mut self.per_channel {
@@ -564,7 +564,7 @@ mod tests {
         bank.power_sum().expect("both windows filled")
     }
 
-    /// THE reason the channels are no longer mixed to mono before analysis: an
+    /// THE reason the channels are not mixed to mono before analysis: an
     /// anti-phase pair is loud, and a waveform sum erases it completely. A
     /// display whose job is to show which pitches are sounding cannot answer
     /// "nothing" for a tone that is plainly audible.

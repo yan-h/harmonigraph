@@ -192,10 +192,10 @@ pub fn apply_theme(ctx: &egui::Context) {
 
     // Selection keeps alpha (it overlays glyphs). egui reuses this pair for
     // the *selected* button look (Meantone/Learn, every selectable_value):
-    // fill = selection.bg_fill, text = selection.stroke color. The old
-    // accent-blue-on-translucent-accent read as blue-on-blue (~3:1) and, now
-    // that resting buttons are brighter, the 0.35 fill no longer separated
-    // from an unselected one. A denser fill plus bright text makes the
+    // fill = selection.bg_fill, text = selection.stroke color.
+    // Accent-blue-on-translucent-accent reads as blue-on-blue (~3:1), and
+    // against the brightness of a resting button a 0.35 fill does not
+    // separate from an unselected one. A denser fill plus bright text makes the
     // selected state unmistakable while still reading fine as a text
     // highlight over glyphs.
     visuals.selection.bg_fill = accent().gamma_multiply(0.5);

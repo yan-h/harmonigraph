@@ -79,11 +79,11 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// The one band standing outside a note's own outline: `(width, color)` of the
 /// white keyline, brighter than the raw Edge fraction (see [`GLOW_INTENSITY`]).
 ///
-/// A note used to carry a solid black outline under this, to separate it from
-/// whatever the spectrogram was doing behind it. It is gone: a filled note is
-/// its own separation, and the black read as a second, heavier outline around
-/// every note — most of all on the thin ribbons this pane is used at, where two
-/// dark lines and a bright one is more edge than note.
+/// A note carries no solid black outline under this. A filled note is its own
+/// separation from whatever the spectrogram is doing behind it, and a black
+/// outline reads as a second, heavier one around every note — most of all on
+/// the thin ribbons this pane is used at, where two dark lines and a bright one
+/// is more edge than note.
 ///
 /// Off comes back zero-width AND transparent, never one or the other: the width
 /// is what the quad grows by to make room for the band (and what the far-edge
@@ -105,12 +105,11 @@ fn rim(cfg: &crate::SpectrumConfig, alpha: f32) -> (f32, Color32) {
 ///
 /// One paint callback for the whole roll, drawing one instanced quad per
 /// note segment — NOT a stack of stroked rounded rects through egui's
-/// tessellator, which is what this used to be. The roll is a scrolling
-/// picture of immutable content, and immediate mode re-uploaded every
-/// vertex of it every frame: 100k+ vertices, 4-5 ms of pure upload, the
-/// dominant cost of the frame. Four vertices a note and a distance field
-/// for the bands costs neither. See `lattice_render::roll` for the
-/// measurement and the shape of the fix.
+/// tessellator. The roll is a scrolling picture of immutable content, and
+/// immediate mode re-uploads every vertex of it every frame: 100k+
+/// vertices, 4-5 ms of pure upload, the dominant cost of the frame. Four
+/// vertices a note and a distance field for the bands costs neither. See
+/// `lattice_render::roll` for the measurement and the shape of the fix.
 pub(super) fn draw_roll(
     painter: &egui::Painter,
     axes: &Axes,
@@ -122,9 +121,9 @@ pub(super) fn draw_roll(
 ) {
     let notes = note_instances(axes, scale, state, split, now);
     if surface == 0 {
-        // What the roll now costs, for the performance overlay: this geometry
-        // stopped passing through egui's vertex buffer, so the `verts` row
-        // can no longer see it. The Render preview is a second roll and does
+        // What the roll costs, for the performance overlay: this geometry
+        // does not pass through egui's vertex buffer, so the `verts` row
+        // cannot see it. The Render preview is a second roll and does
         // not publish (see `SharedState::roll_notes`).
         state
             .roll_notes
@@ -201,12 +200,12 @@ pub(super) fn note_instances(
     //     same side, so a note that merely crosses an edge still draws its
     //     visible part).
     // A note paints past its own box: half its outline, the keyline standing
-    // outside that, and the antialiasing ramp (`reach` in roll.wgsl). The box is what the window
-    // is tested against, so a note used to vanish while that ink was still
-    // owed — the ribbon popped out of existence a few points short of the edge
-    // instead of sliding under it. In time that is the span divided by the
-    // roll's own length, so it grows with the Span: ~200 ms across 10 s, over
-    // a second across a minute.
+    // outside that, and the antialiasing ramp (`reach` in roll.wgsl). The box
+    // is what the window is tested against, so without the overhang below a
+    // note vanishes while that ink is still owed — the ribbon pops out of
+    // existence a few points short of the edge instead of sliding under it.
+    // In time that is the span divided by the roll's own length, so it grows
+    // with the Span: ~200 ms across 10 s, over a second across a minute.
     //
     // The far edge moves out by exactly that, for the cull AND for the clamp
     // below, so the box overhangs and the pane's scissor takes the ink off as
@@ -251,7 +250,7 @@ pub(super) fn note_instances(
     // note count is the right first guess at how many instances this makes.
     let mut instances = Vec::with_capacity(notes.len());
     for note in notes {
-        // Repeats of one key butt together in time, and with the rim no longer
+        // Repeats of one key butt together in time, and with the rim not
         // wrapping their ends (see `RollEdge`) nothing marks where one stopped
         // and the next started — a run of taps reads as one long note. The Gap
         // pulls the tail back off its neighbour so the background shows through
@@ -296,16 +295,16 @@ pub(super) fn note_instances(
             // as a wider stroke of the same path — a centered stroke grows
             // inward exactly as much as outward, and a note is only a few pixels
             // thick at the pitch ranges this pane is actually used at, so the
-            // two long edges met in the middle and painted over the interior.
+            // two long edges meet in the middle and paint over the interior.
             // Here that is structural: the shader reads the band off the
             // DISTANCE to the outline, and a band at distance 1..2 cannot reach
             // back inside it whatever the ribbon's thickness.
             //
-            // The rim used to carry three more bands: a solid black outline
-            // under the keyline, and two approximating the lattice's bloom.
-            // All gone. The bloom is the lattice's alone (there it is a real
-            // post-process pass, not hand-placed bands standing in for one),
-            // and the black turned out to be edge a filled note does not need.
+            // The rim carries no other bands — no solid black outline under the
+            // keyline, and none approximating the lattice's bloom. The bloom is
+            // the lattice's alone (there it is a real post-process pass, not
+            // hand-placed bands standing in for one), and the black is edge a
+            // filled note does not need.
 
             // Geometry in the pane's own two axes, which is all the shader is
             // told: `Axes` maps those onto perpendicular screen axes, so
@@ -495,8 +494,8 @@ mod tests {
     fn the_rim_is_the_same_thickness_at_any_note_width() {
         let thick = ribbon_with_range(0.5, 12.0);
         // ~120 semitones over 100 points: the ribbon is under 2 points thick,
-        // which is where the old centered strokes met in the middle and
-        // painted the interior white.
+        // which is where centered strokes meet in the middle and paint the
+        // interior white.
         let thin = ribbon_with_range(0.5, 120.0);
         assert_eq!(one(&thick).rim[0], KEYLINE_PX, "the keyline is not the width it is fixed at");
         assert_eq!(one(&thin).rim, one(&thick).rim, "the rim thinned with the note");

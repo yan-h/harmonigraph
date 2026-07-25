@@ -14,13 +14,12 @@
 
 /// A decoded file, channels intact.
 ///
-/// It used to average them on the way in ("mono samples, channels averaged —
-/// what the analyzer wants"), which stopped being true when the analyzer began
-/// combining channels in the POWER domain instead of mixing them
-/// ([`ChannelBank`](crate::spectrum::ChannelBank)). Averaging here would have
-/// cancelled anti-phase content before the analyzer ever saw it — so a render
-/// would have shown the summed picture whatever the live pane showed, which is
-/// the one difference between the two that cannot be explained away.
+/// Channels are kept, not averaged on the way in. The analyzer combines them
+/// in the POWER domain rather than mixing them
+/// ([`ChannelBank`](crate::spectrum::ChannelBank)), so averaging here would
+/// cancel anti-phase content before the analyzer ever saw it — and a render
+/// would show the summed picture whatever the live pane showed, which is the
+/// one difference between the two that cannot be explained away.
 pub struct Audio {
     pub sample_rate: f32,
     /// Interleaved samples: `channels` per frame.

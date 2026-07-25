@@ -166,7 +166,7 @@ pub struct ValueBar<'a> {
     range: RangeInclusive<f32>,
     label: &'a str,
     /// Ease the low end of the range (geometric when min > 0, cubic
-    /// otherwise). Matches the intent of the old logarithmic sliders.
+    /// otherwise), so the fine end of a wide range is draggable.
     eased: bool,
     decimals: usize,
     integer: bool,

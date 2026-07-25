@@ -108,8 +108,7 @@ pub enum SpectralOrientation {
 impl SpectralOrientation {
     /// Whether TIME (the spectrogram/roll axis) runs vertically down the
     /// pane, with pitch across it. Resolves [`Auto`](Self::Auto) to the
-    /// pane's long side. (The boolean matches the old pitch-axis flag, so
-    /// only its interpretation in [`Axes`](crate::panes) changed.)
+    /// pane's long side.
     fn is_time_vertical(self, rect: egui::Rect) -> bool {
         match self {
             SpectralOrientation::Auto => rect.height() > rect.width(),
@@ -971,19 +970,17 @@ impl AudioSpectrum {
     /// samples rather than on the shell clock — see
     /// [`push_samples`](Self::push_samples).
     ///
-    /// Raised from 50 ms to 20 ms once the heatmap stopped repainting itself for
-    /// every column (see `write_ring`): the cost of a column is now O(pitch
-    /// pixels) rather than O(pitch pixels x slabs), so the rate buys smoothness
-    /// at the newest edge almost for free. It used to cost REACH as well, back
-    /// when the ring kept every column at this rate forever; the store now
-    /// coarsens with age (see [`SpectrumHistory`]), so the rate sets the
-    /// resolution of the recent stretch and barely touches how far back the
-    /// heatmap goes.
+    /// The heatmap does not repaint itself for every column (see
+    /// `write_ring`), so the cost of a column is O(pitch pixels) rather than
+    /// O(pitch pixels x slabs) and the rate buys smoothness at the newest
+    /// edge almost for free. It costs no REACH either: the store coarsens
+    /// with age (see [`SpectrumHistory`]), so the rate sets the resolution of
+    /// the recent stretch and barely touches how far back the heatmap goes.
     ///
-    /// Raised again to 8 ms, which is a picture change and not an analysis one:
-    /// the window is untouched, so what a column RESOLVES is exactly what it
-    /// was, and overlapping the same window more finely just draws the time
-    /// axis at 2.5x the resolution it could reach before (via
+    /// At 8 ms this is a picture setting and not an analysis one: the window
+    /// is untouched, so what a column RESOLVES is unchanged, and overlapping
+    /// that same window more finely just draws the time axis at 2.5x the
+    /// resolution 20 ms reaches (via
     /// [`MIN_BUCKET`](crate::panes::spectrogram::MIN_BUCKET), which tracks this).
     /// It costs 0.37 ms of FFT per column — 4.7% of a core, against 1.9% at
     /// 20 ms — and one more [`SpectrumHistory`] tier to hold the same reach.
@@ -1140,14 +1137,14 @@ impl AudioSpectrum {
     /// ready the instant the window reaches back to it. Nothing older is
     /// retained even at the maximum span.
     ///
-    /// This is now the ONLY thing that decides reach. It used to be shadowed by
-    /// a memory backstop that bound first — 160 MB bought only ~3.5 minutes at
-    /// 50 Hz, so a long span drew a heatmap over the recent stretch and bare
-    /// roll beyond it. Storing a bucket as a byte of dB and coarsening old
-    /// columns (see [`SpectrumHistory`]) made the full span cost about 30 MB,
-    /// so the cap can simply be the span again.
+    /// This is the ONLY thing that decides reach — no memory backstop binds
+    /// first. Storing a bucket as a byte of dB and coarsening old columns
+    /// (see [`SpectrumHistory`]) puts the full span at about 30 MB, so the
+    /// cap can simply be the span. Keeping every column at full rate forever
+    /// would instead cost 160 MB to reach only ~3.5 minutes at 50 Hz, drawing
+    /// a heatmap over the recent stretch and bare roll beyond it.
     ///
-    /// Raising it is cheap and no longer linear: another
+    /// Raising it is cheap and sub-linear: another
     /// [`SpectrumHistory::COARSE_COLUMNS`] (~4 MB) doubles the reach. The unit
     /// test `spectrum_history_reaches_the_retention_cap` is what keeps the
     /// structure sized for whatever this says.
@@ -1303,14 +1300,14 @@ pub struct SharedState {
     /// which also never asks for the feature, so it has no timer to begin with.
     pub(crate) lattice_stats: std::sync::Arc<lattice_render::LatticeStats>,
     /// How many note segments the docked roll handed its paint callback last
-    /// frame — the geometry that USED to show up in the `verts` readout, four
-    /// vertices at a time instead of several hundred.
+    /// frame — the geometry `verts` does NOT see, four vertices at a time
+    /// instead of several hundred.
     ///
-    /// Reported so the roll's load stays visible after moving off egui's
-    /// vertex buffer: without it the overlay would show the cost vanish with
-    /// nothing standing in its place, and "is the roll drawing at all" would
-    /// have no answer. An atomic for the same reason `lattice_stats` is one —
-    /// the roll draws from a `&SharedState`.
+    /// Reported so the roll's load stays visible while it draws from its own
+    /// vertex buffer rather than egui's: without it the overlay would show
+    /// the cost vanish with nothing standing in its place, and "is the roll
+    /// drawing at all" would have no answer. An atomic for the same reason
+    /// `lattice_stats` is one — the roll draws from a `&SharedState`.
     ///
     /// Only the docked pane (surface 0) publishes; the Render preview is a
     /// second roll on screen and reporting its count as THE count would be

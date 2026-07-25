@@ -434,7 +434,7 @@ fn scroll_over_lattice_zooms_the_camera() {
 
 /// A wheel egui classifies as a zoom gesture (modifier+scroll / trackpad
 /// pinch) arrives as `zoom_delta`, not a scroll delta. The lattice must zoom
-/// on that too — the old handler only read the scroll delta and did nothing.
+/// on that too — a handler that only reads the scroll delta does nothing here.
 #[test]
 fn zoom_gesture_over_lattice_zooms_the_camera() {
     let (start, after) = distance_after_wheel_over_lattice(egui::Modifiers::COMMAND);
@@ -935,8 +935,8 @@ fn a_tones_energy_lands_at_the_time_the_tone_started() {
 /// The store has to be sized for the retention policy above it: every second
 /// inside `HISTORY_MAX_SECONDS` must have columns to draw, or a long span shows
 /// a heatmap that stops partway and bare roll beyond it (which is exactly what
-/// the old fixed-rate ring did — 160 MB bought 3.5 minutes of a 10 minute
-/// span). Raising the cap means adding a tier; this is what says so.
+/// a fixed-rate ring does — 160 MB buys 3.5 minutes of a 10 minute span).
+/// Raising the cap means adding a tier; this is what says so.
 #[test]
 fn spectrum_history_reaches_the_retention_cap() {
     let reach = SpectrumHistory::reach(AudioSpectrum::FFT_INTERVAL);
@@ -1036,7 +1036,7 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
 
 /// Every piece of text one pass over a closure drew, as (line box, text).
 ///
-/// Labels no longer go through egui's shape list — they are collected as
+/// Labels do not go through egui's shape list — they are collected as
 /// glyphs and handed to a paint callback — so this reads the batch instead.
 fn drawn_texts(
     draw: impl Fn(&mut crate::text::TextBatch, &egui::Painter),
@@ -1049,9 +1049,9 @@ fn drawn_texts(
         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
         |ui| draw(&mut batch, ui.painter()),
     );
-    // The line box, as the old shape-list reader reported: the assertions
-    // below are about how pieces stack, and a monospace line box is what
-    // they were calibrated against.
+    // The line box, matching what a shape-list reader would report: the
+    // assertions below are about how pieces stack, and a monospace line box
+    // is what they are calibrated against.
     batch.pieces().iter().map(|p| (p.galley, p.text.clone())).collect()
 }
 
@@ -1091,7 +1091,7 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
 
     // One column, beginning where the letter ends. The boxes are ink, so
     // they meet within a glyph's own side bearing rather than within the
-    // rim the old stamped boxes carried.
+    // rim a stamped box would carry.
     const BEARING: f32 = 2.0;
     assert!(
         (accidental.left() - letter.right()).abs() <= 2.0 * BEARING,
@@ -1534,7 +1534,7 @@ fn the_heatmap_follows_the_curve_until_given_its_own_range() {
     assert_eq!(spectrogram_level(&cfg, power, midi), loudness(&cfg, power, midi));
 
     // Switched on, the heatmap reads its OWN window and stops tracking the
-    // curve's: moving the curve's floor must no longer move the heatmap.
+    // curve's: moving the curve's floor must not move the heatmap.
     cfg.spectrogram_own_range = true;
     let own = spectrogram_level(&cfg, power, midi);
     cfg.floor_db = -20.0;
@@ -1846,11 +1846,11 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     // ...and the HUD really lands in that pane's top-right corner.
     //
     // Found by its painted text rather than by `Memory::area_rect`: the HUD is
-    // no longer an Area. It used to be, and every label inside it registered a
-    // widget rect that took the pointer from whatever was underneath — a dead
-    // zone the size of the readout. It is painted straight onto a foreground
-    // layer now, so there is no area to look up, and the thing worth asserting
-    // was never the Area anyway: it is where the numbers land.
+    // not an Area. As one, every label inside it registers a widget rect that
+    // takes the pointer from whatever is underneath — a dead zone the size of
+    // the readout. It is painted straight onto a foreground layer, so there is
+    // no area to look up, and the thing worth asserting was never the Area
+    // anyway: it is where the numbers land.
     assert!(
         output.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
