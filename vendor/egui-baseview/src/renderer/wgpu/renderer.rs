@@ -209,6 +209,7 @@ pub struct Renderer {
     /// Texture and buffer uploads, which is also where paint callbacks
     /// `prepare`; encoding egui's draw calls; and finish + submit + present.
     last_upload_ms: f32,
+    last_ubuf_ms: f32,
     /// Of that, the texture uploads alone — the rest is buffer uploads and,
     /// with them, the paint callbacks' `prepare`.
     last_texture_ms: f32,
@@ -255,6 +256,7 @@ impl Renderer {
             last_gpu_ms: 0.0,
             last_acquire_ms: 0.0,
             last_upload_ms: 0.0,
+            last_ubuf_ms: 0.0,
             last_texture_ms: 0.0,
             last_prims: 0,
             last_verts: 0,
@@ -288,6 +290,18 @@ impl Renderer {
     /// finish + submit + present.
     pub fn last_upload_ms(&self) -> f32 {
         self.last_upload_ms
+    }
+
+    /// Of the uploads, `update_buffers` ITSELF — egui's own vertex and index
+    /// writes plus every paint callback's `prepare`.
+    ///
+    /// Split out because the upload reading is NOT just that call. It also
+    /// spans creating the command encoder, taking the renderer's write lock,
+    /// and the MSAA view resize below — three unmeasured things that were
+    /// indistinguishable from egui's buffer writes, and which is which
+    /// decides whether a cost is the GUI's own work or a wait on the GPU.
+    pub fn last_ubuf_ms(&self) -> f32 {
+        self.last_ubuf_ms
     }
 
     /// How many primitives and vertices the last upload had to move.
@@ -464,18 +478,38 @@ impl Renderer {
 
             self.last_texture_ms = tex_start.elapsed().as_secs_f32() * 1000.0;
 
-            renderer.update_buffers(
+            let ubuf_start = std::time::Instant::now();
+            let bufs = renderer.update_buffers(
                 &self.render_state.device,
                 &self.render_state.queue,
                 &mut encoder,
                 &clipped_primitives,
                 &screen_descriptor,
-            )
+            );
+            self.last_ubuf_ms = ubuf_start.elapsed().as_secs_f32() * 1000.0;
+            bufs
         };
 
+        // The MSAA term is gated on MSAA actually being ON, which it is not by
+        // default: `RendererOptions::default()` sets `msaa_samples` to 0, and
+        // `resize_and_generate_msaa_view` only fills `msaa_texture_view` when
+        // that is above 1. So the view stayed `None` for the life of the
+        // window, this condition was true on EVERY frame, and every frame
+        // reconfigured the surface — tearing down and rebuilding the swapchain
+        // to arrive at the size it already had.
+        //
+        // That cost 0.5-3 ms a frame, wandering on a roughly one-second
+        // period, and it was invisible: it sits inside the renderer's upload
+        // reading without being an upload, so it read as "buffer uploads" on
+        // the perf overlay while `update_buffers` itself measured 0.3 ms. It
+        // also scaled with GPU load — reconfiguring while more work is in
+        // flight is slower — which is why collapsing the Lattice pane, and
+        // with it five render passes, appeared to make "uploads" cheap.
+        //
+        // `width`/`height` start at 0, so the first frame still configures.
         if self.width != canvas_width
             || self.height != canvas_height
-            || self.msaa_texture_view.is_none()
+            || (self.msaa_samples > 1 && self.msaa_texture_view.is_none())
         {
             self.resize_and_generate_msaa_view(canvas_width, canvas_height);
         }

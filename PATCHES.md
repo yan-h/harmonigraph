@@ -158,11 +158,28 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   no-op pass placed after egui's. Readback is a three-step cycle polled with
   `PollType::Poll`, never `Wait` — blocking for the number would stall the
   pipeline being measured.
+- **Patch 9** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`): split the
+  upload reading, then fix what the split exposed. `last_ubuf_ms` times
+  `update_buffers` on its own, because the surrounding `last_upload_ms` also
+  spans creating the command encoder, taking the renderer's write lock, and
+  the MSAA resize — none of which are uploads, and two of which are places a
+  frame blocks rather than works.
+  With those apart, the resize guard turned out to fire every frame. It tested
+  `msaa_texture_view.is_none()`, but `RendererOptions::default()` sets
+  `msaa_samples` to 0 and `resize_and_generate_msaa_view` only fills that view
+  when it is above 1 — so the view was never `Some`, and every frame
+  reconfigured the surface to the size it already had. Rebuilding a swapchain
+  per frame cost 0.5-3 ms, wandered on a ~1 s period as GPU load moved, and
+  was unattributable: it read as "buffer uploads" on the perf overlay while
+  `update_buffers` itself measured 0.3 ms. The term is now gated on
+  `msaa_samples > 1`; `width`/`height` start at 0, so the first frame still
+  configures.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
   staged-upload flush, the repaint-deadline fix, the frame-timer
-  plumbing, the `WgpuSetup` re-export, and the tessellation/egui-GPU timers.
+  plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers,
+  and the upload split with its per-frame-reconfigure fix.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

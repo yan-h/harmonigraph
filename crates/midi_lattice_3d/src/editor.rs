@@ -416,6 +416,7 @@ fn frame(
     shared.ui.tick_ms = queue.tick_ms();
     shared.ui.render_ms = queue.render_ms();
     shared.ui.upload_ms = queue.upload_ms();
+    shared.ui.ubuf_ms = queue.ubuf_ms();
     shared.ui.texture_ms = queue.texture_ms();
     shared.ui.prims = queue.prims();
     shared.ui.verts = queue.verts();
@@ -468,15 +469,36 @@ const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
 /// is ready when it is ready and the display asks when it asks. Miss the
 /// question and you don't lose a little time, you lose a whole refresh — 144
 /// becomes 72 for that frame. Averaged over a second that reads as an
-/// unsteady 70-100, which is exactly what a 1.1x margin produced: 6.31 ms of
-/// timer against 6.94 ms of refresh leaves 9% for jitter and work spikes to
-/// eat, and they do.
+/// unsteady 70-100, and a 1.1x margin produced exactly that: 6.31 ms of timer
+/// against 6.94 ms of refresh leaves 9% for jitter to eat.
 ///
-/// 2x is deliberately generous. The extra ticks are not wasted frames: the
-/// surface presents with vsync, so a tick that arrives with the swapchain
-/// full simply blocks until a slot frees, and the display rate throttles the
-/// timer rather than the other way round. Oversampling buys the margin;
-/// vsync spends it.
+/// 2x is deliberately generous, and generous is free. The surface presents
+/// with vsync (`AutoVsync`, which is Fifo here), so a tick arriving with the
+/// swapchain full blocks until a slot frees — and because it then presents,
+/// ticks per second equals refreshes per second whatever this constant says.
+/// Oversampling does not multiply the CPU work; it only makes sure a tick is
+/// ready whenever the display asks. There is nothing to win by tightening it.
+///
+/// What the margin is actually protecting against, now: the tick is a
+/// `CFRunLoopTimer` on the HOST'S main run loop, not on a thread of ours. The
+/// host's own UI work delays it by however long it likes, and no amount of
+/// making our frame cheaper touches that. Which is why the number stays where
+/// it is even though the frame got cheaper.
+///
+/// HISTORICAL NOTE, because the original case for 2x no longer holds up. It
+/// blamed the 1.1x failure on "jitter and work spikes", and the spikes were
+/// real — but they were a bug, not a workload: every frame was reconfiguring
+/// the swapchain (see PATCHES.md, patch 9), which cost 0.5-3 ms wandering
+/// against 0.63 ms of margin. That is fixed. The constant survives on the
+/// run-loop argument above, not on the measurement that first chose it, and a
+/// tighter value might well hold today.
+///
+/// To re-test it, watch the overlay's `frame` PEAK, not the fps number. A
+/// missed refresh is not a slow frame, it is a DOUBLED interval, so peak at
+/// roughly twice avg means misses and peak near avg means the margin is
+/// enough. The fps number averages the misses away, which is precisely why
+/// the failure first showed up as a vague "unsteady 70-100" rather than as
+/// something you could point at.
 ///
 /// The real fix is to stop guessing and drive frames from the display itself
 /// (`CVDisplayLink`), which is a much larger change to the vendored baseview.
@@ -487,6 +509,18 @@ const DISPLAY_OVERSAMPLE: f64 = 2.0;
 /// Two bounds, whichever is slower: the user's cap, and what the display can
 /// actually present. A cap above the refresh rate buys nothing but wasted
 /// frames, and a display faster than the cap is exactly what the cap is for.
+///
+/// KNOWN GAP: a binding cap throws [`DISPLAY_OVERSAMPLE`] away. `max` picks
+/// the cap, so a 30 fps cap on a 60 Hz display runs a bare 33.33 ms timer
+/// against a 16.67 ms refresh — zero margin, which is the same condition that
+/// made a 1.1x oversample unsteady. Any jitter and the frame slips to the
+/// third vsync: 20 fps for that frame, averaging out as an unsteady 20-30.
+///
+/// Raising the constant cannot fix that, because capping is a different
+/// mechanism from pacing. Nothing throttles a slow timer TO the cap — vsync
+/// throttles to 60, not to 30 — so hitting 30 means an oversampled timer plus
+/// deliberately skipping presents, not a timer slow enough to land on the
+/// right refresh by luck.
 fn target_frame_interval(fps_cap: Option<f32>, display_max_fps: Option<f64>) -> f64 {
     let from_display = match display_max_fps {
         Some(hz) if hz.is_finite() && hz > 0.0 => 1.0 / (hz * DISPLAY_OVERSAMPLE),
