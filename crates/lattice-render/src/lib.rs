@@ -36,6 +36,12 @@ use lattice_scene::Scene;
 mod roll;
 pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 
+/// Label text, for the same reason the roll has its own callback: what a
+/// label costs is the rim, and the rim was the text drawn again once per
+/// stamp.
+mod text;
+pub use text::{text_paint_callback, FontAtlas, GlyphInstance, TextRing};
+
 // Shells name texture formats through this re-export so every crate agrees
 // on the wgpu version.
 pub use egui_wgpu::wgpu;

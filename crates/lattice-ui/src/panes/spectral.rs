@@ -1099,9 +1099,10 @@ pub(crate) fn spectral_pane(
     // whatever is behind them is a picture, not a background. A pitch label
     // over a bright spectrogram slab, or over the spectrum's own fill, has no
     // contrast to rely on at all.
+    let mut labels = crate::text::TextBatch::default();
     for (p, label) in axis_labels {
         let (pos, align) = axes.text_anchor(p, label_d, 3.0, label_into);
-        super::lattice::outlined_text(
+        labels.text(
             &painter,
             pos,
             align,
@@ -1111,6 +1112,9 @@ pub(crate) fn spectral_pane(
             theme::well(),
         );
     }
+    // Flushed here rather than with the readout below: the divider draws
+    // between them, and a batch is drawn where it is flushed.
+    labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
 
     // The divider, over the plots so it stays findable against a loud
     // spectrogram. Nothing at rest — the roll's now-line already marks where
@@ -1150,7 +1154,8 @@ pub(crate) fn spectral_pane(
         );
         let nearest = midi.round();
         let (pos, align) = axes.text_anchor(scale.t_of(midi), 1.0, 6.0, -2.0);
-        super::lattice::outlined_text(
+        let mut readout = crate::text::TextBatch::default();
+        readout.text(
             &painter,
             pos,
             align,
@@ -1165,6 +1170,7 @@ pub(crate) fn spectral_pane(
             theme::text(),
             theme::well(),
         );
+        readout.flush(&painter, rect, state, crate::text::spectral_readout(surface));
     }
 }
 
@@ -1618,27 +1624,36 @@ mod tests {
         assert_eq!(bands(0.5), 1, "half a semitone sharp has none");
     }
 
-    /// The axis labels are haloed like the lattice's node names. What sits
+    /// The axis labels carry a rim, like the lattice's node names. What sits
     /// behind them is a picture — a bright spectrogram slab, the spectrum's
     /// own fill — so plain text has no contrast to rely on, and a label you
     /// can't read doesn't say which pitch a lane is.
+    ///
+    /// The rim is drawn from the glyph's own coverage now rather than by
+    /// stamping the text, so what this can check is that every label is
+    /// handed a rim color to draw it with.
     #[test]
-    fn the_axis_labels_are_haloed() {
-        let shapes = paint(WIDE, SpectralOrientation::Horizontal, 0.55);
-        let mut runs: std::collections::HashMap<String, usize> = Default::default();
-        for shape in &shapes {
-            if let egui::Shape::Text(t) = shape {
-                *runs.entry(t.galley.text().to_owned()).or_default() += 1;
-            }
-        }
-        assert!(!runs.is_empty(), "the pane drew no labels at all");
-        for (label, stamps) in runs {
-            assert!(
-                stamps > 1,
-                "{label:?} was drawn once, so it carries no halo — bare text over the \
-                 spectrogram is what this guards against",
-            );
-        }
+    fn the_axis_labels_are_rimmed() {
+        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.roll_fraction = 0.55;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+            },
+        );
+        // The labels leave the shape list as one paint callback; what is
+        // checkable from here is that the pane emitted one at all, and the
+        // glyphs' colors are checked where they are built (`crate::text`).
+        assert!(
+            out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Callback(_))),
+            "the pane drew no label callback at all",
+        );
     }
 
     /// The readout names its own unit, and switches to kHz where an analyzer

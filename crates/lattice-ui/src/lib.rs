@@ -5,6 +5,8 @@
 pub mod layout;
 pub mod params;
 pub mod theme;
+/// Haloed label text, collected as glyphs and drawn by one callback.
+pub(crate) mod text;
 pub mod widgets;
 mod panes;
 mod perf;
@@ -1126,6 +1128,11 @@ pub struct SharedState {
     /// second roll on screen and reporting its count as THE count would be
     /// wrong, exactly as it is for the preview's lattice.
     pub(crate) roll_notes: std::sync::atomic::AtomicU32,
+    /// What the label callback's copy of egui's font atlas holds (see
+    /// [`text::AtlasMirror`]). Behind a lock for the same reason the other
+    /// per-frame publishing is behind atomics: labels are drawn from a
+    /// `&SharedState`. Taken once per flush, uncontended.
+    pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
     /// Milliseconds the shell spent tessellating egui's shapes last frame,
     /// or 0 where the shell doesn't measure it (the standalone's eframe loop
     /// isn't ours to instrument). Set by the shell before `root_ui`.
@@ -1290,6 +1297,7 @@ impl SharedState {
                 std::sync::Arc::new(stats)
             },
             roll_notes: std::sync::atomic::AtomicU32::new(0),
+            font_atlas: Default::default(),
             tess_ms: 0.0,
             egui_gpu_ms: 0.0,
             shell_ms: 0.0,
