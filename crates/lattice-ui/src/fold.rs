@@ -14,8 +14,12 @@
 //! bar's THICKNESS — the same measure the vertical fold uses for its height,
 //! and just wide enough for the collapse arrow — and its sibling takes what it
 //! gave up. The result reads as a rail down the edge of the window, so
-//! [`paint`] fills the rail in, turns the arrow sideways, and writes the folded
-//! pane's name up it.
+//! [`paint`] draws the rail as the pane's own tab, name and all.
+//!
+//! A whole subtree folds the same way, as many rails wide as it has panes that
+//! end up beside each other: a collapsed column is one (its panes fold onto
+//! each other's tab bars), a collapsed pair is two, and the split inside a
+//! folded pair divides the width it was given into one rail each.
 //!
 //! Whether a pane is folded stays egui_dock's own `collapsed` flag, set by its
 //! own arrow: nothing here duplicates that bookkeeping, it only reads it. What
@@ -77,29 +81,79 @@ impl Folds {
             let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) else {
                 continue;
             };
-            for node in 0..tree.len() {
-                let node = NodeIndex(node);
-                let Some(side) = folded_side(tree, node) else {
+            // A parent always comes before its children in the tree's array, so
+            // one forward pass can carry what it decides downwards: which
+            // subtrees are inside a fold, and how wide each node is about to
+            // be. The rectangle in a node is still last frame's, so a fold that
+            // narrows a split this frame has to tell its children itself, or
+            // every level below it would settle a frame late.
+            let mut inside = vec![false; tree.len()];
+            let mut granted = vec![f32::NAN; tree.len()];
+            for index in 0..tree.len() {
+                let node = NodeIndex(index);
+                let (left, right) = (node.left(), node.right());
+                let children = right.0 < tree.len();
+                if children && tree[node].is_parent() {
+                    if inside[index] {
+                        // Everything under a folded subtree folds with it.
+                        inside[left.0] = true;
+                        inside[right.0] = true;
+                    }
+                    if tree[node].is_vertical() {
+                        // Stacked: both children are as wide as the split.
+                        granted[left.0] = granted[index];
+                        granted[right.0] = granted[index];
+                    }
+                }
+                if !children || !tree[node].is_horizontal() {
                     continue;
+                }
+                // Either one child is folded and hands its width to the other,
+                // or this split is inside a fold already and divides what it
+                // was given into a rail per pane.
+                let (span, side) = if inside[index] {
+                    (rail_span(rail_columns(tree, left), rail, separator), Side::Left)
+                } else {
+                    match folded_side(tree, node) {
+                        Some(side) => {
+                            let child = match side {
+                                Side::Left => left,
+                                Side::Right => right,
+                            };
+                            inside[child.0] = true;
+                            (rail_span(rail_columns(tree, child), rail, separator), side)
+                        }
+                        None => continue,
+                    }
                 };
-                let Node::Horizontal(split) = &mut tree[node] else {
-                    continue;
+                let width = match (granted[index].is_finite(), &tree[node]) {
+                    (true, _) => granted[index],
+                    (false, Node::Horizontal(split)) => split.rect.width(),
+                    (false, _) => continue,
                 };
-                // `Rect::NOTHING` until the dock has laid out once, and a split
-                // with no room for two rails has nothing to hand over. Either
-                // way the fold waits for a frame rather than dividing by a
-                // width that isn't one.
-                let width = split.rect.width();
-                if !width.is_finite() || width <= 2.0 * (rail + separator) {
+                // `Rect::NOTHING` until the dock has laid out once. A fold also
+                // waits until there is room for it: a pane squeezed to a rail
+                // has to leave its sibling at least one too, or the click that
+                // would undo it lands nowhere. A split already inside a fold is
+                // exempt — it was handed exactly the width its rails need.
+                if !width.is_finite() || !(inside[index] || width > span + separator + rail) {
                     continue;
                 }
                 // A split hands each child the space up to half a separator
                 // short of its midpoint, so the midpoint has to sit that much
-                // further out for the rail itself to come out `rail` wide.
-                let edge = (rail + separator * 0.5) / width;
+                // further out for the rails themselves to come out `span` wide.
+                let edge = (span + separator * 0.5) / width;
                 let fraction = match side {
                     Side::Left => edge,
                     Side::Right => 1.0 - edge,
+                };
+                let rest = width - span - separator;
+                match side {
+                    Side::Left => (granted[left.0], granted[right.0]) = (span, rest),
+                    Side::Right => (granted[left.0], granted[right.0]) = (rest, span),
+                }
+                let Node::Horizontal(split) = &mut tree[node] else {
+                    continue;
                 };
                 // First frame of this fold: the fraction still in the split is
                 // the user's, and this is the last chance to keep it.
@@ -147,32 +201,36 @@ impl Fold {
 ///
 /// `None` covers the cases where nothing can be handed over: a vertical split
 /// (egui_dock folds those itself), neither child collapsed, and both collapsed
-/// — which makes the split itself collapsed, leaving what that means to its own
-/// parent.
+/// — which makes the split itself collapsed, so it is its own parent's to fold,
+/// as a subtree, into as many rails as it has panes side by side.
 fn folded_side(tree: &Tree<Tab>, node: NodeIndex) -> Option<Side> {
     if !tree[node].is_horizontal() {
         return None;
     }
-    match (foldable(tree, node.left()), foldable(tree, node.right())) {
+    match (collapsed(tree, node.left()), collapsed(tree, node.right())) {
         (true, false) => Some(Side::Left),
         (false, true) => Some(Side::Right),
         _ => None,
     }
 }
 
-/// Whether `node` is collapsed and fits in a single rail.
-fn foldable(tree: &Tree<Tab>, node: NodeIndex) -> bool {
-    node.0 < tree.len() && tree[node].is_collapsed() && rail_columns(tree, node) == 1
+fn collapsed(tree: &Tree<Tab>, node: NodeIndex) -> bool {
+    node.0 < tree.len() && tree[node].is_collapsed()
 }
 
-/// How many rails wide `node` would be once folded: one per leaf that would end
-/// up beside another.
+/// The width `rails` rails need side by side, separators included.
+fn rail_span(rails: i32, rail: f32, separator: f32) -> f32 {
+    rails.max(1) as f32 * rail + (rails - 1).max(0) as f32 * separator
+}
+
+/// How many rails wide `node` comes out once folded: one per leaf that ends up
+/// beside another.
 ///
 /// A stack of collapsed leaves is one rail — they fold onto each other's tab
-/// bars, top to bottom — which is what lets the whole settings column fold
-/// away as a single rail once every pane in it is collapsed. Two collapsed
-/// leaves side by side are two rails, and squeezing them into one would divide
-/// it between them by their own fraction, so those are left alone.
+/// bars, top to bottom — which is what lets a whole settings column fold away
+/// as a single rail once every pane in it is collapsed. Two collapsed leaves
+/// side by side are two rails, and the split between them divides the width
+/// they are given into one each.
 fn rail_columns(tree: &Tree<Tab>, node: NodeIndex) -> i32 {
     if node.0 >= tree.len() {
         return 0;
@@ -250,7 +308,10 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
             // Nothing to draw until the fold has actually been laid out: on
             // the frame a pane is collapsed on it is still its old width, and
             // a rail's worth of chrome across a whole pane would flash.
-            if !rect.is_positive() || rect.width() >= 2.0 * rail {
+            let columns = rail_columns(tree, folded);
+            if !rect.is_positive()
+                || rect.width() >= rail_span(columns, rail, style.separator.width) + rail
+            {
                 continue;
             }
             for leaf in leaves(tree, folded) {
@@ -265,7 +326,16 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
                 }
                 paint_arrow(ui, leaf.rect, side, style);
             }
-            deaden_separator(ui, rect, side, style);
+            // The separator the rail sits against, and any between rails of a
+            // folded pair: all of them inert now, for the same reason.
+            let outer = match side {
+                Side::Left => rect.right()..=rect.right() + style.separator.width,
+                Side::Right => rect.left() - style.separator.width..=rect.left(),
+            };
+            deaden(ui, egui::Rect::from_x_y_ranges(outer, rect.y_range()), style);
+            for band in inner_bands(tree, folded) {
+                deaden(ui, band, style);
+            }
         }
     }
 }
@@ -286,20 +356,37 @@ fn leaves(tree: &Tree<Tab>, node: NodeIndex) -> Vec<&egui_dock::LeafNode<Tab>> {
     }
 }
 
-/// Take the grab handle off the separator a rail sits against.
+/// Every separator inside the subtree at `node`: the gaps between panes that
+/// have folded into rails beside each other.
+fn inner_bands(tree: &Tree<Tab>, node: NodeIndex) -> Vec<egui::Rect> {
+    if node.0 >= tree.len() || !tree[node].is_parent() {
+        return Vec::new();
+    }
+    let (left, right) = (node.left(), node.right());
+    if right.0 >= tree.len() {
+        return Vec::new();
+    }
+    let mut bands = inner_bands(tree, left);
+    bands.extend(inner_bands(tree, right));
+    if let Node::Horizontal(split) = &tree[node] {
+        if let (Some(before), Some(after)) = (tree[left].rect(), tree[right].rect()) {
+            bands.push(egui::Rect::from_x_y_ranges(
+                before.right()..=after.left(),
+                split.rect.y_range(),
+            ));
+        }
+    }
+    bands
+}
+
+/// Take the grab handle off a separator a fold has pinned.
 ///
 /// egui_dock keeps drawing the separator between a folded pane and its
 /// neighbour, hover accent and resize cursor and all, but dragging it can no
 /// longer do anything: the fold rewrites the fraction it would set on the very
 /// next frame. So the invitation is withdrawn — the same thing egui_dock does
 /// for a pane folded downwards, which simply has no separator at all.
-fn deaden_separator(ui: &egui::Ui, rail: egui::Rect, side: Side, style: &egui_dock::Style) {
-    let width = style.separator.width;
-    let x = match side {
-        Side::Left => rail.right()..=rail.right() + width,
-        Side::Right => rail.left() - width..=rail.left(),
-    };
-    let band = egui::Rect::from_x_y_ranges(x, rail.y_range());
+fn deaden(ui: &egui::Ui, band: egui::Rect, style: &egui_dock::Style) {
     ui.painter().rect_filled(band, egui::CornerRadius::ZERO, style.separator.color_idle);
     // The cursor is a frame-wide setting rather than a shape, so it is undone
     // by setting it again — which works only because this runs after the dock.
@@ -400,17 +487,19 @@ fn paint_arrow(ui: &egui::Ui, leaf: egui::Rect, side: Side, style: &egui_dock::S
 mod tests {
     use super::*;
 
-    /// A dock shaped like the plugin's: the lattice on the left, a settings
-    /// column on the right, with the column split into two stacked leaves.
-    /// Rects are filled in as a laid-out frame of `width` would leave them,
-    /// since that is what the fold divides.
-    fn dock(width: f32) -> DockState<Tab> {
+    const FRAME_HEIGHT: f32 = 600.0;
+
+    /// The plugin's own arrangement: the lattice and the analyzer share the
+    /// left half, the settings column and the notes are stacked on the right.
+    /// Node indices come out as they do in the real dock — 1 is the picture
+    /// pair, 2 the settings column, 3 and 4 the pictures themselves.
+    fn dock() -> DockState<Tab> {
         let mut dock = DockState::new(vec![Tab::Lattice]);
         let surface = dock.main_surface_mut();
-        let [_, right] = surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
-        surface.split_below(right, 0.5, vec![Tab::Notes]);
-        let frame = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0));
-        surface[NodeIndex::root()].set_rect(frame);
+        let [pictures, settings] =
+            surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
+        surface.split_below(settings, 0.5, vec![Tab::Notes]);
+        surface.split_right(pictures, 0.7, vec![Tab::Spectral]);
         dock
     }
 
@@ -419,6 +508,59 @@ mod tests {
         style.tab_bar.height = 26.0;
         style.separator.width = 4.0;
         style
+    }
+
+    /// What the dock does between two [`Folds::apply`] calls: hand every
+    /// split's rectangle down to its children the way `compute_rect_sizes`
+    /// does, so a test can watch a fold settle the way a frame would.
+    ///
+    /// Vertical splits are laid out by their fraction alone, without
+    /// egui_dock's collapsed-leaf rule. The fold reads the WIDTH of horizontal
+    /// splits and nothing else, so the difference never reaches it.
+    fn lay_out(dock: &mut DockState<Tab>, width: f32) {
+        let separator = style().separator.width;
+        let frame = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, FRAME_HEIGHT));
+        let tree = dock.main_surface_mut();
+        tree[NodeIndex::root()].set_rect(frame);
+        for index in 0..tree.len() {
+            let node = NodeIndex(index);
+            let (left, right) = (node.left(), node.right());
+            if right.0 >= tree.len() {
+                continue;
+            }
+            let Some(rect) = tree[node].rect() else {
+                continue;
+            };
+            let (before, after) = match &tree[node] {
+                Node::Horizontal(split) => {
+                    let mid = rect.left() + rect.width() * split.fraction;
+                    (
+                        rect.intersect(egui::Rect::everything_left_of(mid - separator * 0.5)),
+                        rect.intersect(egui::Rect::everything_right_of(mid + separator * 0.5)),
+                    )
+                }
+                Node::Vertical(split) => {
+                    let mid = rect.top() + rect.height() * split.fraction;
+                    (
+                        rect.intersect(egui::Rect::everything_above(mid - separator * 0.5)),
+                        rect.intersect(egui::Rect::everything_below(mid + separator * 0.5)),
+                    )
+                }
+                _ => continue,
+            };
+            tree[left].set_rect(before);
+            tree[right].set_rect(after);
+        }
+    }
+
+    /// One frame: fold, then lay the result out.
+    fn frame(folds: &mut Folds, dock: &mut DockState<Tab>, width: f32) {
+        folds.apply(dock, &style());
+        lay_out(dock, width);
+    }
+
+    fn width(dock: &DockState<Tab>, node: NodeIndex) -> f32 {
+        dock[SurfaceIndex::main()][node].rect().expect("node is on screen").width()
     }
 
     fn fraction(dock: &DockState<Tab>, node: NodeIndex) -> f32 {
@@ -436,54 +578,63 @@ mod tests {
     /// What egui_dock's arrow does to a leaf's ancestors once its own flag has
     /// flipped — a split whose every child is collapsed is collapsed itself.
     /// Its `node_update_collapsed` is crate-private, so a test that needs a
-    /// fully collapsed column says so directly.
+    /// fully collapsed subtree says so directly.
     fn collapse_split(dock: &mut DockState<Tab>, node: NodeIndex) {
         let surface = dock.main_surface_mut();
         surface[node].set_collapsed(true);
         surface[node].set_collapsed_leaf_count(2);
     }
 
+    /// Node indices, named as the plugin's dock lays them out.
+    const PICTURES: NodeIndex = NodeIndex(1);
+    const SETTINGS: NodeIndex = NodeIndex(2);
+    const LATTICE: NodeIndex = NodeIndex(3);
+    const SPECTRAL: NodeIndex = NodeIndex(4);
+
     /// The whole point: the width a folded pane gives up ends up in the pane
     /// beside it, and the rail left behind is a tab bar thick rather than a
     /// fraction of the window.
     #[test]
     fn folding_a_pane_hands_its_width_to_its_sibling() {
-        let mut dock = dock(1000.0);
+        let mut dock = dock();
+        lay_out(&mut dock, 1000.0);
+        let pair = width(&dock, PICTURES);
         collapse(&mut dock, Tab::Lattice, true);
-        Folds::default().apply(&mut dock, &style());
-        let rail = fraction(&dock, NodeIndex::root()) * 1000.0;
-        assert!((rail - 28.0).abs() < 0.01, "the lattice should be a rail wide, was {rail}");
+        frame(&mut Folds::default(), &mut dock, 1000.0);
+        assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "a rail, not a column");
+        assert!(
+            (width(&dock, SPECTRAL) - (pair - 26.0 - 4.0)).abs() < 0.01,
+            "the analyzer takes everything the lattice gave up"
+        );
     }
 
     /// The rail is a fixed number of points, so the same fold at another
     /// window size is the same rail — it must not scale with the window.
     #[test]
     fn a_rail_is_the_same_width_at_any_window_size() {
-        let mut folds = Folds::default();
-        let mut narrow = dock(600.0);
-        let mut wide = dock(2400.0);
-        for dock in [&mut narrow, &mut wide] {
-            collapse(dock, Tab::Lattice, true);
+        for size in [600.0, 2400.0] {
+            let mut dock = dock();
+            lay_out(&mut dock, size);
+            collapse(&mut dock, Tab::Lattice, true);
+            frame(&mut Folds::default(), &mut dock, size);
+            assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "at {size} wide");
         }
-        folds.apply(&mut narrow, &style());
-        Folds::default().apply(&mut wide, &style());
-        let rail = |dock: &DockState<Tab>, width: f32| fraction(dock, NodeIndex::root()) * width;
-        assert!((rail(&narrow, 600.0) - rail(&wide, 2400.0)).abs() < 0.01);
     }
 
     /// Unfolding is the fraction coming back, not a guess at a new one.
     #[test]
     fn unfolding_gives_back_the_fraction_the_user_had() {
-        let mut dock = dock(1000.0);
+        let mut dock = dock();
         let mut folds = Folds::default();
+        lay_out(&mut dock, 1000.0);
         collapse(&mut dock, Tab::Lattice, true);
-        folds.apply(&mut dock, &style());
         // Twice, because the fold is re-applied every frame: the second pass
         // must not mistake its own rail fraction for the user's.
-        folds.apply(&mut dock, &style());
+        frame(&mut folds, &mut dock, 1000.0);
+        frame(&mut folds, &mut dock, 1000.0);
         collapse(&mut dock, Tab::Lattice, false);
-        folds.apply(&mut dock, &style());
-        assert!((fraction(&dock, NodeIndex::root()) - 0.7).abs() < 0.001);
+        frame(&mut folds, &mut dock, 1000.0);
+        assert!((fraction(&dock, PICTURES) - 0.7).abs() < 0.001);
     }
 
     /// A settings column folds away as one rail once everything in it is
@@ -491,13 +642,36 @@ mod tests {
     /// column itself is one rail wide.
     #[test]
     fn a_column_of_collapsed_panes_folds_as_a_single_rail() {
-        let mut dock = dock(1000.0);
+        let mut dock = dock();
+        lay_out(&mut dock, 1000.0);
         collapse(&mut dock, Tab::Tuning, true);
         collapse(&mut dock, Tab::Notes, true);
-        collapse_split(&mut dock, NodeIndex::root().right());
-        Folds::default().apply(&mut dock, &style());
-        let column = (1.0 - fraction(&dock, NodeIndex::root())) * 1000.0;
-        assert!((column - 28.0).abs() < 0.01, "the column should be a rail wide, was {column}");
+        collapse_split(&mut dock, SETTINGS);
+        frame(&mut Folds::default(), &mut dock, 1000.0);
+        assert!((width(&dock, SETTINGS) - 26.0).abs() < 0.01);
+        assert!((width(&dock, PICTURES) - (1000.0 - 26.0 - 4.0)).abs() < 0.01);
+    }
+
+    /// Both pictures folded is two rails, not one: they sit side by side, so
+    /// neither can be unfolded from a rail it shares. The split between them
+    /// divides the width they are given into one each, and the settings column
+    /// takes everything they left.
+    #[test]
+    fn a_folded_pair_becomes_two_rails_side_by_side() {
+        let mut dock = dock();
+        lay_out(&mut dock, 1000.0);
+        collapse(&mut dock, Tab::Lattice, true);
+        collapse(&mut dock, Tab::Spectral, true);
+        collapse_split(&mut dock, PICTURES);
+        // One frame, not two: a fold tells its children the width it is about
+        // to give them rather than leaving them to read it next frame.
+        frame(&mut Folds::default(), &mut dock, 1000.0);
+        assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "the lattice's own rail");
+        assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01, "the analyzer's own rail");
+        assert!(
+            (width(&dock, PICTURES) - (26.0 + 4.0 + 26.0)).abs() < 0.01,
+            "two rails and the separator between them"
+        );
     }
 
     /// Vertical folds are egui_dock's, and it does them by rect, not fraction:
@@ -505,23 +679,28 @@ mod tests {
     /// neighbour sits at.
     #[test]
     fn a_pane_that_folds_downwards_is_left_alone() {
-        let mut dock = dock(1000.0);
+        let mut dock = dock();
+        lay_out(&mut dock, 1000.0);
         collapse(&mut dock, Tab::Tuning, true);
-        Folds::default().apply(&mut dock, &style());
-        assert_eq!(fraction(&dock, NodeIndex::root().right()), 0.5);
+        frame(&mut Folds::default(), &mut dock, 1000.0);
+        assert_eq!(fraction(&dock, SETTINGS), 0.5);
         assert_eq!(fraction(&dock, NodeIndex::root()), 0.7, "the column keeps its width");
     }
 
-    /// Two panes folded side by side would have to divide one rail between
-    /// them, which is not a rail either of them can be unfolded from.
+    /// With every pane in the dock folded there is no one left to hand the
+    /// space to, and a root split has no parent to fold it either.
     #[test]
-    fn both_children_folded_leaves_the_split_where_it_was() {
-        let mut dock = dock(1000.0);
-        collapse(&mut dock, Tab::Tuning, true);
-        collapse(&mut dock, Tab::Notes, true);
-        collapse(&mut dock, Tab::Lattice, true);
-        collapse_split(&mut dock, NodeIndex::root().right());
-        Folds::default().apply(&mut dock, &style());
+    fn a_fold_with_nowhere_to_give_stays_where_it_is() {
+        let mut dock = dock();
+        lay_out(&mut dock, 1000.0);
+        for tab in [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes] {
+            collapse(&mut dock, tab, true);
+        }
+        for split in [PICTURES, SETTINGS, NodeIndex::root()] {
+            collapse_split(&mut dock, split);
+        }
+        frame(&mut Folds::default(), &mut dock, 1000.0);
         assert_eq!(fraction(&dock, NodeIndex::root()), 0.7);
+        assert_eq!(fraction(&dock, PICTURES), 0.7);
     }
 }
