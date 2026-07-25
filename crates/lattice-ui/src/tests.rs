@@ -667,6 +667,26 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
     assert!(!restored.spectrum_config.show_spectrogram);
 }
 
+/// A field that has since been REMOVED must not take the whole blob down with
+/// it. `spectrogram_fine_levels` existed only while the heatmap's stored
+/// precision was being judged by eye, so any project saved during that window
+/// carries it — and a blob that fails to parse loses the entire UI state, not
+/// just the stale key.
+#[test]
+fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+    // Put the departed field back, exactly as that build wrote it.
+    let stale = saved
+        .replace("spectrogram_gamma:", "spectrogram_fine_levels:true,spectrogram_gamma:");
+    assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&stale);
+    assert_eq!(restored.view.extent_sevens, 3, "an unknown field must not sink the blob");
+}
+
 #[test]
 fn spectrogram_history_stays_bounded() {
     let bins = [0.0f32; lattice_core::spectrum::SPECTRUM_BINS];
@@ -717,11 +737,9 @@ fn spectrum_history_reaches_the_retention_cap() {
         AudioSpectrum::HISTORY_MAX_SECONDS,
     );
     // And it fits in a budget worth calling an optimization: the fixed-rate
-    // f32 ring needed 160 MB to reach a third as far. The bound allows for the
-    // store being twice as wide as it needs to be while the Fine levels A/B
-    // runs — it halves again when that resolves to a byte per bucket.
+    // f32 ring needed 160 MB to reach a third as far.
     let megabytes = SpectrumHistory::max_bytes() as f64 / (1024.0 * 1024.0);
-    assert!(megabytes < 40.0, "the full store is {megabytes:.1} MB");
+    assert!(megabytes < 24.0, "the full store is {megabytes:.1} MB");
 }
 
 /// The bargain the tiers are struck on: a column of age `a` is only ever drawn

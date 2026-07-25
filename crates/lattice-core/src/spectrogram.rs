@@ -7,14 +7,14 @@
 //! plugin is open. Two decisions do the work, and both come from what the
 //! display can actually show:
 //!
-//! - **A bucket is stored as quantized dB, not a float of power.** The heatmap
+//! - **A bucket is stored as a byte of dB, not a float of power.** The heatmap
 //!   maps a bucket through `10*log10` into a colour ramp, so dB is the domain it
-//!   is read in, and a grid over it costs a quarter of what a float does at a
-//!   byte per bucket. MAX (which is all the aggregation ever does) is
-//!   order-preserving under a monotone encoding, so nothing downstream has to
-//!   decode first. Whether a byte's half a dB is fine enough to be invisible is
-//!   what [`coarsen`] and the pane's Fine levels toggle are for; until that is
-//!   settled the store is sixteen bits and the toggle picks the picture.
+//!   is read in, and a byte resolves it to half a dB. MAX (which is all the
+//!   aggregation ever does) is order-preserving under a monotone encoding, so
+//!   nothing downstream has to decode first. Half a dB was checked by eye
+//!   before it was settled on: the store was briefly sixteen bits with a toggle
+//!   that drew either grid, and the two pictures were indistinguishable, so the
+//!   byte stays and the toggle went.
 //! - **Old columns are merged as they age.** The heatmap draws a window ending
 //!   at `now`, so a column of age `a` is only ever on screen when the window is
 //!   at least `a` long — and the window is cut into at most a few hundred time
@@ -33,22 +33,15 @@ use std::collections::VecDeque;
 
 use crate::spectrum::SPECTRUM_BINS;
 
-/// One stored bucket: power in dB, quantized onto a fixed grid. See
-/// [`quantize`].
-///
-/// Sixteen bits while the [`coarsen`] A/B is in place — the question it exists
-/// to answer is whether the eight-bit grid's half a dB is visible as banding,
-/// and that can only be judged against the finer picture. Once it is answered
-/// this goes back to `u8` (and [`coarsen`] goes away), or stays and the toggle
-/// does.
-pub type BucketDb = u16;
+/// One stored bucket: power in dB, quantized to a byte. See [`quantize`].
+pub type BucketDb = u8;
 
 /// One stored column's worth of buckets.
 pub type ColumnDb = [BucketDb; SPECTRUM_BINS];
 
 /// The dB a stored `0` stands for, and the step between stored values.
 ///
-/// The pair covers -120 dB to +11 dB. The floor is exactly where the display's
+/// The pair covers -120 dB to +7.5 dB. The floor is exactly where the display's
 /// own mapping bottoms out (`loudness` clamps power at 1e-12) and exactly where
 /// the heatmap's range bar stops, so the quietest cell the UI can ask to see is
 /// the quietest value there is — the encoding adds no floor of its own, and
@@ -56,25 +49,7 @@ pub type ColumnDb = [BucketDb; SPECTRUM_BINS];
 /// sine's 0 dB, which is already saturated white at any range the bars allow,
 /// so nothing visible clips against it either.
 pub const DB_FLOOR: f32 = -120.0;
-pub const DB_STEP: f32 = 0.002;
-
-/// The step an eight-bit store would have had, and what [`coarsen`] rounds to.
-///
-/// An exact multiple of [`DB_STEP`], so coarsening lands on grid points and
-/// reproduces the byte-per-bucket picture exactly rather than approximating it.
-pub const COARSE_DB_STEP: f32 = 0.5;
-
-/// Round a stored value onto the eight-bit grid — the A/B's coarse side.
-///
-/// Applied when the heatmap DRAWS, not when a column is stored, so flipping the
-/// toggle re-renders the whole accumulated history at the chosen depth instead
-/// of only what arrives next. Comparing two pictures of the same audio is the
-/// entire point; comparing a picture against the seam where the setting changed
-/// would answer nothing.
-pub fn coarsen(bucket: BucketDb) -> BucketDb {
-    let per_step = (COARSE_DB_STEP / DB_STEP).round(); // 250
-    ((bucket as f32 / per_step).round() * per_step) as BucketDb
-}
+pub const DB_STEP: f32 = 0.5;
 
 /// Power at or below [`DB_FLOOR`] — the many empty buckets of a typical
 /// spectrum, which [`quantize`] answers without reaching for a `log10`.
@@ -165,8 +140,7 @@ impl SpectrumHistory {
     /// Total tiers, the fine one included.
     pub const TIERS: usize = 6;
     /// The most columns ever held. At 20 ms per column this reaches ~11 minutes
-    /// (see [`reach`](Self::reach)) — about 18 MB a byte per bucket, double
-    /// that while the [`coarsen`] A/B keeps the store sixteen bits wide.
+    /// (see [`reach`](Self::reach)) for about 18 MB.
     pub const MAX_COLUMNS: usize = Self::FINE_COLUMNS + (Self::TIERS - 1) * Self::COARSE_COLUMNS;
 
     /// How many columns tier `k` holds before it merges into the next.
@@ -368,30 +342,6 @@ mod tests {
         assert_eq!(quantize(1e-30), 0);
         assert_eq!(quantize(1e9), BucketDb::MAX);
         assert!(db_of(BucketDb::MAX) >= 6.0, "no headroom left above a full-scale sine");
-    }
-
-    /// The A/B's coarse side has to be exactly the picture a byte-per-bucket
-    /// store would have given — the same set of representable dB values, hit
-    /// by rounding, not by drifting near them. Otherwise the comparison it
-    /// exists for is between the fine picture and something that is neither.
-    #[test]
-    fn coarsening_lands_on_the_eight_bit_grid() {
-        let per_step = (COARSE_DB_STEP / DB_STEP).round() as u32;
-        for raw in (0..=u32::from(BucketDb::MAX)).step_by(37) {
-            let raw = raw as BucketDb;
-            let coarse = coarsen(raw);
-            assert_eq!(u32::from(coarse) % per_step, 0, "{raw} coarsened to an off-grid {coarse}");
-            let moved = (db_of(coarse) - db_of(raw)).abs();
-            assert!(
-                moved <= COARSE_DB_STEP * 0.5 + 1e-3,
-                "{raw} moved {moved} dB, over half a coarse step",
-            );
-        }
-        // A value already on the grid must not move at all.
-        for k in [0u32, 1, 100, 255] {
-            let on_grid = (k * per_step) as BucketDb;
-            assert_eq!(coarsen(on_grid), on_grid, "a grid point moved");
-        }
     }
 
     /// The flat view has to behave exactly like the single queue it replaced:

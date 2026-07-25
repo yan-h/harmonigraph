@@ -439,17 +439,6 @@ pub struct SpectrumConfig {
     /// quiet partials just above it.
     #[serde(default = "default_one")]
     pub spectrogram_gamma: f32,
-    /// Draw the heatmap from the full stored precision rather than rounding
-    /// each cell onto the eight-bit dB grid first.
-    ///
-    /// A temporary A/B, not a feature to keep: the store is sixteen bits wide
-    /// while it exists, and the point is to find out whether the eight-bit
-    /// grid's half a dB shows as banding on smooth material. Whichever way that
-    /// lands, this and [`lattice_core::spectrogram::coarsen`] go away — either
-    /// the store narrows back to a byte or it stays wide with no choice to
-    /// make. Off by default, so the picture is the eight-bit one until asked.
-    #[serde(default)]
-    pub spectrogram_fine_levels: bool,
 }
 
 fn default_spectrogram_floor_db() -> f32 {
@@ -606,7 +595,6 @@ impl Default for SpectrumConfig {
             spectrogram_floor_db: default_spectrogram_floor_db(),
             spectrogram_ceiling_db: default_ceiling_db(),
             spectrogram_gamma: default_one(),
-            spectrogram_fine_levels: false,
         }
     }
 }
