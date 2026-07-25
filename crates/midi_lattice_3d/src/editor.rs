@@ -515,6 +515,16 @@ const FALLBACK_FRAME_INTERVAL: f64 = 0.015;
 /// a plugin that is only sitting in a project: 288 passes a second at 2x
 /// against 864 at 6x, nearly all for frames that will never be drawn.
 ///
+/// In a HOST that idle path is nearly unreachable, so do not weigh it too
+/// heavily. `animating` includes `spectrum.is_flowing`, which only means
+/// samples arrived recently — and a DAW streams buffers continuously whether
+/// or not anything is playing, silence included. So with the Analyzer showing
+/// the spectrogram or the curve, which is the default, the editor stays
+/// legitimately live and presents every tick: `run_ui` runs at the refresh
+/// rate, not at this constant. Measured in Bitwig with nothing playing:
+/// "144 fps live", a 7 ms frame. The idle arithmetic above only applies with
+/// the Analyzer closed, where the cost is small anyway.
+///
 /// What the margin is also protecting against: the tick is on the HOST'S main
 /// run loop, not a thread of ours. The host's own UI work delays it by however
 /// long it likes, and no amount of making our frame cheaper touches that.
