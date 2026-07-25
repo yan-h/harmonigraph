@@ -65,9 +65,6 @@ fn main() -> Result<(), String> {
             "bloom_strength" => view.bloom_strength = num()?,
             "show_labels" => view.show_labels = flag()?,
             "show_cents" => view.show_cents = flag()?,
-            "label_rim" => {
-                view.label_rim = ron::from_str(value).map_err(|e| format!("`label_rim`: {e}"))?
-            }
             "show_perf" => view.show_perf = flag()?,
             "frameless" => view.frameless = flag()?,
             "highlight_extremes" => {

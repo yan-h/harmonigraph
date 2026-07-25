@@ -795,9 +795,6 @@ pub(crate) fn spectral_pane(
     use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
-    // The rim the pane's own labels wear; a view setting, like the note
-    // names' (see `LabelRim`).
-    let cfg_rim = state.view.label_rim;
     // Drag-sensing, so the pitch range can be panned by grabbing the picture
     // (see `drag_zoom_pitch`). Registered BEFORE the divider's own band, which
     // is what leaves the divider on top where the two overlap: egui hands a
@@ -1099,9 +1096,6 @@ pub(crate) fn spectral_pane(
             egui::FontId::monospace(10.0 * label_scale),
             theme::text_dim(),
             theme::well(),
-            // The same setting the note names follow: these sit over the
-            // spectrogram, which is a picture too.
-            cfg_rim,
         );
     }
 
@@ -1157,7 +1151,6 @@ pub(crate) fn spectral_pane(
             egui::FontId::monospace(10.5 * label_scale),
             theme::text(),
             theme::well(),
-            cfg_rim,
         );
     }
 }

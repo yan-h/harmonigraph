@@ -241,35 +241,3 @@ pub enum SevensLabel {
     /// without.
     None,
 }
-
-/// How a label is lifted off whatever it lands on.
-///
-/// Both panes draw text over a picture — note names over lit nodes, pitch
-/// labels over the spectrogram — so text with no separation of its own
-/// disappears into whatever is behind it. The separation is drawn by
-/// stamping the text around a ring in the panel's dark color, which is also
-/// the labels' whole cost: it is the same glyphs again, once per sample.
-///
-/// Hence a choice rather than a constant. The ring is 32 stamps at [`Halo`],
-/// 8 at [`Outline`], and none at [`Off`] — and since a busy lattice's labels
-/// are most of the geometry it hands the tessellator, this is the largest
-/// single lever the look has over what a frame costs.
-///
-/// [`Halo`]: LabelRim::Halo
-/// [`Outline`]: LabelRim::Outline
-/// [`Off`]: LabelRim::Off
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum LabelRim {
-    /// A tight opaque ring inside a wider faint one: the text sits in a soft
-    /// dark pool that fades out. Reads over anything, including a node at
-    /// full brightness, and is what every build before the setting drew.
-    #[default]
-    Halo,
-    /// The tight ring alone, at a third of the samples — a crisp dark
-    /// outline hugging the glyphs, with no pool around it. Keeps the
-    /// separation and drops the softness, for about a quarter of the cost.
-    Outline,
-    /// Nothing: the glyphs alone. The cheapest label there is, and it reads
-    /// fine wherever the picture behind it stays dark.
-    Off,
-}
