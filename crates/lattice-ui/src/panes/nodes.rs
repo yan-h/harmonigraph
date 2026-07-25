@@ -48,7 +48,7 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // Switchable paints (idle nodes look the same in all).
         // Steady is a calm solid disc blending the sounding octaves'
         // colors; the rest are field styles — Vortex the gas look,
-        // Checker/Spiral/Pinwheel patterns on the sphere. The paint
+        // Checker and Spiral patterns on the sphere. The paint
         // dissolves with the disc toward the glow end.
         choice_row(
             ui,
@@ -59,7 +59,6 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 (NodeStyle::Vortex, "Vortex", ""),
                 (NodeStyle::Checker, "Checker", ""),
                 (NodeStyle::Spiral, "Spiral", ""),
-                (NodeStyle::Pinwheel, "Pinwheel", ""),
             ],
         );
     });

@@ -16,11 +16,10 @@ struct Uniforms {
     //    session runs.
     // y: base node radius (world units),
     // z: unused,
-    // w: node style — the core orb's paint (0 steady, 3 vortex,
-    //    11 pinwheel, 12 spiral, 13 checker). Indices are sparse: they
-    //    are preserved from the original 15-style set so the kept styles'
-    //    branches below stay unchanged (see NodeStyle::shader_index in
-    //    lattice-scene).
+    // w: node style — the core orb's paint (0 steady, 3 vortex, 12 spiral,
+    //    13 checker). Indices are sparse: they are preserved from the
+    //    original 15-style set so the kept styles' branches below stay
+    //    unchanged (see NodeStyle::shader_index in lattice-scene).
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     // (offscreen pixels per screen pixel — converts the screen-pixel
@@ -603,17 +602,6 @@ fn field_pattern(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec
         let q = rot2(time * 0.5) * uv;
         let lum = 0.74 + 0.5 * fbm(q * 3.0 + vec2<f32>(seed * 5.0, 0.0));
         return vec2<f32>(t, lum);
-    } else if style == 11u {
-        // Pinwheel: beach-ball sectors — azimuthal color waves around a
-        // pole tilted toward the viewer, so the wedges curve over the
-        // sphere like a globe seen at an angle. The integer harmonic keeps
-        // the atan2 wrap invisible.
-        let q0 = sphere_point(rot2(seed) * uv);
-        let q = vec3<f32>(q0.x, 0.62 * q0.y - 0.78 * q0.z, 0.78 * q0.y + 0.62 * q0.z);
-        let phi = atan2(q.x, q.z);
-        let wob = (fbm(uv * 2.4 + vec2<f32>(seed * 6.3, time * 0.12)) - 0.5) * 2.6;
-        let lum = 0.78 + 0.4 * fbm(uv * 3.1 + vec2<f32>(seed * 2.7, time * 0.09));
-        return vec2<f32>(0.5 + 0.5 * cos(3.0 * phi + time * 0.25 + wob), lum);
     } else if style == 12u {
         // Spiral: two-armed spiral of color waves winding out from the
         // face center; the polar-angle radial term keeps the arms hugging

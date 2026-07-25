@@ -10,9 +10,9 @@
 /// nodes look identical in every style.
 ///
 /// The aliases on Steady absorb node styles that used to exist (Breathe,
-/// Sparks, and the Wire/Corona/Plasma/Aurora/Marble/Lava/Filament/Stripes/
-/// Rings/Tiles set trimmed later) so persisted view blobs that still name
-/// them keep loading.
+/// Sparks, the Wire/Corona/Plasma/Aurora/Marble/Lava/Filament/Stripes/
+/// Rings/Tiles set trimmed later, and Pinwheel after them) so persisted
+/// view blobs that still name them keep loading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NodeStyle {
     /// The original look: steady disc + glow.
@@ -29,7 +29,8 @@ pub enum NodeStyle {
         alias = "Filament",
         alias = "Stripes",
         alias = "Rings",
-        alias = "Tiles"
+        alias = "Tiles",
+        alias = "Pinwheel"
     )]
     Steady,
     /// Gas ball: octave colors sheared into rotating spiral streaks, like
@@ -39,8 +40,6 @@ pub enum NodeStyle {
     Checker,
     /// Pattern: two-armed spiral of color waves hugging the sphere.
     Spiral,
-    /// Pattern: beach-ball sectors around a tilted pole, slowly turning.
-    Pinwheel,
 }
 
 impl NodeStyle {
@@ -52,7 +51,6 @@ impl NodeStyle {
         match self {
             NodeStyle::Steady => 0,
             NodeStyle::Vortex => 3,
-            NodeStyle::Pinwheel => 11,
             NodeStyle::Spiral => 12,
             NodeStyle::Checker => 13,
         }

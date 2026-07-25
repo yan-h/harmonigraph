@@ -8,8 +8,8 @@ Two independent axes today:
 
 - **Node body** — `NodeStyle` enum (`lattice-scene`) → shader index →
   a branch in `lattice.wgsl` `fs_main`. Adding a look = enum variant +
-  shader branch. Current set: Steady + four field styles
-  (Vortex/Checker/Spiral/Pinwheel).
+  shader branch. Current set: Steady + three field styles
+  (Vortex/Checker/Spiral).
 - **Chrome** — grid lines and chord beams live in `fs_edge` /
   `derive_grid` / `derive_edges`; all colors (node idle, grid line, accent)
   live in one `Skin` struct (`lattice-scene::skin`).
