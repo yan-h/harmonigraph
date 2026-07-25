@@ -77,6 +77,75 @@ fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     Some(pair)
 }
 
+/// A device that actually granted `TIMESTAMP_QUERY`, so `GpuTimer::new`
+/// returns `Some` and the readback cycle is live. Without the feature the
+/// timer is `None` and any test about it would pass vacuously — hence a
+/// separate constructor rather than a flag on [`headless_device`].
+fn headless_device_with_timestamps() -> Option<(wgpu::Device, wgpu::Queue)> {
+    let instance = wgpu::Instance::default();
+    let Ok(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    else {
+        eprintln!("no GPU adapter available; skipping");
+        return None;
+    };
+    if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        eprintln!("adapter has no timestamp queries; skipping");
+        return None;
+    }
+    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: wgpu::Features::TIMESTAMP_QUERY,
+        ..Default::default()
+    }))
+    .expect("headless device with timestamp queries");
+    Some(pair)
+}
+
+/// Two lattice views in ONE frame — the docked pane plus the Video tab's
+/// preview — must survive the submit that follows them.
+///
+/// egui-wgpu runs every callback's `prepare` on one shared encoder and submits
+/// once, at the end. The GPU timer's readback cycle is per-device and assumes
+/// its steps land in different frames: `close` records a copy into the staging
+/// buffer, and the next frame's `poll` maps that buffer. With two callbacks
+/// driving one timer, both steps happened inside a single frame — the second
+/// callback mapped the buffer the first had just recorded a copy into — and
+/// submitting that encoder is a validation error ("Buffer with
+/// 'lattice_gpu_timer_staging' label is still mapped"), fatal by default and
+/// enough to take a plugin's host process down. This is that frame.
+#[test]
+fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
+    let Some((device, queue)) = headless_device_with_timestamps() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [128, 128];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let scene = parity_scene();
+    let size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    // Exactly the plugin's pairing: the docked Lattice pane owns id 0 and the
+    // stats sink; the Video preview is a second view with neither.
+    let docked = LatticeCallback::from_scene(
+        &scene,
+        size,
+        format,
+        0,
+        Some(std::sync::Arc::new(LatticeStats::default())),
+    );
+    let preview = LatticeCallback::from_scene(&scene, size, format, 1, None);
+
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    // Several frames: the cycle is Idle -> Recorded -> Mapping -> Idle, so the
+    // premature map can only be recorded once a frame has armed the timer.
+    for _ in 0..4 {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut bufs = docked.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        bufs.extend(preview.prepare(&device, &queue, &screen, &mut encoder, &mut resources));
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
 /// A scene exercising every draw path: lit + idle + outlined + hovered
 /// nodes with octave indicators, a chord beam, and solid + dashed grid
 /// lines, all overlapping so blend order matters.

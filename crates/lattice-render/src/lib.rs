@@ -496,6 +496,32 @@ impl LatticeCallback {
         }
     }
 
+    /// Whether this callback may drive the shared [`GpuTimer`] — true only for
+    /// the one carrying a stats sink, i.e. the pane that publishes the reading.
+    ///
+    /// There is ONE timer per device, and its three-step readback cycle assumes
+    /// each step lands in a different frame — specifically that the encoder
+    /// holding `close`'s `copy_buffer_to_buffer` has been submitted before the
+    /// next `poll` asks the staging buffer to map. egui-wgpu submits once per
+    /// frame, AFTER running every callback's `prepare` on one shared encoder,
+    /// so that only holds while a single callback drives the cycle.
+    ///
+    /// Two do exist: the Video tab's preview is a second live lattice, and the
+    /// frame it first appears in ran `prepare` twice — the docked pane
+    /// recording the copy, then the preview immediately calling `map_async` on
+    /// the buffer that copy still had to write. Submitting that encoder is a
+    /// wgpu validation error ("Buffer with 'lattice_gpu_timer_staging' label is
+    /// still mapped"), which is fatal by default and took the plugin down with
+    /// it — reproducibly, the moment the preview came into view.
+    ///
+    /// Gating on the stats sink is also what the reading MEANS: the overlay
+    /// reports the cost of the docked lattice, and letting the preview consume
+    /// the cycle would have published the preview's frame time under the
+    /// docked pane's name.
+    fn drives_timer(&self) -> bool {
+        self.stats.is_some()
+    }
+
     /// The bloom post-process, as four full-screen passes in a fixed order:
     /// bright-pass into half res, downsample to quarter, then a separable
     /// blur ping-ponging quarter A -> B (horizontal) -> A (vertical). The
@@ -670,9 +696,12 @@ impl GpuTimer {
         match self.state {
             TimerState::Idle => None,
             TimerState::Recorded => {
-                // The encoder holding those queries has been submitted by now
-                // (egui-wgpu submits between prepares), so the map can be
-                // asked for.
+                // The encoder holding those queries has been submitted by now,
+                // so the map can be asked for. That is true because egui-wgpu
+                // submits once per frame and only ONE callback per frame gets
+                // here — see `LatticeCallback::drives_timer`, which is what
+                // keeps a second lattice view from mapping this buffer between
+                // the copy being recorded and the submit that performs it.
                 let ready = self.ready.clone();
                 self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
                     if result.is_ok() {
@@ -1274,11 +1303,14 @@ impl CallbackTrait for LatticeCallback {
         // Advance the GPU timer's readback cycle first: a result that landed
         // is published now, and the cycle returns to Idle so this frame can be
         // the next one sampled.
+        //
+        // ONLY the callback carrying a stats sink touches the timer — see
+        // `drives_timer`.
         let prepare_start = std::time::Instant::now();
         let poll_start = std::time::Instant::now();
         match (resources.timer.as_mut(), &self.stats) {
-            (Some(timer), out) => {
-                if let (Some(ms), Some(out)) = (timer.poll(device), out) {
+            (Some(timer), Some(out)) => {
+                if let Some(ms) = timer.poll(device) {
                     out.gpu_ms.store(ms.to_bits(), std::sync::atomic::Ordering::Relaxed);
                 }
             }
@@ -1289,7 +1321,7 @@ impl CallbackTrait for LatticeCallback {
             (None, Some(out)) => {
                 out.gpu_ms.store(GPU_TIME_UNSUPPORTED, std::sync::atomic::Ordering::Relaxed);
             }
-            (None, None) => {}
+            (_, None) => {}
         }
         let poll_ms = poll_start.elapsed().as_secs_f32() * 1000.0;
 
@@ -1377,7 +1409,8 @@ impl CallbackTrait for LatticeCallback {
             // overlay wants is the cost of drawing THE LATTICE, which is both.
             // Skipped while a readback is still in flight, so the query set is
             // never overwritten mid-cycle.
-            let timing = resources.timer.as_ref().is_some_and(GpuTimer::arming);
+            let timing =
+                self.drives_timer() && resources.timer.as_ref().is_some_and(GpuTimer::arming);
             let opening = if timing {
                 resources.timer.as_ref().and_then(GpuTimer::opening)
             } else {
