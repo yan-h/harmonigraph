@@ -1,7 +1,7 @@
 //! The 3D lattice view pane: orbit camera on drag, zoom on scroll, node
 //! labels, and the tuning-learn overlay.
 
-use super::{display_note_name, learn_pulse, visibility_floor};
+use super::{display_note_name, learn_pulse};
 use crate::{theme, SharedState};
 use egui::Sense;
 use lattice_render::lattice_paint_callback;
@@ -148,18 +148,12 @@ pub(super) fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        // Fade with the activation envelope. visibility_floor keeps the
-        // label readable through most of the release, but on its own it
-        // bottoms out at 35% and then pops to nothing when the voice is
-        // pruned at activation 0. Ease that last stretch out with a
-        // smoothstep tail so the label fades gradually instead of snapping.
-        // Hovered nodes get a full, steady label.
-        const LABEL_FADE_TAIL: f32 = 0.25;
+        // Fade with the activation envelope; hovered nodes get a full,
+        // steady label regardless.
         let strength = if node.hovered {
             1.0
         } else {
-            let t = (node.activation / LABEL_FADE_TAIL).clamp(0.0, 1.0);
-            let sounding = visibility_floor(node.activation) * t * t * (3.0 - 2.0 * t);
+            let sounding = node.activation;
             // The level a kept name settles on. `node.trail` is the recorded
             // memory, but it is only written the frame the release finishes —
             // during the fade it's still zero. So for a note still sounding
