@@ -58,6 +58,29 @@ pub(crate) const COLUMNS_PER_SLAB: f64 = 1.6;
 /// no longer floors it.
 pub(crate) const MIN_BUCKET: f64 = crate::AudioSpectrum::FFT_INTERVAL * COLUMNS_PER_SLAB;
 
+/// Device pixels the pane's size is rounded UP to before anything is derived
+/// from it.
+///
+/// The same argument as [`live_slab`]'s ladder, for the other axis. A pane's
+/// height decides how many rows the image has, and its width decides how many
+/// slabs and how wide the ring is — so taken to the pixel, every pixel of a
+/// resize drag is a different image AND a different texture, and the drag pays
+/// a full re-fold and a full repaint on every frame of itself. Measured on the
+/// overlay's fallback row, a resize sat at the frame rate: one of each, per
+/// frame, for as long as the drag lasted.
+///
+/// Rounded UP, so the image is never coarser than the pane it is stretched
+/// over — the quantum costs a little oversampling and no detail, which is the
+/// same trade [`PaneView`] makes by sizing in pixels rather than points. Sixty
+/// four turns a 600-pixel drag into ten re-layouts instead of six hundred, and
+/// leaves the image at most 9% taller than a 700-pixel pane needs.
+const PANE_QUANTUM: f32 = 64.0;
+
+/// A pane measurement in device pixels, rounded up to [`PANE_QUANTUM`].
+fn quantized(pixels: f32) -> f32 {
+    (pixels / PANE_QUANTUM).ceil() * PANE_QUANTUM
+}
+
 /// The live grid's finest rung, in analysis intervals — see [`live_slab`].
 ///
 /// TWO, not one: the column grid and the slab grid share a period on the ladder
@@ -385,11 +408,22 @@ struct Plan {
 
 impl Plan {
     fn new(view: &PaneView, columns: &Columns) -> Plan {
-        let rows = ((view.pitch_len * view.ppp).round() as usize).clamp(2, view.max_rows);
+        // The offline build's pane cannot resize mid-render, so it has nothing
+        // to hold still and takes its size to the pixel; the live one rounds up
+        // to a quantum so a resize drag re-lays the grid a handful of times
+        // instead of once a frame. See [`PANE_QUANTUM`].
+        let pitch_px = view.pitch_len * view.ppp;
+        let depth_px = view.depth_len * view.ppp;
+        let (pitch_px, depth_px) = if view.whole {
+            (pitch_px.round(), depth_px.round())
+        } else {
+            (quantized(pitch_px), quantized(depth_px))
+        };
+        let rows = (pitch_px as usize).clamp(2, view.max_rows);
         // One image column per output depth pixel; whole-song spans an entire
         // take, so it needs a higher cap than the live window.
         let col_cap = if view.whole { WHOLE_SONG_SLAB_CAP } else { LIVE_SLAB_CAP };
-        let target_cols = (view.depth_len * view.ppp).round().clamp(2.0, col_cap) as usize;
+        let target_cols = depth_px.clamp(2.0, col_cap) as usize;
         let bucket = if view.whole {
             // The offline build draws its own fixed column set rather than the
             // live store's, so it shares no ladder with it and has nothing to
@@ -1741,8 +1775,17 @@ mod tests {
 
         // Rows are PIXELS, not points: on a 2x screen the image is built at the
         // density it will be drawn at, rather than upsampled from half of it.
-        assert_eq!(plan(&view(1.0, 300.0, 800.0, 12.0, false)).rows, 300);
-        assert_eq!(plan(&view(2.0, 300.0, 800.0, 12.0, false)).rows, 600);
+        // Rounded up to a quantum, so never coarser than the pane and never
+        // more than a quantum finer — see [`PANE_QUANTUM`].
+        let rows_at = |ppp: f32, pitch: f32| plan(&view(ppp, pitch, 800.0, 12.0, false)).rows as f32;
+        for (ppp, pitch) in [(1.0, 300.0), (2.0, 300.0), (1.0, 517.0), (2.0, 517.0)] {
+            let rows = rows_at(ppp, pitch);
+            let want = pitch * ppp;
+            assert!(rows >= want, "{rows} rows is coarser than {want} pixels");
+            assert!(rows < want + PANE_QUANTUM, "{rows} rows for {want} pixels wastes an image");
+        }
+        // Twice the density really is twice the image, quantum aside.
+        assert!((rows_at(2.0, 517.0) / rows_at(1.0, 517.0) - 2.0).abs() < 0.2);
         // And never a taller image than the GPU will take.
         let mut small = view(2.0, 4000.0, 800.0, 12.0, false);
         small.max_rows = 2048;
@@ -1899,6 +1942,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Resizing the pane must not re-lay the grid on every PIXEL of the drag.
+    ///
+    /// The pane's height decides the image's rows and its width decides the
+    /// slabs and the ring's width, so taken to the pixel every frame of a resize
+    /// is a different image and a different texture — a full re-fold and a full
+    /// repaint each, for as long as the drag lasts. On the overlay's fallback
+    /// row that showed up as both counters sitting at the frame rate: the drag
+    /// was not merely dropping frames, it was spending each one rebuilding.
+    ///
+    /// Vertical moves both (rows change the image AND which buckets a row
+    /// reads); horizontal moves the ring alone, since [`live_slab`] holds the
+    /// slab width across a rung. Both are counted here.
+    #[test]
+    fn resizing_the_pane_holds_the_grid_between_quanta() {
+        let scale = PitchScale { min_midi: 40.0, max_midi: 88.0, span: 48.0 };
+        let view = |pitch_len: f32, depth_len: f32| PaneView {
+            ppp: 2.0,
+            max_rows: 8192,
+            pitch_len,
+            depth_len,
+            window: 30.0,
+            scale,
+            cfg: SpectrumConfig::default(),
+            frame: FrameParams::default(),
+            whole: false,
+        };
+        let columns = Columns { first: 3, len: 4000, newest: 12.0 };
+        // What a re-layout is, from each cache's point of view: the aggregator
+        // re-folds when the style changes (rows or slab width), and the ring
+        // restarts when the style OR its capacity does.
+        let layouts = |sizes: &dyn Fn(f32) -> PaneView, from: i32, to: i32| {
+            let (mut styles, mut rings) = (
+                std::collections::BTreeSet::new(),
+                std::collections::BTreeSet::new(),
+            );
+            for px in from..=to {
+                let plan = Plan::new(&sizes(px as f32), &columns);
+                styles.insert(format!("{:?}", plan.key.style()));
+                rings.insert((format!("{:?}", plan.key.style()), plan.capacity));
+            }
+            (styles.len(), rings.len())
+        };
+
+        // A 600-point drag at 2x is 1200 device pixels: without a quantum every
+        // one of them is its own layout.
+        let dragged = 600;
+        let quanta = (dragged as f32 * 2.0 / PANE_QUANTUM).ceil() as usize + 1;
+
+        let (folds, rings) = layouts(&|h| view(h, 800.0), 300, 300 + dragged);
+        assert!(folds <= quanta, "a vertical drag re-folds {folds} times, not {quanta}");
+        assert!(rings <= quanta, "a vertical drag restarts the ring {rings} times");
+
+        let (folds, rings) = layouts(&|w| view(400.0, w), 300, 300 + dragged);
+        assert!(rings <= quanta, "a horizontal drag restarts the ring {rings} times");
+        // And the ladder means width barely touches the aggregator at all: only
+        // a rung crossing re-folds, which a whole drag does a handful of times.
+        assert!(folds <= 8, "a horizontal drag re-folds {folds} times, not a handful");
     }
 
     /// Dragging the Span must not re-lay the grid on every frame of the drag.
