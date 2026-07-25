@@ -2011,10 +2011,13 @@ mod tests {
         let rows = 64;
         let reads: Vec<RowRead> = bins_for(rows, &scale).iter().map(|b| b.read).collect();
 
+        // A gesture: what Span it asks for on its `n`th frame, and the
+        // re-layouts it is allowed over the whole run.
+        type Gesture<'a> = (&'a str, u32, &'a dyn Fn(u32) -> f64);
         // Held still; zoomed out across four rungs; zoomed in inside one. The
         // gesture starts as soon as the window is full, so neither cache has
         // scrolled itself any slack — which is the case that cascaded.
-        let gestures: [(&str, u32, &dyn Fn(u32) -> f64); 3] = [
+        let gestures: [Gesture; 3] = [
             ("held still", 1, &|_| 30.0),
             ("zoomed out across rungs", 5, &|i| 20.0 * 1.004f64.powi(i as i32)),
             ("zoomed in inside a rung", 1, &|i| 30.0 - 5.0 * (i as f64 / 200.0)),
