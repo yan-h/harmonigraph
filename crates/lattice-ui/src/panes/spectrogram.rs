@@ -373,7 +373,7 @@ pub(super) fn draw_spectrogram(
                 // Sized off the WINDOW, not off how much history has arrived:
                 // a capacity that grew with the column count would change on
                 // almost every frame and rebuild the very thing it caches.
-                // +2 so a guard column fits on each side of the visible run
+                // +2 so the far end's guard column fits outside the visible run
                 // without overwriting a column the run still needs.
                 let capacity = ((window / bucket).ceil() as usize + 2).max(w + 2);
                 write_ring(
@@ -418,27 +418,19 @@ pub(super) fn draw_spectrogram(
 
     // Map a screen depth to the texture's time axis CONTINUOUSLY, through the
     // roll's own `now`-anchored depth<->time relation (unclamped, the inverse
-    // of `depth_of`). This is the fix for the image not tracking the notes and
-    // for the per-slab stutter: `u` now slides with `now` frame to frame,
-    // exactly as a note ribbon at the same depth does, instead of being pinned
-    // to the slab endpoints (which jump a whole slab at a time). `v` maps pitch
-    // to the bin rows. UVs run past 0..1 in the thin slivers with no data (the
-    // sub-slab at `now`, the bit beyond the oldest slab); ClampToEdge fills
-    // those from the edge column so the plane stays whole.
+    // of `depth_of`), so `u` slides with `now` frame to frame exactly as a note
+    // ribbon at the same depth does. Pinning it to the slab endpoints instead
+    // jumps a whole slab at a time, which is both the image losing the notes it
+    // is meant to register with and a per-slab stutter. `v` maps pitch to the
+    // bin rows.
     // Slabs occupy texels `x0 .. x0 + visible` of a `tex_w`-wide texture; for a
     // full-width build that is the whole thing and this collapses to the plain
     // `(t - t_origin) / tex_span`.
     //
-    // Deliberately NOT clamped. `u` has to stay a straight function of time —
-    // that continuity is what makes the image track the notes and killed the
-    // per-slab stutter, because these are VERTEX UVs and the fragment scale is
-    // interpolated between them. Pinning one end to the edge texel freezes it
-    // for part of every slab and slides it for the rest, which shows up as the
-    // whole heatmap twitching once per slab. The data-less slivers are handled
-    // where they belong, in the data: `write_ring` keeps a duplicate of each
-    // edge column just outside the run, which is what ClampToEdge did for free
-    // before the texture became a ring.
-    let u_at = |d: f32| u_of(&layout, time.time_at(d), bucket);
+    // Straight in time out to the newest column the texture holds, then HELD
+    // there — see [`u_drawn`], and the mesh below is split at that corner so no
+    // fragment ever interpolates across it.
+    let u_at = |d: f32| u_drawn(&layout, time.time_at(d), bucket);
     let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
     let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
     let vert =
@@ -473,14 +465,37 @@ pub(super) fn draw_spectrogram(
         (near, time.depth_of(layout.t_origin))
     };
 
-    // One quad over pitch [0,1] x depth [d_near, d_far]; GPU bilinear-samples it.
+    // Quads over pitch [0,1] x a depth span; the GPU bilinear-samples them.
     let mut mesh = egui::Mesh::with_texture(tex.id());
-    mesh.vertices.push(vert(0.0, d_far)); // far, low
-    mesh.vertices.push(vert(1.0, d_far)); // far, high
-    mesh.vertices.push(vert(1.0, d_near)); // near, high
-    mesh.vertices.push(vert(0.0, d_near)); // near, low
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
+    let quad = |mesh: &mut egui::Mesh, near: f32, far: f32| {
+        let i = mesh.vertices.len() as u32;
+        mesh.vertices.push(vert(0.0, far)); // far, low
+        mesh.vertices.push(vert(1.0, far)); // far, high
+        mesh.vertices.push(vert(1.0, near)); // near, high
+        mesh.vertices.push(vert(0.0, near)); // near, low
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    };
+
+    // Split at the corner in `u_drawn`: one quad whose UVs are straight in time
+    // (the data) and one whose UVs are CONSTANT (the sliver past the newest
+    // column — leading for the live window, trailing for the whole-song build,
+    // which is the only reason `d_hold` is clamped into the pair rather than
+    // assumed to sit inside it).
+    //
+    // Letting one quad span the corner instead is what the vertex-UV rule
+    // forbids: the fragment scale is interpolated between the corners, so a
+    // vertex sitting mid-bend rescales the whole image, and the bend crosses
+    // each slab, so it would rescale it once per slab — the jitter. Split here,
+    // the data quad's two ends are both straight in time, so it holds exactly
+    // one texel per slab forever; all that changes over a slab is how long the
+    // flat sliver is, and its colour matches the data at the seam (both sample
+    // the newest texel's centre), so the join is invisible.
+    let d_hold = time.depth_of(hold_time(&layout, bucket)).max(d_near).min(d_far);
+    if d_hold > d_near {
+        quad(&mut mesh, d_near, d_hold);
+    }
+    quad(&mut mesh, d_hold, d_far);
     painter.add(egui::Shape::mesh(mesh));
 }
 
@@ -607,6 +622,13 @@ pub(crate) struct SpectrogramAgg {
     /// Time of the newest column already folded; the next update folds only
     /// columns past it.
     last_time: f64,
+    /// How many full rebuilds have been taken. The fast path is the whole point
+    /// of this type, and every condition guarding it can only ever ADD a reason
+    /// to fall back — so without a count, a guard that quietly always fires
+    /// would still pass every correctness test here and simply hand back the
+    /// `aggregate_rows` cost this exists to avoid.
+    #[cfg(test)]
+    rebuilds: u32,
 }
 
 impl SpectrogramAgg {
@@ -616,6 +638,8 @@ impl SpectrogramAgg {
             bucket_bits: 0,
             reads: Vec::new(),
             last_time: f64::NEG_INFINITY,
+            #[cfg(test)]
+            rebuilds: 0,
         }
     }
 
@@ -627,6 +651,10 @@ impl SpectrogramAgg {
         bucket: f64,
         reads: &[RowRead],
     ) {
+        #[cfg(test)]
+        {
+            self.rebuilds += 1;
+        }
         self.grid = SlabGrid::default();
         for col in history.iter_from(first) {
             self.grid.fold(col, reads, bucket);
@@ -651,13 +679,26 @@ impl SpectrogramAgg {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
         let layout_same = self.bucket_bits == bucket.to_bits() && self.reads == reads;
+        // Every in-window column has to still be the one that was folded. Past
+        // [`SpectrumHistory::finest_start`] that holds — the finest tier only
+        // grows at the back and shrinks at the front. BEFORE it, columns have
+        // been MAX-merged in pairs and moved to their midpoint time, so batch
+        // re-reads something the grid never saw: energy in a slab it was not
+        // folded into, and a `RowRead::Lerp` row interpolating across a pair of
+        // buckets that the merge has already maxed together (which is not the
+        // max of the two interpolations). The finest tier holds
+        // `FINE_COLUMNS` at the 125 Hz column rate, about 16 s, so this is the
+        // guard that decides long Spans — and dropping to a rebuild there is
+        // just `aggregate_rows`, the cost this cache saves on shorter ones.
+        let window_unmerged = first >= history.finest_start();
         // The fast path is valid only when: the layout is unchanged, we have a
-        // prior grid, time hasn't gone backwards, and the window's first slab
-        // still sits inside the grid we kept (front..=back). Anything else is a
-        // full rebuild, which is always correct.
+        // prior grid, time hasn't gone backwards, the window holds no merged
+        // columns, and the window's first slab still sits inside the grid we
+        // kept (front..=back). Anything else is a full rebuild, always correct.
         let can_increment = layout_same
             && self.grid.cur_key.is_some()
             && newest >= self.last_time
+            && window_unmerged
             && target.zip(self.grid.centers.first()).zip(self.grid.cur_key).is_some_and(
                 |((t, &front_center), back)| {
                     let front = (front_center / bucket).floor() as i64;
@@ -730,6 +771,39 @@ impl SpectrogramAgg {
 fn u_of(layout: &TexLayout, t: f64, bucket: f64) -> f32 {
     let slabs = ((t - layout.t_origin) / bucket) as f32;
     (layout.x0 + slabs) / layout.tex_w
+}
+
+/// The newest time the texture has data for: the CENTRE of its last slab's
+/// texel, which is the last point `u` may reach.
+///
+/// The strip is drawn out to the now-line, but the newest column is always
+/// older than that — it is stamped at the middle of the window it measured, so
+/// a healthy stream still lags by half an analysis window (171 ms on Precise),
+/// and it lands in a slab that then has to finish before the next begins. What
+/// fills that sliver has to come from the newest column, because it is the only
+/// thing the analyzer has said about the stretch.
+fn hold_time(layout: &TexLayout, bucket: f64) -> f64 {
+    layout.t_origin + layout.tex_span - 0.5 * bucket
+}
+
+/// Texture `u` for a time on the DRAWN strip: [`u_of`] out to
+/// [`hold_time`], and pinned there past it.
+///
+/// A full-width build gets ClampToEdge for this — its last texel IS the texture
+/// edge — but a ring's last texel has a neighbour, holding whatever that texel
+/// carried a lap ago, which is a column from a whole window back. The strip's
+/// leading sliver would then be a stale copy of the far end of the window: dark
+/// while something is playing, bright after it stopped. A guard column just
+/// outside the run covers a texel of that and no more, and the overrun here is
+/// the analyzer's lag, which is roughly six texels once the window is short
+/// enough for slabs to sit at [`MIN_BUCKET`] — so the sliver is filled by
+/// pinning `u`, and the guard is left to the far end, which really does overrun
+/// by only half a texel.
+///
+/// Pinning is safe HERE, at a corner the mesh is split on, and nowhere else:
+/// see the split in [`draw_spectrogram`] for why a bend inside a quad is not.
+fn u_drawn(layout: &TexLayout, t: f64, bucket: f64) -> f32 {
+    u_of(layout, t.min(hold_time(layout, bucket)), bucket)
 }
 
 /// Bring the ring's texture up to date for the visible slabs, allocating or
@@ -809,20 +883,21 @@ fn write_ring(
         tex.set_partial([x + capacity, 0], image, opts);
     }
 
-    // Duplicate each edge column just outside the run. The quad reaches a
-    // little past the data at both ends — the sub-slab between the newest slab
-    // and `now`, and the bit before the oldest slab's center — and a sampler
-    // set to ClampToEdge only clamps at the TEXTURE edge, which inside a ring
-    // is somewhere else entirely. Without these the slivers would sample a
-    // column from a whole window ago. Half a texel is all the quad overruns,
-    // so one column each side covers it.
-    let last_i = visible - 1;
-    for (key, slab) in
-        [(first_key - 1, 0usize), (last_key + 1, last_i)]
+    // Duplicate the oldest column just outside the run. The quad reaches half a
+    // texel past that end — it stops at the oldest slab's leading EDGE, half a
+    // slab before its centre — and a sampler set to ClampToEdge only clamps at
+    // the TEXTURE edge, which inside a ring is somewhere else entirely, so
+    // without this the far sliver would blend in a column from a whole window
+    // ago. Half a texel is all it overruns, so one column covers it.
+    //
+    // The newest end needs no such column: it overruns by the analyzer's lag,
+    // far more than a guard or two would cover, and is filled by pinning `u`
+    // instead (see [`u_drawn`]) — which leaves nothing past the last slab's
+    // centre ever sampled.
     {
-        let column = fill_column(cfg, bins, &power[slab * h..(slab + 1) * h]);
+        let column = fill_column(cfg, bins, &power[..h]);
         let image = egui::ColorImage::new([1, h], column);
-        let x = ring.x_of(key);
+        let x = ring.x_of(first_key - 1);
         tex.set_partial([x, 0], image.clone(), opts);
         tex.set_partial([x + capacity, 0], image, opts);
     }
@@ -1189,6 +1264,93 @@ mod tests {
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
     }
 
+    /// The same exactness, but reaching back past a TIER MERGE — which the
+    /// step-for-step test above never does, because it pushes 14 columns and
+    /// tier 0 holds [`crate::SpectrumHistory::FINE_COLUMNS`] of them.
+    ///
+    /// Once tier 0 overflows, its two oldest columns are MAX-merged into one at
+    /// their MIDPOINT time (`SpectrogramColumn::absorb`). Both halves of that
+    /// rewrite history the incremental grid has ALREADY folded, so batch — which
+    /// re-reads the store as it now stands — can see something else entirely:
+    ///
+    /// - the merged column sits at a time neither original had, which can fall
+    ///   in a different slab than the one its energy was folded into; and
+    /// - a [`RowRead::Lerp`] row reads ACROSS two buckets, and a per-bin MAX does
+    ///   not commute with that interpolation —
+    ///   `max(lerp(a), lerp(b)) != lerp(max(a, b))`.
+    ///
+    /// At the 125 Hz column rate (`SpectrumState::FFT_INTERVAL`) tier 0 holds
+    /// only ~16.4 s, so every Span past that draws from merged columns — and the
+    /// live heatmap would drift from the offline render, which does not use this
+    /// aggregator at all.
+    #[test]
+    fn incremental_aggregation_matches_batch_across_a_tier_merge() {
+        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let bucket = 0.25;
+        let interval = 0.008; // SpectrumState::FFT_INTERVAL, the live column rate.
+        // Long enough that nothing scrolls out: the whole run stays in window,
+        // so any mismatch is the merge and not the front trim.
+        let window_span = 60.0;
+        let columns = crate::SpectrumHistory::FINE_COLUMNS + 64;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history = crate::SpectrumHistory::default();
+        for i in 0..columns {
+            let t = i as f64 * interval;
+            // Adjacent buckets alternate, so the Lerp row's two inputs are never
+            // loud in the same column — exactly the case a per-bin MAX across a
+            // merge collapses into one loud pair.
+            let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+            history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
+
+            let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
+            let inc = agg.window(&history, first, bucket, &reads);
+            // Comparing every step would be O(columns^2); check often enough to
+            // catch the crossing itself, and either side of it.
+            let near_merge = i + 8 >= crate::SpectrumHistory::FINE_COLUMNS;
+            if near_merge || i % 256 == 0 || i + 1 == columns {
+                let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
+                assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
+            }
+        }
+    }
+
+    /// The merge guard must not cost the fast path on the windows that use it.
+    /// A Span SHORTER than the finest tier's reach sits entirely inside columns
+    /// no merge has touched, so the merging going on behind it is none of its
+    /// business and the incremental fold has to keep running. Only the rebuild
+    /// count can tell: falling back is still CORRECT, so every assertion about
+    /// values would pass just the same with the optimization switched off.
+    #[test]
+    fn a_short_window_keeps_the_fast_path_across_merges() {
+        let reads = [RowRead::Max { from: 4, to: 6 }, RowRead::Lerp { lo: 10, f: 0.5 }];
+        let bucket = 0.25;
+        let interval = 0.008;
+        // Two seconds against the finest tier's ~16, so the window stays well
+        // inside it even once merging is continuous.
+        let window_span = 2.0;
+        let columns = crate::SpectrumHistory::FINE_COLUMNS + 256;
+
+        let mut agg = SpectrogramAgg::new();
+        let mut history = crate::SpectrumHistory::default();
+        for i in 0..columns {
+            let t = i as f64 * interval;
+            let (a, b) = if i % 2 == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+            history.push(col(t, &[(4, 0.5), (10, a), (11, b)]));
+
+            let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
+            let inc = agg.window(&history, first, bucket, &reads);
+            if i % 256 == 0 || i + 1 == columns {
+                let bat = aggregate_rows(history.iter_from(first), &reads, bucket);
+                assert_eq!(inc, bat, "incremental != batch at column {i} (t={t})");
+            }
+        }
+        // One to build the grid; the rest of the run rides the incremental path,
+        // merges and all. Anything more means the guard is firing on windows it
+        // has no reason to touch.
+        assert_eq!(agg.rebuilds, 1, "the fast path stopped carrying a short window");
+    }
+
     /// The cache reuses the uploaded texture only while its key matches, so the
     /// key must move for EVERY input the pixels depend on — otherwise a change
     /// would leave a stale image on screen. Identical inputs must compare equal
@@ -1308,12 +1470,88 @@ mod tests {
         }
     }
 
+    /// The strip is drawn out to the now-line, but the newest column is always
+    /// older than that — half an analysis window, by construction. Inside a
+    /// ring the texels past the newest one are not empty: they hold what they
+    /// carried a lap ago, which is a column from a whole window back, so a `u`
+    /// allowed to run on paints the leading sliver with the far end of the
+    /// window (dark while a note sounds, bright once it stops). Nothing past
+    /// the newest slab's CENTRE may be sampled.
+    #[test]
+    fn the_leading_sliver_holds_the_newest_column_instead_of_reading_round_the_ring() {
+        // A live window at the settings that make the sliver widest: a short
+        // span, so slabs sit at MIN_BUCKET and the analyzer's lag spans several
+        // of them.
+        let bucket = MIN_BUCKET;
+        let window = 2.0;
+        let visible = (window / bucket) as usize; // 62 slabs
+        let capacity = visible + 2;
+        let layout = TexLayout {
+            t_origin: 400.0,
+            tex_span: visible as f64 * bucket,
+            t0: 0.0,
+            tn: 1.0,
+            // Parked mid-ring, as it is for all but one lap in `capacity`.
+            x0: 17.0,
+            tex_w: (capacity * 2) as f32,
+        };
+        // The now-line: the newest column lags by half a Precise window, and
+        // its slab has to finish before the next one starts.
+        let now = layout.t_origin + layout.tex_span + 0.171;
+        let texel = |u: f32| u * layout.tex_w - layout.x0; // texels into the run
+
+        // What the run holds: `visible` columns, a guard column before them,
+        // and past their newest a whole window of other laps' columns.
+        let newest = texel(u_drawn(&layout, now, bucket));
+        assert!(
+            newest <= visible as f32 - 0.5 + 1e-4,
+            "the sliver sampled {newest} texels in, past the newest column at {}",
+            visible as f32 - 0.5,
+        );
+        // And it is the newest column it holds, not something short of it.
+        assert!(newest >= visible as f32 - 0.5 - 1e-4, "held short of the newest column");
+        // Worth pinning for, because an unheld mapping runs well past anything
+        // a guard column or two could cover.
+        let unheld = texel(u_of(&layout, now, bucket));
+        assert!(unheld > visible as f32 + 4.0, "expected a multi-texel overrun, got {unheld}");
+    }
+
+    /// Everything BEFORE the hold is untouched by it: the drawn mapping is the
+    /// plain one over the data, so the image still tracks the notes texel for
+    /// texel, and the hold is a corner rather than a bend that creeps inward.
+    #[test]
+    fn holding_the_sliver_leaves_the_data_mapping_alone() {
+        let bucket = 0.05;
+        let layout = TexLayout {
+            t_origin: 10.0,
+            tex_span: 20.0 * bucket,
+            t0: 0.0,
+            tn: 1.0,
+            x0: 3.0,
+            tex_w: 44.0,
+        };
+        let hold = hold_time(&layout, bucket);
+        assert!((hold - (layout.t_origin + layout.tex_span - 0.5 * bucket)).abs() < 1e-9);
+        let mut t = layout.t_origin - 2.0 * bucket;
+        while t <= hold {
+            assert_eq!(u_drawn(&layout, t, bucket), u_of(&layout, t, bucket), "bent at {t}");
+            t += bucket / 8.0;
+        }
+        // Past it, pinned — however far past, and however long the analyzer
+        // stalls for.
+        let pinned = u_of(&layout, hold, bucket);
+        for t in [hold + 1e-6, hold + bucket, hold + 10.0] {
+            assert_eq!(u_drawn(&layout, t, bucket), pinned, "ran on at {t}");
+        }
+    }
+
     /// The time -> texture mapping has to be a straight line, including across
     /// the slab boundary the newest column sits on. Clamping it to the edge
-    /// texel (an early attempt at filling the data-less slivers) pinned it for
-    /// part of every slab and let it slide for the rest, and since these are
-    /// VERTEX UVs that rescaled the whole image once per slab — visible as the
-    /// heatmap jittering. The slivers are filled with guard columns instead.
+    /// texel pins it for part of every slab and lets it slide for the rest, and
+    /// since these are VERTEX UVs that rescales the whole image once per slab —
+    /// visible as the heatmap jittering. Which is why the one place `u` does
+    /// stop ([`u_drawn`]) is a corner the mesh is SPLIT on, leaving no quad to
+    /// interpolate across it and the data quad straight from end to end.
     #[test]
     fn the_time_to_texture_mapping_is_a_straight_line() {
         let bucket = 0.08;
