@@ -30,7 +30,7 @@ struct VertexOut {
     @builtin(position) position: vec4<f32>,
     /// Offset from the note's center in points, along (pitch, depth).
     @location(0) local: vec2<f32>,
-    /// Half extents of the note's own outline, same two axes.
+    /// Half extents of the note's solid body, same two axes.
     @location(1) @interpolate(flat) half_extent: vec2<f32>,
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.

@@ -28,11 +28,10 @@ use crate::{theme, RollColor, SharedState};
 /// at every zoom, at the cost of the widths below it reading alike.
 const MIN_RIBBON_PX: f32 = 1.5;
 
-/// Widest the Gap may be set to. A bound on how far outside its box a note
-/// can paint — the quad grows by exactly that (`reach` in roll.wgsl), and the
-/// far-edge cull pays for it in time. Well past what the settings offer; this
-/// is the guard against a hand-edited state blob, not a taste.
-const MAX_RIM_PX: f32 = 8.0;
+/// Widest the Gap may shave off a released note's tail, in points. Well past
+/// what the bar offers; this is the guard against a hand-edited state blob,
+/// not a taste.
+const MAX_GAP_PX: f32 = 8.0;
 
 /// How wide the white keyline riding a note's outer edge is, in points.
 ///
@@ -76,10 +75,10 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
     edge_strength(cfg, alpha).map(|s| Color32::WHITE.gamma_multiply(s))
 }
 
-/// The one band standing outside a note's own outline: `(width, color)` of the
-/// white keyline, brighter than the raw Edge fraction (see [`GLOW_INTENSITY`]).
+/// The one band standing outside a note: `(width, color)` of the white
+/// keyline, brighter than the raw Edge fraction (see [`GLOW_INTENSITY`]).
 ///
-/// A note carries no solid black outline under this. A filled note is its own
+/// A note carries no solid black outline under this. A solid note is its own
 /// separation from whatever the spectrogram is doing behind it, and a black
 /// outline reads as a second, heavier one around every note — most of all on
 /// the thin ribbons this pane is used at, where two dark lines and a bright one
@@ -89,7 +88,7 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// is what the quad grows by to make room for the band (and what the far-edge
 /// cull keeps a leaving note alive for), so a band that will not paint must not
 /// be paid for either.
-fn rim(cfg: &crate::SpectrumConfig, alpha: f32) -> (f32, Color32) {
+fn keyline_band(cfg: &crate::SpectrumConfig, alpha: f32) -> (f32, Color32) {
     if edge_strength(cfg, alpha).is_none() {
         return (0.0, Color32::TRANSPARENT);
     }
@@ -166,7 +165,13 @@ pub(super) fn note_instances(
     let time = TimeAxis::new(state, split, now);
     let oldest = time.oldest();
 
-    let half = (cfg.roll_thickness * 0.5 / scale.span).max(0.0);
+    // Every note in the roll is the same width, so this is decided once for
+    // the whole build rather than per segment. Floored rather than switched to
+    // a bare line: note width is in SEMITONES, so a wide zoom takes a ribbon
+    // under a pixel, where a rectangle fades out to nothing and the roll stops
+    // saying a note was played there.
+    let half_pitch = (cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len();
+    let half_pitch = half_pitch.max(MIN_RIBBON_PX * 0.5);
 
     // Build in a stable order (the live notes come out of a HashMap, whose
     // iteration order varies per run): instances rasterize in buffer order,
@@ -182,7 +187,7 @@ pub(super) fn note_instances(
     // The whole look of a note, decided once for the roll rather than per
     // note: the keyline standing outside its long edges. The note itself is a
     // solid rectangle of its own color and has nothing else to decide.
-    let (keyline_px, light) = rim(cfg, 1.0);
+    let (keyline_px, light) = keyline_band(cfg, 1.0);
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -192,8 +197,8 @@ pub(super) fn note_instances(
     //   - entirely off the octave zoom (both endpoints outside and on the
     //     same side, so a note that merely crosses an edge still draws its
     //     visible part).
-    // A note paints past its own box: half its outline, the keyline standing
-    // outside that, and the antialiasing ramp (`reach` in roll.wgsl). The box
+    // A note paints past its own box: the keyline standing against it, and the
+    // antialiasing ramp (`reach` in roll.wgsl). The box
     // is what the window is tested against, so without the overhang below a
     // note vanishes while that ink is still owed — the ribbon pops out of
     // existence a few points short of the edge instead of sliding under it.
@@ -237,7 +242,7 @@ pub(super) fn note_instances(
     // How much of a released note's tail the Gap setting takes off. In points,
     // like the rim widths, so the hairline between two repeats stays the same
     // hairline whatever the Span is zoomed to.
-    let gap_seconds = f64::from(cfg.roll_gap.clamp(0.0, MAX_RIM_PX)) * per_point;
+    let gap_seconds = f64::from(cfg.roll_gap.clamp(0.0, MAX_GAP_PX)) * per_point;
 
     // One segment per note is the common case (a note is bent rarely), so the
     // note count is the right first guess at how many instances this makes.
@@ -320,11 +325,6 @@ pub(super) fn note_instances(
             // this frame is one — and a slope is meaningless there.
             let slope =
                 if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
-            // Floored rather than switched to a line: a rectangle under a
-            // pixel wide fades out to nothing, and the roll's whole job is
-            // saying a note was played there.
-            let half_pitch = (half * axes.pitch_len()).max(MIN_RIBBON_PX * 0.5);
-
             instances.push(RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, depth_px.abs() * 0.5],
@@ -413,8 +413,8 @@ mod tests {
     /// A note must stay on screen until the last of its INK is past the far
     /// edge, not until the last of its box is.
     ///
-    /// The shader paints half the outline, both rim bands and an antialiasing
-    /// ramp outside the box it is handed, so testing the box against the window
+    /// The shader paints the keyline and an antialiasing ramp outside the box
+    /// it is handed, so testing the box against the window
     /// dropped the note while a few points of ribbon were still owed — it
     /// popped short of the edge rather than sliding under it. The overhang is
     /// screen-space, so in time it scales with the Span, which is why it reads
