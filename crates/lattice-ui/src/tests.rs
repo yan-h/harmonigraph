@@ -207,6 +207,52 @@ fn a_pre_merge_layout_does_not_open_the_merged_tab_twice() {
     assert_eq!(dock.matches("Tuning").count(), 1, "the merged tab is docked twice");
 }
 
+/// A refreshed dock has to take the folds with it.
+///
+/// `Folds` remembers a split by INDEX — surface and node into the dock tree —
+/// plus the fraction to give back on unfold. Those indices mean nothing once
+/// the tree is replaced, which is why "Reset layout" calls `Folds::clear`. The
+/// version bump in `load_persist` replaces the tree just as wholesale, and its
+/// own comment says so ("the remembered fractions would name splits in a tree
+/// that is gone") — but it sits on the branch that KEEPS the dock, so the
+/// branch that throws it away never cleared anything.
+///
+/// The shared UI state outlives the editor window (`editor.rs`: "This is a NEW
+/// context; the shared UI state is not"), so a fold recorded while the window
+/// was open is still in memory when an older blob arrives on the same device —
+/// load a pre-merge project or preset onto it, and the default layout comes
+/// back with one split sitting at a fraction measured against a tree that no
+/// longer exists.
+#[test]
+fn a_refreshed_dock_forgets_the_folds_measured_against_the_old_one() {
+    let state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let saved = state.save_persist();
+    // A fold on the node the default dock does NOT have folded, so a fraction
+    // left behind is visible as a layout that is not the default.
+    let folded = saved.replacen("folds:([])", "folds:([(surface:0,node:1,fraction:0.9)])", 1);
+    assert_ne!(folded, saved, "the folds field must have been there to splice onto");
+
+    // It loads at the current version, which is how it gets into memory at all.
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&folded);
+    assert!(!restored.folds.is_empty(), "the spliced fold must have loaded");
+
+    // Now the same instance is handed an older blob: the dock is refreshed to
+    // the current default, so what the folds named is gone.
+    let old = folded.replacen(&format!("version:{UI_PERSIST_VERSION},"), "version:1,", 1);
+    assert_ne!(old, folded, "the version rewrite missed");
+    restored.load_persist(&old);
+    assert_eq!(
+        ron::to_string(&restored.dock).unwrap(),
+        ron::to_string(&default_dock()).unwrap(),
+        "the premise: an old version refreshes the dock",
+    );
+    assert!(
+        restored.folds.is_empty(),
+        "folds kept indices into a dock that was just thrown away",
+    );
+}
+
 #[test]
 fn pre_radius_off_core_modes_fold_onto_radius_and_solidity() {
     // Pre-radius-off blobs wrote a `core_style` token the current layout

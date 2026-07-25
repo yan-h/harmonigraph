@@ -141,16 +141,25 @@ consecutive audits do not re-read the same range.
 
 ### The agents in `.claude/agents/`
 
-`merge-auditor` does the reading for `/audit-merges` — read-only, so it hands
-back candidate findings and the fix is written in the calling session. That
-split is the point: a read-only auditor cannot skip from "this looks wrong"
-to a commit without the failing test in between.
+`merge-auditor` does the reading for `/audit-merges` — it hands back candidate
+findings and the fix is written in the calling session. That split is the
+point: the auditor does not go from "this looks wrong" to a commit without the
+failing test in between.
+
+Be precise about how much of that is enforced, because it is easy to read as
+more than it is. The agent is granted `Read, Grep, Glob, Bash`: `Write` and
+`Edit` are withheld, but **`Bash` writes files, and can commit**. So the split
+is instructed, not enforced — the prompt tells it to return findings, and
+nothing stops it doing otherwise. `Bash` is granted deliberately: this audit's
+findings were proved with `cargo test`, `git merge-base` and `git blame`, and
+an auditor that cannot run the suite cannot tell a bug from a guess. Narrowing
+`Bash` to read-only patterns would buy enforcement at that price; the trade is
+open, not settled.
 
 It is the only agent here, and the rule that keeps it that way is worth
 stating: **an agent encodes a job or a constraint, never a description of the
 code.** `merge-auditor` describes a method, and a method does not go stale
-when a type is renamed. It also does something no document can — being
-read-only, it *cannot* skip from "this looks wrong" to a commit.
+when a type is renamed.
 
 A `spectral` agent carrying the spectrogram's retention and aggregation
 invariants was written and then deleted before it ever ran, which is the

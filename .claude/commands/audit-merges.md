@@ -24,6 +24,11 @@ Use `$1` if given. Otherwise the last audited point is the git tag
 `last-merge-audit`; if that tag does not exist, audit the last 12 merge
 commits into `main`.
 
+The tag is local, so it is missing on a fresh clone — and the 12-merge
+fallback is a guess that can reach back past an audit that already happened.
+Before trusting it, look for a previous audit's own merge in the log and start
+from there instead: PR #85 is one, and audited the night below it.
+
 ```sh
 git rev-parse -q --verify last-merge-audit         # empty if never audited
 git log --oneline --merges --first-parent -12      # the fallback window
@@ -75,7 +80,7 @@ prompt, and they run concurrently.
    changed what it describes:
 
    ```sh
-   git diff --name-only <since>..HEAD -- crates/ | sed 's|.*|&|'
+   git diff --name-only <since>..HEAD -- crates/
    ```
 
    Cross-reference against the paths each agent names. A prompt carrying last
