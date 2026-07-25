@@ -642,7 +642,6 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.spectrogram_gamma = 1.6;
     state.spectrum_config.roll_outline_width = 2.5;
     state.spectrum_config.roll_fill = 0.4;
-    state.spectrum_config.roll_edge = crate::RollEdge::Ends;
     state.spectrum_config.roll_gap = 2.0;
     let saved = state.save_persist();
 
@@ -660,7 +659,6 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
     assert_eq!(restored.spectrum_config.roll_outline_width, 2.5);
     assert_eq!(restored.spectrum_config.roll_fill, 0.4);
-    assert_eq!(restored.spectrum_config.roll_edge, crate::RollEdge::Ends);
     assert_eq!(restored.spectrum_config.roll_gap, 2.0);
 }
 

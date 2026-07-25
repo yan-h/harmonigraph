@@ -44,7 +44,7 @@ const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &["vs_note", "fs_note_gamma", "fs_note_linear"];
 
 /// One note segment: a box in the pane's (pitch, depth) plane, its colors,
-/// and the keyline standing outside it.
+/// and the keyline standing outside its long edges.
 ///
 /// Screen geometry, in egui POINTS, already resolved through the pane's
 /// `Axes` — this crate never learns which way the pane is turned. Lengths
@@ -71,12 +71,12 @@ pub struct RollInstance {
     /// and is gone — on the notes short enough for it to show at all, it only
     /// ever rounded a tapped key into a bead.
     pub shape: [f32; 4],
-    /// `(keyline width, edge mode)`.
+    /// Keyline width in points, and 0 when the keyline is turned off.
     ///
-    /// The width is in points, and 0 when the keyline is turned off. The mode
-    /// says which of the note's edges it rides — around (0), its long sides
-    /// (1), or its ends (2); see `rim_mask` in the shader.
-    pub rim: [f32; 2],
+    /// It rides the note's two LONG edges only, and never its ends — see
+    /// `rail_mask` in the shader for why that is the shape rather than a
+    /// choice.
+    pub keyline: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
     pub glow: [u8; 4],
@@ -90,7 +90,7 @@ impl RollInstance {
             0 => Float32x2, // center
             1 => Float32x2, // half_extent
             2 => Float32x4, // shape
-            3 => Float32x2, // rim
+            3 => Float32,   // keyline
             4 => Unorm8x4,  // core
             5 => Unorm8x4,  // glow
         ],
@@ -457,23 +457,18 @@ mod tests {
 
     /// A straight note centered in the frame: 24 points thick, 120 long, a
     /// 4-point outline with a 2-point white keyline standing outside it,
-    /// hollow, and rimmed all the way around. A wide keyline so a sample lands
-    /// well inside it.
+    /// hollow, with the keyline on its long edges. A wide keyline so a sample
+    /// lands well inside it.
     fn centered_note() -> RollInstance {
         RollInstance {
             center: [128.0, 128.0],
             half_extent: [12.0, 60.0],
             shape: [0.0, 4.0, 0.0, 0.0],
-            rim: [2.0, EDGE_AROUND],
+            keyline: 2.0,
             core: [255, 0, 0, 255],
             glow: [255, 255, 255, 255],
         }
     }
-
-    /// The edge modes, as `rim.y` carries them (see `rim_mask` in the shader).
-    const EDGE_AROUND: f32 = 0.0;
-    const EDGE_SIDES: f32 = 1.0;
-    const EDGE_ENDS: f32 = 2.0;
 
     #[test]
     fn baked_roll_shader_validates() {
@@ -572,45 +567,56 @@ mod tests {
         assert!(near(middle, want), "half fill read as {middle:?}, not {want:?}");
     }
 
-    /// `Sides` keeps the rim on the note's long edges and cuts it at the ends;
-    /// `Ends` is the mirror image. The note's OWN outline is untouched either
-    /// way — it is the shape, not the rim.
+    /// The keyline rides the note's two long edges and is cut at its ends.
+    /// The note's OWN outline is untouched either way — it is the shape, not
+    /// the keyline.
     ///
     /// This is what stops repeats of one key painting their halos over each
-    /// other: the rim stands outside the note, and along the time axis a
+    /// other: the keyline stands outside the note, and along the time axis a
     /// note's outside is the next note.
     #[test]
-    fn the_rim_can_be_held_to_one_pair_of_edges() {
+    fn the_keyline_rides_the_long_edges_and_stops_at_the_ends() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // Reading out from the center: the outline spans 10..14 across pitch
         // (x) and 58..62 along time (y), the keyline the 2 beyond that.
-        let look = |mode: f32| {
-            let note = RollInstance { rim: [2.0, mode], ..centered_note() };
-            let frame = draw(&device, &queue, vec![note], bg_color());
-            // (its own outline, the keyline) on a side, then on an end.
-            (
-                [pixel(&frame, 140, 128), pixel(&frame, 143, 128)],
-                [pixel(&frame, 128, 188), pixel(&frame, 128, 191)],
-            )
-        };
+        let frame = draw(&device, &queue, vec![centered_note()], bg_color());
+        // (its own outline, the keyline) on a side, then on an end.
+        let side = [pixel(&frame, 140, 128), pixel(&frame, 143, 128)];
+        let end = [pixel(&frame, 128, 188), pixel(&frame, 128, 191)];
         const RED: [u8; 4] = [255, 0, 0, 255];
         const WHITE: [u8; 4] = [255, 255, 255, 255];
-        let (side, end) = look(EDGE_AROUND);
-        assert!(near(side[1], WHITE), "Around lost the keyline on a side: {:?}", side[1]);
-        assert!(near(end[1], WHITE), "Around lost the keyline on an end: {:?}", end[1]);
+        assert!(near(side[0], RED), "the note's own outline went missing: {:?}", side[0]);
+        assert!(near(side[1], WHITE), "the rail is missing from a long edge: {:?}", side[1]);
+        assert!(near(end[0], RED), "the note's own outline was cut at its end: {:?}", end[0]);
+        assert!(near(end[1], BG), "the keyline wrapped the end: {:?}", end[1]);
+    }
 
-        let (side, end) = look(EDGE_SIDES);
-        assert!(near(side[0], RED), "Sides dropped the note's own outline: {:?}", side[0]);
-        assert!(near(side[1], WHITE), "Sides lost the rail: {:?}", side[1]);
-        assert!(near(end[0], RED), "Sides cut the note's own outline at its end: {:?}", end[0]);
-        assert!(near(end[1], BG), "Sides still rimmed the end: {:?}", end[1]);
-
-        let (side, end) = look(EDGE_ENDS);
-        assert!(near(end[1], WHITE), "Ends lost the cap: {:?}", end[1]);
-        assert!(near(side[0], RED), "Ends cut the note's own outline: {:?}", side[0]);
-        assert!(near(side[1], BG), "Ends still rimmed the side: {:?}", side[1]);
+    /// A rail runs the FULL length of the note it edges, not a point or two
+    /// short of it.
+    ///
+    /// The keyline is a band of the box distance, so around a corner it curves
+    /// with the field and pulls away from the note; the rail is what is left
+    /// after the mask cuts that at the note's painted extent. Cut too early
+    /// and the rails read as visibly shorter than the note between them, which
+    /// on a tapped key is most of its length.
+    #[test]
+    fn a_rail_runs_the_whole_length_of_its_note() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let note = centered_note();
+        let frame = draw(&device, &queue, vec![note], bg_color());
+        // The note's ink ends where its own outline does: half_extent 60 plus
+        // the half outline (4/2), so the last painted row along time is 191.
+        let ink_end = 128 + 60 + (note.shape[1] * 0.5) as u32 - 1;
+        // x = 143 is inside the keyline band (outline 10..14 across pitch, the
+        // keyline the 2 beyond); x = 128 is the note's own middle.
+        let lit = |y: u32| pixel(&frame, 143, y)[0] > (BG[0] + 40);
+        assert!(lit(128), "the rail is missing at the note's middle");
+        assert!(lit(ink_end), "the rail stops short of the note's ink at {ink_end}");
+        assert!(!lit(ink_end + 3), "the rail runs past the note's ink");
     }
 
     /// A note is a rectangle: its corners are square, right out to them.
@@ -631,7 +637,7 @@ mod tests {
         let tap = RollInstance {
             half_extent: [20.0, 3.0],
             shape: [0.0, 0.0, 1.0, 0.0],
-            rim: [0.0, EDGE_AROUND],
+            keyline: 0.0,
             ..centered_note()
         };
         let frame = draw(&device, &queue, vec![tap], bg_color());
@@ -718,7 +724,7 @@ mod tests {
         // coverage is then exactly `1 - r/255` in every pixel it touched.
         let bare = RollInstance {
             shape: [0.0, 0.0, 0.0, 0.0],
-            rim: [1.0, EDGE_AROUND],
+            keyline: 1.0,
             core: [0, 0, 0, 0],
             glow: [0, 0, 0, 255],
             ..centered_note()

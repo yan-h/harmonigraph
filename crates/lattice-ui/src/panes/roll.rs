@@ -20,7 +20,7 @@ use lattice_scene::channel_color;
 
 use super::spectral::{Axes, PitchScale, TimeAxis};
 use super::{scene_color, PITCH_RAMP_CHANNEL};
-use crate::{theme, RollColor, RollEdge, SharedState};
+use crate::{theme, RollColor, SharedState};
 
 /// Below this many pixels a ribbon is too thin to read as a shape, so it
 /// is drawn as a bare line instead (which stays visible at hairline
@@ -180,16 +180,11 @@ pub(super) fn note_instances(
         Some(ws) => &ws.roll,
         None => state.tracker.roll(),
     };
-    // The whole look of a note, decided once for the roll rather than per note:
-    // the keyline standing outside it, how solidly its interior is painted,
-    // and which of its edges that band rides (see [`RollEdge`]).
+    // The whole look of a note, decided once for the roll rather than per
+    // note: the keyline standing outside its long edges, and how solidly its
+    // interior is painted.
     let (keyline_px, light) = rim(cfg, 1.0);
     let fill = cfg.roll_fill.clamp(0.0, 1.0);
-    let edge_mode = match cfg.roll_edge {
-        RollEdge::Around => 0.0,
-        RollEdge::Sides => 1.0,
-        RollEdge::Ends => 2.0,
-    };
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -251,7 +246,7 @@ pub(super) fn note_instances(
     let mut instances = Vec::with_capacity(notes.len());
     for note in notes {
         // Repeats of one key butt together in time, and with the rim not
-        // wrapping their ends (see `RollEdge`) nothing marks where one stopped
+        // wrapping their ends (see `rail_mask`) nothing marks where one stopped
         // and the next started — a run of taps reads as one long note. The Gap
         // pulls the tail back off its neighbour so the background shows through
         // between them.
@@ -342,7 +337,7 @@ pub(super) fn note_instances(
                 center: [center.x, center.y],
                 half_extent: [half_pitch, depth_px.abs() * 0.5],
                 shape: [slope, width, fill, 0.0],
-                rim: [keyline_px, edge_mode],
+                keyline: keyline_px,
                 core: core.to_array(),
                 glow: light.to_array(),
             });
@@ -497,8 +492,8 @@ mod tests {
         // which is where centered strokes meet in the middle and paint the
         // interior white.
         let thin = ribbon_with_range(0.5, 120.0);
-        assert_eq!(one(&thick).rim[0], KEYLINE_PX, "the keyline is not the width it is fixed at");
-        assert_eq!(one(&thin).rim, one(&thick).rim, "the rim thinned with the note");
+        assert_eq!(one(&thick).keyline, KEYLINE_PX, "the keyline is not the width it is fixed at");
+        assert_eq!(one(&thin).keyline, one(&thick).keyline, "the keyline thinned with the note");
         assert!(
             one(&thin).half_extent[0] < one(&thick).half_extent[0],
             "the two notes are the same thickness; the comparison is vacuous",
@@ -526,25 +521,23 @@ mod tests {
             glow_alpha > edge + 0.05,
             "the keyline ({glow_alpha}) is no brighter than the Edge fraction {edge}",
         );
-        assert_eq!(note.rim[0], KEYLINE_PX, "the keyline is not the width it is fixed at");
+        assert_eq!(note.keyline, KEYLINE_PX, "the keyline is not the width it is fixed at");
 
         let dark = ribbon(0.0);
         let note = one(&dark);
-        assert_eq!(note.rim[0], 0.0, "Edge 0 still made room for a keyline");
+        assert_eq!(note.keyline, 0.0, "Edge 0 still made room for a keyline");
         assert_eq!(note.glow[3], 0, "Edge 0 left a keyline color behind");
     }
 
-    /// Fill and the Edge shape ride on the instance, so the shader can paint a
-    /// note's interior and hold its rim to one pair of edges without a second
-    /// pass or a second shape.
+    /// Fill rides on the instance, so the shader can paint a note's interior
+    /// without a second pass or a second shape.
     #[test]
-    fn fill_and_the_edge_shape_reach_the_instance() {
+    fn fill_reaches_the_instance() {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Horizontal;
         state.spectrum_config.low_midi = 54.0;
         state.spectrum_config.high_midi = 66.0;
         state.spectrum_config.roll_fill = 0.6;
-        state.spectrum_config.roll_edge = crate::RollEdge::Ends;
         state.tracker.handle_event(NoteEvent {
             time: 0.0,
             channel: 0,
@@ -553,12 +546,6 @@ mod tests {
         });
         let notes = instances(&state, 0.05);
         assert_eq!(one(&notes).shape[2], 0.6, "Fill did not reach the note");
-        assert_eq!(one(&notes).rim[1], 2.0, "the Edge shape did not reach the note");
-
-        state.spectrum_config.roll_edge = crate::RollEdge::Sides;
-        assert_eq!(one(&instances(&state, 0.05)).rim[1], 1.0);
-        state.spectrum_config.roll_edge = crate::RollEdge::Around;
-        assert_eq!(one(&instances(&state, 0.05)).rim[1], 0.0);
     }
 
     /// The Gap pulls a RELEASED note's tail back off its neighbour, so repeats

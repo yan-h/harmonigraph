@@ -66,7 +66,7 @@ fn span_readout(seconds: f32) -> String {
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
     use crate::{
-        RollColor, RollEdge, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
+        RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
     };
 
     // ---- Layout ---------------------------------------------------------
@@ -251,33 +251,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              With Fill up this just fattens the note; with Fill at 0 it is the \
              whole of it.",
         );
-    choice_row(
-        ui,
-        "Edges",
-        &mut cfg.roll_edge,
-        &[
-            (
-                RollEdge::Around,
-                "Around",
-                "All the way around a note, corners included. (Where the white \
-                 keyline rides; Edge, up in Spectrum, sets how bright it is.)",
-            ),
-            (
-                RollEdge::Sides,
-                "Sides",
-                "The long edges only — above and below a note in Across, either \
-                 side of it in Upright. The keyline never grows along time, so \
-                 repeats of one key butt together cleanly instead of painting \
-                 their highlights over each other",
-            ),
-            (
-                RollEdge::Ends,
-                "Ends",
-                "The onset and release only — a marker across each end of a \
-                 note, and nothing along its length",
-            ),
-        ],
-    );
     ValueBar::new(&mut cfg.roll_gap, 0.0..=6.0, "Gap")
         .decimals(1)
         .show(ui)

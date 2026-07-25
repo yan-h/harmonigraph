@@ -135,29 +135,6 @@ pub enum RollColor {
     Accent,
 }
 
-/// Which of a note's edges the black outline and white keyline ride.
-///
-/// The rim stands OUTSIDE the note, so wherever it is drawn it reaches into
-/// the note's surroundings — and along the time axis those surroundings are
-/// the next note. Repeated taps of one key butt together there, so a rim that
-/// wraps the ends paints each note's halo over its neighbour, and rounded
-/// corners turn the overlap into a chain of lens-shaped notches. Limiting the
-/// rim to one pair of edges is what stops that, and which pair reads better is
-/// a look, not a fact — hence a setting.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum RollEdge {
-    /// All the way around, corners included — every note fully outlined.
-    Around,
-    /// The note's two long edges only (the pitch-facing sides: horizontal
-    /// above and below a note in Across, vertical either side of it in
-    /// Upright). The rim never grows along time, so repeats butt cleanly.
-    #[default]
-    Sides,
-    /// The note's two ends only — a marker at each onset and release, and
-    /// nothing along its length.
-    Ends,
-}
-
 /// The color ramp a spectrogram cell's intensity maps through. A set of
 /// looks to pick from — the spectrogram is a heatmap, and the palette is
 /// most of its character. Intensity always runs dark (quiet) to bright
@@ -421,9 +398,6 @@ pub struct SpectrumConfig {
     /// it. In between it is a wash the heatmap still reads through.
     #[serde(default = "default_roll_fill")]
     pub roll_fill: f32,
-    /// Which of a note's edges the white keyline rides.
-    #[serde(default)]
-    pub roll_edge: RollEdge,
     /// Points shaved off a released note's tail, so repeated notes at one
     /// pitch stay separate instead of merging into one bar.
     ///
@@ -645,7 +619,6 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_outline_width: default_roll_outline_width(),
             roll_fill: default_roll_fill(),
-            roll_edge: RollEdge::default(),
             roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
             show_spectrogram: true,
