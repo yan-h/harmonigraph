@@ -62,8 +62,10 @@ credibility of its weakest entry.
 Do not report:
 
 - Anything a compiler, clippy, or `ci.sh` catches. Those run on push.
-- Formatting. This codebase is hand-formatted and `cargo fmt` is banned;
-  wrapping you would have done differently is not a finding.
+- Wrapping you would have done differently. The codebase is hand-formatted,
+  so there is no formatter to be out of step with. A diff that looks like it
+  was run through `cargo fmt` anyway *is* a finding — CLAUDE.md says why —
+  but a line you would have broken in another place is not.
 - Missing tests or docs in general, absent a specific path that is now
   reachable and unexercised.
 - Pre-existing behaviour the diff merely moved or re-indented.
