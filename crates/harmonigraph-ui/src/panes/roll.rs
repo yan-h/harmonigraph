@@ -357,7 +357,7 @@ mod tests {
     /// rim geometry is under the most pressure.
     fn ribbon_with_range(keyline: f32, range: f32) -> Vec<RollInstance> {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 60.0 - range * 0.5;
         state.spectrum_config.high_midi = 60.0 + range * 0.5;
         state.spectrum_config.roll_thickness = 2.0;
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn a_note_keeps_drawing_until_its_outline_has_left_too() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_seconds = 10.0;
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn a_glide_shears_the_note_rather_than_needing_another_shape() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
         state.tracker.handle_event(NoteEvent {
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 67.0;
         state.tracker.handle_event(NoteEvent {

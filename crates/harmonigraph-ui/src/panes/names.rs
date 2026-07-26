@@ -771,7 +771,7 @@ mod tests {
     /// A state whose pane shows `range` semitones around middle C over a
     /// `span`-second window, with the whole depth axis given to the roll.
     fn state(range: f32, span: f32) -> SharedState {
-        turned(range, span, SpectralOrientation::Horizontal)
+        turned(range, span, SpectralOrientation::Left)
     }
 
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> SharedState {
@@ -1174,7 +1174,7 @@ mod tests {
     fn names_place_the_same_way_on_an_upright_pane() {
         // Upright: pitch runs left to right, time runs DOWN, so the leading
         // edge is the top of a ribbon and names grow downward from it.
-        let mut state = turned(24.0, 10.0, SpectralOrientation::Vertical);
+        let mut state = turned(24.0, 10.0, SpectralOrientation::Top);
         for i in 0..6 {
             let t = i as f64 * 1.2;
             state.tracker.handle_event(on(t, 60));

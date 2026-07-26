@@ -26,38 +26,58 @@ impl SpectrumWindow {
     }
 }
 
-/// Which way the Spectral pane's pitch axis runs.
+/// Which way the Spectral pane runs, named for the side the NOW-line is on —
+/// which is the spectrum's own edge, the one the roll's notes arrive at and
+/// the heatmap's newest column sits against. Time runs away from it into the
+/// pane, and pitch across.
 ///
 /// The pane is written once against an abstract (pitch, depth) plane and
 /// mapped onto the screen at draw time, so every element — gridlines,
 /// spectrum curve, piano roll — turns together.
+///
+/// Pitch reads the conventional way in each pair rather than mirroring with
+/// time: low at the bottom whenever time is horizontal, low at the left
+/// whenever it is vertical. So [`Right`](Self::Right) and
+/// [`Bottom`](Self::Bottom) are their partners flipped along TIME alone, and
+/// an ascending line still ascends in all four.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectralOrientation {
-    /// Follow the pane's shape: time runs along the LONG side (so a
-    /// scrolling spectrogram gets the room), pitch across the short one.
-    /// Reads correctly both under the lattice and beside it, no setting to
-    /// change.
+    /// Time runs left(now)->right(past) along the pane, pitch climbs
+    /// bottom->top, and the spectrum sits on the left, joined to the
+    /// spectrogram.
+    ///
+    /// The aliases are what this variant was called across two renamings. It
+    /// was `Horizontal`, from when the name meant the PITCH axis; and it takes
+    /// `Auto` — a fourth setting that resolved to whichever layout gave the
+    /// scrolling spectrogram the pane's long side — because a blob naming a
+    /// variant that no longer exists does not just lose its orientation, the
+    /// parse fails and drops the WHOLE persist, layout and camera with it.
     #[default]
-    Auto,
-    /// "Across": time runs left(now)->right(past) along the pane, pitch
-    /// climbs bottom->top, and the spectrum sits on the left, joined to the
-    /// spectrogram. (Serialized name kept from when this meant pitch axis.)
-    Horizontal,
-    /// "Upright": time runs top(now)->bottom(past) down the pane, pitch runs
-    /// left->right, and the spectrum sits on top, joined to the spectrogram.
-    Vertical,
+    #[serde(alias = "Horizontal", alias = "Auto")]
+    Left,
+    /// Time runs right(now)->left(past); pitch climbs bottom->top, and the
+    /// spectrum sits on the right.
+    Right,
+    /// Time runs top(now)->bottom(past) down the pane, pitch runs left->right,
+    /// and the spectrum sits on top, joined to the spectrogram.
+    #[serde(alias = "Vertical")]
+    Top,
+    /// Time runs bottom(now)->top(past); pitch runs left->right, and the
+    /// spectrum sits along the bottom.
+    Bottom,
 }
 
 impl SpectralOrientation {
-    /// Whether TIME (the spectrogram/roll axis) runs vertically down the
-    /// pane, with pitch across it. Resolves [`Auto`](Self::Auto) to the
-    /// pane's long side.
-    pub(crate) fn is_time_vertical(self, rect: egui::Rect) -> bool {
-        match self {
-            SpectralOrientation::Auto => rect.height() > rect.width(),
-            SpectralOrientation::Horizontal => false,
-            SpectralOrientation::Vertical => true,
-        }
+    /// Whether TIME (the spectrogram/roll axis) runs vertically down the pane,
+    /// with pitch across it.
+    pub(crate) fn is_time_vertical(self) -> bool {
+        matches!(self, SpectralOrientation::Top | SpectralOrientation::Bottom)
+    }
+
+    /// Whether time runs BACKWARD along its screen axis — leftward or upward,
+    /// against the direction screen coordinates grow.
+    pub(crate) fn is_time_reversed(self) -> bool {
+        matches!(self, SpectralOrientation::Right | SpectralOrientation::Bottom)
     }
 }
 
@@ -228,10 +248,10 @@ impl Default for RenderFrame {
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
-    /// Horizontal (pitch left-to-right) or vertical (pitch bottom-to-top),
-    /// or Auto to follow the pane's shape; see [`SpectralOrientation`]. Those
-    /// are the only orientations offered — the spectrum always stands up from
-    /// its baseline with pitch ascending, so there is nothing to flip.
+    /// Which side of the pane the now-line sits on, and so which way time
+    /// runs; see [`SpectralOrientation`]. Four sides and no more — the pitch
+    /// axis reads the conventional way in each, so there is nothing left to
+    /// flip.
     #[serde(default)]
     pub orientation: SpectralOrientation,
     pub window: SpectrumWindow,
@@ -554,7 +574,7 @@ pub(crate) fn default_tilt() -> f32 {
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
-            orientation: SpectralOrientation::Horizontal,
+            orientation: SpectralOrientation::Left,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             ceiling_db: default_ceiling_db(),

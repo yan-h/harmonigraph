@@ -72,9 +72,13 @@ impl Layout {
     pub fn preset(name: &str) -> Option<Layout> {
         let full = |pane| Placement { pane, rect: (0.0, 0.0, 1.0, 1.0) };
         let panes = match name {
-            // The lattice leads and the roll runs upright beside it —
-            // the Spectral pane's Auto orientation turns it upright by
-            // itself at this aspect.
+            // The lattice leads and the Spectral pane takes a tall column
+            // beside it. The pane draws at whatever orientation is SET — an
+            // Auto setting used to turn it upright here by reading the column's
+            // shape, and a render whose picture depends on the aspect it is
+            // being rendered at is not one you can dial in. Top (or Bottom)
+            // is the orientation this column wants; Left leaves the
+            // spectrogram scrolling across a narrow pane.
             "side-by-side" => vec![
                 Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 0.68, 1.0) },
                 Placement { pane: Pane::Spectral, rect: (0.68, 0.0, 1.0, 1.0) },

@@ -2002,6 +2002,37 @@ fn the_heatmap_reads_the_curve_s_own_level_scale() {
     assert_eq!(heatmap(&cfg, 1e-4, midi), loudness(&cfg, 1e-4, midi));
 }
 
+/// Orientations that no longer exist must still PARSE, and land where the
+/// setting they named would put the picture.
+///
+/// The same threat the palette aliases below answer: a blob naming a variant
+/// the enum has dropped fails to parse, and takes the WHOLE persist with it
+/// rather than the one setting. `Horizontal` and `Vertical` were the names
+/// while they meant the pitch axis; `Auto` picked a layout off the pane's
+/// shape and has no successor, so it lands on the default the pane opens at.
+#[test]
+fn removed_spectral_orientations_load_as_their_successors() {
+    use crate::SpectralOrientation;
+    for (removed, want) in [
+        ("Horizontal", SpectralOrientation::Left),
+        ("Vertical", SpectralOrientation::Top),
+        ("Auto", SpectralOrientation::Left),
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Bottom;
+        state.view.extent_sevens = 3;
+        let saved = state
+            .save_persist()
+            .replace("orientation:Bottom", &format!("orientation:{removed}"));
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.spectrum_config.orientation, want, "{removed} loaded elsewhere");
+        assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
+    }
+}
+
 /// Palettes that no longer exist must still PARSE. Serde aliases fold them
 /// onto Magma, the nearest surviving ramp; without them the failed parse
 /// would drop the whole persist — layout, camera and every view setting with
