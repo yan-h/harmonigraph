@@ -57,7 +57,7 @@ want the tag to distinguish your work.
 
 ## Recovering a build someone else's swap evicted
 
-Release builds land in `<that-worktree>/target/release/libharmonigraph-plugin.dylib`.
+Release builds land in `<that-worktree>/target/release/libharmonigraph_plugin.dylib`.
 Match the dylib's mtime to the branch's last commit time to identify it, then
 swap it back. To rebuild one without cd'ing into the user's checkout:
 `cargo build --release -p harmonigraph-plugin --manifest-path <main>/Cargo.toml`,

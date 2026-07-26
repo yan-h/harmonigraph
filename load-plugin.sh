@@ -24,6 +24,11 @@ set -euo pipefail
 
 PKG="harmonigraph-plugin"
 NAME="Harmonigraph"
+# Cargo names a LIB artifact after the lib target, which is the package name
+# with dashes folded to underscores — so the dylib is libharmonigraph_plugin,
+# not libharmonigraph-plugin. `cargo build -p` and `cargo xtask bundle` both
+# want $PKG itself, so the two spellings have to be kept apart.
+LIB="${PKG//-/_}"
 
 MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
 BUNDLED="$MAIN/target/bundled"
@@ -54,7 +59,7 @@ ago() {  # $1 = epoch seconds -> compact "3m ago"
 # Echo the display fields for worktree index $1 as: built<TAB>vshead<TAB>marker
 build_info() {
   local path="${WT_PATH[$1]}" dylib built vshead marker
-  dylib="$path/target/release/lib${PKG}.dylib"
+  dylib="$path/target/release/lib${LIB}.dylib"
   if [[ -f "$dylib" ]]; then
     local mtime head_ct head_short
     mtime="$(stat -f %m "$dylib")"
@@ -82,7 +87,7 @@ print_table() {
 
 load_build() {  # $1 = worktree index
   local path="${WT_PATH[$1]}" branch="${WT_BRANCH[$1]}"
-  local dylib="$path/target/release/lib${PKG}.dylib"
+  local dylib="$path/target/release/lib${LIB}.dylib"
   if [[ ! -f "$dylib" ]]; then
     echo "ERROR: no build at $dylib" >&2
     echo "       build it first:  (cd \"$path\" && cargo build --release -p $PKG)" >&2

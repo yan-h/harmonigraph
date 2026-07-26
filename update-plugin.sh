@@ -21,13 +21,18 @@ set -euo pipefail
 
 PKG="harmonigraph-plugin"
 NAME="Harmonigraph"
+# Cargo names a LIB artifact after the lib target, which is the package name
+# with dashes folded to underscores — so the dylib is libharmonigraph_plugin,
+# not libharmonigraph-plugin. `cargo build -p` below wants $PKG itself, so the
+# two spellings have to be kept apart.
+LIB="${PKG//-/_}"
 
 # Current checkout (where the build output lands) and the main working tree
 # (first entry of `git worktree list`, whose target/bundled/ Bitwig scans).
 HERE="$(git rev-parse --show-toplevel)"
 MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
 BUNDLED="$MAIN/target/bundled"
-DYLIB="$HERE/target/release/lib${PKG}.dylib"
+DYLIB="$HERE/target/release/lib${LIB}.dylib"
 
 echo "Building $PKG (release) from $HERE ..."
 ( cd "$HERE" && cargo build --release -p "$PKG" )
