@@ -57,32 +57,35 @@ Dependencies point strictly downward; the fun layers never touch plugin
 plumbing.
 
 ```
-harmonigraph-core    pure logic: PitchClass (integer microcents), Tuning,
-                LatticePos, NoteTracker, NoteHistory/NoteRoll (what was
-                played, by pitch and by time), SpectrumAnalyzer (FFT). No deps.
-                Unit-tested. One module per concern; see its crate doc.
-harmonigraph-scene   per-frame view model: derive_scene() turns tracker+tuning
-                into NodeInstances; orbit Camera; envelopes; CPU picking.
-                Split style/view/camera/color/derive; see its crate doc.
-harmonigraph-render  wgpu renderer as an egui paint callback: instanced
-                billboard nodes, WGSL in src/shaders/lattice.wgsl.
-                *** Skins/effects/shaders iterate here. ***
-harmonigraph-ui      egui_dock pane shell: Lattice / Tuning / View / Appearance /
-                Console / Spectral / Spectrum / Notes tabs, one file each
-                under src/panes/. SharedState (incl. cross-pane hover),
-                ParamBackend trait abstracting "where params live".
-harmonigraph-take    the recorded input to a visualization: note events and
-                parameter automation on the audio clock. Linked into the
-                plugin, so serde+ron only. See docs/offline-rendering.md.
-harmonigraph-offline offline video renderer: replays a take headless at an
-                exact frame rate, any resolution, own pane layout, frames
-                piped to ffmpeg. No window, no DAW, no realtime.
+harmonigraph-core        pure logic: PitchClass (integer microcents), Tuning,
+                         LatticePos, NoteTracker, NoteHistory/NoteRoll (what was
+                         played, by pitch and by time), SpectrumAnalyzer (FFT).
+                         No deps. Unit-tested. One module per concern.
+harmonigraph-scene       per-frame view model: derive_scene() turns
+                         tracker+tuning into NodeInstances; orbit Camera;
+                         envelopes; CPU picking. Split style/view/camera/
+                         color/derive; see its crate doc.
+harmonigraph-render      wgpu renderer as an egui paint callback: instanced
+                         billboard nodes, WGSL in src/shaders/lattice.wgsl.
+                         *** Skins/effects/shaders iterate here. ***
+harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / View /
+                         Appearance / Console / Spectral / Spectrum / Notes
+                         tabs, one file each under src/panes/. SharedState
+                         (incl. cross-pane hover), ParamBackend trait
+                         abstracting "where params live".
+harmonigraph-take        the recorded input to a visualization: note events and
+                         parameter automation on the audio clock. Linked into
+                         the plugin, so serde+ron only. See
+                         docs/offline-rendering.md.
+harmonigraph-offline     offline video renderer: replays a take headless at an
+                         exact frame rate, any resolution, own pane layout,
+                         frames piped to ffmpeg. No window, no DAW, no realtime.
 harmonigraph-standalone  eframe dev harness: mock chord progression OR hardware
-                    MIDI in (midir, with MPE bend decoding), plus a mock
-                    synth feeding the spectrum analyzer.
-harmonigraph-plugin     nice-plug shell: params, MIDI + audio → two rtrb ring
-                    buffers, custom wgpu egui editor (editor.rs) with
-                    host-native window resizing, CLAP/VST3 exports.
+                         MIDI in (midir, with MPE bend decoding), plus a mock
+                         synth feeding the spectrum analyzer.
+harmonigraph-plugin      nice-plug shell: params, MIDI + audio → two rtrb ring
+                         buffers, custom wgpu egui editor (editor.rs) with
+                         host-native window resizing, CLAP/VST3 exports.
 ```
 
 Data flow in the plugin: audio thread converts host MIDI to `NoteEvent`s
