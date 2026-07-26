@@ -1981,25 +1981,65 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
 /// curve half way up paints a cell half way along the ramp, and dragging the
 /// Level window moves both together.
 ///
-/// The heatmap had a dB window and a contrast curve of its own, and the pair
-/// could be set so that the same bucket meant two different things in one pane.
-/// Nothing enforces the agreement now except there being one mapping — which is
-/// what this pins, in the power a partial actually has rather than in the dB the
-/// history stores it as.
+/// A private dB window and a contrast curve on the heatmap's side would let the
+/// same bucket mean two different things in one pane. Nothing enforces the
+/// agreement but there being one mapping, and what holds THAT is comparing the
+/// two ends: `loudness`, which the curve's height comes from, against
+/// `bin_level`, which is what the heatmap's pixels actually go through.
+///
+/// Comparing `loudness` against `loudness_db(power_db(..))` instead proves
+/// nothing whatever — that is `loudness`' own body, so both sides of the
+/// assertion are one expression and no change to the heatmap can fail it. The
+/// bridge has to be a function only the heatmap calls.
+///
+/// The tolerance is the store's, not the mapping's: `bin_level` reads a bucket
+/// quantized to a byte of dB, so the two agree to within half a step of that
+/// grid. `quantizing_a_bucket_does_not_move_its_colour` is where the step
+/// itself is held.
 #[test]
 fn the_heatmap_reads_the_curve_s_own_level_scale() {
-    use crate::panes::spectral::{loudness, loudness_db, power_db};
+    use crate::panes::spectral::loudness;
     let mut cfg = SpectrumConfig::default();
-    let heatmap = |cfg: &SpectrumConfig, power: f32, midi| loudness_db(cfg, power_db(power), midi);
     let midi = 60.0;
+    let check = |cfg: &SpectrumConfig, power: f32| {
+        let tolerance =
+            0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
+        let curve = loudness(cfg, power, midi);
+        let heatmap = crate::panes::spectrogram::bin_level_for_test(
+            cfg,
+            harmonigraph_core::spectrogram::quantize(power),
+            midi,
+        );
+        assert!(
+            (heatmap - curve).abs() <= tolerance,
+            "power {power}: the curve reads {curve}, the heatmap {heatmap}",
+        );
+    };
 
     for power in [0.0, 1e-8, 1e-4, 1e-2, 1.0, 1e9] {
-        assert_eq!(heatmap(&cfg, power, midi), loudness(&cfg, power, midi), "power {power}");
+        check(&cfg, power);
     }
     // And they stay together as the window is dragged, at either end.
     cfg.floor_db = -20.0;
     cfg.ceiling_db = 0.0;
-    assert_eq!(heatmap(&cfg, 1e-4, midi), loudness(&cfg, 1e-4, midi));
+    check(&cfg, 1e-4);
+    cfg.floor_db = -90.0;
+    cfg.ceiling_db = -30.0;
+    check(&cfg, 1e-6);
+    // The tilt is the one input that makes the mapping pitch-dependent, so the
+    // two have to track each other across pitch as well as across level.
+    cfg.tilt = -6.0;
+    for midi in [30.0f32, 60.0, 120.0] {
+        let tolerance =
+            0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
+        let curve = loudness(&cfg, 1e-5, midi);
+        let heatmap = crate::panes::spectrogram::bin_level_for_test(
+            &cfg,
+            harmonigraph_core::spectrogram::quantize(1e-5),
+            midi,
+        );
+        assert!((heatmap - curve).abs() <= tolerance, "MIDI {midi}: {curve} vs {heatmap}");
+    }
 }
 
 /// Orientations that no longer exist must still PARSE, and land where the

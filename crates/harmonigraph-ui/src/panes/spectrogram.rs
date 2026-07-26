@@ -1439,6 +1439,18 @@ fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
     loudness_db(cfg, db_of(bucket), midi)
 }
 
+/// [`bin_level`] for the crate's own tests — the bridge
+/// `the_heatmap_reads_the_curve_s_own_level_scale` holds the curve against.
+///
+/// Exposed rather than let that test reach for `loudness_db` itself, which is
+/// what the curve reads too: an assertion whose two sides are both the curve's
+/// mapping is one expression compared with itself, and cannot fail however the
+/// heatmap's pixels are derived.
+#[cfg(test)]
+pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
+    bin_level(cfg, bucket, midi)
+}
+
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
 /// with `y = 0` the lowest bin. `power` is the flat `w * bins.len()` grid from
 /// [`aggregate_rows`]. Opaque throughout — silence is the ramp's dark end, so
