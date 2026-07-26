@@ -123,12 +123,25 @@ the `.githooks/pre-push` hook is the only automatic gate, and it checks
 clippy and tests — not judgement. Review is therefore a habit, in two
 halves, and each half catches a class the other cannot.
 
-**Sessions: review your own diff before you open the PR.** Run
-`/code-review` and act on what it finds. A session has full context on what
-it just wrote, which makes this cheap; it is also biased toward its own
-work, which is why it is only half the gate. This half catches the bugs
-that live entirely inside one branch — a stale invalidation key, an
-underflow, a test whose fixture never reaches the new path.
+**Sessions: review your own diff before you open the PR.** Not with
+`/code-review` — that is a built-in whose frontmatter sets
+`disable-model-invocation`, and the harness treats that as locked: no
+setting re-enables it, and there is no Bash route to a slash command
+either — for the `/code-review ultra` variant, sessions are told in so
+many words not to try. It is billed, so it is Yan's to run. The gate is
+per-skill and deliberate — `/simplify` sits beside it in the same built-in
+family and is model-invocable — so this is a boundary to work within, not
+an oversight to work around.
+
+Run **`/self-review`** instead. It is the project-local command that goes
+where `/code-review` cannot: it fans `diff-reviewer` subagents across
+`git diff main...HEAD`, one per lens — conventions, bugs, invalidation,
+test reach, history — then spawns a refuter per candidate and keeps only
+what survives. A session has full context on what it just wrote, which
+makes this cheap; it is also biased toward its own work, which is what
+the subagents correct for, since they did not write it. This half catches
+the bugs that live entirely inside one branch — a stale invalidation key,
+an underflow, a test whose fixture never reaches the new path.
 
 **Yan: run `/audit-merges` after a batch of merges lands.** Parallel
 sessions produce branches that are each correct against the `main` they
@@ -141,25 +154,28 @@ consecutive audits do not re-read the same range.
 
 ### The agents in `.claude/agents/`
 
-`merge-auditor` does the reading for `/audit-merges` — it hands back candidate
-findings and the fix is written in the calling session. That split is the
-point: the auditor does not go from "this looks wrong" to a commit without the
-failing test in between.
+`merge-auditor` does the reading for `/audit-merges`; `diff-reviewer` does it
+for `/self-review`, one instance per lens. Both hand back candidate findings
+and the fix is written in the calling session. That split is the point:
+neither goes from "this looks wrong" to a commit without the failing test in
+between.
 
 Be precise about how much of that is enforced, because it is easy to read as
-more than it is. The agent is granted `Read, Grep, Glob, Bash`: `Write` and
+more than it is. Both are granted `Read, Grep, Glob, Bash`: `Write` and
 `Edit` are withheld, but **`Bash` writes files, and can commit**. So the split
-is instructed, not enforced — the prompt tells it to return findings, and
-nothing stops it doing otherwise. `Bash` is granted deliberately: this audit's
-findings were proved with `cargo test`, `git merge-base` and `git blame`, and
-an auditor that cannot run the suite cannot tell a bug from a guess. Narrowing
-`Bash` to read-only patterns would buy enforcement at that price; the trade is
-open, not settled.
+is instructed, not enforced — the prompt tells them to return findings, and
+nothing stops them doing otherwise. `Bash` is granted deliberately: the #85
+audit's findings were proved with `cargo test`, `git merge-base` and `git
+blame`, and a reviewer that cannot run the suite cannot tell a bug from a
+guess. Narrowing `Bash` to read-only patterns would buy enforcement at that
+price; the trade is open, not settled.
 
-It is the only agent here, and the rule that keeps it that way is worth
-stating: **an agent encodes a job or a constraint, never a description of the
-code.** `merge-auditor` describes a method, and a method does not go stale
-when a type is renamed.
+Two is the whole list, and the rule that keeps it short is worth stating:
+**an agent encodes a job or a constraint, never a description of the code.**
+Both describe a method, and a method does not go stale when a type is
+renamed. `diff-reviewer` earns its file on the constraint half — it is the
+read-only half of a review whose repair half happens in the calling session,
+and the lens it works is passed in per call rather than baked into it.
 
 A `spectral` agent carrying the spectrogram's retention and aggregation
 invariants was written and then deleted before it ever ran, which is the
