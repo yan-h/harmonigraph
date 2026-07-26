@@ -1,7 +1,8 @@
 //! The Nodes pane: how a sounding note is drawn — its core mark, the octave
 //! ring around it, the melody/bass marks on the outer held notes, and the
-//! color, fade and halo the whole node wears. Everything here is the *played
-//! note*; the surrounding structure and overlays live in [`super::scene`].
+//! color, fade, halo and cleared gutter the whole node wears. Everything here
+//! is the *played note*; the surrounding structure and overlays live in
+//! [`super::scene`].
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
@@ -11,8 +12,8 @@ use lattice_scene::{NodeStyle, ViewConfig};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
-/// on the outer notes, and then the three settings that are not about any one
-/// of those layers but about all of them at once. Scrolls so the full list is
+/// on the outer notes, and then the settings that are not about any one of
+/// those layers but about all of them at once. Scrolls so the full list is
 /// reachable in a short pane.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
@@ -154,12 +155,12 @@ fn pitch_readout(midi: f32) -> String {
 /// tinted through, the time it takes to fade on release, the halo it carries
 /// while lit, and the gap it clears around the whole of itself.
 ///
-/// One section rather than four of one control each, because they are one
-/// idea — none of them is about the core, the octave glyphs or the melody/bass
-/// rings in particular, and all of them apply to whichever of those happen to
-/// be drawn. Fade especially: one time for the node rather than one per layer,
-/// so a release reads as a single gesture instead of pieces of the node going
-/// dark at different moments.
+/// One section rather than a heading apiece, because they are one idea — none
+/// of them is about the core, the octave glyphs or the melody/bass rings in
+/// particular, and all of them apply to whichever of those happen to be drawn.
+/// Fade especially: one time for the node rather than one per layer, so a
+/// release reads as a single gesture instead of pieces of the node going dark
+/// at different moments.
 fn every_layer_section(
     ui: &mut egui::Ui,
     view: &mut ViewConfig,
@@ -193,12 +194,11 @@ fn every_layer_section(
         .on_hover_text(
             "Soft halo around bright notes; 0 turns the post-process off",
         );
-    // Here and not with the sevens-layer controls it was built for, where it
-    // sat under a "Sevenths" name that misreads what it does: the gutter is
-    // cleared by every sounding node on every sheet, the home one included and
-    // at any sevenths extent, so it belongs to the node rather than to the
-    // depth axis. The `sevens_` field names stay — they are what saved
-    // projects spell.
+    // Here rather than with the sevens-layer controls, where a "Sevenths" name
+    // misreads what it does: the gutter is cleared by every sounding node on
+    // every sheet, the home one included and at any sevenths extent, so it
+    // belongs to the node and not to the depth axis. The `sevens_` field names
+    // stay — they are what saved projects spell.
     ValueBar::new(&mut view.sevens_gutter, 0.0..=0.5, "Gutter")
         .show(ui)
         .on_hover_text(

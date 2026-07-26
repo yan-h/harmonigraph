@@ -176,7 +176,7 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     sevens_layer_controls(ui, state);
 }
 
-/// How the sheets other than the home one draw. Both controls are inert with
+/// How the sheets other than the home one draw. Size and label are inert with
 /// the sevenths extent at 0 (a flat lattice has only the home sheet), so they
 /// disable themselves rather than pretending otherwise.
 ///

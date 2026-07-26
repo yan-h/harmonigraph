@@ -315,11 +315,11 @@ pub(super) fn note_instances(
 /// [`channel_color`] the nodes are painted through, so a ribbon and the node
 /// it lit up are the same color.
 ///
-/// The only coloring there is, deliberately. Two others were switchable here
-/// — the low-to-high pitch ramp on every channel, and one flat accent — and
-/// both broke the identity that makes the roll readable beside the lattice:
-/// what a color means has to be the same thing in both pictures, or reading
-/// across them is a translation.
+/// The only coloring there is, deliberately. The two obvious alternatives —
+/// the low-to-high pitch ramp on every channel, and one flat accent — both
+/// break the identity that makes the roll readable beside the lattice: what a
+/// color means has to be the same thing in both pictures, or reading across
+/// them is a translation.
 fn note_color(note: &RollNote, state: &SharedState, pitch: f32, alpha: f32) -> Color32 {
     let (darkest, brightest) =
         (state.frame_params.darkest_pitch, state.frame_params.brightest_pitch);
