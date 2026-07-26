@@ -71,7 +71,7 @@ whatever you actually changed under a whole-tree reformat that no reviewer
 can read past, which is why this is a ban rather than a preference. Match
 the surrounding style by hand, and wrap only the lines you write — about
 100 columns, which is where the tree sits. That is a habit, not a limit to
-enforce: 39 lines already exceed it and the longest runs to 155, and
+enforce: 54 lines already exceed it and the longest runs to 155, and
 rewrapping code you are only passing through costs a reviewer the same way
 `cargo fmt` does, in miniature. To catch only your own long lines, run
 `awk 'length>100'` over the lines you added; leave pre-existing ones alone.
