@@ -1,0 +1,483 @@
+//! [`SharedState`], the one instance of everything the UI reads and mutates
+//! each frame, plus what of it survives a session: the dock arrangement,
+//! camera, and settings written through [`UiPersist`](crate::state::UiPersist).
+
+use std::collections::VecDeque;
+
+use egui_dock::{DockState, NodeIndex};
+use lattice_core::{LatticePos, NoteTracker, PitchClass, Tuning};
+use lattice_render::wgpu::TextureFormat;
+use lattice_scene::{Camera, FrameParams, ViewConfig};
+
+use crate::perf::PerfStats;
+use crate::{fold, panes, text};
+use crate::{AudioSpectrum, RenderConfig, RenderFrame, SpectrumConfig, WholeSong};
+
+/// Scrollback for the debug console pane. Shells and panes log via
+/// [`SharedState::log`].
+#[derive(Default)]
+pub struct Console {
+    pub(crate) lines: VecDeque<String>,
+}
+
+impl Console {
+    /// Lines kept before the oldest is dropped.
+    pub(crate) const MAX_LINES: usize = 500;
+
+    pub fn log(&mut self, line: impl Into<String>) {
+        if self.lines.len() == Self::MAX_LINES {
+            self.lines.pop_front();
+        }
+        self.lines.push_back(line.into());
+    }
+
+    pub fn lines(&self) -> impl Iterator<Item = &str> {
+        self.lines.iter().map(String::as_str)
+    }
+
+    pub fn clear(&mut self) {
+        self.lines.clear();
+    }
+}
+
+/// Everything the UI reads and mutates each frame. One instance lives in the
+/// shell (inside the editor state in the plugin, inside the app in the
+/// standalone harness).
+pub struct SharedState {
+    pub tracker: NoteTracker,
+    /// Snapshot of the tuning parameters, refreshed each frame in
+    /// [`root_ui`](crate::root_ui) so core/scene code never touches the param system.
+    pub tuning: Tuning,
+    pub view: ViewConfig,
+    /// Per-frame mirrors of the appearance parameters, refreshed alongside
+    /// `tuning` (the param system owns the real values; these are never
+    /// persisted).
+    pub frame_params: FrameParams,
+    pub camera: Camera,
+    /// The pitch-class node the pointer is over, if any — shared so *every*
+    /// pane can highlight it (lattice glow, tuning pane readout, ...).
+    pub hovered: Option<LatticePos>,
+    pub console: Console,
+    /// Surface format of the shell's swapchain; the lattice render pipeline
+    /// must match it.
+    pub target_format: TextureFormat,
+    /// The color the lattice pane is painted ONTO, which only the sevens
+    /// knockout reads (see [`lattice_scene::Scene::background`]). Defaults
+    /// to the skin's panel, which is what `egui_dock` fills a tab body with
+    /// — right for the plugin and the standalone harness.
+    ///
+    /// A shell that composes its panes differently MUST set this: the
+    /// offline renderer clears to its layout's own background and draws the
+    /// panes over that, several shades darker than the panel, and a
+    /// knockout clearing to the wrong ground shows up as a disc that is
+    /// visibly too light. Exported video is the one place this is hardest
+    /// to notice and most expensive to get wrong.
+    pub background: glam::Vec4,
+    /// While true, tuning params continuously re-learn from the held notes
+    /// (v1's learn mode). Runtime-only; never persisted.
+    pub learn_active: bool,
+    /// Held pitch classes the last learn ran against (change detection).
+    pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
+    /// User-saved camera angles, applied like the built-in Flat/Isometric
+    /// presets (persisted; see the Frame pane).
+    pub camera_presets: Vec<CameraPreset>,
+    /// Entry buffer for naming a new preset. Runtime-only.
+    pub preset_name: String,
+    /// Take recording, for offline video rendering. The shell owns the
+    /// actual recorder; these three fields are the whole contract.
+    /// Runtime-only — a take is a deliberate act, never resumed on load.
+    ///
+    /// `take_supported` gates the control: shells that cannot record
+    /// (or a build without a writer) simply don't show it, rather than
+    /// offering a button that does nothing.
+    pub take_supported: bool,
+    /// Toggled by the Video pane, acted on by the shell.
+    pub take_recording: bool,
+    /// Whether the transport is actually rolling (capture is happening), as
+    /// opposed to armed-and-waiting. Drives the record indicator: a steady dot
+    /// while rolling, a breathing one while it waits. Shell-set, runtime-only.
+    pub take_rolling: bool,
+    /// One-shot: set by the Video pane's "Render now" button, consumed by the
+    /// shell to render the last take with the CURRENT settings. Runtime-only.
+    pub render_now: bool,
+    /// Whether a take has been recorded this session — the shell sets it so the
+    /// Video pane can offer "Render now". Runtime-only.
+    pub last_take_ready: bool,
+    /// Record the input bus alongside the notes, so the render has a
+    /// spectrum and a soundtrack without a separate bounce. Persisted
+    /// with the render settings rather than the take state, since it is
+    /// a preference, not a live flag.
+    pub take_audio: bool,
+    /// What to do with a take once it is finished (persisted).
+    pub render_config: RenderConfig,
+    /// Shell-supplied one-liner shown under the toggle: where the file is
+    /// going, how many events, or what went wrong.
+    pub take_status: String,
+    /// Audio-derived spectrum for the Spectral pane. Runtime-only.
+    pub spectrum: AudioSpectrum,
+    /// The Spectral pane's settings (Analyzer tab; persisted).
+    pub spectrum_config: SpectrumConfig,
+    /// Offline playhead render: the whole take's spectrogram laid out
+    /// statically with a playhead at `now`, instead of the live scrolling
+    /// window. `Some` only in the offline renderer. Runtime-only, never
+    /// persisted (mirrors `learn_active`).
+    pub whole_song: Option<WholeSong>,
+    /// Set by the Panel pane's "Reset layout" button; consumed by root_ui
+    /// AFTER the frame's DockArea writes the dock back (panes run inside
+    /// that pass, so a direct write from one would be overwritten).
+    pub(crate) reset_layout: bool,
+    pub(crate) dock: DockState<panes::Tab>,
+    /// The split fractions the sideways folds are holding onto, so an unfolded
+    /// pane comes back the width it was (see [`fold`]).
+    pub(crate) folds: fold::Folds,
+    /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
+    /// by the render callback and read by the performance overlay. 0 means no
+    /// reading — the device didn't grant timestamp queries, or none has landed
+    /// yet.
+    ///
+    /// An atomic rather than a return value because the measurement crosses a
+    /// boundary the call stack doesn't: it is produced inside egui-wgpu's
+    /// paint callback, several frames after the frame that asked for it. Same
+    /// shape the plugin already uses to publish its sample rate.
+    ///
+    /// Runtime-only, never persisted, and never read by the offline renderer —
+    /// which also never asks for the feature, so it has no timer to begin with.
+    pub(crate) lattice_stats: std::sync::Arc<lattice_render::LatticeStats>,
+    /// How many note segments the docked roll handed its paint callback last
+    /// frame — the geometry `verts` does NOT see, four vertices at a time
+    /// instead of several hundred.
+    ///
+    /// Reported so the roll's load stays visible while it draws from its own
+    /// vertex buffer rather than egui's: without it the overlay would show
+    /// the cost vanish with nothing standing in its place, and "is the roll
+    /// drawing at all" would have no answer. An atomic for the same reason
+    /// `lattice_stats` is one — the roll draws from a `&SharedState`.
+    ///
+    /// Only the docked pane (surface 0) publishes; the Render preview is a
+    /// second roll on screen and reporting its count as THE count would be
+    /// wrong, exactly as it is for the preview's lattice.
+    pub(crate) roll_notes: std::sync::atomic::AtomicU32,
+    /// What the label callback's copy of egui's font atlas holds (see
+    /// [`text::AtlasMirror`]). Behind a lock for the same reason the other
+    /// per-frame publishing is behind atomics: labels are drawn from a
+    /// `&SharedState`. Taken once per flush, uncontended.
+    pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
+    /// Milliseconds the shell spent tessellating egui's shapes last frame,
+    /// or 0 where the shell doesn't measure it (the standalone's eframe loop
+    /// isn't ours to instrument). Set by the shell before `root_ui`.
+    ///
+    /// Its own field rather than part of the frame's CPU time because it is
+    /// not the same work: `ui cpu` covers building the UI, which only APPENDS
+    /// shapes, and this covers turning those shapes into triangles afterwards.
+    /// A cost can be entirely in one and invisible in the other.
+    pub tess_ms: f32,
+    /// Milliseconds the GPU spent on egui's own render pass last frame, or 0
+    /// where the shell doesn't measure it. Set by the shell before `root_ui`.
+    ///
+    /// Disjoint from [`Self::gpu_ms`], which brackets only the lattice's own
+    /// passes: between them they cover the frame's GPU work, and the two were
+    /// separated because the lattice turned out to be the cheap half.
+    pub egui_gpu_ms: f32,
+    /// Milliseconds the shell spent on its own per-frame work before the UI
+    /// ran — draining the event rings and reconciling the take — or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// Separate from the frame's CPU time because that starts at the dock
+    /// build: this stretch scales with events ARRIVING rather than with what
+    /// is drawn, and there was no reading it could show up in.
+    pub shell_ms: f32,
+    /// Milliseconds the previous frame blocked acquiring the surface — the
+    /// vsync wait. Large here with every cost small means the frame is early,
+    /// not slow.
+    pub acquire_ms: f32,
+    /// Milliseconds the previous frame callback took end to end, or 0 where
+    /// the shell doesn't measure it.
+    ///
+    /// The other readings are stages of it. This is the total, and against the
+    /// interval between frames it answers what no stage can: whether a long
+    /// frame was SLOW, or just late being asked for.
+    pub tick_ms: f32,
+    /// Milliseconds of that callback spent inside the renderer. `tick_ms`
+    /// minus this is the egui half — the UI closure plus egui's own
+    /// end-of-pass work — so the two bracket the whole frame between them.
+    pub render_ms: f32,
+    /// The renderer's stages. `upload_ms` also covers paint callbacks'
+    /// `prepare`, so the lattice's own buffer writes are inside it.
+    pub upload_ms: f32,
+    /// Of that, `update_buffers` itself. The difference is the command-encoder
+    /// creation, the renderer's write lock and the MSAA resize, which the
+    /// upload reading also spans.
+    pub ubuf_ms: f32,
+    /// Of the uploads, the TEXTURE half — the rest is buffer uploads, and
+    /// with them the paint callbacks' `prepare`.
+    pub texture_ms: f32,
+    /// How many primitives and vertices the previous frame uploaded — the
+    /// volume behind the upload cost, rather than another duration.
+    pub prims: u32,
+    pub verts: u32,
+    pub encode_ms: f32,
+    pub submit_ms: f32,
+    /// Upper bound on how often the UI is drawn, in frames per second;
+    /// `None` leaves it uncapped (as fast as the display can present).
+    /// Persisted.
+    ///
+    /// Read by the shells to pace themselves, and by [`root_ui`](crate::root_ui) only to
+    /// schedule repaints — never by any drawing code. The offline renderer
+    /// steps its own clock and never reaches `root_ui`, so a recorded frame
+    /// cannot depend on this and the determinism test stays honest.
+    ///
+    /// The repaint request alone cannot enforce this, and shells must not
+    /// rely on it: egui takes the SMALLEST delay any caller asks for in a
+    /// pass, and a zero-delay `request_repaint` (an input event, a hover
+    /// animation, the plugin's own MIDI-drain repaint) additionally forces
+    /// the following pass to zero. A cap expressed that way evaporates
+    /// exactly when the UI is busy — the case it exists for. The plugin
+    /// therefore drives its window's frame timer from this value, which is a
+    /// hard bound because a frame that is never asked for is never drawn.
+    pub fps_cap: Option<f32>,
+    /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
+    /// Runtime-only; filled and drawn by [`root_ui`](crate::root_ui), never by the offline
+    /// renderer (so recorded frames stay deterministic).
+    pub(crate) perf: PerfStats,
+}
+
+/// A saved camera angle: what the built-in Flat/Isometric buttons are,
+/// but user-defined. Only the orbit angles — projection, zoom, and pan
+/// are deliberately not captured, so a preset composes with any of them.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct CameraPreset {
+    pub name: String,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// The default pane arrangement: big lattice with the Spectral pane
+/// beside it on the right (sharing the pitch intuition: what sounds is
+/// what lights up), the tuning column further right, console and notes
+/// tucked below that. Users can re-dock at runtime; the result persists
+/// via UiPersist, and the Panel pane's "Reset layout" button returns here.
+pub(crate) fn default_dock() -> DockState<panes::Tab> {
+    let mut dock = DockState::new(vec![panes::Tab::Lattice]);
+    let surface = dock.main_surface_mut();
+    let [lattice, right] = surface.split_right(
+        NodeIndex::root(),
+        0.72,
+        vec![
+            // Reading outward from the picture: what the lattice is (its
+            // tuning, and how it's framed), then how a note is drawn, the
+            // scene around it, the analyzer, video export, and the plugin's
+            // own render/layout knobs last.
+            panes::Tab::Tuning,
+            panes::Tab::Nodes,
+            panes::Tab::Scene,
+            panes::Tab::Analyzer,
+            panes::Tab::Video,
+            panes::Tab::Panel,
+        ],
+    );
+    // Notes first so it sits left of Console and is the selected tab by
+    // default (egui_dock makes tab index 0 active).
+    surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
+    // Spectral as a column just right of the lattice: what sounds is directly
+    // beside what lights up. Paired with the "Across" default orientation
+    // (SpectrumConfig::default). Drag it wherever from here — egui_dock docks
+    // it freely, and in Auto the Spectral pane's orientation follows the shape
+    // it lands.
+    surface.split_right(lattice, 0.72, vec![panes::Tab::Spectral]);
+    dock
+}
+
+impl SharedState {
+    pub fn new(target_format: TextureFormat) -> Self {
+        let dock = default_dock();
+
+        SharedState {
+            tracker: NoteTracker::new(),
+            tuning: Tuning::default(),
+            view: ViewConfig::default(),
+            frame_params: FrameParams::default(),
+            camera: Camera::default(),
+            hovered: None,
+            console: Console::default(),
+            target_format,
+            background: lattice_scene::skin::panel_color(),
+            learn_active: false,
+            last_learned_classes: None,
+            camera_presets: Vec::new(),
+            preset_name: String::new(),
+            take_supported: false,
+            take_recording: false,
+            take_rolling: false,
+            render_now: false,
+            last_take_ready: false,
+            take_audio: false,
+            render_config: RenderConfig::default(),
+            take_status: String::new(),
+            spectrum: AudioSpectrum::default(),
+            spectrum_config: SpectrumConfig::default(),
+            whole_song: None,
+            reset_layout: false,
+            dock,
+            folds: fold::Folds::default(),
+            lattice_stats: {
+                let stats = lattice_render::LatticeStats::default();
+                stats
+                    .gpu_ms
+                    .store(lattice_render::GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
+                std::sync::Arc::new(stats)
+            },
+            roll_notes: std::sync::atomic::AtomicU32::new(0),
+            font_atlas: Default::default(),
+            tess_ms: 0.0,
+            egui_gpu_ms: 0.0,
+            shell_ms: 0.0,
+            acquire_ms: 0.0,
+            tick_ms: 0.0,
+            render_ms: 0.0,
+            upload_ms: 0.0,
+            ubuf_ms: 0.0,
+            texture_ms: 0.0,
+            prims: 0,
+            verts: 0,
+            encode_ms: 0.0,
+            submit_ms: 0.0,
+            fps_cap: None,
+            perf: PerfStats::default(),
+        }
+    }
+
+    pub fn log(&mut self, line: impl Into<String>) {
+        self.console.log(line);
+    }
+
+    /// Discard the (persisted) dock arrangement and return to the default
+    /// layout. Camera, view settings, and presets are untouched. Takes
+    /// effect at the end of the frame (see the `reset_layout` field).
+    pub fn reset_dock_layout(&mut self) {
+        self.reset_layout = true;
+    }
+
+    /// Serialize the parts of the UI worth restoring across sessions
+    /// (dock layout, camera, view settings). Parameters are NOT included —
+    /// they live in the host's plugin state.
+    pub fn save_persist(&self) -> String {
+        // RON rather than JSON: dock layout rects can be NaN (before first
+        // layout), which JSON cannot round-trip.
+        ron::to_string(&UiPersist {
+            version: UI_PERSIST_VERSION,
+            dock: self.dock.clone(),
+            folds: self.folds.clone(),
+            camera: self.camera,
+            view: self.view.clone(),
+            camera_presets: self.camera_presets.clone(),
+            spectrum: self.spectrum_config,
+            render: self.render_config.clone(),
+            fps_cap: self.fps_cap,
+        })
+        .unwrap_or_default()
+    }
+
+    /// Drop everything that belongs to a particular egui context. Shells MUST
+    /// call this whenever they build one.
+    ///
+    /// The plugin's editor creates a brand new `Context` every time its window
+    /// opens, while this state lives on across them — so a `TextureHandle`
+    /// taken from the previous one survives into the new window looking
+    /// perfectly valid. It isn't: `set` on it reaches a context nobody is
+    /// drawing any more, and its id names a texture the new renderer never
+    /// allocated. The spectrogram simply vanished after hiding and re-showing
+    /// the window, and stayed gone, because nothing ever asked for a fresh
+    /// handle.
+    pub fn release_context_resources(&mut self) {
+        self.spectrum.release_textures();
+    }
+
+    /// Restore state saved by [`save_persist`](Self::save_persist). Unknown or
+    /// corrupt input is ignored (fresh defaults win over a broken restore).
+    pub fn load_persist(&mut self, serialized: &str) {
+        if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
+            // A pre-reorg (version 0) layout names the old tabs and is missing
+            // the split-out Scene and new Panel tabs, so those controls would
+            // be unreachable. The old tab names still deserialize (Tab's serde
+            // aliases), which is what lets the settings below survive — but the
+            // arrangement itself is stale, so refresh it to the new default.
+            // Everything else the user dialed in is kept.
+            // The folds go with the dock they were measured against: they name
+            // splits by index, so a fresh arrangement has to start with none
+            // rather than with fractions pointing into a tree that is gone.
+            // Same reason "Reset layout" clears them.
+            self.dock = if persist.version < UI_PERSIST_VERSION {
+                self.folds.clear();
+                default_dock()
+            } else {
+                self.folds = persist.folds;
+                persist.dock
+            };
+            self.camera = persist.camera;
+            self.view = persist.view;
+            // Fold fields from older blob layouts (the NodeBody
+            // experiment) into the current core/outer split.
+            self.view.migrate_legacy();
+            self.camera_presets = persist.camera_presets;
+            self.spectrum_config = persist.spectrum;
+            // Same job for the pitch range, which used to be a pair of
+            // octave numbers.
+            self.spectrum_config.migrate_legacy();
+            self.render_config = persist.render;
+            self.fps_cap = persist.fps_cap;
+        }
+    }
+}
+
+/// The current [`UiPersist`] layout version. Bumped when the `Tab` set changes
+/// shape (rename/split/add/merge) so `load_persist` can refresh a stale dock
+/// instead of stranding the user with missing tabs.
+///
+/// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
+/// they now name the same variant — without the refresh the dock would open
+/// with the merged pane in it twice.
+pub(crate) const UI_PERSIST_VERSION: u32 = 2;
+
+/// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
+/// failed deserialize silently falls back to defaults.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct UiPersist {
+    /// serde(default) reads a pre-versioning blob as version 0, which
+    /// [`SharedState::load_persist`] treats as "refresh the dock layout".
+    #[serde(default)]
+    pub(crate) version: u32,
+    pub(crate) dock: DockState<panes::Tab>,
+    /// serde(default) keeps pre-sideways-fold blobs loadable (as nothing
+    /// folded, which is what they were).
+    #[serde(default)]
+    pub(crate) folds: fold::Folds,
+    pub(crate) camera: Camera,
+    pub(crate) view: ViewConfig,
+    /// serde(default) keeps pre-preset persisted blobs loadable.
+    #[serde(default)]
+    pub(crate) camera_presets: Vec<CameraPreset>,
+    /// serde(default) keeps pre-Spectrum-tab blobs loadable.
+    #[serde(default)]
+    pub(crate) spectrum: SpectrumConfig,
+    #[serde(default)]
+    pub(crate) render: RenderConfig,
+    /// serde(default) keeps pre-cap blobs loadable (as uncapped).
+    #[serde(default)]
+    pub(crate) fps_cap: Option<f32>,
+}
+
+/// Parse just the render frame out of a persisted UI-state blob — so the
+/// offline renderer can default its size and layout to what the take was
+/// composed for, without building a whole [`SharedState`].
+pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
+    ron::from_str::<UiPersist>(serialized).ok().map(|persist| persist.render.frame)
+}
+
+impl SharedState {
+    /// Tell the state what ground the lattice is being composited over (see
+    /// the `background` field). Takes sRGB bytes, the form every shell
+    /// already has its background color in, so no shell needs glam to say it.
+    pub fn set_background(&mut self, rgb: (u8, u8, u8)) {
+        self.background = lattice_scene::skin::ground_color(rgb);
+    }
+}

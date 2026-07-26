@@ -511,7 +511,7 @@ mod tests {
         }
         let settled = ctx.fonts(|fonts| fonts.font_image_size());
 
-        let state = crate::SharedState::new(crate::TextureFormat::Bgra8Unorm);
+        let state = crate::SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         let first = batch_keys(&ctx, &font, "Ai");
         assert!(atlas_if_changed(&ctx, &state, first.clone()).is_some(), "the first mirror");
         assert!(atlas_if_changed(&ctx, &state, first.clone()).is_none(), "nothing has moved");
@@ -602,7 +602,7 @@ mod tests {
     /// different SIZE this stops quietly passing for the wrong reason.
     #[test]
     fn a_scale_change_refreshes_the_mirror_though_nothing_else_moves() {
-        let state = crate::SharedState::new(crate::TextureFormat::Bgra8Unorm);
+        let state = crate::SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         let ctx = egui::Context::default();
         let font = egui::FontId::proportional(12.0);
 
