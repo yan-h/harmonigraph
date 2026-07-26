@@ -35,7 +35,7 @@ pub use layout::{Layout, Placement, PRESETS};
 // which nothing outside their own module wanted at all.
 pub use config::{
     RenderConfig, RenderFrame, RenderTrigger, SpectralOrientation, SpectrogramColor,
-    SpectrumConfig, SpectrumLabels, SpectrumWindow, SCALE_BAR_RANGE, TILT_STEPS,
+    SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE, TILT_STEPS,
 };
 pub(crate) use config::{
     COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,

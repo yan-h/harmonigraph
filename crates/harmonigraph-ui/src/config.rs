@@ -26,16 +26,6 @@ impl SpectrumWindow {
     }
 }
 
-/// What the Spectral pane's axis gridlines are labeled with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SpectrumLabels {
-    /// A gridline at every C, labeled with Bitwig octave numbers.
-    Notes,
-    /// Gridlines on the analyzer-standard 1-2-5 series (20, 50, 100, ...
-    /// 10k, 20k Hz).
-    Frequency,
-}
-
 /// Which way the Spectral pane's pitch axis runs.
 ///
 /// The pane is written once against an abstract (pitch, depth) plane and
@@ -271,9 +261,6 @@ pub struct SpectrumConfig {
     /// raw-power 0 a bare f32 default would hand it.
     #[serde(default = "default_tilt")]
     pub tilt: f32,
-    /// Axis gridline labeling.
-    #[serde(default = "default_labels")]
-    pub labels: SpectrumLabels,
     /// Overall size of the pane's own markings — the gridline labels above and
     /// the pitch readout that follows the pointer — as a multiple of their
     /// built-in sizes.
@@ -537,10 +524,6 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
-pub(crate) fn default_labels() -> SpectrumLabels {
-    SpectrumLabels::Notes
-}
-
 pub(crate) fn default_roll_fraction() -> f32 {
     0.55
 }
@@ -577,7 +560,6 @@ impl Default for SpectrumConfig {
             ceiling_db: default_ceiling_db(),
             smoothing: 0.55,
             tilt: default_tilt(),
-            labels: SpectrumLabels::Notes,
             marking_scale: default_one(),
             keyline: default_keyline(),
             low_midi: default_low_midi(),

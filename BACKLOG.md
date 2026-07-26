@@ -46,7 +46,6 @@ both sides. Never resolve one by dropping an item you did not finish.
 
 [spectrogram] very thin notes can flicker when scrolling
 [spectrogram] orientations: instead of "across" and "upright", have "top" "bottom" "left" and "right" where current "across" is equal to "left" and current "upright" is equal to top". Remove "auto" option
-[spectrogram] labels should always be frequency. remove "notes" option
 
 > Work through BACKLOG.md. First triage: restate each item as you understand
 > it and flag anything ambiguous — ask me about those before touching them.

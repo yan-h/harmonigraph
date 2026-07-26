@@ -10,16 +10,7 @@
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
 use super::{names, nearest_visible_node, section};
-use harmonigraph_core::notes::display_octave_of;
 use egui::Sense;
-
-/// The lowest C at or above `midi`, as a MIDI note. Where the octave
-/// gridlines start: since the pitch range went continuous it can begin
-/// anywhere, and stepping twelves from the range's own start would scatter
-/// the "C" lines across whatever pitch the zoom happens to begin on.
-fn first_c_at_or_above(midi: f32) -> i32 {
-    (midi / 12.0).ceil() as i32 * 12
-}
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
 /// low, kHz to one decimal above 1000, each carrying its unit so the number
@@ -65,7 +56,7 @@ fn span_readout(seconds: f32) -> String {
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow};
+    use crate::{SpectralOrientation, SpectrogramColor, SpectrumWindow};
 
     // ---- Axes -----------------------------------------------------------
     // Which way the plot runs, and how much of the pitch axis it shows. Time's
@@ -122,19 +113,11 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          zoom it around the pointer. (Dragging the other way, along time, zooms \
          the roll's Span instead.)",
     );
-    choice_row(
-        ui,
-        "Labels",
-        &mut cfg.labels,
-        &[
-            (SpectrumLabels::Notes, "Notes", "A gridline at every C, Bitwig octave numbers"),
-            (
-                SpectrumLabels::Frequency,
-                "Frequency",
-                "Gridlines at 20, 50, 100 ... 10k, 20k Hz",
-            ),
-        ],
-    );
+    // No choice of what the gridlines say. They are the analyzer-standard
+    // 1-2-5 frequency series, and were switchable to a line at every C with
+    // Bitwig octave numbers — which is what the note NAMES on the ribbons
+    // already say, in the lattice's own spelling, at the pitch they are
+    // sounding rather than at the nearest C below it.
     ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Label size")
         .show(ui)
         .on_hover_text(
@@ -955,7 +938,6 @@ pub(crate) fn spectral_pane(
     // Render preview, so two live copies don't clobber one shared texture.
     surface: usize,
 ) {
-    use crate::SpectrumLabels;
     use harmonigraph_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
@@ -1036,43 +1018,30 @@ pub(crate) fn spectral_pane(
         painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
     }
 
-    // Axis gridlines: every C (note labels) or the analyzer-standard
-    // 1-2-5 frequency series, per the Analyzer tab. Both run the full
-    // depth, so they double as the roll's pitch lanes. The lines lay down
-    // here, under the spectrum; their text labels are collected and drawn
-    // last (below the voice bars), so a loud spectrum slab never buries
-    // which pitch a lane is.
+    // Axis gridlines: the analyzer-standard 1-2-5 frequency series, and only
+    // that. A line at every C with Bitwig octave numbers was the alternative,
+    // and it was answering a question the pane answers better elsewhere —
+    // every ribbon carries its note NAME, spelled the lattice's way and placed
+    // at the pitch that is sounding. What an axis is for is the other reading:
+    // where in the spectrum a band sits, which is a frequency.
+    //
+    // The lines run the full depth, so they double as the roll's pitch lanes.
+    // They lay down here, under the spectrum; their text labels are collected
+    // and drawn last (below the voice bars), so a loud spectrum slab never
+    // buries which pitch a lane is.
     let gridline = |p: f32| {
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
     };
     let mut axis_labels: Vec<(f32, String)> = Vec::new();
-    match cfg.labels {
-        SpectrumLabels::Notes => {
-            let mut c = first_c_at_or_above(min_midi);
-            while c <= max_midi as i32 {
-                let t = scale.t_of(c as f32);
-                gridline(t);
-                if c < max_midi as i32 {
-                    axis_labels.push((t, format!("C{}", display_octave_of(c))));
-                }
-                c += 12;
-            }
+    for hz in [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0] {
+        let midi = hz_to_midi(hz);
+        if !scale.contains(midi) {
+            continue;
         }
-        SpectrumLabels::Frequency => {
-            for hz in
-                [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0]
-            {
-                let midi = hz_to_midi(hz);
-                if !scale.contains(midi) {
-                    continue;
-                }
-                let t = scale.t_of(midi);
-                gridline(t);
-                let label =
-                    if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
-                axis_labels.push((t, label));
-            }
-        }
+        let t = scale.t_of(midi);
+        gridline(t);
+        let label = if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
+        axis_labels.push((t, label));
     }
 
     // Nothing to pump here: the analyzer runs off the samples the shell pushes
@@ -2012,17 +1981,6 @@ mod tests {
         let khz = harmonigraph_core::spectrum::hz_to_midi(1000.0);
         assert_eq!(hz_readout(khz), "1.0 kHz");
         assert!(hz_readout(khz - 0.1).ends_with(" Hz"));
-    }
-
-    /// A C gridline has to land on a C. The range is continuous and can start
-    /// anywhere, so stepping twelves from its start does not work.
-    #[test]
-    fn c_gridlines_land_on_cs_wherever_the_range_starts() {
-        assert_eq!(first_c_at_or_above(48.0), 48, "a range already on a C keeps it");
-        assert_eq!(first_c_at_or_above(40.5), 48);
-        assert_eq!(first_c_at_or_above(47.99), 48);
-        // The axis floor is 20 Hz, which is not a C — the first C above it is MIDI 24.
-        assert_eq!(first_c_at_or_above(harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI), 24);
     }
 
     /// The settings pane, whose pitch-range bar derives rects from a PAIR of
