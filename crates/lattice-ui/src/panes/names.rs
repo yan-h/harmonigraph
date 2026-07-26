@@ -42,6 +42,7 @@ use lattice_core::{LatticePos, NoteName, PitchClass, RollNote, Tuning};
 use lattice_scene::ViewConfig;
 
 use super::lattice;
+use super::roll;
 use super::spectral::{Axes, PitchScale, TimeAxis};
 use crate::{theme, SharedState};
 
@@ -203,11 +204,13 @@ pub(super) fn plan(
     // in general — the two differ for a bent note, and it is the name that has
     // to be on the pane.
     let oldest = time.oldest();
+    // The scale the Gap's shave is measured in — see [`leading_edge`].
+    let per_point = roll::seconds_per_point(axes, &time, split);
     let mut notes: Vec<(&RollNote, Edge)> = roll
         .notes()
         .filter(|note| note.stop(now) >= oldest)
         .filter_map(|note| {
-            let edge = leading_edge(&time, note, now);
+            let edge = leading_edge(&time, cfg, per_point, note, now);
             scale.contains(edge.pitch).then_some((note, edge))
         })
         .collect();
@@ -356,9 +359,22 @@ struct Edge {
 ///
 /// Both ends are CLAMPED into the region on the way, so a note reaching past
 /// either edge is named at the last of it still on the pane.
-fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
+///
+/// The head end is the one the ROLL DREW, not the note's own stop. The Gap
+/// setting shaves a released note's tail back to open a hairline between
+/// repeats, and a name anchored on the unshaved stop lands in that hairline —
+/// off the front of the ribbon it belongs to, on the one strip of the roll the
+/// setting exists to keep clear. Taken from [`roll::drawn_head`] rather than
+/// recomputed, so the name and the ribbon cannot drift apart.
+fn leading_edge(
+    time: &TimeAxis,
+    cfg: &crate::SpectrumConfig,
+    per_point: f64,
+    note: &RollNote,
+    now: f64,
+) -> Edge {
     let start = time.depth_of(note.start);
-    let stop = time.depth_of(note.stop(now));
+    let stop = time.depth_of(roll::drawn_head(cfg, per_point, note, now));
     if stop <= start {
         Edge { depth: stop, pitch: note.end_pitch() }
     } else {
@@ -695,6 +711,43 @@ mod tests {
         assert!(rect.min.x >= lead.x, "it starts at the leading edge");
         assert!(rect.min.x < lead.x + 2.0 * LABEL_INSET, "...and right at it");
         assert!(rect.max.x < axes.at(0.5, 0.8).x, "growing back into the note, not past it");
+    }
+
+    /// A name sits on the ribbon the roll DREW, at every Gap.
+    ///
+    /// The Gap shaves a released note's tail back so a run of repeats shows
+    /// background between them. A name anchored on the note's own stop rather
+    /// than on the shaved one lands in exactly that hairline — off the head of
+    /// its own ribbon, on the one strip of the roll the setting exists to keep
+    /// clear, and the further off the more Gap is asked for.
+    ///
+    /// Read off [`roll::note_instances`] rather than recomputed here. Hand-
+    /// computing the edge is what let this open up unnoticed: the arithmetic in
+    /// the test agreed with the arithmetic in `names`, and both disagreed with
+    /// the roll.
+    #[test]
+    fn a_name_follows_its_ribbon_head_when_the_gap_shaves_it() {
+        for gap in [0.0f32, 1.0, 3.0, 6.0] {
+            let mut state = state(24.0, 10.0);
+            state.spectrum_config.roll_gap = gap;
+            state.tracker.handle_event(on(2.0, 60));
+            state.tracker.handle_event(off(6.0, 60));
+
+            let split = super::super::spectral::spectrum_share(&state.spectrum_config);
+            let axes = Axes::new(PANE, &state.spectrum_config);
+            let ribbon = roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0);
+            assert_eq!(ribbon.len(), 1, "one note, one ribbon");
+            // Horizontal pane: depth is x, and the head is the near end.
+            let head = ribbon[0].center[0] - ribbon[0].half_extent[1];
+
+            let placed = labels(&state, 10.0);
+            assert_eq!(placed.len(), 1);
+            assert!(
+                placed[0].rect.min.x >= head,
+                "at Gap {gap} the name starts at {} but its ribbon only begins at {head}",
+                placed[0].rect.min.x,
+            );
+        }
     }
 
     /// A HELD note's name stays put at the now-line, and starts travelling
