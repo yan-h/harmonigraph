@@ -108,14 +108,32 @@ pub(crate) fn spectral_readout(surface: usize) -> u64 {
     3 + surface as u64 * 2
 }
 
+/// One glyph as the mirror identifies it: its size, its character, and the
+/// TEXEL it was found at.
+///
+/// The texel is what makes this exact rather than nearly right. What the
+/// mirror has to guarantee is that every glyph a batch points at exists, at
+/// those coordinates, in the copy of the atlas the GPU holds — so the thing to
+/// notice is a glyph turning up somewhere we have not uploaded, whatever the
+/// reason. Keyed on (size, character) alone it misses the commonest reason of
+/// all: epaint bins a glyph's subpixel position into four cells and caches
+/// each separately (`SubpixelBin`, and its place in `GlyphCacheKey`), so one
+/// character at one size is up to FOUR images at four texels, chosen by what
+/// precedes it in the string. A digit shifting column between `-13.69` and
+/// `-13.71` lands in a cell the atlas has never held, the pair says "seen",
+/// and the glyph samples blank space until something else forces a refresh —
+/// which is a digit dropping out of the lattice's cents readout and coming
+/// back a frame later.
+type GlyphKey = (u32, char, [u16; 2]);
+
 /// The glyphs a pane has drawn so far, waiting to be handed to the GPU.
 #[derive(Default)]
 pub(crate) struct TextBatch {
     glyphs: Vec<GlyphInstance>,
-    /// Every (font size, character) this batch drew — the probe that decides
-    /// whether egui has rasterized something our mirror of its atlas has not
-    /// seen. See [`AtlasMirror`].
-    drawn: Vec<(u32, char)>,
+    /// Every glyph this batch drew — the probe that decides whether egui has
+    /// rasterized something our mirror of its atlas has not seen. See
+    /// [`GlyphKey`] and [`AtlasMirror`].
+    drawn: Vec<GlyphKey>,
     /// Test-only: which glyphs came from which piece of text. The glyphs
     /// alone carry no text — they are rects and atlas coordinates — so without
     /// this a test could see WHERE a label was drawn but not WHAT, and the
@@ -199,7 +217,7 @@ impl TextBatch {
                 }
                 let left_top = glyph.pos + glyph.uv_rect.offset;
                 let min = pos + row.pos.to_vec2() + left_top.to_vec2();
-                self.drawn.push((font_size_bits, glyph.chr));
+                self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
                 self.glyphs.push(GlyphInstance {
                     rect: [min.x, min.y, glyph.uv_rect.size.x, glyph.uv_rect.size.y],
                     uv: [
@@ -282,31 +300,39 @@ impl TextBatch {
 /// say when the mirror is stale. egui's delta channel is not ours to take
 /// (draining it would starve egui's own renderer and the rest of the UI's
 /// text would stop updating), and the atlas exposes no version, so staleness
-/// is inferred from the one thing that is knowable: a glyph egui has never
-/// been asked for cannot be in the atlas yet, so the first time a
-/// (size, character) pair is drawn, the mirror is refreshed.
+/// is inferred from the one thing that is knowable: a glyph found at a texel
+/// we have never uploaded cannot be in the copy the GPU holds, so the first
+/// time a [`GlyphKey`] is drawn, the mirror is refreshed.
 ///
-/// That set stops growing almost immediately — an editor draws the same
-/// digits and note names over and over — so in a running session the atlas
-/// is copied a handful of times and then never again.
+/// The three fields below are guards on top of that, each for a way the whole
+/// atlas can move at once — cheaper to notice wholesale than one glyph at a
+/// time, and `size` and `ppp` also cover the case where a rearrangement lands
+/// a DIFFERENT glyph on a texel some key already claims.
+///
+/// How often this copies is a function of how many distinct sizes the panes
+/// ask for, which is no longer a handful: a label's size follows the camera
+/// and the pitch zoom, so a zoom gesture walks through sizes and each is a
+/// fresh set of glyphs. See [`snap_scale`], which bounds that set, and the
+/// note on what a refresh costs in `lattice_render::text`.
 #[derive(Default)]
 pub(crate) struct AtlasMirror {
-    seen: std::collections::HashSet<(u32, char)>,
+    seen: std::collections::HashSet<GlyphKey>,
     /// The atlas size the mirror was taken at; a resize moves every glyph.
     size: [usize; 2],
     /// The scale factor it was taken at, as bits — the third way every glyph
-    /// moves, and the one neither of the others can see.
+    /// moves, and the one the others can miss.
     ///
-    /// A pair is a POINT size and a character, but egui rasterizes at PHYSICAL
-    /// pixels, so the same pair is a different image at a different scale.
-    /// Changing it re-rasterizes the whole atlas and hands out new UVs while the
-    /// dimensions stay put — measured: at 1x and 2x the atlas is `[2048, 32]`
-    /// both times, and 'A' sits at texels `[90, 0]..[98, 8]` against
-    /// `[111, 0]..[127, 17]`. So `size` does not move and `seen` reports nothing
-    /// new, and without this the GPU would keep the old pixels while every
-    /// glyph indexes the new layout — labels sampling whatever now lies at the
-    /// coordinates they remember. Dragging the window between a Retina display
-    /// and an external monitor is the ordinary way to do it.
+    /// A key carries a POINT size, but egui rasterizes at PHYSICAL pixels, so
+    /// the same size is a different image at a different scale. Changing it
+    /// appends every glyph afresh — epaint's own cache is keyed on the scale
+    /// too — while the atlas dimensions stay put: measured at 1x and 2x, the
+    /// atlas is `[2048, 32]` both times and 'A' sits at texels `[90, 0]`
+    /// against `[111, 0]`. The keys move with the texels, so `seen` does now
+    /// catch this on its own; this stays because it is the cheap wholesale
+    /// version of the same fact, and because a glyph landing where an old key
+    /// already points is the one arrangement a per-glyph probe cannot see.
+    /// Dragging the window between a Retina display and an external monitor is
+    /// the ordinary way to do it.
     ppp: u32,
     /// How full egui said its atlas was, last time we looked — the fourth way
     /// every glyph moves, and the only signal that egui has thrown the atlas
@@ -333,7 +359,7 @@ pub(crate) struct AtlasMirror {
 fn atlas_if_changed(
     ctx: &egui::Context,
     state: &crate::SharedState,
-    drawn: Vec<(u32, char)>,
+    drawn: Vec<GlyphKey>,
 ) -> Option<lattice_render::FontAtlas> {
     let mut mirror = state.font_atlas.lock().expect("the label mirror is never held across a panic");
     // A resize (or the overflow that clears the atlas and starts over)
@@ -371,31 +397,103 @@ fn atlas_if_changed(
 mod tests {
     use super::*;
 
-    /// Lay a string out at `ppp` and return the atlas dimensions, the first
-    /// glyph's texels, and the (size, char) pairs a pane would report drawing
-    /// it — everything [`atlas_if_changed`] has to decide on.
+    /// Lay `text` out at `ppp` and report exactly what a pane drawing it would
+    /// hand [`atlas_if_changed`]: the keys of its glyphs, with the atlas
+    /// dimensions alongside.
     fn draw_at(
         ctx: &egui::Context,
         font: &egui::FontId,
+        text: &str,
         ppp: f32,
-    ) -> ([usize; 2], [u16; 2], Vec<(u32, char)>) {
+    ) -> ([usize; 2], Vec<GlyphKey>) {
         ctx.set_pixels_per_point(ppp);
-        let mut probe = None;
+        let mut drawn = None;
         // Twice: the first pass asks for glyphs the atlas may not hold yet, and
         // the rasterization it triggers lands for the next one.
         for _ in 0..2 {
             let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let galley =
-                    ui.painter().layout_no_wrap("Ag1".to_owned(), font.clone(), egui::Color32::WHITE);
-                let glyphs = &galley.rows[0].glyphs;
-                probe = Some((
-                    glyphs[0].uv_rect.min,
-                    glyphs.iter().map(|g| (font.size.to_bits(), g.chr)).collect::<Vec<_>>(),
-                ));
+                    ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE);
+                drawn = Some(
+                    galley.rows[0]
+                        .glyphs
+                        .iter()
+                        .map(|g| (font.size.to_bits(), g.chr, g.uv_rect.min))
+                        .collect::<Vec<_>>(),
+                );
             });
         }
-        let (uv, drawn) = probe.expect("the closure runs");
-        (ctx.fonts(|fonts| fonts.font_image_size()), uv, drawn)
+        (ctx.fonts(|fonts| fonts.font_image_size()), drawn.expect("the closure runs"))
+    }
+
+    /// Collect the keys a batch reports for `text`, exactly as a pane would.
+    fn batch_keys(ctx: &egui::Context, font: &egui::FontId, text: &str) -> Vec<GlyphKey> {
+        let mut batch = TextBatch::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            batch.text(
+                ui.painter(),
+                egui::pos2(20.0, 20.0),
+                egui::Align2::LEFT_TOP,
+                text.to_owned(),
+                font.clone(),
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+            );
+        });
+        batch.drawn
+    }
+
+    /// A character the atlas has never rasterized THERE is a glyph the mirror
+    /// has never uploaded, whatever its (size, character) says.
+    ///
+    /// epaint bins a glyph's subpixel position into four cells and caches each
+    /// separately, so one character at one size is up to four images at four
+    /// texels — chosen by what precedes it in the string. This is the ordinary
+    /// case, not a corner: the lattice's cents readout reformats as a note
+    /// bends, a digit shifts column, and it lands in a cell nothing has
+    /// uploaded. Keyed on the pair alone the mirror reports "seen" and that
+    /// digit samples blank space — it drops out of the readout and comes back
+    /// a frame later, when some genuinely new pair happens to force a refresh.
+    ///
+    /// Both strings are laid out BEFORE the mirror is made, so every glyph is
+    /// already in the atlas and its dimensions have settled. Without that the
+    /// second draw grows the atlas and the size guard refreshes for it — which
+    /// is what happens in a fresh editor for a few seconds, and is exactly why
+    /// this went unnoticed: the bug needs an atlas that has stopped growing,
+    /// which is every session after the first moments.
+    #[test]
+    fn a_glyph_at_a_new_texel_refreshes_the_mirror() {
+        let ctx = egui::Context::default();
+        let font = egui::FontId::monospace(13.0);
+        for _ in 0..2 {
+            batch_keys(&ctx, &font, "Ai");
+            batch_keys(&ctx, &font, "iA");
+        }
+        let settled = ctx.fonts(|fonts| fonts.font_image_size());
+
+        let state = crate::SharedState::new(crate::TextureFormat::Bgra8Unorm);
+        let first = batch_keys(&ctx, &font, "Ai");
+        assert!(atlas_if_changed(&ctx, &state, first.clone()).is_some(), "the first mirror");
+        assert!(atlas_if_changed(&ctx, &state, first.clone()).is_none(), "nothing has moved");
+
+        // The same character at the same size, pushed along by what is now in
+        // front of it. Every PAIR here is one the mirror has already seen...
+        let swapped = batch_keys(&ctx, &font, "iA");
+        let (a, moved) = (first[0], swapped[1]);
+        assert_eq!((a.0, a.1), (moved.0, moved.1), "the same size and character");
+        assert_ne!(a.2, moved.2, "...rasterized at a texel of its own");
+        assert!(
+            swapped.iter().all(|k| first.iter().any(|seen| (seen.0, seen.1) == (k.0, k.1))),
+            "every pair here is one the mirror has already been shown",
+        );
+        assert_eq!(ctx.fonts(|fonts| fonts.font_image_size()), settled, "the atlas has not grown");
+
+        // ...so the texel is the whole of what stands between that glyph and a
+        // blank rectangle where a digit should be.
+        assert!(
+            atlas_if_changed(&ctx, &state, swapped).is_some(),
+            "a glyph at an unuploaded texel must refresh the mirror",
+        );
     }
 
     /// A scale that follows a zoom takes a new value on every frame of a drag,
@@ -451,17 +549,22 @@ mod tests {
         let ctx = egui::Context::default();
         let font = egui::FontId::proportional(12.0);
 
-        let (size_1x, uv_1x, drawn_1x) = draw_at(&ctx, &font, 1.0);
+        let (size_1x, drawn_1x) = draw_at(&ctx, &font, "Ag1", 1.0);
         assert!(atlas_if_changed(&ctx, &state, drawn_1x.clone()).is_some(), "the first mirror");
         assert!(
             atlas_if_changed(&ctx, &state, drawn_1x.clone()).is_none(),
             "an unchanged frame must not re-upload the atlas — that is the point of the mirror"
         );
 
-        let (size_2x, uv_2x, drawn_2x) = draw_at(&ctx, &font, 2.0);
-        assert_eq!(size_2x, size_1x, "the atlas is repacked at the SAME dimensions");
-        assert_ne!(uv_2x, uv_1x, "...but the glyph has moved inside it");
-        assert_eq!(drawn_2x, drawn_1x, "...and the pane reports the same pairs it always did");
+        let (size_2x, drawn_2x) = draw_at(&ctx, &font, "Ag1", 2.0);
+        assert_eq!(size_2x, size_1x, "the atlas takes the new glyphs at the SAME dimensions");
+        let point_size = |k: &GlyphKey| (k.0, k.1);
+        assert_eq!(
+            drawn_2x.iter().map(point_size).collect::<Vec<_>>(),
+            drawn_1x.iter().map(point_size).collect::<Vec<_>>(),
+            "the pane asks for the same characters at the same POINT size",
+        );
+        assert_ne!(drawn_2x, drawn_1x, "...and they are rasterized somewhere else entirely");
 
         assert!(
             atlas_if_changed(&ctx, &state, drawn_2x).is_some(),
