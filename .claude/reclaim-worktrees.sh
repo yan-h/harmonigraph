@@ -100,6 +100,8 @@ ROOT=${CLAUDE_PROJECT_DIR:-$SESSION_CWD}
 git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
 WOULD_DO=0
+HELD_LOCKED_KB=0
+HELD_RECENT_KB=0
 
 # Diagnostics for a hand-run. Silence is the right behaviour for the hook —
 # SessionStart fires on every session — but it is a terrible answer to
@@ -208,7 +210,13 @@ usable() {
 
   # Never saw off the branch we are sitting on.
   case "$SESSION_CWD/" in
-    "$path"/*) note "skip $name: this session is running in it"; return 1 ;;
+    "$path"/*)
+      if [ "$DRY_RUN" = 1 ]; then
+        kb=$(du -sk "$path/target/debug" "$path/target/doc" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+        HELD_LOCKED_KB=$((HELD_LOCKED_KB + ${kb:-0}))
+        note "skip $name: this session is running in it (holding $(human "${kb:-0}") of cache)"
+      fi
+      return 1 ;;
   esac
 
   # A lock naming a live pid means a session still owns this worktree. A lock we
@@ -220,7 +228,11 @@ usable() {
       return 1
     fi
     if ps -p "$pid" >/dev/null 2>&1; then
-      note "skip $name: locked by live pid $pid"
+      if [ "$DRY_RUN" = 1 ]; then
+        kb=$(du -sk "$path/target/debug" "$path/target/doc" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+        HELD_LOCKED_KB=$((HELD_LOCKED_KB + ${kb:-0}))
+        note "skip $name: locked by live pid $pid (holding $(human "${kb:-0}") of cache)"
+      fi
       return 1
     fi
   fi
@@ -230,9 +242,11 @@ usable() {
 # Tier 1: regenerable caches out of an idle worktree. Never touches release.
 prune_caches() {
   path=$1
+  found=0
   for sub in debug doc; do
     victim="$path/target/$sub"
     [ -d "$victim" ] || continue
+    found=1
 
     # Idle by the cache's own recent writes, which is a truer "nobody is using
     # this" signal than the worktree's top level. maxdepth 2 rather than 0
@@ -241,7 +255,11 @@ prune_caches() {
     # break that build. The live-lock check above is the primary guard; this is
     # depth behind it, and `-quit` keeps it to a few hundred stats.
     if [ -n "$(find "$victim" -maxdepth 2 -newermt "-${PRUNE_IDLE_MINUTES} minutes" -print -quit 2>/dev/null)" ]; then
-      note "keep $(basename "$path")/target/$sub: written in the last ${PRUNE_IDLE_MINUTES}m"
+      if [ "$DRY_RUN" = 1 ]; then
+        kb=$(du -sk "$victim" 2>/dev/null | awk '{print $1}')
+        HELD_RECENT_KB=$((HELD_RECENT_KB + ${kb:-0}))
+        note "keep $(basename "$path")/target/$sub ($(human "${kb:-0}")): written in the last ${PRUNE_IDLE_MINUTES}m"
+      fi
       continue
     fi
 
@@ -258,6 +276,12 @@ prune_caches() {
       freed_kb=$((freed_kb + size_kb))
     fi
   done
+
+  # Say so explicitly. Printing nothing here is what made a correct run look
+  # like a broken one: five already-pruned worktrees produced no line at all,
+  # and the closing summary then guessed a reason that did not apply to them.
+  [ "$found" = 0 ] && note "clean $(basename "$path"): no target/debug or target/doc to reclaim"
+  return 0
 }
 
 # Tier 2: the whole worktree, only when the work is provably safe to lose.
@@ -272,7 +296,11 @@ remove_worktree() {
   # Merged into main? Unmerged work is never removed. This misses squash
   # merges by construction, which is why tier 1 does not depend on it.
   if ! git -C "$ROOT" merge-base --is-ancestor "$head" "$MAIN_REF" 2>/dev/null; then
-    note "no-remove $name: HEAD not an ancestor of $MAIN_REF (a squash merge reads this way too)"
+    # Not a problem, and true of MOST worktrees here. Do not claim which case
+    # it is: locally these two are indistinguishable, which is the finding that
+    # motivated tier 1 — a squash-merged branch reads exactly like unfinished
+    # work. Tier 1 runs on it either way.
+    note "tier2 pass $name: not an ancestor of $MAIN_REF — unmerged work or a squash merge, indistinguishable here; tier 1 still applies"
     return 1
   fi
 
@@ -351,11 +379,20 @@ flush
 git -C "$ROOT" worktree prune >/dev/null 2>&1
 
 if [ "$DRY_RUN" = 1 ]; then
+  # Report what is held rather than asserting why nothing happened: the reasons
+  # differ per worktree and the per-line notes above already carry them.
   if [ "$WOULD_DO" = 0 ]; then
-    note 'nothing eligible — every worktree above is in use, recently built, or unmerged'
+    note 'nothing eligible this run'
   else
     note "$WOULD_DO action(s) eligible; re-run without RECLAIM_DRY_RUN=1 to apply"
   fi
+  if [ "$HELD_LOCKED_KB" -gt 0 ]; then
+    note "  $(human "$HELD_LOCKED_KB") of cache is held by live-locked worktrees; it frees when those sessions exit"
+  fi
+  if [ "$HELD_RECENT_KB" -gt 0 ]; then
+    note "  $(human "$HELD_RECENT_KB") was built inside the last ${PRUNE_IDLE_MINUTES}m (RECLAIM_PRUNE_IDLE_MINUTES lowers that)"
+  fi
+  note "  ${free_gb}G free now, low water ${FREE_LOW_WATER_GB}G"
   exit 0
 fi
 
