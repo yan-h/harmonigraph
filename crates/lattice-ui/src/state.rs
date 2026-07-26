@@ -251,6 +251,17 @@ pub struct CameraPreset {
     pub pitch: f32,
 }
 
+/// Where the pictures end and the settings column begins, as a fraction of
+/// the window's width. The settings column gets what is left.
+///
+/// It is a named constant because two things have to agree on it: the layout,
+/// and the test that holds the settings column to fitting its own content
+/// without a scroll bar. What the column has to clear is the widest thing in
+/// it, which is its own TAB BAR — six tab names need 347.5pt laid across it,
+/// measured — so this fraction and the window width together decide whether
+/// egui_dock draws a scroll bar over the settings.
+pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
+
 /// The default pane arrangement: big lattice with the Spectral pane
 /// beside it on the right (sharing the pitch intuition: what sounds is
 /// what lights up), the tuning column further right, console and notes
@@ -262,7 +273,7 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     let surface = dock.main_surface_mut();
     let [lattice, right] = surface.split_right(
         NodeIndex::root(),
-        0.72,
+        SETTINGS_SPLIT,
         vec![
             // Reading outward from the picture: what the lattice is (its
             // tuning, and how it's framed), then how a note is drawn, the
