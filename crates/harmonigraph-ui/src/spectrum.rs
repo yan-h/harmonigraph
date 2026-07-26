@@ -128,8 +128,8 @@ pub use harmonigraph_core::spectrogram::{SpectrogramColumn, SpectrumHistory};
 /// Staleness-safe by construction — every way the image can change moves a
 /// field: a fresh column moves `newest_bits` (even in a saturated ring, where
 /// the count holds), the oldest column scrolling out of the window moves
-/// `first`, a resize/zoom moves the layout fields, and a palette, dB window or
-/// contrast change moves `cfg`/`frame`. Floats compare by bit pattern so
+/// `first`, a resize/zoom moves the layout fields, and a palette or Level
+/// window change moves the colour fields. Floats compare by bit pattern so
 /// equality is exact and free of NaN quirks.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SpectrogramKey {

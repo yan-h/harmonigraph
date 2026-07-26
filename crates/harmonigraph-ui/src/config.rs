@@ -68,16 +68,48 @@ pub enum SpectralOrientation {
 }
 
 impl SpectralOrientation {
+    /// Every orientation, for the settings row and the axis tests.
+    ///
+    /// Built from an exhaustive `match` rather than written out as a literal, so
+    /// the list cannot fall behind the enum: a fifth variant fails to compile
+    /// here until it is added, which is what makes the tests that sweep this a
+    /// guarantee about the enum rather than about four names someone typed.
+    pub(crate) const ALL: [SpectralOrientation; 4] = {
+        use SpectralOrientation::*;
+        // Exhaustive, and the compiler checks it. The arms are `()` because
+        // what is wanted is the coverage error, not the value — a const fn
+        // cannot build the array itself.
+        const fn covered(o: SpectralOrientation) {
+            match o {
+                Left | Right | Top | Bottom => (),
+            }
+        }
+        covered(Left);
+        [Left, Right, Top, Bottom]
+    };
+
     /// Whether TIME (the spectrogram/roll axis) runs vertically down the pane,
     /// with pitch across it.
     pub(crate) fn is_time_vertical(self) -> bool {
-        matches!(self, SpectralOrientation::Top | SpectralOrientation::Bottom)
+        match self {
+            SpectralOrientation::Top | SpectralOrientation::Bottom => true,
+            SpectralOrientation::Left | SpectralOrientation::Right => false,
+        }
     }
 
     /// Whether time runs BACKWARD along its screen axis — leftward or upward,
     /// against the direction screen coordinates grow.
+    ///
+    /// Spelled as an exhaustive `match` rather than a `matches!`, like
+    /// [`is_time_vertical`](Self::is_time_vertical): a `matches!` answers
+    /// `false` for a variant nobody has thought about yet, so a fifth
+    /// orientation would silently draw as [`Left`](Self::Left) instead of
+    /// failing to build.
     pub(crate) fn is_time_reversed(self) -> bool {
-        matches!(self, SpectralOrientation::Right | SpectralOrientation::Bottom)
+        match self {
+            SpectralOrientation::Right | SpectralOrientation::Bottom => true,
+            SpectralOrientation::Left | SpectralOrientation::Top => false,
+        }
     }
 }
 
@@ -381,13 +413,15 @@ pub struct SpectrumConfig {
     pub show_spectrogram: bool,
     /// The heatmap's color ramp — the only thing about it left to choose.
     ///
-    /// Four settings stood here and have gone, each of them a knob whose
-    /// neutral position is the one worth looking at: an overall opacity (the
-    /// heatmap now draws solid, and a heatmap you want to see less of is one
-    /// to turn off), a contrast curve, and a private dB window with its own
-    /// floor/ceiling pair. The window is the Spectrum's Level, always: one
-    /// range means "loud" is the same claim in the curve and in the heatmap,
-    /// which is the whole reason they share [`loudness_db`].
+    /// Three more knobs belong here on the obvious reading and are absent on
+    /// purpose, each because its neutral position is the one worth looking at.
+    /// An overall opacity fades the heatmap out from under the notes, at the
+    /// price of the scheme it shares with the curve (see `heatmap_mesh`); a
+    /// contrast curve bends the level a palette is already chosen to spread
+    /// evenly; and a private dB window lets the same bucket mean two things in
+    /// one pane. The window is the Spectrum's Level, always: one range means
+    /// "loud" is the same claim in the curve and in the heatmap, which is the
+    /// whole reason they share [`loudness_db`].
     ///
     /// Their fields are gone from the blob too. That costs nothing on load —
     /// serde ignores keys it has no field for, which

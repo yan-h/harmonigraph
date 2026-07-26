@@ -376,8 +376,18 @@ mod tests {
     const SIZE: [u32; 2] = [256, 256];
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-    /// Pitch across (x), time down (y) — the pane's Upright layout.
-    const UPRIGHT: RollAxes = RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] };
+    /// The four axis pairs the pane hands this shader, named as
+    /// `SpectralOrientation` names them: for the side the now-line sits on, so
+    /// `depth_dir` points away from it. Pitch reads low-to-high the conventional
+    /// way in each pair, which is why only `depth_dir` differs within one.
+    ///
+    /// [`TOP`] is what [`draw`] uses, so a test that says nothing about
+    /// orientation is drawn pitch across (x) and time down (y).
+    const TOP: RollAxes = RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, 1.0] };
+    const BOTTOM: RollAxes = RollAxes { pitch_dir: [1.0, 0.0], depth_dir: [0.0, -1.0] };
+    /// Pitch climbs the screen (low at the bottom), time runs along it.
+    const LEFT: RollAxes = RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [1.0, 0.0] };
+    const RIGHT: RollAxes = RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [-1.0, 0.0] };
 
     /// A background whose bytes are exact, so "nothing was painted here" is
     /// an equality rather than a tolerance.
@@ -400,7 +410,7 @@ mod tests {
         instances: Vec<RollInstance>,
         clear: wgpu::Color,
     ) -> Vec<u8> {
-        draw_turned(device, queue, instances, UPRIGHT, clear)
+        draw_turned(device, queue, instances, TOP, clear)
     }
 
     /// As [`draw`], with the pane turned whichever way `axes` says.
@@ -663,7 +673,7 @@ mod tests {
             ..centered_note()
         };
         // The brightest pixel anywhere, over a sweep of sub-pixel scroll
-        // offsets along depth — which is y under [`UPRIGHT`]. One point is one
+        // offsets along depth — which is y under [`TOP`]. One point is one
         // pixel on this surface.
         let peak_spread = |half_depth: f32| {
             let peaks: Vec<u8> = (0..8)
@@ -707,27 +717,22 @@ mod tests {
     /// turns the picture, and nothing in the instances or the shader names a
     /// screen side.
     ///
-    /// Both layouts the pane actually uses — Upright (pitch across, time
-    /// down) and Across (pitch climbing, time along), which is a rotation AND
-    /// a flip. The same note drawn through each must come out as the same
-    /// picture, turned: `across(x, y)` is `upright(255 - y, x)`.
+    /// [`TOP`] against [`LEFT`], which is a rotation AND a flip. The same note
+    /// drawn through each must come out as the same picture, turned:
+    /// `left(x, y)` is `top(255 - y, x)`.
     #[test]
     fn turning_the_axes_turns_the_picture() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // Across: pitch climbs the screen (low at the bottom), time runs
-        // left to right.
-        const ACROSS: RollAxes = RollAxes { pitch_dir: [0.0, -1.0], depth_dir: [1.0, 0.0] };
-        let upright = draw(&device, &queue, vec![centered_note()], bg_color());
-        let across =
-            draw_turned(&device, &queue, vec![centered_note()], ACROSS, bg_color());
+        let top = draw(&device, &queue, vec![centered_note()], bg_color());
+        let left = draw_turned(&device, &queue, vec![centered_note()], LEFT, bg_color());
 
         // A window around the note, wide enough to hold its full length.
         let mut painted = 0;
         for y in 60..200u32 {
             for x in 60..200u32 {
-                let (a, b) = (pixel(&across, x, y), pixel(&upright, 255 - y, x));
+                let (a, b) = (pixel(&left, x, y), pixel(&top, 255 - y, x));
                 assert!(near(a, b), "the turned pane differs at ({x}, {y}): {a:?} vs {b:?}");
                 if !near(a, BG) {
                     painted += 1;
@@ -735,6 +740,53 @@ mod tests {
             }
         }
         assert!(painted > 500, "the note barely drew ({painted} pixels); the comparison is thin");
+    }
+
+    /// A REVERSED depth direction mirrors the picture and changes nothing else.
+    ///
+    /// The pane has four orientations, and the two whose now-line is on the
+    /// right or the bottom hand this shader a negated `depth_dir` — `[-1, 0]`
+    /// and `[0, -1]`, which the other two can never produce. Nothing here reads
+    /// a screen side, so the claim is that a negated direction is just a mirror:
+    /// a note drawn through `RIGHT` is the `LEFT` picture reflected in x, to the
+    /// byte. A sign dropped anywhere between the uniform and `across` would
+    /// show as the mirror failing, most likely by the keyline landing on the
+    /// wrong flank.
+    #[test]
+    fn a_reversed_depth_direction_only_mirrors_the_picture() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // A note with a glide, so the picture is not its own mirror image and
+        // the comparison can actually fail.
+        let bent = RollInstance { shear: 0.6, ..centered_note() };
+        let left = draw_turned(&device, &queue, vec![bent], LEFT, bg_color());
+        let right = draw_turned(&device, &queue, vec![bent], RIGHT, bg_color());
+
+        // `LEFT` and `RIGHT` share a centre column, so the reflection is about
+        // x = 255 - x with the note's own centre fixed.
+        let mut painted = 0;
+        for y in 0..SIZE[1] {
+            for x in 0..SIZE[0] {
+                let (a, b) = (pixel(&right, x, y), pixel(&left, SIZE[0] - 1 - x, y));
+                assert!(near(a, b), "the mirrored pane differs at ({x}, {y}): {a:?} vs {b:?}");
+                if !near(a, BG) {
+                    painted += 1;
+                }
+            }
+        }
+        assert!(painted > 500, "the note barely drew ({painted} pixels); the comparison is thin");
+
+        // And the vertical pair, so a flip that only reached the x axis is
+        // caught too.
+        let top = draw_turned(&device, &queue, vec![bent], TOP, bg_color());
+        let bottom = draw_turned(&device, &queue, vec![bent], BOTTOM, bg_color());
+        for y in 0..SIZE[1] {
+            for x in 0..SIZE[0] {
+                let (a, b) = (pixel(&bottom, x, y), pixel(&top, x, SIZE[1] - 1 - y));
+                assert!(near(a, b), "the mirrored upright pane differs at ({x}, {y})");
+            }
+        }
     }
 
     /// A glide's rim keeps its thickness instead of thinning with the angle.

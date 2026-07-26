@@ -3,9 +3,10 @@
 //!
 //! What they answer is reading the SPECTROGRAM. A band of energy tells you
 //! there is something at some height on a pitch axis that is continuous in
-//! cents, and the only fixed marks on that axis are C gridlines a full octave
-//! apart — so naming the band means counting semitones by eye from the nearest
-//! C, on a picture that is scrolling. Color cannot say it either: the roll's
+//! cents, and the fixed marks on that axis are frequencies on the 1-2-5 series
+//! — decades apart, and in the wrong currency for naming a note at all — so
+//! reading the band as a pitch means interpolating between two of them by eye,
+//! on a picture that is scrolling. Color cannot say it either: the roll's
 //! colors are the lattice's own, which already spend themselves on channel
 //! and pitch height, and a second pitch-keyed scheme laid over the first is
 //! two things to read where there was one.
@@ -222,9 +223,9 @@ fn pitch_key(midi: f32) -> i32 {
 /// How far a name reaches along the depth axis, in screen points: its padded
 /// box, projected onto whichever way that axis runs.
 ///
-/// The depth direction is axis-aligned — the screen's x on a pane laid out
-/// along its long side, its y on an upright one — so projecting answers it for
-/// both without naming a screen side.
+/// The depth direction is axis-aligned — the screen's x when time runs across
+/// the pane, its y when time runs up or down it — so projecting answers all
+/// four orientations without naming a screen side.
 fn depth_extent(axes: &Axes, name: &NoteName, size: f32, label_scale: f32) -> f32 {
     let extent = name_extent(name, size);
     let depth = axes.dir_depth();
@@ -480,9 +481,10 @@ struct Edge {
     pitch: f32,
 }
 
-/// The end of a ribbon that comes first in reading order — the low-depth end
-/// in either layout and either orientation (the left of a pane laid out along
-/// its long side, the top of an upright one) — and the pitch it sits at.
+/// The end of a ribbon that comes first in reading order — the low-depth end,
+/// which is the pane's now-line side in every orientation (the side
+/// [`SpectralOrientation`](crate::SpectralOrientation) is named for) — and the
+/// pitch it sits at.
 ///
 /// Found by comparing the two ends rather than by naming one, because which
 /// end it is differs between the layouts and the arithmetic does not: live,
@@ -549,10 +551,10 @@ fn label_rect(
 ) -> egui::Rect {
     let extent = name_extent(name, size);
     let depth = axes.dir_depth();
-    // How far the box reaches along the depth axis: text always runs across
-    // the screen, so that is its width on a pane laid out along its long side
-    // and its height on an upright one. Projecting answers both without naming
-    // a screen side.
+    // How far the box reaches along the depth axis: text always runs across the
+    // screen, so that is its width when time runs across the pane and its height
+    // when time runs up or down it. Projecting answers all four without naming a
+    // screen side.
     let along_depth = (extent.x * depth.x).abs() + (extent.y * depth.y).abs();
     let inset = LABEL_INSET * label_scale;
     let centre = axes.at(p, d) + depth * (inset + along_depth * 0.5);

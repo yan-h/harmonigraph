@@ -72,33 +72,28 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // which way the picture travels. There is no Auto: it followed the pane's
     // shape, and a pane that turns itself over when a window is dragged past
     // square is one you cannot dial a video's look in on.
-    choice_row(
-        ui,
-        "Now-line",
-        &mut cfg.orientation,
-        &[
-            (
-                SpectralOrientation::Left,
-                "Left",
-                "Spectrum on the left; time scrolls rightward, pitch climbs",
-            ),
-            (
-                SpectralOrientation::Right,
-                "Right",
-                "Spectrum on the right; time scrolls leftward, pitch climbs",
-            ),
-            (
-                SpectralOrientation::Top,
-                "Top",
-                "Spectrum on top; time scrolls downward, pitch runs left to right",
-            ),
-            (
-                SpectralOrientation::Bottom,
+    // Off `ALL` with an exhaustive match, not a hand-written list of four: both
+    // are built from the enum, so a fifth side cannot reach the pane without a
+    // name and a hint of its own.
+    let sides = SpectralOrientation::ALL.map(|side| {
+        let (label, hint) = match side {
+            SpectralOrientation::Left => {
+                ("Left", "Spectrum on the left; time scrolls rightward, pitch climbs")
+            }
+            SpectralOrientation::Right => {
+                ("Right", "Spectrum on the right; time scrolls leftward, pitch climbs")
+            }
+            SpectralOrientation::Top => {
+                ("Top", "Spectrum on top; time scrolls downward, pitch runs left to right")
+            }
+            SpectralOrientation::Bottom => (
                 "Bottom",
                 "Spectrum along the bottom; time scrolls upward, pitch runs left to right",
             ),
-        ],
-    );
+        };
+        (side, label, hint)
+    });
+    choice_row(ui, "Now-line", &mut cfg.orientation, &sides);
     // One control for both ends, because the two ends are one thing: the
     // window onto the analyzer's axis. Dragged in MIDI note (which is what
     // makes it a log-frequency zoom) and read out in Hz. Labelled, since a
@@ -293,10 +288,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),
         ],
     );
-    // The palette is the whole of it. Opacity, contrast and a private level
-    // range each stood here and each is gone — see
-    // [`spectrogram_color`](crate::SpectrumConfig::spectrogram_color) for why
-    // the neutral setting turned out to be the only one worth having.
+    // The palette is the whole of it. An opacity, a contrast curve and a
+    // private level range would each go here and each is deliberately absent —
+    // see [`spectrogram_color`](crate::SpectrumConfig::spectrogram_color) for
+    // why the neutral setting is the only one worth having.
     button_row(ui, |ui| {
         if ui
             .button("Clear spectrogram")
@@ -423,11 +418,12 @@ pub(crate) fn power_db(power: f32) -> f32 {
 /// [`loudness`] from a bucket already in dB, so the heatmap (whose columns are
 /// stored that way) never takes a `log10` per pixel.
 ///
-/// The heatmap reads exactly this and nothing of its own. It had a private dB
-/// window and a contrast curve wrapped around it, on the argument that a curve
-/// read as a shape and a picture read as a picture want different ranges; the
-/// answer is that one range is what makes "loud" the same claim in both, and a
-/// second one to keep in step was the cost of a distinction nobody drew.
+/// The heatmap reads exactly this and nothing of its own. Giving it a private dB
+/// window and a contrast curve is tempting — a curve is read as a shape against
+/// a baseline and a picture is read as a picture, so the ranges that suit them
+/// need not coincide. What that argument misses is that one range IS what makes
+/// "loud" the same claim in both halves of one pane, and a second one is a
+/// second thing to keep in step.
 pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     // Never trust the pair to be ordered or apart, exactly as the pitch range
@@ -1030,20 +1026,21 @@ pub(crate) fn spectral_pane(
     // columns, and its silence is black; without this bed the un-covered depths
     // (before history fills the window, or past its oldest column) show the
     // lighter pane `well` in jarring patches. Black is the heatmap's own silence
-    // color, and the quad is untinted, so covered and un-covered silence are the
-    // same black rather than two shades of it. Drawn under
-    // the gridlines, so they still read as pitch lanes across the region.
+    // color, so covered and un-covered silence match whatever the quad is tinted
+    // with: `Color32` is premultiplied, so a black texel over this bed
+    // composites to black at every alpha. Drawn under the gridlines, so they
+    // still read as pitch lanes across the region.
     if cfg.show_spectrogram && split < 1.0 {
         let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
         painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
     }
 
     // Axis gridlines: the analyzer-standard 1-2-5 frequency series, and only
-    // that. A line at every C with Bitwig octave numbers was the alternative,
-    // and it was answering a question the pane answers better elsewhere —
-    // every ribbon carries its note NAME, spelled the lattice's way and placed
-    // at the pitch that is sounding. What an axis is for is the other reading:
-    // where in the spectrum a band sits, which is a frequency.
+    // that. The alternative is a line at every C with Bitwig octave numbers,
+    // which answers a question the pane answers better elsewhere — every ribbon
+    // carries its note NAME, spelled the lattice's way and placed at the pitch
+    // that is sounding. What an axis is for is the other reading: where in the
+    // spectrum a band sits, which is a frequency.
     //
     // The lines run the full depth, so they double as the roll's pitch lanes.
     // They lay down here, under the spectrum; their text labels are collected
@@ -1470,14 +1467,13 @@ mod tests {
         }
     }
 
-    /// Every orientation the pane offers — the loop the axis tests run over,
-    /// so a fifth one cannot be added without them covering it.
-    const EVERY_ORIENTATION: [SpectralOrientation; 4] = [
-        SpectralOrientation::Left,
-        SpectralOrientation::Right,
-        SpectralOrientation::Top,
-        SpectralOrientation::Bottom,
-    ];
+    /// Every orientation the pane offers — the loop the axis tests run over.
+    ///
+    /// [`SpectralOrientation::ALL`], not a second list of the same four names:
+    /// that one is built through an exhaustive `match`, so a fifth variant
+    /// fails to compile until it is added and every sweep below picks it up.
+    /// A literal here would leave the sweeps quietly covering four of five.
+    const EVERY_ORIENTATION: [SpectralOrientation; 4] = SpectralOrientation::ALL;
 
     /// Each orientation puts the NOW-line on the side it is named for, which
     /// is the whole meaning of the setting: that is where the spectrum sits,

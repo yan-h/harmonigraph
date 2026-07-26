@@ -109,7 +109,8 @@ fn edge_strength(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<f32> {
 /// quiet it is drawn in that palette's dark end against the pane's dark
 /// background, with no edge, and the shape stops existing. A light rim gives
 /// it an edge to be seen by. It is a setting because how much is right depends
-/// entirely on the palette and opacity in play.
+/// entirely on which palette is in play — Mono runs to white and swallows a rim
+/// the even ramps leave standing.
 ///
 /// The roll's notes carry a brighter version of this (see [`rim`]); the profile
 /// keeps the plain fraction, being one line on a filled slab rather than a

@@ -745,10 +745,19 @@ fn heatmap_mesh(
     // fragment ever interpolates across it.
     let u_at = |d: f32| u_drawn(layout, time.time_at(d));
     let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
-    // Untinted: the texels carry the whole of the colour. The heatmap used to
-    // be faded here by an Opacity setting so it could sit under the notes; a
-    // heatmap worth less than solid is one to turn OFF, and the fade cost the
-    // palette's dark end its match with the black bed behind it.
+    // Untinted: the texels carry the whole of the colour.
+    //
+    // A tint here is how an Opacity setting fades the heatmap so it can sit
+    // under the notes, and what that costs is the SHARED SCHEME. The spectrum
+    // curve is drawn from the same [`cell_color`] ramp against the same
+    // `loudness_db`, and it takes no tint — so a faded heatmap means equal
+    // levels stop looking equal across the two halves of one pane, which is the
+    // whole reason they share a mapping. A heatmap worth less than solid is one
+    // to turn off.
+    //
+    // What a tint does NOT cost is the ramp's dark end: `Color32` is
+    // premultiplied, so a black texel over the black bed composites to black at
+    // any alpha (`spectral_pane` lays that bed and leans on the same fact).
     let tint = Color32::WHITE;
     let vert = |p: f32, d: f32| egui::epaint::Vertex {
         pos: axes.at(p, d),
@@ -1728,7 +1737,8 @@ mod tests {
     fn cells_are_opaque_and_run_dark_to_bright() {
         let quiet = cell_color(SpectrogramColor::Magma, 0.0);
         let loud = cell_color(SpectrogramColor::Magma, 1.0);
-        // Opaque throughout (opacity is applied as the quad tint, not here).
+        // Opaque throughout: a cell's level is its COLOUR, never its alpha, so
+        // silence recedes by being dark rather than by being see-through.
         assert_eq!(quiet.a(), 255);
         assert_eq!(loud.a(), 255);
         // Silence is the dark end; loud is brighter.
