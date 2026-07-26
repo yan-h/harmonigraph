@@ -6,9 +6,9 @@
 //! cents, and the only fixed marks on that axis are C gridlines a full octave
 //! apart — so naming the band means counting semitones by eye from the nearest
 //! C, on a picture that is scrolling. Color cannot say it either: the roll's
-//! colors are already spent on pitch height (see [`crate::RollColor`]), and a
-//! second pitch-keyed scheme laid over the first is two things to read where
-//! there was one.
+//! colors are the lattice's own, which already spend themselves on channel
+//! and pitch height, and a second pitch-keyed scheme laid over the first is
+//! two things to read where there was one.
 //!
 //! So the roll says it, since the roll is already drawing the notes: a name
 //! written ON each ribbon, at its leading edge. The heatmap band under a

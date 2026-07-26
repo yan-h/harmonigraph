@@ -19,8 +19,8 @@ use lattice_render::{RollAxes, RollInstance};
 use lattice_scene::channel_color;
 
 use super::spectral::{Axes, PitchScale, TimeAxis};
-use super::{scene_color, PITCH_RAMP_CHANNEL};
-use crate::{theme, RollColor, SharedState};
+use super::scene_color;
+use crate::SharedState;
 
 /// Narrowest a note may draw, in points. Note width is in SEMITONES of the
 /// pitch axis, so a wide zoom takes a ribbon under a pixel and a filled
@@ -258,7 +258,7 @@ pub(super) fn note_instances(
             // the lattice. It is painted solid, edge to edge — the interior
             // and the boundary are one thing, and a heatmap cell showing
             // through a note said neither clearly.
-            let core = note_color(note, cfg, state, pitch, alpha);
+            let core = note_color(note, state, pitch, alpha);
             // Reading outward: the note, the bright white keyline standing
             // against its long edges, then whatever the spectrogram is doing.
             //
@@ -311,25 +311,19 @@ pub(super) fn note_instances(
     instances
 }
 
-/// The color of a note at `pitch`, per the Color setting.
-fn note_color(
-    note: &RollNote,
-    cfg: &crate::SpectrumConfig,
-    state: &SharedState,
-    pitch: f32,
-    alpha: f32,
-) -> Color32 {
+/// The color of a note at `pitch`: the lattice's own, by the same
+/// [`channel_color`] the nodes are painted through, so a ribbon and the node
+/// it lit up are the same color.
+///
+/// The only coloring there is, deliberately. Two others were switchable here
+/// — the low-to-high pitch ramp on every channel, and one flat accent — and
+/// both broke the identity that makes the roll readable beside the lattice:
+/// what a color means has to be the same thing in both pictures, or reading
+/// across them is a translation.
+fn note_color(note: &RollNote, state: &SharedState, pitch: f32, alpha: f32) -> Color32 {
     let (darkest, brightest) =
         (state.frame_params.darkest_pitch, state.frame_params.brightest_pitch);
-    match cfg.roll_color {
-        RollColor::Channel => {
-            scene_color(channel_color(note.channel, pitch, darkest, brightest), alpha)
-        }
-        RollColor::Pitch => {
-            scene_color(channel_color(PITCH_RAMP_CHANNEL, pitch, darkest, brightest), alpha)
-        }
-        RollColor::Accent => theme::accent().gamma_multiply(alpha),
-    }
+    scene_color(channel_color(note.channel, pitch, darkest, brightest), alpha)
 }
 
 

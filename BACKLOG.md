@@ -39,8 +39,6 @@ both sides. Never resolve one by dropping an item you did not finish.
 
 ## Items
 
-[spectrogram] notes should always be colored exactly matching the lattice (i.e. "channel" mode, iiuc). remove the other options.
-
 [settings] collapse notes and console panel by default
 
 [settings] I don't like having the scrollbar on the top list of settings. Any solutions you can think of?

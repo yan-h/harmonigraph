@@ -71,19 +71,6 @@ impl SpectralOrientation {
     }
 }
 
-/// What colors a note in the piano roll.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum RollColor {
-    /// The lattice's own channel colors, so a note is the same color here
-    /// as the node it lit up.
-    Channel,
-    /// The pitch gradient every channel-9..13 voice uses, applied to all
-    /// channels — reads as a single ramp low-to-high.
-    Pitch,
-    /// One flat accent color: the roll recedes and the lattice leads.
-    Accent,
-}
-
 /// The color ramp a spectrogram cell's intensity maps through. A set of
 /// looks to pick from — the spectrogram is a heatmap, and the palette is
 /// most of its character. Intensity always runs dark (quiet) to bright
@@ -355,13 +342,6 @@ pub struct SpectrumConfig {
     /// nothing straddling its boundary.
     #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
-    /// Points shaved off a released note's tail, so repeated notes at one
-    /// pitch stay separate instead of merging into one bar.
-    ///
-    /// The tail only: a held note still reaches the now-line, and no onset
-    /// ever moves off the moment it was played.
-    #[serde(default = "default_roll_color")]
-    pub roll_color: RollColor,
     /// Write each note's name over its ribbon, at the moment it was struck —
     /// see [`panes::names`](crate::panes::names). `default_true`, not `default`, or a state blob
     /// saved before this field existed would load with them off, contradicting
@@ -589,12 +569,6 @@ pub(crate) fn default_roll_thickness() -> f32 {
     0.3
 }
 
-/// A hairline of background between repeats — enough to read two taps as
-/// two, little enough that a note's length is still its length.
-pub(crate) fn default_roll_color() -> RollColor {
-    RollColor::Channel
-}
-
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
@@ -626,7 +600,6 @@ impl Default for SpectrumConfig {
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
-            roll_color: default_roll_color(),
             note_names: true,
             note_name_scale: default_one(),
             show_spectrogram: true,

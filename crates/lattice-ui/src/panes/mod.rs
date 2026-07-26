@@ -208,13 +208,6 @@ pub(super) fn scene_color(c: glam::Vec4, alpha: f32) -> egui::Color32 {
 }
 
 
-/// A channel in the [`PitchGradient`](lattice_core::ChannelRole::PitchGradient)
-/// role, used to borrow the lattice's low-to-high color ramp for the `Pitch`
-/// colormap of the roll and spectrogram — the ramp has no entry point of its
-/// own that takes the display's darkest/brightest bounds. Shared so the two
-/// layers color their Pitch mode identically.
-pub(super) const PITCH_RAMP_CHANNEL: u8 = 9;
-
 /// A lattice node's note name for display, honoring meantone mode: meantone
 /// tempers out the syntonic comma, so the comma marks are dropped (E- and E
 /// name the same pitch). Shared so every pane that labels a node agrees.
