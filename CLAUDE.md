@@ -123,11 +123,23 @@ the `.githooks/pre-push` hook is the only automatic gate, and it checks
 clippy and tests — not judgement. Review is therefore a habit, in two
 halves, and each half catches a class the other cannot.
 
-**Sessions: review your own diff before you open the PR.** Run
-`/code-review` and act on what it finds. A session has full context on what
-it just wrote, which makes this cheap; it is also biased toward its own
-work, which is why it is only half the gate. This half catches the bugs
-that live entirely inside one branch — a stale invalidation key, an
+**Sessions: review your own diff before you open the PR.** Not with
+`/code-review` — that is a built-in whose frontmatter sets
+`disable-model-invocation`, and the harness treats that as locked: no
+setting re-enables it, and there is no Bash route to a slash command
+either — for the `/code-review ultra` variant, sessions are told in so
+many words not to try. It is billed, so it is Yan's to run. The
+gate is per-skill and deliberate — `/simplify` sits beside it in the same
+built-in family and is model-invocable — so this is a boundary to work
+within, not an oversight to work around.
+
+A session's half is therefore the skills it can actually invoke —
+`/simplify` (quality only; it does not hunt for bugs) and
+`/security-review` — plus a deliberate re-read of `git diff main...HEAD`
+as a reviewer rather than as the author. A session has full context on
+what it just wrote, which makes this cheap; it is also biased toward its
+own work, which is why it is only half the gate. This half catches the
+bugs that live entirely inside one branch — a stale invalidation key, an
 underflow, a test whose fixture never reaches the new path.
 
 **Yan: run `/audit-merges` after a batch of merges lands.** Parallel
