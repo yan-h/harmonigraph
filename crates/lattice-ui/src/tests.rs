@@ -1261,6 +1261,35 @@ fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
     assert!(none.is_empty(), "no sevens component, no mark: {none:?}");
 }
 
+/// A mark costs a bounded few quads, exactly as the glyphs beside it do.
+///
+/// This is the invariant `crate::text` exists to hold: a label's rim is
+/// stamped in the FRAGMENT stage precisely because "20 copies of every glyph
+/// was most of the geometry in a busy frame". `paint_mark` reasoned its way
+/// out of that with "a mark is one quad, so the loop is affordable here" --
+/// true of the handful of hovered and sounding nodes it was written against,
+/// and false the moment note names put a mark on every roll ribbon and every
+/// lit node of a collapsed 12-EDO lattice.
+///
+/// A count, not a timing, so it cannot go quiet on a fast machine.
+#[test]
+fn a_mark_costs_a_bounded_number_of_quads() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = lattice_core::NoteName {
+        letter: 'E',
+        sharps: 0,
+        syntonic_commas: -1,
+        septimal_commas: -1,
+    };
+    let (_, shapes) = drawn_label(name, anchor);
+    assert!(
+        shapes.len() <= 4,
+        "two marks cost {} quads; the rim belongs in the fragment stage, \
+         not once per stamp in the shape list",
+        shapes.len()
+    );
+}
+
 /// The septimal mark gets a column of its own, so a name carrying both
 /// commas reads as three pieces rather than a pile.
 #[test]
