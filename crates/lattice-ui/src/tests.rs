@@ -1570,6 +1570,72 @@ impl DockHarness {
     }
 }
 
+/// Hovering the analyzer writes the matching lattice node into the shared
+/// hover state, and follows the pointer up the pitch axis.
+///
+/// This is the whole of what the hover does now that it no longer also prints
+/// the pitch beside the cursor, and nothing asserted it: several tests drive a
+/// pointer into this pane for other reasons, so the write was executed
+/// constantly and checked never — deleting it outright left the suite green.
+///
+/// Driven at the pane rather than through the dock, because the dock does not
+/// leave the value observable: `lattice_pane` re-derives the scene from
+/// `state.hovered` and then clears it when the pointer is not over ITS rect
+/// (`panes::lattice`), so the analyzer's write is consumed inside the frame it
+/// is made and reads as `None` by the end of one. The highlight is real; the
+/// end-of-frame value is not where to look for it.
+///
+/// Tolerance is opened up deliberately. It ships at half a cent, against a
+/// hovered pitch that is continuous, so at the default a node lights only
+/// within a sub-pixel band of an exact semitone and a test aiming at one
+/// would be asserting the pane's pixel geometry rather than its hover.
+#[test]
+fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
+    let hovered_at = |frac: f32| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.tuning = lattice_core::Tuning::from_cents(
+            0.0,
+            lattice_core::tuning::THREE_12TET,
+            lattice_core::tuning::FIVE_12TET,
+            lattice_core::tuning::SEVEN_12TET,
+            50.0,
+        );
+        // One octave on the axis, so two points on it are two pitch CLASSES.
+        // Across the default ten-octave range, 0.2 and 0.8 sit exactly six
+        // octaves apart and reduce to the same class — which looks like a
+        // hover that does not track and is really the range being wide.
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 72.0;
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 400.0));
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        // Twice: egui resolves the widget under the pointer from the previous
+        // pass, so the pane has to exist before the hover lands on it.
+        for _ in 0..2 {
+            let raw = egui::RawInput {
+                screen_rect: Some(rect),
+                events: vec![egui::Event::PointerMoved(rect.lerp_inside(egui::vec2(0.8, frac)))],
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.5, 0);
+            });
+        }
+        state.hovered
+    };
+
+    // Across is the default orientation, so pitch climbs UP the screen: two
+    // points a good way apart vertically are two different pitches.
+    let (low, high) = (hovered_at(0.8), hovered_at(0.2));
+    assert!(low.is_some(), "hovering the analyzer should name a node, got None");
+    assert!(high.is_some(), "hovering the analyzer should name a node, got None");
+    assert_ne!(
+        low, high,
+        "the hover should follow the pointer along the pitch axis, not sit on one node",
+    );
+}
+
 fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
         pos,

@@ -47,9 +47,10 @@ pub(super) fn panel_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         ],
     );
     ui.checkbox(&mut state.view.show_perf, "Performance overlay").on_hover_text(
-        "A corner HUD with frame rate, the GUI's CPU time per frame, \
-         process memory, and the voice/node workload — to see if the \
-         plugin is working the machine hard.",
+        "A corner HUD with frame rate, the worst recent frame, process \
+         memory, and the voice/node workload — to see if the plugin is \
+         working the machine hard. What a frame COSTS is under Frame \
+         breakdown.",
     );
     if state.view.show_perf {
         ui.checkbox(&mut state.view.show_perf_detail, "Frame breakdown").on_hover_text(
