@@ -68,13 +68,22 @@ pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
 /// dozens of sizes, each rasterizing its own copy of every glyph on screen and
 /// re-uploading the mirror behind it (see [`AtlasMirror`]).
 ///
-/// Snapping bounds that set at one size per physical pixel. epaint will
-/// happily rasterize two sizes a third of a pixel apart and cache both, but
-/// what it hands back is the same picture of the same letter — so the pixel is
-/// the grain worth keeping, and it is the grain the DRAWN marks' bitmaps are
-/// already built on (`panes::lattice::mark_key`), which is what makes a name
-/// and the `+` beside it step together as the camera moves rather than one at
-/// a time.
+/// Two grains bound that set, and the coarser of them is the one that bites:
+///
+///   - a LADDER of fixed relative steps, anchored at scale 1. What the eye
+///     judges of a size change is its proportion, so this is the grain a step
+///     is invisible at — and, being relative, it makes the number of sizes a
+///     zoom can ask for a function of how many times it doubles rather than of
+///     how many pixels it crosses. A pixel grid alone is far too fine once a
+///     name is 60 pixels tall and rising: measured over one 120-frame zoom
+///     drag it let through 299 distinct sizes, and every one of them is a set
+///     of glyphs rasterized and an atlas re-uploaded behind it.
+///   - the PIXEL, which the ladder's rungs are rounded onto. Below a few tens
+///     of pixels the rungs fall closer together than that, and two sizes
+///     inside one pixel are the same picture of the same letter twice. It is
+///     also the grain the DRAWN marks' bitmaps are built on
+///     (`panes::lattice::mark_key`), which is what makes a name and the `+`
+///     beside it step together as the camera moves rather than one at a time.
 ///
 /// A `base` that is not itself a whole number of pixels moves by up to half of
 /// one — 9.5pt is 9.5 pixels on a 1x display and draws at 10 — which is the
@@ -103,11 +112,20 @@ pub(crate) fn snap_scale(scale: f32, base: f32, ppp: f32) -> f32 {
     // Physical pixels per unit of scale. A nonsense one (a zero base, a
     // hand-edited ppp) leaves the scale alone rather than dividing by it.
     let per_scale = base * ppp;
-    if !per_scale.is_finite() || per_scale <= 0.0 {
+    if !per_scale.is_finite() || per_scale <= 0.0 || scale <= 0.0 {
         return scale;
     }
-    (scale * per_scale).round().clamp(1.0, MAX_GLYPH_PX) / per_scale
+    // The rung of the ladder this scale sits nearest, then the pixel that rung
+    // rounds onto. Anchored at scale 1, so the size a label was dialled at is
+    // reproduced exactly rather than to within a step.
+    let rung = SIZE_STEP.powf((scale.ln() / SIZE_STEP.ln()).round());
+    (rung * per_scale).round().clamp(1.0, MAX_GLYPH_PX) / per_scale
 }
+
+/// One rung of the size ladder, as a ratio. 4% — under what reads as a change
+/// of size while a picture is moving, and coarse enough that a sixfold zoom
+/// asks for some 45 sizes where a pixel grid asked for 300.
+const SIZE_STEP: f32 = 1.04;
 
 /// The largest a label's type is ever rasterized, in physical pixels.
 ///
@@ -540,15 +558,20 @@ mod tests {
         // at 1x, and draws at 10.
         assert_eq!(snap_scale(1.0, 9.5, 1.0) * 9.5, 10.0);
 
-        // A pixel of name is a thirtieth of the scale here, so everything
-        // within one lands on the same size...
+        // A rung is 4%, so everything inside one lands on the same size...
         let bucket = |scale: f32| snap_scale(scale, 15.0, 2.0);
         assert_eq!(bucket(2.0), bucket(2.01));
-        assert_eq!(bucket(2.0), bucket(2.016));
-        assert_eq!(bucket(2.0) * 15.0 * 2.0, 60.0, "...and it is a whole number of pixels");
-        // ...while a step across the boundary is a step, which is what makes
-        // the label track the zoom at all.
-        assert_ne!(bucket(2.0), bucket(2.05));
+        assert_eq!(bucket(2.0), bucket(2.03));
+        let px = bucket(2.0) * 15.0 * 2.0;
+        assert_eq!(px, px.round(), "...and it lands on a whole pixel: {px}");
+        // ...while a step past one is a step, which is what makes the label
+        // track the zoom at all.
+        assert_ne!(bucket(2.0), bucket(2.2));
+        // Over a sixfold zoom that is some 45 sizes, where a pixel grid at
+        // these sizes let through 300 — the whole point of the ladder.
+        let rungs: std::collections::HashSet<u32> =
+            (0..600).map(|i| snap_scale(1.0 + i as f32 / 100.0, 30.0, 2.0).to_bits()).collect();
+        assert!(rungs.len() < 60, "{} distinct sizes across a sixfold zoom", rungs.len());
 
         // A nonsense denominator leaves the scale alone rather than dividing
         // by it: no size this could produce is better than the one asked for.

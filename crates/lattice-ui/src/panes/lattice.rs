@@ -499,9 +499,16 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
 }
 
 /// Supersampling grid used to turn a mark's outline into coverage. 4x4 is
-/// finer than the antialiasing a shape would have got from the tessellator
-/// and costs nothing: a mark bitmap is a dozen pixels square and is built
-/// once per size, not once per frame.
+/// finer than the antialiasing a shape would have got from the tessellator,
+/// and on a mark a dozen pixels square it is the difference between an edge
+/// and a staircase.
+///
+/// It used to be free — "a mark bitmap is a dozen pixels square and is built
+/// once per size" — and it is not now that a size follows the camera. The rim
+/// reads this grid twenty times over, so the same 4x4 on a mark two hundred
+/// pixels across was sixteen million coverage tests, several frames' worth,
+/// spent on one `+` the first time a zoom asks for that size. The samples
+/// stayed and the reading of them got cheaper: see [`mark_coverage`].
 const MARK_SUPERSAMPLE: usize = 4;
 
 /// Rasterize a mark to an alpha coverage image -- the same thing a font
@@ -534,23 +541,53 @@ fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
     egui::ColorImage { size: [w, h], pixels, source_size: egui::vec2(w as f32, h as f32) }
 }
 
-/// The mark's own coverage, supersampled, as a flat `(w*n) x (h*n)` grid.
+/// The mark's own coverage, supersampled, as a SUMMED-AREA table over a
+/// `(w*n) x (h*n)` grid — every entry the number of covered cells above and
+/// left of it, so the count inside any rectangle is four lookups.
 ///
 /// Split out of [`rasterize_mark`] because the rim reads the SAME coverage
 /// twenty times over at twenty offsets, and testing the geometry again for
 /// each would be twenty times the work for an answer that cannot differ.
-fn mark_coverage(pieces: &[MarkPiece], [w, h]: [usize; 2]) -> (Vec<bool>, [usize; 2]) {
-    let n = MARK_SUPERSAMPLE;
+/// Summed rather than plain because each of those reads is an `n x n` block:
+/// counting it cell by cell made the rim quadratic in the supersampling on
+/// top of everything else, which was survivable while marks were a dozen
+/// pixels square and is what made a zoomed one cost frames. The answer is
+/// identical — this counts the same cells by subtraction.
+fn mark_coverage(pieces: &[MarkPiece], [w, h]: [usize; 2], n: usize) -> Coverage {
     let (sw, sh) = (w * n, h * n);
     let step = 1.0 / n as f32;
-    let mut cov = vec![false; sw * sh];
+    let mut sums = vec![0u32; (sw + 1) * (sh + 1)];
     for sy in 0..sh {
         for sx in 0..sw {
             let p = egui::pos2((sx as f32 + 0.5) * step, (sy as f32 + 0.5) * step);
-            cov[sy * sw + sx] = pieces.iter().any(|piece| piece.covers(p));
+            let covered = pieces.iter().any(|piece| piece.covers(p)) as u32;
+            sums[(sy + 1) * (sw + 1) + sx + 1] = covered + sums[sy * (sw + 1) + sx + 1]
+                + sums[(sy + 1) * (sw + 1) + sx]
+                - sums[sy * (sw + 1) + sx];
         }
     }
-    (cov, [sw, sh])
+    Coverage { sums, size: [sw, sh] }
+}
+
+/// A mark's supersampled coverage, summed. See [`mark_coverage`].
+struct Coverage {
+    sums: Vec<u32>,
+    /// The supersampled grid's own dimensions, which is `sums` less its zero
+    /// row and column.
+    size: [usize; 2],
+}
+
+impl Coverage {
+    /// How many covered cells lie in the `n x n` block whose top-left cell is
+    /// `(x, y)`, counting cells off the grid as uncovered.
+    fn block(&self, x: isize, y: isize, n: usize) -> u32 {
+        let [sw, sh] = self.size;
+        let (x0, y0) = (x.clamp(0, sw as isize) as usize, y.clamp(0, sh as isize) as usize);
+        let x1 = (x + n as isize).clamp(0, sw as isize) as usize;
+        let y1 = (y + n as isize).clamp(0, sh as isize) as usize;
+        let at = |x: usize, y: usize| self.sums[y * (sw + 1) + x];
+        at(x1, y1) + at(x0, y0) - at(x1, y0) - at(x0, y1)
+    }
 }
 
 /// The mark's RIM, rasterized to alpha as one bitmap: the same rings stamped
@@ -571,8 +608,8 @@ fn mark_coverage(pieces: &[MarkPiece], [w, h]: [usize; 2]) -> (Vec<bool>, [usize
 /// each other.
 fn rasterize_mark_rim(key: MarkKey) -> egui::ColorImage {
     let (pieces, [w, h]) = mark_geometry(key);
-    let (cov, [sw, sh]) = mark_coverage(&pieces, [w, h]);
     let n = MARK_SUPERSAMPLE;
+    let coverage = mark_coverage(&pieces, [w, h], n);
     // Room for the widest ring on every side, so no stamp is clipped.
     let pad = key.rings_px.iter().copied().max().unwrap_or(1) as usize;
     let (rw, rh) = (w + 2 * pad, h + 2 * pad);
@@ -606,20 +643,7 @@ fn rasterize_mark_rim(key: MarkKey) -> egui::ColorImage {
             );
             let mut a = 0.0f32;
             for &(ox, oy, alpha) in &stamps {
-                let mut hits = 0;
-                for sy in 0..n as isize {
-                    for sx in 0..n as isize {
-                        let (gx, gy) = (bx + sx - ox, by + sy - oy);
-                        if gx >= 0
-                            && gy >= 0
-                            && (gx as usize) < sw
-                            && (gy as usize) < sh
-                            && cov[gy as usize * sw + gx as usize]
-                        {
-                            hits += 1;
-                        }
-                    }
-                }
+                let hits = coverage.block(bx - ox, by - oy, n);
                 if hits > 0 {
                     let frac = hits as f32 / (n * n) as f32;
                     a += alpha * frac * (1.0 - a);
@@ -1241,13 +1265,32 @@ mod tests {
             NAME_SIZE,
             "the default framing is where the sizes are dialled",
         );
-        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 0.5), NAME_SIZE * 2.0, "twice as close");
-        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 2.0), NAME_SIZE * 0.5, "twice as far");
-        // ...and a quarter of 30 is 7.5, which is not a whole pixel on this
-        // context's 1x scale, so it lands on the one above: the size follows
-        // the camera continuously but is only ever RASTERIZED on a pixel grid.
-        // See `text::snap_scale` for why that matters.
-        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 4.0), 8.0, "four times as far");
+        // Within a rung of the ladder either way. The size follows the camera
+        // continuously and is RASTERIZED at the nearest size on offer, which
+        // is what keeps a zoom from asking egui for a new one every frame —
+        // see `text::snap_scale`.
+        let tracks = |distance: f32, want: f32| {
+            let got = biggest(distance);
+            // Off by at most a rung of the ladder, or half a pixel where that
+            // is coarser — the two grains `snap_scale` quantizes on. A quarter
+            // of a 30pt name is 7.5 pixels on this 1x context, where half a
+            // pixel is a fifteenth of the size and the rung is a thirtieth.
+            let slack = (0.04 * want).max(0.5);
+            assert!(
+                (got - want).abs() <= slack,
+                "at distance {distance} a name drew at {got}, not within {slack} of {want}",
+            );
+        };
+        tracks(Camera::DEFAULT_DISTANCE * 0.5, NAME_SIZE * 2.0);
+        tracks(Camera::DEFAULT_DISTANCE * 2.0, NAME_SIZE * 0.5);
+        tracks(Camera::DEFAULT_DISTANCE * 4.0, NAME_SIZE * 0.25);
+        // And the ladder is really there: a nudge of the camera too small to
+        // see is not a new size to rasterize.
+        assert_eq!(
+            biggest(Camera::DEFAULT_DISTANCE),
+            biggest(Camera::DEFAULT_DISTANCE * 1.01),
+            "a 1% camera move asked for a size of its own",
+        );
     }
 
     /// A node with `activation`, on the home sheet or off it, and nothing

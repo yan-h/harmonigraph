@@ -1443,7 +1443,10 @@ mod tests {
         // The markings ignore all of it, and answer to their own bar.
         assert_eq!(at(FULL_PITCH_SPAN).markings, at(crate::PITCH_RANGE_MIN_SPAN).markings);
         let bigger = SpectrumConfig { marking_scale: 2.0, ..SpectrumConfig::default() };
-        assert_eq!(text_scales(&bigger, &axes, 24.0, 2.0).markings, 2.0);
+        let doubled = text_scales(&bigger, &axes, 24.0, 2.0).markings;
+        // Within a rung of the size ladder, which is what the bar's 2 is
+        // rounded onto — see `text::snap_scale`.
+        assert!((doubled / 2.0 - 1.0).abs() <= 0.04, "the bar's 2 drew at {doubled}");
         assert_eq!(
             text_scales(&bigger, &axes, 24.0, 2.0).names,
             at(24.0).names,
