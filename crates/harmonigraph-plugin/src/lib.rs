@@ -1,5 +1,5 @@
 //! The nice-plug shell: parameters, MIDI ingestion, and plugin-format
-//! exports. All interesting logic lives in the `lattice-*` crates; this
+//! exports. All interesting logic lives in the `harmonigraph-*` crates; this
 //! crate only adapts them to the plugin world.
 
 use std::num::NonZeroU32;

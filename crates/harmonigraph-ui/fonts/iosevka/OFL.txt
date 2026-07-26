@@ -112,5 +112,5 @@ not met.
 ---
 Note: this file is a glyph subset of Iosevka Fixed Regular (Latin,
 punctuation, arrows, and music accidentals), produced with fonttools
-pyftsubset for embedding in MIDI Lattice 3D. The complete font is
+pyftsubset for embedding in Harmonigraph. The complete font is
 available at https://github.com/be5invis/Iosevka.
