@@ -1211,7 +1211,7 @@ pub(crate) fn spectral_pane(
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
     let note_names = names::plan(state, &axes, &scale, split, now, label_scale);
-    names::draw(&painter, &note_names, label_scale, &mut labels);
+    names::draw(&painter, &note_names, label_scale, state.view.mark_weight, &mut labels);
     // Flushed here rather than with the readout below: the divider draws
     // between them, and a batch is drawn where it is flushed.
     labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));

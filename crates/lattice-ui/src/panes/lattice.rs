@@ -301,7 +301,7 @@ const PLUS_INK_H: f32 = 0.386;
 /// fraction of the mark's font size. Small: enough that the mark is not
 /// read as another row of the stack it sits beside, not so much that it
 /// floats free of the name it belongs to.
-const SEPTIMAL_GAP: f32 = 0.22;
+pub(super) const SEPTIMAL_GAP: f32 = 0.22;
 /// The septimal mark's box, relative to the `+` box beside it. One, which
 /// is to say: the same box.
 ///
