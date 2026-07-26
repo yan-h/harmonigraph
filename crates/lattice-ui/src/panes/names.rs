@@ -138,13 +138,53 @@ struct Occupancy {
 /// dependence on what was kept. A note's fate therefore rests on two adjacent
 /// cells of take time, and nothing outside them can reach it.
 ///
-/// The grid is the lane's OWN room — a pitch has one spelling, so every note
-/// in a lane wants the same width — which is what keeps the density the chain
-/// had: in a run of repeats the offers fall exactly one room apart, and each
-/// clears the last by exactly nothing to spare.
+/// The grid is a name's room, which is what keeps the density the chain had:
+/// in a run of repeats the offers fall exactly one room apart, and each clears
+/// the last by exactly nothing to spare.
+///
+/// WHICH name is the unsound part, and there are two known defects in it. A
+/// lane is [`LANE_CENTS`] — ten — wide, while a name is matched to a node at
+/// `Tuning::tolerance`, half a cent by default. So a lane is not one spelling
+/// and not one width: inside four cents of the just third this lattice spells
+/// `E-`, `E♯-5↓` and `E`, which are 11.9, 21.8 and 7.7 points at the dialled
+/// size. `a_name_is_read_from_its_own_pitch_not_a_lane_neighbours` is the same
+/// fact, proved of the naming.
+///
+///   - The grid is taken from whichever note the sweep reached FIRST, and the
+///     sweep starts at `oldest - lookback`, which scrolls. So in a lane holding
+///     two spellings the cell boundaries depend on where the sweep began, which
+///     is the one dependence the paragraph above exists to remove. Measured: a
+///     note that stops nine seconds before the window opens takes a 24-note run
+///     from 12 names to 7 and moves every one.
+///   - What an offer must clear is read off this grid while the name is DRAWN
+///     at its own width, so a name wider than its lane's overruns the one
+///     before it — consecutive `E♯-5↓` overlap by 4.69 points live, and up to
+///     14.11 in the whole-song layout.
+///
+/// Both are left standing because every local repair measured worse, and the
+/// two obvious ones badly: sizing the grid at the lane's CENTRE pitch names a
+/// pitch nobody plays, which in any non-equal tuning is almost never within
+/// tolerance of a node and so takes `note_name`'s equal-tempered fallback —
+/// 171 of the 361 lane centres between MIDI 48 and 84 have no node at all
+/// under `Tuning::just()`. The cell then has nothing to do with its material
+/// in either direction, and where it reads narrower than its notes, `room`
+/// exceeds the cell and `reached` advances on refusal too, so nothing recovers:
+/// a note repeated forever in a just tuning draws NO name (measured 7 → 1, and
+/// 84 lanes between 55 and 72 semitones sit in that regime). Taking the reach
+/// from the note's own name instead fixes the overlap and starves the same way,
+/// the cell no longer bounding what a name demands.
+///
+/// What is left is a decision about what a lane IS, which is why it is written
+/// down rather than patched: a per-note cell width destroys the absolute
+/// partition this design needs and puts the chain straight back; one grid as
+/// wide as [`WIDEST_NAME`] spaces every plain `C` as though it were a
+/// double-sharp with twelve commas; and splitting a lane by spelling stops
+/// near-pitches contending at all, so two names ten cents apart would simply be
+/// drawn on top of each other.
 #[derive(Clone, Copy)]
 struct Lane {
-    /// Cell width in seconds: this pitch's name plus the gap it asks for.
+    /// Cell width in seconds: a name's room plus the gap it asks for — see the
+    /// two defects above for WHOSE name, which is not reliably this pitch's.
     grid: f64,
     /// The last cell that offered a name here.
     cell: i64,
