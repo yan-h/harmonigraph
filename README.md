@@ -1,9 +1,11 @@
-# MIDI Lattice 3D
+# Harmonigraph
 
-A 3D Tonnetz MIDI visualizer plugin (CLAP + VST3): pitch classes on a
+A Tonnetz harmony visualizer plugin (CLAP + VST3): pitch classes on a
 three-axis harmonic lattice (perfect fifths / major thirds / harmonic
 sevenths, each with adjustable tuning), lit up by incoming MIDI notes with
-per-octave indicators. Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
+per-octave indicators, alongside a spectrum analyzer and spectrogram driven
+by the audio input, and a piano roll of what was played. Successor to
+[midi_lattice](https://github.com/yan-h/midi_lattice).
 
 Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
 community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
@@ -13,7 +15,7 @@ wgpu backend in the plugin, eframe's in the standalone harness).
 
 ```sh
 # The dev loop: full UI + renderer in a plain window with mock MIDI.
-cargo run -p lattice-standalone
+cargo run -p harmonigraph-standalone
 
 # Unit tests (core + scene logic).
 cargo test
@@ -23,7 +25,7 @@ cargo test
 ./ci.sh
 
 # Build the CLAP/VST3 bundles (output in <target-dir>/bundled/).
-cargo xtask bundle midi_lattice_3d --release
+cargo xtask bundle harmonigraph-plugin --release
 
 # Rebuild + hot-swap the binary into the main checkout's bundles (works
 # from a git worktree; re-signs ad-hoc). Then rescan the plugin in the DAW.
@@ -55,30 +57,30 @@ Dependencies point strictly downward; the fun layers never touch plugin
 plumbing.
 
 ```
-lattice-core    pure logic: PitchClass (integer microcents), Tuning,
+harmonigraph-core    pure logic: PitchClass (integer microcents), Tuning,
                 LatticePos, NoteTracker, NoteHistory/NoteRoll (what was
                 played, by pitch and by time), SpectrumAnalyzer (FFT). No deps.
                 Unit-tested. One module per concern; see its crate doc.
-lattice-scene   per-frame view model: derive_scene() turns tracker+tuning
+harmonigraph-scene   per-frame view model: derive_scene() turns tracker+tuning
                 into NodeInstances; orbit Camera; envelopes; CPU picking.
                 Split style/view/camera/color/derive; see its crate doc.
-lattice-render  wgpu renderer as an egui paint callback: instanced
+harmonigraph-render  wgpu renderer as an egui paint callback: instanced
                 billboard nodes, WGSL in src/shaders/lattice.wgsl.
                 *** Skins/effects/shaders iterate here. ***
-lattice-ui      egui_dock pane shell: Lattice / Tuning / View / Appearance /
+harmonigraph-ui      egui_dock pane shell: Lattice / Tuning / View / Appearance /
                 Console / Spectral / Spectrum / Notes tabs, one file each
                 under src/panes/. SharedState (incl. cross-pane hover),
                 ParamBackend trait abstracting "where params live".
-lattice-take    the recorded input to a visualization: note events and
+harmonigraph-take    the recorded input to a visualization: note events and
                 parameter automation on the audio clock. Linked into the
                 plugin, so serde+ron only. See docs/offline-rendering.md.
-lattice-offline offline video renderer: replays a take headless at an
+harmonigraph-offline offline video renderer: replays a take headless at an
                 exact frame rate, any resolution, own pane layout, frames
                 piped to ffmpeg. No window, no DAW, no realtime.
-lattice-standalone  eframe dev harness: mock chord progression OR hardware
+harmonigraph-standalone  eframe dev harness: mock chord progression OR hardware
                     MIDI in (midir, with MPE bend decoding), plus a mock
                     synth feeding the spectrum analyzer.
-midi_lattice_3d     nice-plug shell: params, MIDI + audio → two rtrb ring
+harmonigraph-plugin     nice-plug shell: params, MIDI + audio → two rtrb ring
                     buffers, custom wgpu egui editor (editor.rs) with
                     host-native window resizing, CLAP/VST3 exports.
 ```
@@ -91,8 +93,8 @@ values in the harness), so every pane runs unmodified in both shells.
 
 ## Working on visuals
 
-- `lattice-render/src/shaders/lattice.wgsl` — node look, glow, animation.
-- `lattice-scene` — colors, envelopes, layout, camera behavior.
+- `harmonigraph-render/src/shaders/lattice.wgsl` — node look, glow, animation.
+- `harmonigraph-scene` — colors, envelopes, layout, camera behavior.
 - Run the standalone harness; it uses the identical render path. No DAW
   needed until you're testing host integration.
 
@@ -129,12 +131,12 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   dense scenes can still show overlap artifacts. Enabling real depth
   testing is the remaining step (needs a two-pass opaque/transparent split;
   see [`docs/deferred-work.md`](docs/deferred-work.md)).
-- **Skins**: the mechanism exists (`lattice_scene::skin`); add alternate
+- **Skins**: the mechanism exists (`harmonigraph_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
 - **Making videos**: done, by offline replay rather than screen capture.
   Arm "Record take" in the View pane and play the piece; the plugin writes
   a *take* (every note event and parameter change, stamped on the host
-  transport so it lines up with a bounce). `lattice-offline` replays it
+  transport so it lines up with a bounce). `harmonigraph-offline` replays it
   headless into an exact-CFR video at any resolution, with its own pane
   layout and the bounced audio muxed in. See
   [`docs/offline-rendering.md`](docs/offline-rendering.md). Live capture of
@@ -155,7 +157,7 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 
 Copyright (C) 2026 Yan Han.
 
-MIDI Lattice 3D is free software: you can redistribute it and/or modify it
+Harmonigraph is free software: you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the Free
 Software Foundation, either version 3 of the License, or (at your option)
 any later version. See [`LICENSE`](LICENSE) for the full text.
@@ -167,14 +169,14 @@ more details.
 
 ### Exceptions
 
-[`crates/lattice-core`](crates/lattice-core) is **`MIT OR Apache-2.0`**, not
+[`crates/harmonigraph-core`](crates/harmonigraph-core) is **`MIT OR Apache-2.0`**, not
 GPL. It is the one general-purpose library here — dependency-free
 just-intonation math, Tonnetz coordinates, and note spelling — and much of
 that math descends from the permissively licensed
 [midi_lattice v1](https://github.com/yan-h/midi_lattice), so it stays
 permissive too. `ci.sh` enforces the property that justifies the split: the
 crate must remain dependency-free. See
-[its README](crates/lattice-core/README.md).
+[its README](crates/harmonigraph-core/README.md).
 
 The vendored forks under [`vendor/`](vendor) (`baseview`, `egui-baseview`)
 are likewise **not** covered by the GPL — they remain under their upstream

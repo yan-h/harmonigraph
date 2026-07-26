@@ -7,7 +7,7 @@ read) to pick it up cold later. Neither blocks anything today.
 ## Depth-buffer sorting
 
 **State.** The lattice renders through an offscreen color + `Depth32Float`
-pass (`crates/lattice-render/src/lib.rs`). Depth is *written*, but the node
+pass (`crates/harmonigraph-render/src/lib.rs`). Depth is *written*, but the node
 pipeline is created with `depth_compare: Always` (~`lib.rs:575`), so the
 buffer is never used to reject fragments. Occlusion is still done the old
 way: nodes are sorted **back-to-front on the CPU** and painted in that order
@@ -42,7 +42,7 @@ keep sitting there unused at zero cost.
 ## Render-style final trim
 
 **State.** Most of the "prune the experiments" work is already done — see the
-enum comments in `crates/lattice-scene/src/lib.rs`:
+enum comments in `crates/harmonigraph-scene/src/lib.rs`:
 
 - **`NodeStyle`**: trimmed from a 15-style set down to **4** — Steady,
   Vortex, Checker, Spiral. (Breathe, Sparks, Wire, Corona, Plasma, Aurora,
@@ -74,7 +74,7 @@ the shader) and where they visually overlap, then a pick of which to cut.
   `roll_paint_callback`, with a rounded-box SDF painting the core, the black
   outline and the white keyline as bands of one distance — the reasoning, the
   measurement it came from, and why the instance buffer is still rewritten
-  every frame all live in `crates/lattice-render/src/roll.rs`'s module doc,
+  every frame all live in `crates/harmonigraph-render/src/roll.rs`'s module doc,
   which is where they belong now that there is code to read them against.
   Mesh baking is dead rather than deferred: it addressed the 0.5 ms of
   tessellation and none of the 4-5 ms of upload, and with the notes off
@@ -83,7 +83,7 @@ the shader) and where they visually overlap, then a pick of which to cut.
   now costs (note count), since its geometry no longer passes through egui's
   vertex count.
 - **Surface-format assumption** (`ASSUMED_SURFACE_FORMAT = Bgra8Unorm` in
-  `midi_lattice_3d/src/editor.rs`): the only clean fix needs `RenderState`
+  `harmonigraph-plugin/src/editor.rs`): the only clean fix needs `RenderState`
   access that lives upstream in egui-baseview, and upstreaming is off the
   table, so this stays as-is. The constant is the knob if a mismatch ever
   panics on an exotic host.

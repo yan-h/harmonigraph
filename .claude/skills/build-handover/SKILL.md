@@ -32,7 +32,7 @@ loadable. After a swap, rescan/restart the plugin in Bitwig to pick it up.
 The performance overlay's bottom line reads `build  <branch> @<sha>` — the
 branch with its `worktree-` prefix stripped, so it is exactly the argument
 `./load-plugin.sh <branch>` takes. It is stamped at compile time by
-`crates/lattice-ui/build.rs` and is on by default, so it needs nothing from
+`crates/harmonigraph-ui/build.rs` and is on by default, so it needs nothing from
 Yan but a look at the corner of the Analyzer pane.
 
 This exists because a swap can silently not have happened: no rescan, a build
@@ -57,10 +57,10 @@ want the tag to distinguish your work.
 
 ## Recovering a build someone else's swap evicted
 
-Release builds land in `<that-worktree>/target/release/libmidi_lattice_3d.dylib`.
+Release builds land in `<that-worktree>/target/release/libharmonigraph-plugin.dylib`.
 Match the dylib's mtime to the branch's last commit time to identify it, then
 swap it back. To rebuild one without cd'ing into the user's checkout:
-`cargo build --release -p midi_lattice_3d --manifest-path <main>/Cargo.toml`,
+`cargo build --release -p harmonigraph-plugin --manifest-path <main>/Cargo.toml`,
 then hand-copy the dylib into both bundles and `codesign --force --sign -`
 each, and verify via a distinctive string from that branch's diff.
 
@@ -68,6 +68,6 @@ Do NOT compare shasums against the source dylib to check a swap took:
 `codesign --force` rewrites the bundled binary's signature in place, so its
 hash legitimately differs from the file just copied (the two bundle binaries
 match each OTHER). Confirm the new code is present instead, e.g.
-`strings -a "<bundle>/Contents/MacOS/MIDI Lattice 3D" | grep -c "<new symbol>"`
+`strings -a "<bundle>/Contents/MacOS/Harmonigraph" | grep -c "<new symbol>"`
 — WGSL shader edits are embedded via `include_str!`, so a new const or
 comment name greps cleanly.

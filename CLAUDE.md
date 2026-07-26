@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-A Rust CLAP/VST3 plugin that draws a 3D pitch lattice, plus an offline
-renderer for video export. Everything below is a gotcha or a contract — the
-rest of the repo explains itself by being read.
+A Rust CLAP/VST3 plugin that draws a harmonic pitch lattice and an audio
+spectrum, plus an offline renderer for video export. Everything below is a
+gotcha or a contract — the rest of the repo explains itself by being read.
 
 ## Lazy-loaded detail lives in `.claude/skills/`
 
@@ -28,7 +28,7 @@ instead of 3m36s. `sccache --show-stats` reports the hit rate.
 ## Pausing = a loadable build exists (sessions build, Yan loads)
 
 Bitwig loads exactly ONE plugin build: the main checkout's
-`target/bundled/MIDI Lattice 3D.{clap,vst3}`. A branch or worktree build is
+`target/bundled/Harmonigraph.{clap,vst3}`. A branch or worktree build is
 invisible in the DAW until its binary is swapped into that slot. With
 parallel sessions that slot is shared, so sessions do NOT fight over it — the
 model is pull, not push: every session builds into its own worktree, and Yan
@@ -40,7 +40,7 @@ partial progress — leave a fresh release build in YOUR worktree so it is
 loadable:
 
 ```
-cargo build --release -p midi_lattice_3d          # add -p lattice-offline if you touched video render
+cargo build --release -p harmonigraph-plugin          # add -p harmonigraph-offline if you touched video render
 ```
 
 Then end your message telling Yan it's `loadable via ./load-plugin.sh
@@ -123,7 +123,7 @@ Bash route either. Details of both halves, and the squash rule, are in the
 ## Before running sessions in parallel, check for file overlap
 
 Parallelism buys wall-clock only when the work is disjoint; when three
-sessions converge on `lattice-ui/src/lib.rs` it buys merge-order bugs
+sessions converge on `harmonigraph-ui/src/lib.rs` it buys merge-order bugs
 instead, and `/audit-merges` is what pays for them afterwards. Overlapping
 work is better run in sequence, and variants of a single decision (three
 takes on one fade) are better as one session producing several builds to

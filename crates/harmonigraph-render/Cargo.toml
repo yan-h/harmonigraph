@@ -1,0 +1,29 @@
+[package]
+name = "harmonigraph-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+# Dev-only: watch the .wgsl on disk and rebuild the pipeline on change.
+# Enabled by the standalone harness; release plugin bundles are built
+# per-package and never activate it.
+hot-reload = ["dep:naga"]
+
+[dependencies]
+harmonigraph-scene = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+naga = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The baked-shader validation test runs without the hot-reload feature.
+naga = { workspace = true }
+# Blocks on wgpu's async adapter/device setup in the pipeline-build test.
+pollster = "0.4"
+# The offscreen-vs-direct parity test builds a Scene literal, whose
+# NodeInstance carries a LatticePos.
+harmonigraph-core = { path = "../harmonigraph-core" }

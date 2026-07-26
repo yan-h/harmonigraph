@@ -22,8 +22,8 @@
 # "matches the working tree".
 set -euo pipefail
 
-PKG="midi_lattice_3d"
-NAME="MIDI Lattice 3D"
+PKG="harmonigraph-plugin"
+NAME="Harmonigraph"
 
 MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
 BUNDLED="$MAIN/target/bundled"
@@ -106,13 +106,13 @@ load_build() {  # $1 = worktree index
 
   # Keep the renderer matched to the build being loaded (they share the take
   # format). Only if this worktree built one; otherwise leave the installed one.
-  local offline="$path/target/release/lattice-offline"
+  local offline="$path/target/release/harmonigraph-offline"
   local support="$HOME/Library/Application Support/$NAME"
   if [[ -f "$offline" ]]; then
-    mkdir -p "$support"; cp "$offline" "$support/lattice-offline"
-    echo "Loaded renderer: $support/lattice-offline"
+    mkdir -p "$support"; cp "$offline" "$support/harmonigraph-offline"
+    echo "Loaded renderer: $support/harmonigraph-offline"
   else
-    echo "NOTE: no lattice-offline in this build; offline render keeps the previously-installed renderer." >&2
+    echo "NOTE: no harmonigraph-offline in this build; offline render keeps the previously-installed renderer." >&2
   fi
 
   { echo "worktree=$path"

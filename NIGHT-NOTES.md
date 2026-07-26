@@ -37,7 +37,7 @@ pass, spectral audio FFT (unchanged from the overnight list).
 
 Eleven commits, one per feature, oldest first. Each entry: what changed and
 a ~2-minute audit. Quick global audit: `cargo test --workspace` (18 tests),
-`cargo run -p lattice-standalone`, CI on GitHub Actions, and fresh bundles
+`cargo run -p harmonigraph-standalone`, CI on GitHub Actions, and fresh bundles
 in `target/bundled/`.
 
 All items are correctness/mechanism work — no aesthetic decisions were made
@@ -58,11 +58,11 @@ open) — GPU/CPU usage should be visibly lower than while notes play.
 ## 0cbf3cd — v1 channel semantics + pitch coloring
 Channels (MIDI convention): 1-9 fixed colors, 10-14 pitch-height gradient
 between new Darkest/Brightest Pitch params, 15 outline ring, 16 ignored.
-**Audit**: send notes on those channels; `cargo test -p lattice-scene`.
+**Audit**: send notes on those channels; `cargo test -p harmonigraph-scene`.
 
 ## 339d85f — Per-note tuning (PolyTuning/MPE)
 Bent notes re-map pitch class, octave, and gradient color.
-**Audit**: `cargo test -p lattice-core` (tuning_bends_pitch_class_and_octave);
+**Audit**: `cargo test -p harmonigraph-core` (tuning_bends_pitch_class_and_octave);
 or play MPE slides in Bitwig and watch nodes hand off.
 
 ## ca9ca68 — Tuning-learn
@@ -90,7 +90,7 @@ View. Tooltip now leads with the name.
 **Audit**: hover the origin node — "C"; one node up — "G".
 
 ## ca8b352 — Skin mechanism (no visual change)
-`lattice_scene::skin::Skin` owns every color (scene + UI chrome); theme
+`harmonigraph_scene::skin::Skin` owns every color (scene + UI chrome); theme
 constants became accessors. The single built-in skin reproduces the old
 constants exactly.
 **Audit**: the UI looks identical to last night; `git show ca8b352` for

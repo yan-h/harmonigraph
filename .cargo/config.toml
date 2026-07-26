@@ -1,5 +1,5 @@
 [alias]
-# `cargo xtask bundle midi_lattice_3d --release` builds the CLAP/VST3 bundles.
+# `cargo xtask bundle harmonigraph-plugin --release` builds the CLAP/VST3 bundles.
 # xtask runs in release mode so serde etc. aren't compiled twice.
 xtask = "run --package xtask --release --"
 xtask-debug = "run --package xtask --"

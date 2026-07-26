@@ -1,0 +1,29 @@
+[package]
+name = "harmonigraph-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Tonnetz harmony and spectrum visualizer plugin"
+homepage = "https://github.com/yan-h/harmonigraph"
+
+[lib]
+# cdylib for the plugin bundle, lib so tests/other tools can link it.
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+harmonigraph-core = { workspace = true }
+harmonigraph-ui = { workspace = true }
+harmonigraph-take = { workspace = true }
+harmonigraph-render = { workspace = true }
+
+nice-plug = { workspace = true }
+egui = { workspace = true }
+egui-baseview = { workspace = true }
+baseview = { workspace = true }
+raw-window-handle = { workspace = true }
+
+rtrb = { workspace = true }
+crossbeam = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }

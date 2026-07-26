@@ -1,0 +1,23 @@
+[package]
+name = "harmonigraph-offline"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+harmonigraph-core = { workspace = true }
+harmonigraph-ui = { workspace = true }
+harmonigraph-render = { workspace = true }
+harmonigraph-take = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+serde = { workspace = true }
+ron = { workspace = true }
+# Blocks on wgpu's async adapter/device setup; there is no event loop
+# here to be async around.
+pollster = "0.4"
+# PNG output for single-frame checks. The moving picture goes out as raw
+# frames to ffmpeg, which needs no crate at all.
+image = { version = "0.25", default-features = false, features = ["png"] }
