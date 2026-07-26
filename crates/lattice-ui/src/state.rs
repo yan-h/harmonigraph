@@ -377,8 +377,6 @@ impl SharedState {
         .unwrap_or_default()
     }
 
-    /// Restore state saved by [`save_persist`]. Unknown/corrupt input is
-    /// ignored (fresh defaults win over a broken restore).
     /// Drop everything that belongs to a particular egui context. Shells MUST
     /// call this whenever they build one.
     ///
@@ -394,6 +392,8 @@ impl SharedState {
         self.spectrum.release_textures();
     }
 
+    /// Restore state saved by [`save_persist`](Self::save_persist). Unknown or
+    /// corrupt input is ignored (fresh defaults win over a broken restore).
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
             // A pre-reorg (version 0) layout names the old tabs and is missing

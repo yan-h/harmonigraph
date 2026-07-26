@@ -48,15 +48,6 @@ use params::ParamBackend;
 
 use egui_dock::{DockArea, DockState};
 
-/// Draw one frame of the whole UI into `ui`, which is expected to cover the
-/// window (egui-baseview hands the plugin editor exactly that; eframe hands
-/// the standalone harness the same via its `App::ui` hook).
-///
-/// The shell contract, which is otherwise only discoverable by reading both
-/// shells: before calling this, feed the frame's MIDI into `state.tracker`
-/// and its audio samples into `state.spectrum`. `now` is seconds on the
-/// shell's clock, and must be the SAME clock that timestamped those
-/// `NoteEvent`s — envelopes are derived from the difference.
 /// End a drag whose release is never coming, because it is holding every
 /// scroll area in the editor hostage.
 ///
@@ -109,6 +100,15 @@ fn end_stranded_drag(ctx: &egui::Context) {
     }
 }
 
+/// Draw one frame of the whole UI into `ui`, which is expected to cover the
+/// window (egui-baseview hands the plugin editor exactly that; eframe hands
+/// the standalone harness the same via its `App::ui` hook).
+///
+/// The shell contract, which is otherwise only discoverable by reading both
+/// shells: before calling this, feed the frame's MIDI into `state.tracker`
+/// and its audio samples into `state.spectrum`. `now` is seconds on the
+/// shell's clock, and must be the SAME clock that timestamped those
+/// `NoteEvent`s — envelopes are derived from the difference.
 pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
     begin_frame(state, params, now);
     end_stranded_drag(ui.ctx());
