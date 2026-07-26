@@ -1134,6 +1134,16 @@ mod tests {
     /// Draw the labels for a chord, with the camera at `distance`, and
     /// report the pieces of text that were laid out.
     fn label_pieces(rect: egui::Rect, distance: f32) -> Vec<crate::text::TextPiece> {
+        labelled(rect, distance).0
+    }
+
+    /// The pieces of text a chord's labels lay out, with the scene they came
+    /// from — so a test can ask what SHOULD have been labelled without
+    /// borrowing the answer from the code that decides it.
+    fn labelled(
+        rect: egui::Rect,
+        distance: f32,
+    ) -> (Vec<crate::text::TextPiece>, lattice_scene::Scene) {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.camera.distance = distance;
         // A chord spread across the lattice, so nodes land all over the pane
@@ -1166,7 +1176,7 @@ mod tests {
                 draw_node_labels(&child, rect, &scene, &state.view, &mut batch);
             },
         );
-        batch.pieces().to_vec()
+        (batch.pieces().to_vec(), scene)
     }
 
     /// One quad per glyph, whatever the rim is doing.
@@ -1218,25 +1228,39 @@ mod tests {
             zoomed.len(),
             wide.len(),
         );
-        // And nothing is laid out far outside the pane, at either zoom: a
-        // label's own reach is the only slack the cull allows.
-        //
-        // That reach is the LABEL's, so it grows with the label — zoomed in, a
-        // name is drawn several times the size it opens at, and the cull has
-        // to leave room for the one straddling the edge. Measured off the same
-        // camera factor the labels take their size from, so this stays a
-        // statement about the cull rather than about a constant.
-        for (pieces, distance) in [(&wide, 14.0), (&zoomed, 2.0)] {
-            let scale = Camera { distance, ..Default::default() }.screen_scale();
-            let slack = rect.expand(LABEL_REACH * scale * 2.0);
-            for piece in pieces.iter() {
-                assert!(
-                    slack.contains(piece.ink.min) && slack.contains(piece.ink.max),
-                    "a label was laid out at {:?}, outside the pane {rect:?} \
-                     by more than its reach at distance {distance}",
-                    piece.ink,
-                );
-            }
+        // The other half, and the one an upper bound cannot state: the cull
+        // may only drop what is OFF the pane. A bound written as the cull's
+        // own reach is met by any cull, however tight — including one that
+        // clips a label whose node you are looking straight at, which is the
+        // failure `LABEL_REACH`'s doc warns about. So this counts what should
+        // have been labelled, through the scene's own projector rather than
+        // through the cull's arithmetic: every node the pane can show carries
+        // a name, wherever the reach is set.
+        for distance in [14.0f32, 2.0] {
+            let (pieces, scene) = labelled(rect, distance);
+            let projector =
+                scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+            let on_pane = scene
+                .nodes
+                .iter()
+                // The home sheet's, which is what the size filter below
+                // picks out: an off-sheet node draws its name smaller, so
+                // counting those on one side and not the other would compare
+                // two different things.
+                .filter(|node| node.on_home && node.activation > 0.0 && node.is_visible())
+                .filter_map(|node| projector.project(node.world_pos))
+                .filter(|p| rect.contains(egui::pos2(rect.min.x + p.x, rect.min.y + p.y)))
+                .count();
+            assert!(on_pane > 0, "no lit node projects onto the pane at distance {distance}");
+            // One letter per label, so the letters count the labels. Off-sheet
+            // nodes draw theirs smaller, so this is the LARGEST size drawn.
+            let biggest = pieces.iter().map(|piece| piece.font_size).fold(0.0f32, f32::max);
+            let names = pieces.iter().filter(|piece| piece.font_size == biggest).count();
+            assert!(
+                names >= on_pane,
+                "{on_pane} lit nodes are on the pane at distance {distance} but only \
+                 {names} names were laid out: the cull is dropping what you can see",
+            );
         }
     }
 

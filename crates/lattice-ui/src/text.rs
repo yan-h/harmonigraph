@@ -86,8 +86,8 @@ pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
 ///     beside it step together as the camera moves rather than one at a time.
 ///
 /// A `base` that is not itself a whole number of pixels moves by up to half of
-/// one — 9.5pt is 9.5 pixels on a 1x display and draws at 10 — which is the
-/// grid asserting itself, not a size being got wrong.
+/// one — the roll's 12.35pt name is 24.7 pixels at 2x and draws at 25 — which
+/// is the grid asserting itself, not a size being got wrong.
 ///
 /// Bounded at both ends, in PIXELS, since that is where the consequences are.
 /// A pixel is the floor because a glyph smaller than one is nothing at all.
@@ -554,9 +554,9 @@ mod tests {
         assert_eq!(snap_scale(1.0, 15.0, 2.0), 1.0, "the dialled size is left alone");
         assert_eq!(snap_scale(1.0, 9.5, 2.0), 1.0, "19 physical pixels, already whole");
         // A base that isn't whole on the display it is drawn on lands on the
-        // grid rather than sitting off it: the roll's 9.5pt name is 9.5 pixels
-        // at 1x, and draws at 10.
-        assert_eq!(snap_scale(1.0, 9.5, 1.0) * 9.5, 10.0);
+        // grid rather than sitting off it: the roll's name is 24.7 pixels at
+        // 2x, and draws at 25.
+        assert!((snap_scale(1.0, 12.35, 2.0) * 12.35 * 2.0 - 25.0).abs() < 1e-4);
 
         // A rung is 4%, so everything inside one lands on the same size...
         let bucket = |scale: f32| snap_scale(scale, 15.0, 2.0);

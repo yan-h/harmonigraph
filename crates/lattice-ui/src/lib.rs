@@ -344,6 +344,12 @@ pub struct SpectrumConfig {
     /// Fixed against the zoom, unlike the note names: a marking says what the
     /// axis is, and the axis is the one thing on the pane that does not change
     /// size when the range is zoomed.
+    ///
+    /// A saved view loads at 1 and so draws its markings TWICE the size it was
+    /// saved at, the built-in size having been rebased by 2 (see
+    /// `panes::spectral::MARKING_PT`). Deliberate, and the same call as the
+    /// lattice's: 10pt was the wrong number rather than one of several, and a
+    /// blob that kept it would be preserving a mistake.
     #[serde(default = "default_one")]
     pub marking_scale: f32,
     /// Strength of the light edge drawn along the spectrum's profile and
@@ -418,6 +424,10 @@ pub struct SpectrumConfig {
     /// narrows so that it keeps its footing on the ribbon it is written on —
     /// see `panes::spectral::name_zoom`. This says how big it is at the zoom
     /// you are at.
+    ///
+    /// A saved view loads at 1 and so draws its names 1.3 times the size it
+    /// was saved at, for the reason [`marking_scale`](Self::marking_scale)
+    /// gives.
     #[serde(default = "default_one")]
     pub note_name_scale: f32,
 

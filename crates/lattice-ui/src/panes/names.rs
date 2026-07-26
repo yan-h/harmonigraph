@@ -703,15 +703,19 @@ mod tests {
     const PANE: egui::Rect =
         egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
 
-    /// A pitch axis the size a docked pane actually has: 700 points.
+    /// A pitch axis the size a docked pane actually has — see
+    /// `spectral::REFERENCE_PITCH_LEN`, which is that size and the one the
+    /// type is quoted against.
     ///
     /// The pitch range cannot be zoomed under two octaves
     /// ([`PITCH_RANGE_MIN_SPAN`](crate::PITCH_RANGE_MIN_SPAN)), so across 100
     /// points a semitone is four of them — less than a name is tall. Anything
     /// about naming NEIGHBOURING pitches therefore has to be asked of a pane
     /// with room to draw them apart, or it is asking about the test fixture.
-    const BIG: egui::Rect =
-        egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 720.0) };
+    const BIG: egui::Rect = egui::Rect {
+        min: egui::pos2(10.0, 20.0),
+        max: egui::pos2(310.0, 20.0 + super::super::spectral::REFERENCE_PITCH_LEN),
+    };
 
     fn on(time: f64, note: u8) -> NoteEvent {
         NoteEvent { time, channel: 0, note, kind: NoteEventKind::On { velocity: 0.8 } }

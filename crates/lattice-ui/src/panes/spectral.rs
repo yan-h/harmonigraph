@@ -419,7 +419,7 @@ fn name_zoom(span: f32) -> f32 {
 /// The PITCH axis, of the two: a ribbon's width is set in semitones, so that
 /// is the axis whose length decides how big the picture under a name is. It is
 /// also the short side, and so the one a window resize tends to take first.
-const REFERENCE_PITCH_LEN: f32 = 860.0;
+pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 
 /// The sizes this pane sets text at for one frame, as multiples of each
 /// piece's built-in point size.
@@ -1405,11 +1405,11 @@ mod tests {
     /// text labelling the axis it is drawn against.
     ///
     /// Both ends of the zoom are pinned, because both are claims: at the whole
-    /// axis a name is exactly the size it was dialled at (nothing about the
-    /// default view changes), and at the tightest zoom the range offers it is
-    /// about three times that — grown enough to hold a ribbon eight times
-    /// fatter, nowhere near the tenfold a name that kept a constant share of
-    /// the axis would have taken.
+    /// axis a name is exactly the size it was dialled at, so nothing about the
+    /// default view changes, and at the tightest range the analyzer offers it
+    /// is five times that — the axis being ten octaves and the floor two, and
+    /// the law being a constant share of the axis rather than some softened
+    /// fraction of one.
     #[test]
     fn names_follow_the_pitch_zoom_and_markings_hold_still() {
         let cfg = SpectrumConfig::default();
@@ -1430,7 +1430,7 @@ mod tests {
         // Monotone in between, and never under the size it started at: the
         // reference is the widest range there is, so the only way is up.
         let mut previous = 0.0;
-        for span in [FULL_PITCH_SPAN, 96.0, 60.0, 36.0, 24.0, crate::PITCH_RANGE_MIN_SPAN] {
+        for span in [FULL_PITCH_SPAN, 96.0, 60.0, 36.0, crate::PITCH_RANGE_MIN_SPAN] {
             let names = at(span).names;
             assert!(names >= previous, "{span} semitones drew smaller names than the span above");
             previous = names;
