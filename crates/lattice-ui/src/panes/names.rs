@@ -397,6 +397,11 @@ pub(super) fn plan(
         // its grid cell, and then has to clear what the cell before it offered.
         // See [`Lane`] for why it is a grid and not a queue.
         let key = pitch_key(edge.pitch);
+        // This note's OWN name, and the room this note's own name takes. The
+        // lane's grid lays the cells out; what a name has to be given is what
+        // it will occupy, and in a lane holding more than one spelling those
+        // are different numbers.
+        let (name, room) = naming(edge.pitch, &mut names);
         let lane = match occupied.pitches.entry(key) {
             std::collections::hash_map::Entry::Occupied(lane) => lane.into_mut(),
             // A lane's grid is the room of the LANE's own name -- the pitch at
@@ -419,8 +424,11 @@ pub(super) fn plan(
         if cell == lane.cell {
             continue;
         }
-        // The lane's grid IS a name's room here, so the reach is what is left
-        // of it once the gap is taken back out.
+        // How far THIS name reaches: its own room, less the gap that room
+        // carries. The lane's grid is the same number wherever a lane spells
+        // one way, which is nearly everywhere; where it does not, a name given
+        // the lane's width and drawn at its own lands on its neighbour, and
+        // the pane draws the collision.
         //
         // What the offer has to clear is the previous one's INK, with no gap
         // demanded on top: the gap is already built into the cell, so a run of
@@ -428,12 +436,11 @@ pub(super) fn plan(
         // gap. Asking for it twice would refuse an offer whenever a note fell
         // late in its cell and the next fell early — which is most of them,
         // and cost half the names in a dense run.
-        let (from, to) = name_span(edge.time, lane.grid - gap, backward);
+        let (from, to) = name_span(edge.time, room - gap, backward);
         let clear = from >= lane.reached;
         lane.cell = cell;
         lane.reached = to;
         if clear && visible {
-            let (name, _) = naming(edge.pitch, &mut names);
             let rect =
                 label_rect(axes, scale.t_of(edge.pitch), time.depth_of(edge.time), &name, size, label_scale);
             placed.push(NoteLabel { name, rect, #[cfg(test)] at: edge.time });
@@ -979,6 +986,54 @@ mod tests {
             alone,
             "a note off the pane resized its lane's cells and renamed the run behind it",
         );
+    }
+
+    /// Two names in one lane never overlap, whatever they spell.
+    ///
+    /// Thinning exists to stop names landing on each other, and it decides by
+    /// comparing a name's reach against what the last one took. That reach is
+    /// read off the LANE's grid, and a name is DRAWN at its own width — one
+    /// number for the room it is given and another for the room it takes.
+    /// Where a lane holds one spelling the two agree, which is nearly always;
+    /// where it holds several they do not, and a name wider than its lane's
+    /// simply overruns the one before it. The pane draws the collision.
+    ///
+    /// Alternating spellings a fifth of a cent apart, which is a real thing to
+    /// play — it is one note held against a tuning that keeps drifting past
+    /// `Tuning::tolerance` and back. `E♯-5↓` is 21.8 points wide against `E`'s
+    /// 7.7, so the wide ones land 4.7 points inside each other.
+    #[test]
+    fn names_in_one_lane_do_not_overlap_however_they_spell() {
+        let mut state = state(24.0, 10.0);
+        state.tuning = lattice_core::Tuning::just();
+        for i in 0..24 {
+            let t = 5.0 + i as f64 * 0.35;
+            // Both inside lane 639; the second spells nearly three times as
+            // wide as the first.
+            let bend = if i % 2 == 0 { -0.127 } else { -0.131 };
+            state.tracker.handle_event(on(t, 64));
+            state.tracker.handle_event(tuning(t + 0.01, 64, bend));
+            state.tracker.handle_event(off(t + 0.2, 64));
+        }
+        let placed = labels_in(&state, 14.0, BIG);
+        assert!(placed.len() > 2, "nothing to collide: {} names", placed.len());
+        // One pitch, so one lane, and the pane is laid out along its long side
+        // — the depth axis is the screen's x. Sorted by where they start, so
+        // adjacent pairs are the only ones that can touch.
+        let mut boxes: Vec<(f32, f32, String)> =
+            placed.iter().map(|l| (l.rect.min.x, l.rect.max.x, l.name.to_string())).collect();
+        boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for pair in boxes.windows(2) {
+            assert!(
+                pair[1].0 >= pair[0].1,
+                "{} ends at {:.2} and {} starts at {:.2}: they overlap by {:.2} points",
+                pair[0].2,
+                pair[0].1,
+                pair[1].2,
+                pair[1].0,
+                pair[0].1 - pair[1].0,
+            );
+        }
     }
 
     fn said(labels: &[NoteLabel]) -> Vec<String> {
