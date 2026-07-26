@@ -13,6 +13,12 @@ use harmonigraph_core::{NoteEvent, NoteEventKind};
 use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use harmonigraph_ui::SharedState;
 
+// This key and the `run_native` app name below (which is also the storage
+// DIRECTORY) both moved with the rename, so the harness starts once from
+// defaults rather than restoring the pre-rename app.ron. Deliberate: this is
+// dev-harness layout, not user data, and carrying a legacy key for it would
+// buy nothing. Copying the old app.ron across does NOT recover it — the key
+// inside it is the old one too.
 const UI_STATE_STORAGE_KEY: &str = "harmonigraph-ui-state";
 
 fn main() -> eframe::Result {
