@@ -1,6 +1,6 @@
 //! [`SharedState`], the one instance of everything the UI reads and mutates
 //! each frame, plus what of it survives a session: the dock arrangement,
-//! camera, and settings written through [`UiPersist`].
+//! camera, and settings written through [`UiPersist`](crate::state::UiPersist).
 
 use std::collections::VecDeque;
 

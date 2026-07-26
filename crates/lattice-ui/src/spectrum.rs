@@ -310,7 +310,7 @@ impl Default for AudioSpectrum {
 impl AudioSpectrum {
     /// Forget the spectrogram textures, so the next draw uploads fresh ones
     /// into whatever context is current. See
-    /// [`SharedState::release_context_resources`].
+    /// [`SharedState::release_context_resources`](crate::SharedState::release_context_resources).
     pub(crate) fn release_textures(&mut self) {
         for surface in &mut self.spectrogram {
             surface.release_texture();

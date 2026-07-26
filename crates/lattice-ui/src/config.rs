@@ -542,8 +542,9 @@ pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 /// controls now set it — the Analyzer tab's Span bar and the drag across the
 /// picture — and a gesture that clamped to its own idea of the limits would
 /// push the bar past its own ends. The maximum is also what
-/// [`AudioSpectrum::HISTORY_MAX_SECONDS`] is sized to reach back to, so the
-/// heatmap can fill the widest span the axis offers.
+/// [`AudioSpectrum::HISTORY_MAX_SECONDS`](crate::AudioSpectrum::HISTORY_MAX_SECONDS)
+/// is sized to reach back to, so the heatmap can fill the widest span the axis
+/// offers.
 pub(crate) const ROLL_SECONDS_MIN: f32 = 1.0;
 pub(crate) const ROLL_SECONDS_MAX: f32 = 600.0;
 
