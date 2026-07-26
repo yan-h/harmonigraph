@@ -539,10 +539,22 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 
-/// A full-scale sine reads as full height, which is what the pane did before
-/// the ceiling was adjustable at all.
+/// Where the curve's window ends, and it is NOT full scale, because nothing
+/// musical gets near full scale in one bucket.
+///
+/// Measured: a chord of six partials mixed to peak at -12 dBFS reads -23.8 dB
+/// in its loudest bucket once the default -4.5 dB/oct tilt has taken its cut,
+/// because a chord splits its power across its partials and one bucket only
+/// ever holds a share of it. Against a full-scale ceiling that is 0.60 of the
+/// pane, so the top two fifths of an analyzer are empty in normal use.
+///
+/// -20 puts the same chord at 0.90 and a quiet passage where the curve can
+/// still be read. A full-scale sine now runs off the top, which is the right
+/// trade: the pane is read against material, not against a test tone.
+///
+/// The bar still offers [`LEVEL_MAX_DB`], so 0 is one drag away.
 pub(crate) fn default_ceiling_db() -> f32 {
-    LEVEL_MAX_DB
+    -20.0
 }
 
 pub(crate) fn default_true() -> bool {

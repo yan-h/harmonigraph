@@ -656,6 +656,56 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
     assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());
 }
 
+/// Music fills most of the analyzer's height, rather than half of it.
+///
+/// The ceiling used to be full scale, and nothing musical puts full scale in
+/// ONE bucket: a chord splits its power across its partials, and the default
+/// tilt takes another 10 dB off anything well under the 1 kHz pivot. The curve
+/// topped out halfway up and the top half of the pane was empty in normal use.
+///
+/// So the defaults are held to a chord rather than to a test tone. This one
+/// reads 0.90 of the pane as they stand and 0.60 against a full-scale ceiling,
+/// so 0.75 is the line between the two — what it catches is the ceiling
+/// drifting back up, not a shift of a few dB either way. The upper bound is
+/// the other failure: a curve clipped flat against the top has lost the shape
+/// of its own peaks, which is worse than empty space above it.
+#[test]
+fn a_chord_fills_most_of_the_analyzers_height() {
+    let sr = 48_000.0;
+    let cfg = SpectrumConfig::default();
+    // Six partials sharing the headroom, peaking about -12 dBFS — a mix, not a
+    // tone. Two seconds, so the smoothing has long settled.
+    let samples: Vec<f32> = (0..24_000)
+        .map(|i| {
+            let t = i as f32 / sr;
+            let mix: f32 = [220.0, 277.2, 329.6, 440.0, 554.4, 659.3]
+                .iter()
+                .map(|f| (std::f32::consts::TAU * f * t).sin())
+                .sum();
+            0.25 * mix / 6.0_f32.sqrt()
+        })
+        .collect();
+    let mut spectrum = AudioSpectrum::default();
+    spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+    let levels = spectrum.display(1.0).expect("audio is flowing");
+
+    // The drawn height of the tallest bucket, through the same mapping the
+    // curve is painted with — bucket index back to MIDI, since the tilt is a
+    // function of pitch.
+    let peak = levels
+        .iter()
+        .enumerate()
+        .map(|(i, &power)| {
+            let midi = lattice_core::spectrum::SPECTRUM_MIN_MIDI
+                + i as f32 / lattice_core::spectrum::BINS_PER_SEMITONE as f32;
+            crate::panes::spectral::loudness(&cfg, power, midi)
+        })
+        .fold(0.0_f32, f32::max);
+
+    assert!(peak > 0.75, "the curve only reaches {peak:.2} of the pane; the top is empty");
+    assert!(peak < 0.99, "the curve is clipped flat against the ceiling at {peak:.2}");
+}
+
 #[test]
 fn spectrum_config_round_trips_through_persist() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);

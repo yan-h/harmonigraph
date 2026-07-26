@@ -260,6 +260,15 @@ pub struct CameraPreset {
 /// it, which is its own TAB BAR — six tab names need 347.5pt laid across it,
 /// measured — so this fraction and the window width together decide whether
 /// egui_dock draws a scroll bar over the settings.
+///
+/// Widening the column is what a scroll bar over the settings costs, and the
+/// price is charged to the picture twice over: 0.68 would carry the tab bar
+/// down to a window about 1090pt wide instead of 1240, but it also takes 8pt
+/// off the Spectral pane, which is already within a few points of being
+/// narrower than the perf HUD it has to contain. So the column is not widened
+/// on account of a bar that does not appear at the window this is dialled in
+/// for — see `the_settings_column_needs_no_scroll_bar_at_the_window_it_was_
+/// dialled_in`, which is what would notice if that stopped being true.
 pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
 
 /// The default pane arrangement: big lattice with the Spectral pane

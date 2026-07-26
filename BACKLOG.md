@@ -40,8 +40,7 @@ both sides. Never resolve one by dropping an item you did not finish.
 ## Items
 
 [settings] I don't like having the scrollbar on the top list of settings. Any solutions you can think of?
-
-[spectrum] analyzer has a lot of empty space in typical usage. generally only half of the height is used.
+  — at 1512x886 there is now no scrollbar of either kind in the settings column: the tab bar clears its six names by 76pt, and folding Notes/Console gave the panes the height they were short of (Tuning/Nodes/Analyzer scrolled by 20/63/120pt before it, zero after). Pinned by `the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`. Widening the column was tried and withdrawn: it takes 8pt off the Spectral pane, which is already within a few points of being narrower than the perf HUD it has to hold. Reopen with the window size you saw it at if it is still there.
 
 [ui] with Notes/Console folded by default, collapsing the settings leaf makes BOTH children of that split collapsed, so the whole settings column folds sideways to one rail — one click where it used to take two. Three reviewers read `fold::paint` as labelling that rail "Notes" (the settings leaf's body is 0px, so only the log leaf gets a name painted). Nobody could drive the painter to confirm it. If true, the rail naming the wrong pane is the bug, not the one-click fold.
 
