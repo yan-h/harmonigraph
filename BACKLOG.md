@@ -47,6 +47,8 @@ both sides. Never resolve one by dropping an item you did not finish.
 
 [spectrum] analyzer has a lot of empty space in typical usage. generally only half of the height is used.
 
+[render] texture ids leak on the swapchain's unhappy arms. vendor/egui-baseview's wgpu renderer returns early on Occluded/Timeout/Suboptimal/Outdated/Lost (renderer.rs:527-575) — before the free_texture loop at :639 — so egui drops the handle and forgets the id while the renderer's map keeps the texture forever. Mirror image of the crash fixed in #112 (there a texture died too early; here it never dies). Found by that PR's self-review, left alone as outside its diff. Trigger is a window backgrounded or a surface lost mid-drag, so a long session that gets occluded repeatedly is the case to measure before deciding it matters.
+
 > Work through BACKLOG.md. First triage: restate each item as you understand
 > it and flag anything ambiguous — ask me about those before touching them.
 > Then fix the clear ones, one commit per item. Remove completed items from
