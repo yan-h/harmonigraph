@@ -270,7 +270,6 @@ pub(crate) fn draw_node_labels(
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
-                    view.mark_weight,
                 )
             }
         };
@@ -346,6 +345,24 @@ pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
 /// em wide. A drawn mark claims exactly this, so it sits in the same column
 /// grid as the typeset accidental above it.
 const MARK_ADVANCE: f32 = 0.5;
+/// Iosevka's own stroke weight, measured off its outlines: 70/1000 em, as a
+/// fraction of the mark's font size.
+///
+/// A constant rather than a setting, because the face gives no other answer
+/// to weigh it against. It uses ONE weight for everything — `♯`'s verticals
+/// are 69 and its bars 70, the hyphen is 70, `+` is about 70 — and it does
+/// that across a glyph 878 units tall (`♯`) and one 70 units tall (`-`)
+/// alike. So the typeface's own answer to "should a smaller mark be drawn
+/// heavier?" is no, and an optical-sizing argument for 0.10 or 0.12 is an
+/// argument against the face these marks sit in.
+///
+/// Heavier weights were also compensating for something since fixed: while
+/// the marks were composited shapes their feathered joins read heavier than
+/// the geometry measured, and while they were typeset a bar this thin really
+/// did smear. Rasterized with a whole-pixel floor (see [`mark_key`]), 0.07 is
+/// a clean line — and it is the line the rest of the label is drawn with.
+const MARK_WEIGHT: f32 = 0.07;
+
 /// The ink width Iosevka gives `+` and `-` within that cell (372/1000 em).
 /// Matching it is what keeps a drawn sign from reading as a different size
 /// of mark than the `♯` stacked over it.
@@ -820,7 +837,6 @@ pub(crate) fn draw_stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
-    mark_weight: f32,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
@@ -909,7 +925,7 @@ pub(crate) fn draw_stacked_name(
                            count: &str,
                            kind: MarkKind|
      -> f32 {
-        let key = mark_key(kind, mark_size, mark_weight, ppp);
+        let key = mark_key(kind, mark_size, MARK_WEIGHT, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
         let half_height = paint_mark(painter, ppp, key, center, color, outline);
         if !count.is_empty() {

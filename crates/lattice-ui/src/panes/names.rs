@@ -712,7 +712,6 @@ pub(super) fn draw(
     painter: &egui::Painter,
     labels: &[NoteLabel],
     label_scale: f32,
-    mark_weight: f32,
     batch: &mut crate::text::TextBatch,
 ) {
     // `draw_stacked_name` sizes everything off the lattice's own letter size,
@@ -727,7 +726,6 @@ pub(super) fn draw(
             theme::text(),
             theme::well(),
             scale,
-            mark_weight,
         );
     }
 }
