@@ -715,8 +715,6 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
-    state.spectrum_config.spectrogram_opacity = 0.5;
-    state.spectrum_config.spectrogram_gamma = 1.6;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -729,8 +727,6 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.low_midi, 40.5);
     assert!(restored.spectrum_config.show_spectrogram);
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
-    assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
-    assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
 }
 
 /// The pitch range used to be a pair of Bitwig octave numbers. A blob from
@@ -809,18 +805,24 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
 }
 
 /// A field that has since been REMOVED must not take the whole blob down with
-/// it. `spectrogram_fine_levels` existed only while the heatmap's stored
-/// precision was being judged by eye, so any project saved during that window
-/// carries it — and a blob that fails to parse loses the entire UI state, not
-/// just the stale key.
+/// it. A blob that fails to parse loses the entire UI state, not just the stale
+/// key — so every settings removal rides on serde ignoring what it has no field
+/// for, and this is where that is held.
+///
+/// `spectrogram_fine_levels` existed only while the heatmap's stored precision
+/// was being judged by eye; the other four are the heatmap's opacity, contrast
+/// and private dB window, which every project saved before they were dropped
+/// still carries.
 #[test]
 fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.view.extent_sevens = 3;
     let saved = state.save_persist();
-    // Put the departed field back, exactly as that build wrote it.
-    let stale = saved
-        .replace("spectrogram_gamma:", "spectrogram_fine_levels:true,spectrogram_gamma:");
+    // Put the departed fields back, exactly as those builds wrote them.
+    let gone = "spectrogram_fine_levels:true,spectrogram_opacity:0.85,\
+                spectrogram_own_range:true,spectrogram_floor_db:-60.0,\
+                spectrogram_ceiling_db:-20.0,spectrogram_gamma:1.6,";
+    let stale = saved.replace("spectrogram_color:", &format!("{gone}spectrogram_color:"));
     assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -1975,52 +1977,29 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
 }
 
-/// The heatmap's level for a bucket given as POWER. The pane itself reads the
-/// dB its history already stores; these tests are about the mapping, which is
-/// easier to state in the power a partial actually has.
-fn spectrogram_level(cfg: &SpectrumConfig, power: f32, midi: f32) -> f32 {
-    use crate::panes::spectral::{power_db, spectrogram_level_db};
-    spectrogram_level_db(cfg, power_db(power), midi)
-}
-
+/// The heatmap and the curve read ONE level scale, so a bucket that draws the
+/// curve half way up paints a cell half way along the ramp, and dragging the
+/// Level window moves both together.
+///
+/// The heatmap had a dB window and a contrast curve of its own, and the pair
+/// could be set so that the same bucket meant two different things in one pane.
+/// Nothing enforces the agreement now except there being one mapping — which is
+/// what this pins, in the power a partial actually has rather than in the dB the
+/// history stores it as.
 #[test]
-fn the_heatmap_follows_the_curve_until_given_its_own_range() {
-    use crate::panes::spectral::loudness;
+fn the_heatmap_reads_the_curve_s_own_level_scale() {
+    use crate::panes::spectral::{loudness, loudness_db, power_db};
     let mut cfg = SpectrumConfig::default();
-    let (power, midi) = (1e-4, 60.0);
+    let heatmap = |cfg: &SpectrumConfig, power: f32, midi| loudness_db(cfg, power_db(power), midi);
+    let midi = 60.0;
 
-    // Shared by default — the behaviour every existing persist blob expects.
-    assert_eq!(spectrogram_level(&cfg, power, midi), loudness(&cfg, power, midi));
-
-    // Switched on, the heatmap reads its OWN window and stops tracking the
-    // curve's: moving the curve's floor must not move the heatmap.
-    cfg.spectrogram_own_range = true;
-    let own = spectrogram_level(&cfg, power, midi);
-    cfg.floor_db = -20.0;
-    assert_eq!(spectrogram_level(&cfg, power, midi), own, "the heatmap tracked the curve");
-    assert_ne!(loudness(&cfg, power, midi), own, "the curve should have moved");
-}
-
-#[test]
-fn heatmap_contrast_bends_the_level_without_clipping_it() {
-    let mut cfg = SpectrumConfig::default();
-    // A power that lands mid-range, so there is room to bend either way.
-    let (power, midi) = (1e-4, 60.0);
-    let straight = spectrogram_level(&cfg, power, midi);
-    assert!(straight > 0.01 && straight < 0.99, "need a mid-scale level, got {straight}");
-
-    cfg.spectrogram_gamma = 0.5;
-    let lifted = spectrogram_level(&cfg, power, midi);
-    cfg.spectrogram_gamma = 2.5;
-    let crushed = spectrogram_level(&cfg, power, midi);
-    assert!(lifted > straight, "gamma below 1 should lift ({straight} -> {lifted})");
-    assert!(crushed < straight, "gamma above 1 should crush ({straight} -> {crushed})");
-    // The ends are fixed points: contrast redistributes, it never clips.
-    for gamma in [0.3, 1.0, 3.0] {
-        cfg.spectrogram_gamma = gamma;
-        assert_eq!(spectrogram_level(&cfg, 0.0, midi), 0.0, "silence moved at gamma {gamma}");
-        assert_eq!(spectrogram_level(&cfg, 1e9, midi), 1.0, "full scale moved at gamma {gamma}");
+    for power in [0.0, 1e-8, 1e-4, 1e-2, 1.0, 1e9] {
+        assert_eq!(heatmap(&cfg, power, midi), loudness(&cfg, power, midi), "power {power}");
     }
+    // And they stay together as the window is dragged, at either end.
+    cfg.floor_db = -20.0;
+    cfg.ceiling_db = 0.0;
+    assert_eq!(heatmap(&cfg, 1e-4, midi), loudness(&cfg, 1e-4, midi));
 }
 
 /// Palettes that no longer exist must still PARSE. Serde aliases fold them

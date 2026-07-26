@@ -286,7 +286,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ui.checkbox(&mut cfg.show_spectrogram, "Heatmap").on_hover_text(
         "A frequency-vs-time heatmap of the audio, drawn in the roll's \
          region on the same time axis — so each column of energy lines up \
-         with the notes that made it. Shares the Spectrum's Floor and Tilt \
+         with the notes that made it. Reads the Spectrum's Level and Tilt \
          for intensity. Turn Note history off to see the heatmap alone.",
     );
     choice_row(
@@ -300,32 +300,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),
         ],
     );
-    ValueBar::new(&mut cfg.spectrogram_opacity, 0.05..=1.0, "Opacity")
-        .show(ui)
-        .on_hover_text("Overall heatmap opacity, so it can sit under the notes");
-    ValueBar::new(&mut cfg.spectrogram_gamma, 0.3..=3.0, "Contrast")
-        .decimals(2)
-        .show(ui)
-        .on_hover_text(
-            "Curve on the heatmap's brightness: 1.0 is straight, below lifts \
-             quiet detail toward the bright end, above pushes it into the \
-             dark. Unlike the Floor, this keeps everything and only changes \
-             how it's spread — so hiss can be pushed down without losing the \
-             quiet partials just above it.",
-        );
-    ui.checkbox(&mut cfg.spectrogram_own_range, "Own level range").on_hover_text(
-        "Give the heatmap its own Floor and Ceiling instead of sharing the \
-         Spectrum's. The curve wants a range that keeps peaks on the pane, \
-         the heatmap one that lifts quiet detail off the background — they \
-         rarely agree.",
-    );
-    if cfg.spectrogram_own_range {
-        RangeBar::new(&mut cfg.spectrogram_floor_db, &mut cfg.spectrogram_ceiling_db, -120.0..=0.0)
-            .display(|db| format!("{db:.0} dB"))
-            .min_span(crate::LEVEL_RANGE_MIN_SPAN)
-            .show(ui)
-            .on_hover_text("The heatmap's own dB window: silence at the low end, brightest at the high");
-    }
+    // The palette is the whole of it. Opacity, contrast and a private level
+    // range each stood here and each is gone — see
+    // [`spectrogram_color`](crate::SpectrumConfig::spectrogram_color) for why
+    // the neutral setting turned out to be the only one worth having.
     button_row(ui, |ui| {
         if ui
             .button("Clear spectrogram")
@@ -451,6 +429,12 @@ pub(crate) fn power_db(power: f32) -> f32 {
 
 /// [`loudness`] from a bucket already in dB, so the heatmap (whose columns are
 /// stored that way) never takes a `log10` per pixel.
+///
+/// The heatmap reads exactly this and nothing of its own. It had a private dB
+/// window and a contrast curve wrapped around it, on the argument that a curve
+/// read as a shape and a picture read as a picture want different ranges; the
+/// answer is that one range is what makes "loud" the same claim in both, and a
+/// second one to keep in step was the cost of a distinction nobody drew.
 pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     // Never trust the pair to be ordered or apart, exactly as the pitch range
@@ -459,35 +443,6 @@ pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32)
     // takes the editor — and with it the host — down.
     let ceiling = cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
     ((db - cfg.floor_db) / (ceiling - cfg.floor_db)).clamp(0.0, 1.0)
-}
-
-/// [`loudness`] as the SPECTROGRAM sees it: its own dB window when it has been
-/// given one, then its contrast curve. Takes the bucket in dB, which is how its
-/// history stores it, so there is no `log10` per pixel.
-///
-/// Split from the curve's mapping because the two are read differently. The
-/// curve is read as a shape against a baseline, so its range wants to keep
-/// peaks on the pane; the heatmap is read as a picture, so its range wants to
-/// lift quiet partials clear of the background. Sharing one range meant
-/// tuning either one spoiled the other.
-pub(crate) fn spectrogram_level_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
-    let level = if cfg.spectrogram_own_range {
-        let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-        // Same guard as `loudness`: a collapsed pair out of a hand-edited blob
-        // would divide by a zero span and paint NaN geometry.
-        let floor = cfg.spectrogram_floor_db;
-        let ceiling = cfg.spectrogram_ceiling_db.max(floor + crate::LEVEL_RANGE_MIN_SPAN);
-        ((db - floor) / (ceiling - floor)).clamp(0.0, 1.0)
-    } else {
-        loudness_db(cfg, power_db, midi)
-    };
-    // powf(1.0) is not free and gamma sits at 1 unless touched, so skip it.
-    let gamma = cfg.spectrogram_gamma;
-    if gamma > 0.0 && (gamma - 1.0).abs() > 1e-3 {
-        level.powf(gamma)
-    } else {
-        level
-    }
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.
@@ -1073,9 +1028,10 @@ pub(crate) fn spectral_pane(
     // columns, and its silence is black; without this bed the un-covered depths
     // (before history fills the window, or past its oldest column) show the
     // lighter pane `well` in jarring patches. Black is the heatmap's own silence
-    // color, so covered and un-covered silence match at any opacity. Drawn under
+    // color, and the quad is untinted, so covered and un-covered silence are the
+    // same black rather than two shades of it. Drawn under
     // the gridlines, so they still read as pitch lanes across the region.
-    if cfg.show_spectrogram && cfg.spectrogram_opacity > 0.0 && split < 1.0 {
+    if cfg.show_spectrogram && split < 1.0 {
         let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
         painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
     }

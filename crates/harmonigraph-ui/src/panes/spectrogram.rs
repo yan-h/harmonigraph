@@ -17,7 +17,7 @@ use egui::Color32;
 use harmonigraph_core::spectrogram::{db_of, BucketDb};
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 
-use super::spectral::{spectrogram_level_db, Axes, PitchScale, TimeAxis};
+use super::spectral::{loudness_db, Axes, PitchScale, TimeAxis};
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
 /// Most time slabs a live window is ever cut into, whatever the pane's size —
@@ -246,8 +246,8 @@ pub(crate) enum Restart {
     /// slab (its time side, through the Span).
     Rows,
     Slab,
-    /// The pitch range the rows read, or the dB window, tilt, contrast and
-    /// ramp that colour them.
+    /// The pitch range the rows read, or the dB window, tilt and ramp that
+    /// colour them.
     Pitch,
     Colour,
     /// The ring's own size, which is the pane's time side.
@@ -332,21 +332,19 @@ pub(crate) struct ColumnStyle {
     color: ColumnColor,
 }
 
-/// How a bucket becomes a colour: the dB window it is read against, the
-/// contrast curve applied to it, and the ramp the result lands on. Exactly the
-/// fields [`fill_column`] reaches — `cell_color`'s ramp, and everything
-/// [`spectrogram_level_db`] reads down both of its branches — and nothing else.
+/// How a bucket becomes a colour: the dB window it is read against and the ramp
+/// the result lands on. Exactly the fields [`fill_column`] reaches —
+/// `cell_color`'s ramp, and everything [`loudness_db`] reads — and nothing else.
 ///
 /// It is spelled out field by field rather than holding a whole
 /// [`SpectrumConfig`] because the config is also where the pane keeps what it
 /// is LOOKING at, and that moves continuously: `roll_seconds` on every frame of
-/// a Span drag, `roll_fraction` on every frame of a divider drag,
-/// `spectrogram_opacity` on every frame of an opacity drag — none of which
-/// changes a texel (opacity is the quad's tint, applied once at draw). Keying
-/// the ring on the whole config made every one of those a full re-blank and
-/// repaint, which is precisely the per-frame rebuild [`live_slab`]'s ladder was
-/// built to end; the ladder held `bucket` still and the config moved anyway.
-/// `dragging_the_span_carries_the_ring_forward` is that drag.
+/// a Span drag, `roll_fraction` on every frame of a divider drag — neither of
+/// which changes a texel. Keying the ring on the whole config made every one of
+/// those a full re-blank and repaint, which is precisely the per-frame rebuild
+/// [`live_slab`]'s ladder was built to end; the ladder held `bucket` still and
+/// the config moved anyway. `dragging_the_span_carries_the_ring_forward` is
+/// that drag.
 ///
 /// The cost of listing fields is that a new colour input has to be added here
 /// too, and forgetting leaves a WRONG picture rather than a slow one — so
@@ -354,13 +352,9 @@ pub(crate) struct ColumnStyle {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ColumnColor {
     ramp: SpectrogramColor,
-    own_range: bool,
-    // Bit patterns, for the same exactness the outer struct's floats get.
-    // The heatmap's own dB window and contrast curve, used when `own_range`;
-    // the curve's shared window when not; the tilt both branches apply.
-    own_floor_bits: u32,
-    own_ceiling_bits: u32,
-    gamma_bits: u32,
+    // Bit patterns, for the same exactness the outer struct's floats get: the
+    // Level window the heatmap shares with the curve, and the tilt applied
+    // inside it.
     floor_bits: u32,
     ceiling_bits: u32,
     tilt_bits: u32,
@@ -370,10 +364,6 @@ impl ColumnColor {
     fn new(cfg: &SpectrumConfig) -> ColumnColor {
         ColumnColor {
             ramp: cfg.spectrogram_color,
-            own_range: cfg.spectrogram_own_range,
-            own_floor_bits: cfg.spectrogram_floor_db.to_bits(),
-            own_ceiling_bits: cfg.spectrogram_ceiling_db.to_bits(),
-            gamma_bits: cfg.spectrogram_gamma.to_bits(),
             floor_bits: cfg.floor_db.to_bits(),
             ceiling_bits: cfg.ceiling_db.to_bits(),
             tilt_bits: cfg.tilt.to_bits(),
@@ -747,7 +737,6 @@ fn heatmap_mesh(
     axes: &Axes,
     time: &TimeAxis,
     layout: &TexLayout,
-    opacity: f32,
     d_near: f32,
     d_far: f32,
 ) -> egui::Mesh {
@@ -756,7 +745,11 @@ fn heatmap_mesh(
     // fragment ever interpolates across it.
     let u_at = |d: f32| u_drawn(layout, time.time_at(d));
     let v_at = |p: f32| (p - layout.t0) / (layout.tn - layout.t0);
-    let tint = Color32::from_white_alpha((opacity * 255.0) as u8);
+    // Untinted: the texels carry the whole of the colour. The heatmap used to
+    // be faded here by an Opacity setting so it could sit under the notes; a
+    // heatmap worth less than solid is one to turn OFF, and the fade cost the
+    // palette's dark end its match with the black bed behind it.
+    let tint = Color32::WHITE;
     let vert = |p: f32, d: f32| egui::epaint::Vertex {
         pos: axes.at(p, d),
         uv: egui::pos2(u_at(d), v_at(p)),
@@ -815,14 +808,13 @@ pub(super) fn draw_spectrogram(
     let time = TimeAxis::new(state, split, now);
     let whole = state.whole_song.as_ref();
     let spectrum = &mut state.spectrum;
-    let opacity = cfg.spectrogram_opacity.clamp(0.0, 1.0);
     // Columns come from the precomputed whole-take set (playhead mode) or the
     // live store.
     let enough = match whole {
         Some(ws) => ws.columns.len() >= 2,
         None => spectrum.history().len() >= 2,
     };
-    if opacity <= 0.0 || !enough {
+    if !enough {
         return;
     }
 
@@ -903,8 +895,7 @@ pub(super) fn draw_spectrogram(
         (near, time.depth_of(layout.t_origin))
     };
 
-    let mesh =
-        heatmap_mesh(tex.id(), axes, &time, &layout, opacity, d_near, d_far);
+    let mesh = heatmap_mesh(tex.id(), axes, &time, &layout, d_near, d_far);
     painter.add(egui::Shape::mesh(mesh));
 }
 
@@ -1445,7 +1436,7 @@ fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[BucketDb]) -> Vec<Col
 /// the faintest colour dropping straight to black, with the whole quiet end of
 /// a wide window missing behind the cliff.
 fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    spectrogram_level_db(cfg, db_of(bucket), midi)
+    loudness_db(cfg, db_of(bucket), midi)
 }
 
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
@@ -1467,9 +1458,9 @@ fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb])
 
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the chosen
 /// ramp. The ramp's dark end is black, matching the region's black bed (laid
-/// down in `spectral_pane`), so silence recedes while energy stands out — the
-/// overall opacity is applied once, as the quad's tint. Shared with the spectrum
-/// curve so the two read in the same scheme.
+/// down in `spectral_pane`), so silence recedes while energy stands out — and
+/// the quad is drawn untinted, so what a texel says is what lands. Shared with
+/// the spectrum curve so the two read in the same scheme.
 pub(super) fn cell_color(kind: SpectrogramColor, level: f32) -> Color32 {
     let t = level.clamp(0.0, 1.0);
     let rgb = match kind {
@@ -1663,31 +1654,27 @@ mod tests {
     /// and found invisible; this is what keeps it from drifting after.)
     #[test]
     fn quantizing_a_bucket_does_not_move_its_colour() {
-        use super::super::spectral::{power_db, spectrogram_level_db};
+        use super::super::spectral::{loudness_db, power_db};
         let mut cfg = SpectrumConfig::default();
         let tolerance =
             0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
-        for own_range in [false, true] {
-            cfg.spectrogram_own_range = own_range;
-            for tilt in [0.0, 3.0, -3.0] {
-                cfg.tilt = tilt;
-                for midi in [20.0f32, 60.0, 100.0, 130.0] {
-                    for power in [1e-8f32, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 1.0, 4.0] {
-                        let exact = spectrogram_level_db(&cfg, power_db(power), midi);
-                        let stored = bin_level(&cfg, q(power), midi);
-                        assert!(
-                            (stored - exact).abs() <= tolerance,
-                            "power {power} at MIDI {midi} (tilt {tilt}, own range \
-                             {own_range}): {exact} exact vs {stored} stored",
-                        );
-                    }
+        for tilt in [0.0, 3.0, -3.0] {
+            cfg.tilt = tilt;
+            for midi in [20.0f32, 60.0, 100.0, 130.0] {
+                for power in [1e-8f32, 1e-6, 1e-4, 1e-2, 0.1, 0.5, 1.0, 4.0] {
+                    let exact = loudness_db(&cfg, power_db(power), midi);
+                    let stored = bin_level(&cfg, q(power), midi);
+                    assert!(
+                        (stored - exact).abs() <= tolerance,
+                        "power {power} at MIDI {midi} (tilt {tilt}): \
+                         {exact} exact vs {stored} stored",
+                    );
                 }
             }
         }
         // And silence stays exactly silent rather than creeping up off the
         // quantizer's floor, whatever the dB window is set to.
-        cfg.spectrogram_own_range = true;
-        cfg.spectrogram_floor_db = -120.0;
+        cfg.floor_db = -120.0;
         assert_eq!(bin_level(&cfg, 0, 60.0), 0.0, "an empty bucket must read as silence");
     }
 
@@ -1697,19 +1684,18 @@ mod tests {
     /// hard edge — faintest colour straight to black — as soon as the window
     /// can be dragged below it. Nothing between two adjacent stored bytes may
     /// move the level by more than the step between them.
+    ///
+    /// The sweep runs past [`LEVEL_MIN_DB`](crate::LEVEL_MIN_DB) on purpose: the
+    /// Level bar stops at -100, and a hand-edited blob does not.
     #[test]
     fn the_quiet_end_of_the_ramp_fades_instead_of_cutting_off() {
-        let mut cfg = SpectrumConfig {
-            spectrogram_own_range: true,
-            spectrogram_ceiling_db: 0.0,
-            ..SpectrumConfig::default()
-        };
+        let mut cfg = SpectrumConfig { ceiling_db: 0.0, ..SpectrumConfig::default() };
         for floor in [-60.0f32, -90.0, -100.0, -120.0] {
-            cfg.spectrogram_floor_db = floor;
+            cfg.floor_db = floor;
             // One stored step, as a fraction of the window it is drawn in; the
             // levels either side of any stored byte may differ by that and no
             // more.
-            let step = harmonigraph_core::spectrogram::DB_STEP / (cfg.spectrogram_ceiling_db - floor);
+            let step = harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - floor);
             for bucket in 0..BucketDb::MAX {
                 let here = bin_level(&cfg, bucket, 60.0);
                 let next = bin_level(&cfg, bucket + 1, 60.0);
@@ -2436,8 +2422,8 @@ mod tests {
         styled(style(100, 0.2, 40.0, 48.0, &cfg)); // slab width
         styled(style(100, 0.1, 41.0, 48.0, &cfg)); // pitch range, low end
         styled(style(100, 0.1, 40.0, 49.0, &cfg)); // pitch range, span
-        // Every colour input, one at a time: a palette, either dB window, the
-        // contrast curve or the tilt recolours every pixel without moving a
+        // Every colour input, one at a time: the palette, either end of the
+        // Level window, or the tilt recolours every pixel without moving a
         // column. Spelled out one by one because [`ColumnColor`] is a list kept
         // by hand, and a field left off it is a WRONG picture — which, unlike a
         // slow one, no frame counter reports.
@@ -2447,10 +2433,6 @@ mod tests {
             styled(style(100, 0.1, 40.0, 48.0, &c));
         };
         recoloured(|c| c.spectrogram_color = SpectrogramColor::Mono);
-        recoloured(|c| c.spectrogram_own_range = !c.spectrogram_own_range);
-        recoloured(|c| c.spectrogram_floor_db -= 6.0);
-        recoloured(|c| c.spectrogram_ceiling_db -= 6.0);
-        recoloured(|c| c.spectrogram_gamma += 0.1);
         recoloured(|c| c.floor_db -= 6.0);
         recoloured(|c| c.ceiling_db -= 6.0);
         recoloured(|c| c.tilt += 1.0);
@@ -2458,8 +2440,8 @@ mod tests {
         // The converse, which is what the ring is FOR. A config field that
         // reaches no texel has to leave the style ALONE, or every frame of the
         // drag that moves it re-blanks the texture and repaints every column.
-        // All three below are continuous drags, and the first is the one the
-        // ladder in [`live_slab`] was written to make free.
+        // Both below are continuous drags, and the first is the one the ladder
+        // in [`live_slab`] was written to make free.
         let carried = |edit: fn(&mut SpectrumConfig)| {
             let mut c = cfg;
             edit(&mut c);
@@ -2471,7 +2453,6 @@ mod tests {
         };
         carried(|c| c.roll_seconds *= 1.01); // Span: the drag along time
         carried(|c| c.roll_fraction += 0.01); // the roll/heatmap divider
-        carried(|c| c.spectrogram_opacity -= 0.1); // the quad's tint, applied at draw
 
         // And every field that says WHICH columns were drawn. These move as the
         // window scrolls, which the ring is built to survive — so they must move

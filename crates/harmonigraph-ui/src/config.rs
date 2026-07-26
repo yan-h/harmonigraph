@@ -372,50 +372,26 @@ pub struct SpectrumConfig {
     /// really did turn it off carries `false` and still round-trips.
     #[serde(default = "default_true")]
     pub show_spectrogram: bool,
-    /// The heatmap's color ramp.
+    /// The heatmap's color ramp — the only thing about it left to choose.
+    ///
+    /// Four settings stood here and have gone, each of them a knob whose
+    /// neutral position is the one worth looking at: an overall opacity (the
+    /// heatmap now draws solid, and a heatmap you want to see less of is one
+    /// to turn off), a contrast curve, and a private dB window with its own
+    /// floor/ceiling pair. The window is the Spectrum's Level, always: one
+    /// range means "loud" is the same claim in the curve and in the heatmap,
+    /// which is the whole reason they share [`loudness_db`].
+    ///
+    /// Their fields are gone from the blob too. That costs nothing on load —
+    /// serde ignores keys it has no field for, which
+    /// `a_persist_blob_carrying_a_since_removed_field_still_loads` pins — so a
+    /// project saved with an opacity simply loads without one.
     #[serde(default)]
     pub spectrogram_color: SpectrogramColor,
-    /// Overall spectrogram opacity, so it can sit under the notes without
-    /// swamping them. (For the heatmap alone, turn the note ribbons off with
-    /// `show_roll`.)
-    #[serde(default = "default_spectrogram_opacity")]
-    pub spectrogram_opacity: f32,
-    /// Give the heatmap its own dB window instead of sharing the curve's.
-    ///
-    /// Off — the default, and what the heatmap always did — means it reads
-    /// `floor_db`/`ceiling_db` like the curve. They answer different
-    /// questions, though: the curve wants a range that keeps peaks on the
-    /// pane, the heatmap one that separates quiet detail from the background,
-    /// and those rarely coincide. `serde(default)` is false, so an existing
-    /// blob keeps the shared behaviour it was saved with.
-    #[serde(default)]
-    pub spectrogram_own_range: bool,
-    /// The heatmap's own dB window, used only while `spectrogram_own_range`.
-    #[serde(default = "default_spectrogram_floor_db")]
-    pub spectrogram_floor_db: f32,
-    #[serde(default = "default_ceiling_db")]
-    pub spectrogram_ceiling_db: f32,
-    /// Contrast curve on the heatmap's 0..1 level: 1 is linear, below 1 lifts
-    /// quiet detail toward the bright end, above 1 pushes it into the dark.
-    ///
-    /// Separate from the dB window on purpose. Moving the floor DISCARDS
-    /// everything under it; gamma keeps the whole range and only changes how
-    /// it is spread, so background hiss can be pushed down without losing the
-    /// quiet partials just above it.
-    #[serde(default = "default_one")]
-    pub spectrogram_gamma: f32,
-}
-
-pub(crate) fn default_spectrogram_floor_db() -> f32 {
-    -60.0
 }
 
 pub(crate) fn default_one() -> f32 {
     1.0
-}
-
-pub(crate) fn default_spectrogram_opacity() -> f32 {
-    0.85
 }
 
 /// Enough of an edge to hold a shape against a bright spectrogram cell,
@@ -616,11 +592,6 @@ impl Default for SpectrumConfig {
             note_name_scale: default_one(),
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
-            spectrogram_opacity: default_spectrogram_opacity(),
-            spectrogram_own_range: false,
-            spectrogram_floor_db: default_spectrogram_floor_db(),
-            spectrogram_ceiling_db: default_ceiling_db(),
-            spectrogram_gamma: default_one(),
         }
     }
 }
