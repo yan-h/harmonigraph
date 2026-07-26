@@ -302,11 +302,15 @@ const PLUS_INK_H: f32 = 0.386;
 /// read as another row of the stack it sits beside, not so much that it
 /// floats free of the name it belongs to.
 const SEPTIMAL_GAP: f32 = 0.22;
-/// How much larger the septimal shape draws than that `+` box. A triangle
-/// covers half its bounding box, so drawn to the same box it reads as the
-/// lighter mark of the two; this is the size at which the pair looks like
-/// one system rather than a mark and a smaller mark.
-const SEPTIMAL_BULK: f32 = 1.25;
+/// The septimal mark's box, relative to the `+` box beside it. One, which
+/// is to say: the same box.
+///
+/// It was 1.25 to keep a FILLED TRIANGLE from reading lighter than the `+`,
+/// a triangle covering half its bounding box. The chevron that replaced it
+/// has the opposite problem -- two arms spanning the full diagonal are
+/// already more ink than the `+` at equal stroke -- so the compensation
+/// went from justified to doubled.
+const SEPTIMAL_BULK: f32 = 1.0;
 /// One piece of a mark, in the mark bitmap's own pixel space.
 ///
 /// These are never drawn to the screen. They describe a shape that gets
@@ -315,7 +319,13 @@ const SEPTIMAL_BULK: f32 = 1.25;
 /// none of the artifacts of drawing them separately can arise.
 enum MarkPiece {
     Bar(egui::Rect),
-    Line(Vec<egui::Pos2>, f32),
+    /// A stroked segment with FLAT terminals, as four corners.
+    ///
+    /// Not a distance-to-segment test, which is the easy way to stroke a
+    /// line and gives round caps and a round join. Iosevka cuts its
+    /// terminals flat, and a chevron with rounded ends and a blunt apex
+    /// reads as a different hand than the `♯` above it.
+    Quad([egui::Pos2; 4]),
 }
 
 impl MarkPiece {
@@ -323,19 +333,31 @@ impl MarkPiece {
     fn covers(&self, p: egui::Pos2) -> bool {
         match self {
             MarkPiece::Bar(rect) => rect.contains(p),
-            MarkPiece::Line(points, width) => points
-                .windows(2)
-                .any(|seg| point_to_segment(p, seg[0], seg[1]) <= width / 2.0),
+            MarkPiece::Quad(corners) => {
+                // Convex and consistently wound: inside is the same side of
+                // every edge.
+                let (mut neg, mut pos) = (false, false);
+                for i in 0..4 {
+                    let (a, b) = (corners[i], corners[(i + 1) % 4]);
+                    let cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+                    neg |= cross < 0.0;
+                    pos |= cross > 0.0;
+                }
+                !(neg && pos)
+            }
         }
     }
 }
 
-/// Distance from `p` to the segment `a`-`b`.
-fn point_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
-    let ab = b - a;
-    let len2 = ab.length_sq();
-    let t = if len2 <= f32::EPSILON { 0.0 } else { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) };
-    ((p - a) - ab * t).length()
+/// One arm of a stroked mark: the segment `a`-`b` at `width`, with flat
+/// terminals, extended past `b` by half a width so two arms meeting there
+/// overlap into a clean point instead of leaving a notch in the outer
+/// corner. Overlap is free -- coverage is a union.
+fn arm(a: egui::Pos2, b: egui::Pos2, width: f32) -> MarkPiece {
+    let along = (b - a).normalized();
+    let across = egui::vec2(-along.y, along.x) * (width / 2.0);
+    let tip = b + along * (width / 2.0);
+    MarkPiece::Quad([a + across, tip + across, tip - across, a - across])
 }
 
 /// Which mark, at what size in physical pixels -- the identity of one
@@ -407,7 +429,7 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
             let tip = egui::pos2(c.x, c.y + dir * hh);
             let base_l = egui::pos2(c.x - hw, c.y - dir * hh);
             let base_r = egui::pos2(c.x + hw, c.y - dir * hh);
-            vec![MarkPiece::Line(vec![base_l, tip, base_r], thick)]
+            vec![arm(base_l, tip, thick), arm(base_r, tip, thick)]
         }
     };
     (pieces, [bw as usize, bh as usize])
@@ -598,6 +620,22 @@ pub(crate) fn draw_stacked_name(
     // Every mark sits on one line of the mark font, so they all rise by the
     // same amount -- including the drawn ones, which have no galley to ask.
     let line = measure("0", &mark_font);
+    // A drawn mark is centered on its line box, with NO correction toward
+    // the font's own bar axis, and that is a measured decision rather than
+    // an omission.
+    //
+    // Iosevka puts the ink of `-`, `+` and `♯` alike at 340/1000 em above
+    // the baseline: one axis, by design. Its typo line box is centered on
+    // exactly that and its hhea box 35 units above it, which looked like a
+    // 0.035 em correction worth applying. But at MARK_SIZE egui rasterizes
+    // into whole-point atlas cells, and those same three glyphs come back
+    // centered at -0.5pt, +0.0pt and +0.5pt from the line box: a whole
+    // point of spread across glyphs the font draws on one axis. The offset
+    // is below the size at which the text beside it can be positioned, and
+    // reading it off any single glyph measures that glyph's rounding.
+    //
+    // Centered is the mean of what the font actually renders, and it is
+    // exactly where `+` lands.
     let rise = (letter.y - line.y) / 2.0;
     let cell = MARK_ADVANCE * mark_size;
 
@@ -830,6 +868,33 @@ mod tests {
             (0..h).any(|y| (0..w).any(|x| coverage(&up, x, y) != coverage(&up, x, h - 1 - y))),
             "a chevron that mirrors onto itself carries no direction"
         );
+    }
+
+    /// Every drawn mark is one stroke weight, and it is the one the font
+    /// draws with.
+    ///
+    /// Iosevka uses a single weight across its whole set -- `♯`'s verticals
+    /// are 69 units, its bars 70, the hyphen 70 -- and it does that over a
+    /// glyph 878 units tall and one 70 units tall alike. These marks sit in
+    /// that set, so they are drawn at 70/1000 em too, and the `-` and the
+    /// `+`'s bar have to come out identical.
+    #[test]
+    fn every_drawn_mark_is_the_fonts_one_stroke_weight() {
+        const WEIGHT: f32 = 0.07;
+        let size = 24.0;
+        let ppp = 2.0;
+        let minus = rasterize_mark(mark_key(MarkKind::Minus, size, WEIGHT, ppp));
+        let plus = rasterize_mark(mark_key(MarkKind::Plus, size, WEIGHT, ppp));
+        // The bar's thickness: inked rows down a column, read a quarter of
+        // the way across so the `+`'s upright is nowhere near it.
+        let bar = |img: &egui::ColorImage| {
+            let x = img.size[0] / 4;
+            (0..img.size[1]).filter(|&y| coverage(img, x, y) > 127).count()
+        };
+        assert_eq!(bar(&minus), bar(&plus), "the - and the +'s bar disagree");
+        // And that thickness is the font's own 0.07 em, to the pixel.
+        let want = (WEIGHT * size * ppp).round() as usize;
+        assert_eq!(bar(&minus), want, "{} px drawn, {want} px is 0.07 em", bar(&minus));
     }
 
     /// The stroke floor is one PHYSICAL pixel, not one point -- a point is

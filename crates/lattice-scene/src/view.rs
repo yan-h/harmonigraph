@@ -420,23 +420,22 @@ fn default_sevens_label() -> SevensLabel {
     SevensLabel::Name
 }
 
-/// Heavier than Iosevka's own 0.07 em, deliberately, because matching that
-/// number does NOT match the `♯` beside it.
+/// Iosevka's own stroke weight, measured off its outlines: 70/1000 em.
 ///
-/// Iosevka Fixed draws one stroke weight for everything: measured off the
-/// outlines, `♯`'s verticals are 69 units and its bars 70, which is the
-/// same 70 the hyphen is. But `♯` spends that weight over 878 units of
-/// height where `+` has 386, so at equal stroke the sharp reads as the
-/// heavier mark by a wide margin. Small marks need relatively more weight
-/// to hold the same color on the page, which is ordinary optical sizing —
-/// and the freedom to say so is the point of drawing them.
+/// The face uses ONE weight for everything — `♯`'s verticals are 69 and its
+/// bars 70, the hyphen is 70, `+` is about 70 — and it does that across a
+/// glyph 878 units tall (`♯`) and one 70 units tall (`-`) alike. So the
+/// typeface's own answer to "should a smaller mark be drawn heavier?" is
+/// no, and the optical-sizing argument that put this at 0.12 and then 0.10
+/// was arguing against the face these marks sit in.
 ///
-/// How MUCH more is a look, and this is where looking landed: half again
-/// Iosevka's weight rather than the near-double 0.12 was, which read heavy
-/// once the marks stopped being composited shapes and started resolving
-/// like the glyphs around them.
+/// Heavier weights were also compensating for something since fixed: while
+/// the marks were composited shapes their feathered joins read heavier than
+/// the geometry measured, and while they were typeset a bar this thin
+/// really did smear. Rasterized with a whole-pixel floor, 0.07 is a clean
+/// line — and it is the line the rest of the label is drawn with.
 fn default_mark_weight() -> f32 {
-    0.10
+    0.07
 }
 
 /// The classic solid orb — the identity end of the solidity axis.

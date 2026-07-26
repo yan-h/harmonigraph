@@ -2181,3 +2181,4 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         "a collapsed analyzer pane should hand the overlay back to the editor",
     );
 }
+
