@@ -556,7 +556,7 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// and a note with no name at all would just look like a bug.
 fn note_name(view: &ViewConfig, tuning: &Tuning, midi: f32) -> NoteName {
     // Cents from C, measured from MIDI 0 (which IS a C) — the same reduction
-    // the pane's hover readout makes before asking the same question.
+    // the pane's hover makes before asking the same question.
     let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
     match naming_node(view, tuning, pc) {
         Some(pos) => super::display_note_name(pos, view.meantone),
