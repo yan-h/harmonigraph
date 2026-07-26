@@ -1389,7 +1389,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     let mut batch = crate::text::TextBatch::default();
     let _ = ctx.run_ui(
         egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
-        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, 1.0, &mut batch),
+        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch),
     );
 
     // A held note lights every node of its pitch class, so each piece turns
@@ -1406,10 +1406,15 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         }
         clusters
     };
+    // Every size here scales with the pane and the camera together, so read
+    // that scale off the biggest piece drawn rather than assuming the pane is
+    // the one the constants are quoted at.
+    let scale = batch.pieces().iter().map(|p| p.font_size).fold(0.0, f32::max)
+        / panes::lattice::NAME_SIZE;
     // Letter and marks together: the readout has to clear the comma, which
     // hangs lower than the letter does.
-    let names = ink_of(&[panes::lattice::NAME_SIZE, panes::lattice::MARK_SIZE]);
-    let cents = ink_of(&[panes::lattice::CENTS_SIZE]);
+    let names = ink_of(&[panes::lattice::NAME_SIZE * scale, panes::lattice::MARK_SIZE * scale]);
+    let cents = ink_of(&[panes::lattice::CENTS_SIZE * scale]);
     assert!(!names.is_empty() && !cents.is_empty(), "the held C should be labeled");
 
     // Every readout belongs to the name directly above it, and sits the
@@ -1433,9 +1438,10 @@ fn the_cents_readout_sits_right_under_the_note_name() {
         // the gap rather than in absolute points — the regression this is
         // watching for, hanging the readout off the galley box instead of the
         // ink, is worth twice the gap and clears any of this.
-        let slack = panes::lattice::CENTS_GAP / 3.0;
+        let want = panes::lattice::CENTS_GAP * scale;
+        let slack = want / 3.0;
         assert!(
-            (gap - panes::lattice::CENTS_GAP).abs() <= slack,
+            (gap - want).abs() <= slack,
             "cents should sit CENTS_GAP under the name, got {gap}px of ink-to-ink gap"
         );
     }

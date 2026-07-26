@@ -62,11 +62,12 @@ pub(super) const LABEL_PT: f32 = 12.35;
 /// Points the name is set in from the ribbon's leading edge, along the time
 /// axis. Enough that the letter is not touching the end it starts from.
 ///
-/// Scaled with the type, like every other length here. The offline render
-/// draws at three times the docked pane's `label_scale`, so a spacing left in
-/// fixed points would be a third of the clear air there that it is here — the
-/// render diverging from the pane the look was dialled in on, which is the one
-/// thing this codebase most wants it not to do.
+/// Scaled with the type, like every other length here — the scale the pane
+/// hands down carries the pitch zoom, the user's bar and the pane's own size,
+/// and a spacing left in fixed points would be the same air on a pane half the
+/// size as on one twice it. The Render preview and the video it previews are
+/// where that shows worst: the render diverging from the pane the look was
+/// dialled in on is the one thing this codebase most wants it not to do.
 const LABEL_INSET: f32 = 2.6;
 
 /// What a monospace glyph advances, and a line box stands, as fractions of the

@@ -90,7 +90,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         draw_learn_overlay(&mut batch, ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.view, 1.0, &mut batch);
+        draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
     }
     batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
 }
@@ -172,26 +172,37 @@ fn label_strength(node: &lattice_scene::NodeInstance, trailed: bool, keeps_names
 /// (projected with the same camera as the nodes): the note name centered on
 /// the node, optionally its pitch class in cents just below.
 ///
-/// `scale` is the PANE's own factor and nothing else: 1 in the docked pane, the
-/// Render preview's shrink where it draws the lattice small. The camera's zoom
-/// and the user's Size bar are folded in here rather than by the callers, so
-/// the two views cannot drift apart over which of the three they applied.
+/// Every factor a label's size answers to is gathered here rather than by the
+/// callers -- the pane's own size, the camera's zoom and the user's Size bar --
+/// so the docked view, the Render preview and the offline render cannot drift
+/// apart over which of the three each remembered to apply.
 pub(crate) fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
     scene: &lattice_scene::Scene,
     view: &lattice_scene::ViewConfig,
-    scale: f32,
     batch: &mut crate::text::TextBatch,
 ) {
     // The nodes are world-space geometry and their labels are typeset in
-    // points, so a label only stays ON its node by following the camera:
-    // `screen_scale` is exactly how much bigger the lattice draws than at the
-    // framing a fresh view opens at. Snapped, because a size that tracks a
-    // continuous zoom is a new entry in egui's font atlas every frame of a
-    // drag otherwise -- see `crate::text::snap_scale`.
+    // points, so a label stays ON its node only by following the two things
+    // that decide how big a node draws:
+    //
+    //   - the PANE, whose height is the whole of what maps world units to
+    //     pixels (the projection's window is `distance * tan(fov/2)` high
+    //     and lands on the viewport's height, in x as much as in y);
+    //   - the CAMERA, via `screen_scale`.
+    //
+    // The pane is why this needs no argument from its callers. A preview
+    // drawing the lattice small, an offline render drawing it large, and a
+    // window being dragged narrower are one question with one answer, where
+    // they were three: a factor threaded from the Video pane, a scale factor,
+    // and nothing at all.
+    //
+    // Snapped, because a size that tracks a continuous zoom is a new entry in
+    // egui's font atlas every frame of a drag otherwise -- see
+    // `crate::text::snap_scale`.
     let scale = crate::text::snap_scale(
-        scale * view.label_scale * scene.camera.screen_scale(),
+        rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale(),
         NAME_SIZE,
         ui.painter().ctx().pixels_per_point(),
     );
@@ -298,6 +309,15 @@ pub(crate) fn draw_node_labels(
 /// wrong rather than that the bar wanted using — so the number moved and the
 /// bar went back to reading 1 at the size the lattice is actually looked at.
 pub(crate) const NAME_SIZE: f32 = 30.0;
+/// The pane the sizes here are quoted against: 860 points tall, which is what
+/// the lattice gets in the 1512x886 window they were dialled in. A pane half
+/// as tall draws them half the size, because a pane half as tall draws the
+/// LATTICE half the size — see [`draw_node_labels`].
+///
+/// Height, not width: the projection's window is a height, and the aspect
+/// ratio spreads it sideways, so a node's size on screen is a function of the
+/// pane's height whichever way the pane is stretched.
+const REFERENCE_HEIGHT: f32 = 860.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
 pub(crate) const CENTS_SIZE: f32 = 16.0;
@@ -1119,7 +1139,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                draw_node_labels(&child, rect, &scene, &state.view, 1.0, &mut batch);
+                draw_node_labels(&child, rect, &scene, &state.view, &mut batch);
             },
         );
         batch.pieces().to_vec()
@@ -1206,7 +1226,10 @@ mod tests {
     /// name: the marks and the cents line are sized off it.
     #[test]
     fn a_label_grows_with_the_camera() {
-        let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, 400.0));
+        // A pane the height the sizes are quoted against, so this is a test
+        // about the camera and not about the pane.
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, REFERENCE_HEIGHT));
         let biggest = |distance: f32| {
             label_pieces(rect, distance)
                 .iter()

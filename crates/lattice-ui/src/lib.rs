@@ -1902,9 +1902,9 @@ pub enum Pane {
 pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
     match pane {
         Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
-        // Offline: pixels-per-point already scales text, so no extra factor;
-        // one spectrogram per frame, so texture slot 0.
-        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 1.0, 0),
+        // One spectrogram per frame offline, so texture slot 0. Text sizes
+        // itself off the pane, here as everywhere.
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 0),
     }
 }
 

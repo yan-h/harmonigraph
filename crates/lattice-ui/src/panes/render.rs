@@ -27,13 +27,6 @@ use crate::{theme, Layout, Pane, SharedState};
 /// other's buffers within a frame.
 const PREVIEW_PANE_ID: u64 = 1;
 
-/// The offline renderer composes its frame at about this many points across
-/// (its default pixels-per-point reference in `lattice-offline`). A preview
-/// `box_rect.width()` points wide is therefore that frame scaled by
-/// `width / this`, and fixed-point-size labels have to scale with it or they
-/// swamp a small preview.
-const RENDER_POINTS_ACROSS: f32 = 1280.0;
-
 /// Points of breathing room between the render frame and the pane edge, so
 /// the frame's boundary chrome always has somewhere to sit outside the
 /// picture. See [`frame_chrome`].
@@ -73,10 +66,6 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     // two sides. Shrinks on a small preview rather than eating it.
     let pad = FRAME_CHROME_PAD.min(size.min_elem() * 0.15);
     let box_rect = letterbox(outer.shrink(pad), aspect);
-    // How far the preview shrinks the render frame — labels scale by this so
-    // they read at the size they will in the render, not at full point size.
-    let label_scale = box_rect.width() / RENDER_POINTS_ACROSS;
-
     // Compose with the SAME Layout the offline renderer resolves.
     let layout = Layout::split(frame.stacked, frame.split);
 
@@ -104,12 +93,14 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
             Pane::Spectral if placeholder => playhead_placeholder(ui, rect),
             Pane::Spectral => {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                // Directly, so the preview's shrink scales its text too — the
-                // one fixed-size thing draw_pane can't carry. Texture slot 1, so
-                // its spectrogram doesn't clobber the docked pane's (slot 0).
-                super::spectral::spectral_pane(&mut child, state, now, label_scale, 1);
+                // Directly rather than through `draw_pane`, for the texture
+                // slot: 1 here, so this second live copy doesn't clobber the
+                // docked pane's spectrogram (slot 0). Its text sizes itself
+                // off the rect it is given, so drawing the pane small draws
+                // its type small, as the render will.
+                super::spectral::spectral_pane(&mut child, state, now, 1);
             }
-            Pane::Lattice => preview_lattice(ui, rect, state, now, label_scale),
+            Pane::Lattice => preview_lattice(ui, rect, state, now),
         }
     }
 
@@ -244,13 +235,7 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
 /// from `rect` inside the render callback, so this frames exactly as the render
 /// will. Non-interactive: `hovered` is left `None`, and the camera is framed in
 /// the Lattice tab (shared state), not here.
-fn preview_lattice(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    state: &SharedState,
-    now: f64,
-    label_scale: f32,
-) {
+fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now: f64) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
@@ -279,8 +264,9 @@ fn preview_lattice(
         PREVIEW_PANE_ID,
         None,
     ));
-    // Node names/cents, exactly as the Lattice pane and the render draw them —
-    // scaled down so they read at render size in the shrunken preview. Clipped
+    // Node names/cents, exactly as the Lattice pane and the render draw them:
+    // sized off this rect, so a preview a third of the render's size draws
+    // them a third of the size, which is what makes it a preview. Clipped
     // to the lattice rect: a node near the frame edge would otherwise paint its
     // label out past the preview box, since draw_node_labels uses an unclipped
     // painter (harmless in the docked pane, which owns its whole rect and is
@@ -289,14 +275,7 @@ fn preview_lattice(
         let mut clipped = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         clipped.set_clip_rect(rect);
         let mut batch = crate::text::TextBatch::default();
-        super::lattice::draw_node_labels(
-            &clipped,
-            rect,
-            &scene,
-            &state.view,
-            label_scale,
-            &mut batch,
-        );
+        super::lattice::draw_node_labels(&clipped, rect, &scene, &state.view, &mut batch);
         batch.flush(clipped.painter(), rect, state, crate::text::LATTICE_PREVIEW_LABELS);
     }
 }

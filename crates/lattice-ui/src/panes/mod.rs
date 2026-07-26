@@ -169,7 +169,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Nodes => nodes_pane(ui, self.state, self.params),
             Tab::Scene => scene_pane(ui, self.state),
             Tab::Console => console_pane(ui, self.state),
-            Tab::Spectral => spectral_pane(ui, self.state, self.now, 1.0, 0),
+            Tab::Spectral => spectral_pane(ui, self.state, self.now, 0),
             Tab::Analyzer => spectrum_settings_pane(ui, self.state),
             Tab::Notes => notes_pane(ui, self.state),
             Tab::Video => render_pane(ui, self.state, self.now),

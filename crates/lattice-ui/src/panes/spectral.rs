@@ -411,15 +411,24 @@ fn name_zoom(span: f32) -> f32 {
     FULL_PITCH_SPAN / span.clamp(crate::PITCH_RANGE_MIN_SPAN, FULL_PITCH_SPAN)
 }
 
+/// The pane the sizes here are quoted against: a pitch axis 860 points long,
+/// which is what the Spectral pane gets in the 1512x886 window they were
+/// dialled in. Halve the pane and the type halves with it, along with every
+/// ribbon and every band it is written over.
+///
+/// The PITCH axis, of the two: a ribbon's width is set in semitones, so that
+/// is the axis whose length decides how big the picture under a name is. It is
+/// also the short side, and so the one a window resize tends to take first.
+const REFERENCE_PITCH_LEN: f32 = 860.0;
+
 /// The sizes this pane sets text at for one frame, as multiples of each
 /// piece's built-in point size.
 ///
-/// Three factors go into each: the pane's own `label_scale` (1 docked, the
-/// Render preview's shrink where it draws this pane small), the user's bar for
-/// that kind of text, and — for the note names alone — the pitch zoom. Both
-/// come out snapped, since a scale that follows a continuous zoom otherwise
-/// asks egui for a new font size on every frame of a drag (see
-/// [`crate::text::snap_scale`]).
+/// Three factors go into each: the pane's own size against
+/// [`REFERENCE_PITCH_LEN`], the user's bar for that kind of text, and — for
+/// the note names alone — the pitch zoom. Both come out snapped, since a scale
+/// that follows a continuous zoom otherwise asks egui for a new font size on
+/// every frame of a drag (see [`crate::text::snap_scale`]).
 #[derive(Clone, Copy, Debug)]
 struct TextScales {
     /// The axis gridline labels and the hover readout.
@@ -428,16 +437,12 @@ struct TextScales {
     names: f32,
 }
 
-fn text_scales(
-    cfg: &crate::SpectrumConfig,
-    span: f32,
-    label_scale: f32,
-    ppp: f32,
-) -> TextScales {
+fn text_scales(cfg: &crate::SpectrumConfig, axes: &Axes, span: f32, ppp: f32) -> TextScales {
+    let pane = axes.pitch_len() / REFERENCE_PITCH_LEN;
     TextScales {
-        markings: crate::text::snap_scale(label_scale * cfg.marking_scale, MARKING_PT, ppp),
+        markings: crate::text::snap_scale(pane * cfg.marking_scale, MARKING_PT, ppp),
         names: crate::text::snap_scale(
-            label_scale * cfg.note_name_scale * name_zoom(span),
+            pane * cfg.note_name_scale * name_zoom(span),
             names::LABEL_PT,
             ppp,
         ),
@@ -1006,7 +1011,6 @@ pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
     now: f64,
-    label_scale: f32,
     // Spectrogram texture slot: 0 the docked pane / offline render, 1 the
     // Render preview, so two live copies don't clobber one shared texture.
     surface: usize,
@@ -1060,7 +1064,7 @@ pub(crate) fn spectral_pane(
     let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
     // Everything this pane sets text at, decided once from the range it just
     // settled on: the markings hold their size, the names follow the zoom.
-    let text = text_scales(&cfg, scale.span, label_scale, painter.ctx().pixels_per_point());
+    let text = text_scales(&cfg, &axes, scale.span, painter.ctx().pixels_per_point());
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
     // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
     // the conventional reference slope (negative), so the display
@@ -1409,7 +1413,8 @@ mod tests {
     #[test]
     fn names_follow_the_pitch_zoom_and_markings_hold_still() {
         let cfg = SpectrumConfig::default();
-        let at = |span| text_scales(&cfg, span, 1.0, 2.0);
+        let axes = axes(reference_pane(), SpectralOrientation::Horizontal);
+        let at = |span| text_scales(&cfg, &axes, span, 2.0);
         // Every size comes out snapped onto a whole physical pixel, and a name
         // is 12.35pt, which is not one at 2x — so the law is met to within half
         // a pixel of type and no closer. See `text::snap_scale`.
@@ -1438,26 +1443,44 @@ mod tests {
         // The markings ignore all of it, and answer to their own bar.
         assert_eq!(at(FULL_PITCH_SPAN).markings, at(crate::PITCH_RANGE_MIN_SPAN).markings);
         let bigger = SpectrumConfig { marking_scale: 2.0, ..SpectrumConfig::default() };
-        assert_eq!(text_scales(&bigger, 24.0, 1.0, 2.0).markings, 2.0);
+        assert_eq!(text_scales(&bigger, &axes, 24.0, 2.0).markings, 2.0);
         assert_eq!(
-            text_scales(&bigger, 24.0, 1.0, 2.0).names,
+            text_scales(&bigger, &axes, 24.0, 2.0).names,
             at(24.0).names,
             "and the two bars are independent",
         );
     }
 
-    /// The Render preview draws this pane small and the offline render draws
-    /// it large, and `label_scale` is how they say so. It has to reach EVERY
-    /// piece of text — a name that ignored it would come out three times its
-    /// intended size in the render, which is the one divergence between the
-    /// pane and the video this codebase least wants.
+    /// A pane at the size these sizes were chosen at, so a test about anything
+    /// else is not also a test about the pane being some other size.
+    fn reference_pane() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(300.0, REFERENCE_PITCH_LEN))
+    }
+
+    /// Text shrinks with the pane it is drawn on — every kind of it, and in
+    /// proportion.
+    ///
+    /// This is one mechanism doing three jobs that were three mechanisms: a
+    /// window dragged narrower, the Render preview drawing this pane small,
+    /// and the offline render drawing it large. A kind of text that missed it
+    /// would come out at some other size in the video than in the pane the
+    /// look was dialled in on, which is the divergence this codebase least
+    /// wants.
     #[test]
-    fn the_panes_own_scale_reaches_every_kind_of_text() {
+    fn text_shrinks_with_the_pane() {
         let cfg = SpectrumConfig::default();
-        let docked = text_scales(&cfg, 48.0, 1.0, 2.0);
-        let shrunk = text_scales(&cfg, 48.0, 0.5, 2.0);
+        let half = egui::Rect::from_min_size(
+            reference_pane().min,
+            egui::vec2(300.0, REFERENCE_PITCH_LEN * 0.5),
+        );
+        let full = axes(reference_pane(), SpectralOrientation::Horizontal);
+        let small = axes(half, SpectralOrientation::Horizontal);
+        let docked = text_scales(&cfg, &full, 48.0, 2.0);
+        let shrunk = text_scales(&cfg, &small, 48.0, 2.0);
         assert!((shrunk.names / docked.names - 0.5).abs() < 0.02);
         assert!((shrunk.markings / docked.markings - 0.5).abs() < 0.02);
+        // ...and at the reference pane the bars read what they say.
+        assert!((docked.markings - 1.0).abs() < 0.02, "{}", docked.markings);
     }
 
     /// The Span readout carries its own unit, and switches to minutes at
@@ -1675,7 +1698,7 @@ mod tests {
             let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
             let _ = ctx.run_ui(input, |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, state, 100.0, 1.0, 0);
+                spectral_pane(&mut child, state, 100.0, 0);
             });
         };
         let press = |pos, pressed| egui::Event::PointerButton {
@@ -1801,7 +1824,7 @@ mod tests {
                 },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, now, 1.0, 0);
+                    spectral_pane(&mut child, &mut state, now, 0);
                 },
             )
         };
@@ -1848,7 +1871,7 @@ mod tests {
             },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, now, 1.0, 0);
+                spectral_pane(&mut child, &mut state, now, 0);
             },
         );
         let mesh = out
@@ -1902,7 +1925,7 @@ mod tests {
                     egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                     |ui| {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                        spectral_pane(&mut child, &mut state, 94.0, 1.0, 0);
+                        spectral_pane(&mut child, &mut state, 94.0, 0);
                     },
                 );
             }
@@ -1941,7 +1964,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 0.1, 1.0, 0);
+                spectral_pane(&mut child, &mut state, 0.1, 0);
             },
         );
         // The now-line is the one hairline-colored segment clean across the
@@ -1996,7 +2019,7 @@ mod tests {
                 egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+                    spectral_pane(&mut child, &mut state, 0.05, 0);
                 },
             );
             let want = theme::warning_text().gamma_multiply(0.3);
@@ -2029,7 +2052,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+                spectral_pane(&mut child, &mut state, 0.05, 0);
             },
         );
         // The labels leave the shape list as one paint callback; what is
@@ -2103,7 +2126,7 @@ mod tests {
                 egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, 100.0, 1.0, 0);
+                    spectral_pane(&mut child, &mut state, 100.0, 0);
                 },
             );
             assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
@@ -2167,7 +2190,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, &mut state, now, 1.0, 0);
+                spectral_pane(&mut child, &mut state, now, 0);
             },
         );
         output.shapes.into_iter().map(|s| s.shape).collect()
