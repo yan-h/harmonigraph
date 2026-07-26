@@ -1170,11 +1170,11 @@ mod tests {
     }
 
     /// The pane turns, and the names turn with it: nothing here names a screen
-    /// side, so an upright pane places them by the same arithmetic with the
+    /// side, so a Top pane places them by the same arithmetic with the
     /// axes swapped.
     #[test]
-    fn names_place_the_same_way_on_an_upright_pane() {
-        // Upright: pitch runs left to right, time runs DOWN, so the leading
+    fn names_place_the_same_way_on_a_top_pane() {
+        // Top: pitch runs left to right, time runs DOWN, so the leading
         // edge is the top of a ribbon and names grow downward from it.
         let mut state = turned(24.0, 10.0, SpectralOrientation::Top);
         for i in 0..6 {
@@ -1187,12 +1187,12 @@ mod tests {
         assert!(placed.len() > 1, "several names: {}", placed.len());
 
         let axes = Axes::new(tall, &state.spectrum_config);
-        // Every name sits on middle C's line, which upright is an x.
+        // Every name sits on middle C's line, which with time vertical is an x.
         let lane = axes.at(scale_of(&state).t_of(60.0), 0.0).x;
         for label in &placed {
             assert!((label.rect.center().x - lane).abs() < 1.0, "off the ribbon's line");
         }
-        // ...and they are spread along the TIME axis, which upright is y.
+        // ...and they are spread along the TIME axis, which here is y.
         let mut ys: Vec<f32> = placed.iter().map(|l| l.rect.min.y).collect();
         ys.sort_by(f32::total_cmp);
         for pair in ys.windows(2) {

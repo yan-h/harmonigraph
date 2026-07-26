@@ -355,7 +355,7 @@ const FULL_PITCH_SPAN: f32 =
 /// axis offers, so the only direction left is up.
 ///
 /// Says nothing about which way the pane is turned. The span is in semitones,
-/// not in points, so an upright pane (whose pitch axis is horizontal) scales
+/// not in points, so a Top or Bottom pane (whose pitch axis is horizontal) scales
 /// exactly as a wide one does — [`Axes`] is the only thing here that knows a
 /// screen side, and this is not it.
 fn name_zoom(span: f32) -> f32 {
@@ -1681,7 +1681,7 @@ mod tests {
         state.spectrum_config.roll_fraction
     }
 
-    /// A gridline label at the now edge of a wide (Across) pane sits just
+    /// A gridline label at the now edge of a wide (Left) pane sits just
     /// inside it and grows up-and-inward (LEFT_BOTTOM anchor).
     #[test]
     fn gridline_labels_sit_just_inside_the_now_edge() {

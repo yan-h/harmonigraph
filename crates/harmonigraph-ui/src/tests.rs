@@ -1559,7 +1559,7 @@ fn the_spectral_divider_drags_through_the_dock() {
     let grab = band.center();
     let before = state.spectrum_config.roll_fraction;
 
-    // Across (the default orientation) puts the divider upright, so the drag
+    // Left (the default orientation) puts the divider upright, so the drag
     // that moves it runs along x — pushing it away from the spectrum.
     let press = |pos, pressed| egui::Event::PointerButton {
         pos,
@@ -1634,7 +1634,7 @@ impl DockHarness {
 
     /// The same, at a chosen fraction along the depth (time) axis — which side
     /// of the divider a drag starts on decides whether it is the Span's.
-    /// Across, the default orientation, runs depth rightward.
+    /// Left, the default orientation, runs depth rightward.
     fn spectral_grab_at(&self, state: &SharedState, depth: f32) -> egui::Pos2 {
         // The perf overlay already answers "where is the Spectral pane's
         // body", and falls back to the whole window when it isn't on screen.
@@ -1699,7 +1699,7 @@ fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
         state.hovered
     };
 
-    // Across is the default orientation, so pitch climbs UP the screen: two
+    // Left is the default orientation, so pitch climbs UP the screen: two
     // points a good way apart vertically are two different pitches.
     let (low, high) = (hovered_at(0.8), hovered_at(0.2));
     assert!(low.is_some(), "hovering the analyzer should name a node, got None");
@@ -1733,7 +1733,7 @@ fn dragging_the_spectral_picture_pans_the_pitch_range() {
 
     let grab = h.spectral_grab(&state);
     let before = state.spectrum_config;
-    // Across (the default orientation) climbs in pitch UP the screen, so a
+    // Left (the default orientation) climbs in pitch UP the screen, so a
     // drag toward higher pitch is a drag toward smaller y.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     let target = grab + egui::vec2(0.0, -60.0);
@@ -1769,7 +1769,7 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
 
     let grab = h.spectral_grab(&state);
     let before = state.spectrum_config;
-    // Across runs time rightward (now at the left), so dragging right is
+    // Left runs time rightward (now at the left), so dragging right is
     // dragging toward the past.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     let target = grab + egui::vec2(120.0, 0.0);
