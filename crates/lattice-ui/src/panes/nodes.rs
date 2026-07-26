@@ -151,15 +151,15 @@ fn pitch_readout(midi: f32) -> String {
 }
 
 /// What every layer of the node shares: the pitch->color gradient it is
-/// tinted through, the time it takes to fade on release, and the halo it
-/// carries while lit.
+/// tinted through, the time it takes to fade on release, the halo it carries
+/// while lit, and the gap it clears around the whole of itself.
 ///
-/// One section rather than three of one control each, because the three are
-/// one idea — none of them is about the core, the octave glyphs or the
-/// melody/bass rings in particular, and all three apply to whichever of those
-/// happen to be drawn. Fade especially: one time for the node rather than one
-/// per layer, so a release reads as a single gesture instead of pieces of the
-/// node going dark at different moments.
+/// One section rather than four of one control each, because they are one
+/// idea — none of them is about the core, the octave glyphs or the melody/bass
+/// rings in particular, and all of them apply to whichever of those happen to
+/// be drawn. Fade especially: one time for the node rather than one per layer,
+/// so a release reads as a single gesture instead of pieces of the node going
+/// dark at different moments.
 fn every_layer_section(
     ui: &mut egui::Ui,
     view: &mut ViewConfig,
@@ -192,5 +192,28 @@ fn every_layer_section(
         .show(ui)
         .on_hover_text(
             "Soft halo around bright notes; 0 turns the post-process off",
+        );
+    // Here and not with the sevens-layer controls it was built for, where it
+    // sat under a "Sevenths" name that misreads what it does: the gutter is
+    // cleared by every sounding node on every sheet, the home one included and
+    // at any sevenths extent, so it belongs to the node rather than to the
+    // depth axis. The `sevens_` field names stay — they are what saved
+    // projects spell.
+    ValueBar::new(&mut view.sevens_gutter, 0.0..=0.5, "Gutter")
+        .show(ui)
+        .on_hover_text(
+            "The dark gap a sounding node clears around itself, so it reads \
+             over whatever it crosses rather than needing room of its own: \
+             the grid lines under it, and the sheets behind it once the \
+             lattice has depth. Measured past the node's own edge, and the \
+             same width on screen whatever size the node draws at. 0 draws \
+             none",
+        );
+    ValueBar::new(&mut view.sevens_gutter_soft, 0.0..=0.5, "Gutter fade")
+        .show(ui)
+        .on_hover_text(
+            "How gradually the gap ends, independent of how wide it is. \
+             0 is a hard edge; past the gutter's own width it softens \
+             outward rather than eating into the node",
         );
 }

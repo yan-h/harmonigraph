@@ -176,17 +176,19 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     sevens_layer_controls(ui, state);
 }
 
-/// How the sheets other than the home one draw. Size and label are inert
-/// with the sevenths extent at 0 (a flat lattice has only the home sheet), so
-/// they disable themselves rather than pretending otherwise. The two gutter
-/// bars stay live: every sounding node clears, the home sheet included, so at
-/// extent 0 they still cut the grid lines under the notes.
+/// How the sheets other than the home one draw. Both controls are inert with
+/// the sevenths extent at 0 (a flat lattice has only the home sheet), so they
+/// disable themselves rather than pretending otherwise.
 ///
-/// What they are all for: the 5-limit sheet wants its pitch classes as large
-/// as they will go, and turning depth on asks the same rectangle to hold
-/// three or five times the nodes. The way out is not to shrink the home sheet
-/// — that is the picture — but to let the sevens layer sit ON it, smaller and
-/// clearing its own gutter.
+/// What they are for: the 5-limit sheet wants its pitch classes as large as
+/// they will go, and turning depth on asks the same rectangle to hold three or
+/// five times the nodes. The way out is not to shrink the home sheet — that is
+/// the picture — but to let the sevens layer sit ON it, smaller and clearing
+/// its own gutter.
+///
+/// The gutter itself is in the Nodes pane, not here. It is cleared by every
+/// sounding node on every sheet, so it is a property of the node rather than
+/// of this layer, whatever its field names say.
 fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     let has_depth = state.view.extent_sevens != 0;
     ui.add_enabled_ui(has_depth, |ui| {
@@ -198,25 +200,6 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
                  sheet, not depth toward you -- so the home sheet stays the \
                  largest thing on screen. 1 draws every sheet alike",
             );
-    });
-    ValueBar::new(&mut state.view.sevens_gutter, 0.0..=0.5, "Sevenths gutter")
-        .show(ui)
-        .on_hover_text(
-            "The dark gap a node clears around itself, so a sheet reads \
-             over the ones behind it instead of needing room of its own. \
-             Measured past the node's own edge, and the same width on \
-             screen whatever size the node draws at. The home sheet clears \
-             too, cutting the grid lines under a sounding note even with no \
-             depth at all. 0 draws none",
-        );
-    ValueBar::new(&mut state.view.sevens_gutter_soft, 0.0..=0.5, "Sevenths gutter fade")
-        .show(ui)
-        .on_hover_text(
-            "How gradually the gap ends, independent of how wide it is. \
-             0 is a hard edge; past the gutter's own width it softens \
-             outward rather than eating into the node",
-        );
-    ui.add_enabled_ui(has_depth, |ui| {
         choice_row(
             ui,
             "Sevenths label",
