@@ -1072,6 +1072,38 @@ mod tests {
         assert_eq!(name(64.0), "E");
     }
 
+    /// A name carrying a septimal mark measures WIDER than its accidental
+    /// stack alone would suggest, because the mark takes a column past them
+    /// with air before it.
+    ///
+    /// `name_extent` is what the thinning believes a name occupies, so a
+    /// short measurement here is not a rounding error, it is two names
+    /// overlapping on the picture.
+    #[test]
+    fn a_septimal_mark_widens_what_a_name_is_measured_at() {
+        let size = LABEL_PT;
+        let plain =
+            NoteName { letter: 'B', sharps: -1, syntonic_commas: 0, septimal_commas: 0 };
+        let marked = NoteName { septimal_commas: -1, ..plain };
+        let (plain_box, marked_box) = (name_extent(&plain, size), name_extent(&marked, size));
+
+        // A whole column plus the gap wider, not a rounding's worth.
+        let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
+        let grew = marked_box.x - plain_box.x;
+        assert!(
+            grew > lattice::SEPTIMAL_GAP * mark_size,
+            "a septimal mark widened the name by only {grew}"
+        );
+        // The mark sits inside the line it shares, so nothing grows taller.
+        assert_eq!(plain_box.y, marked_box.y, "a mark should not raise the line");
+        // And a counted mark carries its digit, so it is wider still.
+        let counted = NoteName { septimal_commas: -5, ..plain };
+        assert!(
+            name_extent(&counted, size).x > marked_box.x,
+            "a counted mark takes a digit's width past a bare one"
+        );
+    }
+
     /// A septimal mark costs a reader what a syntonic one does, so the
     /// spelling chooser weighs them together.
     ///

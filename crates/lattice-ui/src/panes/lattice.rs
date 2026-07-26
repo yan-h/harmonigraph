@@ -487,13 +487,21 @@ fn mark_texture(ctx: &egui::Context, key: MarkKey) -> egui::TextureHandle {
     // LINEAR, because a mark is placed at a subpixel position and resampled
     // exactly as a glyph is. NEAREST would put the pixel grid back.
     let handle = ctx.load_texture(
-        format!("mark{key:?}", key = key.size_px),
+        format!("{:?}", key),
         rasterize_mark(key),
         egui::TextureOptions::LINEAR,
     );
     let mut next = cached.map(|c| (*c).clone()).unwrap_or_default();
+    // Evict ONE rather than emptying the map. Zooming walks through sizes a
+    // pixel at a time, so the cache fills during an ordinary drag; clearing
+    // it there drops every texture at once and re-rasterizes the whole
+    // visible set on the next frame, which is a stall exactly while the
+    // camera is moving. Which one goes is arbitrary — there is no recency
+    // here to consult — but one at a time keeps the cost flat.
     if next.len() >= MARK_CACHE_LIMIT {
-        next.clear();
+        if let Some(&victim) = next.keys().next() {
+            next.remove(&victim);
+        }
     }
     next.insert(key, handle.clone());
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, std::sync::Arc::new(next)));
@@ -519,6 +527,11 @@ fn mark_texture(ctx: &egui::Context, key: MarkKey) -> egui::TextureHandle {
 ///
 /// Rim first, then the fill, which is the order stamping had and the order
 /// the shader kept.
+/// Returns how far the mark reaches from its own center, which the caller
+/// needs to know what the cents readout has to clear. Read off the texture
+/// rather than rebuilt: the bitmap's size IS the mark's size, and asking
+/// `mark_geometry` again allocated a fresh piece list per mark per frame on
+/// the label path.
 fn paint_mark(
     painter: &egui::Painter,
     ppp: f32,
@@ -526,7 +539,7 @@ fn paint_mark(
     center: egui::Pos2,
     color: egui::Color32,
     outline: egui::Color32,
-) {
+) -> f32 {
     let texture = mark_texture(painter.ctx(), key);
     let [w, h] = texture.size();
     // One texel per physical pixel: the bitmap was rasterized at this size,
@@ -549,6 +562,7 @@ fn paint_mark(
         }
     }
     painter.image(texture.id(), rect, uv, color);
+    rect.height() / 2.0
 }
 
 /// The key for one mark at the size a label is drawing at.
@@ -688,7 +702,7 @@ pub(crate) fn draw_stacked_name(
      -> f32 {
         let key = mark_key(kind, mark_size, mark_weight, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
-        paint_mark(painter, ppp, key, center, color, outline);
+        let half_height = paint_mark(painter, ppp, key, center, color, outline);
         if !count.is_empty() {
             batch.text(
                 painter,
@@ -702,7 +716,7 @@ pub(crate) fn draw_stacked_name(
         }
         // Whichever reaches lower: the mark's own bitmap from its center, or
         // the count's digits from theirs.
-        let ink = (mark_geometry(key).1[1] as f32 / ppp / 2.0)
+        let ink = half_height
             .max(if count.is_empty() { 0.0 } else { ink_below(count, &mark_font, line) });
         direction * rise + ink
     };

@@ -128,21 +128,30 @@ impl TextBatch {
         let first = self.glyphs.len();
         let font_size_bits = font.size.to_bits();
         let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
-        // Placed at whatever position it was handed, NOT rounded onto a whole
-        // physical pixel.
+        // Placed at whatever position it is handed, NOT rounded onto a whole
+        // physical pixel — for EVERY pane that draws through this batch, not
+        // only the ones whose text moves.
         //
-        // egui rounds a galley before drawing it (`round_text_to_pixels`) and
-        // this used to round with it, which does keep every glyph landing on
-        // the pixel grid it was rasterized for. The cost is that a label is
-        // then the only thing on the lattice that moves in whole pixels: the
-        // nodes are shader geometry at continuous positions, so a label
-        // stepped while the node it belongs to glided, and the mismatch read
-        // as the text juddering against its own node.
+        // egui rounds a galley before drawing it (`round_text_to_pixels`),
+        // and rounding with it does keep each glyph on the pixel grid it was
+        // rasterized for. The cost is that text becomes the only thing on a
+        // picture pane that moves in whole pixels: the lattice's nodes and
+        // the roll's ribbons are shader geometry at continuous positions, so
+        // a label steps while the thing it names glides, and the mismatch
+        // reads as judder against its own subject.
         //
-        // Unrounded, a glyph at a fractional offset resamples its atlas cell
-        // and softens slightly. That is the trade, taken deliberately: the
-        // softening is a constant, and constant softness reads as a typeface
-        // choice where intermittent stepping reads as a bug.
+        // Global rather than per-pane, deliberately. Nearly every label this
+        // batch carries sits on something that moves — lattice names ride a
+        // camera, roll names ride a scrolling picture, and the render pane
+        // draws the lattice again. The few that hold still, chiefly the
+        // spectral pitch gridlines, pay a constant softening so that there
+        // is ONE text path rather than two: a mode here would mean the same
+        // label rendered differently depending on which pane drew it, and
+        // this module's worth is that it has no modes.
+        //
+        // The softening is real — a glyph at a fractional offset resamples
+        // its atlas cell. Constant softness reads as a typeface;
+        // intermittent stepping reads as a bug.
         let pos = align.anchor_size(anchor, galley.size()).min;
 
         for row in &galley.rows {
