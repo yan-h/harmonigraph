@@ -451,6 +451,12 @@ fn default_sevens_label() -> SevensLabel {
 /// the geometry measured, and while they were typeset a bar this thin
 /// really did smear. Rasterized with a whole-pixel floor, 0.07 is a clean
 /// line — and it is the line the rest of the label is drawn with.
+///
+/// All of which is an argument about the line a blob predating this field
+/// is drawn at. `impl Default` deliberately sets a heavier mark for a fresh
+/// view, and the two are allowed to disagree — that is what these fns are
+/// for — so this reasoning is not licence to pull the fresh-view weight
+/// back down to match.
 fn default_mark_weight() -> f32 {
     0.07
 }
