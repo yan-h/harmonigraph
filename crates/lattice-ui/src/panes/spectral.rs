@@ -1230,11 +1230,17 @@ pub(crate) fn spectral_pane(
     // every time the pointer crossed it.
     //
     // The pitch under the cursor is no longer also printed beside it. A
-    // name-and-Hz readout tracking the pointer is a second thing moving over a
-    // picture whose whole subject is movement, and it answers a question the
-    // lit lattice node answers better and in the pane you are already looking
-    // at. The pitch axis is labelled; the readout was telling you where your
-    // own cursor was.
+    // name-and-Hz readout tracking the pointer is a second thing moving over
+    // a picture whose whole subject is movement, and the axis it moves along
+    // is already labelled.
+    //
+    // Be exact about what did NOT replace it, because the highlight below
+    // looks like it should have: `nearest_visible_node` goes through
+    // `Tuning::matches`, so a node lights only within Tolerance of the
+    // hovered pitch class — and Tolerance ships at 0.5 cents, against a
+    // `midi` that is continuous. Off a node the pane now answers a hover
+    // with nothing at all. That is the trade; it is not the highlight
+    // covering the readout's job.
     let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
     if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
@@ -1369,9 +1375,8 @@ mod tests {
         assert_eq!(tall.at(1.0, 0.0), egui::pos2(110.0, 20.0));
     }
 
-    /// Hover has to name the pitch the pointer is actually over, in either
-    /// orientation — the readout and the lattice highlight both hang off
-    /// this one inverse.
+    /// Hover has to find the pitch the pointer is actually over, in either
+    /// orientation — the lattice highlight hangs off this one inverse.
     #[test]
     fn pitch_at_inverts_at_whichever_way_the_axes_run() {
         for rect in [WIDE, TALL] {

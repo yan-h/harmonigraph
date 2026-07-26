@@ -53,9 +53,9 @@ pub(super) fn normalize_deg(deg: f32) -> f32 {
     (deg + 180.0).rem_euclid(360.0) - 180.0
 }
 
-/// 12-TET key spellings for MIDI-note readouts (Spectral hover, Notes
-/// pane). Octave numbers next to these use Bitwig's convention
-/// (middle C = C3).
+/// 12-TET key spellings for MIDI-note readouts (the Notes pane's rows, the
+/// color range's ends in `nodes`). Octave numbers next to these use
+/// Bitwig's convention (middle C = C3).
 pub(super) const KEY_NAMES: [&str; 12] = [
     "C", "C\u{266F}", "D", "D\u{266F}", "E", "F",
     "F\u{266F}", "G", "G\u{266F}", "A", "A\u{266F}", "B",
