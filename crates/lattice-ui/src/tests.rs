@@ -1426,8 +1426,16 @@ fn the_cents_readout_sits_right_under_the_note_name() {
             .min_by(|a, b| (readout.top() - a.bottom()).total_cmp(&(readout.top() - b.bottom())))
             .unwrap_or_else(|| panic!("no name above {readout:?}, of {names:?}"));
         let gap = readout.top() - name.bottom();
+        // Slack enough for a DRAWN comma hanging below the letter's ink: the
+        // readout clears it (`draw_stacked_name` reports it) but the clusters
+        // above cannot see it, a drawn mark being a bitmap rather than a
+        // glyph. It is a fraction of the type, so the slack is quoted against
+        // the gap rather than in absolute points — the regression this is
+        // watching for, hanging the readout off the galley box instead of the
+        // ink, is worth twice the gap and clears any of this.
+        let slack = panes::lattice::CENTS_GAP / 3.0;
         assert!(
-            (gap - panes::lattice::CENTS_GAP).abs() <= 1.0,
+            (gap - panes::lattice::CENTS_GAP).abs() <= slack,
             "cents should sit CENTS_GAP under the name, got {gap}px of ink-to-ink gap"
         );
     }

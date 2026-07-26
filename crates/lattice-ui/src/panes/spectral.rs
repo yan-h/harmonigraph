@@ -276,11 +276,11 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             .show(ui)
             .on_hover_text(
                 "Overall size of those names.\n\nThey already follow the pitch \
-                 zoom: a ribbon's width is set in semitones, so narrowing the \
-                 range fattens every ribbon, and a name that held its size \
-                 would be left a speck on the note it names. It grows about \
-                 threefold from the whole axis down to a single octave. This \
-                 sets how big it is at the zoom you are at",
+                 zoom, in proportion: a ribbon's width is set in semitones, so \
+                 narrowing the range fattens every ribbon, and a name keeps the \
+                 same relation to the ribbon it is written on -- five times its \
+                 size here at the tightest two-octave range. This sets what \
+                 that size is",
             );
     });
     button_row(ui, |ui| {
@@ -359,11 +359,16 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
 /// Point size of an axis gridline's label, and of the pitch readout that
-/// follows the pointer. The readout is the half point larger: it is one line
+/// follows the pointer. The readout is the point larger: it is one line
 /// answering a question you just asked, where the gridline labels are a dozen
 /// standing marks that should stay quiet.
-pub(super) const MARKING_PT: f32 = 10.0;
-const READOUT_PT: f32 = 10.5;
+///
+/// Doubled from the 10 and 10.5 these were drawn at before the Label size bar
+/// existed. The bar went to 2 the first time it was tried and stayed there —
+/// so the number was wrong rather than the bar wanted, and rebasing it leaves
+/// the bar reading 1 at the size the pane is actually read at.
+pub(super) const MARKING_PT: f32 = 20.0;
+const READOUT_PT: f32 = 21.0;
 
 /// The whole pitch axis, in semitones — the widest the range opens, and the
 /// zoom the note names' built-in size is dialled for.
@@ -371,25 +376,24 @@ const FULL_PITCH_SPAN: f32 =
     lattice_core::spectrum::SPECTRUM_MAX_MIDI - lattice_core::spectrum::SPECTRUM_MIN_MIDI;
 
 /// How much bigger a note name draws with the pitch range zoomed to `span`
-/// semitones: 1 across the whole axis, growing as the range narrows.
+/// semitones: 1 across the whole axis, growing in PROPORTION as it narrows.
 ///
 /// The names are written ON the ribbons, and a ribbon's width is set in
-/// SEMITONES — so zooming from the whole axis down to the single octave the
-/// range bottoms out at, a tenfold zoom, draws every ribbon ten times thicker
-/// while leaving the name that names it exactly the size it was. That is the
-/// mismatch this answers.
+/// SEMITONES — so zooming the pitch range draws every ribbon thicker by
+/// exactly the zoom factor while leaving the name that names it the size it
+/// was. That is the mismatch this answers, and proportional answers it
+/// squarely: a name keeps a constant share of the pitch axis, so it holds the
+/// same relation to its ribbon at every zoom and the picture simply gets
+/// bigger, type and all.
 ///
-/// It lands halfway between the two honest laws, because neither end is usable
-/// alone. Holding the size — what this did before — is what leaves a name
-/// stranded on a ribbon that has grown ten times around it. Following the zoom
-/// outright, the name keeping a constant share of the pitch axis so that it
-/// grows exactly as its ribbon does, is right there and wrong at the other
-/// end: the wide zooms are where a name is ALREADY as small as it can be read
-/// at, and a tenfold cut takes it to a smear where a name should be. The
-/// geometric mean grows a name threefold across the same range, which reads at
-/// both ends, and it does it smoothly — a clamp would buy the same two ends at
-/// the price of a dead zone in the middle, which is where the working zooms
-/// are.
+/// Which turns "how large can a name get" into "how far may the range be
+/// CLOSED", and that is answered where it belongs — see
+/// [`PITCH_RANGE_MIN_SPAN`](crate::PITCH_RANGE_MIN_SPAN), whose two octaves
+/// against this ten-octave axis are what cap a name at five times its dialled
+/// size. One law with a limit at the end beats a law that bends in the middle:
+/// a softened curve holds the far end down by making a name disagree with its
+/// ribbon at every zoom in between, which is where the reading actually
+/// happens.
 ///
 /// Thinning follows for free: [`plan`](super::names::plan) measures the room a
 /// name demands from the size it is drawn at, so names that have grown are
@@ -404,7 +408,7 @@ const FULL_PITCH_SPAN: f32 =
 /// exactly as a wide one does — [`Axes`] is the only thing here that knows a
 /// screen side, and this is not it.
 fn name_zoom(span: f32) -> f32 {
-    (FULL_PITCH_SPAN / span.clamp(crate::PITCH_RANGE_MIN_SPAN, FULL_PITCH_SPAN)).sqrt()
+    FULL_PITCH_SPAN / span.clamp(crate::PITCH_RANGE_MIN_SPAN, FULL_PITCH_SPAN)
 }
 
 /// The sizes this pane sets text at for one frame, as multiples of each
@@ -1406,10 +1410,18 @@ mod tests {
     fn names_follow_the_pitch_zoom_and_markings_hold_still() {
         let cfg = SpectrumConfig::default();
         let at = |span| text_scales(&cfg, span, 1.0, 2.0);
+        // Every size comes out snapped onto a whole physical pixel, and a name
+        // is 12.35pt, which is not one at 2x — so the law is met to within half
+        // a pixel of type and no closer. See `text::snap_scale`.
+        let pixel = 0.5 / (names::LABEL_PT * 2.0);
 
-        assert_eq!(at(FULL_PITCH_SPAN).names, 1.0, "the whole axis is the size names are set at");
-        let octave = at(crate::PITCH_RANGE_MIN_SPAN).names;
-        assert!((octave - 10f32.sqrt()).abs() < 0.02, "an octave draws names at {octave}");
+        let full = at(FULL_PITCH_SPAN).names;
+        assert!((full - 1.0).abs() <= pixel, "the whole axis draws names at {full}, not 1");
+        let tightest = at(crate::PITCH_RANGE_MIN_SPAN).names;
+        assert!(
+            (tightest - FULL_PITCH_SPAN / crate::PITCH_RANGE_MIN_SPAN).abs() <= pixel,
+            "the tightest range draws names at {tightest}, not in proportion to its zoom",
+        );
         // Monotone in between, and never under the size it started at: the
         // reference is the widest range there is, so the only way is up.
         let mut previous = 0.0;
@@ -1420,8 +1432,8 @@ mod tests {
         }
         // A range zoomed past either end (a hand-edited blob; the bars cannot
         // do it) still lands inside the band rather than off it.
-        assert_eq!(at(0.0).names, octave);
-        assert_eq!(at(1e6).names, 1.0);
+        assert_eq!(at(0.0).names, tightest);
+        assert_eq!(at(1e6).names, full);
 
         // The markings ignore all of it, and answer to their own bar.
         assert_eq!(at(FULL_PITCH_SPAN).markings, at(crate::PITCH_RANGE_MIN_SPAN).markings);

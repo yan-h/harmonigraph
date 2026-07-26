@@ -525,9 +525,15 @@ impl SpectrumConfig {
     }
 }
 
-/// Closest the two ends of the pitch range may come: one octave, which is
-/// what the octave-pair control guaranteed before it went continuous.
-pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 12.0;
+/// Closest the two ends of the pitch range may come.
+///
+/// Two octaves, and it is the note names that set it. They scale in
+/// proportion to the zoom (see `panes::spectral::name_zoom`), so how far the
+/// range may be closed IS how large a name can get: the whole axis is ten
+/// octaves, so a two-octave floor puts a name at five times its dialled size
+/// and no more. It was one octave, from when the range was a pair of octave
+/// numbers and nothing downstream cared how tight it got.
+pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 24.0;
 
 /// How far the roll's time span may be taken, in seconds. Named because two
 /// controls now set it — the Analyzer tab's Span bar and the drag across the

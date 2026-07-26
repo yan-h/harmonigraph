@@ -45,14 +45,19 @@ use super::lattice;
 use super::spectral::{Axes, PitchScale, TimeAxis};
 use crate::{theme, SharedState};
 
-/// Point size of a name's letter. Half a point under the axis labels'
+/// Point size of a name's letter. Well under the axis labels'
 /// ([`MARKING_PT`](super::spectral::MARKING_PT)): there are many more of
 /// these, and they sit inside the picture rather than along its edge.
 ///
 /// The size at the pitch zoom it is dialled for, that is — the pane hands
 /// [`plan`] and [`draw`] a scale that grows this as the range narrows. See
 /// `spectral::name_zoom`.
-pub(super) const LABEL_PT: f32 = 9.5;
+///
+/// Rebased by 1.3 from the 9.5 it was drawn at before the Name size bar
+/// existed, that being where the bar settled once there was one; every length
+/// below moved with it, since they are the spacing AROUND type of this size
+/// and were being scaled by the same bar.
+pub(super) const LABEL_PT: f32 = 12.35;
 
 /// Points the name is set in from the ribbon's leading edge, along the time
 /// axis. Enough that the letter is not touching the end it starts from.
@@ -62,7 +67,7 @@ pub(super) const LABEL_PT: f32 = 9.5;
 /// fixed points would be a third of the clear air there that it is here — the
 /// render diverging from the pane the look was dialled in on, which is the one
 /// thing this codebase most wants it not to do.
-const LABEL_INSET: f32 = 2.0;
+const LABEL_INSET: f32 = 2.6;
 
 /// What a monospace glyph advances, and a line box stands, as fractions of the
 /// font size — and the clear space a name demands around itself, in points.
@@ -75,7 +80,7 @@ const LABEL_INSET: f32 = 2.0;
 /// render's output depend on font metrics rather than on arithmetic.
 const GLYPH_ADVANCE: f32 = 0.62;
 const LINE_HEIGHT: f32 = 1.3;
-const LABEL_PAD: f32 = 1.5;
+const LABEL_PAD: f32 = 1.95;
 
 /// Clear time a name demands beyond its own box, in points along the time
 /// axis, before the next name at that pitch may take a place.
@@ -84,9 +89,9 @@ const LABEL_PAD: f32 = 1.5;
 /// a run of repeats reads as a word rather than as a name on each of several
 /// notes. This is the "certain span" the greedy leaves between the instance it
 /// picks and the next one it will take.
-const REPEAT_GAP: f32 = 6.0;
+const REPEAT_GAP: f32 = 7.8;
 
-/// Which stretches of the time axis are already spoken for, at each pitch.
+/// When each pitch last gave a name away — the whole of the thinning's state.
 ///
 /// Thinning happens along TIME and within ONE PITCH only. A repeat waits for
 /// clear room after whichever instance took the name; a name at one pitch never
@@ -99,30 +104,33 @@ const REPEAT_GAP: f32 = 6.0;
 /// than either (nudging them apart, stacking them, thinning by loudness) is
 /// deferred rather than guessed at.
 ///
-/// A plain list per pitch, because the list is short by construction: within a
-/// pitch the placed stretches are disjoint and each is a name plus its gap
-/// wide, so a pane of finite width holds only so many however many notes are
-/// offered to it.
+/// One TIME per lane, not a list of screen spans, and measured in seconds of
+/// take rather than in points of pane. Both of those are the fix for names
+/// blinking as the roll scrolls, and neither is a simplification for its own
+/// sake — see [`plan`], which explains what the sweep has to be anchored to
+/// and why the window's own edge is the one place it cannot be.
+///
+/// One entry suffices, where the screen-space version kept a list. The sweep
+/// runs in time order, so every candidate is later than everything placed; the
+/// placed spans at one pitch are disjoint by construction (each was let
+/// through for clearing the one before it), so the LAST one placed is the only
+/// one that can be in the way.
 #[derive(Default)]
 struct Occupancy {
-    pitches: HashMap<i32, Vec<(f32, f32)>>,
+    /// How far the last name taken at each pitch reaches, in take time.
+    pitches: HashMap<i32, f64>,
 }
 
 impl Occupancy {
-    /// Whether `span` — a candidate's reach along the time axis, already grown
-    /// by the clear room it demands — meets nothing placed at this pitch.
-    fn free(&self, pitch: i32, span: (f32, f32)) -> bool {
-        match self.pitches.get(&pitch) {
-            Some(taken) => !taken.iter().any(|t| span.0 < t.1 && t.0 < span.1),
-            None => true,
-        }
-    }
-
-    /// Record a name's own reach. The gap it demands is added to whatever is
-    /// TESTED against this, not stored here, so the clear room between two
-    /// names is one gap rather than two.
-    fn insert(&mut self, pitch: i32, span: (f32, f32)) {
-        self.pitches.entry(pitch).or_default().push(span);
+    /// How far the last name at this pitch reaches: a slot to test against and
+    /// then write through.
+    ///
+    /// One lookup rather than a read and a write, because the sweep asks this
+    /// of every note the roll remembers and a hash of a lane key is a
+    /// measurable part of what that costs. Empty lanes read as
+    /// `NEG_INFINITY` — nothing has been named, so everything clears.
+    fn lane(&mut self, pitch: i32) -> &mut f64 {
+        self.pitches.entry(pitch).or_insert(f64::NEG_INFINITY)
     }
 }
 
@@ -147,20 +155,38 @@ fn pitch_key(midi: f32) -> i32 {
     (midi * 100.0 / LANE_CENTS).round() as i32
 }
 
-/// Where a name lies along the TIME axis, in screen points.
+/// How far a name reaches along the depth axis, in screen points: its padded
+/// box, projected onto whichever way that axis runs.
 ///
 /// The depth direction is axis-aligned — the screen's x on a pane laid out
-/// along its long side, its y on an upright one — so the reach is one of the
-/// box's two extents, chosen by which way that axis points rather than by
-/// naming a screen side.
-fn depth_span(axes: &Axes, rect: egui::Rect) -> (f32, f32) {
+/// along its long side, its y on an upright one — so projecting answers it for
+/// both without naming a screen side.
+fn depth_extent(axes: &Axes, name: &NoteName, size: f32, label_scale: f32) -> f32 {
+    let extent = name_extent(name, size);
     let depth = axes.dir_depth();
-    if depth.x.abs() > depth.y.abs() {
-        (rect.min.x, rect.max.x)
+    (extent.x * depth.x).abs() + (extent.y * depth.y).abs() + 2.0 * LABEL_PAD * label_scale
+}
+
+/// The stretch of TAKE TIME a name covers, from a leading edge at `at`.
+///
+/// A name always lies from its leading edge over the ribbon it names, which is
+/// to say toward increasing depth — and depth runs backward through time in
+/// the live layout (the picture scrolls into the past) and forward in the
+/// whole-song one. So which of two names reaches across the other is a
+/// question about the layout, and this is where it is answered; the thinning
+/// above only compares spans.
+fn name_span(at: f64, reach: f64, backward: bool) -> (f64, f64) {
+    if backward {
+        (at - reach, at)
     } else {
-        (rect.min.y, rect.max.y)
+        (at, at + reach)
     }
 }
+
+/// The narrowest name there is: one letter, nothing stacked beside it. Stands
+/// for the least room any name can ask for — see [`plan`].
+const PLAINEST_NAME: NoteName =
+    NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
 
 /// One name, placed: what it says and the box it was measured into.
 #[derive(Clone, Copy, Debug)]
@@ -170,6 +196,12 @@ pub(super) struct NoteLabel {
     /// drawn — [`lattice::draw_stacked_name`] centres on its anchor, while the
     /// placement here works in boxes that grow away from theirs.
     pub rect: egui::Rect,
+    /// Test-only: the take time this name was placed at. Which NOTE a name
+    /// belongs to is the whole question when asking whether the set of them
+    /// holds still as the picture scrolls, and a rect that scrolls cannot
+    /// answer it.
+    #[cfg(test)]
+    pub at: f64,
 }
 
 /// Every name this frame draws, already thinned to the ones that fit — empty
@@ -199,48 +231,82 @@ pub(super) fn plan(
         None => state.tracker.roll(),
     };
 
-    // Cull to what is on the pane before anything else: the roll remembers
-    // thousands of notes while a handful are in the window, and everything
-    // below is per-candidate work.
+    // EVERY note the roll remembers, not the ones on the pane — the one place
+    // the sweep must not start is the window's own edge, because that edge
+    // moves.
     //
-    // Culled on the pitch the name will be DRAWN at, not on the note's pitch
-    // in general — the two differ for a bent note, and it is the name that has
-    // to be on the pane.
+    // The greedy hands a name to the first instance it reaches and then to the
+    // next with room after it, so each decision rests on the one before it, all
+    // the way back to whichever note the sweep began at. Begin at the oldest
+    // note IN THE WINDOW and that anchor slides off the far edge every time a
+    // note is culled — and the parity of the whole chain behind it flips: the
+    // name that was suppressed takes the ground, the one after it loses it, and
+    // so on down the lane. Names blink out and back in as the picture scrolls,
+    // and the more of them compete the more of them blink. (Measured: with the
+    // pitch range zoomed so names draw at twice their size, 47 of 59 named notes
+    // blinked over eight seconds of scrolling; at one and a half times, none of
+    // them did. Zooming made it visible; the anchor is what made it possible.)
+    //
+    // Anchored at the roll's own beginning there is nothing to slide: a note's
+    // decision is settled by the notes BEFORE it, which the scrolling window
+    // cannot change. What is left is a chain reaching back to the roll's first
+    // note, and it breaks at the first quiet stretch in a lane wider than a
+    // name — so in practice the anchor is a rest a few seconds back, not the
+    // start of the session.
+    //
+    // The cost of sweeping the whole roll rather than the window is one pass
+    // over what `roll.notes()` already iterates in full, plus a lane lookup per
+    // note; the naming, which is the expensive part, is still only paid where a
+    // note has room for a name (see `least_room` below).
     let oldest = time.oldest();
-    let mut notes: Vec<(&RollNote, Edge)> = roll
-        .notes()
-        .filter(|note| note.stop(now) >= oldest)
-        .filter_map(|note| {
-            let edge = leading_edge(&time, note, now);
-            scale.contains(edge.pitch).then_some((note, edge))
-        })
-        .collect();
-    // Oldest first — and a total order, since the offline render must not
-    // depend on the order the roll happened to hand them back and a name's
-    // place is decided first-come.
+    let mut notes: Vec<(&RollNote, Edge)> =
+        roll.notes().map(|note| (note, leading_edge(&time, note, now))).collect();
+    // By LEADING EDGE, oldest first — where the name will sit, which is what
+    // the sweep is handing out — and a total order, since the offline render
+    // must not depend on the order the roll happened to hand them back.
     //
-    // OLDEST first is what makes the picture hold still while you play. The
-    // greedy gives a name to the first instance of a note it reaches and then
-    // to the next one with room after it, so the names are decided from the
-    // far end of the window inward — and a note arriving at the now-line is
-    // last in the order, so it fits in around what is already named instead of
-    // evicting it. Newest-first reshuffles the whole pane on every note played,
-    // which is precisely when you are trying to read it.
+    // A note arriving at the now-line is therefore last, and fits in around
+    // what is already named instead of evicting it. Newest-first would
+    // reshuffle the whole pane on every note played, which is precisely when
+    // you are trying to read it.
     //
     // Oldest first, whether held or not: the sweep's order is about which
     // instance of a note takes the name, and a held note is no earlier a note
     // for being held. Held notes are lifted out for DRAWING afterwards, which
     // is a separate question from where they sit in the sweep — keeping the
     // two apart is what leaves the held-note exemption below with any teeth.
-    notes.sort_unstable_by(|a, b| {
-        a.0.start
-            .total_cmp(&b.0.start)
-            .then(a.0.channel.cmp(&b.0.channel))
-            .then(a.0.note.cmp(&b.0.note))
-    });
+    // Live, the roll already hands them over in this order and the sort is
+    // skipped: `notes()` yields the finished ones in RELEASE order, which is
+    // leading-edge order there, and the sounding ones after them — all at the
+    // now-line, which is later than any of them. The whole-song layout leads
+    // with the ONSET instead, which release order is not.
+    if time.whole_song() {
+        notes.sort_unstable_by(|a, b| {
+            a.1.time
+                .total_cmp(&b.1.time)
+                .then(a.0.channel.cmp(&b.0.channel))
+                .then(a.0.note.cmp(&b.0.note))
+        });
+    }
 
     let size = LABEL_PT * label_scale;
-    let gap = REPEAT_GAP * label_scale;
+    // One point of the depth axis, in seconds of take. A name's reach is a
+    // length on the screen and the sweep measures in TIME, so this is the rate
+    // between them — one number, the time axis being linear across the region.
+    let seconds_per_point =
+        (time.time_at(1.0) - time.time_at(0.0)).abs() / axes.depth_len().max(1.0) as f64;
+    let gap = (REPEAT_GAP * label_scale) as f64 * seconds_per_point;
+    let reach = |name: &NoteName| {
+        depth_extent(axes, name, size, label_scale) as f64 * seconds_per_point
+    };
+    // Live, the picture scrolls into the past, so a name lies back over its
+    // ribbon; the whole-song layout runs the other way. See [`name_span`].
+    let backward = !time.whole_song();
+    // The furthest into the clear any name can start: a bare letter, nothing
+    // stacked beside it, is the least any of them reaches. A note refused even
+    // that much room will be refused its own, so it can be turned down without
+    // being named — and naming is the one expensive thing per note here.
+    let least_reach = reach(&PLAINEST_NAME);
 
     // One naming per pitch CLASS rather than per note. Naming walks every
     // visible lattice node looking for the match that spells best, and a
@@ -263,17 +329,32 @@ pub(super) fn plan(
     // repeats, and material whose tuning genuinely drifts between repeats
     // pays per distinct landing, which is correct, because those really are
     // different pitches and may deserve different names.
-    let mut names: HashMap<PitchClass, NoteName> = HashMap::new();
-    let naming = |pitch: f32, names: &mut HashMap<PitchClass, NoteName>| {
+    // The name's REACH is memoized with it, and has to be: measuring one asks
+    // the name for its marks, which builds a String per mark, and the sweep
+    // now reaches every note the roll remembers rather than the handful on the
+    // pane. Per class that is a few allocations a frame; per note it was
+    // thousands, and it cost more than everything else here put together.
+    let mut names: HashMap<PitchClass, (NoteName, f64)> = HashMap::new();
+    let naming = |pitch: f32, names: &mut HashMap<PitchClass, (NoteName, f64)>| {
         let class = PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0);
-        *names.entry(class).or_insert_with(|| note_name(&state.view, &state.tuning, pitch))
+        *names.entry(class).or_insert_with(|| {
+            let name = note_name(&state.view, &state.tuning, pitch);
+            (name, reach(&name))
+        })
     };
 
     let mut occupied = Occupancy::default();
     let mut placed: Vec<NoteLabel> = Vec::new();
     let mut held: Vec<NoteLabel> = Vec::new();
     for (note, edge) in notes {
-        let p = scale.t_of(edge.pitch);
+        // On the pane, and so worth drawing — decided on the pitch the name
+        // will be DRAWN at, not the note's pitch in general, since the two
+        // differ for a bent note and it is the name that has to be visible.
+        //
+        // Only DRAWING is culled here. A note off the far edge still takes its
+        // turn in the sweep above, which is the whole of what holds the names
+        // still.
+        let visible = note.stop(now) >= oldest && scale.contains(edge.pitch);
         // A held note stands outside the sweep in BOTH directions: it is named
         // whatever is already there, and it is not recorded, so it takes
         // nothing out of the running for anyone else.
@@ -294,38 +375,62 @@ pub(super) fn plan(
         // this is the only one that never withholds a name that could have
         // been shown.
         if note.is_live() {
-            let name = naming(edge.pitch, &mut names);
-            let rect = label_rect(axes, p, edge.depth, &name, size, label_scale);
+            if !visible {
+                continue;
+            }
+            let (name, _) = naming(edge.pitch, &mut names);
+            let rect =
+                label_rect(axes, scale.t_of(edge.pitch), time.depth_of(edge.time), &name, size, label_scale);
             // Two keys sounding one pitch — a doubled MIDI source, a layered
             // MPE part — would otherwise stamp the same name on the same
             // points once per voice. The name still appears; it is drawn once.
             if !held.iter().any(|l| l.name == name && l.rect == rect) {
-                held.push(NoteLabel { name, rect });
+                held.push(NoteLabel { name, rect, #[cfg(test)] at: edge.time });
             }
             continue;
         }
-        // Everything else has to find clear time at its own pitch — including
-        // the room it will demand of whoever comes next.
-        let name = naming(edge.pitch, &mut names);
-        let rect = label_rect(axes, p, edge.depth, &name, size, label_scale);
-        let (near, far) = depth_span(axes, rect);
-        let key = pitch_key(edge.pitch);
-        if !occupied.free(key, (near - gap, far + gap)) {
+        // Everything else has to find clear time at its own pitch — its own
+        // span, plus the gap it owes whatever was named there last.
+        let reached = occupied.lane(pitch_key(edge.pitch));
+        if name_span(edge.time, least_reach, backward).0 - gap < *reached {
             continue;
         }
-        occupied.insert(key, (near, far));
-        placed.push(NoteLabel { name, rect });
+        let (name, reach) = naming(edge.pitch, &mut names);
+        let (from, to) = name_span(edge.time, reach, backward);
+        if from - gap < *reached {
+            continue;
+        }
+        *reached = to;
+        if visible {
+            let rect =
+                label_rect(axes, scale.t_of(edge.pitch), time.depth_of(edge.time), &name, size, label_scale);
+            placed.push(NoteLabel { name, rect, #[cfg(test)] at: edge.time });
+        }
     }
+    // Sounding notes reach the sweep out of a map, so their order among
+    // themselves is not one: it decides which of two overlapping held names
+    // lands on top, and the offline render must not draw that differently
+    // twice. Every other name was already ordered by the sweep.
+    held.sort_unstable_by(|a, b| {
+        a.rect.min.x.total_cmp(&b.rect.min.x).then(a.rect.min.y.total_cmp(&b.rect.min.y))
+    });
     // Held names last, so that where one overlaps another it is the note under
     // your finger that stays readable.
     placed.append(&mut held);
     placed
 }
 
-/// A ribbon's LEADING edge: where it is, and what pitch the ribbon has THERE.
+/// A ribbon's LEADING edge: when it is, and what pitch the ribbon has THERE.
+///
+/// A TIME, not a depth. The thinning is measured in it — a time is a fact
+/// about the music, where a depth is a fact about where the window happens to
+/// be — and it is the only one of the two that still says anything about a
+/// note off the pane, since past either edge every depth clamps to the edge.
+/// The depth follows from it (`TimeAxis::depth_of`) for the few notes that are
+/// actually drawn.
 #[derive(Clone, Copy)]
 struct Edge {
-    depth: f32,
+    time: f64,
     pitch: f32,
 }
 
@@ -361,15 +466,20 @@ struct Edge {
 /// Both ends are CLAMPED into the region on the way, so a note reaching past
 /// either edge is named at the last of it still on the pane.
 fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
-    let start = time.depth_of(note.start);
-    let stop = time.depth_of(note.stop(now));
-    if stop <= start {
-        Edge { depth: stop, pitch: note.end_pitch() }
-    } else {
+    // Which end leads is a question about the LAYOUT, and `backward` is the
+    // whole of the answer: depth runs into the past live (so the ribbon's
+    // recent end is its head) and forward in the whole-song layout (so the
+    // onset is). Asked of the two ends' times rather than of their depths,
+    // which is the same question — depth is monotone in time — and answerable
+    // for a note nowhere near the pane, where every depth clamps to the same
+    // edge and the comparison stops meaning anything.
+    if time.whole_song() {
         // The onset end, so the pitch the note SETTLED on rather than the key
         // it was pressed at — a retuned note reaches its real pitch a moment
         // after its note-on, and the ribbon is drawn from there.
-        Edge { depth: start, pitch: note.settled_pitch() }
+        Edge { time: note.start, pitch: note.settled_pitch() }
+    } else {
+        Edge { time: note.stop(now), pitch: note.end_pitch() }
     }
 }
 
@@ -589,9 +699,9 @@ mod tests {
 
     /// A pitch axis the size a docked pane actually has: 700 points.
     ///
-    /// The pitch range cannot be zoomed under an octave
+    /// The pitch range cannot be zoomed under two octaves
     /// ([`PITCH_RANGE_MIN_SPAN`](crate::PITCH_RANGE_MIN_SPAN)), so across 100
-    /// points a semitone is eight of them — less than a name is tall. Anything
+    /// points a semitone is four of them — less than a name is tall. Anything
     /// about naming NEIGHBOURING pitches therefore has to be asked of a pane
     /// with room to draw them apart, or it is asking about the test fixture.
     const BIG: egui::Rect =
@@ -643,6 +753,82 @@ mod tests {
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::spectral::spectrum_share(cfg);
         plan(state, &axes, &scale, split, now, 1.0)
+    }
+
+    /// A phrase dense enough that its names have to compete for room: three
+    /// pitches struck together every 0.9 seconds, for longer than the window
+    /// holds. `from` cuts the roll's memory back to notes still sounding then,
+    /// which is what a sweep anchored on the window's own edge amounts to.
+    fn phrase(from: f64) -> SharedState {
+        let mut state = state(24.0, 10.0);
+        let mut t = 0.0;
+        while t < 24.0 {
+            for (i, note) in [60u8, 62, 64].iter().enumerate() {
+                let at = t + i as f64 * 0.11;
+                if at + 0.25 >= from {
+                    state.tracker.handle_event(on(at, *note));
+                    state.tracker.handle_event(off(at + 0.25, *note));
+                }
+            }
+            t += 0.9;
+        }
+        state
+    }
+
+    /// How many times a name vanishes from the picture and comes back, over
+    /// eight seconds of scrolling at `label_scale`. Names are followed by the
+    /// NOTE each belongs to, not by where it is drawn: every name is moving,
+    /// so a position says nothing about identity.
+    fn blinks(state_at: impl Fn(f64) -> SharedState, label_scale: f32) -> usize {
+        let mut seen: HashMap<(String, i64), Vec<usize>> = HashMap::new();
+        for frame in 0..480 {
+            let now = 14.0 + frame as f64 / 60.0;
+            let state = state_at(now);
+            let cfg = state.spectrum_config;
+            let split = super::super::spectral::spectrum_share(&cfg);
+            let labels =
+                plan(&state, &Axes::new(BIG, &cfg), &scale_of(&state), split, now, label_scale);
+            for label in labels {
+                let key = (label.name.to_string(), (label.at * 1000.0).round() as i64);
+                seen.entry(key).or_default().push(frame);
+            }
+        }
+        seen.values().map(|f| f.windows(2).filter(|w| w[1] != w[0] + 1).count()).sum()
+    }
+
+    /// A name never vanishes and comes back as the roll scrolls.
+    ///
+    /// The thinning is a chain — each name's place rests on the ones already
+    /// placed — so it matters enormously WHERE the chain is anchored. Anchored
+    /// on the oldest note in the WINDOW, that anchor slides off the far edge
+    /// every time a note is culled, and the parity of the whole chain flips
+    /// behind it: the suppressed name takes the ground, the one after it loses
+    /// it, on down the lane. Anchored on the roll's own beginning there is
+    /// nothing to slide, because a note's place is settled by the notes before
+    /// it and scrolling does not change those.
+    ///
+    /// Measured at twice the dialled size, which is about what a four-octave
+    /// pitch zoom draws names at: the bigger they are the longer the chains,
+    /// and it was zooming that made this visible at all.
+    ///
+    /// The second half is what keeps the first honest. The same phrase with
+    /// the roll's memory cut back to the window — which is exactly what the
+    /// old anchor saw — blinks, so a fix that quietly stopped thinning at all
+    /// could not pass this by having nothing to thin.
+    #[test]
+    fn a_name_never_blinks_out_and_back_as_the_roll_scrolls() {
+        const ZOOMED: f32 = 2.23;
+        assert_eq!(blinks(|_| phrase(f64::NEG_INFINITY), ZOOMED), 0);
+        assert_eq!(blinks(|_| phrase(f64::NEG_INFINITY), 1.0), 0, "...and at the dialled size");
+
+        // The counterfactual: the same music, remembered only as far back as
+        // the window reaches.
+        let windowed = blinks(|now| phrase(now - 10.0), ZOOMED);
+        assert!(
+            windowed > 20,
+            "a window-anchored sweep blinked only {windowed} times, so this test \
+             is no longer watching the thing it was written for",
+        );
     }
 
     fn said(labels: &[NoteLabel]) -> Vec<String> {
@@ -778,12 +964,12 @@ mod tests {
     /// way to look at a few semitones of a piece that spans four octaves.
     #[test]
     fn notes_outside_the_pitch_zoom_are_left_out() {
-        let mut state = state(12.0, 10.0); // 54..66
-        for note in [48, 60, 72] {
+        let mut state = state(24.0, 10.0); // 48..72
+        for note in [36, 60, 84] {
             state.tracker.handle_event(on(0.0, note));
             state.tracker.handle_event(off(0.5, note));
         }
-        assert_eq!(said(&labels(&state, 5.0)), ["C"], "only the one inside 54..66");
+        assert_eq!(said(&labels(&state, 5.0)), ["C"], "only the one inside 48..72");
     }
 
     /// Notes that have scrolled off the far end are not named either — their
@@ -814,7 +1000,7 @@ mod tests {
         let mut state = state(24.0, 10.0);
         // A run of one pitch, far too fast for every name to fit: the roll is
         // 300 points wide over 10 seconds, so a tenth of a second is 3 points
-        // where a name plus its gap is a dozen.
+        // where a name plus its gap is nearer twenty.
         for i in 0..40 {
             let t = i as f64 * 0.1;
             state.tracker.handle_event(on(t, 60));
@@ -831,10 +1017,10 @@ mod tests {
         let mut xs: Vec<f32> = placed.iter().map(|l| l.rect.min.x).collect();
         xs.sort_by(f32::total_cmp);
         for pair in xs.windows(2) {
-            assert!(pair[1] - pair[0] >= 12.0, "names crowd at {pair:?}");
+            assert!(pair[1] - pair[0] >= 15.0, "names crowd at {pair:?}");
             // ...and by ONE gap, not two: the room a name demands is added to
             // whoever is tested against it, never stored on both sides.
-            assert!(pair[1] - pair[0] < 20.0, "names sit twice as far apart as asked: {pair:?}");
+            assert!(pair[1] - pair[0] < 26.0, "names sit twice as far apart as asked: {pair:?}");
         }
     }
 
@@ -1083,7 +1269,7 @@ mod tests {
     /// names replace, and the ribbon would sit a comma off the name over it.
     #[test]
     fn a_note_is_named_by_the_pitch_its_tuning_lands_it_at() {
-        let mut state = state(12.0, 10.0);
+        let mut state = state(24.0, 10.0);
         // A JUST tuning, which is the one the distinction lives in: an equal
         // temperament tempers the syntonic comma out by construction, so there
         // is no node a comma below E to name.
@@ -1314,12 +1500,12 @@ mod tests {
     /// about the pitch the name would be drawn at, not the note in general.
     #[test]
     fn the_cull_follows_the_name_not_the_notes_onset() {
-        let mut out = state(12.0, 10.0); // 54..66
+        let mut out = state(24.0, 10.0); // 48..72
         out.tracker.handle_event(on(1.0, 60));
         out.tracker.handle_event(tuning(1.5, 60, 30.0)); // gone to MIDI 90
         assert!(labels(&out, 3.0).is_empty(), "its name left with it");
 
-        let mut into = state(12.0, 10.0);
+        let mut into = state(24.0, 10.0);
         into.tracker.handle_event(on(1.0, 30));
         into.tracker.handle_event(tuning(1.5, 30, 30.0)); // arrived at MIDI 60
         assert_eq!(said(&labels(&into, 3.0)), ["C"], "and arrives with it");

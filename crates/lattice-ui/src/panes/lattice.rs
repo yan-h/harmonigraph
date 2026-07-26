@@ -291,10 +291,16 @@ pub(crate) fn draw_node_labels(
 /// At the framing a fresh view opens at, that is. Every size here is a size at
 /// scale 1, and the scale a label is actually drawn at follows the camera —
 /// see [`draw_node_labels`].
-pub(crate) const NAME_SIZE: f32 = 15.0;
+///
+/// Doubled from the 15pt these labels were drawn at for as long as they had no
+/// setting, along with everything below that is measured in points. The Size
+/// bar landed on 2 immediately and stayed there, which says the old number was
+/// wrong rather than that the bar wanted using — so the number moved and the
+/// bar went back to reading 1 at the size the lattice is actually looked at.
+pub(crate) const NAME_SIZE: f32 = 30.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
-pub(crate) const CENTS_SIZE: f32 = 8.0;
+pub(crate) const CENTS_SIZE: f32 = 16.0;
 /// How far a label can reach from the node it belongs to, in points at
 /// scale 1 — the name, its marks, the gap and the cents line under it, with
 /// room to spare. Scaled with the label like everything else here, so the
@@ -302,12 +308,12 @@ pub(crate) const CENTS_SIZE: f32 = 8.0;
 /// that a label is too far off the pane to be worth laying out, so it errs
 /// generous: too small silently clips a label at the edge, too large only
 /// costs the work this saves.
-pub(crate) const LABEL_REACH: f32 = 48.0;
+pub(crate) const LABEL_REACH: f32 = 96.0;
 
 /// Air between the bottom of the name's glyphs and the top of the cents
 /// readout's. Real pixels of gap, since both ends are measured as ink: the
 /// two are one label, sitting together without crowding.
-pub(crate) const CENTS_GAP: f32 = 3.0;
+pub(crate) const CENTS_GAP: f32 = 6.0;
 /// Accidental and comma marks, relative to the letter. Small enough that the
 /// two of them stacked still fit inside the letter's own height -- the pair
 /// is an annotation on the name, and a label that grows taller than its
@@ -1213,11 +1219,12 @@ mod tests {
             "the default framing is where the sizes are dialled",
         );
         assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 0.5), NAME_SIZE * 2.0, "twice as close");
-        // ...and half of 15 is 7.5, which is not a whole pixel on this
+        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 2.0), NAME_SIZE * 0.5, "twice as far");
+        // ...and a quarter of 30 is 7.5, which is not a whole pixel on this
         // context's 1x scale, so it lands on the one above: the size follows
-        // the camera continuously but is only ever RASTERIZED at a pixel grid.
+        // the camera continuously but is only ever RASTERIZED on a pixel grid.
         // See `text::snap_scale` for why that matters.
-        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 2.0), 8.0, "twice as far");
+        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 4.0), 8.0, "four times as far");
     }
 
     /// A node with `activation`, on the home sheet or off it, and nothing

@@ -451,9 +451,15 @@ fn default_mark_weight() -> f32 {
     0.07
 }
 
-/// Labels at their built-in size. What a blob predating the setting was drawn
-/// with — but only as a SIZE: the camera tracking that arrived alongside it is
-/// behaviour rather than a value, so an older view gets that too.
+/// Labels at their built-in size.
+///
+/// The deliberate exception to what these `default_*` fns are for. An older
+/// blob was drawn at HALF this — the letter was 15pt and is now 30 — so this
+/// restyles it, where every other default here exists precisely not to. The
+/// bar this field belongs to went to 2 the first time it was tried and stayed
+/// there, which said the built-in size was wrong rather than merely one
+/// choice; a size that was wrong is worth correcting everywhere it was used,
+/// and a saved view that kept it would be preserving a mistake, not a look.
 fn default_label_scale() -> f32 {
     1.0
 }
