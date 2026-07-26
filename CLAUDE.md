@@ -115,6 +115,45 @@ The script explains the container format in its header. Projects live under
 Google Drive, not `~/Documents/Bitwig Studio/Projects` (empty); it finds
 them via `mdfind`.
 
+## House style: hand-formatted, comments in the present tense
+
+Two conventions here are invisible to the build — nothing fails when you
+break either, and both are easy to break by reflex.
+
+**Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
+never been through rustfmt, so rustfmt's idea of this code and the code
+have drifted a long way apart: `cargo fmt --check` currently wants 835
+changes across 51 of the 57 files in `crates/`. Running it once would bury
+whatever you actually changed under a whole-tree reformat that no reviewer
+can read past, which is why this is a ban rather than a preference. Match
+the surrounding style by hand, and wrap only the lines you write — about
+100 columns, which is where the tree sits. That is a habit, not a limit to
+enforce: 39 lines already exceed it and the longest runs to 155, and
+rewrapping code you are only passing through costs a reviewer the same way
+`cargo fmt` does, in miniature.
+
+**Comments state the current constraint, in the present tense.** A comment
+describing the delta from a previous version rots: once that version is a
+couple of refactors gone it names something no reader can reconstruct, and
+it still reads as authoritative, which makes it worse than no comment at
+all. Git already holds the history. PR #83 converted 59 such comments
+across 23 files, keeping each argument and dropping only its time
+reference.
+
+The exception is where the past tense is load-bearing, and it is a real
+category rather than an escape hatch. Comments about **blobs still sitting
+in saved projects** must stay historical — the `default_*` block and
+`migrate_legacy` in `view.rs`, the serde aliases for deleted palettes and
+node styles, the `low_octave` sentinel, the version-0 dock refresh — and so
+must the fade param's pre-merge id, where the id is a persistence contract
+that outlives the rename. There the history *is* the current constraint,
+and flattening it destroys real information. `DISPLAY_OVERSAMPLE` in
+`editor.rs` carries an explicit `HISTORICAL NOTE` on the same grounds: it
+exists to stop someone tightening the constant on reasoning that no longer
+holds. Runtime "old" and "no longer" — a previously-held voice, the ring's
+previously-written columns — describe state rather than builds, and are not
+in scope at all.
+
 ## Review happens at the merge boundary, not on the branch
 
 Nothing mechanical blocks a merge here: GitHub Actions is disabled on the
