@@ -679,15 +679,39 @@ fn rasterize_mark_rim(key: MarkKey) -> egui::ColorImage {
 /// How many mark bitmaps to keep before starting over. Zooming walks through
 /// sizes, and each one is its own bitmap; this is a ceiling on the churn,
 /// not a working-set estimate.
-const MARK_CACHE_LIMIT: usize = 96;
+pub(crate) const MARK_CACHE_LIMIT: usize = 96;
+
+type MarkTextures = (egui::TextureHandle, egui::TextureHandle);
+
+/// The mark bitmaps, plus the ones evicted too recently to destroy yet.
+#[derive(Clone, Default)]
+struct MarkCache {
+    live: std::collections::HashMap<MarkKey, MarkTextures>,
+    /// Evicted handles, each with the pass it was evicted on, held until a
+    /// LATER pass has begun.
+    ///
+    /// Dropping the last handle to a texture makes egui queue its id into
+    /// `textures_delta.free`, and the wgpu renderer applies those frees
+    /// BEFORE it submits the encoder (see `free_texture` then `queue.submit`
+    /// in egui-baseview's wgpu renderer). So a texture evicted midway
+    /// through a pass is destroyed while draw commands recorded EARLIER in
+    /// that same pass still name it, and the submit fails validation with
+    /// "Texture ... has been destroyed" — which is fatal, not recoverable.
+    /// Eviction picks an arbitrary victim, so the victim is sometimes a mark
+    /// the pass has already painted.
+    ///
+    /// Holding the handle until the next pass is what makes the eviction
+    /// safe: by then the pass that drew it has been submitted, and the key
+    /// is already out of `live`, so nothing new can reference the old id.
+    retired: Vec<(u64, MarkTextures)>,
+}
 
 /// The texture for one mark, rasterized on first use and kept in egui's own
 /// per-frame data store.
-fn mark_texture(ctx: &egui::Context, key: MarkKey) -> (egui::TextureHandle, egui::TextureHandle) {
-    type Cache =
-        std::collections::HashMap<MarkKey, (egui::TextureHandle, egui::TextureHandle)>;
-    let cached = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<Cache>>(egui::Id::NULL));
-    if let Some(hit) = cached.as_ref().and_then(|c| c.get(&key)) {
+fn mark_texture(ctx: &egui::Context, key: MarkKey) -> MarkTextures {
+    let pass = ctx.cumulative_pass_nr();
+    let cached = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<MarkCache>>(egui::Id::NULL));
+    if let Some(hit) = cached.as_ref().and_then(|c| c.live.get(&key)) {
         return hit.clone();
     }
     // LINEAR, because a mark is placed at a subpixel position and resampled
@@ -705,18 +729,23 @@ fn mark_texture(ctx: &egui::Context, key: MarkKey) -> (egui::TextureHandle, egui
         ),
     );
     let mut next = cached.map(|c| (*c).clone()).unwrap_or_default();
+    // Anything retired on an earlier pass has had its pass submitted, so the
+    // handle can go now and the texture is destroyed on this pass's frees.
+    next.retired.retain(|(evicted_on, _)| *evicted_on >= pass);
     // Evict ONE rather than emptying the map. Zooming walks through sizes a
     // pixel at a time, so the cache fills during an ordinary drag; clearing
     // it there drops every texture at once and re-rasterizes the whole
     // visible set on the next frame, which is a stall exactly while the
     // camera is moving. Which one goes is arbitrary — there is no recency
     // here to consult — but one at a time keeps the cost flat.
-    if next.len() >= MARK_CACHE_LIMIT {
-        if let Some(&victim) = next.keys().next() {
-            next.remove(&victim);
+    if next.live.len() >= MARK_CACHE_LIMIT {
+        if let Some(&victim) = next.live.keys().next() {
+            if let Some(handles) = next.live.remove(&victim) {
+                next.retired.push((pass, handles));
+            }
         }
     }
-    next.insert(key, handle.clone());
+    next.live.insert(key, handle.clone());
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, std::sync::Arc::new(next)));
     handle
 }
