@@ -40,6 +40,17 @@ pub struct RollNote {
     /// line — MPE bends arrive densely enough that interpolating looks
     /// like the glide it is, where holding each value would draw stairs.
     bends: Vec<(Time, f32)>,
+    /// The pitch reached by the end of the onset — see
+    /// [`settled_pitch`](Self::settled_pitch).
+    ///
+    /// Kept as a field rather than read back out of `bends`, so that it is
+    /// genuinely immutable once the note is [`SETTLE`](Self::SETTLE) old. Read
+    /// back, it is not: the [`MAX_BENDS`](Self::MAX_BENDS) fold overwrites the
+    /// LAST breakpoint in place, so a note bent hard enough to fill the vector
+    /// inside the onset window would have its final in-window breakpoint
+    /// replaced by an out-of-window one, and the answer would move — long
+    /// after anything derived from it had been told it could not.
+    settled: f32,
 }
 
 impl RollNote {
@@ -49,9 +60,43 @@ impl RollNote {
     /// for a while to reach it.
     pub const MAX_BENDS: usize = 64;
 
+    /// How long after the onset a pitch change still counts as part of the
+    /// onset rather than as a bend — see [`settled_pitch`](Self::settled_pitch).
+    ///
+    /// Long enough to cover a per-note tuning that arrives a block or two
+    /// behind its note-on (a 512-frame block at 48 kHz is 11 ms), far short of
+    /// any glide played on purpose.
+    pub const SETTLE: Time = 0.05;
+
     /// The pitch this note started on.
     pub fn start_pitch(&self) -> f32 {
         self.bends[0].1
+    }
+
+    /// The pitch this note SETTLED on: the last breakpoint within
+    /// [`SETTLE`](Self::SETTLE) of the onset.
+    ///
+    /// The pitch that identifies a note, as against
+    /// [`start_pitch`](Self::start_pitch), which is where the KEY sits. Under
+    /// per-note tuning the two are different notes: a retuned note arrives as
+    /// a note-on at its equal-tempered pitch followed by a tuning expression,
+    /// so its first breakpoint is 12-EDO however the tuning is set, and every
+    /// note in a just-intoned piece would answer `start_pitch` on the same
+    /// twelve pitches. This is the plugin's whole subject matter, so a caller
+    /// asking "which pitch is this" wants this one.
+    ///
+    /// Immutable once the note is [`SETTLE`](Self::SETTLE) old, which is what
+    /// makes it safe to derive something from and keep — unlike
+    /// [`end_pitch`](Self::end_pitch), which moves under a held note for as
+    /// long as it is being bent.
+    ///
+    /// Like [`NoteHistory`](crate::NoteHistory), it prefers a note's SOUNDING
+    /// pitch to its key; unlike history, which records where a note ended, it
+    /// records where the note began once its tuning had landed. For a glided
+    /// note the two name different pitches, and each is right about a
+    /// different moment.
+    pub fn settled_pitch(&self) -> f32 {
+        self.settled
     }
 
     /// The pitch it is sounding (or last sounded) at.
@@ -98,6 +143,12 @@ impl RollNote {
         } else {
             self.bends.push((at, pitch));
         }
+        // Still part of the onset: this is how a retuned note reaches the
+        // pitch it is actually playing. Recorded as it happens, so the fold
+        // above can never take it back.
+        if at <= self.start + Self::SETTLE {
+            self.settled = pitch;
+        }
     }
 }
 
@@ -126,7 +177,15 @@ impl NoteRoll {
         self.close(channel, note, at);
         self.live.insert(
             (channel, note),
-            RollNote { channel, note, velocity, start: at, end: None, bends: vec![(at, pitch)] },
+            RollNote {
+                channel,
+                note,
+                velocity,
+                start: at,
+                end: None,
+                bends: vec![(at, pitch)],
+                settled: pitch,
+            },
         );
     }
 
@@ -372,6 +431,76 @@ mod tests {
             roll.notes().all(|n| n.start >= 8.0),
             "the first eight presses should have been dropped"
         );
+    }
+
+    /// A retuned note is a note-on at its equal-tempered pitch followed by a
+    /// tuning expression, so the pitch it was PRESSED at says nothing about
+    /// which note it is — in a just-intoned piece every note would answer on
+    /// the same twelve. What it settles on within `SETTLE` is the answer; a
+    /// bend after that is a glide, and leaves the note's identity alone.
+    #[test]
+    fn a_note_settles_on_the_pitch_its_tuning_lands_it_at() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 64));
+        assert_eq!(tracker.roll().notes().next().unwrap().settled_pitch(), 64.0);
+
+        // The tuning, arriving a block behind its note-on.
+        tracker.handle_event(bend(0.01, 64, -0.137));
+        let note = tracker.roll().notes().next().unwrap();
+        assert!((note.settled_pitch() - 63.863).abs() < 1e-4, "{}", note.settled_pitch());
+        assert_eq!(note.start_pitch(), 64.0, "the KEY is still where it always was");
+
+        // A glide, well past the window: it moves where the note sounds and
+        // not which note it is.
+        tracker.handle_event(bend(1.0, 64, 2.0));
+        let note = tracker.roll().notes().next().unwrap();
+        assert!((note.settled_pitch() - 63.863).abs() < 1e-4);
+        assert_eq!(note.end_pitch(), 66.0);
+    }
+
+    /// A bend LANDING on the window's edge is still part of the onset, and one
+    /// past it is not — the constant is a real boundary, not a rough size.
+    #[test]
+    fn the_settle_window_has_edges() {
+        let settled = |at: Time| -> f32 {
+            let mut tracker = NoteTracker::new();
+            tracker.handle_event(on(0.0, 60));
+            tracker.handle_event(bend(at, 60, 1.0));
+            let pitch = tracker.roll().notes().next().unwrap().settled_pitch();
+            pitch
+        };
+        assert_eq!(settled(RollNote::SETTLE), 61.0, "on the edge counts");
+        assert_eq!(settled(RollNote::SETTLE * 2.0), 60.0, "past it does not");
+    }
+
+    /// The settled pitch does not move once the onset is over — including
+    /// under an expression ramp fast enough to fill the breakpoint vector
+    /// inside the onset itself.
+    ///
+    /// Read back out of `bends` it DOES move: the MAX_BENDS fold overwrites
+    /// the last breakpoint in place, so the final in-window one is eventually
+    /// replaced by an out-of-window one and `take_while` drops back a step.
+    /// Small — one sub-50 ms increment — and enough to re-place a name that
+    /// had been told the pitch was fixed.
+    #[test]
+    fn a_ramp_that_fills_the_breakpoints_cannot_move_the_settled_pitch() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        // Fill the vector inside the settle window...
+        for i in 1..RollNote::MAX_BENDS {
+            let at = RollNote::SETTLE * (i as Time / RollNote::MAX_BENDS as Time);
+            tracker.handle_event(bend(at, 60, i as f32 * 0.001));
+        }
+        let settled = tracker.roll().notes().next().unwrap().settled_pitch();
+        assert!(settled > 60.0, "the ramp did land inside the window: {settled}");
+
+        // ...then keep bending, long after. The fold now rewrites the last
+        // breakpoint, which was the one inside the window.
+        for i in 1..10 {
+            tracker.handle_event(bend(1.0 + i as Time, 60, 1.0 + i as f32));
+        }
+        let note = tracker.roll().notes().next().unwrap();
+        assert_eq!(note.settled_pitch(), settled, "the onset is over; the answer is fixed");
     }
 
     #[test]

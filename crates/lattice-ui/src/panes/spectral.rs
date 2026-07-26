@@ -9,7 +9,7 @@
 
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
-use super::{nearest_visible_node, section, KEY_NAMES};
+use super::{names, nearest_visible_node, section, KEY_NAMES};
 use lattice_core::notes::display_octave_of;
 use egui::Sense;
 
@@ -259,6 +259,19 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (RollColor::Accent, "Accent", "One flat color; the lattice leads"),
         ],
     );
+    ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
+        "Write each note's name on its own ribbon, at the leading edge — so a \
+         held note's name waits at the now-line and travels off with the note \
+         when you let go. For reading the heatmap: a band of energy sits at \
+         some height on an axis marked only every octave, and the ribbon over \
+         that band is the same note, so naming the ribbon names the band.\n\n\
+         Names are the lattice's own, in its own hand: the node's spelling \
+         with its accidental and comma mark, so a just third reads E- rather \
+         than as an E and a cents offset.\n\nWhere repeats of a note come too \
+         fast to name each one, the first keeps its name and the next waits \
+         for clear room — except a note you are holding, which is always \
+         named. Needs Note history on: a name labels a ribbon.",
+    );
     button_row(ui, |ui| {
         if ui
             .button("Clear roll")
@@ -505,7 +518,13 @@ impl Axes {
     /// growing in those same directions. One helper covers both
     /// orientations: the growth direction is read off the axes rather
     /// than case-matched per side.
-    fn text_anchor(&self, p: f32, d: f32, along: f32, into: f32) -> (egui::Pos2, egui::Align2) {
+    pub(super) fn text_anchor(
+        &self,
+        p: f32,
+        d: f32,
+        along: f32,
+        into: f32,
+    ) -> (egui::Pos2, egui::Align2) {
         let (pu, du) = (self.dir_pitch(), self.dir_depth());
         let pos = self.at(p, d) + pu * along + du * into;
         let grow = pu * along.signum() + du * into.signum();
@@ -1188,6 +1207,11 @@ pub(crate) fn spectral_pane(
             theme::well(),
         );
     }
+    // Each note's own name, over the ribbon it belongs to. In the same batch
+    // as the axis labels, and so over the same pictures: a name that could be
+    // buried by a loud slab — or by the ribbon it is naming — names nothing.
+    let note_names = names::plan(state, &axes, &scale, split, now, label_scale);
+    names::draw(&painter, &note_names, label_scale, &mut labels);
     // Flushed here rather than with the readout below: the divider draws
     // between them, and a batch is drawn where it is flushed.
     labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));

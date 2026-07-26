@@ -399,6 +399,12 @@ pub struct SpectrumConfig {
     pub roll_gap: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
+    /// Write each note's name over its ribbon, at the moment it was struck —
+    /// see [`panes::names`]. `default_true`, not `default`, or a state blob
+    /// saved before this field existed would load with them off, contradicting
+    /// the struct's own default, which is what a fresh install gets.
+    #[serde(default = "default_true")]
+    pub note_names: bool,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
@@ -600,6 +606,7 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
+            note_names: true,
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
