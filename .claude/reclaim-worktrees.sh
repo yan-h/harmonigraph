@@ -220,10 +220,15 @@ load_merged_heads() {
   fi
 
   tmp=$(mktemp) || return 0
+  # Head shas only, NOT "<branch> <sha>" pairs: keying on the branch name misses
+  # a branch that was renamed, or a second local branch pointing at the same
+  # merged commit (pr97 and pr98 here are aliases for the heads of #97 and
+  # #98). The sha alone is the whole claim — if HEAD *is* a merged PR's head
+  # commit, that work merged, whatever the branch is called.
   # --jq uses gh's embedded jq, so this needs no external jq.
   gh pr list --state merged --limit "$GH_PR_LIMIT" \
-    --json headRefName,headRefOid \
-    --jq '.[] | "\(.headRefName) \(.headRefOid)"' >"$tmp" 2>/dev/null &
+    --json headRefOid \
+    --jq '.[].headRefOid' >"$tmp" 2>/dev/null &
   gh_pid=$!
 
   # Bound it by hand: macOS ships no `timeout`, and a hung network call must not
@@ -256,10 +261,10 @@ load_merged_heads() {
 # the safety: it means the worktree holds the work that merged and nothing
 # newer, so the squash commit on main supersedes it completely. A worktree that
 # has moved on past its merge fails this and is kept.
-# -F -x: branch names are data, not patterns.
+# -F -x: the sha is data, not a pattern.
 pr_merged_at_head() {
   [ -n "$MERGED_HEADS" ] || return 1
-  printf '%s\n' "$MERGED_HEADS" | grep -Fxq "$1 $2"
+  printf '%s\n' "$MERGED_HEADS" | grep -Fxq "$1"
 }
 
 # Rename aside, then delete detached. The rename is atomic within the volume,
@@ -386,7 +391,7 @@ remove_worktree() {
     how="ancestor of $MAIN_REF"
   else
     load_merged_heads
-    if [ -n "$branch" ] && pr_merged_at_head "$branch" "$head"; then
+    if pr_merged_at_head "$head"; then
       how="merged PR, head sha matches"
     fi
   fi
