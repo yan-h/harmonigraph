@@ -67,6 +67,13 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// seconds. It is the trade [`MIN_RIBBON_PX`] already makes: past the point
 /// where a zoom can resolve one note from the next, what the roll owes the
 /// reader is that a note was played, not how long it was held.
+///
+/// A BENT segment pays a second time, in its shear: the box it is drawn in is
+/// longer than the drift it carries, so the drift spreads over the floored
+/// length and reads as a shallower bend. That is deliberate, and the
+/// alternative is much worse — see the shear in [`note_instances`], where the
+/// two are one product and holding the rate instead puts ink at pitches
+/// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
 /// How wide the white keyline riding a note's outer edge is, in points.
@@ -344,23 +351,42 @@ pub(super) fn note_instances(
             // placement is now simply what it does.
             let center = axes.at((a0 + a1) * 0.5, (d0 + d1) * 0.5);
             let depth_px = (d1 - d0) * axes.depth_len();
+            // Floored the same way the width is, and centered the same way — on
+            // the middle of what the segment actually was, so a brief note reads
+            // up to half the floor early at one end and late at the other rather
+            // than being pushed off its own moment in one direction.
+            let half_depth = (depth_px.abs() * 0.5).max(min_half_depth);
             // How far the note's center line drifts along the pitch axis per
             // point of depth: 0 for a held note, non-zero for a glide, which
             // shears the box into the parallelogram the ribbon follows. Guarded
             // because a segment can have no duration at all — a note pressed
             // this frame is one — and a slope is meaningless there.
-            let slope =
-                if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
-            // Floored the same way the width is, and centered the same way — on
-            // the middle of what the segment actually was, so a brief note reads
-            // up to half the floor early at one end and late at the other rather
-            // than being pushed off its own moment in one direction.
             //
-            // The SLOPE is left at the true one, so a glide short enough to be
-            // floored extends along its own line. Holding the total pitch drift
-            // instead would flatten the shear, which is the same note reported
-            // as a shallower bend.
-            let half_depth = (depth_px.abs() * 0.5).max(min_half_depth);
+            // Taken against the box's OWN depth, which is why it is derived
+            // after the floor. The shader reaches `|shear| * half_extent[1]`
+            // along pitch, so the shear and the length are one product: a shear
+            // left at the segment's true rate while the floor lengthens the box
+            // multiplies that reach by however much the floor won by, which is
+            // unbounded as the segment shortens. Per-note tuning hands us that
+            // case on every retuned note — the tuning lands a block after the
+            // note-on (`RollNote::SETTLE`), so the opening segment is
+            // milliseconds long and carries the whole offset — and it drew a
+            // diagonal streak, keyline and all, through pitches nothing
+            // sounded. Scaled to the drawn box, the reach is the segment's real
+            // drift at every length.
+            //
+            // What that costs is the shear itself: a segment the floor
+            // lengthened draws its drift spread over the floored length, so it
+            // reads as a shallower bend than it was. That is the honest way
+            // round. A slope is a ratio of two things, and the floor has
+            // already overstated the denominator on purpose; overstating the
+            // numerator to match would put ink where no note was, and pitch is
+            // the axis this pane exists to be read precisely on.
+            let slope = if depth_px.abs() > 1e-6 {
+                (a1 - a0) * axes.pitch_len() / depth_px * (depth_px.abs() * 0.5 / half_depth)
+            } else {
+                0.0
+            };
             instances.push(RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
@@ -690,6 +716,73 @@ mod tests {
         assert_eq!(at(1.0), 0.5 * MIN_LENGTH_DEVICE_PX, "1x: two points");
         assert_eq!(at(2.0), 0.25 * MIN_LENGTH_DEVICE_PX, "2x: one point");
         assert!(at(1.0) > at(2.0), "the floor did not follow the density at all");
+    }
+
+    /// A floored segment must not paint outside the pitch it covered.
+    ///
+    /// `shear` is a RATE — pitch points per point of depth — and the shader
+    /// reaches `|shear| * half_extent[1]` along pitch, so the length floor and
+    /// the shear are one product. Leaving the shear at the true rate while the
+    /// floor lengthens the box multiplies that reach by however much the floor
+    /// won by, which is unbounded as the segment shortens: it draws a diagonal
+    /// streak, keyline and all, through pitches the note never sounded.
+    ///
+    /// Per-note tuning makes that the ordinary case rather than a corner. A
+    /// note-on arrives at the key's pitch and the tuning expression lands a
+    /// block later (see `RollNote::SETTLE` — 11 ms at 48 kHz), so every retuned
+    /// note opens with a segment a few milliseconds long carrying its whole
+    /// offset. Measured before the bound, at the Span below: 13.8 points of
+    /// drawn reach against 0.4 of real drift, and 49 semitones at the Span
+    /// bar's top.
+    #[test]
+    fn a_floored_segment_stays_inside_the_pitch_it_covered() {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 60.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 2.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        // One 512-frame block at 48 kHz behind the note-on, which is what a
+        // host's per-note tuning actually does.
+        state.tracker.handle_event(NoteEvent {
+            time: 2.011,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: 0.3 },
+        });
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        // The whole drift any segment of this note can carry, as a half-extent
+        // in points: 0.3 semitones of a 36-semitone axis. No segment may reach
+        // further than this along pitch, whatever the floor did to its length.
+        let bound = 0.3 / 36.0 * axes.pitch_len() * 0.5;
+
+        let notes = instances(&state, 5.0);
+        assert!(notes.len() >= 2, "the tuning should have split the note into segments");
+        let mut floored = 0;
+        for note in &notes {
+            let reach = note.shear.abs() * note.half_extent[1];
+            assert!(
+                reach <= bound + 1e-3,
+                "a segment reaches {reach} points along pitch, against {bound} of real drift",
+            );
+            if note.half_extent[1] > min_half_depth_for(2.0) - 1e-6
+                && note.half_extent[1] < min_half_depth_for(2.0) + 1e-6
+            {
+                floored += 1;
+            }
+        }
+        assert!(floored > 0, "no segment was short enough to be floored; the test is vacuous");
+    }
+
+    /// [`note_instances`]' length floor in points, for a test that needs to
+    /// recognise a floored extent.
+    fn min_half_depth_for(ppp: f32) -> f32 {
+        0.5 * MIN_LENGTH_DEVICE_PX / ppp
     }
 
     /// A glide is the same instance sheared, not a second kind of shape: the
