@@ -623,36 +623,38 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            // A tall window of fifths and a wide band of thirds, and one
-            // sevens sheet either side of the home one. Depth opens at one
-            // sheet rather than collapsed (extent 0): a second sheet at full
-            // size makes the picture unreadable — nothing says which sheet a
-            // node is on and an off-sheet label lands on top of its
-            // neighbours — but the sevens layer settings below are the
-            // answer to that, and they only do anything when there is depth
-            // to draw. Opening flat hides the feature rather than protecting
-            // anyone from it.
+            // A tall window of fifths and a wide band of thirds, on the home
+            // sevens sheet alone. Opening with a sheet either side (extent 1)
+            // shows the septimal axis without anyone having to go find it,
+            // but it also puts a second sheet in the picture before anything
+            // tells the eye which sheet a node is on; flat is the look this
+            // is actually used at, and depth is worth opening deliberately,
+            // with the sevens layer settings below to make it readable.
             extent_threes: 10,
             extent_fives: 6,
-            extent_sevens: 1,
+            extent_sevens: 0,
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
-            // A sevens sheet reads as an annotation on the home sheet, not
-            // as a rival to it: each step off it draws at a bit over half
-            // size, and clears a gutter wide enough to sit legibly on top of
-            // whatever it crosses rather than needing clearance of its own.
-            // Its label keeps the name, which the septimal mark now spells
-            // apart from the node two fifths down (see SevensLabel) rather
-            // than repeating it.
-            sevens_size: 0.55,
+            // Sevens sheets at full size, which rides along inert while the
+            // axis is collapsed above. At full size a sheet rivals the home
+            // one rather than annotating it — nothing says which sheet a node
+            // is on and an off-sheet label lands on its neighbours — so
+            // opening depth is also the cue to bring this down (around 0.55
+            // reads as an annotation). Its label keeps the name, which the
+            // septimal mark spells apart from the node two fifths down (see
+            // SevensLabel) rather than repeating it.
+            sevens_size: 1.0,
             // Reach and fade equal, which puts the clearing at full strength
             // exactly to the node's rim and gone a quarter of a node-width
             // past it.
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
             sevens_label: SevensLabel::Name,
-            mark_weight: default_mark_weight(),
+            // Heavier than the `default_mark_weight` a pre-field blob is
+            // drawn at, and heavier than that fn's own argument for 0.07
+            // would put it — this is the weight the view is actually used at.
+            mark_weight: 0.1,
             show_labels: true,
             label_scale: default_label_scale(),
             show_cents: true,
@@ -663,16 +665,18 @@ impl Default for ViewConfig {
             // and the octaves carry the node's outline.
             core_solidity: 0.4,
             core_radius: 0.2,
-            // A narrower octave band, set well off the core and stopping
-            // short of the quad edge, with a tight gap between sectors: the
-            // octaves read as a ring of distinct marks rather than a solid
-            // annulus, and the core keeps clear space around it.
-            outer_inner: 0.605_904,
-            outer_outer: 0.836_332_2,
-            outer_backdrop: 0.6,
+            // A narrow octave band, set well off the core and stopping short
+            // of the quad edge, with a tight gap between sectors: the octaves
+            // read as a ring of distinct marks rather than a solid annulus,
+            // and the core keeps clear space around it. The backdrop runs at
+            // full strength, so the silent slots hold the whole ring's shape
+            // rather than leaving the sounding octaves to imply it.
+            outer_inner: 0.641_313_55,
+            outer_outer: 0.851_483_05,
+            outer_backdrop: 1.0,
             legacy_outer_backdrop: None,
             outer_solidity: default_outer_solidity(),
-            outer_gap: 0.061_245_676,
+            outer_gap: 0.051_732_67,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so
@@ -688,7 +692,7 @@ impl Default for ViewConfig {
             mark_bass: true,
             legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
-            mark_thickness: 0.070_653_12,
+            mark_thickness: 0.063_829_795,
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,
@@ -706,10 +710,10 @@ impl Default for ViewConfig {
             show_perf: true,
             show_perf_detail: false,
             render_scale: default_render_scale(),
-            // A strong halo: the small soft core and the thin octave
-            // marks are quiet shapes, and the bloom is what gives them
-            // presence.
-            bloom_strength: 1.132_461_1,
+            // A halo just under unit strength: the small soft core and the
+            // thin octave marks are quiet shapes, and the bloom is what
+            // gives them presence.
+            bloom_strength: 0.974_009_9,
         }
     }
 }
