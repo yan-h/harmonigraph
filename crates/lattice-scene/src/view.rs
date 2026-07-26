@@ -506,7 +506,8 @@ fn default_idle_radius() -> f32 {
 
 /// The classic annulus (SLICE_IN/OUT, from before the band was
 /// parameterized), which is what a blob predating these keys was drawn
-/// with. A fresh view uses the wider band in `impl Default` instead.
+/// with. A fresh view uses a narrower band, set further off the core, in
+/// `impl Default` instead.
 fn default_outer_inner() -> f32 {
     0.56
 }
@@ -670,9 +671,10 @@ impl Default for ViewConfig {
             show_cents: true,
             node_style: NodeStyle::Steady,
             core_style: CoreStyle::default(),
-            // A small, soft core inside a wide octave band with its silent
-            // slots ghosted in: the pitch class reads as a compact center
-            // and the octaves carry the node's outline.
+            // A small, soft core inside the octave band, with the band's
+            // silent slots ghosted in: the pitch class reads as a compact
+            // center and the octaves carry the node's outline. (The band's
+            // own width is set below.)
             core_solidity: 0.4,
             core_radius: 0.2,
             // A narrow octave band, set well off the core and stopping short
