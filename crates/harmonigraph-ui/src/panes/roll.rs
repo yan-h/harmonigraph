@@ -22,11 +22,52 @@ use super::spectral::{Axes, PitchScale, TimeAxis};
 use super::scene_color;
 use crate::SharedState;
 
-/// Narrowest a note may draw, in points. Note width is in SEMITONES of the
-/// pitch axis, so a wide zoom takes a ribbon under a pixel and a filled
-/// rectangle simply disappears; the floor is what keeps a played note visible
-/// at every zoom, at the cost of the widths below it reading alike.
+/// Narrowest a note may draw across PITCH, in points. Note width is in
+/// SEMITONES of the pitch axis, so a wide zoom takes a ribbon under a pixel
+/// and a filled rectangle simply disappears; the floor is what keeps a played
+/// note visible at every zoom, at the cost of the widths below it reading
+/// alike.
 const MIN_RIBBON_PX: f32 = 1.5;
+
+/// Shortest a note may draw along TIME, in DEVICE pixels — the floor that stops
+/// a brief note flickering as the roll scrolls.
+///
+/// The same shape of problem as [`MIN_RIBBON_PX`] on the other axis, with a
+/// sharper threshold, because this is the axis a note MOVES along. The shader
+/// antialiases with a one-pixel box filter (`band`/`inside` in roll.wgsl),
+/// which conserves a shape's total ink under any sub-pixel offset but not its
+/// PEAK — and peak is what the eye reads on something a pixel or two across.
+/// Measured on the real pipeline, sweeping a note through eight sub-pixel
+/// offsets and taking the spread of its brightest pixel:
+///
+/// | drawn length | peak spread | total ink spread |
+/// |--------------|-------------|------------------|
+/// | 4 px         | 0%          | 0.0%             |
+/// | 2 px         | 0%          | 0.2%             |
+/// | 1.5 px       | 25%         | 0.3%             |
+/// | 1 px         | 50%         | 0.4%             |
+/// | 0.5 px       | 67%         | 33%              |
+/// | 0.2 px       | 83%         | 66%              |
+///
+/// Two pixels is where it goes to zero, and the reason is exact rather than
+/// empirical: the coverage profile is a trapezoid whose ramps are one pixel
+/// wide, so its flat top is `length - 1` pixels across and a sample lands on
+/// the top for every offset once that reaches one pixel. Under two the top
+/// shrinks, some offsets miss it, and the note pulses at whatever rate it is
+/// scrolling. Under one pixel even the ink stops being conserved and it
+/// pulses in brightness AND in weight.
+///
+/// In DEVICE pixels, unlike [`MIN_RIBBON_PX`]'s points, because that is what
+/// the argument is about — the filter is one physical pixel wide, so on a 2x
+/// display this is one point and on a 1x display two. A floor in points would
+/// be right on exactly one class of display.
+///
+/// The cost is a note drawn longer than it lasted, up to this, and at a long
+/// Span that is a real overstatement — two pixels of a ten-minute Span is four
+/// seconds. It is the trade [`MIN_RIBBON_PX`] already makes: past the point
+/// where a zoom can resolve one note from the next, what the roll owes the
+/// reader is that a note was played, not how long it was held.
+const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
 /// How wide the white keyline riding a note's outer edge is, in points.
 ///
@@ -113,7 +154,8 @@ pub(super) fn draw_roll(
     now: f64,
     surface: usize,
 ) {
-    let notes = note_instances(axes, scale, state, split, now);
+    let ppp = painter.ctx().pixels_per_point().max(1.0);
+    let notes = note_instances(axes, scale, state, split, now, ppp);
     if surface == 0 {
         // What the roll costs, for the performance overlay: this geometry
         // does not pass through egui's vertex buffer, so the `verts` row
@@ -153,6 +195,8 @@ pub(super) fn note_instances(
     state: &SharedState,
     split: f32,
     now: f64,
+    // Physical pixels per point, which [`MIN_LENGTH_DEVICE_PX`] is quoted in.
+    ppp: f32,
 ) -> Vec<RollInstance> {
     let cfg = &state.spectrum_config;
     // Shared time<->depth mapping: a `now`-anchored scrolling window live, or
@@ -167,6 +211,9 @@ pub(super) fn note_instances(
     // saying a note was played there.
     let half_pitch = (cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len();
     let half_pitch = half_pitch.max(MIN_RIBBON_PX * 0.5);
+    // The other axis' floor, in points at this display's density — the one that
+    // stops a brief note pulsing as it scrolls. See [`MIN_LENGTH_DEVICE_PX`].
+    let min_half_depth = 0.5 * MIN_LENGTH_DEVICE_PX / ppp.max(1e-3);
 
     // Build in a stable order (the live notes come out of a HashMap, whose
     // iteration order varies per run): instances rasterize in buffer order,
@@ -208,7 +255,13 @@ pub(super) fn note_instances(
     // Not in whole-song mode: there the region's far end is the take's start,
     // and overhanging it would paint into the spectrum curve above, which no
     // scissor cuts.
-    let ink_px = keyline_px + 1.0;
+    //
+    // `min_half_depth` is in the overhang because the length floor grows a
+    // leaving note's box back toward the region as its true length is truncated
+    // to nothing — so without it the last sliver of a floored note would appear
+    // INSIDE the far edge on the frame before the cull takes it, which is the
+    // pop the overhang exists to prevent.
+    let ink_px = keyline_px + 1.0 + min_half_depth;
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
     // against. What every screen-space length here (the ink overhang) is
@@ -298,9 +351,19 @@ pub(super) fn note_instances(
             // this frame is one — and a slope is meaningless there.
             let slope =
                 if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
+            // Floored the same way the width is, and centered the same way — on
+            // the middle of what the segment actually was, so a brief note reads
+            // up to half the floor early at one end and late at the other rather
+            // than being pushed off its own moment in one direction.
+            //
+            // The SLOPE is left at the true one, so a glide short enough to be
+            // floored extends along its own line. Holding the total pitch drift
+            // instead would flatten the shear, which is the same note reported
+            // as a shallower bend.
+            let half_depth = (depth_px.abs() * 0.5).max(min_half_depth);
             instances.push(RollInstance {
                 center: [center.x, center.y],
-                half_extent: [half_pitch, depth_px.abs() * 0.5],
+                half_extent: [half_pitch, half_depth],
                 shear: slope,
                 keyline: keyline_px,
                 core: core.to_array(),
@@ -338,6 +401,11 @@ mod tests {
     const PANE: egui::Rect =
         egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::pos2(310.0, 120.0) };
 
+    /// The display density these tests derive geometry at — a Retina screen,
+    /// which is what the plugin is looked at on, and where
+    /// [`MIN_LENGTH_DEVICE_PX`] comes to one point.
+    const PPP: f32 = 2.0;
+
     /// The roll's geometry for `state`, derived exactly the way
     /// [`spectral_pane`](super::super::spectral::spectral_pane) derives it
     /// before handing over — same axes, same pitch scale, same split.
@@ -348,7 +416,7 @@ mod tests {
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::spectral::spectrum_share(cfg);
-        note_instances(&axes, &scale, state, split, now)
+        note_instances(&axes, &scale, state, split, now, PPP)
     }
 
     /// One held note, and the instances the roll would draw for it. `range`
@@ -507,6 +575,121 @@ mod tests {
             MIN_RIBBON_PX * 0.5,
             "a hairline ribbon was not floored at the width it can be seen at",
         );
+    }
+
+    /// A note too brief to fill two device pixels is drawn at that length
+    /// anyway, centered on the moment it was — the floor that stops it
+    /// flickering as it scrolls. See [`MIN_LENGTH_DEVICE_PX`] for the
+    /// measurement behind the number.
+    ///
+    /// Both halves matter. Long enough, and the length is the note's own, to
+    /// the point — a floor that rounded every note up would be a roll that
+    /// cannot say how long anything was held. Short enough, and it is the
+    /// floor, and the note still sits on its own midpoint rather than being
+    /// pushed off it in one direction.
+    #[test]
+    fn a_brief_note_is_floored_at_the_length_it_can_scroll_without_flickering() {
+        // A 10 s span across 300 points of depth, of which the roll takes its
+        // share: about 60 ms per point, so a 20 ms tap is well under the floor
+        // and a 2 s note is well over it.
+        let tap = |length: f64| {
+            let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+            state.spectrum_config.orientation = SpectralOrientation::Left;
+            state.spectrum_config.roll_seconds = 10.0;
+            state.spectrum_config.low_midi = 48.0;
+            state.spectrum_config.high_midi = 84.0;
+            state.tracker.handle_event(NoteEvent {
+                time: 2.0,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+            state.tracker.handle_event(NoteEvent {
+                time: 2.0 + length,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Off,
+            });
+            let notes = instances(&state, 5.0);
+            let note = *one(&notes);
+            let axes = Axes::new(PANE, &state.spectrum_config);
+            let split = super::super::spectral::spectrum_share(&state.spectrum_config);
+            // What the segment would have measured unfloored: its true seconds
+            // over the roll's own share of the depth axis.
+            let per_point = f64::from(state.spectrum_config.roll_seconds)
+                / f64::from(axes.depth_len() * (1.0 - split));
+            (note, (length / per_point) as f32)
+        };
+
+        let floor = 0.5 * MIN_LENGTH_DEVICE_PX / PPP;
+        let (brief, true_half) = tap(0.02);
+        assert!(true_half * 0.5 < floor, "the brief note ({true_half} pt) is not under the floor");
+        assert_eq!(brief.half_extent[1], floor, "a brief note was left to flicker");
+
+        let (held, true_half) = tap(2.0);
+        assert!(true_half * 0.5 > floor, "the held note ({true_half} pt) is not over the floor");
+        assert!(
+            (held.half_extent[1] - true_half * 0.5).abs() < 0.01,
+            "a note long enough to draw honestly was rounded up: {} vs {}",
+            held.half_extent[1],
+            true_half * 0.5,
+        );
+
+        // Centered on the note, not pushed off it: the floored box sits on the
+        // depth of the note's own mid-time, so it reaches half the floor either
+        // side of the moment it was rather than the whole floor in one
+        // direction. Depth runs away from the now-line, so the box's far end is
+        // `+ half_extent` and its near end `-`, and the moment the note happened
+        // is the midpoint between them.
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 10.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let split = super::super::spectral::spectrum_share(&state.spectrum_config);
+        let time = super::super::spectral::TimeAxis::new(&state, split, 5.0);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let want = axes.at(scale.t_of(60.0), time.depth_of_unclamped(2.01));
+        assert!(
+            (brief.center[0] - want.x).abs() < 0.01 && (brief.center[1] - want.y).abs() < 0.01,
+            "the floored note sits at {:?}, not on its own mid-time {want:?}",
+            brief.center,
+        );
+    }
+
+    /// The floor is in DEVICE pixels, so it is half as many points on a 2x
+    /// display as on a 1x one — the antialiasing ramp it is sized against is
+    /// one physical pixel wide, and a floor in points would be right on
+    /// exactly one class of display.
+    #[test]
+    fn the_length_floor_follows_the_display_density() {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.roll_seconds = 10.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 2.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        state.tracker.handle_event(NoteEvent {
+            time: 2.001,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Off,
+        });
+        let cfg = &state.spectrum_config;
+        let axes = Axes::new(PANE, cfg);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        let split = super::super::spectral::spectrum_share(cfg);
+        let at = |ppp| {
+            let notes = note_instances(&axes, &scale, &state, split, 5.0, ppp);
+            one(&notes).half_extent[1]
+        };
+        assert_eq!(at(1.0), 0.5 * MIN_LENGTH_DEVICE_PX, "1x: two points");
+        assert_eq!(at(2.0), 0.25 * MIN_LENGTH_DEVICE_PX, "2x: one point");
+        assert!(at(1.0) > at(2.0), "the floor did not follow the density at all");
     }
 
     /// A glide is the same instance sheared, not a second kind of shape: the

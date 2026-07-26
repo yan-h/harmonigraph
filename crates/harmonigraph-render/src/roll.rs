@@ -635,6 +635,74 @@ mod tests {
         assert!(near(at(132), BG), "the keyline reaches further than it should: {:?}", at(132));
     }
 
+    /// A note two pixels along the depth axis holds its brightness as it
+    /// scrolls sub-pixel; one pixel does not. That threshold is what
+    /// `panes::roll::MIN_LENGTH_DEVICE_PX` floors a brief note's length to, and
+    /// this is the measurement it is quoted from.
+    ///
+    /// The `band`/`inside` box filter is one pixel wide, so a shape's coverage
+    /// profile is a trapezoid with one-pixel ramps: its flat top is
+    /// `length - 1` pixels across, and every sub-pixel offset lands a sample on
+    /// the top only once that top is a pixel wide. Under it, some offsets catch
+    /// only the ramps and the note reads dimmer — which, on something scrolling,
+    /// is a flicker at the scroll rate rather than a static difference.
+    ///
+    /// Total ink is not the thing to measure: the filter conserves it to a
+    /// fraction of a percent well past the point where the peak has collapsed,
+    /// so a test on ink alone passes while the artifact is at its worst.
+    #[test]
+    fn a_two_pixel_note_holds_its_brightness_as_it_scrolls() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // White, no keyline: every painted byte is the fill's own coverage.
+        let bare = RollInstance {
+            keyline: 0.0,
+            core: [255, 255, 255, 255],
+            glow: [0, 0, 0, 0],
+            ..centered_note()
+        };
+        // The brightest pixel anywhere, over a sweep of sub-pixel scroll
+        // offsets along depth — which is y under [`UPRIGHT`]. One point is one
+        // pixel on this surface.
+        let peak_spread = |half_depth: f32| {
+            let peaks: Vec<u8> = (0..8)
+                .map(|step| {
+                    let note = RollInstance {
+                        center: [128.0, 128.0 + step as f32 / 8.0],
+                        half_extent: [bare.half_extent[0], half_depth],
+                        ..bare
+                    };
+                    let frame = draw(&device, &queue, vec![note], wgpu::Color::BLACK);
+                    (0..SIZE[1])
+                        .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
+                        .map(|(x, y)| pixel(&frame, x, y)[0])
+                        .max()
+                        .unwrap_or(0)
+                })
+                .collect();
+            let (lo, hi) = (*peaks.iter().min().unwrap(), *peaks.iter().max().unwrap());
+            f32::from(hi - lo) / f32::from(hi.max(1))
+        };
+
+        // Two pixels long: the floor. Nothing may move.
+        let floored = peak_spread(1.0);
+        assert!(
+            floored < 0.02,
+            "a two-pixel note pulsed by {:.0}% as it scrolled",
+            floored * 100.0,
+        );
+
+        // One pixel: what an unfloored brief note gets, and what the floor is
+        // for. Asserted so the check above cannot pass by measuring nothing.
+        let hairline = peak_spread(0.5);
+        assert!(
+            hairline > 0.3,
+            "a one-pixel note only pulsed by {:.0}%, so the floor above is guarding nothing",
+            hairline * 100.0,
+        );
+    }
+
     /// The pane's orientation lives entirely in the uniform: turning the axes
     /// turns the picture, and nothing in the instances or the shader names a
     /// screen side.

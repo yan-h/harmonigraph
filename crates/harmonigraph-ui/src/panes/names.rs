@@ -1013,7 +1013,7 @@ mod tests {
         let split = super::super::spectral::spectrum_share(&state.spectrum_config);
         let axes = Axes::new(PANE, &state.spectrum_config);
         let ribbon =
-            super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0);
+            super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0, 2.0);
         assert_eq!(ribbon.len(), 1, "one note, one ribbon");
         // Horizontal pane: depth is x, and the head is the near end.
         let head = ribbon[0].center[0] - ribbon[0].half_extent[1];
