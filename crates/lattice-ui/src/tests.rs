@@ -640,7 +640,6 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
     state.spectrum_config.spectrogram_opacity = 0.5;
     state.spectrum_config.spectrogram_gamma = 1.6;
-    state.spectrum_config.roll_gap = 2.0;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -655,7 +654,6 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
     assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
-    assert_eq!(restored.spectrum_config.roll_gap, 2.0);
 }
 
 /// The pitch range used to be a pair of Bitwig octave numbers. A blob from
@@ -2235,3 +2233,28 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     );
 }
 
+
+/// A key this build has RETIRED does not cost the blob it sits in.
+///
+/// `load_persist` takes the whole `UiPersist` or nothing (`if let Ok(persist)`),
+/// so a field that fails to parse does not degrade — it silently discards the
+/// dock, the camera and the entire `ViewConfig` along with itself, and the
+/// project opens on defaults with no error anywhere. Retiring a setting is
+/// therefore a persistence change, and this is the guard on it: `roll_gap` was
+/// removed with the Gap feature, and every project saved before that still
+/// carries the key.
+#[test]
+fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.roll_thickness = 1.75;
+    state.spectrum_config.low_midi = 40.5;
+    let saved = state.save_persist();
+    // A blob from before the retirement: the key spliced back where it sat.
+    let old = saved.replacen("roll_thickness:", "roll_gap:2.5,roll_thickness:", 1);
+    assert_ne!(old, saved, "the splice must have landed for this to test anything");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&old);
+    assert_eq!(restored.spectrum_config.roll_thickness, 1.75, "the blob survived");
+    assert_eq!(restored.spectrum_config.low_midi, 40.5);
+}

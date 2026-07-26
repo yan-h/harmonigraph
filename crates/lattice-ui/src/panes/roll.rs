@@ -28,11 +28,6 @@ use crate::{theme, RollColor, SharedState};
 /// at every zoom, at the cost of the widths below it reading alike.
 const MIN_RIBBON_PX: f32 = 1.5;
 
-/// Widest the Gap may shave off a released note's tail, in points. Well past
-/// what the bar offers; this is the guard against a hand-edited state blob,
-/// not a taste.
-const MAX_GAP_PX: f32 = 8.0;
-
 /// How wide the white keyline riding a note's outer edge is, in points.
 ///
 /// Fixed rather than a setting: a full point is the only width worth having.
@@ -141,47 +136,6 @@ pub(super) fn draw_roll(
     ));
 }
 
-/// Seconds per point along the roll's own share of the depth axis.
-///
-/// The pane's depth axis is shared with the spectrum, so it is the ROLL's
-/// share of it that a point is measured against. Every screen-space length
-/// the roll works in — the ink overhang, the Gap — is converted through this.
-pub(super) fn seconds_per_point(axes: &Axes, time: &TimeAxis, split: f32) -> f64 {
-    f64::from(1.0 / (axes.depth_len() * (1.0 - split)).max(1.0)) * time.window()
-}
-
-/// How much of a released note's tail the Gap setting takes off, in seconds.
-pub(super) fn gap_seconds(cfg: &crate::SpectrumConfig, per_point: f64) -> f64 {
-    f64::from(cfg.roll_gap.clamp(0.0, MAX_GAP_PX)) * per_point
-}
-
-/// A segment's end once the Gap has shaved it. Never shaved out of existence:
-/// a point of note survives, and a note already shorter than that is left
-/// alone.
-pub(super) fn shaved(t0: f64, t1: f64, tail: f64, per_point: f64) -> f64 {
-    (t1 - tail).max((t0 + per_point).min(t1))
-}
-
-/// Where a note's ribbon HEAD actually is in time — its stop, shaved by the
-/// Gap exactly as [`note_instances`] shaves it.
-///
-/// Its own function, and shared with [`names`](super::names), because a name
-/// is anchored on the leading edge of the ribbon it labels: reading the
-/// note's un-shaved stop instead puts the name in the hairline the Gap just
-/// opened, which is the one place on the roll the setting exists to keep
-/// clear. Held notes are exempt on both sides, the tail being the only end
-/// the Gap touches.
-pub(super) fn drawn_head(cfg: &crate::SpectrumConfig, per_point: f64, note: &RollNote, now: f64) -> f64 {
-    let stop = note.stop(now);
-    if note.is_live() {
-        return stop;
-    }
-    // The LAST segment is the one that reaches the stop; a glide's earlier
-    // breakpoints are interior and keep their times.
-    let last_start = note.segments(now).last().map_or(note.start, |((t0, _), _)| t0);
-    shaved(last_start, stop, gap_seconds(cfg, per_point), per_point)
-}
-
 /// Every visible note segment as one GPU instance, in paint order.
 ///
 /// The whole geometry of the roll, and the only place it is decided — the
@@ -257,9 +211,9 @@ pub(super) fn note_instances(
     let ink_px = keyline_px + 1.0;
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
-    // against. What every screen-space length here (the ink overhang, the Gap)
-    // is converted through.
-    let per_point = seconds_per_point(axes, &time, split);
+    // against. What every screen-space length here (the ink overhang) is
+    // converted through.
+    let per_point = f64::from(1.0 / (axes.depth_len() * (1.0 - split)).max(1.0)) * time.window();
     let ink_seconds = if time.whole_song() { 0.0 } else { f64::from(ink_px) * per_point };
     let edge = oldest - ink_seconds;
     let mut notes: Vec<&RollNote> = roll
@@ -280,33 +234,11 @@ pub(super) fn note_instances(
             .then(a.note.cmp(&b.note))
     });
 
-    // How much of a released note's tail the Gap setting takes off. In points,
-    // like the rim widths, so the hairline between two repeats stays the same
-    // hairline whatever the Span is zoomed to.
-    let gap_seconds = gap_seconds(cfg, per_point);
-
     // One segment per note is the common case (a note is bent rarely), so the
     // note count is the right first guess at how many instances this makes.
     let mut instances = Vec::with_capacity(notes.len());
     for note in notes {
-        // Repeats of one key butt together in time, and with the rim not
-        // wrapping their ends (see `rail_mask`) nothing marks where one stopped
-        // and the next started — a run of taps reads as one long note. The Gap
-        // pulls the tail back off its neighbour so the background shows through
-        // between them.
-        //
-        // The TAIL only, and only once the note is over: a held note still
-        // reaches the now-line and meets the spectrum peak it is making, and no
-        // onset ever moves off the moment it was played (which is what the
-        // spectrogram beside it is lined up against).
-        let stop = note.stop(now);
-        let tail = if note.is_live() { 0.0 } else { gap_seconds };
         for ((t0, p0), (t1, p1)) in note.segments(now) {
-            // The last segment is the one that reaches the note's stop; a
-            // glide's earlier breakpoints are interior and keep their times.
-            // Never shaved out of existence: a point of note survives, and a
-            // note already shorter than that is left alone.
-            let t1 = if t1 >= stop { shaved(t0, t1, tail, per_point) } else { t1 };
             let (t0, t1) = (t0.max(edge), t1.max(edge));
             if t1 < edge {
                 continue;
@@ -559,57 +491,6 @@ mod tests {
         let note = one(&dark);
         assert_eq!(note.keyline, 0.0, "Edge 0 still made room for a keyline");
         assert_eq!(note.glow[3], 0, "Edge 0 left a keyline color behind");
-    }
-
-    /// The Gap pulls a RELEASED note's tail back off its neighbour, so repeats
-    /// of one key read as repeats — and it moves nothing else. An onset stays
-    /// on the moment it was played (the spectrogram beside it is lined up
-    /// against exactly that), and a held note still reaches the now-line.
-    #[test]
-    fn the_gap_pulls_a_released_notes_tail_back_and_leaves_its_onset_alone() {
-        let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
-        state.spectrum_config.low_midi = 54.0;
-        state.spectrum_config.high_midi = 66.0;
-        state.tracker.handle_event(NoteEvent {
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::On { velocity: 1.0 },
-        });
-        // Across: time runs left (now) to right (past), so a note's release is
-        // its left end and its onset its right one.
-        let ends = |state: &SharedState| {
-            let notes = instances(state, 2.0);
-            let note = one(&notes);
-            (note.center[0] - note.half_extent[1], note.center[0] + note.half_extent[1])
-        };
-
-        // Held: the gap must not lift it off the now-line.
-        state.spectrum_config.roll_gap = 0.0;
-        let held = ends(&state);
-        state.spectrum_config.roll_gap = 3.0;
-        assert_eq!(ends(&state), held, "the Gap shortened a note that is still sounding");
-
-        state.tracker.handle_event(NoteEvent {
-            time: 1.0,
-            channel: 0,
-            note: 60,
-            kind: NoteEventKind::Off,
-        });
-        state.spectrum_config.roll_gap = 0.0;
-        let (release, onset) = ends(&state);
-        state.spectrum_config.roll_gap = 3.0;
-        let (gapped_release, gapped_onset) = ends(&state);
-        assert!(
-            (gapped_onset - onset).abs() < 1e-3,
-            "the onset moved with the Gap ({onset} -> {gapped_onset})",
-        );
-        assert!(
-            (gapped_release - release - 3.0).abs() < 0.05,
-            "the tail retreated by {} points, not the 3 the Gap asked for",
-            gapped_release - release,
-        );
     }
 
     /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a

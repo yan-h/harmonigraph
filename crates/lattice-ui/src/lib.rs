@@ -395,8 +395,6 @@ pub struct SpectrumConfig {
     ///
     /// The tail only: a held note still reaches the now-line, and no onset
     /// ever moves off the moment it was played.
-    #[serde(default = "default_roll_gap")]
-    pub roll_gap: f32,
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
     /// Write each note's name over its ribbon, at the moment it was struck —
@@ -566,10 +564,6 @@ fn default_roll_thickness() -> f32 {
 
 /// A hairline of background between repeats — enough to read two taps as
 /// two, little enough that a note's length is still its length.
-fn default_roll_gap() -> f32 {
-    1.0
-}
-
 fn default_roll_color() -> RollColor {
     RollColor::Channel
 }
@@ -604,7 +598,6 @@ impl Default for SpectrumConfig {
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
-            roll_gap: default_roll_gap(),
             roll_color: default_roll_color(),
             note_names: true,
             show_spectrogram: true,

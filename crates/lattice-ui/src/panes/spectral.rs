@@ -240,15 +240,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              musical meaning as the pitch range is zoomed, and a note is as \
              wide as the interval it would cover",
         );
-    ValueBar::new(&mut cfg.roll_gap, 0.0..=6.0, "Gap")
-        .decimals(1)
-        .show(ui)
-        .on_hover_text(
-            "Points shaved off a released note's tail, so repeats at one pitch \
-             read as repeats instead of merging into one bar. The tail only: a \
-             held note still reaches the now-line, and no onset moves off the \
-             moment it was played.",
-        );
     choice_row(
         ui,
         "Color",
