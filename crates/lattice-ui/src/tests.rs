@@ -2364,23 +2364,36 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
 /// so a field that fails to parse does not degrade — it silently discards the
 /// dock, the camera and the entire `ViewConfig` along with itself, and the
 /// project opens on defaults with no error anywhere. Retiring a setting is
-/// therefore a persistence change, and this is the guard on it: `roll_gap` was
-/// removed with the Gap feature, and every project saved before that still
-/// carries the key.
+/// therefore a persistence change, and this is the guard on it: `roll_gap` went
+/// with the Gap feature and `roll_color` with the roll's Color row, and every
+/// project saved before each still carries its key.
+///
+/// Both SHAPES of value, because they are not the same risk. A retired key
+/// holding a NUMBER is skipped by any parser worth the name. One holding a bare
+/// identifier is the shape that has actually cost a blob here — a
+/// `SpectrogramColor` naming a palette this build no longer has takes the whole
+/// persist with it, which is why the deleted palettes keep serde aliases. What
+/// separates the two is that retiring a FIELD is safe where retiring a VARIANT
+/// is not, and a test that only ever splices a number cannot tell them apart.
 #[test]
 fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.spectrum_config.roll_thickness = 1.75;
-    state.spectrum_config.low_midi = 40.5;
-    let saved = state.save_persist();
-    // A blob from before the retirement: the key spliced back where it sat.
-    let old = saved.replacen("roll_thickness:", "roll_gap:2.5,roll_thickness:", 1);
-    assert_ne!(old, saved, "the splice must have landed for this to test anything");
+    for retired in ["roll_gap:2.5,", "roll_color:Pitch,"] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.roll_thickness = 1.75;
+        state.spectrum_config.low_midi = 40.5;
+        let saved = state.save_persist();
+        // A blob from before the retirement: the key spliced back where it sat.
+        let old = saved.replacen("roll_thickness:", &format!("{retired}roll_thickness:"), 1);
+        assert_ne!(old, saved, "the {retired} splice must land for this to test anything");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&old);
-    assert_eq!(restored.spectrum_config.roll_thickness, 1.75, "the blob survived");
-    assert_eq!(restored.spectrum_config.low_midi, 40.5);
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&old);
+        assert_eq!(
+            restored.spectrum_config.roll_thickness, 1.75,
+            "the blob carrying {retired} survived",
+        );
+        assert_eq!(restored.spectrum_config.low_midi, 40.5);
+    }
 }
 
 /// The lattice's label-size bar and the clamp its value is persisted through
