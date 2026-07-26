@@ -128,10 +128,10 @@ halves, and each half catches a class the other cannot.
 `disable-model-invocation`, and the harness treats that as locked: no
 setting re-enables it, and there is no Bash route to a slash command
 either — for the `/code-review ultra` variant, sessions are told in so
-many words not to try. It is billed, so it is Yan's to run. The
-gate is per-skill and deliberate — `/simplify` sits beside it in the same
-built-in family and is model-invocable — so this is a boundary to work
-within, not an oversight to work around.
+many words not to try. It is billed, so it is Yan's to run. The gate is
+per-skill and deliberate — `/simplify` sits beside it in the same built-in
+family and is model-invocable — so this is a boundary to work within, not
+an oversight to work around.
 
 Run **`/self-review`** instead. It is the project-local command that goes
 where `/code-review` cannot: it fans `diff-reviewer` subagents across
