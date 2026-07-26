@@ -46,10 +46,24 @@ alarming, say so under a separate heading and do not count it as a finding.
    state, and the wrong output. Most things that look wrong on a first
    reading are not, and finding that out is your job, not the caller's.
 
-4. **Run the suite when it settles a question.** You have `Bash` for exactly
-   this — `cargo test -p <crate>` on a doubt is worth more than a paragraph
-   of reasoning about it. Builds go through `sccache`; see the root
+4. **The suite has already run.** When this diff touches code, your prompt
+   carries `./ci.sh`'s output — clippy, the full test suite, the dependency
+   guard. Read that before reaching for cargo yourself. When it carries no
+   such output the diff touched no `.rs`, `.sh` or `.py` at all, and there
+   is nothing here for you to build. Build or test only to execute a
+   *specific new assertion* that output cannot answer: a case the existing
+   tests do not cover, which you are constructing to turn a suspicion into a
+   finding. That is rare, and it is not a way to re-confirm a green suite —
+   every other lens is looking at the same tree you are, and each cargo run
+   is paid for once per lens. Builds go through `sccache`; see the root
    CLAUDE.md if one fails to launch.
+
+5. **Read with `Read`, `Grep` and `Glob`. Keep `Bash` for `git`.** That is
+   what those tools are for, and their results come back structured rather
+   than as shell output you then pay to read back. The habit runs the other
+   way by default: across the runs measured so far these agents made 1703
+   `Bash` calls against 263 `Read`s, shelling out to `grep` 507 times and
+   `sed` 133 more.
 
 ## The bar
 
@@ -74,10 +88,10 @@ Do not report:
 Report, do not repair. You hand back something specific enough that the
 caller can write the failing test and the fix. Hold to that even though you
 CAN edit: `Write` and `Edit` are withheld, but you have `Bash`, so nothing
-mechanically stops a commit. `Bash` is yours so you can run the suite that
-turns a suspicion into a finding — not so you can act on one. A fix you
-commit skips the failing test, which is the entire reason reading and
-repair are split here.
+mechanically stops a commit. `Bash` is yours for `git`, and for the rare
+assertion the caller's suite output cannot answer — not so you can act on a
+finding. A fix you commit skips the failing test, which is the entire reason
+reading and repair are split here.
 
 ## What to return
 
