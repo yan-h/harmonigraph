@@ -223,11 +223,10 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             &mut state.view.sevens_label,
             &[
                 (
-                    SevensLabel::Comma,
-                    "Comma",
-                    "The name, plus the signed cents to the home-sheet note \
-                     that wears the same name -- the septimal comma, which \
-                     moves as you retune",
+                    SevensLabel::Name,
+                    "Name",
+                    "The note name, carrying the septimal mark that tells it \
+                     from the node two fifths down that shares its letter",
                 ),
                 (
                     SevensLabel::Cents,
@@ -235,15 +234,17 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
                     "The pitch class alone, in cents. Says what the node is \
                      and nothing it isn't",
                 ),
-                (
-                    SevensLabel::Name,
-                    "Name",
-                    "The note name, as the home sheet gets. Note that it is \
-                     the SAME name the node two fifths down wears: the \
-                     spelling carries no sevenths information at all",
-                ),
                 (SevensLabel::None, "None", "No text off the home sheet"),
             ],
         );
     });
+    ValueBar::new(&mut state.view.mark_weight, 0.04..=0.20, "Mark weight")
+        .show(ui)
+        .on_hover_text(
+            "How heavy the DRAWN label marks are (+, -, and the septimal \
+             shape), as a fraction of the mark's font size. Iosevka draws \
+             every bar it has at 0.07 -- which is why these are geometry \
+             and not type. Floored at a whole pixel, so the bottom of the \
+             range stops mattering on a small node",
+        );
 }

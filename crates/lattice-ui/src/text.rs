@@ -41,6 +41,21 @@ use lattice_render::{GlyphInstance, TextRing};
 /// outline on a high-DPI display.
 pub(crate) const RINGS: [(f32, f32, u32); 2] = [(2.0, 0.21, 8), (1.2, 1.0, 12)];
 
+/// One ring's radius on this display, rounded to a whole physical pixel.
+///
+/// A SIZE, and the one thing here that is still rounded now that positions
+/// are not: a sub-pixel or mixed-fraction radius reads as a lumpy outline,
+/// and unlike a position it is a constant of the frame, so rounding it
+/// cannot make anything step as it moves.
+///
+/// Shared because the drawn label marks build the same two rings out of
+/// geometry (`panes::lattice::paint_mark`), and a rim that is 1.2pt around
+/// a glyph and 1.0pt around the `+` beside it is exactly the mismatch this
+/// pairing exists to avoid.
+pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
+    (radius * ppp).round().max(1.0) / ppp
+}
+
 /// Which batch a flush belongs to. Unique per batch drawn in one frame,
 /// since each keeps its own instance buffer: the two picture panes, their
 /// Render-preview copies, and the analyzer's readout, which flushes
@@ -113,14 +128,31 @@ impl TextBatch {
         let first = self.glyphs.len();
         let font_size_bits = font.size.to_bits();
         let galley = painter.layout_no_wrap(text, font, egui::Color32::PLACEHOLDER);
-        let ppp = painter.ctx().pixels_per_point();
-        let round = |v: f32| (v * ppp).round() / ppp;
-        // egui rounds a galley onto a whole physical pixel before drawing it
-        // (`round_text_to_pixels`), and its glyphs are already snapped
-        // relative to that. Both have to happen here too, or the text lands
-        // a fraction of a pixel off where egui puts it and every glyph softens.
+        // Placed at whatever position it is handed, NOT rounded onto a whole
+        // physical pixel — for EVERY pane that draws through this batch, not
+        // only the ones whose text moves.
+        //
+        // egui rounds a galley before drawing it (`round_text_to_pixels`),
+        // and rounding with it does keep each glyph on the pixel grid it was
+        // rasterized for. The cost is that text becomes the only thing on a
+        // picture pane that moves in whole pixels: the lattice's nodes and
+        // the roll's ribbons are shader geometry at continuous positions, so
+        // a label steps while the thing it names glides, and the mismatch
+        // reads as judder against its own subject.
+        //
+        // Global rather than per-pane, deliberately. Nearly every label this
+        // batch carries sits on something that moves — lattice names ride a
+        // camera, roll names ride a scrolling picture, and the render pane
+        // draws the lattice again. The few that hold still, chiefly the
+        // spectral pitch gridlines, pay a constant softening so that there
+        // is ONE text path rather than two: a mode here would mean the same
+        // label rendered differently depending on which pane drew it, and
+        // this module's worth is that it has no modes.
+        //
+        // The softening is real — a glyph at a fractional offset resamples
+        // its atlas cell. Constant softness reads as a typeface;
+        // intermittent stepping reads as a bug.
         let pos = align.anchor_size(anchor, galley.size()).min;
-        let pos = egui::pos2(round(pos.x), round(pos.y));
 
         for row in &galley.rows {
             for glyph in &row.glyphs {
@@ -128,9 +160,7 @@ impl TextBatch {
                     continue;
                 }
                 let left_top = glyph.pos + glyph.uv_rect.offset;
-                let min = pos
-                    + row.pos.to_vec2()
-                    + egui::vec2(round(left_top.x), round(left_top.y));
+                let min = pos + row.pos.to_vec2() + left_top.to_vec2();
                 self.drawn.push((font_size_bits, glyph.chr));
                 self.glyphs.push(GlyphInstance {
                     rect: [min.x, min.y, glyph.uv_rect.size.x, glyph.uv_rect.size.y],
@@ -193,10 +223,9 @@ impl TextBatch {
         #[cfg(test)]
         self.pieces.clear();
         let atlas = atlas_if_changed(painter.ctx(), state, std::mem::take(&mut self.drawn));
-        let rings = RINGS.map(|(radius, alpha, samples)| {
-            let ppp = painter.ctx().pixels_per_point();
-            TextRing { radius: (radius * ppp).round().max(1.0) / ppp, alpha, samples }
-        });
+        let ppp = painter.ctx().pixels_per_point();
+        let rings = RINGS
+            .map(|(radius, alpha, samples)| TextRing { radius: ring_radius(radius, ppp), alpha, samples });
         painter.add(lattice_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),

@@ -101,6 +101,17 @@ pub struct ViewConfig {
     /// Only meaningful while `show_labels` is on.
     #[serde(default = "default_sevens_label")]
     pub sevens_label: SevensLabel,
+    /// Stroke weight of the DRAWN label marks (`+`, `-`, and the septimal
+    /// shape), as a fraction of the mark's own font size.
+    ///
+    /// It has a setting because it is the whole reason those marks stopped
+    /// being text. Iosevka draws every horizontal bar it has at 70/1000 em
+    /// -- 0.58px at `MARK_SIZE` -- so a typeset `-` is a sub-pixel smear
+    /// next to a `+` whose upright is 3.18px, and no character in the font
+    /// is thicker. Drawn, the weight is chosen here and floored at a whole
+    /// pixel, which is the only way this mark is ever crisp.
+    #[serde(default = "default_mark_weight")]
+    pub mark_weight: f32,
     /// Draw note-name labels on hovered and sounding nodes.
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
@@ -409,6 +420,24 @@ fn default_sevens_label() -> SevensLabel {
     SevensLabel::Name
 }
 
+/// Iosevka's own stroke weight, measured off its outlines: 70/1000 em.
+///
+/// The face uses ONE weight for everything — `♯`'s verticals are 69 and its
+/// bars 70, the hyphen is 70, `+` is about 70 — and it does that across a
+/// glyph 878 units tall (`♯`) and one 70 units tall (`-`) alike. So the
+/// typeface's own answer to "should a smaller mark be drawn heavier?" is
+/// no, and the optical-sizing argument that put this at 0.12 and then 0.10
+/// was arguing against the face these marks sit in.
+///
+/// Heavier weights were also compensating for something since fixed: while
+/// the marks were composited shapes their feathered joins read heavier than
+/// the geometry measured, and while they were typeset a bar this thin
+/// really did smear. Rasterized with a whole-pixel floor, 0.07 is a clean
+/// line — and it is the line the rest of the label is drawn with.
+fn default_mark_weight() -> f32 {
+    0.07
+}
+
 /// The classic solid orb — the identity end of the solidity axis.
 fn default_core_solidity() -> f32 {
     1.0
@@ -584,7 +613,8 @@ impl Default for ViewConfig {
             // past it.
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
-            sevens_label: SevensLabel::Comma,
+            sevens_label: SevensLabel::Name,
+            mark_weight: default_mark_weight(),
             show_labels: true,
             show_cents: true,
             node_style: NodeStyle::Steady,

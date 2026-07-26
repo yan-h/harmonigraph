@@ -1099,27 +1099,6 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
     }
 }
 
-/// Every piece of text one pass over a closure drew, as (line box, text).
-///
-/// Labels do not go through egui's shape list — they are collected as
-/// glyphs and handed to a paint callback — so this reads the batch instead.
-fn drawn_texts(
-    draw: impl Fn(&mut crate::text::TextBatch, &egui::Painter),
-) -> Vec<(egui::Rect, String)> {
-    let ctx = egui::Context::default();
-    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    let mut batch = crate::text::TextBatch::default();
-    let _ = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| draw(&mut batch, ui.painter()),
-    );
-    // The line box, matching what a shape-list reader would report: the
-    // assertions below are about how pieces stack, and a monospace line box
-    // is what they are calibrated against.
-    batch.pieces().iter().map(|p| (p.galley, p.text.clone())).collect()
-}
-
 /// The box one piece of text occupies.
 fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
     texts
@@ -1130,29 +1109,74 @@ fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
         .unwrap_or_else(|| panic!("no {want:?} drawn, got {texts:?}"))
 }
 
-/// The lattice's note labels stack the accidental over the comma mark in one
+/// The stroke weight the label tests draw their marks at. Nothing below
+/// depends on the number; the marks only have to be present and placed.
+const TEST_MARK_WEIGHT: f32 = 0.10;
+
+/// A label's text pieces AND the boxes of its drawn marks.
+///
+/// The comma signs are geometry rather than type (see
+/// [`panes::lattice::draw_stacked_name`]), so a text-only view of a label is
+/// blind to exactly the marks these tests are about. Each drawn piece emits
+/// two shapes, halo then fill, and both are symmetric about the piece, so a
+/// box here is the piece's own box grown by the halo.
+fn drawn_label(
+    name: lattice_core::NoteName,
+    anchor: egui::Pos2,
+) -> (Vec<(egui::Rect, String)>, Vec<egui::Rect>) {
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+    let mut batch = crate::text::TextBatch::default();
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            panes::lattice::draw_stacked_name(
+                &mut batch,
+                ui.painter(),
+                anchor,
+                name,
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+                1.0,
+                TEST_MARK_WEIGHT,
+            );
+        },
+    );
+    let texts = batch.pieces().iter().map(|p| (p.galley, p.text.clone())).collect();
+    let shapes = out
+        .shapes
+        .iter()
+        .map(|s| s.shape.visual_bounding_rect())
+        .filter(|r| r.is_finite() && r.width() > 0.0 && r.height() > 0.0)
+        .collect();
+    (texts, shapes)
+}
+
+/// The lattice's note labels stack the accidental over the comma sign in one
 /// column after the letter, so a name deep in the lattice stays narrow. The
 /// whole name still has to sit centered on its node.
 #[test]
 fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     let anchor = egui::pos2(200.0, 200.0);
-    let name = lattice_core::NoteName { letter: 'C', sharps: 5, syntonic_commas: 4 };
-    let texts = drawn_texts(|batch, painter| {
-        panes::lattice::draw_stacked_name(
-            batch,
-            painter,
-            anchor,
-            name,
-            egui::Color32::WHITE,
-            egui::Color32::BLACK,
-            1.0,
-        );
-    });
+    let name = lattice_core::NoteName {
+        letter: 'C',
+        sharps: 5,
+        syntonic_commas: 4,
+        septimal_commas: 0,
+    };
+    let (texts, shapes) = drawn_label(name, anchor);
 
-    // Counted marks, not five sharps and four pluses spelled out.
+    // Counted marks, not five sharps and four pluses spelled out. The `+`
+    // itself is drawn, so only its COUNT is text.
     let letter = text_box(&texts, "C");
     let accidental = text_box(&texts, "\u{266F}5");
-    let comma = text_box(&texts, "+4");
+    let count = text_box(&texts, "4");
+    let sign = shapes
+        .iter()
+        .copied()
+        .reduce(|a, b| a.union(b))
+        .expect("the + should be drawn, not typeset");
 
     // One column, beginning where the letter ends. The boxes are ink, so
     // they meet within a glyph's own side bearing rather than within the
@@ -1162,22 +1186,26 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
         (accidental.left() - letter.right()).abs() <= 2.0 * BEARING,
         "marks should follow the letter ({accidental:?} after {letter:?})"
     );
-    assert!((accidental.left() - comma.left()).abs() < 0.5, "marks share a column");
+    assert!(
+        (accidental.left() - sign.left()).abs() <= 2.0 * BEARING,
+        "the drawn sign shares the accidental's column ({sign:?} vs {accidental:?})"
+    );
+    assert!(sign.right() <= count.left() + BEARING, "the count follows its sign");
     // Superscript over subscript, straddling the letter's own line.
     assert!(accidental.center().y < letter.center().y, "the accidental rides high");
-    assert!(comma.center().y > letter.center().y, "the comma sits low");
+    assert!(sign.center().y > letter.center().y, "the comma sits low");
     // Marks are subordinate to the letter, not the same weight...
     assert!(accidental.height() < letter.height(), "marks are the smaller size");
     // ...and neither stands proud of it: the stacked pair has to stay inside
     // the letter's own height, or the label reads as two lines, not one name.
     assert!(
-        accidental.top() >= letter.top() - 0.01 && comma.bottom() <= letter.bottom() + 0.01,
-        "marks should not overhang the letter (acc {accidental:?}, comma {comma:?}, \
+        accidental.top() >= letter.top() - 0.01 && count.bottom() <= letter.bottom() + 0.01,
+        "marks should not overhang the letter (acc {accidental:?}, count {count:?}, \
          letter {letter:?})"
     );
 
     // The name as a whole straddles the node it labels.
-    let name_box = letter.union(accidental).union(comma);
+    let name_box = letter.union(accidental).union(count);
     assert!(
         (name_box.center().x - anchor.x).abs() < 0.5,
         "name should center on the node ({name_box:?} vs {anchor:?})"
@@ -1191,24 +1219,89 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     );
 }
 
+/// The septimal mark sits ACROSS the divide between the accidental and the
+/// comma, not in either slot.
+///
+/// It belongs to a different prime than the two it sits beside, and it is
+/// placed to say so: centered on the letter's own line, with air before it.
+/// It used to take one slot or the other as a second cue for its direction,
+/// which put it in the stack it is not part of; the chevron carries its own
+/// direction, so the slot is free to mean this instead.
+#[test]
+fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let mark_of = |septimal_commas: i32| {
+        let name = lattice_core::NoteName {
+            letter: 'B',
+            sharps: -1,
+            syntonic_commas: 0,
+            septimal_commas,
+        };
+        let (_, shapes) = drawn_label(name, anchor);
+        shapes.into_iter().reduce(|a, b| a.union(b)).expect("a septimal mark should be drawn")
+    };
+    // Both directions sit on the same line, and it is the letter's own.
+    for commas in [-1, 1] {
+        let mark = mark_of(commas);
+        assert!(
+            (mark.center().y - anchor.y).abs() < 1.0,
+            "a septimal mark belongs on the letter's line, got {mark:?} against {anchor:?}"
+        );
+    }
+    // A home-sheet name draws no mark at all.
+    let (_, none) = drawn_label(
+        lattice_core::NoteName {
+            letter: 'B',
+            sharps: -1,
+            syntonic_commas: 0,
+            septimal_commas: 0,
+        },
+        anchor,
+    );
+    assert!(none.is_empty(), "no sevens component, no mark: {none:?}");
+}
+
+/// The septimal mark gets a column of its own, so a name carrying both
+/// commas reads as three pieces rather than a pile.
+#[test]
+fn both_comma_marks_get_their_own_column() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = lattice_core::NoteName {
+        letter: 'E',
+        sharps: 0,
+        syntonic_commas: -1,
+        septimal_commas: -1,
+    };
+    let (texts, shapes) = drawn_label(name, anchor);
+    assert!(texts.iter().all(|(_, t)| t == "E"), "single marks carry no count: {texts:?}");
+    let letter = text_box(&texts, "E");
+    // Two drawn marks, so two columns' worth of shapes: the syntonic bar
+    // sits left of the septimal shape rather than on top of it.
+    let left = shapes.iter().copied().reduce(|a, b| a.union(b)).expect("marks drawn");
+    assert!(left.left() >= letter.right() - 2.0, "marks follow the letter, {left:?}");
+    let syntonic_x =
+        shapes.iter().map(|r| r.center().x).fold(f32::INFINITY, f32::min);
+    let septimal_x = shapes.iter().map(|r| r.center().x).fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        septimal_x > syntonic_x,
+        "the septimal mark takes its own column right of the syntonic one"
+    );
+}
+
 /// A plain name has no marks to stack -- nothing extra is drawn, and the
 /// letter alone centers on the node.
 #[test]
 fn a_natural_note_label_is_just_the_letter() {
     let anchor = egui::pos2(200.0, 200.0);
-    let name = lattice_core::NoteName { letter: 'G', sharps: 0, syntonic_commas: 0 };
-    let texts = drawn_texts(|batch, painter| {
-        panes::lattice::draw_stacked_name(
-            batch,
-            painter,
-            anchor,
-            name,
-            egui::Color32::WHITE,
-            egui::Color32::BLACK,
-            1.0,
-        );
-    });
+    let name = lattice_core::NoteName {
+        letter: 'G',
+        sharps: 0,
+        syntonic_commas: 0,
+        septimal_commas: 0,
+    };
+    let (texts, shapes) = drawn_label(name, anchor);
     assert!(texts.iter().all(|(_, t)| t == "G"), "only the letter: {texts:?}");
+    assert!(shapes.is_empty(), "a natural draws no marks: {shapes:?}");
     assert!((text_box(&texts, "G").center().x - anchor.x).abs() < 0.5);
 }
 
@@ -2088,3 +2181,4 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         "a collapsed analyzer pane should hand the overlay back to the editor",
     );
 }
+

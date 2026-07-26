@@ -24,8 +24,8 @@
 //!
 //! The name is the LATTICE's: the same [`NoteName`] the node carries, drawn by
 //! the same [`draw_stacked_name`](super::lattice::draw_stacked_name) — letter
-//! at full size, accidental riding high, syntonic-comma mark low, both counted
-//! rather than repeated. Not a resemblance but the same function, so the two
+//! at full size, accidental riding high, syntonic-comma mark low, septimal
+//! mark in a column of its own past them, all counted rather than repeated. Not a resemblance but the same function, so the two
 //! cannot drift apart. That is the errand: a name here is read against the
 //! lattice, so it has to answer in the lattice's vocabulary. A cents deviation
 //! off the nearest piano key would say where a pitch sits between two keys
@@ -401,7 +401,16 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
         .count()
         .max(name.comma_mark().chars().count());
     let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
-    egui::vec2((size + marks as f32 * mark_size) * GLYPH_ADVANCE, size * LINE_HEIGHT)
+    // The septimal mark takes a column PAST those two, with air before it,
+    // so a name carrying one is wider than its accidental stack suggests —
+    // see `lattice::draw_stacked_name`. Missing it here would let a `B♭↓`
+    // overlap whatever the thinning decided it cleared.
+    let septimal = name.septimal_mark().chars().count();
+    let gap = if septimal == 0 { 0.0 } else { lattice::SEPTIMAL_GAP * mark_size };
+    egui::vec2(
+        (size + (marks + septimal) as f32 * mark_size) * GLYPH_ADVANCE + gap,
+        size * LINE_HEIGHT,
+    )
 }
 
 /// A note's name: the LATTICE's spelling of its pitch.
@@ -468,6 +477,14 @@ fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<Lat
 /// letter is the name for it, even though the comma'd node is nearer the
 /// origin.
 ///
+/// BOTH comma marks count toward the first term, and they have to. The
+/// sevens axis used to add no mark, so an off-sheet node spelled exactly
+/// like the node two fifths down and the choice between them was invisible
+/// — which meant the distance term silently decided it, and decided it
+/// wrong: in an equal temperament `(2,0,-1)` is nearer the origin than
+/// `(4,0,0)`, so a plain `E` was being named off the sevens sheet. It only
+/// became visible when that node started spelling `E↑`.
+///
 /// The last term settles what the first three cannot, and exists because there
 /// is a real tie they cannot reach: in an equal temperament the tritone is six
 /// fifths up (`F♯`) and six fifths down (`G♭`), which cost the same on every
@@ -479,7 +496,7 @@ fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<Lat
 /// that it is written down here and not implied by a loop elsewhere.
 fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32, i32) {
     (
-        name.syntonic_commas.abs(),
+        name.syntonic_commas.abs() + name.septimal_commas.abs(),
         name.sharps.abs(),
         pos.threes.abs() + pos.fives.abs() + pos.sevens.abs(),
         -pos.threes,
@@ -504,7 +521,9 @@ fn equal_tempered_name(midi: f32) -> NoteName {
         ('B', 0),
     ];
     let (letter, sharps) = SPELLINGS[(midi.round() as i32).rem_euclid(12) as usize];
-    NoteName { letter, sharps, syntonic_commas: 0 }
+    // No septimal component: this is the fallback for a pitch the visible
+    // lattice has no node for, so there is no sevens axis to be off.
+    NoteName { letter, sharps, syntonic_commas: 0, septimal_commas: 0 }
 }
 
 /// The names, into whichever batch the pane is drawing its labels from.
@@ -522,6 +541,7 @@ pub(super) fn draw(
     painter: &egui::Painter,
     labels: &[NoteLabel],
     label_scale: f32,
+    mark_weight: f32,
     batch: &mut crate::text::TextBatch,
 ) {
     // `draw_stacked_name` sizes everything off the lattice's own letter size,
@@ -536,6 +556,7 @@ pub(super) fn draw(
             theme::text(),
             theme::well(),
             scale,
+            mark_weight,
         );
     }
 }
@@ -1049,6 +1070,71 @@ mod tests {
         // Four fifths up spells E; one just third up spells E-, and in this
         // tuning they are the same pitch. The plain letter wins.
         assert_eq!(name(64.0), "E");
+    }
+
+    /// A name carrying a septimal mark measures WIDER than its accidental
+    /// stack alone would suggest, because the mark takes a column past them
+    /// with air before it.
+    ///
+    /// `name_extent` is what the thinning believes a name occupies, so a
+    /// short measurement here is not a rounding error, it is two names
+    /// overlapping on the picture.
+    #[test]
+    fn a_septimal_mark_widens_what_a_name_is_measured_at() {
+        let size = LABEL_PT;
+        let plain =
+            NoteName { letter: 'B', sharps: -1, syntonic_commas: 0, septimal_commas: 0 };
+        let marked = NoteName { septimal_commas: -1, ..plain };
+        let (plain_box, marked_box) = (name_extent(&plain, size), name_extent(&marked, size));
+
+        // A whole column plus the gap wider, not a rounding's worth.
+        let mark_size = size * lattice::MARK_SIZE / lattice::NAME_SIZE;
+        let grew = marked_box.x - plain_box.x;
+        assert!(
+            grew > lattice::SEPTIMAL_GAP * mark_size,
+            "a septimal mark widened the name by only {grew}"
+        );
+        // The mark sits inside the line it shares, so nothing grows taller.
+        assert_eq!(plain_box.y, marked_box.y, "a mark should not raise the line");
+        // And a counted mark carries its digit, so it is wider still.
+        let counted = NoteName { septimal_commas: -5, ..plain };
+        assert!(
+            name_extent(&counted, size).x > marked_box.x,
+            "a counted mark takes a digit's width past a bare one"
+        );
+    }
+
+    /// A septimal mark costs a reader what a syntonic one does, so the
+    /// spelling chooser weighs them together.
+    ///
+    /// This is the shape of a bug that only exists where two branches meet.
+    /// The sevens axis used to add no mark at all, so an off-sheet node
+    /// spelled exactly like the node two fifths down and no test could tell
+    /// which had been picked — leaving the DISTANCE term to decide it, and
+    /// decide it wrong: in an equal temperament `(2,0,-1)` is nearer the
+    /// origin than `(4,0,0)`, so a plain `E` was being named off the sevens
+    /// sheet. Neither branch was wrong on its own; the naming became visible
+    /// and the choice became visibly wrong in the same commit.
+    #[test]
+    fn a_plain_spelling_beats_an_off_sheet_one_at_the_same_pitch() {
+        // A view with depth, so off-sheet nodes are candidates at all.
+        let view = lattice_scene::ViewConfig { extent_sevens: 1, ..Default::default() };
+        let equal = lattice_core::Tuning::default();
+        let name = |midi| note_name(&view, &equal, midi).to_string();
+
+        // Every one of these has an equal-tempered twin one sevens step off,
+        // nearer the origin, that would win on distance alone.
+        assert_eq!(name(64.0), "E", "not the sevens-sheet node two fifths nearer");
+        assert_eq!(name(66.0), "F\u{266F}");
+        assert_eq!(name(60.0), "C");
+        // And the cost is symmetric: the mark counts whichever way it points.
+        for pos in [LatticePos::new(2, 0, -1), LatticePos::new(-2, 0, 1)] {
+            let spelled = super::super::display_note_name(pos, view.meantone);
+            assert!(
+                spelling_cost(spelled, pos).0 > 0,
+                "a septimal mark should cost like a comma, {spelled} did not"
+            );
+        }
     }
 
     /// A pitch the visible lattice has no node for still gets a name, spelled
