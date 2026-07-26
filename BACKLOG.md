@@ -43,6 +43,10 @@ both sides. Never resolve one by dropping an item you did not finish.
 
 [settings] collapse notes and console panel by default
 
+[settings] I don't like having the scrollbar on the top list of settings. Any solutions you can think of?
+
+[spectrum] analyzer has a lot of empty space in typical usage. generally only half of the height is used.
+
 > Work through BACKLOG.md. First triage: restate each item as you understand
 > it and flag anything ambiguous — ask me about those before touching them.
 > Then fix the clear ones, one commit per item. Remove completed items from
