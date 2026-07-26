@@ -94,6 +94,18 @@ fn labels_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         view.show_labels,
         egui::Checkbox::new(&mut view.show_cents, "Cents"),
     );
+    ui.add_enabled_ui(view.show_labels, |ui| {
+        ValueBar::new(&mut view.label_scale, crate::SCALE_BAR_RANGE, "Size")
+            .show(ui)
+            .on_hover_text(
+                "Overall size of a label -- the name, the marks beside it and \
+                 the cents line under it together, so it keeps its \
+                 proportions.\n\nLabels already follow the camera: they grow \
+                 and shrink with the lattice as you zoom, so a name stays the \
+                 same size ON its node whatever the framing. This sets what \
+                 that size is",
+            );
+    });
 }
 
 /// Trail: where the music has already been. Rides the IDLE layer only -- a

@@ -90,13 +90,18 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         draw_learn_overlay(&mut batch, ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.view, 1.0, &mut batch);
+        draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
     }
     batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
 /// even when the Tuning tab (and its Learn toggle) is hidden.
+///
+/// The one piece of text on this pane that does NOT follow the camera. It
+/// names a mode rather than a node — pinned to the corner, sized like the rest
+/// of the UI's chrome — and a badge that grew as you zoomed in would be saying
+/// something about the lattice, which is exactly what it is not about.
 fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: egui::Rect, now: f64) {
     let color = theme::armed().gamma_multiply(learn_pulse(now));
     let painter = ui.painter_at(rect);
@@ -166,14 +171,41 @@ fn label_strength(node: &lattice_scene::NodeInstance, trailed: bool, keeps_names
 /// on -- already-visited nodes, drawn as egui text over the 3D view
 /// (projected with the same camera as the nodes): the note name centered on
 /// the node, optionally its pitch class in cents just below.
+///
+/// Every factor a label's size answers to is gathered here rather than by the
+/// callers -- the pane's own size, the camera's zoom and the user's Size bar --
+/// so the docked view, the Render preview and the offline render cannot drift
+/// apart over which of the three each remembered to apply.
 pub(crate) fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
     scene: &lattice_scene::Scene,
     view: &lattice_scene::ViewConfig,
-    scale: f32,
     batch: &mut crate::text::TextBatch,
 ) {
+    // The nodes are world-space geometry and their labels are typeset in
+    // points, so a label stays ON its node only by following the two things
+    // that decide how big a node draws:
+    //
+    //   - the PANE, whose height is the whole of what maps world units to
+    //     pixels (the projection's window is `distance * tan(fov/2)` high
+    //     and lands on the viewport's height, in x as much as in y);
+    //   - the CAMERA, via `screen_scale`.
+    //
+    // The pane is why this needs no argument from its callers. A preview
+    // drawing the lattice small, an offline render drawing it large, and a
+    // window being dragged narrower are one question with one answer, where
+    // they were three: a factor threaded from the Video pane, a scale factor,
+    // and nothing at all.
+    //
+    // Snapped, because a size that tracks a continuous zoom is a new entry in
+    // egui's font atlas every frame of a drag otherwise -- see
+    // `crate::text::snap_scale`.
+    let scale = crate::text::snap_scale(
+        rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale(),
+        NAME_SIZE,
+        ui.painter().ctx().pixels_per_point(),
+    );
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     // "Keep note names" retains a name only while the trail marks that
     // populate `node.trail` are on; with the marks Off the field never fills,
@@ -266,21 +298,42 @@ pub(crate) fn draw_node_labels(
 }
 
 /// The note name's letter, the size the label reads at.
-pub(crate) const NAME_SIZE: f32 = 15.0;
+///
+/// At the framing a fresh view opens at, that is. Every size here is a size at
+/// scale 1, and the scale a label is actually drawn at follows the camera —
+/// see [`draw_node_labels`].
+///
+/// Doubled from the 15pt these labels were drawn at for as long as they had no
+/// setting, along with everything below that is measured in points. The Size
+/// bar landed on 2 immediately and stayed there, which says the old number was
+/// wrong rather than that the bar wanted using — so the number moved and the
+/// bar went back to reading 1 at the size the lattice is actually looked at.
+pub(crate) const NAME_SIZE: f32 = 30.0;
+/// The pane the sizes here are quoted against: 860 points tall, which is what
+/// the lattice gets in the 1512x886 window they were dialled in. A pane half
+/// as tall draws them half the size, because a pane half as tall draws the
+/// LATTICE half the size — see [`draw_node_labels`].
+///
+/// Height, not width: the projection's window is a height, and the aspect
+/// ratio spreads it sideways, so a node's size on screen is a function of the
+/// pane's height whichever way the pane is stretched.
+const REFERENCE_HEIGHT: f32 = 860.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
-pub(crate) const CENTS_SIZE: f32 = 8.0;
+pub(crate) const CENTS_SIZE: f32 = 16.0;
 /// How far a label can reach from the node it belongs to, in points at
 /// scale 1 — the name, its marks, the gap and the cents line under it, with
-/// room to spare. Only used to decide that a label is too far off the pane
-/// to be worth laying out, so it errs generous: too small silently clips a
-/// label at the edge, too large only costs the work this saves.
-pub(crate) const LABEL_REACH: f32 = 48.0;
+/// room to spare. Scaled with the label like everything else here, so the
+/// cull leaves a zoomed-in label the room it now takes. Only used to decide
+/// that a label is too far off the pane to be worth laying out, so it errs
+/// generous: too small silently clips a label at the edge, too large only
+/// costs the work this saves.
+pub(crate) const LABEL_REACH: f32 = 96.0;
 
 /// Air between the bottom of the name's glyphs and the top of the cents
 /// readout's. Real pixels of gap, since both ends are measured as ink: the
 /// two are one label, sitting together without crowding.
-pub(crate) const CENTS_GAP: f32 = 3.0;
+pub(crate) const CENTS_GAP: f32 = 6.0;
 /// Accidental and comma marks, relative to the letter. Small enough that the
 /// two of them stacked still fit inside the letter's own height -- the pair
 /// is an annotation on the name, and a label that grows taller than its
@@ -446,9 +499,16 @@ fn mark_geometry(key: MarkKey) -> (Vec<MarkPiece>, [usize; 2]) {
 }
 
 /// Supersampling grid used to turn a mark's outline into coverage. 4x4 is
-/// finer than the antialiasing a shape would have got from the tessellator
-/// and costs nothing: a mark bitmap is a dozen pixels square and is built
-/// once per size, not once per frame.
+/// finer than the antialiasing a shape would have got from the tessellator,
+/// and on a mark a dozen pixels square it is the difference between an edge
+/// and a staircase.
+///
+/// It used to be free — "a mark bitmap is a dozen pixels square and is built
+/// once per size" — and it is not now that a size follows the camera. The rim
+/// reads this grid twenty times over, so the same 4x4 on a mark two hundred
+/// pixels across was sixteen million coverage tests, several frames' worth,
+/// spent on one `+` the first time a zoom asks for that size. The samples
+/// stayed and the reading of them got cheaper: see [`mark_coverage`].
 const MARK_SUPERSAMPLE: usize = 4;
 
 /// Rasterize a mark to an alpha coverage image -- the same thing a font
@@ -481,23 +541,53 @@ fn rasterize_mark(key: MarkKey) -> egui::ColorImage {
     egui::ColorImage { size: [w, h], pixels, source_size: egui::vec2(w as f32, h as f32) }
 }
 
-/// The mark's own coverage, supersampled, as a flat `(w*n) x (h*n)` grid.
+/// The mark's own coverage, supersampled, as a SUMMED-AREA table over a
+/// `(w*n) x (h*n)` grid — every entry the number of covered cells above and
+/// left of it, so the count inside any rectangle is four lookups.
 ///
 /// Split out of [`rasterize_mark`] because the rim reads the SAME coverage
 /// twenty times over at twenty offsets, and testing the geometry again for
 /// each would be twenty times the work for an answer that cannot differ.
-fn mark_coverage(pieces: &[MarkPiece], [w, h]: [usize; 2]) -> (Vec<bool>, [usize; 2]) {
-    let n = MARK_SUPERSAMPLE;
+/// Summed rather than plain because each of those reads is an `n x n` block:
+/// counting it cell by cell made the rim quadratic in the supersampling on
+/// top of everything else, which was survivable while marks were a dozen
+/// pixels square and is what made a zoomed one cost frames. The answer is
+/// identical — this counts the same cells by subtraction.
+fn mark_coverage(pieces: &[MarkPiece], [w, h]: [usize; 2], n: usize) -> Coverage {
     let (sw, sh) = (w * n, h * n);
     let step = 1.0 / n as f32;
-    let mut cov = vec![false; sw * sh];
+    let mut sums = vec![0u32; (sw + 1) * (sh + 1)];
     for sy in 0..sh {
         for sx in 0..sw {
             let p = egui::pos2((sx as f32 + 0.5) * step, (sy as f32 + 0.5) * step);
-            cov[sy * sw + sx] = pieces.iter().any(|piece| piece.covers(p));
+            let covered = pieces.iter().any(|piece| piece.covers(p)) as u32;
+            sums[(sy + 1) * (sw + 1) + sx + 1] = covered + sums[sy * (sw + 1) + sx + 1]
+                + sums[(sy + 1) * (sw + 1) + sx]
+                - sums[sy * (sw + 1) + sx];
         }
     }
-    (cov, [sw, sh])
+    Coverage { sums, size: [sw, sh] }
+}
+
+/// A mark's supersampled coverage, summed. See [`mark_coverage`].
+struct Coverage {
+    sums: Vec<u32>,
+    /// The supersampled grid's own dimensions, which is `sums` less its zero
+    /// row and column.
+    size: [usize; 2],
+}
+
+impl Coverage {
+    /// How many covered cells lie in the `n x n` block whose top-left cell is
+    /// `(x, y)`, counting cells off the grid as uncovered.
+    fn block(&self, x: isize, y: isize, n: usize) -> u32 {
+        let [sw, sh] = self.size;
+        let (x0, y0) = (x.clamp(0, sw as isize) as usize, y.clamp(0, sh as isize) as usize);
+        let x1 = (x + n as isize).clamp(0, sw as isize) as usize;
+        let y1 = (y + n as isize).clamp(0, sh as isize) as usize;
+        let at = |x: usize, y: usize| self.sums[y * (sw + 1) + x];
+        at(x1, y1) + at(x0, y0) - at(x1, y0) - at(x0, y1)
+    }
 }
 
 /// The mark's RIM, rasterized to alpha as one bitmap: the same rings stamped
@@ -518,8 +608,8 @@ fn mark_coverage(pieces: &[MarkPiece], [w, h]: [usize; 2]) -> (Vec<bool>, [usize
 /// each other.
 fn rasterize_mark_rim(key: MarkKey) -> egui::ColorImage {
     let (pieces, [w, h]) = mark_geometry(key);
-    let (cov, [sw, sh]) = mark_coverage(&pieces, [w, h]);
     let n = MARK_SUPERSAMPLE;
+    let coverage = mark_coverage(&pieces, [w, h], n);
     // Room for the widest ring on every side, so no stamp is clipped.
     let pad = key.rings_px.iter().copied().max().unwrap_or(1) as usize;
     let (rw, rh) = (w + 2 * pad, h + 2 * pad);
@@ -553,20 +643,7 @@ fn rasterize_mark_rim(key: MarkKey) -> egui::ColorImage {
             );
             let mut a = 0.0f32;
             for &(ox, oy, alpha) in &stamps {
-                let mut hits = 0;
-                for sy in 0..n as isize {
-                    for sx in 0..n as isize {
-                        let (gx, gy) = (bx + sx - ox, by + sy - oy);
-                        if gx >= 0
-                            && gy >= 0
-                            && (gx as usize) < sw
-                            && (gy as usize) < sh
-                            && cov[gy as usize * sw + gx as usize]
-                        {
-                            hits += 1;
-                        }
-                    }
-                }
+                let hits = coverage.block(bx - ox, by - oy, n);
                 if hits > 0 {
                     let frac = hits as f32 / (n * n) as f32;
                     a += alpha * frac * (1.0 - a);
@@ -1057,6 +1134,16 @@ mod tests {
     /// Draw the labels for a chord, with the camera at `distance`, and
     /// report the pieces of text that were laid out.
     fn label_pieces(rect: egui::Rect, distance: f32) -> Vec<crate::text::TextPiece> {
+        labelled(rect, distance).0
+    }
+
+    /// The pieces of text a chord's labels lay out, with the scene they came
+    /// from — so a test can ask what SHOULD have been labelled without
+    /// borrowing the answer from the code that decides it.
+    fn labelled(
+        rect: egui::Rect,
+        distance: f32,
+    ) -> (Vec<crate::text::TextPiece>, lattice_scene::Scene) {
         let mut state = SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         state.camera.distance = distance;
         // A chord spread across the lattice, so nodes land all over the pane
@@ -1086,10 +1173,10 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                draw_node_labels(&child, rect, &scene, &state.view, 1.0, &mut batch);
+                draw_node_labels(&child, rect, &scene, &state.view, &mut batch);
             },
         );
-        batch.pieces().to_vec()
+        (batch.pieces().to_vec(), scene)
     }
 
     /// One quad per glyph, whatever the rim is doing.
@@ -1141,16 +1228,93 @@ mod tests {
             zoomed.len(),
             wide.len(),
         );
-        // And nothing is laid out far outside the pane, at either zoom: a
-        // label's own reach is the only slack the cull allows.
-        let slack = rect.expand(LABEL_REACH * 2.0);
-        for piece in wide.iter().chain(&zoomed) {
+        // The other half, and the one an upper bound cannot state: the cull
+        // may only drop what is OFF the pane. A bound written as the cull's
+        // own reach is met by any cull, however tight — including one that
+        // clips a label whose node you are looking straight at, which is the
+        // failure `LABEL_REACH`'s doc warns about. So this counts what should
+        // have been labelled, through the scene's own projector rather than
+        // through the cull's arithmetic: every node the pane can show carries
+        // a name, wherever the reach is set.
+        for distance in [14.0f32, 2.0] {
+            let (pieces, scene) = labelled(rect, distance);
+            let projector =
+                scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+            let on_pane = scene
+                .nodes
+                .iter()
+                // The home sheet's, which is what the size filter below
+                // picks out: an off-sheet node draws its name smaller, so
+                // counting those on one side and not the other would compare
+                // two different things.
+                .filter(|node| node.on_home && node.activation > 0.0 && node.is_visible())
+                .filter_map(|node| projector.project(node.world_pos))
+                .filter(|p| rect.contains(egui::pos2(rect.min.x + p.x, rect.min.y + p.y)))
+                .count();
+            assert!(on_pane > 0, "no lit node projects onto the pane at distance {distance}");
+            // One letter per label, so the letters count the labels. Off-sheet
+            // nodes draw theirs smaller, so this is the LARGEST size drawn.
+            let biggest = pieces.iter().map(|piece| piece.font_size).fold(0.0f32, f32::max);
+            let names = pieces.iter().filter(|piece| piece.font_size == biggest).count();
             assert!(
-                slack.contains(piece.ink.min) && slack.contains(piece.ink.max),
-                "a label was laid out at {:?}, outside the pane {rect:?}",
-                piece.ink,
+                names >= on_pane,
+                "{on_pane} lit nodes are on the pane at distance {distance} but only \
+                 {names} names were laid out: the cull is dropping what you can see",
             );
         }
+    }
+
+    /// Labels follow the camera: a name is the same size ON its node at every
+    /// zoom, which is the whole of what makes it a label on a node rather than
+    /// text over a picture of one.
+    ///
+    /// Halving the distance doubles the lattice on screen — the ortho window's
+    /// half-height is `distance * tan(fov/2)` — so it has to double the type
+    /// too. Read off the largest piece each frame laid out, which is the note
+    /// name: the marks and the cents line are sized off it.
+    #[test]
+    fn a_label_grows_with_the_camera() {
+        // A pane the height the sizes are quoted against, so this is a test
+        // about the camera and not about the pane.
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, REFERENCE_HEIGHT));
+        let biggest = |distance: f32| {
+            label_pieces(rect, distance)
+                .iter()
+                .map(|piece| piece.font_size)
+                .fold(0.0f32, f32::max)
+        };
+        assert_eq!(
+            biggest(Camera::DEFAULT_DISTANCE),
+            NAME_SIZE,
+            "the default framing is where the sizes are dialled",
+        );
+        // Within a rung of the ladder either way. The size follows the camera
+        // continuously and is RASTERIZED at the nearest size on offer, which
+        // is what keeps a zoom from asking egui for a new one every frame —
+        // see `text::snap_scale`.
+        let tracks = |distance: f32, want: f32| {
+            let got = biggest(distance);
+            // Off by at most a rung of the ladder, or half a pixel where that
+            // is coarser — the two grains `snap_scale` quantizes on. A quarter
+            // of a 30pt name is 7.5 pixels on this 1x context, where half a
+            // pixel is a fifteenth of the size and the rung is a thirtieth.
+            let slack = (0.04 * want).max(0.5);
+            assert!(
+                (got - want).abs() <= slack,
+                "at distance {distance} a name drew at {got}, not within {slack} of {want}",
+            );
+        };
+        tracks(Camera::DEFAULT_DISTANCE * 0.5, NAME_SIZE * 2.0);
+        tracks(Camera::DEFAULT_DISTANCE * 2.0, NAME_SIZE * 0.5);
+        tracks(Camera::DEFAULT_DISTANCE * 4.0, NAME_SIZE * 0.25);
+        // And the ladder is really there: a nudge of the camera too small to
+        // see is not a new size to rasterize.
+        assert_eq!(
+            biggest(Camera::DEFAULT_DISTANCE),
+            biggest(Camera::DEFAULT_DISTANCE * 1.01),
+            "a 1% camera move asked for a size of its own",
+        );
     }
 
     /// A node with `activation`, on the home sheet or off it, and nothing

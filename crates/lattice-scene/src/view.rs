@@ -116,6 +116,18 @@ pub struct ViewConfig {
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
     pub show_labels: bool,
+    /// Overall size of a node's label, as a multiple of its built-in sizes —
+    /// the note name, the marks stacked beside it and the cents line under it
+    /// together, so the label keeps its proportions and only the whole of it
+    /// grows.
+    ///
+    /// It trims what the CAMERA decides rather than replacing it. A label
+    /// tracks the on-screen size of the lattice it sits on (see
+    /// [`Camera::screen_scale`](crate::Camera::screen_scale)), which is what
+    /// keeps a name the same size on its node at every zoom; this says what
+    /// that size is.
+    #[serde(default = "default_label_scale")]
+    pub label_scale: f32,
     /// Under each note-name label, also show the node's pitch class in
     /// cents. Only meaningful while `show_labels` is on.
     #[serde(default = "default_true")]
@@ -440,6 +452,19 @@ fn default_mark_weight() -> f32 {
     0.07
 }
 
+/// Labels at their built-in size.
+///
+/// The deliberate exception to what these `default_*` fns are for. An older
+/// blob was drawn at HALF this — the letter was 15pt and is now 30 — so this
+/// restyles it, where every other default here exists precisely not to. The
+/// bar this field belongs to went to 2 the first time it was tried and stayed
+/// there, which said the built-in size was wrong rather than merely one
+/// choice; a size that was wrong is worth correcting everywhere it was used,
+/// and a saved view that kept it would be preserving a mistake, not a look.
+fn default_label_scale() -> f32 {
+    1.0
+}
+
 /// The classic solid orb — the identity end of the solidity axis.
 fn default_core_solidity() -> f32 {
     1.0
@@ -549,6 +574,17 @@ impl ViewConfig {
     /// slice_inner/slice_outer fields, absorbed by the
     /// outer_inner/outer_outer aliases.)
     pub fn migrate_legacy(&mut self) {
+        // Fit the label scale to what its bar offers. It multiplies a FONT
+        // SIZE, and the bar cannot produce a nonsense value where a
+        // hand-edited blob can: a non-finite one reaches egui as a glyph with
+        // no image, so every label silently vanishes, and a huge one asks the
+        // rasterizer for a glyph wider than the texture atlas can hold.
+        self.label_scale = if self.label_scale.is_finite() {
+            self.label_scale.clamp(0.3, 3.0)
+        } else {
+            default_label_scale()
+        };
+
         // The backdrop's pre-opacity bool: on means full strength, which
         // is what that build drew.
         if let Some(on) = self.legacy_outer_backdrop.take() {
@@ -618,6 +654,7 @@ impl Default for ViewConfig {
             sevens_label: SevensLabel::Name,
             mark_weight: default_mark_weight(),
             show_labels: true,
+            label_scale: default_label_scale(),
             show_cents: true,
             node_style: NodeStyle::Steady,
             core_style: CoreStyle::default(),
