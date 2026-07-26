@@ -117,9 +117,10 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   single-gesture parameter automation.
 - The Spectral pane also draws a **piano roll** of incoming MIDI over the
   same pitch axis (continuous in cents, so bends and microtonal tunings sit
-  between the keys), and **turns at right angles**: it can run upright as a
-  tall strip beside the lattice, or across as a wide strip below it, with
-  the orientation following the pane's own shape by default.
+  between the keys), and **turns to any of four sides**: the now-line — where
+  the spectrum sits and a note arrives — can be the pane's left, right, top
+  or bottom, so it reads as a tall strip beside the lattice or a wide one
+  below it.
 
 ## Known gaps / next steps
 

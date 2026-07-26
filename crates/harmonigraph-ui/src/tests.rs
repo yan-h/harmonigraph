@@ -715,8 +715,6 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.low_midi = 40.5;
     state.spectrum_config.show_spectrogram = true;
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
-    state.spectrum_config.spectrogram_opacity = 0.5;
-    state.spectrum_config.spectrogram_gamma = 1.6;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -729,8 +727,6 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.low_midi, 40.5);
     assert!(restored.spectrum_config.show_spectrogram);
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
-    assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
-    assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
 }
 
 /// The pitch range used to be a pair of Bitwig octave numbers. A blob from
@@ -809,18 +805,24 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
 }
 
 /// A field that has since been REMOVED must not take the whole blob down with
-/// it. `spectrogram_fine_levels` existed only while the heatmap's stored
-/// precision was being judged by eye, so any project saved during that window
-/// carries it — and a blob that fails to parse loses the entire UI state, not
-/// just the stale key.
+/// it. A blob that fails to parse loses the entire UI state, not just the stale
+/// key — so every settings removal rides on serde ignoring what it has no field
+/// for, and this is where that is held.
+///
+/// `spectrogram_fine_levels` existed only while the heatmap's stored precision
+/// was being judged by eye; the other four are the heatmap's opacity, contrast
+/// and private dB window, which every project saved before they were dropped
+/// still carries.
 #[test]
 fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.view.extent_sevens = 3;
     let saved = state.save_persist();
-    // Put the departed field back, exactly as that build wrote it.
-    let stale = saved
-        .replace("spectrogram_gamma:", "spectrogram_fine_levels:true,spectrogram_gamma:");
+    // Put the departed fields back, exactly as those builds wrote them.
+    let gone = "spectrogram_fine_levels:true,spectrogram_opacity:0.85,\
+                spectrogram_own_range:true,spectrogram_floor_db:-60.0,\
+                spectrogram_ceiling_db:-20.0,spectrogram_gamma:1.6,";
+    let stale = saved.replace("spectrogram_color:", &format!("{gone}spectrogram_color:"));
     assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -1557,7 +1559,7 @@ fn the_spectral_divider_drags_through_the_dock() {
     let grab = band.center();
     let before = state.spectrum_config.roll_fraction;
 
-    // Across (the default orientation) puts the divider upright, so the drag
+    // Left (the default orientation) puts the divider upright, so the drag
     // that moves it runs along x — pushing it away from the spectrum.
     let press = |pos, pressed| egui::Event::PointerButton {
         pos,
@@ -1632,7 +1634,7 @@ impl DockHarness {
 
     /// The same, at a chosen fraction along the depth (time) axis — which side
     /// of the divider a drag starts on decides whether it is the Span's.
-    /// Across, the default orientation, runs depth rightward.
+    /// Left, the default orientation, runs depth rightward.
     fn spectral_grab_at(&self, state: &SharedState, depth: f32) -> egui::Pos2 {
         // The perf overlay already answers "where is the Spectral pane's
         // body", and falls back to the whole window when it isn't on screen.
@@ -1697,7 +1699,7 @@ fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
         state.hovered
     };
 
-    // Across is the default orientation, so pitch climbs UP the screen: two
+    // Left is the default orientation, so pitch climbs UP the screen: two
     // points a good way apart vertically are two different pitches.
     let (low, high) = (hovered_at(0.8), hovered_at(0.2));
     assert!(low.is_some(), "hovering the analyzer should name a node, got None");
@@ -1731,7 +1733,7 @@ fn dragging_the_spectral_picture_pans_the_pitch_range() {
 
     let grab = h.spectral_grab(&state);
     let before = state.spectrum_config;
-    // Across (the default orientation) climbs in pitch UP the screen, so a
+    // Left (the default orientation) climbs in pitch UP the screen, so a
     // drag toward higher pitch is a drag toward smaller y.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     let target = grab + egui::vec2(0.0, -60.0);
@@ -1767,7 +1769,7 @@ fn dragging_the_spectral_picture_along_time_zooms_the_span() {
 
     let grab = h.spectral_grab(&state);
     let before = state.spectrum_config;
-    // Across runs time rightward (now at the left), so dragging right is
+    // Left runs time rightward (now at the left), so dragging right is
     // dragging toward the past.
     h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
     let target = grab + egui::vec2(120.0, 0.0);
@@ -1975,51 +1977,99 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
 }
 
-/// The heatmap's level for a bucket given as POWER. The pane itself reads the
-/// dB its history already stores; these tests are about the mapping, which is
-/// easier to state in the power a partial actually has.
-fn spectrogram_level(cfg: &SpectrumConfig, power: f32, midi: f32) -> f32 {
-    use crate::panes::spectral::{power_db, spectrogram_level_db};
-    spectrogram_level_db(cfg, power_db(power), midi)
-}
-
+/// The heatmap and the curve read ONE level scale, so a bucket that draws the
+/// curve half way up paints a cell half way along the ramp, and dragging the
+/// Level window moves both together.
+///
+/// A private dB window and a contrast curve on the heatmap's side would let the
+/// same bucket mean two different things in one pane. Nothing enforces the
+/// agreement but there being one mapping, and what holds THAT is comparing the
+/// two ends: `loudness`, which the curve's height comes from, against
+/// `bin_level`, which is what the heatmap's pixels actually go through.
+///
+/// Comparing `loudness` against `loudness_db(power_db(..))` instead proves
+/// nothing whatever — that is `loudness`' own body, so both sides of the
+/// assertion are one expression and no change to the heatmap can fail it. The
+/// bridge has to be a function only the heatmap calls.
+///
+/// The tolerance is the store's, not the mapping's: `bin_level` reads a bucket
+/// quantized to a byte of dB, so the two agree to within half a step of that
+/// grid. `quantizing_a_bucket_does_not_move_its_colour` is where the step
+/// itself is held.
 #[test]
-fn the_heatmap_follows_the_curve_until_given_its_own_range() {
+fn the_heatmap_reads_the_curve_s_own_level_scale() {
     use crate::panes::spectral::loudness;
     let mut cfg = SpectrumConfig::default();
-    let (power, midi) = (1e-4, 60.0);
+    let midi = 60.0;
+    let check = |cfg: &SpectrumConfig, power: f32| {
+        let tolerance =
+            0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
+        let curve = loudness(cfg, power, midi);
+        let heatmap = crate::panes::spectrogram::bin_level_for_test(
+            cfg,
+            harmonigraph_core::spectrogram::quantize(power),
+            midi,
+        );
+        assert!(
+            (heatmap - curve).abs() <= tolerance,
+            "power {power}: the curve reads {curve}, the heatmap {heatmap}",
+        );
+    };
 
-    // Shared by default — the behaviour every existing persist blob expects.
-    assert_eq!(spectrogram_level(&cfg, power, midi), loudness(&cfg, power, midi));
-
-    // Switched on, the heatmap reads its OWN window and stops tracking the
-    // curve's: moving the curve's floor must not move the heatmap.
-    cfg.spectrogram_own_range = true;
-    let own = spectrogram_level(&cfg, power, midi);
+    for power in [0.0, 1e-8, 1e-4, 1e-2, 1.0, 1e9] {
+        check(&cfg, power);
+    }
+    // And they stay together as the window is dragged, at either end.
     cfg.floor_db = -20.0;
-    assert_eq!(spectrogram_level(&cfg, power, midi), own, "the heatmap tracked the curve");
-    assert_ne!(loudness(&cfg, power, midi), own, "the curve should have moved");
+    cfg.ceiling_db = 0.0;
+    check(&cfg, 1e-4);
+    cfg.floor_db = -90.0;
+    cfg.ceiling_db = -30.0;
+    check(&cfg, 1e-6);
+    // The tilt is the one input that makes the mapping pitch-dependent, so the
+    // two have to track each other across pitch as well as across level.
+    cfg.tilt = -6.0;
+    for midi in [30.0f32, 60.0, 120.0] {
+        let tolerance =
+            0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
+        let curve = loudness(&cfg, 1e-5, midi);
+        let heatmap = crate::panes::spectrogram::bin_level_for_test(
+            &cfg,
+            harmonigraph_core::spectrogram::quantize(1e-5),
+            midi,
+        );
+        assert!((heatmap - curve).abs() <= tolerance, "MIDI {midi}: {curve} vs {heatmap}");
+    }
 }
 
+/// Orientations that no longer exist must still PARSE, and land where the
+/// setting they named would put the picture.
+///
+/// The same threat the palette aliases below answer: a blob naming a variant
+/// the enum has dropped fails to parse, and takes the WHOLE persist with it
+/// rather than the one setting. `Horizontal` and `Vertical` were the names
+/// while they meant the pitch axis; `Auto` picked a layout off the pane's
+/// shape and has no successor, so it lands on the default the pane opens at.
 #[test]
-fn heatmap_contrast_bends_the_level_without_clipping_it() {
-    let mut cfg = SpectrumConfig::default();
-    // A power that lands mid-range, so there is room to bend either way.
-    let (power, midi) = (1e-4, 60.0);
-    let straight = spectrogram_level(&cfg, power, midi);
-    assert!(straight > 0.01 && straight < 0.99, "need a mid-scale level, got {straight}");
+fn removed_spectral_orientations_load_as_their_successors() {
+    use crate::SpectralOrientation;
+    for (removed, want) in [
+        ("Horizontal", SpectralOrientation::Left),
+        ("Vertical", SpectralOrientation::Top),
+        ("Auto", SpectralOrientation::Left),
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Bottom;
+        state.view.extent_sevens = 3;
+        let saved = state
+            .save_persist()
+            .replace("orientation:Bottom", &format!("orientation:{removed}"));
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {removed}");
 
-    cfg.spectrogram_gamma = 0.5;
-    let lifted = spectrogram_level(&cfg, power, midi);
-    cfg.spectrogram_gamma = 2.5;
-    let crushed = spectrogram_level(&cfg, power, midi);
-    assert!(lifted > straight, "gamma below 1 should lift ({straight} -> {lifted})");
-    assert!(crushed < straight, "gamma above 1 should crush ({straight} -> {crushed})");
-    // The ends are fixed points: contrast redistributes, it never clips.
-    for gamma in [0.3, 1.0, 3.0] {
-        cfg.spectrogram_gamma = gamma;
-        assert_eq!(spectrogram_level(&cfg, 0.0, midi), 0.0, "silence moved at gamma {gamma}");
-        assert_eq!(spectrogram_level(&cfg, 1e9, midi), 1.0, "full scale moved at gamma {gamma}");
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.spectrum_config.orientation, want, "{removed} loaded elsewhere");
+        assert_eq!(restored.view.extent_sevens, 3, "the rest of the blob must survive");
     }
 }
 

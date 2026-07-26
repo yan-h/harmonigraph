@@ -26,47 +26,89 @@ impl SpectrumWindow {
     }
 }
 
-/// What the Spectral pane's axis gridlines are labeled with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SpectrumLabels {
-    /// A gridline at every C, labeled with Bitwig octave numbers.
-    Notes,
-    /// Gridlines on the analyzer-standard 1-2-5 series (20, 50, 100, ...
-    /// 10k, 20k Hz).
-    Frequency,
-}
-
-/// Which way the Spectral pane's pitch axis runs.
+/// Which way the Spectral pane runs, named for the side the NOW-line is on —
+/// which is the spectrum's own edge, the one the roll's notes arrive at and
+/// the heatmap's newest column sits against. Time runs away from it into the
+/// pane, and pitch across.
 ///
 /// The pane is written once against an abstract (pitch, depth) plane and
 /// mapped onto the screen at draw time, so every element — gridlines,
 /// spectrum curve, piano roll — turns together.
+///
+/// Pitch reads the conventional way in each pair rather than mirroring with
+/// time: low at the bottom whenever time is horizontal, low at the left
+/// whenever it is vertical. So [`Right`](Self::Right) and
+/// [`Bottom`](Self::Bottom) are their partners flipped along TIME alone, and
+/// an ascending line still ascends in all four.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectralOrientation {
-    /// Follow the pane's shape: time runs along the LONG side (so a
-    /// scrolling spectrogram gets the room), pitch across the short one.
-    /// Reads correctly both under the lattice and beside it, no setting to
-    /// change.
+    /// Time runs left(now)->right(past) along the pane, pitch climbs
+    /// bottom->top, and the spectrum sits on the left, joined to the
+    /// spectrogram.
+    ///
+    /// The aliases are what this variant was called across two renamings. It
+    /// was `Horizontal`, from when the name meant the PITCH axis; and it takes
+    /// `Auto` — a fourth setting that resolved to whichever layout gave the
+    /// scrolling spectrogram the pane's long side — because a blob naming a
+    /// variant that no longer exists does not just lose its orientation, the
+    /// parse fails and drops the WHOLE persist, layout and camera with it.
     #[default]
-    Auto,
-    /// "Across": time runs left(now)->right(past) along the pane, pitch
-    /// climbs bottom->top, and the spectrum sits on the left, joined to the
-    /// spectrogram. (Serialized name kept from when this meant pitch axis.)
-    Horizontal,
-    /// "Upright": time runs top(now)->bottom(past) down the pane, pitch runs
-    /// left->right, and the spectrum sits on top, joined to the spectrogram.
-    Vertical,
+    #[serde(alias = "Horizontal", alias = "Auto")]
+    Left,
+    /// Time runs right(now)->left(past); pitch climbs bottom->top, and the
+    /// spectrum sits on the right.
+    Right,
+    /// Time runs top(now)->bottom(past) down the pane, pitch runs left->right,
+    /// and the spectrum sits on top, joined to the spectrogram.
+    #[serde(alias = "Vertical")]
+    Top,
+    /// Time runs bottom(now)->top(past); pitch runs left->right, and the
+    /// spectrum sits along the bottom.
+    Bottom,
 }
 
 impl SpectralOrientation {
-    /// Whether TIME (the spectrogram/roll axis) runs vertically down the
-    /// pane, with pitch across it. Resolves [`Auto`](Self::Auto) to the
-    /// pane's long side.
-    pub(crate) fn is_time_vertical(self, rect: egui::Rect) -> bool {
+    /// Every orientation, for the settings row and the axis tests.
+    ///
+    /// Built from an exhaustive `match` rather than written out as a literal, so
+    /// the list cannot fall behind the enum: a fifth variant fails to compile
+    /// here until it is added, which is what makes the tests that sweep this a
+    /// guarantee about the enum rather than about four names someone typed.
+    pub(crate) const ALL: [SpectralOrientation; 4] = {
+        use SpectralOrientation::*;
+        // Exhaustive, and the compiler checks it. The arms are `()` because
+        // what is wanted is the coverage error, not the value — a const fn
+        // cannot build the array itself.
+        const fn covered(o: SpectralOrientation) {
+            match o {
+                Left | Right | Top | Bottom => (),
+            }
+        }
+        covered(Left);
+        [Left, Right, Top, Bottom]
+    };
+
+    /// Whether TIME (the spectrogram/roll axis) runs vertically down the pane,
+    /// with pitch across it.
+    pub(crate) fn is_time_vertical(self) -> bool {
         match self {
-            SpectralOrientation::Auto => rect.height() > rect.width(),
-            SpectralOrientation::Horizontal => false,
-            SpectralOrientation::Vertical => true,
+            SpectralOrientation::Top | SpectralOrientation::Bottom => true,
+            SpectralOrientation::Left | SpectralOrientation::Right => false,
+        }
+    }
+
+    /// Whether time runs BACKWARD along its screen axis — leftward or upward,
+    /// against the direction screen coordinates grow.
+    ///
+    /// Spelled as an exhaustive `match` rather than a `matches!`, like
+    /// [`is_time_vertical`](Self::is_time_vertical): a `matches!` answers
+    /// `false` for a variant nobody has thought about yet, so a fifth
+    /// orientation would silently draw as [`Left`](Self::Left) instead of
+    /// failing to build.
+    pub(crate) fn is_time_reversed(self) -> bool {
+        match self {
+            SpectralOrientation::Right | SpectralOrientation::Bottom => true,
+            SpectralOrientation::Left | SpectralOrientation::Top => false,
         }
     }
 }
@@ -238,10 +280,10 @@ impl Default for RenderFrame {
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpectrumConfig {
-    /// Horizontal (pitch left-to-right) or vertical (pitch bottom-to-top),
-    /// or Auto to follow the pane's shape; see [`SpectralOrientation`]. Those
-    /// are the only orientations offered — the spectrum always stands up from
-    /// its baseline with pitch ascending, so there is nothing to flip.
+    /// Which side of the pane the now-line sits on, and so which way time
+    /// runs; see [`SpectralOrientation`]. Four sides and no more — the pitch
+    /// axis reads the conventional way in each, so there is nothing left to
+    /// flip.
     #[serde(default)]
     pub orientation: SpectralOrientation,
     pub window: SpectrumWindow,
@@ -271,9 +313,6 @@ pub struct SpectrumConfig {
     /// raw-power 0 a bare f32 default would hand it.
     #[serde(default = "default_tilt")]
     pub tilt: f32,
-    /// Axis gridline labeling.
-    #[serde(default = "default_labels")]
-    pub labels: SpectrumLabels,
     /// Overall size of the pane's own markings — the gridline labels above and
     /// the pitch readout that follows the pointer — as a multiple of their
     /// built-in sizes.
@@ -372,50 +411,28 @@ pub struct SpectrumConfig {
     /// really did turn it off carries `false` and still round-trips.
     #[serde(default = "default_true")]
     pub show_spectrogram: bool,
-    /// The heatmap's color ramp.
+    /// The heatmap's color ramp — the only thing about it left to choose.
+    ///
+    /// Three more knobs belong here on the obvious reading and are absent on
+    /// purpose, each because its neutral position is the one worth looking at.
+    /// An overall opacity fades the heatmap out from under the notes, at the
+    /// price of the scheme it shares with the curve (see `heatmap_mesh`); a
+    /// contrast curve bends the level a palette is already chosen to spread
+    /// evenly; and a private dB window lets the same bucket mean two things in
+    /// one pane. The window is the Spectrum's Level, always: one range means
+    /// "loud" is the same claim in the curve and in the heatmap, which is the
+    /// whole reason they share [`loudness_db`].
+    ///
+    /// Their fields are gone from the blob too. That costs nothing on load —
+    /// serde ignores keys it has no field for, which
+    /// `a_persist_blob_carrying_a_since_removed_field_still_loads` pins — so a
+    /// project saved with an opacity simply loads without one.
     #[serde(default)]
     pub spectrogram_color: SpectrogramColor,
-    /// Overall spectrogram opacity, so it can sit under the notes without
-    /// swamping them. (For the heatmap alone, turn the note ribbons off with
-    /// `show_roll`.)
-    #[serde(default = "default_spectrogram_opacity")]
-    pub spectrogram_opacity: f32,
-    /// Give the heatmap its own dB window instead of sharing the curve's.
-    ///
-    /// Off — the default, and what the heatmap always did — means it reads
-    /// `floor_db`/`ceiling_db` like the curve. They answer different
-    /// questions, though: the curve wants a range that keeps peaks on the
-    /// pane, the heatmap one that separates quiet detail from the background,
-    /// and those rarely coincide. `serde(default)` is false, so an existing
-    /// blob keeps the shared behaviour it was saved with.
-    #[serde(default)]
-    pub spectrogram_own_range: bool,
-    /// The heatmap's own dB window, used only while `spectrogram_own_range`.
-    #[serde(default = "default_spectrogram_floor_db")]
-    pub spectrogram_floor_db: f32,
-    #[serde(default = "default_ceiling_db")]
-    pub spectrogram_ceiling_db: f32,
-    /// Contrast curve on the heatmap's 0..1 level: 1 is linear, below 1 lifts
-    /// quiet detail toward the bright end, above 1 pushes it into the dark.
-    ///
-    /// Separate from the dB window on purpose. Moving the floor DISCARDS
-    /// everything under it; gamma keeps the whole range and only changes how
-    /// it is spread, so background hiss can be pushed down without losing the
-    /// quiet partials just above it.
-    #[serde(default = "default_one")]
-    pub spectrogram_gamma: f32,
-}
-
-pub(crate) fn default_spectrogram_floor_db() -> f32 {
-    -60.0
 }
 
 pub(crate) fn default_one() -> f32 {
     1.0
-}
-
-pub(crate) fn default_spectrogram_opacity() -> f32 {
-    0.85
 }
 
 /// Enough of an edge to hold a shape against a bright spectrogram cell,
@@ -561,10 +578,6 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
-pub(crate) fn default_labels() -> SpectrumLabels {
-    SpectrumLabels::Notes
-}
-
 pub(crate) fn default_roll_fraction() -> f32 {
     0.55
 }
@@ -595,13 +608,12 @@ pub(crate) fn default_tilt() -> f32 {
 impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
-            orientation: SpectralOrientation::Horizontal,
+            orientation: SpectralOrientation::Left,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
             ceiling_db: default_ceiling_db(),
             smoothing: 0.55,
             tilt: default_tilt(),
-            labels: SpectrumLabels::Notes,
             marking_scale: default_one(),
             keyline: default_keyline(),
             low_midi: default_low_midi(),
@@ -616,11 +628,6 @@ impl Default for SpectrumConfig {
             note_name_scale: default_one(),
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
-            spectrogram_opacity: default_spectrogram_opacity(),
-            spectrogram_own_range: false,
-            spectrogram_floor_db: default_spectrogram_floor_db(),
-            spectrogram_ceiling_db: default_ceiling_db(),
-            spectrogram_gamma: default_one(),
         }
     }
 }

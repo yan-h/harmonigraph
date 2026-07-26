@@ -233,9 +233,15 @@ Offline rendering does **not** reproduce the plugin's dock. It composes
 its own picture — no tab bars, no settings columns, and whatever
 proportions suit the piece.
 
-Four presets: `side-by-side` (lattice left, upright roll right — the
-Spectral pane's Auto orientation turns itself upright at that aspect),
+Four presets: `side-by-side` (lattice left, Spectral pane right),
 `stacked` (the plugin's default arrangement), `lattice`, `spectral`.
+
+A preset places the panes and nothing else: the Spectral pane renders at
+whichever orientation the take's own UI state carries, so a `side-by-side`
+render wants Top or Bottom picked in the pane before the take is recorded —
+its column is tall and narrow, and Left scrolls the spectrogram across the
+short side. Nothing infers it from the aspect, deliberately: a picture that
+changes with the size it is rendered at is not one you can dial in.
 
 For anything else, start from a preset and edit:
 

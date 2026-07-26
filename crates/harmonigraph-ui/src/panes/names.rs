@@ -3,9 +3,10 @@
 //!
 //! What they answer is reading the SPECTROGRAM. A band of energy tells you
 //! there is something at some height on a pitch axis that is continuous in
-//! cents, and the only fixed marks on that axis are C gridlines a full octave
-//! apart — so naming the band means counting semitones by eye from the nearest
-//! C, on a picture that is scrolling. Color cannot say it either: the roll's
+//! cents, and the fixed marks on that axis are frequencies on the 1-2-5 series
+//! — decades apart, and in the wrong currency for naming a note at all — so
+//! reading the band as a pitch means interpolating between two of them by eye,
+//! on a picture that is scrolling. Color cannot say it either: the roll's
 //! colors are the lattice's own, which already spend themselves on channel
 //! and pitch height, and a second pitch-keyed scheme laid over the first is
 //! two things to read where there was one.
@@ -222,9 +223,9 @@ fn pitch_key(midi: f32) -> i32 {
 /// How far a name reaches along the depth axis, in screen points: its padded
 /// box, projected onto whichever way that axis runs.
 ///
-/// The depth direction is axis-aligned — the screen's x on a pane laid out
-/// along its long side, its y on an upright one — so projecting answers it for
-/// both without naming a screen side.
+/// The depth direction is axis-aligned — the screen's x when time runs across
+/// the pane, its y when time runs up or down it — so projecting answers all
+/// four orientations without naming a screen side.
 fn depth_extent(axes: &Axes, name: &NoteName, size: f32, label_scale: f32) -> f32 {
     let extent = name_extent(name, size);
     let depth = axes.dir_depth();
@@ -480,9 +481,10 @@ struct Edge {
     pitch: f32,
 }
 
-/// The end of a ribbon that comes first in reading order — the low-depth end
-/// in either layout and either orientation (the left of a pane laid out along
-/// its long side, the top of an upright one) — and the pitch it sits at.
+/// The end of a ribbon that comes first in reading order — the low-depth end,
+/// which is the pane's now-line side in every orientation (the side
+/// [`SpectralOrientation`](crate::SpectralOrientation) is named for) — and the
+/// pitch it sits at.
 ///
 /// Found by comparing the two ends rather than by naming one, because which
 /// end it is differs between the layouts and the arithmetic does not: live,
@@ -549,10 +551,10 @@ fn label_rect(
 ) -> egui::Rect {
     let extent = name_extent(name, size);
     let depth = axes.dir_depth();
-    // How far the box reaches along the depth axis: text always runs across
-    // the screen, so that is its width on a pane laid out along its long side
-    // and its height on an upright one. Projecting answers both without naming
-    // a screen side.
+    // How far the box reaches along the depth axis: text always runs across the
+    // screen, so that is its width when time runs across the pane and its height
+    // when time runs up or down it. Projecting answers all four without naming a
+    // screen side.
     let along_depth = (extent.x * depth.x).abs() + (extent.y * depth.y).abs();
     let inset = LABEL_INSET * label_scale;
     let centre = axes.at(p, d) + depth * (inset + along_depth * 0.5);
@@ -771,7 +773,7 @@ mod tests {
     /// A state whose pane shows `range` semitones around middle C over a
     /// `span`-second window, with the whole depth axis given to the roll.
     fn state(range: f32, span: f32) -> SharedState {
-        turned(range, span, SpectralOrientation::Horizontal)
+        turned(range, span, SpectralOrientation::Left)
     }
 
     fn turned(range: f32, span: f32, orientation: SpectralOrientation) -> SharedState {
@@ -1013,7 +1015,7 @@ mod tests {
         let split = super::super::spectral::spectrum_share(&state.spectrum_config);
         let axes = Axes::new(PANE, &state.spectrum_config);
         let ribbon =
-            super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0);
+            super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0, 2.0);
         assert_eq!(ribbon.len(), 1, "one note, one ribbon");
         // Horizontal pane: depth is x, and the head is the near end.
         let head = ribbon[0].center[0] - ribbon[0].half_extent[1];
@@ -1168,13 +1170,13 @@ mod tests {
     }
 
     /// The pane turns, and the names turn with it: nothing here names a screen
-    /// side, so an upright pane places them by the same arithmetic with the
+    /// side, so a Top pane places them by the same arithmetic with the
     /// axes swapped.
     #[test]
-    fn names_place_the_same_way_on_an_upright_pane() {
-        // Upright: pitch runs left to right, time runs DOWN, so the leading
+    fn names_place_the_same_way_on_a_top_pane() {
+        // Top: pitch runs left to right, time runs DOWN, so the leading
         // edge is the top of a ribbon and names grow downward from it.
-        let mut state = turned(24.0, 10.0, SpectralOrientation::Vertical);
+        let mut state = turned(24.0, 10.0, SpectralOrientation::Top);
         for i in 0..6 {
             let t = i as f64 * 1.2;
             state.tracker.handle_event(on(t, 60));
@@ -1185,12 +1187,12 @@ mod tests {
         assert!(placed.len() > 1, "several names: {}", placed.len());
 
         let axes = Axes::new(tall, &state.spectrum_config);
-        // Every name sits on middle C's line, which upright is an x.
+        // Every name sits on middle C's line, which with time vertical is an x.
         let lane = axes.at(scale_of(&state).t_of(60.0), 0.0).x;
         for label in &placed {
             assert!((label.rect.center().x - lane).abs() < 1.0, "off the ribbon's line");
         }
-        // ...and they are spread along the TIME axis, which upright is y.
+        // ...and they are spread along the TIME axis, which here is y.
         let mut ys: Vec<f32> = placed.iter().map(|l| l.rect.min.y).collect();
         ys.sort_by(f32::total_cmp);
         for pair in ys.windows(2) {

@@ -10,16 +10,7 @@
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
 use super::{names, nearest_visible_node, section};
-use harmonigraph_core::notes::display_octave_of;
 use egui::Sense;
-
-/// The lowest C at or above `midi`, as a MIDI note. Where the octave
-/// gridlines start: since the pitch range went continuous it can begin
-/// anywhere, and stepping twelves from the range's own start would scatter
-/// the "C" lines across whatever pitch the zoom happens to begin on.
-fn first_c_at_or_above(midi: f32) -> i32 {
-    (midi / 12.0).ceil() as i32 * 12
-}
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
 /// low, kHz to one decimal above 1000, each carrying its unit so the number
@@ -65,7 +56,7 @@ fn span_readout(seconds: f32) -> String {
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow};
+    use crate::{SpectralOrientation, SpectrogramColor, SpectrumWindow};
 
     // ---- Axes -----------------------------------------------------------
     // Which way the plot runs, and how much of the pitch axis it shows. Time's
@@ -76,28 +67,33 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     // a leading rule there is a line under nothing.
     ui.heading("Axes");
     let cfg = &mut state.spectrum_config;
-    choice_row(
-        ui,
-        "Orientation",
-        &mut cfg.orientation,
-        &[
-            (
-                SpectralOrientation::Auto,
-                "Auto",
-                "Follow the pane's shape: the spectrogram scrolls along the long side",
+    // Named for the side the now-line is on, which is where the spectrum sits
+    // and where a note arrives — so the setting says where to LOOK rather than
+    // which way the picture travels. There is no Auto: it followed the pane's
+    // shape, and a pane that turns itself over when a window is dragged past
+    // square is one you cannot dial a video's look in on.
+    // Off `ALL` with an exhaustive match, not a hand-written list of four: both
+    // are built from the enum, so a fifth side cannot reach the pane without a
+    // name and a hint of its own.
+    let sides = SpectralOrientation::ALL.map(|side| {
+        let (label, hint) = match side {
+            SpectralOrientation::Left => {
+                ("Left", "Spectrum on the left; time scrolls rightward, pitch climbs")
+            }
+            SpectralOrientation::Right => {
+                ("Right", "Spectrum on the right; time scrolls leftward, pitch climbs")
+            }
+            SpectralOrientation::Top => {
+                ("Top", "Spectrum on top; time scrolls downward, pitch runs left to right")
+            }
+            SpectralOrientation::Bottom => (
+                "Bottom",
+                "Spectrum along the bottom; time scrolls upward, pitch runs left to right",
             ),
-            (
-                SpectralOrientation::Horizontal,
-                "Across",
-                "Time scrolls sideways (now on the left); pitch is vertical, spectrum on the left",
-            ),
-            (
-                SpectralOrientation::Vertical,
-                "Upright",
-                "Time scrolls downward (now on top); pitch is horizontal, spectrum on top",
-            ),
-        ],
-    );
+        };
+        (side, label, hint)
+    });
+    choice_row(ui, "Now-line", &mut cfg.orientation, &sides);
     // One control for both ends, because the two ends are one thing: the
     // window onto the analyzer's axis. Dragged in MIDI note (which is what
     // makes it a log-frequency zoom) and read out in Hz. Labelled, since a
@@ -122,19 +118,11 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          zoom it around the pointer. (Dragging the other way, along time, zooms \
          the roll's Span instead.)",
     );
-    choice_row(
-        ui,
-        "Labels",
-        &mut cfg.labels,
-        &[
-            (SpectrumLabels::Notes, "Notes", "A gridline at every C, Bitwig octave numbers"),
-            (
-                SpectrumLabels::Frequency,
-                "Frequency",
-                "Gridlines at 20, 50, 100 ... 10k, 20k Hz",
-            ),
-        ],
-    );
+    // No choice of what the gridlines say. They are the analyzer-standard
+    // 1-2-5 frequency series, and were switchable to a line at every C with
+    // Bitwig octave numbers — which is what the note NAMES on the ribbons
+    // already say, in the lattice's own spelling, at the pitch they are
+    // sounding rather than at the nearest C below it.
     ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Label size")
         .show(ui)
         .on_hover_text(
@@ -286,7 +274,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     ui.checkbox(&mut cfg.show_spectrogram, "Heatmap").on_hover_text(
         "A frequency-vs-time heatmap of the audio, drawn in the roll's \
          region on the same time axis — so each column of energy lines up \
-         with the notes that made it. Shares the Spectrum's Floor and Tilt \
+         with the notes that made it. Reads the Spectrum's Level and Tilt \
          for intensity. Turn Note history off to see the heatmap alone.",
     );
     choice_row(
@@ -300,32 +288,10 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             (SpectrogramColor::Magma, "Magma", "Indigo-magenta-orange-cream (even ramp)"),
         ],
     );
-    ValueBar::new(&mut cfg.spectrogram_opacity, 0.05..=1.0, "Opacity")
-        .show(ui)
-        .on_hover_text("Overall heatmap opacity, so it can sit under the notes");
-    ValueBar::new(&mut cfg.spectrogram_gamma, 0.3..=3.0, "Contrast")
-        .decimals(2)
-        .show(ui)
-        .on_hover_text(
-            "Curve on the heatmap's brightness: 1.0 is straight, below lifts \
-             quiet detail toward the bright end, above pushes it into the \
-             dark. Unlike the Floor, this keeps everything and only changes \
-             how it's spread — so hiss can be pushed down without losing the \
-             quiet partials just above it.",
-        );
-    ui.checkbox(&mut cfg.spectrogram_own_range, "Own level range").on_hover_text(
-        "Give the heatmap its own Floor and Ceiling instead of sharing the \
-         Spectrum's. The curve wants a range that keeps peaks on the pane, \
-         the heatmap one that lifts quiet detail off the background — they \
-         rarely agree.",
-    );
-    if cfg.spectrogram_own_range {
-        RangeBar::new(&mut cfg.spectrogram_floor_db, &mut cfg.spectrogram_ceiling_db, -120.0..=0.0)
-            .display(|db| format!("{db:.0} dB"))
-            .min_span(crate::LEVEL_RANGE_MIN_SPAN)
-            .show(ui)
-            .on_hover_text("The heatmap's own dB window: silence at the low end, brightest at the high");
-    }
+    // The palette is the whole of it. An opacity, a contrast curve and a
+    // private level range would each go here and each is deliberately absent —
+    // see [`spectrogram_color`](crate::SpectrumConfig::spectrogram_color) for
+    // why the neutral setting is the only one worth having.
     button_row(ui, |ui| {
         if ui
             .button("Clear spectrogram")
@@ -389,7 +355,7 @@ const FULL_PITCH_SPAN: f32 =
 /// axis offers, so the only direction left is up.
 ///
 /// Says nothing about which way the pane is turned. The span is in semitones,
-/// not in points, so an upright pane (whose pitch axis is horizontal) scales
+/// not in points, so a Top or Bottom pane (whose pitch axis is horizontal) scales
 /// exactly as a wide one does — [`Axes`] is the only thing here that knows a
 /// screen side, and this is not it.
 fn name_zoom(span: f32) -> f32 {
@@ -451,6 +417,13 @@ pub(crate) fn power_db(power: f32) -> f32 {
 
 /// [`loudness`] from a bucket already in dB, so the heatmap (whose columns are
 /// stored that way) never takes a `log10` per pixel.
+///
+/// The heatmap reads exactly this and nothing of its own. Giving it a private dB
+/// window and a contrast curve is tempting — a curve is read as a shape against
+/// a baseline and a picture is read as a picture, so the ranges that suit them
+/// need not coincide. What that argument misses is that one range IS what makes
+/// "loud" the same claim in both halves of one pane, and a second one is a
+/// second thing to keep in step.
 pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     // Never trust the pair to be ordered or apart, exactly as the pitch range
@@ -459,35 +432,6 @@ pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32)
     // takes the editor — and with it the host — down.
     let ceiling = cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
     ((db - cfg.floor_db) / (ceiling - cfg.floor_db)).clamp(0.0, 1.0)
-}
-
-/// [`loudness`] as the SPECTROGRAM sees it: its own dB window when it has been
-/// given one, then its contrast curve. Takes the bucket in dB, which is how its
-/// history stores it, so there is no `log10` per pixel.
-///
-/// Split from the curve's mapping because the two are read differently. The
-/// curve is read as a shape against a baseline, so its range wants to keep
-/// peaks on the pane; the heatmap is read as a picture, so its range wants to
-/// lift quiet partials clear of the background. Sharing one range meant
-/// tuning either one spoiled the other.
-pub(crate) fn spectrogram_level_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
-    let level = if cfg.spectrogram_own_range {
-        let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
-        // Same guard as `loudness`: a collapsed pair out of a hand-edited blob
-        // would divide by a zero span and paint NaN geometry.
-        let floor = cfg.spectrogram_floor_db;
-        let ceiling = cfg.spectrogram_ceiling_db.max(floor + crate::LEVEL_RANGE_MIN_SPAN);
-        ((db - floor) / (ceiling - floor)).clamp(0.0, 1.0)
-    } else {
-        loudness_db(cfg, power_db, midi)
-    };
-    // powf(1.0) is not free and gamma sits at 1 unless touched, so skip it.
-    let gamma = cfg.spectrogram_gamma;
-    if gamma > 0.0 && (gamma - 1.0).abs() > 1e-3 {
-        level.powf(gamma)
-    } else {
-        level
-    }
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.
@@ -501,34 +445,45 @@ pub(crate) fn spectrogram_level_db(cfg: &crate::SpectrumConfig, power_db: f32, m
 ///   the spectrogram), and 1 the far edge (the roll's oldest notes).
 ///
 /// Orientation is handled inside [`at`](Self::at); nothing else in the pane
-/// names a screen side. Two layouts: **Across** — time left(now)->right(past),
-/// pitch bottom->top; and **Upright** — time top(now)->bottom(past), pitch
-/// left->right. In both the spectrum sits at the now-line end.
+/// names a screen side. Four layouts, named for the side the now-line is on —
+/// **Left** (time left->right, pitch bottom->top), **Right** (the same flipped
+/// along time), **Top** (time top->bottom, pitch left->right) and **Bottom**.
+/// In all four the spectrum sits at the now-line end.
 #[derive(Clone, Copy)]
 pub(super) struct Axes {
     pub rect: egui::Rect,
     /// Time (the depth axis) runs down the pane rather than along it, with
     /// pitch across. See [`SpectralOrientation`](crate::SpectralOrientation).
     time_vertical: bool,
+    /// Time runs against its screen axis — leftward, or upward.
+    time_reversed: bool,
 }
 
 impl Axes {
     pub(super) fn new(rect: egui::Rect, cfg: &crate::SpectrumConfig) -> Axes {
-        Axes { rect, time_vertical: cfg.orientation.is_time_vertical(rect) }
+        Axes {
+            rect,
+            time_vertical: cfg.orientation.is_time_vertical(),
+            time_reversed: cfg.orientation.is_time_reversed(),
+        }
     }
 
     /// The screen point at pitch fraction `p` and depth (time) fraction `d`.
     pub fn at(&self, p: f32, d: f32) -> egui::Pos2 {
+        // Depth measured from whichever edge the now-line is on. Reversed, the
+        // past runs back toward the origin of the screen axis; pitch is not
+        // touched by it, so it keeps reading low-to-high the conventional way.
+        let d = if self.time_reversed { 1.0 - d } else { d };
         if self.time_vertical {
-            // Upright: time runs down (now/spectrum at the top, past below);
-            // pitch runs across (low left, high right).
+            // Time runs down the pane (Top) or up it (Bottom); pitch runs
+            // across, low left to high right.
             egui::pos2(
                 self.rect.left() + self.rect.width() * p,
                 self.rect.top() + self.rect.height() * d,
             )
         } else {
-            // Across: time runs along the pane (now/spectrum at the left, past
-            // to the right); pitch climbs (low bottom, high top).
+            // Time runs along the pane, rightward (Left) or leftward (Right);
+            // pitch climbs, low bottom to high top.
             egui::pos2(
                 self.rect.left() + self.rect.width() * d,
                 self.rect.bottom() - self.rect.height() * p,
@@ -579,15 +534,14 @@ impl Axes {
     }
 
     /// The depth fraction under a screen position — the inverse of the
-    /// depth half of [`at`](Self::at). Unclamped. Depth grows the same way
-    /// on screen in both orientations (rightward / downward), so unlike
-    /// [`pitch_at`](Self::pitch_at) neither case flips.
+    /// depth half of [`at`](Self::at). Unclamped.
     fn depth_at(&self, pos: egui::Pos2) -> f32 {
-        if self.time_vertical {
+        let d = if self.time_vertical {
             (pos.y - self.rect.top()) / self.rect.height().max(1.0)
         } else {
             (pos.x - self.rect.left()) / self.rect.width().max(1.0)
-        }
+        };
+        if self.time_reversed { 1.0 - d } else { d }
     }
 
     /// A grab band `half` pixels either side of depth `d`, spanning the
@@ -1000,7 +954,6 @@ pub(crate) fn spectral_pane(
     // Render preview, so two live copies don't clobber one shared texture.
     surface: usize,
 ) {
-    use crate::SpectrumLabels;
     use harmonigraph_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
@@ -1073,50 +1026,39 @@ pub(crate) fn spectral_pane(
     // columns, and its silence is black; without this bed the un-covered depths
     // (before history fills the window, or past its oldest column) show the
     // lighter pane `well` in jarring patches. Black is the heatmap's own silence
-    // color, so covered and un-covered silence match at any opacity. Drawn under
-    // the gridlines, so they still read as pitch lanes across the region.
-    if cfg.show_spectrogram && cfg.spectrogram_opacity > 0.0 && split < 1.0 {
+    // color, so covered and un-covered silence match whatever the quad is tinted
+    // with: `Color32` is premultiplied, so a black texel over this bed
+    // composites to black at every alpha. Drawn under the gridlines, so they
+    // still read as pitch lanes across the region.
+    if cfg.show_spectrogram && split < 1.0 {
         let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
         painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
     }
 
-    // Axis gridlines: every C (note labels) or the analyzer-standard
-    // 1-2-5 frequency series, per the Analyzer tab. Both run the full
-    // depth, so they double as the roll's pitch lanes. The lines lay down
-    // here, under the spectrum; their text labels are collected and drawn
-    // last (below the voice bars), so a loud spectrum slab never buries
-    // which pitch a lane is.
+    // Axis gridlines: the analyzer-standard 1-2-5 frequency series, and only
+    // that. The alternative is a line at every C with Bitwig octave numbers,
+    // which answers a question the pane answers better elsewhere — every ribbon
+    // carries its note NAME, spelled the lattice's way and placed at the pitch
+    // that is sounding. What an axis is for is the other reading: where in the
+    // spectrum a band sits, which is a frequency.
+    //
+    // The lines run the full depth, so they double as the roll's pitch lanes.
+    // They lay down here, under the spectrum; their text labels are collected
+    // and drawn last (below the voice bars), so a loud spectrum slab never
+    // buries which pitch a lane is.
     let gridline = |p: f32| {
         painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
     };
     let mut axis_labels: Vec<(f32, String)> = Vec::new();
-    match cfg.labels {
-        SpectrumLabels::Notes => {
-            let mut c = first_c_at_or_above(min_midi);
-            while c <= max_midi as i32 {
-                let t = scale.t_of(c as f32);
-                gridline(t);
-                if c < max_midi as i32 {
-                    axis_labels.push((t, format!("C{}", display_octave_of(c))));
-                }
-                c += 12;
-            }
+    for hz in [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0] {
+        let midi = hz_to_midi(hz);
+        if !scale.contains(midi) {
+            continue;
         }
-        SpectrumLabels::Frequency => {
-            for hz in
-                [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0]
-            {
-                let midi = hz_to_midi(hz);
-                if !scale.contains(midi) {
-                    continue;
-                }
-                let t = scale.t_of(midi);
-                gridline(t);
-                let label =
-                    if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
-                axis_labels.push((t, label));
-            }
-        }
+        let t = scale.t_of(midi);
+        gridline(t);
+        let label = if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
+        axis_labels.push((t, label));
     }
 
     // Nothing to pump here: the analyzer runs off the samples the shell pushes
@@ -1392,7 +1334,7 @@ mod tests {
     #[test]
     fn names_follow_the_pitch_zoom_and_markings_hold_still() {
         let cfg = SpectrumConfig::default();
-        let axes = axes(reference_pane(), SpectralOrientation::Horizontal);
+        let axes = axes(reference_pane(), SpectralOrientation::Left);
         let at = |span| text_scales(&cfg, &axes, span, 2.0);
         // Every size comes out snapped onto a whole physical pixel, and a name
         // is 12.35pt, which is not one at 2x — so the law is met to within half
@@ -1455,8 +1397,8 @@ mod tests {
             reference_pane().min,
             egui::vec2(300.0, REFERENCE_PITCH_LEN * 0.5),
         );
-        let full = axes(reference_pane(), SpectralOrientation::Horizontal);
-        let small = axes(half, SpectralOrientation::Horizontal);
+        let full = axes(reference_pane(), SpectralOrientation::Left);
+        let small = axes(half, SpectralOrientation::Left);
         let docked = text_scales(&cfg, &full, 48.0, 2.0);
         let shrunk = text_scales(&cfg, &small, 48.0, 2.0);
         assert!((shrunk.names / docked.names - 0.5).abs() < 0.02);
@@ -1525,50 +1467,90 @@ mod tests {
         }
     }
 
-    /// Across: time runs along the pane (now/spectrum on the left, past to
-    /// the right); pitch climbs bottom to top.
+    /// Every orientation the pane offers — the loop the axis tests run over.
+    ///
+    /// [`SpectralOrientation::ALL`], not a second list of the same four names:
+    /// that one is built through an exhaustive `match`, so a fifth variant
+    /// fails to compile until it is added and every sweep below picks it up.
+    /// A literal here would leave the sweeps quietly covering four of five.
+    const EVERY_ORIENTATION: [SpectralOrientation; 4] = SpectralOrientation::ALL;
+
+    /// Each orientation puts the NOW-line on the side it is named for, which
+    /// is the whole meaning of the setting: that is where the spectrum sits,
+    /// where a ribbon arrives, and where the heatmap's newest column is. The
+    /// far corner pins the direction time then runs in.
     #[test]
-    fn across_runs_time_sideways_with_pitch_climbing() {
-        let a = axes(WIDE, SpectralOrientation::Horizontal);
-        assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 120.0), "low pitch, now edge (left)");
-        assert_eq!(a.at(0.0, 1.0), egui::pos2(310.0, 120.0), "low pitch, past edge (right)");
-        assert_eq!(a.at(1.0, 0.0), egui::pos2(10.0, 20.0), "high pitch, now edge");
-        assert_eq!(a.pitch_len(), 100.0, "pitch is the short (vertical) side");
-        assert_eq!(a.depth_len(), 300.0, "time is the long (horizontal) side");
+    fn the_now_line_lands_on_the_side_the_orientation_names() {
+        // WIDE is (10, 20)..(310, 120): 300 across, 100 down.
+        let now_and_past = |o| {
+            let a = axes(WIDE, o);
+            (a.at(0.0, 0.0), a.at(0.0, 1.0))
+        };
+        assert_eq!(
+            now_and_past(SpectralOrientation::Left),
+            (egui::pos2(10.0, 120.0), egui::pos2(310.0, 120.0)),
+            "now on the left, past to the right",
+        );
+        assert_eq!(
+            now_and_past(SpectralOrientation::Right),
+            (egui::pos2(310.0, 120.0), egui::pos2(10.0, 120.0)),
+            "now on the right, past to the left",
+        );
+        assert_eq!(
+            now_and_past(SpectralOrientation::Top),
+            (egui::pos2(10.0, 20.0), egui::pos2(10.0, 120.0)),
+            "now along the top, past below",
+        );
+        assert_eq!(
+            now_and_past(SpectralOrientation::Bottom),
+            (egui::pos2(10.0, 120.0), egui::pos2(10.0, 20.0)),
+            "now along the bottom, past above",
+        );
     }
 
-    /// Upright: time runs down the pane (now/spectrum on top, past below);
-    /// pitch runs left to right.
+    /// Pitch reads the conventional way in all four, rather than mirroring
+    /// with time: low at the BOTTOM wherever time is horizontal, low at the
+    /// LEFT wherever it is vertical. Flipping it along with time would turn
+    /// Right and Bottom into upside-down pictures of their partners, where
+    /// what they are for is the same picture arriving from the other side.
     #[test]
-    fn upright_runs_time_downward_with_pitch_across() {
-        let a = axes(TALL, SpectralOrientation::Vertical);
-        assert_eq!(a.at(0.0, 0.0), egui::pos2(10.0, 20.0), "low pitch, now edge (top)");
-        assert_eq!(a.at(1.0, 0.0), egui::pos2(110.0, 20.0), "high pitch, top");
-        assert_eq!(a.at(0.0, 1.0), egui::pos2(10.0, 320.0), "low pitch, past edge (bottom)");
-        assert_eq!(a.pitch_len(), 100.0, "pitch is the short (horizontal) side");
-        assert_eq!(a.depth_len(), 300.0, "time is the long (vertical) side");
+    fn pitch_climbs_the_same_way_in_the_pair_that_shares_an_axis() {
+        for (o, low, high) in [
+            (SpectralOrientation::Left, 120.0, 20.0),
+            (SpectralOrientation::Right, 120.0, 20.0),
+        ] {
+            let a = axes(WIDE, o);
+            assert_eq!(a.at(0.0, 0.5).y, low, "{o:?}: low pitch is not at the bottom");
+            assert_eq!(a.at(1.0, 0.5).y, high, "{o:?}: high pitch is not at the top");
+        }
+        for o in [SpectralOrientation::Top, SpectralOrientation::Bottom] {
+            let a = axes(WIDE, o);
+            assert_eq!(a.at(0.0, 0.5).x, 10.0, "{o:?}: low pitch is not at the left");
+            assert_eq!(a.at(1.0, 0.5).x, 310.0, "{o:?}: high pitch is not at the right");
+        }
     }
 
+    /// Which side is the pitch axis and which the time axis, in each pair.
     #[test]
-    fn auto_orientation_follows_the_pane_shape() {
-        let wide = axes(WIDE, SpectralOrientation::Auto); // time along the width
-        let tall = axes(TALL, SpectralOrientation::Auto); // time down the height
-        // High pitch at the now edge: on the wide pane that's up top, on the
-        // tall one it's to the right.
-        assert_eq!(wide.at(1.0, 0.0), egui::pos2(10.0, 20.0));
-        assert_eq!(tall.at(1.0, 0.0), egui::pos2(110.0, 20.0));
+    fn the_axes_take_the_pane_sides_the_orientation_asks_for() {
+        for o in [SpectralOrientation::Left, SpectralOrientation::Right] {
+            let a = axes(WIDE, o);
+            assert_eq!(a.pitch_len(), 100.0, "{o:?}: pitch is the vertical side");
+            assert_eq!(a.depth_len(), 300.0, "{o:?}: time is the horizontal side");
+        }
+        for o in [SpectralOrientation::Top, SpectralOrientation::Bottom] {
+            let a = axes(TALL, o);
+            assert_eq!(a.pitch_len(), 100.0, "{o:?}: pitch is the horizontal side");
+            assert_eq!(a.depth_len(), 300.0, "{o:?}: time is the vertical side");
+        }
     }
 
-    /// Hover has to find the pitch the pointer is actually over, in either
+    /// Hover has to find the pitch the pointer is actually over, in every
     /// orientation — the lattice highlight hangs off this one inverse.
     #[test]
     fn pitch_at_inverts_at_whichever_way_the_axes_run() {
         for rect in [WIDE, TALL] {
-            for orientation in [
-                SpectralOrientation::Auto,
-                SpectralOrientation::Horizontal,
-                SpectralOrientation::Vertical,
-            ] {
+            for orientation in EVERY_ORIENTATION {
                 let a = axes(rect, orientation);
                 for step in 0..=10 {
                     let p = step as f32 / 10.0;
@@ -1581,16 +1563,13 @@ mod tests {
     }
 
     /// The divider drag reads the pointer through this inverse, so it has to
-    /// agree with `at` in either orientation — a sign flip would send the
-    /// handle the wrong way.
+    /// agree with `at` in every orientation — a sign flip would send the
+    /// handle the wrong way, and the two reversed layouts are exactly where a
+    /// missing flip hides.
     #[test]
     fn depth_at_inverts_at_whichever_way_the_axes_run() {
         for rect in [WIDE, TALL] {
-            for orientation in [
-                SpectralOrientation::Auto,
-                SpectralOrientation::Horizontal,
-                SpectralOrientation::Vertical,
-            ] {
+            for orientation in EVERY_ORIENTATION {
                 let a = axes(rect, orientation);
                 for step in 0..=10 {
                     let d = step as f32 / 10.0;
@@ -1608,7 +1587,7 @@ mod tests {
     #[test]
     fn the_split_band_straddles_the_divider_and_stays_inside_the_pane() {
         for rect in [WIDE, TALL] {
-            for orientation in [SpectralOrientation::Horizontal, SpectralOrientation::Vertical] {
+            for orientation in EVERY_ORIENTATION {
                 let a = axes(rect, orientation);
                 for split in [0.0, 0.5, 1.0] {
                     let band = a.depth_band(split, SPLIT_GRAB_HALF);
@@ -1628,17 +1607,20 @@ mod tests {
     }
 
     /// Dragging the divider away from the spectrum GROWS the spectrum's
-    /// share, in either orientation, by the distance dragged — the whole
+    /// share, in every orientation, by the distance dragged — the whole
     /// point of the handle, and the one thing an axis sign error breaks.
+    ///
+    /// The drag is taken along `dir_depth` rather than written out per case,
+    /// so "away from the spectrum" means the same thing in the two reversed
+    /// layouts, where it points back toward the screen's origin.
     #[test]
     fn dragging_the_divider_moves_the_split_with_the_pointer() {
-        for (rect, orientation, drag) in [
-            (WIDE, SpectralOrientation::Horizontal, egui::vec2(30.0, 0.0)),
-            (TALL, SpectralOrientation::Vertical, egui::vec2(0.0, 30.0)),
-        ] {
+        for (rect, orientation) in
+            EVERY_ORIENTATION.map(|o| (if o.is_time_vertical() { TALL } else { WIDE }, o))
+        {
             let a = axes(rect, orientation);
             let before = 0.5;
-            let after = drag_divider(rect, orientation, before, drag);
+            let after = drag_divider(rect, orientation, before, a.dir_depth() * 30.0);
             // Depth runs away from the spectrum, so +30 px of depth takes
             // 30/depth_len off the roll's share.
             let expected = before - 30.0 / a.depth_len();
@@ -1652,9 +1634,13 @@ mod tests {
     /// And back the other way, into the spectrum: the roll grows.
     #[test]
     fn dragging_the_divider_into_the_spectrum_grows_the_roll() {
-        let drag = egui::vec2(-30.0, 0.0);
-        let after = drag_divider(WIDE, SpectralOrientation::Horizontal, 0.5, drag);
-        assert!(after > 0.55, "roll share should have grown, got {after}");
+        for (rect, orientation) in
+            EVERY_ORIENTATION.map(|o| (if o.is_time_vertical() { TALL } else { WIDE }, o))
+        {
+            let drag = axes(rect, orientation).dir_depth() * -30.0;
+            let after = drag_divider(rect, orientation, 0.5, drag);
+            assert!(after > 0.55, "{orientation:?}: roll share should have grown, got {after}");
+        }
     }
 
     /// Press on the divider, drag by `delta`, and return the resulting
@@ -1695,11 +1681,11 @@ mod tests {
         state.spectrum_config.roll_fraction
     }
 
-    /// A gridline label at the now edge of a wide (Across) pane sits just
+    /// A gridline label at the now edge of a wide (Left) pane sits just
     /// inside it and grows up-and-inward (LEFT_BOTTOM anchor).
     #[test]
     fn gridline_labels_sit_just_inside_the_now_edge() {
-        let a = axes(WIDE, SpectralOrientation::Horizontal);
+        let a = axes(WIDE, SpectralOrientation::Left);
         let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
         assert_eq!(pos, egui::pos2(12.0, 67.0));
         assert_eq!(align, egui::Align2::LEFT_BOTTOM);
@@ -1709,7 +1695,7 @@ mod tests {
     /// edge grows inward rather than off the pane.
     #[test]
     fn label_anchors_grow_into_the_pane() {
-        for orientation in [SpectralOrientation::Horizontal, SpectralOrientation::Vertical] {
+        for orientation in EVERY_ORIENTATION {
             let a = axes(WIDE, orientation);
             let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
             // A nominal 40x12 label placed by this anchor.
@@ -1741,11 +1727,7 @@ mod tests {
     #[test]
     fn the_pane_paints_in_every_orientation() {
         for rect in [WIDE, TALL] {
-            for orientation in [
-                SpectralOrientation::Auto,
-                SpectralOrientation::Horizontal,
-                SpectralOrientation::Vertical,
-            ] {
+            for orientation in EVERY_ORIENTATION {
                 for roll_fraction in [0.0, 0.55, 1.0] {
                     let shapes = paint(rect, orientation, roll_fraction);
                     assert!(!shapes.is_empty(), "{orientation:?} drew nothing");
@@ -1777,7 +1759,7 @@ mod tests {
         }
 
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.show_spectrogram = true;
         state.spectrum_config.low_midi = 55.0;
         state.spectrum_config.high_midi = 79.0;
@@ -1830,7 +1812,7 @@ mod tests {
     #[test]
     fn the_strip_holds_its_leading_sliver_instead_of_reading_round_the_ring() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.show_spectrogram = true;
         state.spectrum_config.roll_seconds = 2.0; // zoomed in: the sliver is widest
         let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
@@ -1888,7 +1870,7 @@ mod tests {
     fn the_heatmap_image_is_built_at_device_pixels() {
         fn rows_at(ppp: f32) -> usize {
             let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-            state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+            state.spectrum_config.orientation = SpectralOrientation::Left;
             state.spectrum_config.show_spectrogram = true;
             state.spectrum_config.roll_seconds = 10.0;
             let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
@@ -1929,7 +1911,7 @@ mod tests {
     #[test]
     fn the_roll_paints_over_the_now_line() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.low_midi = 60.0;
         state.spectrum_config.high_midi = 72.0;
         state.tracker.handle_event(NoteEvent {
@@ -1976,7 +1958,7 @@ mod tests {
     fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
         let bands = |tuning_offset: f32| {
             let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-            state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+            state.spectrum_config.orientation = SpectralOrientation::Left;
             state.spectrum_config.low_midi = 55.0;
             state.spectrum_config.high_midi = 67.0;
             state.tracker.handle_event(NoteEvent {
@@ -2024,7 +2006,7 @@ mod tests {
     #[test]
     fn the_axis_labels_are_rimmed() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Horizontal;
+        state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_fraction = 0.55;
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
@@ -2056,17 +2038,6 @@ mod tests {
         let khz = harmonigraph_core::spectrum::hz_to_midi(1000.0);
         assert_eq!(hz_readout(khz), "1.0 kHz");
         assert!(hz_readout(khz - 0.1).ends_with(" Hz"));
-    }
-
-    /// A C gridline has to land on a C. The range is continuous and can start
-    /// anywhere, so stepping twelves from its start does not work.
-    #[test]
-    fn c_gridlines_land_on_cs_wherever_the_range_starts() {
-        assert_eq!(first_c_at_or_above(48.0), 48, "a range already on a C keeps it");
-        assert_eq!(first_c_at_or_above(40.5), 48);
-        assert_eq!(first_c_at_or_above(47.99), 48);
-        // The axis floor is 20 Hz, which is not a C — the first C above it is MIDI 24.
-        assert_eq!(first_c_at_or_above(harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI), 24);
     }
 
     /// The settings pane, whose pitch-range bar derives rects from a PAIR of
