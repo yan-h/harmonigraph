@@ -451,12 +451,6 @@ fn default_sevens_label() -> SevensLabel {
 /// the geometry measured, and while they were typeset a bar this thin
 /// really did smear. Rasterized with a whole-pixel floor, 0.07 is a clean
 /// line — and it is the line the rest of the label is drawn with.
-///
-/// All of which is an argument about the line a blob predating this field
-/// is drawn at. `impl Default` deliberately sets a heavier mark for a fresh
-/// view, and the two are allowed to disagree — that is what these fns are
-/// for — so this reasoning is not licence to pull the fresh-view weight
-/// back down to match.
 fn default_mark_weight() -> f32 {
     0.07
 }
@@ -662,10 +656,7 @@ impl Default for ViewConfig {
             sevens_gutter: 0.24,
             sevens_gutter_soft: 0.24,
             sevens_label: SevensLabel::Name,
-            // Heavier than the `default_mark_weight` a pre-field blob is
-            // drawn at, and heavier than that fn's own argument for 0.07
-            // would put it — this is the weight the view is actually used at.
-            mark_weight: 0.1,
+            mark_weight: default_mark_weight(),
             show_labels: true,
             label_scale: default_label_scale(),
             show_cents: true,
