@@ -1,7 +1,12 @@
 //! The performance overlay: a small corner HUD over the editor showing the
-//! frame rate, the GUI's own CPU cost per frame, the process's memory, and the
-//! workload driving them — enough to see at a glance whether the plugin is
-//! working the machine hard, and to watch the cost settle once the notes stop.
+//! frame rate, the process's memory, and the workload driving them — enough
+//! to see at a glance whether the plugin is working the machine hard.
+//!
+//! What a frame COSTS lives one checkbox further in, under `show_perf_detail`
+//! (see [`draw_overlay`]). The headline list carries the frame interval and
+//! its worst recent frame, but the interval's mean is the rate in another
+//! unit — `fps` is literally its reciprocal — so the only cost reading the
+//! HUD gives without the breakdown is that peak.
 //!
 //! Interactive only. [`root_ui`](crate::root_ui) times the frame, folds the
 //! numbers in here, and draws the overlay; the offline renderer bypasses
@@ -602,11 +607,16 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     // of them must not look like it does.
     //
     // Without `detail` the list is what you read to NOTICE something is wrong:
-    // the rate, one cost, and the workload behind it. A row that only answers
-    // WHERE the frame went belongs to the breakdown — `tick` and everything
-    // nested under it, and the GPU passes beside them — because that is the
-    // question the breakdown exists to answer, and until it is asked the rows
-    // are scaffolding sitting over the picture.
+    // the rate, its worst recent frame, and the workload behind them. A row
+    // that only answers WHERE the frame went belongs to the breakdown —
+    // `tick` and everything nested under it, and the GPU passes beside them —
+    // because that is the question the breakdown exists to answer, and until
+    // it is asked the rows are scaffolding sitting over the picture.
+    //
+    // Note what that leaves: `frame`'s MEAN is the header's `fps` in another
+    // unit (`fps()` is its reciprocal), so the peak column is the only thing
+    // the headline list says about cost. Reading a rising cost off the basic
+    // HUD means watching that peak, or turning the breakdown on.
     let mut rows: Vec<(u8, &str, String, Option<String>)> =
         vec![timed(0, "frame", &perf.frame_ms)];
     if detail {
@@ -944,7 +954,10 @@ mod tests {
 
     /// The basic overlay answers "is something wrong", the breakdown answers
     /// "where did the frame go" — so every row that only serves the second
-    /// question waits for `detail`, `tick` and `gpu` included.
+    /// question waits for `detail`, `tick` and `gpu` included. The breakdown
+    /// EXPANDS the headline list rather than replacing it: the headline rows
+    /// keep their order and their place, so a glance at one mode transfers
+    /// to the other.
     ///
     /// Worth asserting rather than eyeballing: both modes draw a plausible
     /// HUD, and a row leaking back into the basic list is a change nobody
@@ -960,21 +973,37 @@ mod tests {
         assert_eq!(
             basic,
             ["frame", "memory", "voices", "nodes"],
-            "the basic overlay is the rate's one cost plus the workload behind it",
+            "the basic overlay is the rate, its worst frame, and the workload behind them",
         );
 
         let detail = label_of(&overlay_rows(&perf, true));
         for row in ["tick", "gpu", "egui", "render", "verts", "spec"] {
             assert!(detail.contains(&row), "the breakdown should still carry `{row}`");
         }
-        // Every basic row survives the expansion, in order: the breakdown adds
-        // to the headline list rather than replacing it, so a glance at one
-        // mode transfers to the other.
-        let mut kept = detail.iter().filter(|row| basic.contains(row));
-        assert!(
-            basic.iter().all(|row| kept.next() == Some(row)),
-            "the breakdown reorders or drops a headline row: {detail:?}",
+        // The breakdown EXPANDS the headline list: every basic row survives,
+        // in order, and — the part a subsequence check alone does not say —
+        // each stays where it was, with the new rows spliced INTO the list
+        // rather than parked before or after it. Checking only the
+        // subsequence let the whole breakdown move to the end of the HUD and
+        // still pass, which is exactly the glance that stops transferring.
+        assert_eq!(detail.first(), basic.first(), "the breakdown must still open on `frame`");
+        let tail = basic.len() - 1;
+        assert_eq!(
+            detail[detail.len() - tail..],
+            basic[1..],
+            "the workload rows belong at the foot of both lists",
         );
+
+        // Depth, not just labels: the nesting is what lets a total and its
+        // parts be read against each other, and a flattened breakdown draws
+        // a plausible list of numbers that has quietly stopped saying what
+        // contains what.
+        let depth_of = |label: &str| {
+            overlay_rows(&perf, true).into_iter().find(|(_, l, _, _)| *l == label).map(|(d, ..)| d)
+        };
+        for (label, depth) in [("frame", 0), ("tick", 0), ("egui", 1), ("shell", 2), ("prep", 4)] {
+            assert_eq!(depth_of(label), Some(depth), "`{label}` sits at depth {depth}");
+        }
     }
 
     /// The readout that would have caught both of the spectrogram's silent
