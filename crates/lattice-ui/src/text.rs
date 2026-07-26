@@ -139,17 +139,13 @@ const SIZE_STEP: f32 = 1.04;
 const MAX_GLYPH_PX: f32 = 512.0;
 
 /// Which batch a flush belongs to. Unique per batch drawn in one frame,
-/// since each keeps its own instance buffer: the two picture panes, their
-/// Render-preview copies, and the analyzer's readout, which flushes
-/// separately because the divider is drawn between it and the axis labels.
+/// since each keeps its own instance buffer: the two picture panes and their
+/// Render-preview copies.
 pub(crate) const LATTICE_LABELS: u64 = 0;
 pub(crate) const LATTICE_PREVIEW_LABELS: u64 = 1;
-/// The analyzer's, one pair per surface (docked, then the preview).
+/// The analyzer's, one per surface (docked, then the preview).
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
-    2 + surface as u64 * 2
-}
-pub(crate) fn spectral_readout(surface: usize) -> u64 {
-    3 + surface as u64 * 2
+    2 + surface as u64
 }
 
 /// One glyph as the mirror identifies it: its size, its character, and the
@@ -515,7 +511,7 @@ mod tests {
         }
         let settled = ctx.fonts(|fonts| fonts.font_image_size());
 
-        let state = crate::SharedState::new(crate::TextureFormat::Bgra8Unorm);
+        let state = crate::SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         let first = batch_keys(&ctx, &font, "Ai");
         assert!(atlas_if_changed(&ctx, &state, first.clone()).is_some(), "the first mirror");
         assert!(atlas_if_changed(&ctx, &state, first.clone()).is_none(), "nothing has moved");
@@ -606,7 +602,7 @@ mod tests {
     /// different SIZE this stops quietly passing for the wrong reason.
     #[test]
     fn a_scale_change_refreshes_the_mirror_though_nothing_else_moves() {
-        let state = crate::SharedState::new(crate::TextureFormat::Bgra8Unorm);
+        let state = crate::SharedState::new(lattice_render::wgpu::TextureFormat::Bgra8Unorm);
         let ctx = egui::Context::default();
         let font = egui::FontId::proportional(12.0);
 

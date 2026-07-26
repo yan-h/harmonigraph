@@ -9,7 +9,7 @@
 
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
-use super::{names, nearest_visible_node, section, KEY_NAMES};
+use super::{names, nearest_visible_node, section};
 use lattice_core::notes::display_octave_of;
 use egui::Sense;
 
@@ -358,17 +358,14 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
-/// Point size of an axis gridline's label, and of the pitch readout that
-/// follows the pointer. The readout is the point larger: it is one line
-/// answering a question you just asked, where the gridline labels are a dozen
-/// standing marks that should stay quiet.
+/// Point size of an axis gridline's label — a dozen standing marks that
+/// should stay quiet.
 ///
-/// Doubled from the 10 and 10.5 these were drawn at before the Label size bar
-/// existed. The bar went to 2 the first time it was tried and stayed there —
-/// so the number was wrong rather than the bar wanted, and rebasing it leaves
-/// the bar reading 1 at the size the pane is actually read at.
+/// Doubled from the 10 it was drawn at before the Label size bar existed. The
+/// bar went to 2 the first time it was tried and stayed there — so the number
+/// was wrong rather than the bar wanted, and rebasing it leaves the bar
+/// reading 1 at the size the pane is actually read at.
 pub(super) const MARKING_PT: f32 = 20.0;
-const READOUT_PT: f32 = 21.0;
 
 /// The whole pitch axis, in semitones — the widest the range opens, and the
 /// zoom the note names' built-in size is dialled for.
@@ -1016,7 +1013,7 @@ pub(crate) fn spectral_pane(
     surface: usize,
 ) {
     use crate::SpectrumLabels;
-    use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use lattice_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
     // Drag-sensing, so the pitch range can be panned and the time Span zoomed
@@ -1316,8 +1313,8 @@ pub(crate) fn spectral_pane(
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
     let note_names = names::plan(state, &axes, &scale, split, now, text.names);
     names::draw(&painter, &note_names, text.names, state.view.mark_weight, &mut labels);
-    // Flushed here rather than with the readout below: the divider draws
-    // between them, and a batch is drawn where it is flushed.
+    // Flushed before the divider: a batch is drawn where it is flushed, and
+    // the divider belongs over the plots, not under the names.
     labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
 
     // The divider, over the plots so it stays findable against a loud
@@ -1337,10 +1334,23 @@ pub(crate) fn spectral_pane(
         }
     }
 
-    // Hovering here highlights the matching lattice node (if in view) and
-    // reads out the pitch under the cursor. Gated on contains_pointer (pure
-    // geometry) rather than hovered(): the divider sits on top of the pane,
-    // and hovered() would blank the readout every time the pointer crossed it.
+    // Hovering here highlights the matching lattice node, if it is in view.
+    // Gated on contains_pointer (pure geometry) rather than hovered(): the
+    // divider sits on top of the pane, and hovered() would drop the highlight
+    // every time the pointer crossed it.
+    //
+    // The pitch under the cursor is no longer also printed beside it. A
+    // name-and-Hz readout tracking the pointer is a second thing moving over
+    // a picture whose whole subject is movement, and the axis it moves along
+    // is already labelled.
+    //
+    // Be exact about what did NOT replace it, because the highlight below
+    // looks like it should have: `nearest_visible_node` goes through
+    // `Tuning::matches`, so a node lights only within Tolerance of the
+    // hovered pitch class — and Tolerance ships at 0.5 cents, against a
+    // `midi` that is continuous. Off a node the pane now answers a hover
+    // with nothing at all. That is the trade; it is not the highlight
+    // covering the readout's job.
     let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
     if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
@@ -1355,25 +1365,6 @@ pub(crate) fn spectral_pane(
             &state.tuning,
             lattice_core::PitchClass::from_cents(pc_cents),
         );
-        let nearest = midi.round();
-        let (pos, align) = axes.text_anchor(scale.t_of(midi), 1.0, 6.0, -2.0);
-        let mut readout = crate::text::TextBatch::default();
-        readout.text(
-            &painter,
-            pos,
-            align,
-            format!(
-                "{}{} {:+.0}\u{a2} \u{b7} {:.1} Hz",
-                KEY_NAMES[nearest as usize % 12],
-                display_octave_of(nearest as i32),
-                (midi - nearest) * 100.0,
-                midi_to_hz(midi),
-            ),
-            egui::FontId::monospace(READOUT_PT * text.markings),
-            theme::text(),
-            theme::well(),
-        );
-        readout.flush(&painter, rect, state, crate::text::spectral_readout(surface));
     }
 }
 
@@ -1580,9 +1571,8 @@ mod tests {
         assert_eq!(tall.at(1.0, 0.0), egui::pos2(110.0, 20.0));
     }
 
-    /// Hover has to name the pitch the pointer is actually over, in either
-    /// orientation — the readout and the lattice highlight both hang off
-    /// this one inverse.
+    /// Hover has to find the pitch the pointer is actually over, in either
+    /// orientation — the lattice highlight hangs off this one inverse.
     #[test]
     fn pitch_at_inverts_at_whichever_way_the_axes_run() {
         for rect in [WIDE, TALL] {

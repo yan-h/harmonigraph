@@ -356,9 +356,10 @@ pub struct ViewConfig {
     /// record as one seamless surface. Esc restores.
     #[serde(default)]
     pub frameless: bool,
-    /// Show the performance overlay (a small corner HUD with frame rate, UI
-    /// CPU time, memory and workload counts). Interactive shells only — the
-    /// offline renderer never draws it, keeping its frames deterministic.
+    /// Show the performance overlay (a small corner HUD with frame rate,
+    /// memory and workload counts; per-stage CPU time waits for
+    /// [`Self::show_perf_detail`]). Interactive shells only — the offline
+    /// renderer never draws it, keeping its frames deterministic.
     ///
     /// `default_true`, matching the struct default, so a fresh install and a
     /// pre-`show_perf` blob both open with it on. A project that explicitly
