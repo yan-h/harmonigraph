@@ -39,8 +39,6 @@ both sides. Never resolve one by dropping an item you did not finish.
 
 ## Items
 
-[settings] collapse notes and console panel by default
-
 [settings] I don't like having the scrollbar on the top list of settings. Any solutions you can think of?
 
 [spectrum] analyzer has a lot of empty space in typical usage. generally only half of the height is used.

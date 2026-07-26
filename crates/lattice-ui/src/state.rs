@@ -254,8 +254,9 @@ pub struct CameraPreset {
 /// The default pane arrangement: big lattice with the Spectral pane
 /// beside it on the right (sharing the pitch intuition: what sounds is
 /// what lights up), the tuning column further right, console and notes
-/// tucked below that. Users can re-dock at runtime; the result persists
-/// via UiPersist, and the Panel pane's "Reset layout" button returns here.
+/// folded to a tab bar below that. Users can re-dock at runtime; the result
+/// persists via UiPersist, and the Panel pane's "Reset layout" button
+/// returns here.
 pub(crate) fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
@@ -277,7 +278,17 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     );
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
-    surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
+    let [_, log] = surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
+    // Folded to its tab bar, because neither pane is looked at while playing:
+    // Notes is a readout of what the tracker already draws on the lattice and
+    // Console is a diagnostic. Open they take 45% of the settings column's
+    // height, which is the half of it the settings themselves want -- see the
+    // scroll every settings pane carries. One click on the tab reopens them,
+    // and the split fraction is remembered, so this costs nothing to undo.
+    //
+    // A vertical fold, so egui_dock does the whole of it; `Folds` only exists
+    // for the horizontal ones (see `fold`).
+    surface[log].set_collapsed(true);
     // Spectral as a column just right of the lattice: what sounds is directly
     // beside what lights up. Paired with the "Across" default orientation
     // (SpectrumConfig::default). Drag it wherever from here — egui_dock docks

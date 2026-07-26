@@ -232,6 +232,31 @@ fn a_pre_merge_layout_does_not_open_the_merged_tab_twice() {
     assert_eq!(dock.matches("Tuning").count(), 1, "the merged tab is docked twice");
 }
 
+/// The layout opens with Notes and Console folded to their tab bar, and with
+/// nothing else folded.
+///
+/// Both are read on demand — Notes restates what the lattice is already
+/// drawing, Console is a diagnostic — and open they take 45% of the settings
+/// column, the half the settings themselves want. Folded is a click from open
+/// and the split fraction survives it, so this is a starting point rather than
+/// a decision taken away.
+#[test]
+fn the_default_layout_opens_with_the_two_readout_panes_folded() {
+    let dock = default_dock();
+    let folded = |tab: panes::Tab| {
+        let path = dock.find_tab(&tab).expect("docked by default");
+        let egui_dock::Node::Leaf(leaf) = &dock[path.surface][path.node] else {
+            panic!("{tab:?} should live in a leaf");
+        };
+        leaf.collapsed
+    };
+    assert!(folded(panes::Tab::Notes), "Notes should open folded");
+    assert!(folded(panes::Tab::Console), "Console should open folded");
+    for tab in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning] {
+        assert!(!folded(tab), "{tab:?} should open on screen");
+    }
+}
+
 /// A refreshed dock has to take the folds with it.
 ///
 /// `Folds` remembers a split by INDEX — surface and node into the dock tree —
@@ -1980,6 +2005,21 @@ fn removed_spectrogram_palettes_load_as_magma() {
     }
 }
 
+/// Put the Notes/Console leaf back on screen, which is what the two wheel
+/// harnesses below are written against: they read the settings leaf as the box
+/// from the tab bar down to the 0.55 split, and the default layout opens that
+/// leaf folded (see
+/// [`the_default_layout_opens_with_the_two_readout_panes_folded`]) so the
+/// settings column runs the whole height instead.
+///
+/// Unfolded rather than measured where it now is, because a taller pane is the
+/// wrong pane to ask these questions of: both tests need content that
+/// OVERFLOWS, and the short window they pick is short relative to this box.
+fn unfold_the_readout_panes(state: &mut SharedState) {
+    let path = state.dock.find_tab(&panes::Tab::Notes).expect("Notes is docked");
+    state.dock[path.surface][path.node].set_collapsed(false);
+}
+
 /// Drive the REAL dock (root_ui, egui_dock, the tab body's ScrollArea and
 /// all) with a wheel over `tab`'s body, and answer how far its content moved.
 /// Negative = the content moved up, i.e. the pane scrolled down.
@@ -1990,6 +2030,7 @@ fn removed_spectrogram_palettes_load_as_magma() {
 /// movement that is). The y of a string drawn in both frames cannot lie.
 fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    unfold_the_readout_panes(&mut state);
     // The settings leaf opens on Tuning; every other settings pane is a tab
     // behind it.
     let path = state.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
@@ -2113,6 +2154,7 @@ enum Lose {
 /// pane and answer how far its content moved.
 fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    unfold_the_readout_panes(&mut state);
     let path = state.dock.find_tab(&panes::Tab::Analyzer).expect("the Analyzer settings tab");
     state.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
