@@ -62,8 +62,8 @@ impl Default for Camera {
             target: Vec3::ZERO,
             yaw: 0.4,
             pitch: 0.3,
-            distance: 12.0,
-            fov_y: 45f32.to_radians(),
+            distance: Camera::DEFAULT_DISTANCE,
+            fov_y: Camera::DEFAULT_FOV_Y,
             projection: Projection::Cabinet,
             cabinet_angle: default_cabinet_angle(),
             cabinet_scale: default_cabinet_scale(),
@@ -84,6 +84,45 @@ impl Camera {
     /// Zoom clamp; CLIP_NEAR/CLIP_FAR must bracket it with margin.
     pub const MIN_DISTANCE: f32 = 2.0;
     pub const MAX_DISTANCE: f32 = 80.0;
+    /// The framing a fresh view opens at, and the zoom
+    /// [`screen_scale`](Self::screen_scale) measures against.
+    pub const DEFAULT_DISTANCE: f32 = 12.0;
+    /// Fixed: nothing sets the field of view, so the whole of the zoom is the
+    /// distance. Named anyway, since [`screen_scale`](Self::screen_scale)'s
+    /// arithmetic is only right while the two are read together.
+    pub const DEFAULT_FOV_Y: f32 = std::f32::consts::FRAC_PI_4; // 45 degrees
+
+    /// How large a world-space length draws compared to the default framing:
+    /// 2 means the lattice is twice the size on screen that it opens at.
+    ///
+    /// Exact under Orthographic and Cabinet, whose window half-height is
+    /// `distance * tan(fov/2)` — the whole of what maps world units to the
+    /// viewport. Under Perspective it is true at the focus plane, which is
+    /// where the content is: the camera always looks at the lattice it orbits.
+    ///
+    /// What it is for is the node LABELS. They are typeset in points and the
+    /// nodes they name are geometry, so without this the two part company on
+    /// every zoom — a name that fits its node at the default distance is a
+    /// speck on it zoomed in, and swamps it zoomed out.
+    ///
+    /// The distance is read through the working range rather than trusted: a
+    /// zero out of a hand-edited persisted blob would divide to infinity here,
+    /// and this scales a FONT SIZE, where an infinity or a NaN is the NaN
+    /// geometry egui panics on — inside the host, taking the editor with it.
+    pub fn screen_scale(&self) -> f32 {
+        let distance = if self.distance.is_finite() {
+            self.distance.clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE)
+        } else {
+            Self::DEFAULT_DISTANCE
+        };
+        let fov_y = if self.fov_y.is_finite() && self.fov_y > 0.0 {
+            self.fov_y
+        } else {
+            Self::DEFAULT_FOV_Y
+        };
+        let half_height = |distance: f32, fov_y: f32| distance * (fov_y * 0.5).tan();
+        half_height(Self::DEFAULT_DISTANCE, Self::DEFAULT_FOV_Y) / half_height(distance, fov_y)
+    }
 
     /// Orbit around the target by a drag delta in pixels.
     pub fn orbit(&mut self, delta: Vec2) {

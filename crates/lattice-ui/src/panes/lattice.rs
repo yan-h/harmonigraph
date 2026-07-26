@@ -97,6 +97,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
 /// even when the Tuning tab (and its Learn toggle) is hidden.
+///
+/// The one piece of text on this pane that does NOT follow the camera. It
+/// names a mode rather than a node — pinned to the corner, sized like the rest
+/// of the UI's chrome — and a badge that grew as you zoomed in would be saying
+/// something about the lattice, which is exactly what it is not about.
 fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: egui::Rect, now: f64) {
     let color = theme::armed().gamma_multiply(learn_pulse(now));
     let painter = ui.painter_at(rect);
@@ -166,6 +171,11 @@ fn label_strength(node: &lattice_scene::NodeInstance, trailed: bool, keeps_names
 /// on -- already-visited nodes, drawn as egui text over the 3D view
 /// (projected with the same camera as the nodes): the note name centered on
 /// the node, optionally its pitch class in cents just below.
+///
+/// `scale` is the PANE's own factor and nothing else: 1 in the docked pane, the
+/// Render preview's shrink where it draws the lattice small. The camera's zoom
+/// and the user's Size bar are folded in here rather than by the callers, so
+/// the two views cannot drift apart over which of the three they applied.
 pub(crate) fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -174,6 +184,17 @@ pub(crate) fn draw_node_labels(
     scale: f32,
     batch: &mut crate::text::TextBatch,
 ) {
+    // The nodes are world-space geometry and their labels are typeset in
+    // points, so a label only stays ON its node by following the camera:
+    // `screen_scale` is exactly how much bigger the lattice draws than at the
+    // framing a fresh view opens at. Snapped, because a size that tracks a
+    // continuous zoom is a new entry in egui's font atlas every frame of a
+    // drag otherwise -- see `crate::text::snap_scale`.
+    let scale = crate::text::snap_scale(
+        scale * view.label_scale * scene.camera.screen_scale(),
+        NAME_SIZE,
+        ui.painter().ctx().pixels_per_point(),
+    );
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     // "Keep note names" retains a name only while the trail marks that
     // populate `node.trail` are on; with the marks Off the field never fills,
@@ -266,15 +287,21 @@ pub(crate) fn draw_node_labels(
 }
 
 /// The note name's letter, the size the label reads at.
+///
+/// At the framing a fresh view opens at, that is. Every size here is a size at
+/// scale 1, and the scale a label is actually drawn at follows the camera —
+/// see [`draw_node_labels`].
 pub(crate) const NAME_SIZE: f32 = 15.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
 pub(crate) const CENTS_SIZE: f32 = 8.0;
 /// How far a label can reach from the node it belongs to, in points at
 /// scale 1 — the name, its marks, the gap and the cents line under it, with
-/// room to spare. Only used to decide that a label is too far off the pane
-/// to be worth laying out, so it errs generous: too small silently clips a
-/// label at the edge, too large only costs the work this saves.
+/// room to spare. Scaled with the label like everything else here, so the
+/// cull leaves a zoomed-in label the room it now takes. Only used to decide
+/// that a label is too far off the pane to be worth laying out, so it errs
+/// generous: too small silently clips a label at the edge, too large only
+/// costs the work this saves.
 pub(crate) const LABEL_REACH: f32 = 48.0;
 
 /// Air between the bottom of the name's glyphs and the top of the cents
@@ -1143,14 +1170,54 @@ mod tests {
         );
         // And nothing is laid out far outside the pane, at either zoom: a
         // label's own reach is the only slack the cull allows.
-        let slack = rect.expand(LABEL_REACH * 2.0);
-        for piece in wide.iter().chain(&zoomed) {
-            assert!(
-                slack.contains(piece.ink.min) && slack.contains(piece.ink.max),
-                "a label was laid out at {:?}, outside the pane {rect:?}",
-                piece.ink,
-            );
+        //
+        // That reach is the LABEL's, so it grows with the label — zoomed in, a
+        // name is drawn several times the size it opens at, and the cull has
+        // to leave room for the one straddling the edge. Measured off the same
+        // camera factor the labels take their size from, so this stays a
+        // statement about the cull rather than about a constant.
+        for (pieces, distance) in [(&wide, 14.0), (&zoomed, 2.0)] {
+            let scale = Camera { distance, ..Default::default() }.screen_scale();
+            let slack = rect.expand(LABEL_REACH * scale * 2.0);
+            for piece in pieces.iter() {
+                assert!(
+                    slack.contains(piece.ink.min) && slack.contains(piece.ink.max),
+                    "a label was laid out at {:?}, outside the pane {rect:?} \
+                     by more than its reach at distance {distance}",
+                    piece.ink,
+                );
+            }
         }
+    }
+
+    /// Labels follow the camera: a name is the same size ON its node at every
+    /// zoom, which is the whole of what makes it a label on a node rather than
+    /// text over a picture of one.
+    ///
+    /// Halving the distance doubles the lattice on screen — the ortho window's
+    /// half-height is `distance * tan(fov/2)` — so it has to double the type
+    /// too. Read off the largest piece each frame laid out, which is the note
+    /// name: the marks and the cents line are sized off it.
+    #[test]
+    fn a_label_grows_with_the_camera() {
+        let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(500.0, 400.0));
+        let biggest = |distance: f32| {
+            label_pieces(rect, distance)
+                .iter()
+                .map(|piece| piece.font_size)
+                .fold(0.0f32, f32::max)
+        };
+        assert_eq!(
+            biggest(Camera::DEFAULT_DISTANCE),
+            NAME_SIZE,
+            "the default framing is where the sizes are dialled",
+        );
+        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 0.5), NAME_SIZE * 2.0, "twice as close");
+        // ...and half of 15 is 7.5, which is not a whole pixel on this
+        // context's 1x scale, so it lands on the one above: the size follows
+        // the camera continuously but is only ever RASTERIZED at a pixel grid.
+        // See `text::snap_scale` for why that matters.
+        assert_eq!(biggest(Camera::DEFAULT_DISTANCE * 2.0), 8.0, "twice as far");
     }
 
     /// A node with `activation`, on the home sheet or off it, and nothing

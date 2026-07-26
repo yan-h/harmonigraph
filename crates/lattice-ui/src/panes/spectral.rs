@@ -137,6 +137,14 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             ),
         ],
     );
+    ValueBar::new(&mut cfg.marking_scale, 0.3..=3.0, "Label size")
+        .show(ui)
+        .on_hover_text(
+            "Size of the pane's own markings: the label on each gridline, and \
+             the pitch readout that follows the pointer. Fixed against the \
+             zoom, unlike the note names on the ribbons -- a marking says what \
+             the axis is, and the axis does not change size when you zoom it",
+        );
 
     // ---- Audio spectrum -------------------------------------------------
     // Always analyzed: the pane IS the analyzer, the spectrogram reads the
@@ -263,6 +271,18 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          for clear room — except a note you are holding, which is always \
          named. Needs Note history on: a name labels a ribbon.",
     );
+    ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
+        ValueBar::new(&mut cfg.note_name_scale, 0.3..=3.0, "Name size")
+            .show(ui)
+            .on_hover_text(
+                "Overall size of those names.\n\nThey already follow the pitch \
+                 zoom: a ribbon's width is set in semitones, so narrowing the \
+                 range fattens every ribbon, and a name that held its size \
+                 would be left a speck on the note it names. It grows about \
+                 threefold from the whole axis down to a single octave. This \
+                 sets how big it is at the zoom you are at",
+            );
+    });
     button_row(ui, |ui| {
         if ui
             .button("Clear roll")
@@ -337,6 +357,88 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
+
+/// Point size of an axis gridline's label, and of the pitch readout that
+/// follows the pointer. The readout is the half point larger: it is one line
+/// answering a question you just asked, where the gridline labels are a dozen
+/// standing marks that should stay quiet.
+pub(super) const MARKING_PT: f32 = 10.0;
+const READOUT_PT: f32 = 10.5;
+
+/// The whole pitch axis, in semitones — the widest the range opens, and the
+/// zoom the note names' built-in size is dialled for.
+const FULL_PITCH_SPAN: f32 =
+    lattice_core::spectrum::SPECTRUM_MAX_MIDI - lattice_core::spectrum::SPECTRUM_MIN_MIDI;
+
+/// How much bigger a note name draws with the pitch range zoomed to `span`
+/// semitones: 1 across the whole axis, growing as the range narrows.
+///
+/// The names are written ON the ribbons, and a ribbon's width is set in
+/// SEMITONES — so zooming from the whole axis down to the single octave the
+/// range bottoms out at, a tenfold zoom, draws every ribbon ten times thicker
+/// while leaving the name that names it exactly the size it was. That is the
+/// mismatch this answers.
+///
+/// It lands halfway between the two honest laws, because neither end is usable
+/// alone. Holding the size — what this did before — is what leaves a name
+/// stranded on a ribbon that has grown ten times around it. Following the zoom
+/// outright, the name keeping a constant share of the pitch axis so that it
+/// grows exactly as its ribbon does, is right there and wrong at the other
+/// end: the wide zooms are where a name is ALREADY as small as it can be read
+/// at, and a tenfold cut takes it to a smear where a name should be. The
+/// geometric mean grows a name threefold across the same range, which reads at
+/// both ends, and it does it smoothly — a clamp would buy the same two ends at
+/// the price of a dead zone in the middle, which is where the working zooms
+/// are.
+///
+/// Thinning follows for free: [`plan`](super::names::plan) measures the room a
+/// name demands from the size it is drawn at, so names that have grown are
+/// spaced further apart and the ones that no longer fit are dropped, exactly
+/// as they are at any other size.
+///
+/// Never SMALLER than the built-in size: the reference is the widest range the
+/// axis offers, so the only direction left is up.
+///
+/// Says nothing about which way the pane is turned. The span is in semitones,
+/// not in points, so an upright pane (whose pitch axis is horizontal) scales
+/// exactly as a wide one does — [`Axes`] is the only thing here that knows a
+/// screen side, and this is not it.
+fn name_zoom(span: f32) -> f32 {
+    (FULL_PITCH_SPAN / span.clamp(crate::PITCH_RANGE_MIN_SPAN, FULL_PITCH_SPAN)).sqrt()
+}
+
+/// The sizes this pane sets text at for one frame, as multiples of each
+/// piece's built-in point size.
+///
+/// Three factors go into each: the pane's own `label_scale` (1 docked, the
+/// Render preview's shrink where it draws this pane small), the user's bar for
+/// that kind of text, and — for the note names alone — the pitch zoom. Both
+/// come out snapped, since a scale that follows a continuous zoom otherwise
+/// asks egui for a new font size on every frame of a drag (see
+/// [`crate::text::snap_scale`]).
+#[derive(Clone, Copy, Debug)]
+struct TextScales {
+    /// The axis gridline labels and the hover readout.
+    markings: f32,
+    /// The name written on each ribbon.
+    names: f32,
+}
+
+fn text_scales(
+    cfg: &crate::SpectrumConfig,
+    span: f32,
+    label_scale: f32,
+    ppp: f32,
+) -> TextScales {
+    TextScales {
+        markings: crate::text::snap_scale(label_scale * cfg.marking_scale, MARKING_PT, ppp),
+        names: crate::text::snap_scale(
+            label_scale * cfg.note_name_scale * name_zoom(span),
+            names::LABEL_PT,
+            ppp,
+        ),
+    }
+}
 
 /// How loud `power` reads at pitch `midi`, on a 0..1 scale: the configured
 /// floor is 0, the configured ceiling is 1, and the tilt lifts treble by
@@ -952,6 +1054,9 @@ pub(crate) fn spectral_pane(
     // bar can't produce one; a hand-edited state blob can.
     let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
     let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
+    // Everything this pane sets text at, decided once from the range it just
+    // settled on: the markings hold their size, the names follow the zoom.
+    let text = text_scales(&cfg, scale.span, label_scale, painter.ctx().pixels_per_point());
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
     // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
     // the conventional reference slope (negative), so the display
@@ -1193,7 +1298,7 @@ pub(crate) fn spectral_pane(
             pos,
             align,
             label,
-            egui::FontId::monospace(10.0 * label_scale),
+            egui::FontId::monospace(MARKING_PT * text.markings),
             theme::text_dim(),
             theme::well(),
         );
@@ -1201,8 +1306,8 @@ pub(crate) fn spectral_pane(
     // Each note's own name, over the ribbon it belongs to. In the same batch
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
-    let note_names = names::plan(state, &axes, &scale, split, now, label_scale);
-    names::draw(&painter, &note_names, label_scale, state.view.mark_weight, &mut labels);
+    let note_names = names::plan(state, &axes, &scale, split, now, text.names);
+    names::draw(&painter, &note_names, text.names, state.view.mark_weight, &mut labels);
     // Flushed here rather than with the readout below: the divider draws
     // between them, and a batch is drawn where it is flushed.
     labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
@@ -1256,7 +1361,7 @@ pub(crate) fn spectral_pane(
                 (midi - nearest) * 100.0,
                 midi_to_hz(midi),
             ),
-            egui::FontId::monospace(10.5 * label_scale),
+            egui::FontId::monospace(READOUT_PT * text.markings),
             theme::text(),
             theme::well(),
         );
@@ -1285,6 +1390,62 @@ mod tests {
     /// `power` for a level in dB, undoing the 10*log10 `loudness` applies.
     fn power_at(db: f32) -> f32 {
         10.0f32.powf(db / 10.0)
+    }
+
+    /// The note names follow the pitch zoom and the markings do not, which is
+    /// the whole of the difference between text written ON the picture and
+    /// text labelling the axis it is drawn against.
+    ///
+    /// Both ends of the zoom are pinned, because both are claims: at the whole
+    /// axis a name is exactly the size it was dialled at (nothing about the
+    /// default view changes), and at the tightest zoom the range offers it is
+    /// about three times that — grown enough to hold a ribbon eight times
+    /// fatter, nowhere near the tenfold a name that kept a constant share of
+    /// the axis would have taken.
+    #[test]
+    fn names_follow_the_pitch_zoom_and_markings_hold_still() {
+        let cfg = SpectrumConfig::default();
+        let at = |span| text_scales(&cfg, span, 1.0, 2.0);
+
+        assert_eq!(at(FULL_PITCH_SPAN).names, 1.0, "the whole axis is the size names are set at");
+        let octave = at(crate::PITCH_RANGE_MIN_SPAN).names;
+        assert!((octave - 10f32.sqrt()).abs() < 0.02, "an octave draws names at {octave}");
+        // Monotone in between, and never under the size it started at: the
+        // reference is the widest range there is, so the only way is up.
+        let mut previous = 0.0;
+        for span in [FULL_PITCH_SPAN, 96.0, 60.0, 36.0, 24.0, crate::PITCH_RANGE_MIN_SPAN] {
+            let names = at(span).names;
+            assert!(names >= previous, "{span} semitones drew smaller names than the span above");
+            previous = names;
+        }
+        // A range zoomed past either end (a hand-edited blob; the bars cannot
+        // do it) still lands inside the band rather than off it.
+        assert_eq!(at(0.0).names, octave);
+        assert_eq!(at(1e6).names, 1.0);
+
+        // The markings ignore all of it, and answer to their own bar.
+        assert_eq!(at(FULL_PITCH_SPAN).markings, at(crate::PITCH_RANGE_MIN_SPAN).markings);
+        let bigger = SpectrumConfig { marking_scale: 2.0, ..SpectrumConfig::default() };
+        assert_eq!(text_scales(&bigger, 24.0, 1.0, 2.0).markings, 2.0);
+        assert_eq!(
+            text_scales(&bigger, 24.0, 1.0, 2.0).names,
+            at(24.0).names,
+            "and the two bars are independent",
+        );
+    }
+
+    /// The Render preview draws this pane small and the offline render draws
+    /// it large, and `label_scale` is how they say so. It has to reach EVERY
+    /// piece of text — a name that ignored it would come out three times its
+    /// intended size in the render, which is the one divergence between the
+    /// pane and the video this codebase least wants.
+    #[test]
+    fn the_panes_own_scale_reaches_every_kind_of_text() {
+        let cfg = SpectrumConfig::default();
+        let docked = text_scales(&cfg, 48.0, 1.0, 2.0);
+        let shrunk = text_scales(&cfg, 48.0, 0.5, 2.0);
+        assert!((shrunk.names / docked.names - 0.5).abs() < 0.02);
+        assert!((shrunk.markings / docked.markings - 0.5).abs() < 0.02);
     }
 
     /// The Span readout carries its own unit, and switches to minutes at

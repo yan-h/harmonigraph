@@ -116,6 +116,18 @@ pub struct ViewConfig {
     /// serde(default) keeps older persisted blobs loadable.
     #[serde(default = "default_true")]
     pub show_labels: bool,
+    /// Overall size of a node's label, as a multiple of its built-in sizes —
+    /// the note name, the marks stacked beside it and the cents line under it
+    /// together, so the label keeps its proportions and only the whole of it
+    /// grows.
+    ///
+    /// It trims what the CAMERA decides rather than replacing it. A label
+    /// tracks the on-screen size of the lattice it sits on (see
+    /// [`Camera::screen_scale`](crate::Camera::screen_scale)), which is what
+    /// keeps a name the same size on its node at every zoom; this says what
+    /// that size is.
+    #[serde(default = "default_label_scale")]
+    pub label_scale: f32,
     /// Under each note-name label, also show the node's pitch class in
     /// cents. Only meaningful while `show_labels` is on.
     #[serde(default = "default_true")]
@@ -439,6 +451,13 @@ fn default_mark_weight() -> f32 {
     0.07
 }
 
+/// Labels at their built-in size. What a blob predating the setting was drawn
+/// with — but only as a SIZE: the camera tracking that arrived alongside it is
+/// behaviour rather than a value, so an older view gets that too.
+fn default_label_scale() -> f32 {
+    1.0
+}
+
 /// The classic solid orb — the identity end of the solidity axis.
 fn default_core_solidity() -> f32 {
     1.0
@@ -617,6 +636,7 @@ impl Default for ViewConfig {
             sevens_label: SevensLabel::Name,
             mark_weight: default_mark_weight(),
             show_labels: true,
+            label_scale: default_label_scale(),
             show_cents: true,
             node_style: NodeStyle::Steady,
             core_style: CoreStyle::default(),

@@ -56,6 +56,44 @@ pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
     (radius * ppp).round().max(1.0) / ppp
 }
 
+/// A text scale snapped so that text of `base` points lands on a whole
+/// PHYSICAL pixel.
+///
+/// Every distinct size a pane asks for is one more entry in egui's font atlas:
+/// epaint rasterizes and caches a glyph per exact size, and rebuilds the whole
+/// font store once the atlas passes 80% full — throwing away the UVs this
+/// module's mirror is holding. That cost nothing while label sizes were
+/// constants. It is not nothing now that they follow a zoom: unsnapped, the
+/// scale takes a new value on every frame of a drag, so one gesture asks for
+/// dozens of sizes, each rasterizing its own copy of every glyph on screen and
+/// re-uploading the mirror behind it (see [`AtlasMirror`]).
+///
+/// Snapping bounds that set at one size per physical pixel. epaint will
+/// happily rasterize two sizes a third of a pixel apart and cache both, but
+/// what it hands back is the same picture of the same letter — so the pixel is
+/// the grain worth keeping, and it is the grain the DRAWN marks' bitmaps are
+/// already built on (`panes::lattice::mark_key`), which is what makes a name
+/// and the `+` beside it step together as the camera moves rather than one at
+/// a time.
+///
+/// A `base` that is not itself a whole number of pixels moves by up to half of
+/// one — 9.5pt is 9.5 pixels on a 1x display and draws at 10 — which is the
+/// grid asserting itself, not a size being got wrong.
+///
+/// `base` is the size the scale is quoted against — the note name's, since it
+/// is the biggest thing in a label and the one whose stepping would show. The
+/// rest of a label is sized off the same scale, so it lands where the
+/// proportions put it rather than on a pixel of its own.
+pub(crate) fn snap_scale(scale: f32, base: f32, ppp: f32) -> f32 {
+    // Physical pixels per unit of scale. A nonsense one (a zero base, a
+    // hand-edited ppp) leaves the scale alone rather than dividing by it.
+    let per_scale = base * ppp;
+    if !per_scale.is_finite() || per_scale <= 0.0 || !scale.is_finite() {
+        return scale;
+    }
+    (scale * per_scale).round().max(1.0) / per_scale
+}
+
 /// Which batch a flush belongs to. Unique per batch drawn in one frame,
 /// since each keeps its own instance buffer: the two picture panes, their
 /// Render-preview copies, and the analyzer's readout, which flushes
@@ -270,6 +308,21 @@ pub(crate) struct AtlasMirror {
     /// coordinates they remember. Dragging the window between a Retina display
     /// and an external monitor is the ordinary way to do it.
     ppp: u32,
+    /// How full egui said its atlas was, last time we looked — the fourth way
+    /// every glyph moves, and the only signal that egui has thrown the atlas
+    /// away and started over.
+    ///
+    /// `Fonts::begin_pass` rebuilds the entire font store once the atlas passes
+    /// 80% full, re-rasterizing every glyph at fresh UVs. Zoom-scaled labels are
+    /// what put that within reach: a label's size follows the camera and the
+    /// pitch range, so a session walks through many more sizes than the handful
+    /// of constants the panes used to draw at, and each one fills more of the
+    /// atlas. The other triggers can both miss it — the rebuilt atlas regrows
+    /// through whatever size the mirror recorded, and the panes report the same
+    /// pairs they always did — so the DROP in fill ratio is what says it
+    /// happened. (It only ever drops there; new glyphs raise it.) Everything in
+    /// `seen` is stale with it, so it goes too.
+    fill: f32,
     /// Bumped on every refresh; the callback compares it against what it
     /// last uploaded.
     key: u64,
@@ -291,8 +344,13 @@ fn atlas_if_changed(
     // scale and say nothing about the new one, so they go with it: every glyph
     // the panes draw counts as unseen again, which is also what refills `seen`.
     let ppp = ctx.pixels_per_point().to_bits();
-    let rescaled = ppp != mirror.ppp;
-    if rescaled {
+    // ...and so does the rebuild egui does when its atlas fills up, which
+    // repacks every glyph without either of the two above having to change.
+    // See [`AtlasMirror::fill`].
+    let fill = ctx.fonts(|fonts| fonts.font_atlas_fill_ratio());
+    let rebuilt = fill < mirror.fill;
+    mirror.fill = fill;
+    if ppp != mirror.ppp || rebuilt {
         mirror.seen.clear();
     }
     let resized = mirror.seen.is_empty() || size != mirror.size;
@@ -338,6 +396,43 @@ mod tests {
         }
         let (uv, drawn) = probe.expect("the closure runs");
         (ctx.fonts(|fonts| fonts.font_image_size()), uv, drawn)
+    }
+
+    /// A scale that follows a zoom takes a new value on every frame of a drag,
+    /// and every distinct SIZE is its own set of rasterized glyphs in egui's
+    /// atlas. Snapping is what keeps a continuous gesture from asking for a
+    /// continuum of them: everything inside one physical pixel is one size.
+    ///
+    /// The identity end matters as much as the bucketing — a label drawn at
+    /// the framing its sizes were dialled for must come out at exactly those
+    /// sizes, not a rounding away from them.
+    #[test]
+    fn snapping_bounds_the_sizes_a_zoom_can_ask_for() {
+        // 15pt at 2x is 30 physical pixels, so scale 1 is already whole.
+        assert_eq!(snap_scale(1.0, 15.0, 2.0), 1.0, "the dialled size is left alone");
+        assert_eq!(snap_scale(1.0, 9.5, 2.0), 1.0, "19 physical pixels, already whole");
+        // A base that isn't whole on the display it is drawn on lands on the
+        // grid rather than sitting off it: the roll's 9.5pt name is 9.5 pixels
+        // at 1x, and draws at 10.
+        assert_eq!(snap_scale(1.0, 9.5, 1.0) * 9.5, 10.0);
+
+        // A pixel of name is a thirtieth of the scale here, so everything
+        // within one lands on the same size...
+        let bucket = |scale: f32| snap_scale(scale, 15.0, 2.0);
+        assert_eq!(bucket(2.0), bucket(2.01));
+        assert_eq!(bucket(2.0), bucket(2.016));
+        assert_eq!(bucket(2.0) * 15.0 * 2.0, 60.0, "...and it is a whole number of pixels");
+        // ...while a step across the boundary is a step, which is what makes
+        // the label track the zoom at all.
+        assert_ne!(bucket(2.0), bucket(2.05));
+
+        // A nonsense denominator leaves the scale alone rather than dividing
+        // by it: no size this could produce is better than the one asked for.
+        assert_eq!(snap_scale(1.5, 0.0, 2.0), 1.5);
+        assert_eq!(snap_scale(1.5, 15.0, 0.0), 1.5);
+        assert_eq!(snap_scale(1.5, f32::NAN, 2.0), 1.5);
+        // And nothing snaps to zero: a floored pixel is still a pixel.
+        assert!(snap_scale(0.001, 15.0, 2.0) * 15.0 * 2.0 >= 1.0);
     }
 
     /// A SCALE change re-rasterizes every glyph and hands out new UVs, and the

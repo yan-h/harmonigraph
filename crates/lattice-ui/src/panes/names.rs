@@ -45,10 +45,14 @@ use super::lattice;
 use super::spectral::{Axes, PitchScale, TimeAxis};
 use crate::{theme, SharedState};
 
-/// Point size of a name's letter. Half a point under the axis labels': there
-/// are many more of these, and they sit inside the picture rather than along
-/// its edge.
-const LABEL_PT: f32 = 9.5;
+/// Point size of a name's letter. Half a point under the axis labels'
+/// ([`MARKING_PT`](super::spectral::MARKING_PT)): there are many more of
+/// these, and they sit inside the picture rather than along its edge.
+///
+/// The size at the pitch zoom it is dialled for, that is — the pane hands
+/// [`plan`] and [`draw`] a scale that grows this as the range narrows. See
+/// `spectral::name_zoom`.
+pub(super) const LABEL_PT: f32 = 9.5;
 
 /// Points the name is set in from the ribbon's leading edge, along the time
 /// axis. Enough that the letter is not touching the end it starts from.

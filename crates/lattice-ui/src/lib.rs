@@ -337,6 +337,15 @@ pub struct SpectrumConfig {
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
     pub labels: SpectrumLabels,
+    /// Overall size of the pane's own markings — the gridline labels above and
+    /// the pitch readout that follows the pointer — as a multiple of their
+    /// built-in sizes.
+    ///
+    /// Fixed against the zoom, unlike the note names: a marking says what the
+    /// axis is, and the axis is the one thing on the pane that does not change
+    /// size when the range is zoomed.
+    #[serde(default = "default_one")]
+    pub marking_scale: f32,
     /// Strength of the light edge drawn along the spectrum's profile and
     /// around each note ribbon, 0 = none. On a roll note it is the whole of
     /// the rim — how bright the keyline is, and whether it is drawn at all.
@@ -403,6 +412,14 @@ pub struct SpectrumConfig {
     /// the struct's own default, which is what a fresh install gets.
     #[serde(default = "default_true")]
     pub note_names: bool,
+    /// Overall size of those names, as a multiple of their built-in size.
+    ///
+    /// Rides on top of the pitch zoom, which already grows a name as the range
+    /// narrows so that it keeps its footing on the ribbon it is written on —
+    /// see `panes::spectral::name_zoom`. This says how big it is at the zoom
+    /// you are at.
+    #[serde(default = "default_one")]
+    pub note_name_scale: f32,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
@@ -589,6 +606,7 @@ impl Default for SpectrumConfig {
             smoothing: 0.55,
             tilt: default_tilt(),
             labels: SpectrumLabels::Notes,
+            marking_scale: default_one(),
             keyline: default_keyline(),
             low_midi: default_low_midi(),
             high_midi: default_high_midi(),
@@ -600,6 +618,7 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_color: default_roll_color(),
             note_names: true,
+            note_name_scale: default_one(),
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
