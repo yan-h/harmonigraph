@@ -55,9 +55,18 @@
 # and the branch can be checked out again later.
 #
 # Runs automatically at SessionStart, wired up in .claude/settings.json. Also
-# safe to run by hand:
-#   RECLAIM_DRY_RUN=1 .claude/reclaim-worktrees.sh   # report, change nothing
+# safe to run by hand, from the main checkout OR any worktree — it locates the
+# main checkout through `git worktree list` rather than trusting $PWD:
+#
+#   RECLAIM_DRY_RUN=1 .claude/reclaim-worktrees.sh   # explain, change nothing
 #   RECLAIM_FORCE=1   .claude/reclaim-worktrees.sh   # ignore the df gate
+#   RECLAIM_DRY_RUN=1 RECLAIM_FORCE=1 RECLAIM_PRUNE_IDLE_MINUTES=1 \
+#     .claude/reclaim-worktrees.sh                   # see it find things NOW
+#
+# DRY_RUN prints one line per decision, on stderr, because stdout is reserved
+# for the systemMessage JSON. It is verbose on purpose: the failure mode this
+# guards against is a hand-run that silently does nothing and gives no clue
+# why — which is exactly what the earlier $PWD-derived path produced.
 #
 # A no-op prints nothing, so a session that reclaims nothing stays quiet; when
 # it does free something it reports the total as a systemMessage.
@@ -90,10 +99,40 @@ fi
 ROOT=${CLAUDE_PROJECT_DIR:-$SESSION_CWD}
 git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
-WT_DIR="$ROOT/.claude/worktrees"
-[ -d "$WT_DIR" ] || exit 0
+WOULD_DO=0
 
-DRY_NOTES=0
+# Diagnostics for a hand-run. Silence is the right behaviour for the hook —
+# SessionStart fires on every session — but it is a terrible answer to
+# "why did nothing happen?", so DRY_RUN explains every decision it makes.
+# These go to stderr; stdout stays reserved for the systemMessage JSON.
+note() {
+  [ "$DRY_RUN" = 1 ] || return 0
+  printf '%s\n' "$1" >&2
+}
+
+# A note that also counts as "this run would have changed something", which is
+# what separates "examined everything, all of it in use" from "did nothing".
+act() {
+  WOULD_DO=$((WOULD_DO + 1))
+  note "$1"
+}
+
+# The first record `git worktree list` prints is always the main checkout, and
+# that holds from ANY worktree of the repo. Derive both paths from it rather
+# than from ROOT: ROOT falls back to $PWD, so a hand-run from inside
+# .claude/worktrees/<branch>/ would otherwise look for
+# <branch>/.claude/worktrees and find nothing.
+MAIN_WT=$(git -C "$ROOT" worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')
+if [ -z "$MAIN_WT" ]; then
+  note 'could not resolve the main checkout from git worktree list'
+  exit 0
+fi
+
+WT_DIR="$MAIN_WT/.claude/worktrees"
+if [ ! -d "$WT_DIR" ]; then
+  note "no worktree dir at $WT_DIR — nothing this script manages"
+  exit 0
+fi
 
 # Sweep staging dirs a previous run left behind BEFORE the df gate: a killed
 # background delete is exactly the case where space is still held, so exiting
@@ -101,8 +140,7 @@ DRY_NOTES=0
 for stale in "$WT_DIR"/*/target/.reclaiming-*; do
   [ -d "$stale" ] || continue
   if [ "$DRY_RUN" = 1 ]; then
-    printf 'would sweep leftover %s\n' "$stale" >&2
-    DRY_NOTES=1
+    act "would sweep leftover $stale"
   else
     nohup rm -rf "$stale" >/dev/null 2>&1 &
   fi
@@ -112,10 +150,10 @@ done
 free_gb=$(df -k "$ROOT" 2>/dev/null | awk 'NR==2 {printf "%d", $4 / 1048576}')
 [ -n "$free_gb" ] || free_gb=0
 if [ "$FORCE" != 1 ] && [ "$free_gb" -ge "$FREE_LOW_WATER_GB" ]; then
-  [ "$DRY_RUN" = 1 ] && printf 'df gate: %sG free >= %sG low water — nothing to do\n' \
-    "$free_gb" "$FREE_LOW_WATER_GB" >&2
+  note "df gate: ${free_gb}G free >= ${FREE_LOW_WATER_GB}G low water, so nothing to do (RECLAIM_FORCE=1 overrides)"
   exit 0
 fi
+note "df gate: ${free_gb}G free, low water ${FREE_LOW_WATER_GB}G$([ "$FORCE" = 1 ] && printf ' (forced)')"
 
 # Resolve main once. Without it "merged" is unanswerable, so tier 2 is skipped
 # while tier 1 — which never asks — still runs.
@@ -126,9 +164,6 @@ for ref in main origin/main; do
     break
   fi
 done
-
-# The first record `git worktree list` prints is always the main checkout.
-MAIN_WT=$(git -C "$ROOT" worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')
 
 freed_kb=0
 removed=0
@@ -160,6 +195,7 @@ usable() {
   path=$1
   locked=$2
   reason=$3
+  name=$(basename "$path")
 
   [ -d "$path" ] || return 1
   [ "$path" = "$MAIN_WT" ] && return 1
@@ -167,20 +203,26 @@ usable() {
   # Only ever touch worktrees Claude created.
   case "$path" in
     */.claude/worktrees/*) ;;
-    *) return 1 ;;
+    *) note "skip $name: not under .claude/worktrees"; return 1 ;;
   esac
 
   # Never saw off the branch we are sitting on.
   case "$SESSION_CWD/" in
-    "$path"/*) return 1 ;;
+    "$path"/*) note "skip $name: this session is running in it"; return 1 ;;
   esac
 
   # A lock naming a live pid means a session still owns this worktree. A lock we
   # cannot attribute to a pid is left alone rather than guessed at.
   if [ "$locked" = 1 ]; then
     pid=$(printf '%s' "$reason" | sed -n 's/.*pid \([0-9][0-9]*\).*/\1/p')
-    [ -n "$pid" ] || return 1
-    ps -p "$pid" >/dev/null 2>&1 && return 1
+    if [ -z "$pid" ]; then
+      note "skip $name: locked, no pid in the reason to check"
+      return 1
+    fi
+    if ps -p "$pid" >/dev/null 2>&1; then
+      note "skip $name: locked by live pid $pid"
+      return 1
+    fi
   fi
   return 0
 }
@@ -199,6 +241,7 @@ prune_caches() {
     # break that build. The live-lock check above is the primary guard; this is
     # depth behind it, and `-quit` keeps it to a few hundred stats.
     if [ -n "$(find "$victim" -maxdepth 2 -newermt "-${PRUNE_IDLE_MINUTES} minutes" -print -quit 2>/dev/null)" ]; then
+      note "keep $(basename "$path")/target/$sub: written in the last ${PRUNE_IDLE_MINUTES}m"
       continue
     fi
 
@@ -206,8 +249,7 @@ prune_caches() {
     [ -n "$size_kb" ] || size_kb=0
 
     if [ "$DRY_RUN" = 1 ]; then
-      printf 'would prune %s (%s)\n' "$victim" "$(human "$size_kb")" >&2
-      DRY_NOTES=1
+      act "would prune $victim ($(human "$size_kb"))"
       continue
     fi
 
@@ -224,20 +266,28 @@ remove_worktree() {
   head=$2
   locked=$3
 
-  [ -n "$MAIN_REF" ] || return 1
+  name=$(basename "$path")
+  [ -n "$MAIN_REF" ] || { note "no-remove $name: could not resolve main"; return 1; }
 
   # Merged into main? Unmerged work is never removed. This misses squash
   # merges by construction, which is why tier 1 does not depend on it.
-  git -C "$ROOT" merge-base --is-ancestor "$head" "$MAIN_REF" 2>/dev/null || return 1
+  if ! git -C "$ROOT" merge-base --is-ancestor "$head" "$MAIN_REF" 2>/dev/null; then
+    note "no-remove $name: HEAD not an ancestor of $MAIN_REF (a squash merge reads this way too)"
+    return 1
+  fi
 
   # Clean? --porcelain lists untracked files too, so a stray scratch file saves it.
   status=$(git -C "$path" status --porcelain 2>/dev/null) || return 1
-  [ -z "$status" ] || return 1
+  if [ -n "$status" ]; then
+    note "no-remove $name: $(printf '%s' "$status" | wc -l | tr -d ' ') uncommitted/untracked file(s)"
+    return 1
+  fi
 
   # Belt and braces for work that is committed but still being used: maxdepth
   # keeps this cheap, and catches both source edits and a running build's
   # writes to target/{debug,release}.
   if [ -n "$(find "$path" -maxdepth 2 -newermt "-${MIN_IDLE_MINUTES} minutes" -print -quit 2>/dev/null)" ]; then
+    note "no-remove $name: touched in the last ${MIN_IDLE_MINUTES}m"
     return 1
   fi
 
@@ -245,8 +295,7 @@ remove_worktree() {
   [ -n "$size_kb" ] || size_kb=0
 
   if [ "$DRY_RUN" = 1 ]; then
-    printf 'would remove %s (%s)\n' "$path" "$(human "$size_kb")" >&2
-    DRY_NOTES=1
+    act "would remove $path ($(human "$size_kb"))"
     return 0
   fi
 
@@ -302,7 +351,11 @@ flush
 git -C "$ROOT" worktree prune >/dev/null 2>&1
 
 if [ "$DRY_RUN" = 1 ]; then
-  [ "$DRY_NOTES" = 0 ] && printf 'nothing eligible\n' >&2
+  if [ "$WOULD_DO" = 0 ]; then
+    note 'nothing eligible — every worktree above is in use, recently built, or unmerged'
+  else
+    note "$WOULD_DO action(s) eligible; re-run without RECLAIM_DRY_RUN=1 to apply"
+  fi
   exit 0
 fi
 
