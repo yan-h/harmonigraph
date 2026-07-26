@@ -191,6 +191,52 @@ bugs, both of them a cache whose missing input arrived in a *different* PR.
 The command reads the combined diff and keeps a `last-merge-audit` tag so
 consecutive audits do not re-read the same range.
 
+### Squash by default; merge-commit the exception
+
+**Squash a PR unless its commits are separable.** The question is not how
+many there are — #97 had eight and was squashed, #95 had about seven and
+took a merge commit. It is whether the commits *supersede one another*.
+
+A session usually pursues one idea and arrives at it, so most of its
+commits correct earlier ones on the same branch: #98's "four ways the drawn
+marks were wrong", then "round a mark's SIZE", then "make a mark a coverage
+bitmap" are three passes at one problem, two of them later overturned. On
+`main` those read as decisions when they are revisions, and `blame` lands a
+future reader on reasoning that was abandoned. Squashed, `main` carries the
+conclusion and the passes stay in the PR.
+
+The exception is a branch holding changes that merely share a branch. #95 —
+remove peak hold, remove the Heat palette, the keyline change, the spectrum
+always analyzed — is four decisions, each worth finding on its own, and a
+merge commit keeps them findable.
+
+**What squashing costs, and what to do about it.** This repo's commit
+messages carry measurements and rejected alternatives, and condensing them
+leaves that reasoning only in the PR. So treat *"would I lose this by
+squashing?"* as the signal it was never safe there: a fact whose only home
+is a commit message is already weakly anchored, because nothing puts it in
+front of the next person to touch the code. The same argument the agents
+section makes for doc comments applies here — put the load-bearing why in a
+comment and squashing costs nothing. In #98 that is what happened: the
+Iosevka stroke measurements and the atlas-quantization finding are in
+comments and survived intact.
+
+**Not a bisect argument, though it looks like one.** `.githooks/pre-push`
+gates the push and not each commit, so intermediate commits on any branch
+are unverified and a merge commit puts them on `main`. That sounds like it
+breaks `git bisect`, and it does not: `git bisect start --first-parent`
+tests only merge commits and squashes, each of which is a whole PR that
+passed `ci.sh` on its way up. Reach for that flag rather than for a reason
+to rewrite history.
+
+**Which is also why the history behind this rule is left alone.**
+Retroactively squashing what has already merged would mean force-pushing
+`main`, invalidating every worktree built on it, and voiding every sha
+already written down — the `last-merge-audit` tag, the `build … @<sha>`
+stamped into binaries, every PR link. It would buy tidiness in a log that
+`--first-parent` already reads cleanly. This rule is for the next PR, not
+the last thirty.
+
 ### The agents in `.claude/agents/`
 
 `merge-auditor` does the reading for `/audit-merges`; `diff-reviewer` does it
