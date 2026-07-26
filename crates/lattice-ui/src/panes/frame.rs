@@ -221,13 +221,4 @@ fn sevens_layer_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             ],
         );
     });
-    ValueBar::new(&mut state.view.mark_weight, 0.04..=0.20, "Mark weight")
-        .show(ui)
-        .on_hover_text(
-            "How heavy the DRAWN label marks are (+, -, and the septimal \
-             shape), as a fraction of the mark's font size. Iosevka draws \
-             every bar it has at 0.07 -- which is why these are geometry \
-             and not type. Floored at a whole pixel, so the bottom of the \
-             range stops mattering on a small node",
-        );
 }

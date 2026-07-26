@@ -270,7 +270,6 @@ pub(crate) fn draw_node_labels(
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
-                    view.mark_weight,
                 )
             }
         };
@@ -346,6 +345,24 @@ pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
 /// em wide. A drawn mark claims exactly this, so it sits in the same column
 /// grid as the typeset accidental above it.
 const MARK_ADVANCE: f32 = 0.5;
+/// Iosevka's own stroke weight, measured off its outlines: 70/1000 em, as a
+/// fraction of the mark's font size.
+///
+/// A constant rather than a setting, because the face gives no other answer
+/// to weigh it against. It uses ONE weight for everything — `♯`'s verticals
+/// are 69 and its bars 70, the hyphen is 70, `+` is about 70 — and it does
+/// that across a glyph 878 units tall (`♯`) and one 70 units tall (`-`)
+/// alike. So the typeface's own answer to "should a smaller mark be drawn
+/// heavier?" is no, and an optical-sizing argument for 0.10 or 0.12 is an
+/// argument against the face these marks sit in.
+///
+/// Heavier weights were also compensating for something since fixed: while
+/// the marks were composited shapes their feathered joins read heavier than
+/// the geometry measured, and while they were typeset a bar this thin really
+/// did smear. Rasterized with a whole-pixel floor (see [`mark_key`]), 0.07 is
+/// a clean line — and it is the line the rest of the label is drawn with.
+const MARK_WEIGHT: f32 = 0.07;
+
 /// The ink width Iosevka gives `+` and `-` within that cell (372/1000 em).
 /// Matching it is what keeps a drawn sign from reading as a different size
 /// of mark than the `♯` stacked over it.
@@ -662,15 +679,39 @@ fn rasterize_mark_rim(key: MarkKey) -> egui::ColorImage {
 /// How many mark bitmaps to keep before starting over. Zooming walks through
 /// sizes, and each one is its own bitmap; this is a ceiling on the churn,
 /// not a working-set estimate.
-const MARK_CACHE_LIMIT: usize = 96;
+pub(crate) const MARK_CACHE_LIMIT: usize = 96;
+
+type MarkTextures = (egui::TextureHandle, egui::TextureHandle);
+
+/// The mark bitmaps, plus the ones evicted too recently to destroy yet.
+#[derive(Clone, Default)]
+struct MarkCache {
+    live: std::collections::HashMap<MarkKey, MarkTextures>,
+    /// Evicted handles, each with the pass it was evicted on, held until a
+    /// LATER pass has begun.
+    ///
+    /// Dropping the last handle to a texture makes egui queue its id into
+    /// `textures_delta.free`, and the wgpu renderer applies those frees
+    /// BEFORE it submits the encoder (see `free_texture` then `queue.submit`
+    /// in egui-baseview's wgpu renderer). So a texture evicted midway
+    /// through a pass is destroyed while draw commands recorded EARLIER in
+    /// that same pass still name it, and the submit fails validation with
+    /// "Texture ... has been destroyed" — which is fatal, not recoverable.
+    /// Eviction picks an arbitrary victim, so the victim is sometimes a mark
+    /// the pass has already painted.
+    ///
+    /// Holding the handle until the next pass is what makes the eviction
+    /// safe: by then the pass that drew it has been submitted, and the key
+    /// is already out of `live`, so nothing new can reference the old id.
+    retired: Vec<(u64, MarkTextures)>,
+}
 
 /// The texture for one mark, rasterized on first use and kept in egui's own
 /// per-frame data store.
-fn mark_texture(ctx: &egui::Context, key: MarkKey) -> (egui::TextureHandle, egui::TextureHandle) {
-    type Cache =
-        std::collections::HashMap<MarkKey, (egui::TextureHandle, egui::TextureHandle)>;
-    let cached = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<Cache>>(egui::Id::NULL));
-    if let Some(hit) = cached.as_ref().and_then(|c| c.get(&key)) {
+fn mark_texture(ctx: &egui::Context, key: MarkKey) -> MarkTextures {
+    let pass = ctx.cumulative_pass_nr();
+    let cached = ctx.data_mut(|d| d.get_temp::<std::sync::Arc<MarkCache>>(egui::Id::NULL));
+    if let Some(hit) = cached.as_ref().and_then(|c| c.live.get(&key)) {
         return hit.clone();
     }
     // LINEAR, because a mark is placed at a subpixel position and resampled
@@ -688,18 +729,23 @@ fn mark_texture(ctx: &egui::Context, key: MarkKey) -> (egui::TextureHandle, egui
         ),
     );
     let mut next = cached.map(|c| (*c).clone()).unwrap_or_default();
+    // Anything retired on an earlier pass has had its pass submitted, so the
+    // handle can go now and the texture is destroyed on this pass's frees.
+    next.retired.retain(|(evicted_on, _)| *evicted_on >= pass);
     // Evict ONE rather than emptying the map. Zooming walks through sizes a
     // pixel at a time, so the cache fills during an ordinary drag; clearing
     // it there drops every texture at once and re-rasterizes the whole
     // visible set on the next frame, which is a stall exactly while the
     // camera is moving. Which one goes is arbitrary — there is no recency
     // here to consult — but one at a time keeps the cost flat.
-    if next.len() >= MARK_CACHE_LIMIT {
-        if let Some(&victim) = next.keys().next() {
-            next.remove(&victim);
+    if next.live.len() >= MARK_CACHE_LIMIT {
+        if let Some(&victim) = next.live.keys().next() {
+            if let Some(handles) = next.live.remove(&victim) {
+                next.retired.push((pass, handles));
+            }
         }
     }
-    next.insert(key, handle.clone());
+    next.live.insert(key, handle.clone());
     ctx.data_mut(|d| d.insert_temp(egui::Id::NULL, std::sync::Arc::new(next)));
     handle
 }
@@ -820,7 +866,6 @@ pub(crate) fn draw_stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
-    mark_weight: f32,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
@@ -909,7 +954,7 @@ pub(crate) fn draw_stacked_name(
                            count: &str,
                            kind: MarkKind|
      -> f32 {
-        let key = mark_key(kind, mark_size, mark_weight, ppp);
+        let key = mark_key(kind, mark_size, MARK_WEIGHT, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
         let half_height = paint_mark(painter, ppp, key, center, color, outline);
         if !count.is_empty() {
