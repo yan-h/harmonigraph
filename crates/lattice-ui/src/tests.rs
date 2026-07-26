@@ -2272,3 +2272,31 @@ fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
     assert_eq!(restored.spectrum_config.roll_thickness, 1.75, "the blob survived");
     assert_eq!(restored.spectrum_config.low_midi, 40.5);
 }
+
+/// The three text-size bars and the clamps their values are persisted through
+/// offer the same range.
+///
+/// `SCALE_BAR_RANGE` says it is "one range for the three of them", and for two
+/// of them it is the constant itself: `sane_scale` fits `marking_scale` and
+/// `note_name_scale` to it on load. The lattice's `label_scale` cannot reach
+/// it — `ViewConfig` lives in `lattice-scene`, which is BELOW this crate, so
+/// the range is not visible there and `migrate_legacy` clamps to a written-out
+/// copy of the same two numbers.
+///
+/// Nothing ties the copy to the original. Widen the bar and a saved view keeps
+/// loading at the old ceiling, which is a setting that will not stay where it
+/// is put — silently, and only for the one of the three that is a different
+/// crate. This is what notices.
+#[test]
+fn every_text_size_bar_persists_through_the_range_it_offers() {
+    let through_view = |scale: f32| {
+        let mut view = lattice_scene::ViewConfig { label_scale: scale, ..Default::default() };
+        view.migrate_legacy();
+        view.label_scale
+    };
+    let (low, high) = (*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end());
+    assert_eq!(through_view(low - 1.0), low, "the lattice label bar's floor");
+    assert_eq!(through_view(high + 1.0), high, "...and its ceiling");
+    assert_eq!(sane_scale(low - 1.0), low, "the two analyzer bars', from the constant itself");
+    assert_eq!(sane_scale(high + 1.0), high);
+}
