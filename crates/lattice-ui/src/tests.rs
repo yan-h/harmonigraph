@@ -2363,3 +2363,62 @@ fn the_lattice_label_bar_persists_through_the_range_it_offers() {
     assert_eq!(through_view(low - 1.0), low, "the bar's floor");
     assert_eq!(through_view(high + 1.0), high, "...and its ceiling");
 }
+
+/// A pass that fills the mark cache must not destroy a texture it has
+/// already drawn.
+///
+/// Eviction drops the last handle to a bitmap, which makes egui queue that
+/// id into `textures_delta.free` -- and egui-baseview's wgpu renderer
+/// applies those frees BEFORE it submits the encoder. So a mark evicted
+/// midway through a pass is destroyed while the draw commands naming it are
+/// still queued, and `Queue::submit` fails validation with "Texture ... has
+/// been destroyed", which wgpu treats as fatal. The victim is arbitrary, so
+/// it is sometimes a mark this pass has already painted.
+///
+/// Reachable from any control that walks a mark's key: the sizes zooming
+/// steps through, or the weight when that was still a setting. Each pass
+/// mints fresh keys, so the cache sits at its limit and evicts on every
+/// insert.
+#[test]
+fn filling_the_mark_cache_never_frees_a_texture_the_pass_drew() {
+    use panes::lattice::{MARK_CACHE_LIMIT, MARK_SIZE};
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+    // Both comma marks, so each size contributes more than one key.
+    let name =
+        lattice_core::NoteName { letter: 'C', sharps: 1, syntonic_commas: 1, septimal_commas: 1 };
+
+    // Ask for one mark per whole pixel size, far enough past the limit that
+    // eviction is running while the pass is still drawing.
+    let sizes = 3..=(3 + MARK_CACHE_LIMIT / 2 + 8);
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            let mut batch = crate::text::TextBatch::default();
+            for size_px in sizes.clone() {
+                panes::lattice::draw_stacked_name(
+                    &mut batch,
+                    ui.painter(),
+                    egui::pos2(200.0, 200.0),
+                    name,
+                    egui::Color32::WHITE,
+                    egui::Color32::BLACK,
+                    size_px as f32 / MARK_SIZE,
+                );
+            }
+        },
+    );
+
+    let drawn: std::collections::HashSet<egui::TextureId> = out
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
+            _ => None,
+        })
+        .collect();
+    let freed: Vec<_> =
+        out.textures_delta.free.iter().copied().filter(|id| drawn.contains(id)).collect();
+    assert!(freed.is_empty(), "the pass freed {} textures it had drawn: {freed:?}", freed.len());
+}
