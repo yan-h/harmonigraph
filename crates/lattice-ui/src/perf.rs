@@ -573,33 +573,13 @@ pub const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
 /// Points between the overlay and the corner it sits in.
 const OVERLAY_INSET: f32 = 8.0;
 
-/// Draw the overlay in the top-right corner of `area` — the analyzer pane when
-/// it is on screen, the whole editor otherwise (see `perf_overlay_area`). A
-/// floating, non-interactive panel so it never steals clicks from the view
-/// under it.
-pub(crate) fn draw_overlay(
-    ctx: &egui::Context,
-    area: egui::Rect,
-    perf: &PerfStats,
-    detail: bool,
-) {
-    let fps = perf.fps();
-    // Only flag a low rate while something is actually animating — an idle
-    // editor is meant to drop to the poll rate, so a low idle number is fine.
-    let health = if perf.workload.animating && fps < 30.0 {
-        egui::Color32::from_rgb(0xE5, 0x7A, 0x5A) // warm red
-    } else if perf.workload.animating && fps < 50.0 {
-        egui::Color32::from_rgb(0xE0, 0xB0, 0x4A) // amber
-    } else {
-        egui::Color32::from_rgb(0x7A, 0xC8, 0x8A) // calm green
-    };
-    let state = if perf.workload.animating { "live" } else { "idle" };
-
-    let dim = egui::Color32::from_gray(0x9A);
-    let bright = egui::Color32::from_gray(0xE6);
-    let mono = egui::FontId::monospace(11.0);
-    let head_font = egui::FontId::monospace(12.0);
-
+/// The overlay's rows: `(depth, label, value, peak)`.
+///
+/// Split out from the drawing so what the two modes SHOW is assertable
+/// without a font, a context, or a painter — the reason `tick` is absent
+/// from the basic list is a decision worth a test, and it is invisible in a
+/// picture.
+fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String, Option<String>)> {
     let fading = perf.workload.active_voices.saturating_sub(perf.workload.held_voices);
     // A timed row: the window mean, and the worst frame of the last few
     // windows. Two numbers because neither answers the question alone — the
@@ -620,12 +600,18 @@ pub(crate) fn draw_overlay(
     // because each frame's parts do — but two stages' worst frames are almost
     // never the same frame, so the peaks do not sum to anything and a column
     // of them must not look like it does.
-    let mut rows: Vec<(u8, &str, String, Option<String>)> = vec![
-        timed(0, "frame", &perf.frame_ms),
-        timed(0, "tick", &perf.tick),
-    ];
+    //
+    // Without `detail` the list is what you read to NOTICE something is wrong:
+    // the rate, one cost, and the workload behind it. A row that only answers
+    // WHERE the frame went belongs to the breakdown — `tick` and everything
+    // nested under it, and the GPU passes beside them — because that is the
+    // question the breakdown exists to answer, and until it is asked the rows
+    // are scaffolding sitting over the picture.
+    let mut rows: Vec<(u8, &str, String, Option<String>)> =
+        vec![timed(0, "frame", &perf.frame_ms)];
     if detail {
         rows.extend([
+            timed(0, "tick", &perf.tick),
             timed(1, "egui", &perf.egui),
             timed(2, "shell", &perf.shell),
             timed(2, "ui", &perf.ui),
@@ -643,24 +629,23 @@ pub(crate) fn draw_overlay(
             timed(2, "encode", &perf.encode),
             timed(2, "submit", &perf.submit),
         ]);
-    }
-    rows.push((0, "gpu", {
-        // Both passes on one line at the top level: they run alongside the CPU
-        // stages rather than inside any of them, so nesting either under
-        // `tick` would be a lie about what contains what.
-        //
-        // Means only. Two peaks as well would be four numbers on one row, and
-        // the row would stop being readable long before it became more useful.
-        let lattice = if !perf.gpu_supported {
-            "n/a".to_owned()
-        } else if perf.have_gpu {
-            format!("{:.1}", perf.gpu.shown_mean)
-        } else {
-            "—".to_owned()
-        };
-        format!("{:.1} ui · {lattice} 3d", perf.egui_gpu.shown_mean)
-    }, None));
-    if detail {
+        rows.push((0, "gpu", {
+            // Both passes on one line at the top level: they run alongside the
+            // CPU stages rather than inside any of them, so nesting either
+            // under `tick` would be a lie about what contains what.
+            //
+            // Means only. Two peaks as well would be four numbers on one row,
+            // and the row would stop being readable long before it became more
+            // useful.
+            let lattice = if !perf.gpu_supported {
+                "n/a".to_owned()
+            } else if perf.have_gpu {
+                format!("{:.1}", perf.gpu.shown_mean)
+            } else {
+                "—".to_owned()
+            };
+            format!("{:.1} ui · {lattice} 3d", perf.egui_gpu.shown_mean)
+        }, None));
         rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims), None));
         // The roll's geometry, which `verts` does not see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
@@ -697,6 +682,37 @@ pub(crate) fn draw_overlay(
             None,
         ),
     ]);
+    rows
+}
+
+/// Draw the overlay in the top-right corner of `area` — the analyzer pane when
+/// it is on screen, the whole editor otherwise (see `perf_overlay_area`). A
+/// floating, non-interactive panel so it never steals clicks from the view
+/// under it.
+pub(crate) fn draw_overlay(
+    ctx: &egui::Context,
+    area: egui::Rect,
+    perf: &PerfStats,
+    detail: bool,
+) {
+    let fps = perf.fps();
+    // Only flag a low rate while something is actually animating — an idle
+    // editor is meant to drop to the poll rate, so a low idle number is fine.
+    let health = if perf.workload.animating && fps < 30.0 {
+        egui::Color32::from_rgb(0xE5, 0x7A, 0x5A) // warm red
+    } else if perf.workload.animating && fps < 50.0 {
+        egui::Color32::from_rgb(0xE0, 0xB0, 0x4A) // amber
+    } else {
+        egui::Color32::from_rgb(0x7A, 0xC8, 0x8A) // calm green
+    };
+    let state = if perf.workload.animating { "live" } else { "idle" };
+
+    let dim = egui::Color32::from_gray(0x9A);
+    let bright = egui::Color32::from_gray(0xE6);
+    let mono = egui::FontId::monospace(11.0);
+    let head_font = egui::FontId::monospace(12.0);
+
+    let rows = overlay_rows(perf, detail);
 
     // Painted straight onto a foreground layer rather than assembled from
     // widgets inside an Area.
@@ -924,6 +940,41 @@ mod tests {
                 Workload::default(),
             );
         }
+    }
+
+    /// The basic overlay answers "is something wrong", the breakdown answers
+    /// "where did the frame go" — so every row that only serves the second
+    /// question waits for `detail`, `tick` and `gpu` included.
+    ///
+    /// Worth asserting rather than eyeballing: both modes draw a plausible
+    /// HUD, and a row leaking back into the basic list is a change nobody
+    /// notices until the corner is cluttered again.
+    #[test]
+    fn the_basic_overlay_is_the_headline_rows_only() {
+        let perf = PerfStats::default();
+        let label_of = |rows: &[(u8, &'static str, String, Option<String>)]| {
+            rows.iter().map(|(_, label, _, _)| *label).collect::<Vec<_>>()
+        };
+
+        let basic = label_of(&overlay_rows(&perf, false));
+        assert_eq!(
+            basic,
+            ["frame", "memory", "voices", "nodes"],
+            "the basic overlay is the rate's one cost plus the workload behind it",
+        );
+
+        let detail = label_of(&overlay_rows(&perf, true));
+        for row in ["tick", "gpu", "egui", "render", "verts", "spec"] {
+            assert!(detail.contains(&row), "the breakdown should still carry `{row}`");
+        }
+        // Every basic row survives the expansion, in order: the breakdown adds
+        // to the headline list rather than replacing it, so a glance at one
+        // mode transfers to the other.
+        let mut kept = detail.iter().filter(|row| basic.contains(row));
+        assert!(
+            basic.iter().all(|row| kept.next() == Some(&row)),
+            "the breakdown reorders or drops a headline row: {detail:?}",
+        );
     }
 
     /// The readout that would have caught both of the spectrogram's silent
