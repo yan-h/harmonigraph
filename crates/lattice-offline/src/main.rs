@@ -203,6 +203,14 @@ fn parse_size(text: &str) -> Result<[u32; 2], String> {
 /// 1000x700 points, so matching that density means giving the render
 /// about the same number of points across — hence dividing the output
 /// width by a reference width rather than by anything about the display.
+///
+/// It decides how SHARPLY the type is rasterized and nothing else about its
+/// size: every label sizes itself off the pane it is drawn on, in points, and
+/// a pane's points are its pixels over this — so the two cancel and a render
+/// of the same frame at any resolution carries the same type, larger. That is
+/// the point of it, but it used to work the other way about (point sizes were
+/// fixed, so this scaled them), and the difference matters if anyone ever
+/// reaches for `--scale` to make the text bigger. It will not.
 fn default_scale(size: [u32; 2]) -> f32 {
     const REFERENCE_POINTS_ACROSS: f32 = 1280.0;
     (size[0] as f32 / REFERENCE_POINTS_ACROSS).clamp(1.0, 4.0)

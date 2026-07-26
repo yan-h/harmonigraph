@@ -337,6 +337,21 @@ pub struct SpectrumConfig {
     /// Axis gridline labeling.
     #[serde(default = "default_labels")]
     pub labels: SpectrumLabels,
+    /// Overall size of the pane's own markings — the gridline labels above and
+    /// the pitch readout that follows the pointer — as a multiple of their
+    /// built-in sizes.
+    ///
+    /// Fixed against the zoom, unlike the note names: a marking says what the
+    /// axis is, and the axis is the one thing on the pane that does not change
+    /// size when the range is zoomed.
+    ///
+    /// A saved view loads at 1 and so draws its markings TWICE the size it was
+    /// saved at, the built-in size having been rebased by 2 (see
+    /// `panes::spectral::MARKING_PT`). Deliberate, and the same call as the
+    /// lattice's: 10pt was the wrong number rather than one of several, and a
+    /// blob that kept it would be preserving a mistake.
+    #[serde(default = "default_one")]
+    pub marking_scale: f32,
     /// Strength of the light edge drawn along the spectrum's profile and
     /// around each note ribbon, 0 = none. On a roll note it is the whole of
     /// the rim — how bright the keyline is, and whether it is drawn at all.
@@ -403,6 +418,18 @@ pub struct SpectrumConfig {
     /// the struct's own default, which is what a fresh install gets.
     #[serde(default = "default_true")]
     pub note_names: bool,
+    /// Overall size of those names, as a multiple of their built-in size.
+    ///
+    /// Rides on top of the pitch zoom, which already grows a name as the range
+    /// narrows so that it keeps its footing on the ribbon it is written on —
+    /// see `panes::spectral::name_zoom`. This says how big it is at the zoom
+    /// you are at.
+    ///
+    /// A saved view loads at 1 and so draws its names 1.3 times the size it
+    /// was saved at, for the reason [`marking_scale`](Self::marking_scale)
+    /// gives.
+    #[serde(default = "default_one")]
+    pub note_name_scale: f32,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
@@ -505,12 +532,61 @@ impl SpectrumConfig {
         let (floor, ceil) = (default_low_midi(), default_high_midi());
         self.low_midi = self.low_midi.clamp(floor, ceil - PITCH_RANGE_MIN_SPAN);
         self.high_midi = self.high_midi.clamp(self.low_midi + PITCH_RANGE_MIN_SPAN, ceil);
+        // And the same treatment for the two text scales, for the same reason
+        // and against the same threat: their bars cannot produce a nonsense
+        // value, a hand-edited blob can, and these multiply a FONT SIZE. A
+        // non-finite one reaches egui as a glyph with no image — every marking
+        // and every name silently gone, which reads as a broken plugin rather
+        // than as a bad number — and a huge one asks its rasterizer for a
+        // glyph wider than the texture atlas can hold.
+        self.marking_scale = sane_scale(self.marking_scale);
+        self.note_name_scale = sane_scale(self.note_name_scale);
     }
 }
 
-/// Closest the two ends of the pitch range may come: one octave, which is
-/// what the octave-pair control guaranteed before it went continuous.
-pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 12.0;
+/// Closest the two ends of the ANALYZER's pitch range may come.
+///
+/// Two octaves, and it is the note names that set it. They scale in
+/// proportion to the zoom (see `panes::spectral::name_zoom`), so how far the
+/// range may be closed IS how large a name can get: the whole axis is ten
+/// octaves, so a two-octave floor puts a name at five times its dialled size
+/// and no more. It was one octave, from when the range was a pair of octave
+/// numbers and nothing downstream cared how tight it got.
+///
+/// A range saved narrower than this widens to it on load
+/// ([`SpectrumConfig::migrate_legacy`]), takes included — so a video rendered
+/// from an old take renders at the wider range too.
+///
+/// Named for the analyzer alone, and read by nothing else. The Nodes tab's
+/// colour range is a span of pitch as well and used to borrow this; it has
+/// [`COLOR_RANGE_MIN_SPAN`] of its own now, because the reasoning above is
+/// about the size of TYPE and says nothing whatever about how tightly a
+/// gradient may be aimed.
+pub(crate) const PITCH_RANGE_MIN_SPAN: f32 = 24.0;
+
+/// A persisted text scale, fit to the range its bar offers.
+///
+/// Anything outside it — a hand-edited blob, a NaN out of a corrupt float —
+/// becomes the size a fresh install draws at, which is the one value that is
+/// certainly meant to be legible. See [`SCALE_BAR_RANGE`].
+pub(crate) fn sane_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end())
+    } else {
+        1.0
+    }
+}
+
+/// What every text-size bar offers, and so what a persisted scale is fit to.
+/// One range for the three of them: they are the same control over three kinds
+/// of text, and a reader comparing two of them should not have to check
+/// whether they mean the same thing by 2.
+pub const SCALE_BAR_RANGE: std::ops::RangeInclusive<f32> = 0.3..=3.0;
+
+/// Closest the two ends of the Nodes tab's colour range may come: an octave,
+/// which is where it sat while it shared [`PITCH_RANGE_MIN_SPAN`] and had no
+/// reason to move when that one did.
+pub(crate) const COLOR_RANGE_MIN_SPAN: f32 = 12.0;
 
 /// How far the roll's time span may be taken, in seconds. Named because two
 /// controls now set it — the Analyzer tab's Span bar and the drag across the
@@ -589,6 +665,7 @@ impl Default for SpectrumConfig {
             smoothing: 0.55,
             tilt: default_tilt(),
             labels: SpectrumLabels::Notes,
+            marking_scale: default_one(),
             keyline: default_keyline(),
             low_midi: default_low_midi(),
             high_midi: default_high_midi(),
@@ -600,6 +677,7 @@ impl Default for SpectrumConfig {
             roll_thickness: default_roll_thickness(),
             roll_color: default_roll_color(),
             note_names: true,
+            note_name_scale: default_one(),
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
             spectrogram_opacity: default_spectrogram_opacity(),
@@ -1877,9 +1955,9 @@ pub enum Pane {
 pub fn draw_pane(ui: &mut egui::Ui, pane: Pane, state: &mut SharedState, now: f64) {
     match pane {
         Pane::Lattice => panes::lattice::lattice_pane(ui, state, now),
-        // Offline: pixels-per-point already scales text, so no extra factor;
-        // one spectrogram per frame, so texture slot 0.
-        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 1.0, 0),
+        // One spectrogram per frame offline, so texture slot 0. Text sizes
+        // itself off the pane, here as everywhere.
+        Pane::Spectral => panes::spectral::spectral_pane(ui, state, now, 0),
     }
 }
 

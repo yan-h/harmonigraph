@@ -137,6 +137,14 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             ),
         ],
     );
+    ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Label size")
+        .show(ui)
+        .on_hover_text(
+            "Size of the pane's own markings: the label on each gridline, and \
+             the pitch readout that follows the pointer. Fixed against the \
+             zoom, unlike the note names on the ribbons -- a marking says what \
+             the axis is, and the axis does not change size when you zoom it",
+        );
 
     // ---- Audio spectrum -------------------------------------------------
     // Always analyzed: the pane IS the analyzer, the spectrogram reads the
@@ -263,6 +271,18 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          for clear room — except a note you are holding, which is always \
          named. Needs Note history on: a name labels a ribbon.",
     );
+    ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
+        ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Name size")
+            .show(ui)
+            .on_hover_text(
+                "Overall size of those names.\n\nThey already follow the pitch \
+                 zoom, in proportion: a ribbon's width is set in semitones, so \
+                 narrowing the range fattens every ribbon, and a name keeps the \
+                 same relation to the ribbon it is written on -- five times its \
+                 size here at the tightest two-octave range. This sets what \
+                 that size is",
+            );
+    });
     button_row(ui, |ui| {
         if ui
             .button("Clear roll")
@@ -337,6 +357,97 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
+
+/// Point size of an axis gridline's label, and of the pitch readout that
+/// follows the pointer. The readout is the point larger: it is one line
+/// answering a question you just asked, where the gridline labels are a dozen
+/// standing marks that should stay quiet.
+///
+/// Doubled from the 10 and 10.5 these were drawn at before the Label size bar
+/// existed. The bar went to 2 the first time it was tried and stayed there —
+/// so the number was wrong rather than the bar wanted, and rebasing it leaves
+/// the bar reading 1 at the size the pane is actually read at.
+pub(super) const MARKING_PT: f32 = 20.0;
+const READOUT_PT: f32 = 21.0;
+
+/// The whole pitch axis, in semitones — the widest the range opens, and the
+/// zoom the note names' built-in size is dialled for.
+const FULL_PITCH_SPAN: f32 =
+    lattice_core::spectrum::SPECTRUM_MAX_MIDI - lattice_core::spectrum::SPECTRUM_MIN_MIDI;
+
+/// How much bigger a note name draws with the pitch range zoomed to `span`
+/// semitones: 1 across the whole axis, growing in PROPORTION as it narrows.
+///
+/// The names are written ON the ribbons, and a ribbon's width is set in
+/// SEMITONES — so zooming the pitch range draws every ribbon thicker by
+/// exactly the zoom factor while leaving the name that names it the size it
+/// was. That is the mismatch this answers, and proportional answers it
+/// squarely: a name keeps a constant share of the pitch axis, so it holds the
+/// same relation to its ribbon at every zoom and the picture simply gets
+/// bigger, type and all.
+///
+/// Which turns "how large can a name get" into "how far may the range be
+/// CLOSED", and that is answered where it belongs — see
+/// [`PITCH_RANGE_MIN_SPAN`](crate::PITCH_RANGE_MIN_SPAN), whose two octaves
+/// against this ten-octave axis are what cap a name at five times its dialled
+/// size. One law with a limit at the end beats a law that bends in the middle:
+/// a softened curve holds the far end down by making a name disagree with its
+/// ribbon at every zoom in between, which is where the reading actually
+/// happens.
+///
+/// Thinning follows for free: [`plan`](super::names::plan) measures the room a
+/// name demands from the size it is drawn at, so names that have grown are
+/// spaced further apart and the ones that no longer fit are dropped, exactly
+/// as they are at any other size.
+///
+/// Never SMALLER than the built-in size: the reference is the widest range the
+/// axis offers, so the only direction left is up.
+///
+/// Says nothing about which way the pane is turned. The span is in semitones,
+/// not in points, so an upright pane (whose pitch axis is horizontal) scales
+/// exactly as a wide one does — [`Axes`] is the only thing here that knows a
+/// screen side, and this is not it.
+fn name_zoom(span: f32) -> f32 {
+    FULL_PITCH_SPAN / span.clamp(crate::PITCH_RANGE_MIN_SPAN, FULL_PITCH_SPAN)
+}
+
+/// The pane the sizes here are quoted against: a pitch axis 860 points long,
+/// which is what the Spectral pane gets in the 1512x886 window they were
+/// dialled in. Halve the pane and the type halves with it, along with every
+/// ribbon and every band it is written over.
+///
+/// The PITCH axis, of the two: a ribbon's width is set in semitones, so that
+/// is the axis whose length decides how big the picture under a name is. It is
+/// also the short side, and so the one a window resize tends to take first.
+pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
+
+/// The sizes this pane sets text at for one frame, as multiples of each
+/// piece's built-in point size.
+///
+/// Three factors go into each: the pane's own size against
+/// [`REFERENCE_PITCH_LEN`], the user's bar for that kind of text, and — for
+/// the note names alone — the pitch zoom. Both come out snapped, since a scale
+/// that follows a continuous zoom otherwise asks egui for a new font size on
+/// every frame of a drag (see [`crate::text::snap_scale`]).
+#[derive(Clone, Copy, Debug)]
+struct TextScales {
+    /// The axis gridline labels and the hover readout.
+    markings: f32,
+    /// The name written on each ribbon.
+    names: f32,
+}
+
+fn text_scales(cfg: &crate::SpectrumConfig, axes: &Axes, span: f32, ppp: f32) -> TextScales {
+    let pane = axes.pitch_len() / REFERENCE_PITCH_LEN;
+    TextScales {
+        markings: crate::text::snap_scale(pane * cfg.marking_scale, MARKING_PT, ppp),
+        names: crate::text::snap_scale(
+            pane * cfg.note_name_scale * name_zoom(span),
+            names::LABEL_PT,
+            ppp,
+        ),
+    }
+}
 
 /// How loud `power` reads at pitch `midi`, on a 0..1 scale: the configured
 /// floor is 0, the configured ceiling is 1, and the tilt lifts treble by
@@ -900,7 +1011,6 @@ pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
     now: f64,
-    label_scale: f32,
     // Spectrogram texture slot: 0 the docked pane / offline render, 1 the
     // Render preview, so two live copies don't clobber one shared texture.
     surface: usize,
@@ -952,6 +1062,9 @@ pub(crate) fn spectral_pane(
     // bar can't produce one; a hand-edited state blob can.
     let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
     let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
+    // Everything this pane sets text at, decided once from the range it just
+    // settled on: the markings hold their size, the names follow the zoom.
+    let text = text_scales(&cfg, &axes, scale.span, painter.ctx().pixels_per_point());
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
     // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
     // the conventional reference slope (negative), so the display
@@ -1193,7 +1306,7 @@ pub(crate) fn spectral_pane(
             pos,
             align,
             label,
-            egui::FontId::monospace(10.0 * label_scale),
+            egui::FontId::monospace(MARKING_PT * text.markings),
             theme::text_dim(),
             theme::well(),
         );
@@ -1201,8 +1314,8 @@ pub(crate) fn spectral_pane(
     // Each note's own name, over the ribbon it belongs to. In the same batch
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
-    let note_names = names::plan(state, &axes, &scale, split, now, label_scale);
-    names::draw(&painter, &note_names, label_scale, state.view.mark_weight, &mut labels);
+    let note_names = names::plan(state, &axes, &scale, split, now, text.names);
+    names::draw(&painter, &note_names, text.names, state.view.mark_weight, &mut labels);
     // Flushed here rather than with the readout below: the divider draws
     // between them, and a batch is drawn where it is flushed.
     labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
@@ -1256,7 +1369,7 @@ pub(crate) fn spectral_pane(
                 (midi - nearest) * 100.0,
                 midi_to_hz(midi),
             ),
-            egui::FontId::monospace(10.5 * label_scale),
+            egui::FontId::monospace(READOUT_PT * text.markings),
             theme::text(),
             theme::well(),
         );
@@ -1285,6 +1398,92 @@ mod tests {
     /// `power` for a level in dB, undoing the 10*log10 `loudness` applies.
     fn power_at(db: f32) -> f32 {
         10.0f32.powf(db / 10.0)
+    }
+
+    /// The note names follow the pitch zoom and the markings do not, which is
+    /// the whole of the difference between text written ON the picture and
+    /// text labelling the axis it is drawn against.
+    ///
+    /// Both ends of the zoom are pinned, because both are claims: at the whole
+    /// axis a name is exactly the size it was dialled at, so nothing about the
+    /// default view changes, and at the tightest range the analyzer offers it
+    /// is five times that — the axis being ten octaves and the floor two, and
+    /// the law being a constant share of the axis rather than some softened
+    /// fraction of one.
+    #[test]
+    fn names_follow_the_pitch_zoom_and_markings_hold_still() {
+        let cfg = SpectrumConfig::default();
+        let axes = axes(reference_pane(), SpectralOrientation::Horizontal);
+        let at = |span| text_scales(&cfg, &axes, span, 2.0);
+        // Every size comes out snapped onto a whole physical pixel, and a name
+        // is 12.35pt, which is not one at 2x — so the law is met to within half
+        // a pixel of type and no closer. See `text::snap_scale`.
+        let pixel = 0.5 / (names::LABEL_PT * 2.0);
+
+        let full = at(FULL_PITCH_SPAN).names;
+        assert!((full - 1.0).abs() <= pixel, "the whole axis draws names at {full}, not 1");
+        let tightest = at(crate::PITCH_RANGE_MIN_SPAN).names;
+        assert!(
+            (tightest - FULL_PITCH_SPAN / crate::PITCH_RANGE_MIN_SPAN).abs() <= pixel,
+            "the tightest range draws names at {tightest}, not in proportion to its zoom",
+        );
+        // Monotone in between, and never under the size it started at: the
+        // reference is the widest range there is, so the only way is up.
+        let mut previous = 0.0;
+        for span in [FULL_PITCH_SPAN, 96.0, 60.0, 36.0, crate::PITCH_RANGE_MIN_SPAN] {
+            let names = at(span).names;
+            assert!(names >= previous, "{span} semitones drew smaller names than the span above");
+            previous = names;
+        }
+        // A range zoomed past either end (a hand-edited blob; the bars cannot
+        // do it) still lands inside the band rather than off it.
+        assert_eq!(at(0.0).names, tightest);
+        assert_eq!(at(1e6).names, full);
+
+        // The markings ignore all of it, and answer to their own bar.
+        assert_eq!(at(FULL_PITCH_SPAN).markings, at(crate::PITCH_RANGE_MIN_SPAN).markings);
+        let bigger = SpectrumConfig { marking_scale: 2.0, ..SpectrumConfig::default() };
+        let doubled = text_scales(&bigger, &axes, 24.0, 2.0).markings;
+        // Within a rung of the size ladder, which is what the bar's 2 is
+        // rounded onto — see `text::snap_scale`.
+        assert!((doubled / 2.0 - 1.0).abs() <= 0.04, "the bar's 2 drew at {doubled}");
+        assert_eq!(
+            text_scales(&bigger, &axes, 24.0, 2.0).names,
+            at(24.0).names,
+            "and the two bars are independent",
+        );
+    }
+
+    /// A pane at the size these sizes were chosen at, so a test about anything
+    /// else is not also a test about the pane being some other size.
+    fn reference_pane() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(300.0, REFERENCE_PITCH_LEN))
+    }
+
+    /// Text shrinks with the pane it is drawn on — every kind of it, and in
+    /// proportion.
+    ///
+    /// This is one mechanism doing three jobs that were three mechanisms: a
+    /// window dragged narrower, the Render preview drawing this pane small,
+    /// and the offline render drawing it large. A kind of text that missed it
+    /// would come out at some other size in the video than in the pane the
+    /// look was dialled in on, which is the divergence this codebase least
+    /// wants.
+    #[test]
+    fn text_shrinks_with_the_pane() {
+        let cfg = SpectrumConfig::default();
+        let half = egui::Rect::from_min_size(
+            reference_pane().min,
+            egui::vec2(300.0, REFERENCE_PITCH_LEN * 0.5),
+        );
+        let full = axes(reference_pane(), SpectralOrientation::Horizontal);
+        let small = axes(half, SpectralOrientation::Horizontal);
+        let docked = text_scales(&cfg, &full, 48.0, 2.0);
+        let shrunk = text_scales(&cfg, &small, 48.0, 2.0);
+        assert!((shrunk.names / docked.names - 0.5).abs() < 0.02);
+        assert!((shrunk.markings / docked.markings - 0.5).abs() < 0.02);
+        // ...and at the reference pane the bars read what they say.
+        assert!((docked.markings - 1.0).abs() < 0.02, "{}", docked.markings);
     }
 
     /// The Span readout carries its own unit, and switches to minutes at
@@ -1502,7 +1701,7 @@ mod tests {
             let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
             let _ = ctx.run_ui(input, |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, state, 100.0, 1.0, 0);
+                spectral_pane(&mut child, state, 100.0, 0);
             });
         };
         let press = |pos, pressed| egui::Event::PointerButton {
@@ -1628,7 +1827,7 @@ mod tests {
                 },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, now, 1.0, 0);
+                    spectral_pane(&mut child, &mut state, now, 0);
                 },
             )
         };
@@ -1675,7 +1874,7 @@ mod tests {
             },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, now, 1.0, 0);
+                spectral_pane(&mut child, &mut state, now, 0);
             },
         );
         let mesh = out
@@ -1729,7 +1928,7 @@ mod tests {
                     egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                     |ui| {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                        spectral_pane(&mut child, &mut state, 94.0, 1.0, 0);
+                        spectral_pane(&mut child, &mut state, 94.0, 0);
                     },
                 );
             }
@@ -1768,7 +1967,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 0.1, 1.0, 0);
+                spectral_pane(&mut child, &mut state, 0.1, 0);
             },
         );
         // The now-line is the one hairline-colored segment clean across the
@@ -1823,7 +2022,7 @@ mod tests {
                 egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+                    spectral_pane(&mut child, &mut state, 0.05, 0);
                 },
             );
             let want = theme::warning_text().gamma_multiply(0.3);
@@ -1856,7 +2055,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                spectral_pane(&mut child, &mut state, 0.05, 1.0, 0);
+                spectral_pane(&mut child, &mut state, 0.05, 0);
             },
         );
         // The labels leave the shape list as one paint callback; what is
@@ -1930,7 +2129,7 @@ mod tests {
                 egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                 |ui| {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-                    spectral_pane(&mut child, &mut state, 100.0, 1.0, 0);
+                    spectral_pane(&mut child, &mut state, 100.0, 0);
                 },
             );
             assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
@@ -1994,7 +2193,7 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                spectral_pane(&mut child, &mut state, now, 1.0, 0);
+                spectral_pane(&mut child, &mut state, now, 0);
             },
         );
         output.shapes.into_iter().map(|s| s.shape).collect()
