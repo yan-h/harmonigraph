@@ -56,11 +56,27 @@ ago() {  # $1 = epoch seconds -> compact "3m ago"
   fi
 }
 
+# This script scans EVERY worktree, not just the one it lives in, so at the
+# rename boundary it has to read both vocabularies: a branch cut before
+# Harmonigraph still builds libmidi_lattice_3d.dylib, and would otherwise
+# read as "- not built -" and refuse to load. Delete LIB_LEGACY and this
+# fallback once no pre-rename worktree is left.
+LIB_LEGACY="midi_lattice_3d"
+
+# Echo the release dylib worktree $1 built under either name, or nothing.
+find_dylib() {
+  local rel="$1/target/release" cand
+  for cand in "$rel/lib${LIB}.dylib" "$rel/lib${LIB_LEGACY}.dylib"; do
+    [[ -f "$cand" ]] && { echo "$cand"; return 0; }
+  done
+  return 1
+}
+
 # Echo the display fields for worktree index $1 as: built<TAB>vshead<TAB>marker
 build_info() {
   local path="${WT_PATH[$1]}" dylib built vshead marker
-  dylib="$path/target/release/lib${LIB}.dylib"
-  if [[ -f "$dylib" ]]; then
+  dylib="$(find_dylib "$path")" || dylib=""
+  if [[ -n "$dylib" ]]; then
     local mtime head_ct head_short
     mtime="$(stat -f %m "$dylib")"
     built="$(ago "$mtime")"
@@ -87,12 +103,13 @@ print_table() {
 
 load_build() {  # $1 = worktree index
   local path="${WT_PATH[$1]}" branch="${WT_BRANCH[$1]}"
-  local dylib="$path/target/release/lib${LIB}.dylib"
-  if [[ ! -f "$dylib" ]]; then
-    echo "ERROR: no build at $dylib" >&2
+  local dylib
+  dylib="$(find_dylib "$path")" || {
+    echo "ERROR: no build in $path/target/release (looked for lib${LIB}.dylib" >&2
+    echo "       and the pre-rename lib${LIB_LEGACY}.dylib)" >&2
     echo "       build it first:  (cd \"$path\" && cargo build --release -p $PKG)" >&2
     exit 1
-  fi
+  }
   local updated=0 ext bundle
   for ext in clap vst3; do
     bundle="$BUNDLED/$NAME.$ext"
