@@ -271,9 +271,11 @@ pub fn derive_scene(
         let (scale, comma) = if sheets == 0 {
             (1.0, 0.0)
         } else {
-            // The node this one shares a spelling with, on the home sheet:
-            // the letter walk uses `threes - 2*sevens`, so undoing the
-            // sevens term two fifths at a time lands on the same name.
+            // The node this one shares a LETTER with, on the home sheet: the
+            // letter walk uses `threes - 2*sevens`, so undoing the sevens
+            // term two fifths at a time lands on the same letter and
+            // accidental. Not the same name — the septimal mark the name now
+            // carries is exactly what separates them.
             let namesake =
                 LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
             (

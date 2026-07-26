@@ -640,7 +640,6 @@ fn spectrum_config_round_trips_through_persist() {
     state.spectrum_config.spectrogram_color = crate::SpectrogramColor::Aurora;
     state.spectrum_config.spectrogram_opacity = 0.5;
     state.spectrum_config.spectrogram_gamma = 1.6;
-    state.spectrum_config.roll_gap = 2.0;
     let saved = state.save_persist();
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -655,7 +654,6 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
     assert_eq!(restored.spectrum_config.spectrogram_opacity, 0.5);
     assert_eq!(restored.spectrum_config.spectrogram_gamma, 1.6);
-    assert_eq!(restored.spectrum_config.roll_gap, 2.0);
 }
 
 /// The pitch range used to be a pair of Bitwig octave numbers. A blob from
@@ -1261,6 +1259,35 @@ fn the_septimal_mark_sits_across_the_divide_between_the_other_two() {
     assert!(none.is_empty(), "no sevens component, no mark: {none:?}");
 }
 
+/// A mark costs a bounded few quads, exactly as the glyphs beside it do.
+///
+/// This is the invariant `crate::text` exists to hold: a label's rim is
+/// stamped in the FRAGMENT stage precisely because "20 copies of every glyph
+/// was most of the geometry in a busy frame". `paint_mark` reasoned its way
+/// out of that with "a mark is one quad, so the loop is affordable here" --
+/// true of the handful of hovered and sounding nodes it was written against,
+/// and false the moment note names put a mark on every roll ribbon and every
+/// lit node of a collapsed 12-EDO lattice.
+///
+/// A count, not a timing, so it cannot go quiet on a fast machine.
+#[test]
+fn a_mark_costs_a_bounded_number_of_quads() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = lattice_core::NoteName {
+        letter: 'E',
+        sharps: 0,
+        syntonic_commas: -1,
+        septimal_commas: -1,
+    };
+    let (_, shapes) = drawn_label(name, anchor);
+    assert!(
+        shapes.len() <= 4,
+        "two marks cost {} quads; the rim belongs in the fragment stage, \
+         not once per stamp in the shape list",
+        shapes.len()
+    );
+}
+
 /// The septimal mark gets a column of its own, so a name carrying both
 /// commas reads as three pieces rather than a pile.
 #[test]
@@ -1279,12 +1306,36 @@ fn both_comma_marks_get_their_own_column() {
     // sits left of the septimal shape rather than on top of it.
     let left = shapes.iter().copied().reduce(|a, b| a.union(b)).expect("marks drawn");
     assert!(left.left() >= letter.right() - 2.0, "marks follow the letter, {left:?}");
-    let syntonic_x =
-        shapes.iter().map(|r| r.center().x).fold(f32::INFINITY, f32::min);
-    let septimal_x = shapes.iter().map(|r| r.center().x).fold(f32::NEG_INFINITY, f32::max);
+
+    // Cluster the stamps into columns rather than reading the flat list's
+    // extremes. A mark is not one shape: `paint_mark` stamps its rim as ~20
+    // separate quads around the fill, so ONE mark already spreads its centers
+    // over four points, and `min(x) < max(x)` holds with the other mark
+    // missing entirely or drawn on top of it -- the two failures this test
+    // exists to catch. Within a mark consecutive stamps are under a point
+    // apart; between the columns they are nearly two.
+    const COLUMN_GAP: f32 = 1.0;
+    let mut stamps: Vec<egui::Pos2> = shapes.iter().map(|r| r.center()).collect();
+    stamps.sort_by(|a, b| a.x.total_cmp(&b.x));
+    let mut columns: Vec<Vec<egui::Pos2>> = Vec::new();
+    for stamp in stamps {
+        match columns.last_mut() {
+            Some(col) if stamp.x - col[col.len() - 1].x <= COLUMN_GAP => col.push(stamp),
+            _ => columns.push(vec![stamp]),
+        }
+    }
+    let widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+    assert_eq!(columns.len(), 2, "two marks, two columns, got {widths:?}");
+    assert_eq!(widths[0], widths[1], "each column is a whole mark, not one mark's rim");
+
+    // The right-hand column is the septimal one, and it is on the letter's own
+    // line while the syntonic bar sits below it -- so which column is which is
+    // checked, not assumed from the ordering the split already imposed.
+    let line = |col: &[egui::Pos2]| col.iter().map(|p| p.y).sum::<f32>() / col.len() as f32;
     assert!(
-        septimal_x > syntonic_x,
-        "the septimal mark takes its own column right of the syntonic one"
+        line(&columns[1]) < line(&columns[0]),
+        "the septimal mark takes the right column, across the letter's line: {:?}",
+        columns.iter().map(|c| line(c)).collect::<Vec<_>>()
     );
 }
 
@@ -2182,3 +2233,28 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     );
 }
 
+
+/// A key this build has RETIRED does not cost the blob it sits in.
+///
+/// `load_persist` takes the whole `UiPersist` or nothing (`if let Ok(persist)`),
+/// so a field that fails to parse does not degrade — it silently discards the
+/// dock, the camera and the entire `ViewConfig` along with itself, and the
+/// project opens on defaults with no error anywhere. Retiring a setting is
+/// therefore a persistence change, and this is the guard on it: `roll_gap` was
+/// removed with the Gap feature, and every project saved before that still
+/// carries the key.
+#[test]
+fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.roll_thickness = 1.75;
+    state.spectrum_config.low_midi = 40.5;
+    let saved = state.save_persist();
+    // A blob from before the retirement: the key spliced back where it sat.
+    let old = saved.replacen("roll_thickness:", "roll_gap:2.5,roll_thickness:", 1);
+    assert_ne!(old, saved, "the splice must have landed for this to test anything");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&old);
+    assert_eq!(restored.spectrum_config.roll_thickness, 1.75, "the blob survived");
+    assert_eq!(restored.spectrum_config.low_midi, 40.5);
+}

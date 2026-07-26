@@ -242,15 +242,26 @@ pub(super) fn plan(
     // visible lattice node looking for the match that spells best, and a
     // passage is the same handful of classes over and over.
     //
-    // Keyed at the LANE grain, which is what bounds this: there are only ever
-    // `1200 / LANE_CENTS` classes an octave, so the walk is paid at most that
-    // many times a frame however many notes are on the pane. At a one-cent
-    // grain it was paid per NOTE for any material whose tuning drifts between
-    // repeats — thousands of walks a frame, in exactly the microtonal case
-    // this plugin is for.
-    let mut names: HashMap<i32, NoteName> = HashMap::new();
-    let naming = |pitch: f32, names: &mut HashMap<i32, NoteName>| {
-        let class = (pitch.rem_euclid(12.0) * 100.0 / LANE_CENTS).round() as i32;
+    // Keyed on the EXACT class, which is the one [`note_name`] itself reduces
+    // to. It cannot be keyed at the [`LANE_CENTS`] grain that thinning uses:
+    // a lane is ten cents and a name is matched to a node at
+    // [`Tuning::tolerance`], half a cent by default, so a lane is twenty
+    // times wider than the window it would have to stand for. Two pitches
+    // inside one lane can and do spell differently — 70.00 is the lattice's
+    // `B♭` while 70.02 has already fallen past the tolerance to the piano's
+    // `A♯` — and a per-lane memo hands both of them whichever was reached
+    // first, so an in-tune note takes a two-cent-sharp neighbour's spelling
+    // and gives it back when that neighbour scrolls off.
+    //
+    // The walk is still bounded, just by a larger number: distinct pitches on
+    // the pane rather than notes. A passage that replays the same pitches —
+    // which is what a passage is — pays once for each however often it
+    // repeats, and material whose tuning genuinely drifts between repeats
+    // pays per distinct landing, which is correct, because those really are
+    // different pitches and may deserve different names.
+    let mut names: HashMap<PitchClass, NoteName> = HashMap::new();
+    let naming = |pitch: f32, names: &mut HashMap<PitchClass, NoteName>| {
+        let class = PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0);
         *names.entry(class).or_insert_with(|| note_name(&state.view, &state.tuning, pitch))
     };
 
@@ -686,6 +697,40 @@ mod tests {
         assert!(rect.max.x < axes.at(0.5, 0.8).x, "growing back into the note, not past it");
     }
 
+    /// A name sits on the ribbon the ROLL DREW, read from the roll's own
+    /// geometry rather than recomputed here.
+    ///
+    /// Hand-computing the expected edge is how this last went wrong: the Gap
+    /// setting shaved a released note's tail back and the name kept anchoring
+    /// on the unshaved stop, so it sat off the head of its own ribbon — and
+    /// the test could not see it, because the test's arithmetic agreed with
+    /// `names`' arithmetic and both disagreed with the roll. Gap is gone, so
+    /// the two ends agree again by construction; this reads `note_instances`
+    /// anyway, which is what would catch the next thing to move a ribbon's
+    /// head without telling the name.
+    #[test]
+    fn a_name_sits_on_the_ribbon_the_roll_drew() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(2.0, 60));
+        state.tracker.handle_event(off(6.0, 60));
+
+        let split = super::super::spectral::spectrum_share(&state.spectrum_config);
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let ribbon =
+            super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0);
+        assert_eq!(ribbon.len(), 1, "one note, one ribbon");
+        // Horizontal pane: depth is x, and the head is the near end.
+        let head = ribbon[0].center[0] - ribbon[0].half_extent[1];
+
+        let placed = labels(&state, 10.0);
+        assert_eq!(placed.len(), 1);
+        assert!(
+            placed[0].rect.min.x >= head,
+            "the name starts at {} but its ribbon only begins at {head}",
+            placed[0].rect.min.x,
+        );
+    }
+
     /// A HELD note's name stays put at the now-line, and starts travelling
     /// only once the note is released.
     ///
@@ -1047,6 +1092,42 @@ mod tests {
         // the lattice draws on that node — the whole reason to spell a name
         // the lattice's way rather than as a piano key and a cents offset.
         assert_eq!(said(&labels_in(&state, 5.0, BIG)), ["E-"]);
+    }
+
+    /// A name is read from the note's OWN pitch, whatever else is on the pane.
+    ///
+    /// The thinning grain is ten cents, twenty times the half-cent tolerance a
+    /// name is matched at, so one lane holds pitches that spell differently:
+    /// 70.00 is the lattice's `B♭`, and 70.02 is already past the tolerance and
+    /// falls back to the piano's `A♯`. Naming once per LANE and reusing it
+    /// gives both of them whichever was reached first — so an in-tune note
+    /// wears the spelling of a neighbour that was two cents sharp, and changes
+    /// spelling again when that neighbour scrolls out of the window. The pane
+    /// renames a note nobody touched, which reads as the plugin arguing with
+    /// itself about what it just heard.
+    #[test]
+    fn a_name_is_read_from_its_own_pitch_not_a_lane_neighbours() {
+        // The same two pitches every time; only which one is played first
+        // differs. Both spellings are in one lane, so a per-lane memo cannot
+        // tell them apart.
+        let named = |bent_first: bool, now: f64| {
+            let (early, late) = if bent_first { (0.02, 0.0) } else { (0.0, 0.02) };
+            let mut state = state(24.0, 10.0);
+            state.tracker.handle_event(on(1.0, 70));
+            state.tracker.handle_event(tuning(1.01, 70, early));
+            state.tracker.handle_event(off(2.0, 70));
+            state.tracker.handle_event(on(5.0, 70));
+            state.tracker.handle_event(tuning(5.01, 70, late));
+            state.tracker.handle_event(off(6.0, 70));
+            said(&labels_in(&state, now, BIG))
+        };
+
+        assert_eq!(named(false, 9.0), ["B♭", "A♯"], "in tune first, then two cents sharp");
+        assert_eq!(named(true, 9.0), ["A♯", "B♭"], "the same pair, played the other way round");
+
+        // And the survivor keeps its own name once the other has scrolled off:
+        // at 13 s the note that ended at 2 s is past the ten-second window.
+        assert_eq!(named(true, 13.0), ["B♭"], "an in-tune note left alone is still B♭");
     }
 
     /// In an EQUAL temperament the lattice collapses — twelve fifths are seven
