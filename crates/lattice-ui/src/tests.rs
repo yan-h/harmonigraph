@@ -2364,6 +2364,45 @@ fn the_lattice_label_bar_persists_through_the_range_it_offers() {
     assert_eq!(through_view(high + 1.0), high, "...and its ceiling");
 }
 
+/// Draw enough distinct marks in ONE pass to outrun the cache limit, so
+/// eviction is running while the pass is still drawing. Returns the texture
+/// ids the pass drew, and the ids it asked egui to destroy.
+fn mark_cache_pass(ctx: &egui::Context) -> (std::collections::HashSet<egui::TextureId>, Vec<egui::TextureId>) {
+    use panes::lattice::{MARK_CACHE_LIMIT, MARK_SIZE};
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+    // Both comma marks, so each size contributes more than one key.
+    let name =
+        lattice_core::NoteName { letter: 'C', sharps: 1, syntonic_commas: 1, septimal_commas: 1 };
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            let mut batch = crate::text::TextBatch::default();
+            // One mark per whole pixel size, far enough past the limit that
+            // the pass evicts marks it has already painted.
+            for size_px in 3..=(3 + MARK_CACHE_LIMIT / 2 + 8) {
+                panes::lattice::draw_stacked_name(
+                    &mut batch,
+                    ui.painter(),
+                    egui::pos2(200.0, 200.0),
+                    name,
+                    egui::Color32::WHITE,
+                    egui::Color32::BLACK,
+                    size_px as f32 / MARK_SIZE,
+                );
+            }
+        },
+    );
+    let drawn = out
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
+            _ => None,
+        })
+        .collect();
+    (drawn, out.textures_delta.free)
+}
+
 /// A pass that fills the mark cache must not destroy a texture it has
 /// already drawn.
 ///
@@ -2381,44 +2420,32 @@ fn the_lattice_label_bar_persists_through_the_range_it_offers() {
 /// insert.
 #[test]
 fn filling_the_mark_cache_never_frees_a_texture_the_pass_drew() {
-    use panes::lattice::{MARK_CACHE_LIMIT, MARK_SIZE};
     let ctx = egui::Context::default();
     theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
-    // Both comma marks, so each size contributes more than one key.
-    let name =
-        lattice_core::NoteName { letter: 'C', sharps: 1, syntonic_commas: 1, septimal_commas: 1 };
+    let (drawn, freed) = mark_cache_pass(&ctx);
+    let bad: Vec<_> = freed.iter().copied().filter(|id| drawn.contains(id)).collect();
+    assert!(bad.is_empty(), "the pass freed {} textures it had drawn: {bad:?}", bad.len());
+}
 
-    // Ask for one mark per whole pixel size, far enough past the limit that
-    // eviction is running while the pass is still drawing.
-    let sizes = 3..=(3 + MARK_CACHE_LIMIT / 2 + 8);
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            let mut batch = crate::text::TextBatch::default();
-            for size_px in sizes.clone() {
-                panes::lattice::draw_stacked_name(
-                    &mut batch,
-                    ui.painter(),
-                    egui::pos2(200.0, 200.0),
-                    name,
-                    egui::Color32::WHITE,
-                    egui::Color32::BLACK,
-                    size_px as f32 / MARK_SIZE,
-                );
-            }
-        },
+/// ...and the pass AFTER it must actually destroy them.
+///
+/// The retention is a delay, not a reprieve: holding an evicted bitmap
+/// forever would trade the crash above for a leak that grows for as long as
+/// the editor is open, since a zoom drag mints fresh keys every pass. This
+/// pins the half the single-pass test cannot see -- with the prune deleted
+/// that test still passes, because pass 0 frees nothing either way.
+#[test]
+fn the_next_pass_destroys_what_the_last_one_retired() {
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx);
+    let (_, freed_first) = mark_cache_pass(&ctx);
+    assert!(freed_first.is_empty(), "the first pass should hold its evictions, freed {freed_first:?}");
+
+    let (drawn, freed_second) = mark_cache_pass(&ctx);
+    assert!(
+        !freed_second.is_empty(),
+        "the second pass should destroy what the first retired, or they accumulate"
     );
-
-    let drawn: std::collections::HashSet<egui::TextureId> = out
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
-            _ => None,
-        })
-        .collect();
-    let freed: Vec<_> =
-        out.textures_delta.free.iter().copied().filter(|id| drawn.contains(id)).collect();
-    assert!(freed.is_empty(), "the pass freed {} textures it had drawn: {freed:?}", freed.len());
+    let bad: Vec<_> = freed_second.iter().copied().filter(|id| drawn.contains(id)).collect();
+    assert!(bad.is_empty(), "the second pass freed {} textures it had drawn: {bad:?}", bad.len());
 }
