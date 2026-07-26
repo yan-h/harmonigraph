@@ -283,11 +283,23 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     // Notes is a readout of what the tracker already draws on the lattice and
     // Console is a diagnostic. Open they take 45% of the settings column's
     // height, which is the half of it the settings themselves want -- see the
-    // scroll every settings pane carries. One click on the tab reopens them,
-    // and the split fraction is remembered, so this costs nothing to undo.
+    // scroll every settings pane carries.
+    //
+    // The COLLAPSE ARROW is what brings them back, not the tab name: egui_dock
+    // reaches `set_collapsed` from the arrow's own square alone, and clicking
+    // "Notes" on a folded bar only selects a tab whose body stays hidden. The
+    // split fraction survives the fold, so the pane comes back the size it
+    // went away.
     //
     // A vertical fold, so egui_dock does the whole of it; `Folds` only exists
     // for the horizontal ones (see `fold`).
+    //
+    // This is the DEFAULT, which is to say it reaches a fresh instance and
+    // "Reset layout" and nothing else. A project that has saved a layout keeps
+    // the one it saved, since the arrangement is persisted and
+    // `UI_PERSIST_VERSION` is bumped for a changed tab SET rather than a
+    // changed default -- and throwing away a dialed-in layout to deliver a
+    // default is the worse trade.
     surface[log].set_collapsed(true);
     // Spectral as a column just right of the lattice: what sounds is directly
     // beside what lights up. Paired with the "Across" default orientation

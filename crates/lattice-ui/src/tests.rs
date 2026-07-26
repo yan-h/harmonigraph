@@ -237,9 +237,9 @@ fn a_pre_merge_layout_does_not_open_the_merged_tab_twice() {
 ///
 /// Both are read on demand — Notes restates what the lattice is already
 /// drawing, Console is a diagnostic — and open they take 45% of the settings
-/// column, the half the settings themselves want. Folded is a click from open
-/// and the split fraction survives it, so this is a starting point rather than
-/// a decision taken away.
+/// column, the half the settings themselves want. The collapse arrow on the
+/// folded bar brings either back at the size it went away, so this is a
+/// starting point rather than a decision taken away.
 #[test]
 fn the_default_layout_opens_with_the_two_readout_panes_folded() {
     let dock = default_dock();
