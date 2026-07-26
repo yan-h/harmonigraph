@@ -26,9 +26,13 @@ mod state;
 pub use layout::{Layout, Placement, PRESETS};
 
 // The three modules above are an arrangement of this file's insides, not a
-// change to its surface: everything they hold was declared here, so it is
-// re-exported here and every path that named it — inside the crate and out —
-// still resolves.
+// change to what the crate exports: everything that was `pub` here is
+// re-exported here, so no path outside this crate moves.
+//
+// Four crate-internal names are the exception, and are reached by their own
+// path rather than through here: `UI_PERSIST_VERSION` and `TextureFormat`,
+// which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
+// which nothing outside their own module wanted at all.
 pub use config::{
     RenderConfig, RenderFrame, RenderTrigger, RollColor, SpectralOrientation, SpectrogramColor,
     SpectrumConfig, SpectrumLabels, SpectrumWindow, SCALE_BAR_RANGE, TILT_STEPS,
