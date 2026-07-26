@@ -6,9 +6,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{
-    Align2, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2,
-};
+use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use crate::theme;
 
@@ -160,6 +158,38 @@ const BAR_HEIGHT: f32 = 20.0;
 /// Corner rounding of the bar track — the shared control radius, so a bar and
 /// a button beside it round the same.
 const BAR_RADIUS: u8 = theme::CONTROL_RADIUS;
+/// Inset of a bar's name and its value readout from the bar's own ends.
+const BAR_TEXT_PAD: f32 = 8.0;
+/// Clear space kept between the two, so an elided name stops short of the
+/// number rather than touching it.
+const BAR_LABEL_GAP: f32 = 6.0;
+
+/// How wide a bar draws: the width the layout offers, but never past the
+/// visible edge of the pane. Shared by [`ValueBar`] and [`RangeBar`], so every
+/// bar in a settings column comes out the same length and they all narrow
+/// together as the column does.
+///
+/// `available_width` alone is not enough, and the reason is worth stating
+/// because nothing about it is visible here: egui's
+/// `Region::expand_to_include_rect` unions `max_rect` as well as `min_rect`, so
+/// any control that overruns the column widens the region for everything AFTER
+/// it, and a bar sizing itself from the layout inherits the overrun as a floor
+/// it cannot shrink past. Each bar's minimum length is then the width of the
+/// widest thing above it — several different minimums down one pane, the bars
+/// under a wide control running their value readout off the pane edge while the
+/// ones above compress properly.
+///
+/// [`button_row`] keeps rows and their button labels inside the column, which is
+/// what removes the usual sources; this covers the ones with nowhere to wrap to,
+/// like the record button and the Options field in a very narrow Video pane.
+///
+/// The clip rect is the pane the dock actually painted, and nothing grows it, so
+/// it is the honest limit. A bar drawn past it has its value readout and its
+/// full-scale end off screen, where they can be neither read nor dragged to.
+fn bar_width(ui: &Ui) -> f32 {
+    let visible = ui.clip_rect().right() - ui.cursor().left();
+    ui.available_width().min(visible).max(0.0)
+}
 
 pub struct ValueBar<'a> {
     value: &'a mut f32,
@@ -276,7 +306,7 @@ impl<'a> ValueBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let width = ui.available_width();
+        let width = bar_width(ui);
         // Locked bars are read-only: sense hover (so a tooltip still works)
         // but not clicks/drags.
         let sense = if self.locked { Sense::hover() } else { Sense::click_and_drag() };
@@ -374,21 +404,34 @@ impl<'a> ValueBar<'a> {
         } else {
             theme::text_dim()
         };
-        painter.text(
-            rect.left_center() + Vec2::new(8.0, 0.0),
-            Align2::LEFT_CENTER,
-            self.label,
-            TextStyle::Body.resolve(ui.style()),
-            text_color,
-        );
+        // The value is laid out first and the name takes what is left, elided.
+        // The number is what the bar is FOR — a name that runs over it, or out
+        // past the pane edge, costs the reading the control exists to give.
         // Values in monospace: digits align and don't wiggle as they
         // change. Dimmed too while locked, to match the fill.
-        painter.text(
-            rect.right_center() - Vec2::new(8.0, 0.0),
-            Align2::RIGHT_CENTER,
+        let value = painter.layout_no_wrap(
             self.shown(*self.value),
             TextStyle::Monospace.resolve(ui.style()),
             if self.locked { theme::text_dim() } else { theme::text() },
+        );
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            self.label.to_owned(),
+            TextStyle::Body.resolve(ui.style()),
+            text_color,
+        );
+        job.wrap.max_width =
+            (rect.width() - 2.0 * BAR_TEXT_PAD - BAR_LABEL_GAP - value.size().x).max(0.0);
+        job.wrap.max_rows = 1;
+        job.wrap.overflow_character = Some('\u{2026}');
+        let label = painter.layout_job(job);
+        let centered = |galley: &egui::Galley, x: f32| {
+            egui::pos2(x, rect.center().y - galley.size().y * 0.5)
+        };
+        painter.galley(centered(&label, rect.left() + BAR_TEXT_PAD), label, text_color);
+        painter.galley(
+            centered(&value, rect.right() - BAR_TEXT_PAD - value.size().x),
+            value,
+            theme::text(),
         );
 
         if self.locked {
@@ -546,7 +589,7 @@ impl<'a> RangeBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let width = ui.available_width();
+        let width = bar_width(ui);
         let (rect, mut response) =
             ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::click_and_drag());
         let (min, max) = (*self.range.start(), *self.range.end());
@@ -678,20 +721,40 @@ impl<'a> RangeBar<'a> {
     }
 }
 
-/// A horizontal row sized up front to framed-button height.
+/// A horizontal row of controls in a settings column, sized up front to
+/// framed-button height and wrapping onto further lines when the column is too
+/// narrow to hold it.
 ///
 /// Plain `ui.horizontal*` starts its row at `interact_size.y`, which is
 /// shorter than a padded button: egui centers early widgets in that short
 /// row, then grows the row downward under the first button it meets, so a
 /// bare label (or checkbox) next to buttons sits a few pixels above their
 /// text. Starting the row at button height centers everything on one line.
+///
+/// The single row helper, deliberately: a settings pane is a column whose width
+/// the dock hands it, and a row that cannot wrap runs its last buttons out past
+/// the pane edge where they can be neither read nor clicked. A non-wrapping
+/// variant is only ever the wrong choice here, and having one to reach for is
+/// what left the panes disagreeing about whether their buttons wrap at all —
+/// Projection and Tilt overran a narrow column while Style and Palette wrapped.
+///
+/// Wrapping settles the harder half too, and not obviously: `horizontal_wrapped`
+/// sets the row's wrap mode, so each BUTTON's own label wraps onto a second line
+/// rather than extending past its frame. A single button too wide for the column
+/// (Orthographic, at any column narrow enough) has nowhere to wrap TO, and would
+/// otherwise overrun the pane whatever the row did — and take every control
+/// under it along, since egui's `Region::expand_to_include_rect` unions
+/// `max_rect` as well as `min_rect`.
 pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    button_row_impl(ui, false, add)
-}
-
-/// [`button_row`], wrapping onto new rows like `horizontal_wrapped`.
-pub fn button_row_wrapped<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    button_row_impl(ui, true, add)
+    let height =
+        ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
+    ui.scope(|ui| {
+        // The row ui reads this as its initial height; buttons already
+        // size to at least it, so only the shorter widgets move.
+        ui.style_mut().spacing.interact_size.y = height;
+        ui.horizontal_wrapped(add).inner
+    })
+    .inner
 }
 
 /// A labelled row of mutually-exclusive choices for `value`: the standard
@@ -706,7 +769,7 @@ pub fn choice_row<T: Copy + PartialEq>(
     value: &mut T,
     options: &[(T, &str, &str)],
 ) {
-    button_row_wrapped(ui, |ui| {
+    button_row(ui, |ui| {
         ui.label(name);
         for (option, label, hint) in options {
             let response = ui.selectable_value(value, *option, *label);
@@ -715,22 +778,6 @@ pub fn choice_row<T: Copy + PartialEq>(
             }
         }
     });
-}
-
-fn button_row_impl<R>(ui: &mut Ui, wrap: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let height =
-        ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
-    ui.scope(|ui| {
-        // The row ui reads this as its initial height; buttons already
-        // size to at least it, so only the shorter widgets move.
-        ui.style_mut().spacing.interact_size.y = height;
-        if wrap {
-            ui.horizontal_wrapped(add).inner
-        } else {
-            ui.horizontal(add).inner
-        }
-    })
-    .inner
 }
 
 #[cfg(test)]
@@ -1016,7 +1063,7 @@ mod tests {
         offset
     }
 
-    /// A bare label centers on the button text in both row variants. The
+    /// A bare label centers on the button text in a `button_row`. The
     /// companion assert shows plain `horizontal` still misaligns them —
     /// when an egui upgrade fixes row sizing upstream, that assert fails
     /// and this whole workaround becomes deletable.
@@ -1031,10 +1078,45 @@ mod tests {
             button_row(ui, |ui| add(ui));
         });
         assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
+    }
 
-        let wrapped = row_offset(|ui, add| {
-            button_row_wrapped(ui, |ui| add(ui));
-        });
-        assert!(wrapped.abs() < 0.5, "button_row_wrapped label off by {wrapped}px");
+    /// A row of buttons too wide for its column stays inside the column: the
+    /// buttons take further lines, and a button whose own label cannot fit on
+    /// one line wraps that label rather than extending past its frame.
+    ///
+    /// Both halves come from `horizontal_wrapped` and neither is visible at the
+    /// call site, which is the reason to pin them: what the panes need from
+    /// [`button_row`] is that nothing it holds can leave the column, and a
+    /// non-wrapping row helper looks identical in the code that calls it.
+    #[test]
+    fn a_row_too_wide_for_its_column_wraps_inside_it() {
+        const COLUMN: f32 = 120.0;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(COLUMN, 400.0));
+        let mut rects = Vec::new();
+        let _ = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                button_row(ui, |ui| {
+                    ui.label("Projection");
+                    for label in ["Perspective", "Orthographic", "Cabinet"] {
+                        rects.push(ui.button(label).rect);
+                    }
+                });
+            },
+        );
+        for (label, rect) in ["Perspective", "Orthographic", "Cabinet"].iter().zip(&rects) {
+            assert!(
+                rect.right() <= COLUMN + 1.0,
+                "{label} reached {} in a {COLUMN}px column",
+                rect.right()
+            );
+        }
+        // And they really did stack rather than all landing on one line.
+        assert!(
+            rects[2].top() > rects[0].top(),
+            "three wide buttons stayed on one line: {rects:?}"
+        );
     }
 }

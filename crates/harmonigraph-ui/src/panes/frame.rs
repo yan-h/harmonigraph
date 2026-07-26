@@ -9,12 +9,15 @@
 //! controls. Kept as a file because the two halves have nothing to say to each
 //! other beyond sharing a tab.
 
-use crate::widgets::{button_row, button_row_wrapped, choice_row, ValueBar};
+use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::{CameraPreset, SharedState};
 use super::normalize_deg;
 use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
 use harmonigraph_scene::SevensLabel;
+
+/// Width of the camera-preset name field, when the pane has that much to give.
+const PRESET_NAME_WIDTH: f32 = 110.0;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
 /// extents/center. Drawn into the Tuning tab, under its own section heading.
@@ -90,7 +93,7 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         }
 
         // One-click reading angles: built-ins plus user-saved presets.
-        button_row_wrapped(ui, |ui| {
+        button_row(ui, |ui| {
             ui.label("Angle");
             if ui
                 .button("Flat")
@@ -129,10 +132,17 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             }
         });
         button_row(ui, |ui| {
+            // Room for a short name, or the whole row when the pane is
+            // narrower than that. Asked for flat, the field is the one control
+            // in the pane that cannot shrink, so it alone decides how thin the
+            // settings column may get. `max_rect` rather than
+            // `available_width`: this is a wrapping row, so the width worth
+            // measuring against is the row's, not what is left of this line.
+            let width = ui.max_rect().width().min(PRESET_NAME_WIDTH);
             ui.add(
                 egui::TextEdit::singleline(&mut state.preset_name)
                     .hint_text("preset name")
-                    .desired_width(110.0),
+                    .desired_width(width),
             );
             if ui.button("Save angle").clicked() {
                 let trimmed = state.preset_name.trim();

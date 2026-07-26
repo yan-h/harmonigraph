@@ -2323,6 +2323,152 @@ fn the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in() {
     }
 }
 
+/// Every settings tab, and the tabs that share the column with them.
+const SETTINGS_TABS: [panes::Tab; 8] = [
+    panes::Tab::Tuning,
+    panes::Tab::Nodes,
+    panes::Tab::Scene,
+    panes::Tab::Analyzer,
+    panes::Tab::Video,
+    panes::Tab::Panel,
+    panes::Tab::Console,
+    panes::Tab::Notes,
+];
+
+/// One settings pane drawn into a column `width` points wide, as the shapes it
+/// emitted. Driven through [`panes::Viewer`] rather than the dock, so a sweep
+/// over widths costs one pane each instead of a whole window, and the width
+/// under test is the pane's own rather than a window size minus chrome.
+///
+/// Tall on purpose (a pane's controls are a column, and the point here is the
+/// other axis) and with the take controls switched on, so the Video tab draws
+/// the record button and the Options field a real session has.
+fn settings_pane_at_width(tab: panes::Tab, width: f32) -> Vec<egui::epaint::ClippedShape> {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.take_supported = true;
+    state.last_take_ready = true;
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 2400.0));
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
+        |ui| {
+            let mut tab = tab;
+            let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
+            egui_dock::TabViewer::ui(&mut viewer, ui, &mut tab);
+        },
+    );
+    out.shapes
+}
+
+/// The bar tracks a pane drew, by width. A `ValueBar`/`RangeBar` track is the
+/// one thing in a settings pane painted as a `BAR_HEIGHT`-tall rect in
+/// `well()`: the accent fill over it is the same height in a different color,
+/// and the record button's own `well()` panel is taller.
+fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
+    let well = crate::theme::well();
+    shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Rect(r) if r.fill == well && (r.rect.height() - 20.0).abs() < 0.6 => {
+                Some(r.rect.width())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every bar in a settings pane is the same length, and that length is the
+/// column's — so dragging the column narrower narrows all of them together.
+///
+/// What breaks it is invisible in the code that draws a bar, which is why this
+/// is pinned rather than left to reading: egui's `Region::expand_to_include_rect`
+/// unions `max_rect` as well as `min_rect`, so any control that overruns the
+/// column widens the column for everything BELOW it, and a bar sizing itself
+/// from bare `available_width` inherits the overrun as a floor it cannot shrink
+/// past. Each bar's minimum length is then the width of the widest thing above
+/// it — five different minimums down one pane, the bars under a wide row running
+/// their value readout off the pane edge while the bars above it compress
+/// properly. `widgets::bar_width` is the answer, and the reason it measures the
+/// clip rect rather than trusting the layout.
+///
+/// Swept past the width where the pane's other controls stop fitting on purpose.
+/// Above about 100pt nothing overruns at all (see below), so those widths would
+/// pass whether a bar clamped itself or not; 100 and 80, where the record button
+/// and the Options field have nowhere left to go, are where the clamp is the
+/// only thing holding the bars level.
+#[test]
+fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
+    for width in [400.0f32, 240.0, 160.0, 120.0, 100.0, 80.0] {
+        for tab in SETTINGS_TABS {
+            let widths = bar_track_widths(&settings_pane_at_width(tab, width));
+            for bar in &widths {
+                assert!(
+                    (bar - width).abs() < 1.0,
+                    "{tab:?} at {width}pt drew a {bar}pt bar (all of {widths:?})"
+                );
+            }
+        }
+    }
+    // The sniffing above finds nothing if the bars stop being painted this way,
+    // and a test that measures nothing passes. The Tuning pane is the deepest
+    // stack of bars in the dock.
+    let bars = bar_track_widths(&settings_pane_at_width(panes::Tab::Tuning, 400.0)).len();
+    assert!(bars >= 10, "only found {bars} bar tracks in the Tuning pane; has the paint changed?");
+}
+
+/// No settings pane's controls run out past the column, at any width worth
+/// dragging one to. Off the pane edge a control cannot be read, clicked, or
+/// dragged to its end, and horizontal scrolling is deliberately off in the dock
+/// (see `panes::Viewer::scroll_bars`), so there is no way to reach it.
+///
+/// Three things hold it: rows wrap, and so do the labels of the buttons in them
+/// (`widgets::button_row`); bars take the column's visible width
+/// (`widgets::bar_width`); and a bar's name elides against its own value readout
+/// instead of running over it and out of the pane.
+///
+/// 120pt is the narrowest pinned because it is the last width where everything
+/// still fits. Below about 100 what is left is widgets that wrap nothing and
+/// have nowhere to wrap to — the record button, a `toggle_switch` label, the
+/// Options field — and the answer there would be to elide those too, which costs
+/// every reader something to buy back a column nobody drags to.
+///
+/// The column opens at around 423pt (`state::SETTINGS_SPLIT` of the reference
+/// window) and fits there, which is why this went unnoticed: the overrun starts
+/// somewhere under 400, and by 300 the Tuning pane was running 32pt of bar off
+/// its own edge. It is a resize bug, so the sweep is the test.
+#[test]
+fn no_settings_pane_overruns_a_narrow_column() {
+    for width in [400.0f32, 300.0, 240.0, 200.0, 160.0, 120.0] {
+        for tab in SETTINGS_TABS {
+            let shapes = settings_pane_at_width(tab, width);
+            let mut worst: Option<(f32, String)> = None;
+            for cs in &shapes {
+                let rect = cs.shape.visual_bounding_rect();
+                // Shapes that carry no geometry answer with an inverted or
+                // infinite rect; egui's own `is_finite` lets those through.
+                if !rect.is_finite() || rect.width() > 1.0e4 {
+                    continue;
+                }
+                let over = rect.right() - width;
+                if over > 1.0 && worst.as_ref().is_none_or(|(w, _)| over > *w) {
+                    let what = match &cs.shape {
+                        egui::Shape::Text(t) => format!("{:?}", t.galley.text()),
+                        other => format!("{other:?}").chars().take(40).collect(),
+                    };
+                    worst = Some((over, what));
+                }
+            }
+            assert!(
+                worst.is_none(),
+                "{tab:?} at {width}pt ran {:?} past the pane edge",
+                worst.unwrap()
+            );
+        }
+    }
+}
+
 /// A drag whose release never arrives must not take the wheel down with it.
 ///
 /// egui gates every `ScrollArea` on `dragged_id().is_none()` — globally, not
