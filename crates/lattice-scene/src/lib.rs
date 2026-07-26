@@ -110,15 +110,23 @@ pub struct NodeInstance {
     /// clears, the home sheet included and whatever depth the window holds;
     /// 0 on a silent node, and whenever the gutter is off.
     pub gutter: f32,
-    /// Signed cents from the home-sheet node this one SHARES A NAME with:
-    /// `(threes - 2*(sevens - center), fives, center)`, which is the
-    /// position the letter walk makes spell identically. The septimal comma
-    /// — ±27¢ per step at just intonation, but it moves with the tuning.
-    /// 0 on the home sheet.
+    /// Signed cents from the home-sheet node this one shares a LETTER and an
+    /// accidental with: `(threes - 2*(sevens - center), fives, center)`,
+    /// which is the position the letter walk lands on. Not the same NAME —
+    /// the septimal mark is what tells the two apart, and this is the
+    /// distance that mark stands for. The septimal comma — ±27¢ per step at
+    /// just intonation, but it moves with the tuning. 0 on the home sheet.
     ///
     /// Derived here rather than at the label because the namesake can be
     /// outside the displayed window entirely, so the UI has no node to read
     /// it off; the tuning is right here and answers for any position.
+    ///
+    /// **Nothing draws this.** Its only reader was the retired
+    /// `SevensLabel::Comma`, which put the number under the name; the name
+    /// now carries the mark instead. Kept because the quantity is still the
+    /// one the mark means, and the scene is where it can be answered for any
+    /// position — but it is computed per off-sheet node per frame for tests
+    /// alone, so anything that makes that cost matter should delete it.
     pub comma: f32,
     /// The node's pitch class in cents under the current tuning, for the
     /// in-lattice cents readout.

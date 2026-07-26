@@ -414,8 +414,9 @@ fn default_sevens_gutter_soft() -> f32 {
     0.24
 }
 
-/// The home sheet's own name, which every earlier build drew off the home
-/// sheet too — ambiguity and all.
+/// The note name, which every earlier build drew off the home sheet too —
+/// but unambiguously now, the septimal mark having given an off-sheet name
+/// its own spelling rather than its namesake's.
 fn default_sevens_label() -> SevensLabel {
     SevensLabel::Name
 }
@@ -604,9 +605,9 @@ impl Default for ViewConfig {
             // as a rival to it: each step off it draws at a bit over half
             // size, and clears a gutter wide enough to sit legibly on top of
             // whatever it crosses rather than needing clearance of its own.
-            // Its label drops the name — which is the SAME name the node two
-            // fifths down wears (see SevensLabel) — for the letter plus the
-            // signed comma to that namesake.
+            // Its label keeps the name, which the septimal mark now spells
+            // apart from the node two fifths down (see SevensLabel) rather
+            // than repeating it.
             sevens_size: 0.55,
             // Reach and fade equal, which puts the clearing at full strength
             // exactly to the node's rim and gone a quarter of a node-width

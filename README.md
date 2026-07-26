@@ -142,12 +142,13 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   expensive, lower-quality route —
   [`docs/window-recording.md`](docs/window-recording.md) has the analysis.
 - **Spectral audio FFT**: done — the Spectral pane analyzes a real FFT of
-  the plugin's audio input (mono mixdown of the input bus, gated on
-  `show_audio`), no longer MIDI-only. Remaining work is analysis polish,
-  not wiring.
-- **Render styles**: the experimental set has been trimmed (NodeStyle 15→5,
-  OuterStyle→4, CoreStyle folded into a solidity slider); a final aesthetic
-  trim of the 5 surviving node styles is the remaining call. See
+  the plugin's audio input (mono mixdown of the input bus), no longer
+  MIDI-only, and unconditionally rather than behind a setting. Remaining
+  work is analysis polish, not wiring.
+- **Render styles**: the experimental set has been trimmed (NodeStyle 15→4,
+  OuterStyle removed outright, CoreStyle folded into a solidity slider); a
+  final aesthetic trim of the 4 surviving node styles is the remaining call.
+  See
   [`docs/deferred-work.md`](docs/deferred-work.md).
 
 ## License

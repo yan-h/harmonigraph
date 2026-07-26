@@ -211,9 +211,11 @@ pub(crate) fn draw_node_labels(
         // smallest sheet is still legible rather than merely present.
         let scale = scale * node.scale.max(0.6);
         // What an off-sheet node says, and whether it says anything: its
-        // NAME is shared with the node two fifths down and is the same
-        // string on every sheet, so it is the one thing not worth the
-        // biggest glyph on the node. See SevensLabel.
+        // name shares a LETTER and an accidental with the node two fifths
+        // down, but not the whole string — the septimal mark is the column
+        // that tells the two apart, so the name is what distinguishes an
+        // off-sheet node rather than the one thing every sheet repeats.
+        // See SevensLabel.
         let sevens = if node.on_home { SevensLabel::Name } else { view.sevens_label };
         let name_bottom = match sevens {
             SevensLabel::None => 0.0,
