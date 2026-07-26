@@ -1,6 +1,8 @@
 //! Unit tests for the UI shell.
 
 use super::*;
+use crate::state::UI_PERSIST_VERSION;
+use lattice_render::wgpu::TextureFormat;
 
 #[test]
 fn persist_round_trips_camera_and_view() {
