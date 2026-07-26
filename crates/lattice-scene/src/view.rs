@@ -573,6 +573,17 @@ impl ViewConfig {
     /// slice_inner/slice_outer fields, absorbed by the
     /// outer_inner/outer_outer aliases.)
     pub fn migrate_legacy(&mut self) {
+        // Fit the label scale to what its bar offers. It multiplies a FONT
+        // SIZE, and the bar cannot produce a nonsense value where a
+        // hand-edited blob can: a non-finite one reaches egui as a glyph with
+        // no image, so every label silently vanishes, and a huge one asks the
+        // rasterizer for a glyph wider than the texture atlas can hold.
+        self.label_scale = if self.label_scale.is_finite() {
+            self.label_scale.clamp(0.3, 3.0)
+        } else {
+            default_label_scale()
+        };
+
         // The backdrop's pre-opacity bool: on means full strength, which
         // is what that build drew.
         if let Some(on) = self.legacy_outer_backdrop.take() {

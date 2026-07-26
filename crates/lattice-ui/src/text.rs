@@ -80,19 +80,45 @@ pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
 /// one — 9.5pt is 9.5 pixels on a 1x display and draws at 10 — which is the
 /// grid asserting itself, not a size being got wrong.
 ///
+/// Bounded at both ends, in PIXELS, since that is where the consequences are.
+/// A pixel is the floor because a glyph smaller than one is nothing at all.
+/// [`MAX_GLYPH_PX`] is the ceiling: every factor feeding this is bounded, but
+/// they multiply, and their product times a 30pt name is not — and a size past
+/// the atlas's own width is not merely large. epaint takes the overflow path
+/// there, recycling texels that live glyphs still point at, so the failure is
+/// not a big label but every label on the pane going to garbage.
+///
 /// `base` is the size the scale is quoted against — the note name's, since it
 /// is the biggest thing in a label and the one whose stepping would show. The
 /// rest of a label is sized off the same scale, so it lands where the
 /// proportions put it rather than on a pixel of its own.
 pub(crate) fn snap_scale(scale: f32, base: f32, ppp: f32) -> f32 {
+    // A scale that is not a number cannot be drawn at, and passing it on is
+    // the quietest of the failures available: egui rasterizes such a size to
+    // an empty glyph, so every label vanishes and nothing says why. The size
+    // the base was chosen at is the one value certain to be legible.
+    if !scale.is_finite() {
+        return 1.0;
+    }
     // Physical pixels per unit of scale. A nonsense one (a zero base, a
     // hand-edited ppp) leaves the scale alone rather than dividing by it.
     let per_scale = base * ppp;
-    if !per_scale.is_finite() || per_scale <= 0.0 || !scale.is_finite() {
+    if !per_scale.is_finite() || per_scale <= 0.0 {
         return scale;
     }
-    (scale * per_scale).round().max(1.0) / per_scale
+    (scale * per_scale).round().clamp(1.0, MAX_GLYPH_PX) / per_scale
 }
+
+/// The largest a label's type is ever rasterized, in physical pixels.
+///
+/// Far past anything readable — 512 pixels is a quarter of a tall pane on a
+/// Retina display — so it bounds the accidents (a hand-edited blob, a camera
+/// and a bar and a pane all at their limits at once) without reaching any
+/// size a person would ask for. Chosen under the smallest atlas any shell
+/// here builds: the offline renderer's egui context takes egui's 2048 default
+/// rather than the 8192 the plugin gets from wgpu, and a video is exactly
+/// where a corrupted glyph is least recoverable.
+const MAX_GLYPH_PX: f32 = 512.0;
 
 /// Which batch a flush belongs to. Unique per batch drawn in one frame,
 /// since each keeps its own instance buffer: the two picture panes, their
@@ -529,8 +555,20 @@ mod tests {
         assert_eq!(snap_scale(1.5, 0.0, 2.0), 1.5);
         assert_eq!(snap_scale(1.5, 15.0, 0.0), 1.5);
         assert_eq!(snap_scale(1.5, f32::NAN, 2.0), 1.5);
-        // And nothing snaps to zero: a floored pixel is still a pixel.
+        // A scale that is not a number is a different matter: there is no
+        // size to snap, and passing it on draws nothing at all.
+        assert_eq!(snap_scale(f32::NAN, 15.0, 2.0), 1.0);
+        assert_eq!(snap_scale(f32::INFINITY, 15.0, 2.0), 1.0);
+        // And nothing snaps to zero: a floored pixel is still a pixel...
         assert!(snap_scale(0.001, 15.0, 2.0) * 15.0 * 2.0 >= 1.0);
+        // ...nor past what a rasterizer will take. Every factor feeding a
+        // label's size is bounded on its own, but they multiply, and a glyph
+        // wider than the atlas is not a big label: it is the overflow path
+        // recycling texels that live glyphs point at.
+        for absurd in [50.0, 1e6, f32::INFINITY] {
+            let px = snap_scale(absurd, 30.0, 2.0) * 30.0 * 2.0;
+            assert!(px <= MAX_GLYPH_PX, "a scale of {absurd} asked for {px} pixels of type");
+        }
     }
 
     /// A SCALE change re-rasterizes every glyph and hands out new UVs, and the

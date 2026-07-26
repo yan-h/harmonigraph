@@ -95,7 +95,7 @@ fn labels_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         egui::Checkbox::new(&mut view.show_cents, "Cents"),
     );
     ui.add_enabled_ui(view.show_labels, |ui| {
-        ValueBar::new(&mut view.label_scale, 0.3..=3.0, "Size")
+        ValueBar::new(&mut view.label_scale, crate::SCALE_BAR_RANGE, "Size")
             .show(ui)
             .on_hover_text(
                 "Overall size of a label -- the name, the marks beside it and \

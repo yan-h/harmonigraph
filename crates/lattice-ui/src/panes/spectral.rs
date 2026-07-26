@@ -137,7 +137,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             ),
         ],
     );
-    ValueBar::new(&mut cfg.marking_scale, 0.3..=3.0, "Label size")
+    ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Label size")
         .show(ui)
         .on_hover_text(
             "Size of the pane's own markings: the label on each gridline, and \
@@ -272,7 +272,7 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          named. Needs Note history on: a name labels a ribbon.",
     );
     ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
-        ValueBar::new(&mut cfg.note_name_scale, 0.3..=3.0, "Name size")
+        ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Name size")
             .show(ui)
             .on_hover_text(
                 "Overall size of those names.\n\nThey already follow the pitch \

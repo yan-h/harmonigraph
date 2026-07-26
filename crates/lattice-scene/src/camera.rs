@@ -105,21 +105,30 @@ impl Camera {
     /// every zoom — a name that fits its node at the default distance is a
     /// speck on it zoomed in, and swamps it zoomed out.
     ///
-    /// The distance is read through the working range rather than trusted: a
-    /// zero out of a hand-edited persisted blob would divide to infinity here,
-    /// and this scales a FONT SIZE, where an infinity or a NaN is the NaN
-    /// geometry egui panics on — inside the host, taking the editor with it.
+    /// Both terms are read through the range they are navigable in rather
+    /// than trusted. Nothing the UI does can put either outside it; a
+    /// hand-edited persisted blob can, and this scales a FONT SIZE — where a
+    /// zero distance divides to infinity, and a field of view anywhere near
+    /// `PI` sends `tan` through it and comes back NEGATIVE. What egui does
+    /// with a size like that is quietly draw nothing: the glyph is rasterized
+    /// at a width that saturates to zero and every label vanishes, which reads
+    /// as a broken plugin rather than as a bad number.
     pub fn screen_scale(&self) -> f32 {
-        let distance = if self.distance.is_finite() {
-            self.distance.clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE)
-        } else {
-            Self::DEFAULT_DISTANCE
+        let sane = |value: f32, range: std::ops::RangeInclusive<f32>, fallback: f32| {
+            if value.is_finite() {
+                value.clamp(*range.start(), *range.end())
+            } else {
+                fallback
+            }
         };
-        let fov_y = if self.fov_y.is_finite() && self.fov_y > 0.0 {
-            self.fov_y
-        } else {
-            Self::DEFAULT_FOV_Y
-        };
+        let distance = sane(
+            self.distance,
+            Self::MIN_DISTANCE..=Self::MAX_DISTANCE,
+            Self::DEFAULT_DISTANCE,
+        );
+        // Well short of the half-turn where `tan` changes sign, and off zero,
+        // which would divide by it.
+        let fov_y = sane(self.fov_y, 0.2..=2.0, Self::DEFAULT_FOV_Y);
         let half_height = |distance: f32, fov_y: f32| distance * (fov_y * 0.5).tan();
         half_height(Self::DEFAULT_DISTANCE, Self::DEFAULT_FOV_Y) / half_height(distance, fov_y)
     }
@@ -297,5 +306,44 @@ impl Scene {
             }
         }
         best.map(|(_, pos)| pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The zoom factor labels are sized by is finite and positive for anything
+    /// a persisted blob can carry.
+    ///
+    /// Nothing in the UI writes a bad camera — `zoom`, `zoom_by` and `Default`
+    /// all clamp — so the only route in is a hand-edited or corrupted blob,
+    /// which is the route this codebase guards every other divisor against
+    /// (see `SpectrumConfig::migrate_legacy`). It matters here because the
+    /// factor multiplies a font size, and egui answers a nonsense one by
+    /// rasterizing nothing: the labels do not draw wrong, they disappear.
+    #[test]
+    fn a_hand_edited_camera_still_yields_a_usable_label_scale() {
+        let at = |distance: f32, fov_y: f32| {
+            Camera { distance, fov_y, ..Default::default() }.screen_scale()
+        };
+        // The framing a fresh view opens at is the identity, by construction.
+        assert_eq!(at(Camera::DEFAULT_DISTANCE, Camera::DEFAULT_FOV_Y), 1.0);
+        // Twice as close draws twice the size; the working range is bounded at
+        // both ends, so the factor is too.
+        assert_eq!(at(Camera::DEFAULT_DISTANCE * 0.5, Camera::DEFAULT_FOV_Y), 2.0);
+        // Finite and positive is the whole of what is owed here: what a label
+        // may finally be SIZED at is bounded downstream, by `text::snap_scale`.
+        let inside = |scale: f32| scale.is_finite() && scale > 0.0 && scale < 100.0;
+        for distance in [0.0, -1.0, f32::NAN, f32::INFINITY, 1e30, -1e30] {
+            let scale = at(distance, Camera::DEFAULT_FOV_Y);
+            assert!(inside(scale), "distance {distance} gave a scale of {scale}");
+        }
+        // A field of view near a half turn sends `tan` through infinity and
+        // back negative, which is the one of these that is not obviously bad.
+        for fov_y in [0.0, -1.0, f32::NAN, std::f32::consts::PI, 4.0, 1e-30, 1e30] {
+            let scale = at(Camera::DEFAULT_DISTANCE, fov_y);
+            assert!(inside(scale), "fov {fov_y} gave a scale of {scale}");
+        }
     }
 }
