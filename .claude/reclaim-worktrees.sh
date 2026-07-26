@@ -21,14 +21,26 @@
 # `release`, never in `debug`. `target/release` is therefore never pruned.
 # `debug` holds test and clippy output that only `ci.sh` consumes.
 #
-# WHY TIER 1 EXISTS: `git merge-base --is-ancestor` cannot see a SQUASH
-# merge, and CLAUDE.md makes squashing the default. A squash-merged branch's
-# commits are never ancestors of main, so the merged-only rule retained 14.5G
-# across four already-merged PRs (#101, #103, #104, #105) with no expiry —
-# the disk filled while every gate reported "unmerged, keep". Patch-id
-# containment was tried as a fix and rejected: it caught one of those four,
-# because main modified the same files afterwards, and cost 1.9s. Tier 1 does
-# not ask the question at all.
+# HOW TIER 2 SEES A SQUASH MERGE, which is the thing that made merged
+# worktrees pile up. `git merge-base --is-ancestor` cannot see one, and
+# CLAUDE.md makes squashing the default, so four already-merged PRs (#101,
+# #103, #104, #105) sat undeletable while every gate said "unmerged, keep".
+# Tier 2 therefore takes TWO signals, and a worktree needs either:
+#   - HEAD is an ancestor of main. Offline, instant, covers merge-commit PRs.
+#   - a MERGED PR's head sha EQUALS this worktree's HEAD, from one
+#     `gh pr list` call (~0.9s for 300 PRs, once per run, lazy). Sha equality
+#     is the safety: the worktree holds exactly what merged and nothing newer,
+#     so main's squash commit supersedes it. A worktree that committed past
+#     its merge fails this and is kept.
+# Rejected alternatives: patch-id containment caught one of the four, because
+# main edited the same files afterwards, and cost 1.9s. "Remote branch is
+# gone" was worse — 46 of 48 merged branches are still on the remote here,
+# because --delete-branch mostly did not run.
+#
+# WHY TIER 1 STILL EXISTS once tier 2 can see squashes: an UNFINISHED branch
+# is never removable, and its cache is still dead weight. The three fade-*
+# worktrees had no PR at all and held 8.6G of `debug` between them. Tier 1
+# also needs no network, so it keeps working when gh is unavailable.
 #
 # COST. A `df` check gates everything and takes ~6ms, so a session with room
 # to spare pays that and exits. Only under FREE_LOW_WATER_GB does the scan
@@ -84,6 +96,16 @@ PRUNE_IDLE_MINUTES=${RECLAIM_PRUNE_IDLE_MINUTES:-480}
 FREE_LOW_WATER_GB=${RECLAIM_FREE_LOW_WATER_GB:-80}
 DRY_RUN=${RECLAIM_DRY_RUN:-0}
 FORCE=${RECLAIM_FORCE:-0}
+
+# The squash-merge answer, and the only thing here that touches the network.
+# One `gh pr list` call per run resolves every merged PR's head sha, which is
+# what makes a squash-merged worktree removable rather than merely prunable.
+# It is lazy (nothing asks until a worktree fails the ancestor check), bounded
+# (killed after GH_TIMEOUT_S), and fail-safe: any failure falls back to
+# ancestor-only, so a flaky network makes the script conservative, never wrong.
+NO_NETWORK=${RECLAIM_NO_NETWORK:-0}
+GH_TIMEOUT_S=${RECLAIM_GH_TIMEOUT_S:-8}
+GH_PR_LIMIT=${RECLAIM_GH_PR_LIMIT:-300}
 
 # SessionStart delivers its payload as JSON on stdin; a hand-run has a tty and
 # must not block waiting for input that never comes.
@@ -178,6 +200,66 @@ human() {
     else if (kb >= 1024) printf "%.0fM", kb / 1024
     else printf "%dK", kb
   }'
+}
+
+# "<branch> <sha>" per line for every merged PR, loaded at most once per run.
+MERGED_HEADS=""
+MERGED_TRIED=0
+
+load_merged_heads() {
+  [ "$MERGED_TRIED" = 1 ] && return 0
+  MERGED_TRIED=1
+
+  if [ "$NO_NETWORK" = 1 ]; then
+    note 'gh lookup disabled (RECLAIM_NO_NETWORK=1) — ancestor-only, so squash merges stay'
+    return 0
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    note 'gh not on PATH — ancestor-only, so squash merges stay'
+    return 0
+  fi
+
+  tmp=$(mktemp) || return 0
+  # --jq uses gh's embedded jq, so this needs no external jq.
+  gh pr list --state merged --limit "$GH_PR_LIMIT" \
+    --json headRefName,headRefOid \
+    --jq '.[] | "\(.headRefName) \(.headRefOid)"' >"$tmp" 2>/dev/null &
+  gh_pid=$!
+
+  # Bound it by hand: macOS ships no `timeout`, and a hung network call must not
+  # stall session start. Counted in half-seconds.
+  halves=0
+  limit=$((GH_TIMEOUT_S * 2))
+  while kill -0 "$gh_pid" 2>/dev/null && [ "$halves" -lt "$limit" ]; do
+    sleep 0.5
+    halves=$((halves + 1))
+  done
+  if kill -0 "$gh_pid" 2>/dev/null; then
+    kill "$gh_pid" 2>/dev/null
+    wait "$gh_pid" 2>/dev/null
+    note "gh pr list exceeded ${GH_TIMEOUT_S}s — ancestor-only for this run"
+    rm -f "$tmp"
+    return 0
+  fi
+  wait "$gh_pid" 2>/dev/null
+
+  if [ -s "$tmp" ]; then
+    MERGED_HEADS=$(cat "$tmp")
+    note "gh: $(printf '%s\n' "$MERGED_HEADS" | wc -l | tr -d ' ') merged PR head(s) resolved"
+  else
+    note 'gh returned nothing (offline, or not authenticated) — ancestor-only for this run'
+  fi
+  rm -f "$tmp"
+}
+
+# True when a MERGED PR's head sha is exactly this worktree's HEAD. Equality is
+# the safety: it means the worktree holds the work that merged and nothing
+# newer, so the squash commit on main supersedes it completely. A worktree that
+# has moved on past its merge fails this and is kept.
+# -F -x: branch names are data, not patterns.
+pr_merged_at_head() {
+  [ -n "$MERGED_HEADS" ] || return 1
+  printf '%s\n' "$MERGED_HEADS" | grep -Fxq "$1 $2"
 }
 
 # Rename aside, then delete detached. The rename is atomic within the volume,
@@ -289,18 +371,27 @@ remove_worktree() {
   path=$1
   head=$2
   locked=$3
+  branch=$4
 
   name=$(basename "$path")
   [ -n "$MAIN_REF" ] || { note "no-remove $name: could not resolve main"; return 1; }
 
-  # Merged into main? Unmerged work is never removed. This misses squash
-  # merges by construction, which is why tier 1 does not depend on it.
-  if ! git -C "$ROOT" merge-base --is-ancestor "$head" "$MAIN_REF" 2>/dev/null; then
-    # Not a problem, and true of MOST worktrees here. Do not claim which case
-    # it is: locally these two are indistinguishable, which is the finding that
-    # motivated tier 1 — a squash-merged branch reads exactly like unfinished
-    # work. Tier 1 runs on it either way.
-    note "tier2 pass $name: not an ancestor of $MAIN_REF — unmerged work or a squash merge, indistinguishable here; tier 1 still applies"
+  # Two independent merged-signals, because one of them cannot see a squash.
+  #   ancestor — covers merge-commit PRs, works offline, always tried first.
+  #   gh sha   — covers squash merges, which the ancestor test reads as unmerged
+  #              forever. Consulted only when ancestor says no, so the network
+  #              is untouched on a repo that merge-commits everything.
+  how=""
+  if git -C "$ROOT" merge-base --is-ancestor "$head" "$MAIN_REF" 2>/dev/null; then
+    how="ancestor of $MAIN_REF"
+  else
+    load_merged_heads
+    if [ -n "$branch" ] && pr_merged_at_head "$branch" "$head"; then
+      how="merged PR, head sha matches"
+    fi
+  fi
+  if [ -z "$how" ]; then
+    note "no-remove $name: not an ancestor of $MAIN_REF and no merged PR at this HEAD"
     return 1
   fi
 
@@ -323,7 +414,7 @@ remove_worktree() {
   [ -n "$size_kb" ] || size_kb=0
 
   if [ "$DRY_RUN" = 1 ]; then
-    act "would remove $path ($(human "$size_kb"))"
+    act "would remove $path ($(human "$size_kb")) — $how"
     return 0
   fi
 
@@ -342,12 +433,13 @@ consider() {
   head=$2
   locked=$3
   reason=$4
+  branch=$5
 
   usable "$path" "$locked" "$reason" || return 0
 
   # Tier 2 first: a full removal makes tier 1 moot for this worktree, and
   # sizing the whole tree once beats sizing it and then its caches.
-  remove_worktree "$path" "$head" "$locked" && return 0
+  remove_worktree "$path" "$head" "$locked" "$branch" && return 0
   prune_caches "$path"
 }
 
@@ -357,20 +449,23 @@ cur_path=""
 cur_head=""
 cur_locked=0
 cur_reason=""
+cur_branch=""
 
 flush() {
   [ -n "$cur_path" ] || return 0
-  consider "$cur_path" "$cur_head" "$cur_locked" "$cur_reason"
+  consider "$cur_path" "$cur_head" "$cur_locked" "$cur_reason" "$cur_branch"
   cur_path=""
   cur_head=""
   cur_locked=0
   cur_reason=""
+  cur_branch=""
 }
 
 while IFS= read -r line; do
   case "$line" in
     "worktree "*) flush; cur_path=${line#worktree } ;;
     "HEAD "*)     cur_head=${line#HEAD } ;;
+    "branch "*)   cur_branch=${line#branch refs/heads/} ;;
     "locked"*)    cur_locked=1; cur_reason=${line#locked} ;;
   esac
 done < <(git -C "$ROOT" worktree list --porcelain)
