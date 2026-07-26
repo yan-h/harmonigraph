@@ -1109,10 +1109,6 @@ fn text_box(texts: &[(egui::Rect, String)], want: &str) -> egui::Rect {
         .unwrap_or_else(|| panic!("no {want:?} drawn, got {texts:?}"))
 }
 
-/// The stroke weight the label tests draw their marks at. Nothing below
-/// depends on the number; the marks only have to be present and placed.
-const TEST_MARK_WEIGHT: f32 = 0.10;
-
 /// A label's text pieces AND the boxes of its drawn marks.
 ///
 /// The comma signs are geometry rather than type (see
@@ -1139,7 +1135,6 @@ fn drawn_label(
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
                 1.0,
-                TEST_MARK_WEIGHT,
             );
         },
     );

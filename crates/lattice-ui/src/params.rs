@@ -126,7 +126,12 @@ impl ParamKey {
             ParamKey::Five => tuning::FIVE_12TET,
             ParamKey::Seven => tuning::SEVEN_12TET,
             ParamKey::Tolerance => 0.5,
-            ParamKey::Fade => 1.0,
+            // A tenth of a second: long enough that a release reads as a
+            // fade rather than a cut, short enough that the node is clear
+            // before the next one lands at playing tempo. A whole second
+            // keeps released notes up long enough to blur which of them are
+            // still sounding.
+            ParamKey::Fade => 0.1,
             ParamKey::DarkestPitch => 24.0,
             ParamKey::BrightestPitch => 108.0,
         }
