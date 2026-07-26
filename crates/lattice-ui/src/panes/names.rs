@@ -138,10 +138,17 @@ struct Occupancy {
 /// dependence on what was kept. A note's fate therefore rests on two adjacent
 /// cells of take time, and nothing outside them can reach it.
 ///
-/// The grid is the lane's OWN room — a pitch has one spelling, so every note
-/// in a lane wants the same width — which is what keeps the density the chain
-/// had: in a run of repeats the offers fall exactly one room apart, and each
-/// clears the last by exactly nothing to spare.
+/// The grid is the lane's OWN room, measured at the pitch its key rounds to
+/// ([`lane_midi`]) rather than at any note's — which is what keeps the density
+/// the chain had: in a run of repeats the offers fall exactly one room apart,
+/// and each clears the last by exactly nothing to spare.
+///
+/// The lane's and not a note's, because a lane holds more than one spelling. It
+/// is ten cents wide where a name is matched to a node at half of one, so the
+/// pitches in it can and do spell differently — and differently-spelled names
+/// are different WIDTHS. Measured at a note, the grid would be a fact about
+/// which note the sweep reached first, and so about where the sweep began,
+/// which is exactly what the paragraph above is at pains to keep it free of.
 #[derive(Clone, Copy)]
 struct Lane {
     /// Cell width in seconds: this pitch's name plus the gap it asks for.
@@ -177,6 +184,17 @@ const LANE_CENTS: f32 = 10.0;
 /// A pitch as an occupancy key — see [`LANE_CENTS`].
 fn pitch_key(midi: f32) -> i32 {
     (midi * 100.0 / LANE_CENTS).round() as i32
+}
+
+/// The pitch a lane is MEASURED at: its centre, which [`pitch_key`] rounds to
+/// and every note in the lane is within half a lane of.
+///
+/// A lane needs one width for its grid, and it has to be the lane's rather
+/// than any particular note's, or the grid moves with whichever note the sweep
+/// reached first — see [`Lane`]. The centre is the choice that depends on
+/// nothing but the key.
+fn lane_midi(key: i32) -> f32 {
+    key as f32 * LANE_CENTS / 100.0
 }
 
 /// How far a name reaches along the depth axis, in screen points: its padded
@@ -381,12 +399,20 @@ pub(super) fn plan(
         let key = pitch_key(edge.pitch);
         let lane = match occupied.pitches.entry(key) {
             std::collections::hash_map::Entry::Occupied(lane) => lane.into_mut(),
-            // A lane's grid is its own name's room. Every note at one pitch
-            // spells the same, so this is asked once per pitch rather than
-            // once per note — and the room it yields is the same whichever
-            // note in the lane the sweep reaches first.
+            // A lane's grid is the room of the LANE's own name -- the pitch at
+            // its centre, which is the one pitch every note in it agrees on.
+            //
+            // Not the first note's. A lane is ten cents and a name is matched
+            // to a node at `Tuning::tolerance`, half a cent by default, so one
+            // lane holds several spellings and they are not one width: within
+            // four cents of the just third the lattice spells `E-`, `E♯-5↓`
+            // and `E`, which are 11.9, 21.8 and 7.7 points of it. Taking the
+            // grid from whichever the sweep met first makes every cell
+            // boundary in the lane a function of where the sweep BEGAN, and
+            // that scrolls -- which is the one dependence this whole design
+            // exists to remove, so it took the names with it.
             std::collections::hash_map::Entry::Vacant(slot) => {
-                slot.insert(Lane::new(naming(edge.pitch, &mut names).1))
+                slot.insert(Lane::new(naming(lane_midi(key), &mut names).1))
             }
         };
         let cell = (edge.time / lane.grid).floor() as i64;
@@ -897,6 +923,62 @@ mod tests {
         assert_eq!(blinks(|_| phrase(f64::NEG_INFINITY), ZOOMED), 0);
         assert_eq!(blinks(|_| phrase(f64::NEG_INFINITY), 1.0), 0, "...and at the dialled size");
         assert_eq!(blinks_at_the_roll_cap(), 0, "...and with the roll evicting as it plays");
+    }
+
+    /// A lane's grid is a fact about the LANE, not about whichever note in it
+    /// the sweep happened to reach first.
+    ///
+    /// [`Lane`] takes its cell width from a name's room, and names it once per
+    /// lane on the grounds that "a pitch has one spelling". A lane is ten
+    /// cents and a name is matched to a node at `Tuning::tolerance`, half a
+    /// cent by default, so that is twenty times too coarse to be true — the
+    /// same thing
+    /// [`a_name_is_read_from_its_own_pitch_not_a_lane_neighbours`] guards the
+    /// naming itself against. Within four cents of the just third the lattice
+    /// spells `E-`, `E♯-5↓` and `E`, and those are not the same WIDTH: 11.9,
+    /// 21.8 and 7.7 points at the dialled size.
+    ///
+    /// So the grid comes out of whichever spelling the sweep met first, and
+    /// the sweep's start scrolls — which is the one dependence [`Lane`] exists
+    /// to remove. An older note in the lane, off the pane and on its way out
+    /// of the lookback entirely, resizes every cell behind it and changes
+    /// which of the notes you ARE looking at keep their names.
+    #[test]
+    fn a_lanes_grid_does_not_depend_on_which_note_reached_it_first() {
+        // Three pitches inside lane 639, spelling three different widths.
+        const WIDE: f32 = -0.131; // E♯-5↓, the widest
+        const NARROW: f32 = -0.127; // E, the plainest
+        let named = |older: bool| {
+            let mut state = state(24.0, 10.0);
+            state.tuning = lattice_core::Tuning::just();
+            if older {
+                // Off the pane at `now` — it stops nine seconds before the
+                // ten-second window opens — but still inside the sweep, which
+                // reads back of the window by its own lookback. Nothing about
+                // this note is visible; it is only the first of its lane.
+                state.tracker.handle_event(on(0.0, 64));
+                state.tracker.handle_event(tuning(0.01, 64, WIDE));
+                state.tracker.handle_event(off(0.4, 64));
+            }
+            // A run of the plain spelling, dense enough to be thinned, all of
+            // it on the pane at `now`.
+            for i in 0..24 {
+                let t = 5.0 + i as f64 * 0.35;
+                state.tracker.handle_event(on(t, 64));
+                state.tracker.handle_event(tuning(t + 0.01, 64, NARROW));
+                state.tracker.handle_event(off(t + 0.2, 64));
+            }
+            let placed = labels_in(&state, 14.0, BIG);
+            placed.iter().map(|l| (l.at * 1000.0).round() as i64).collect::<Vec<_>>()
+        };
+
+        let alone = named(false);
+        assert!(alone.len() > 1, "nothing is being thinned: {} names", alone.len());
+        assert_eq!(
+            named(true),
+            alone,
+            "a note off the pane resized its lane's cells and renamed the run behind it",
+        );
     }
 
     fn said(labels: &[NoteLabel]) -> Vec<String> {
