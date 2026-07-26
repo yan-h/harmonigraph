@@ -30,8 +30,11 @@ pub struct ViewConfig {
     #[serde(default)]
     pub center_sevens: i32,
     // ---- The sevens layer ------------------------------------------------
-    // How the sheets other than the home one draw. Everything here is inert
-    // while `extent_sevens` is 0, which is where a fresh view starts.
+    // How the sheets other than the home one draw. `sevens_size` and
+    // `sevens_label` go inert while `extent_sevens` is 0, which is where a
+    // fresh view starts; `sevens_gutter` does NOT — it is named for this
+    // layer but cuts the grid under a sounding node at any extent (see its
+    // own doc below, and `a_flat_lattice_still_clears_its_grid`).
     //
     // The problem all three settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at the default spacing a
@@ -628,8 +631,9 @@ impl Default for ViewConfig {
             // shows the septimal axis without anyone having to go find it,
             // but it also puts a second sheet in the picture before anything
             // tells the eye which sheet a node is on; flat is the look this
-            // is actually used at, and depth is worth opening deliberately,
-            // with the sevens layer settings below to make it readable.
+            // is actually used at. The sevens layer settings below are the
+            // lever for making depth readable, but they need setting by hand
+            // when it is opened rather than being sized for it already.
             extent_threes: 10,
             extent_fives: 6,
             extent_sevens: 0,
