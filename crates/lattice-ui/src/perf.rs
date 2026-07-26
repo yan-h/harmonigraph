@@ -972,7 +972,7 @@ mod tests {
         // mode transfers to the other.
         let mut kept = detail.iter().filter(|row| basic.contains(row));
         assert!(
-            basic.iter().all(|row| kept.next() == Some(&row)),
+            basic.iter().all(|row| kept.next() == Some(row)),
             "the breakdown reorders or drops a headline row: {detail:?}",
         );
     }

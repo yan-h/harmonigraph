@@ -9,7 +9,7 @@
 
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
-use super::{names, nearest_visible_node, section, KEY_NAMES};
+use super::{names, nearest_visible_node, section};
 use lattice_core::notes::display_octave_of;
 use egui::Sense;
 
@@ -906,7 +906,7 @@ pub(crate) fn spectral_pane(
     surface: usize,
 ) {
     use crate::SpectrumLabels;
-    use lattice_core::spectrum::{hz_to_midi, midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
+    use lattice_core::spectrum::{hz_to_midi, BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
 
     let cfg = state.spectrum_config;
     // Drag-sensing, so the pitch range can be panned and the time Span zoomed
@@ -1203,8 +1203,8 @@ pub(crate) fn spectral_pane(
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
     let note_names = names::plan(state, &axes, &scale, split, now, label_scale);
     names::draw(&painter, &note_names, label_scale, state.view.mark_weight, &mut labels);
-    // Flushed here rather than with the readout below: the divider draws
-    // between them, and a batch is drawn where it is flushed.
+    // Flushed before the divider: a batch is drawn where it is flushed, and
+    // the divider belongs over the plots, not under the names.
     labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
 
     // The divider, over the plots so it stays findable against a loud
@@ -1224,10 +1224,17 @@ pub(crate) fn spectral_pane(
         }
     }
 
-    // Hovering here highlights the matching lattice node (if in view) and
-    // reads out the pitch under the cursor. Gated on contains_pointer (pure
-    // geometry) rather than hovered(): the divider sits on top of the pane,
-    // and hovered() would blank the readout every time the pointer crossed it.
+    // Hovering here highlights the matching lattice node, if it is in view.
+    // Gated on contains_pointer (pure geometry) rather than hovered(): the
+    // divider sits on top of the pane, and hovered() would drop the highlight
+    // every time the pointer crossed it.
+    //
+    // The pitch under the cursor is no longer also printed beside it. A
+    // name-and-Hz readout tracking the pointer is a second thing moving over a
+    // picture whose whole subject is movement, and it answers a question the
+    // lit lattice node answers better and in the pane you are already looking
+    // at. The pitch axis is labelled; the readout was telling you where your
+    // own cursor was.
     let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
     if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
@@ -1242,25 +1249,6 @@ pub(crate) fn spectral_pane(
             &state.tuning,
             lattice_core::PitchClass::from_cents(pc_cents),
         );
-        let nearest = midi.round();
-        let (pos, align) = axes.text_anchor(scale.t_of(midi), 1.0, 6.0, -2.0);
-        let mut readout = crate::text::TextBatch::default();
-        readout.text(
-            &painter,
-            pos,
-            align,
-            format!(
-                "{}{} {:+.0}\u{a2} \u{b7} {:.1} Hz",
-                KEY_NAMES[nearest as usize % 12],
-                display_octave_of(nearest as i32),
-                (midi - nearest) * 100.0,
-                midi_to_hz(midi),
-            ),
-            egui::FontId::monospace(10.5 * label_scale),
-            theme::text(),
-            theme::well(),
-        );
-        readout.flush(&painter, rect, state, crate::text::spectral_readout(surface));
     }
 }
 

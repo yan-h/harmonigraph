@@ -57,17 +57,13 @@ pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
 }
 
 /// Which batch a flush belongs to. Unique per batch drawn in one frame,
-/// since each keeps its own instance buffer: the two picture panes, their
-/// Render-preview copies, and the analyzer's readout, which flushes
-/// separately because the divider is drawn between it and the axis labels.
+/// since each keeps its own instance buffer: the two picture panes and their
+/// Render-preview copies.
 pub(crate) const LATTICE_LABELS: u64 = 0;
 pub(crate) const LATTICE_PREVIEW_LABELS: u64 = 1;
-/// The analyzer's, one pair per surface (docked, then the preview).
+/// The analyzer's, one per surface (docked, then the preview).
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
-    2 + surface as u64 * 2
-}
-pub(crate) fn spectral_readout(surface: usize) -> u64 {
-    3 + surface as u64 * 2
+    2 + surface as u64
 }
 
 /// The glyphs a pane has drawn so far, waiting to be handed to the GPU.
