@@ -201,7 +201,8 @@ impl SpectrogramCache {
 /// the time axis with a playhead at `now`, instead of the live scrolling
 /// window. `Some` only in the offline renderer — the live ring
 /// ([`AudioSpectrum::history`]) is bounded and cannot hold a whole song.
-/// Runtime-only, never persisted (like [`SharedState::learn_active`]).
+/// Runtime-only, never persisted (like
+/// [`SharedState::learn_active`](crate::SharedState::learn_active)).
 pub struct WholeSong {
     /// Take time at the near edge: the playhead sits here at the render's
     /// start.
@@ -346,7 +347,7 @@ impl AudioSpectrum {
 
     /// Feed mono samples from the shell, analyzing one spectrum per
     /// [`FFT_INTERVAL`](Self::FFT_INTERVAL) of audio in them. `now` is the shell
-    /// clock also passed to [`root_ui`], and dates the NEWEST sample of the
+    /// clock also passed to [`root_ui`](crate::root_ui), and dates the NEWEST sample of the
     /// batch — which is what a shell draining its audio ring at frame time
     /// means by it.
     ///

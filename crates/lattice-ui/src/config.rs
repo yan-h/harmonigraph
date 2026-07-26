@@ -212,8 +212,9 @@ impl Default for RenderConfig {
 
 /// The video frame the Video pane composes: an aspect ratio plus the
 /// lattice/spectral split. Aspect is size-agnostic (the render's resolution is
-/// chosen separately); the split feeds [`Layout::split`], so the plugin's live
-/// preview and the offline renderer build the identical frame.
+/// chosen separately); the split feeds [`Layout::split`](crate::Layout::split),
+/// so the plugin's live preview and the offline renderer build the identical
+/// frame.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RenderFrame {
     /// Frame aspect numerator (e.g. 16 of 16:9). Drives the preview letterbox
@@ -362,7 +363,7 @@ pub struct SpectrumConfig {
     #[serde(default = "default_roll_color")]
     pub roll_color: RollColor,
     /// Write each note's name over its ribbon, at the moment it was struck —
-    /// see [`panes::names`]. `default_true`, not `default`, or a state blob
+    /// see [`panes::names`](crate::panes::names). `default_true`, not `default`, or a state blob
     /// saved before this field existed would load with them off, contradicting
     /// the struct's own default, which is what a fresh install gets.
     #[serde(default = "default_true")]

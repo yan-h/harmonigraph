@@ -46,7 +46,7 @@ impl Console {
 pub struct SharedState {
     pub tracker: NoteTracker,
     /// Snapshot of the tuning parameters, refreshed each frame in
-    /// [`root_ui`] so core/scene code never touches the param system.
+    /// [`root_ui`](crate::root_ui) so core/scene code never touches the param system.
     pub tuning: Tuning,
     pub view: ViewConfig,
     /// Per-frame mirrors of the appearance parameters, refreshed alongside
@@ -221,7 +221,7 @@ pub struct SharedState {
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
     ///
-    /// Read by the shells to pace themselves, and by [`root_ui`] only to
+    /// Read by the shells to pace themselves, and by [`root_ui`](crate::root_ui) only to
     /// schedule repaints — never by any drawing code. The offline renderer
     /// steps its own clock and never reaches `root_ui`, so a recorded frame
     /// cannot depend on this and the determinism test stays honest.
@@ -236,7 +236,7 @@ pub struct SharedState {
     /// hard bound because a frame that is never asked for is never drawn.
     pub fps_cap: Option<f32>,
     /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
-    /// Runtime-only; filled and drawn by [`root_ui`], never by the offline
+    /// Runtime-only; filled and drawn by [`root_ui`](crate::root_ui), never by the offline
     /// renderer (so recorded frames stay deterministic).
     pub(crate) perf: PerfStats,
 }
