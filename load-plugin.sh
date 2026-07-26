@@ -22,8 +22,13 @@
 # "matches the working tree".
 set -euo pipefail
 
-PKG="midi_lattice_3d"
-NAME="MIDI Lattice 3D"
+PKG="harmonigraph-plugin"
+NAME="Harmonigraph"
+# Cargo names a LIB artifact after the lib target, which is the package name
+# with dashes folded to underscores — so the dylib is libharmonigraph_plugin,
+# not libharmonigraph-plugin. `cargo build -p` and `cargo xtask bundle` both
+# want $PKG itself, so the two spellings have to be kept apart.
+LIB="${PKG//-/_}"
 
 MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
 BUNDLED="$MAIN/target/bundled"
@@ -51,11 +56,27 @@ ago() {  # $1 = epoch seconds -> compact "3m ago"
   fi
 }
 
+# This script scans EVERY worktree, not just the one it lives in, so at the
+# rename boundary it has to read both vocabularies: a branch cut before
+# Harmonigraph still builds libmidi_lattice_3d.dylib, and would otherwise
+# read as "- not built -" and refuse to load. Delete LIB_LEGACY and this
+# fallback once no pre-rename worktree is left.
+LIB_LEGACY="midi_lattice_3d"
+
+# Echo the release dylib worktree $1 built under either name, or nothing.
+find_dylib() {
+  local rel="$1/target/release" cand
+  for cand in "$rel/lib${LIB}.dylib" "$rel/lib${LIB_LEGACY}.dylib"; do
+    [[ -f "$cand" ]] && { echo "$cand"; return 0; }
+  done
+  return 1
+}
+
 # Echo the display fields for worktree index $1 as: built<TAB>vshead<TAB>marker
 build_info() {
   local path="${WT_PATH[$1]}" dylib built vshead marker
-  dylib="$path/target/release/lib${PKG}.dylib"
-  if [[ -f "$dylib" ]]; then
+  dylib="$(find_dylib "$path")" || dylib=""
+  if [[ -n "$dylib" ]]; then
     local mtime head_ct head_short
     mtime="$(stat -f %m "$dylib")"
     built="$(ago "$mtime")"
@@ -82,12 +103,13 @@ print_table() {
 
 load_build() {  # $1 = worktree index
   local path="${WT_PATH[$1]}" branch="${WT_BRANCH[$1]}"
-  local dylib="$path/target/release/lib${PKG}.dylib"
-  if [[ ! -f "$dylib" ]]; then
-    echo "ERROR: no build at $dylib" >&2
+  local dylib
+  dylib="$(find_dylib "$path")" || {
+    echo "ERROR: no build in $path/target/release (looked for lib${LIB}.dylib" >&2
+    echo "       and the pre-rename lib${LIB_LEGACY}.dylib)" >&2
     echo "       build it first:  (cd \"$path\" && cargo build --release -p $PKG)" >&2
     exit 1
-  fi
+  }
   local updated=0 ext bundle
   for ext in clap vst3; do
     bundle="$BUNDLED/$NAME.$ext"
@@ -106,13 +128,17 @@ load_build() {  # $1 = worktree index
 
   # Keep the renderer matched to the build being loaded (they share the take
   # format). Only if this worktree built one; otherwise leave the installed one.
-  local offline="$path/target/release/lattice-offline"
+  local offline="$path/target/release/harmonigraph-offline"
   local support="$HOME/Library/Application Support/$NAME"
   if [[ -f "$offline" ]]; then
-    mkdir -p "$support"; cp "$offline" "$support/lattice-offline"
-    echo "Loaded renderer: $support/lattice-offline"
+    mkdir -p "$support"; cp "$offline" "$support/harmonigraph-offline"
+    echo "Loaded renderer: $support/harmonigraph-offline"
   else
-    echo "NOTE: no lattice-offline in this build; offline render keeps the previously-installed renderer." >&2
+    # Says "if any" because the rename moved the support directory: a renderer
+    # installed under the old product name is not on the path the plugin now
+    # resolves, so the first load after the rename has none until some worktree
+    # builds -p harmonigraph-offline.
+    echo "NOTE: no harmonigraph-offline in this build; offline render keeps the previously-installed renderer, if any." >&2
   fi
 
   { echo "worktree=$path"

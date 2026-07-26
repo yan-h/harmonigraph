@@ -18,11 +18,11 @@ bar positions don't give you floats. The exact values are recoverable:
 **The trap, which costs a round trip with Yan every time it's missed:** the
 UI state (dock, camera, ViewConfig) is written into the plugin state ONLY
 when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`,
-`crates/midi_lattice_3d/src/editor.rs`). Saving a project with the plugin
+`crates/harmonigraph-plugin/src/editor.rs`). Saving a project with the plugin
 window open silently keeps the previous values, with no warning. So ask Yan
 for, in order:
 
-1. close the MIDI Lattice 3D **window**, then
+1. close the Harmonigraph **window**, then
 2. save the project (Cmd+S).
 
 Only then run the script. Asking for a save alone gets you nothing.

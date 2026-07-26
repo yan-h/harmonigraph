@@ -37,7 +37,7 @@ non-resizable, preserving current behavior). When resizable, `EguiEditor`
 implements `resize_hint()`/`set_size()`: report the new size immediately,
 apply it to the render surface and child view on the next frame — no
 `request_resize` round-trip, since the host already resized the parent.
-A working implementation of exactly this lives in the midi-lattice-3d
-editor (`crates/midi_lattice_3d/src/editor.rs`, `set_size` +
+A working implementation of exactly this lives in the harmonigraph
+editor (`crates/harmonigraph-plugin/src/editor.rs`, `set_size` +
 `host_resized` handling); happy to adapt it into a PR if the shape sounds
 right.

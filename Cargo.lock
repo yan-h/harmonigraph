@@ -1349,6 +1349,106 @@ dependencies = [
 ]
 
 [[package]]
+name = "harmonigraph-core"
+version = "0.1.0"
+
+[[package]]
+name = "harmonigraph-offline"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "harmonigraph-core",
+ "harmonigraph-render",
+ "harmonigraph-take",
+ "harmonigraph-ui",
+ "image",
+ "pollster",
+ "ron 0.8.1",
+ "serde",
+]
+
+[[package]]
+name = "harmonigraph-plugin"
+version = "0.1.0"
+dependencies = [
+ "baseview",
+ "crossbeam",
+ "egui",
+ "egui-baseview",
+ "harmonigraph-core",
+ "harmonigraph-render",
+ "harmonigraph-take",
+ "harmonigraph-ui",
+ "nice-plug",
+ "parking_lot",
+ "raw-window-handle 0.5.2",
+ "rtrb",
+ "serde",
+]
+
+[[package]]
+name = "harmonigraph-render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "egui",
+ "egui-wgpu",
+ "glam",
+ "harmonigraph-core",
+ "harmonigraph-scene",
+ "naga",
+ "pollster",
+]
+
+[[package]]
+name = "harmonigraph-scene"
+version = "0.1.0"
+dependencies = [
+ "color_space",
+ "glam",
+ "harmonigraph-core",
+ "serde",
+]
+
+[[package]]
+name = "harmonigraph-standalone"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "harmonigraph-core",
+ "harmonigraph-render",
+ "harmonigraph-take",
+ "harmonigraph-ui",
+ "image",
+ "midir",
+]
+
+[[package]]
+name = "harmonigraph-take"
+version = "0.1.0"
+dependencies = [
+ "ron 0.8.1",
+ "serde",
+]
+
+[[package]]
+name = "harmonigraph-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui_dock",
+ "glam",
+ "harmonigraph-core",
+ "harmonigraph-render",
+ "harmonigraph-scene",
+ "libc",
+ "ron 0.8.1",
+ "serde",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1722,87 +1822,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lattice-core"
-version = "0.1.0"
-
-[[package]]
-name = "lattice-offline"
-version = "0.1.0"
-dependencies = [
- "egui",
- "egui-wgpu",
- "image",
- "lattice-core",
- "lattice-render",
- "lattice-take",
- "lattice-ui",
- "pollster",
- "ron 0.8.1",
- "serde",
-]
-
-[[package]]
-name = "lattice-render"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "egui",
- "egui-wgpu",
- "glam",
- "lattice-core",
- "lattice-scene",
- "naga",
- "pollster",
-]
-
-[[package]]
-name = "lattice-scene"
-version = "0.1.0"
-dependencies = [
- "color_space",
- "glam",
- "lattice-core",
- "serde",
-]
-
-[[package]]
-name = "lattice-standalone"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui",
- "image",
- "lattice-core",
- "lattice-render",
- "lattice-take",
- "lattice-ui",
- "midir",
-]
-
-[[package]]
-name = "lattice-take"
-version = "0.1.0"
-dependencies = [
- "ron 0.8.1",
- "serde",
-]
-
-[[package]]
-name = "lattice-ui"
-version = "0.1.0"
-dependencies = [
- "egui",
- "egui_dock",
- "glam",
- "lattice-core",
- "lattice-render",
- "lattice-scene",
- "libc",
- "ron 0.8.1",
- "serde",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1920,25 +1939,6 @@ name = "midi-consts"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f2dd5c7f8aaf48a76e389068ab25ed80bdbc226b887f9013844c415698c9952"
-
-[[package]]
-name = "midi_lattice_3d"
-version = "0.1.0"
-dependencies = [
- "baseview",
- "crossbeam",
- "egui",
- "egui-baseview",
- "lattice-core",
- "lattice-render",
- "lattice-take",
- "lattice-ui",
- "nice-plug",
- "parking_lot",
- "raw-window-handle 0.5.2",
- "rtrb",
- "serde",
-]
 
 [[package]]
 name = "midir"

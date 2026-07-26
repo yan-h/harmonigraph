@@ -13,12 +13,12 @@ THE ONE THING THAT WILL WASTE YOUR TIME
 ---------------------------------------
 The UI state (dock layout, camera, ViewConfig) is written into the plugin
 state ONLY when the editor window is CLOSED — see `impl Drop for
-LatticeEditorHandle` in crates/midi_lattice_3d/src/editor.rs. Saving a
+LatticeEditorHandle` in crates/harmonigraph-plugin/src/editor.rs. Saving a
 project with the plugin window open stores whatever was there before.
 
 So the procedure is, in this order:
 
-    1. Close the MIDI Lattice 3D plugin WINDOW in Bitwig.
+    1. Close the Harmonigraph plugin WINDOW in Bitwig.
     2. Save the project (Cmd+S).
     3. Run this.
 

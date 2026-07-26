@@ -19,15 +19,20 @@
 # we then copy the artifact into the main checkout's bundles explicitly.
 set -euo pipefail
 
-PKG="midi_lattice_3d"
-NAME="MIDI Lattice 3D"
+PKG="harmonigraph-plugin"
+NAME="Harmonigraph"
+# Cargo names a LIB artifact after the lib target, which is the package name
+# with dashes folded to underscores — so the dylib is libharmonigraph_plugin,
+# not libharmonigraph-plugin. `cargo build -p` below wants $PKG itself, so the
+# two spellings have to be kept apart.
+LIB="${PKG//-/_}"
 
 # Current checkout (where the build output lands) and the main working tree
 # (first entry of `git worktree list`, whose target/bundled/ Bitwig scans).
 HERE="$(git rev-parse --show-toplevel)"
 MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
 BUNDLED="$MAIN/target/bundled"
-DYLIB="$HERE/target/release/lib${PKG}.dylib"
+DYLIB="$HERE/target/release/lib${LIB}.dylib"
 
 echo "Building $PKG (release) from $HERE ..."
 ( cd "$HERE" && cargo build --release -p "$PKG" )
@@ -54,13 +59,13 @@ done
 # path — and it means the renderer always matches the build it shipped
 # with, which matters because they share the take format.
 SUPPORT="$HOME/Library/Application Support/$NAME"
-( cd "$HERE" && cargo build --release -p lattice-offline )
-if [ -f "$HERE/target/release/lattice-offline" ]; then
+( cd "$HERE" && cargo build --release -p harmonigraph-offline )
+if [ -f "$HERE/target/release/harmonigraph-offline" ]; then
   mkdir -p "$SUPPORT"
-  cp "$HERE/target/release/lattice-offline" "$SUPPORT/lattice-offline"
-  echo "Updated renderer:  $SUPPORT/lattice-offline"
+  cp "$HERE/target/release/harmonigraph-offline" "$SUPPORT/harmonigraph-offline"
+  echo "Updated renderer:  $SUPPORT/harmonigraph-offline"
 else
-  echo "WARNING: lattice-offline not built; auto-render will not work" >&2
+  echo "WARNING: harmonigraph-offline not built; auto-render will not work" >&2
 fi
 
 echo

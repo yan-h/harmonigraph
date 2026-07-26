@@ -152,7 +152,7 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   the app's own frame time nor GPU time, and a wgpu paint callback's timer
   brackets only ITS passes, never the 2D UI around them. A frame cost could
   live entirely in either and read as zero everywhere. Both samples are
-  BEGINNING-of-pass writes for the reason `lattice-render` found the hard way:
+  BEGINNING-of-pass writes for the reason `harmonigraph-render` found the hard way:
   Metal grants `TIMESTAMP_QUERY_INSIDE_ENCODERS` and end-of-pass writes, then
   records zero for both, silently. The closing sample therefore rides a 1x1
   no-op pass placed after egui's. Readback is a three-step cycle polled with

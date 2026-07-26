@@ -16,7 +16,7 @@ That is the whole idea:
    export audio ────┴──> piece.wav           the bounce, as always
                     │
                     ▼
-        lattice-offline take.take --audio piece.wav --out piece.mp4
+        harmonigraph-offline take.take --audio piece.wav --out piece.mp4
                     │
                     ▼
                piece.mp4  (exact CFR, any size, audio muxed)
@@ -34,8 +34,8 @@ your refresh rate, or whether a window was in front.
 # 1. In Bitwig: arm "Record take" (View pane), play the piece, disarm.
 #    Export audio as usual for the soundtrack.
 # 2. Render:
-cargo build --release -p lattice-offline
-./target/release/lattice-offline ~/Music/"MIDI Lattice 3D Takes"/take-1770000000.take \
+cargo build --release -p harmonigraph-offline
+./target/release/harmonigraph-offline ~/Music/"Harmonigraph Takes"/take-1770000000.take \
     --audio ~/bounces/piece.wav \
     --out piece.mp4 \
     --size 3840x2160
@@ -49,7 +49,7 @@ cargo build --release -p lattice-offline
 it. You do not have to export, and you do not have to do anything
 differently from how you'd play it anyway.
 
-Takes are written to `~/Music/MIDI Lattice 3D Takes/take-<unixtime>.take`
+Takes are written to `~/Music/Harmonigraph Takes/take-<unixtime>.take`
 (`LATTICE_TAKE_DIR` overrides the directory). The status line under the
 toggle tells you where the file is going and how many events have landed.
 
@@ -105,12 +105,12 @@ export.
 #### Rendering automatically when the take ends
 
 Tick **"Render video when done"** under the toggle and the plugin runs
-`lattice-offline` itself the moment you disarm, writing the video next to
+`harmonigraph-offline` itself the moment you disarm, writing the video next to
 the take. Three fields appear:
 
 | field | meaning |
 |---|---|
-| Renderer | path to the `lattice-offline` binary — leave empty to use the copy `update-plugin.sh` installs |
+| Renderer | path to the `harmonigraph-offline` binary — leave empty to use the copy `update-plugin.sh` installs |
 | Audio | bounced WAV to mux in and feed the spectrum; empty renders silent, with no spectrum curve |
 | When | what counts as "done" — see below |
 | Options | extra flags, split on spaces: `--size 3840x2160 --layout side-by-side` |
@@ -135,7 +135,7 @@ the GUI, so a long one does not hold up the DAW. The status line reports
 — which is the only place you'll see it, since a plugin has no terminal.
 
 `update-plugin.sh` builds the renderer alongside the plugin and installs
-it to `~/Library/Application Support/MIDI Lattice 3D/lattice-offline`, so
+it to `~/Library/Application Support/Harmonigraph/harmonigraph-offline`, so
 the two always match — they share the take format, so a mismatched pair
 would fail at the version check.
 
@@ -146,7 +146,7 @@ actually complete on disk.
 ### From the standalone harness (no DAW)
 
 ```sh
-LATTICE_TAKE=/tmp/piece.take cargo run --release -p lattice-standalone
+LATTICE_TAKE=/tmp/piece.take cargo run --release -p harmonigraph-standalone
 ```
 
 Records every note the harness sees — the mock progression, a MIDI
@@ -157,7 +157,7 @@ to `--audio` at render time.
 ## Pass 2 — rendering
 
 ```sh
-lattice-offline <take> [options]
+harmonigraph-offline <take> [options]
 ```
 
 The flags worth knowing (`--help` lists them all):
@@ -199,7 +199,7 @@ enough to ship. Bounce a clean WAV of the same performance and pass it as
 `--audio`:
 
 ```sh
-lattice-offline take.take --audio clean-bounce.wav --out piece.mp4
+harmonigraph-offline take.take --audio clean-bounce.wav --out piece.mp4
 ```
 
 The catch a naive swap hits is alignment. The clean bounce might start at
@@ -240,8 +240,8 @@ Spectral pane's Auto orientation turns itself upright at that aspect),
 For anything else, start from a preset and edit:
 
 ```sh
-lattice-offline --layout side-by-side --dump-layout > mine.ron
-lattice-offline piece.take --layout mine.ron
+harmonigraph-offline --layout side-by-side --dump-layout > mine.ron
+harmonigraph-offline piece.take --layout mine.ron
 ```
 
 ```ron
@@ -289,10 +289,10 @@ the DAW.
 
 ## Crates
 
-- `lattice-take` — the take format. Line-oriented RON, appendable,
+- `harmonigraph-take` — the take format. Line-oriented RON, appendable,
   flushed per record so an interrupted export still renders everything up
   to the cut. Deliberately tiny: it is linked into the plugin.
-- `lattice-offline` — the renderer. Headless wgpu device, egui driven by
+- `harmonigraph-offline` — the renderer. Headless wgpu device, egui driven by
   synthesized input, frames read back and piped to ffmpeg.
 
 Determinism is a tested property, not an aspiration: `render.rs` renders

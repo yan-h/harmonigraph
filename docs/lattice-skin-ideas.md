@@ -6,13 +6,13 @@ or scheduled.** Pick whatever's appealing and it can be built later.
 
 Two independent axes today:
 
-- **Node body** — `NodeStyle` enum (`lattice-scene`) → shader index →
+- **Node body** — `NodeStyle` enum (`harmonigraph-scene`) → shader index →
   a branch in `lattice.wgsl` `fs_main`. Adding a look = enum variant +
   shader branch. Current set: Steady + three field styles
   (Vortex/Checker/Spiral).
 - **Chrome** — grid lines and chord beams live in `fs_edge` /
   `derive_grid` / `derive_edges`; all colors (node idle, grid line, accent)
-  live in one `Skin` struct (`lattice-scene::skin`).
+  live in one `Skin` struct (`harmonigraph-scene::skin`).
 
 The disc is a camera-facing billboard with a signed-distance mask, so
 new node shapes are cheap: change the coverage math, keep the compositing.
