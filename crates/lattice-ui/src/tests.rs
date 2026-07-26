@@ -1279,12 +1279,36 @@ fn both_comma_marks_get_their_own_column() {
     // sits left of the septimal shape rather than on top of it.
     let left = shapes.iter().copied().reduce(|a, b| a.union(b)).expect("marks drawn");
     assert!(left.left() >= letter.right() - 2.0, "marks follow the letter, {left:?}");
-    let syntonic_x =
-        shapes.iter().map(|r| r.center().x).fold(f32::INFINITY, f32::min);
-    let septimal_x = shapes.iter().map(|r| r.center().x).fold(f32::NEG_INFINITY, f32::max);
+
+    // Cluster the stamps into columns rather than reading the flat list's
+    // extremes. A mark is not one shape: `paint_mark` stamps its rim as ~20
+    // separate quads around the fill, so ONE mark already spreads its centers
+    // over four points, and `min(x) < max(x)` holds with the other mark
+    // missing entirely or drawn on top of it -- the two failures this test
+    // exists to catch. Within a mark consecutive stamps are under a point
+    // apart; between the columns they are nearly two.
+    const COLUMN_GAP: f32 = 1.0;
+    let mut stamps: Vec<egui::Pos2> = shapes.iter().map(|r| r.center()).collect();
+    stamps.sort_by(|a, b| a.x.total_cmp(&b.x));
+    let mut columns: Vec<Vec<egui::Pos2>> = Vec::new();
+    for stamp in stamps {
+        match columns.last_mut() {
+            Some(col) if stamp.x - col[col.len() - 1].x <= COLUMN_GAP => col.push(stamp),
+            _ => columns.push(vec![stamp]),
+        }
+    }
+    let widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+    assert_eq!(columns.len(), 2, "two marks, two columns, got {widths:?}");
+    assert_eq!(widths[0], widths[1], "each column is a whole mark, not one mark's rim");
+
+    // The right-hand column is the septimal one, and it is on the letter's own
+    // line while the syntonic bar sits below it -- so which column is which is
+    // checked, not assumed from the ordering the split already imposed.
+    let line = |col: &[egui::Pos2]| col.iter().map(|p| p.y).sum::<f32>() / col.len() as f32;
     assert!(
-        septimal_x > syntonic_x,
-        "the septimal mark takes its own column right of the syntonic one"
+        line(&columns[1]) < line(&columns[0]),
+        "the septimal mark takes the right column, across the letter's line: {:?}",
+        columns.iter().map(|c| line(c)).collect::<Vec<_>>()
     );
 }
 
