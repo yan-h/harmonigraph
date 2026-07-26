@@ -65,9 +65,7 @@ fn span_readout(seconds: f32) -> String {
 /// Settings for the Spectral pane's display and analyzer (persisted with
 /// the UI state).
 pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState) {
-    use crate::{
-        RollColor, SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow,
-    };
+    use crate::{SpectralOrientation, SpectrogramColor, SpectrumLabels, SpectrumWindow};
 
     // ---- Axes -----------------------------------------------------------
     // Which way the plot runs, and how much of the pitch axis it shows. Time's
@@ -248,16 +246,6 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
              musical meaning as the pitch range is zoomed, and a note is as \
              wide as the interval it would cover",
         );
-    choice_row(
-        ui,
-        "Color",
-        &mut cfg.roll_color,
-        &[
-            (RollColor::Channel, "Channel", "The lattice's own per-channel colors"),
-            (RollColor::Pitch, "Pitch", "The low-to-high gradient, on every channel"),
-            (RollColor::Accent, "Accent", "One flat color; the lattice leads"),
-        ],
-    );
     ui.checkbox(&mut cfg.note_names, "Note names").on_hover_text(
         "Write each note's name on its own ribbon, at the leading edge — so a \
          held note's name waits at the now-line and travels off with the note \

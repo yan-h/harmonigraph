@@ -71,19 +71,6 @@ impl SpectralOrientation {
     }
 }
 
-/// What colors a note in the piano roll.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum RollColor {
-    /// The lattice's own channel colors, so a note is the same color here
-    /// as the node it lit up.
-    Channel,
-    /// The pitch gradient every channel-9..13 voice uses, applied to all
-    /// channels — reads as a single ramp low-to-high.
-    Pitch,
-    /// One flat accent color: the roll recedes and the lattice leads.
-    Accent,
-}
-
 /// The color ramp a spectrogram cell's intensity maps through. A set of
 /// looks to pick from — the spectrogram is a heatmap, and the palette is
 /// most of its character. Intensity always runs dark (quiet) to bright
@@ -355,13 +342,6 @@ pub struct SpectrumConfig {
     /// nothing straddling its boundary.
     #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
-    /// Points shaved off a released note's tail, so repeated notes at one
-    /// pitch stay separate instead of merging into one bar.
-    ///
-    /// The tail only: a held note still reaches the now-line, and no onset
-    /// ever moves off the moment it was played.
-    #[serde(default = "default_roll_color")]
-    pub roll_color: RollColor,
     /// Write each note's name over its ribbon, at the moment it was struck —
     /// see [`panes::names`](crate::panes::names). `default_true`, not `default`, or a state blob
     /// saved before this field existed would load with them off, contradicting
@@ -559,10 +539,22 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 
-/// A full-scale sine reads as full height, which is what the pane did before
-/// the ceiling was adjustable at all.
+/// Where the curve's window ends, and it is NOT full scale, because nothing
+/// musical gets near full scale in one bucket.
+///
+/// Measured: a chord of six partials mixed to peak at -12 dBFS reads -23.8 dB
+/// in its loudest bucket once the default -4.5 dB/oct tilt has taken its cut,
+/// because a chord splits its power across its partials and one bucket only
+/// ever holds a share of it. Against a full-scale ceiling that is 0.60 of the
+/// pane, so the top two fifths of an analyzer are empty in normal use.
+///
+/// -20 puts the same chord at 0.90 and a quiet passage where the curve can
+/// still be read. A full-scale sine now runs off the top, which is the right
+/// trade: the pane is read against material, not against a test tone.
+///
+/// The bar still offers [`LEVEL_MAX_DB`], so 0 is one drag away.
 pub(crate) fn default_ceiling_db() -> f32 {
-    LEVEL_MAX_DB
+    -20.0
 }
 
 pub(crate) fn default_true() -> bool {
@@ -587,12 +579,6 @@ pub(crate) fn default_roll_seconds() -> f32 {
 /// pitch range is zoomed out over the whole spectrum.
 pub(crate) fn default_roll_thickness() -> f32 {
     0.3
-}
-
-/// A hairline of background between repeats — enough to read two taps as
-/// two, little enough that a note's length is still its length.
-pub(crate) fn default_roll_color() -> RollColor {
-    RollColor::Channel
 }
 
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
@@ -626,7 +612,6 @@ impl Default for SpectrumConfig {
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
             roll_thickness: default_roll_thickness(),
-            roll_color: default_roll_color(),
             note_names: true,
             note_name_scale: default_one(),
             show_spectrogram: true,

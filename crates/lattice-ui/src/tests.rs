@@ -232,6 +232,31 @@ fn a_pre_merge_layout_does_not_open_the_merged_tab_twice() {
     assert_eq!(dock.matches("Tuning").count(), 1, "the merged tab is docked twice");
 }
 
+/// The layout opens with Notes and Console folded to their tab bar, and with
+/// nothing else folded.
+///
+/// Both are read on demand — Notes restates what the lattice is already
+/// drawing, Console is a diagnostic — and open they take 45% of the settings
+/// column, the half the settings themselves want. The collapse arrow on the
+/// folded bar brings either back at the size it went away, so this is a
+/// starting point rather than a decision taken away.
+#[test]
+fn the_default_layout_opens_with_the_two_readout_panes_folded() {
+    let dock = default_dock();
+    let folded = |tab: panes::Tab| {
+        let path = dock.find_tab(&tab).expect("docked by default");
+        let egui_dock::Node::Leaf(leaf) = &dock[path.surface][path.node] else {
+            panic!("{tab:?} should live in a leaf");
+        };
+        leaf.collapsed
+    };
+    assert!(folded(panes::Tab::Notes), "Notes should open folded");
+    assert!(folded(panes::Tab::Console), "Console should open folded");
+    for tab in [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning] {
+        assert!(!folded(tab), "{tab:?} should open on screen");
+    }
+}
+
 /// A refreshed dock has to take the folds with it.
 ///
 /// `Folds` remembers a split by INDEX — surface and node into the dock tree —
@@ -629,6 +654,56 @@ fn audio_spectrum_shows_while_flowing_and_hides_after() {
 
     // Once samples stop, the curve hides instead of freezing.
     assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());
+}
+
+/// Music fills most of the analyzer's height, rather than half of it.
+///
+/// The ceiling used to be full scale, and nothing musical puts full scale in
+/// ONE bucket: a chord splits its power across its partials, and the default
+/// tilt takes another 10 dB off anything well under the 1 kHz pivot. The curve
+/// topped out halfway up and the top half of the pane was empty in normal use.
+///
+/// So the defaults are held to a chord rather than to a test tone. This one
+/// reads 0.90 of the pane as they stand and 0.60 against a full-scale ceiling,
+/// so 0.75 is the line between the two — what it catches is the ceiling
+/// drifting back up, not a shift of a few dB either way. The upper bound is
+/// the other failure: a curve clipped flat against the top has lost the shape
+/// of its own peaks, which is worse than empty space above it.
+#[test]
+fn a_chord_fills_most_of_the_analyzers_height() {
+    let sr = 48_000.0;
+    let cfg = SpectrumConfig::default();
+    // Six partials sharing the headroom, peaking about -12 dBFS — a mix, not a
+    // tone. Two seconds, so the smoothing has long settled.
+    let samples: Vec<f32> = (0..24_000)
+        .map(|i| {
+            let t = i as f32 / sr;
+            let mix: f32 = [220.0, 277.2, 329.6, 440.0, 554.4, 659.3]
+                .iter()
+                .map(|f| (std::f32::consts::TAU * f * t).sin())
+                .sum();
+            0.25 * mix / 6.0_f32.sqrt()
+        })
+        .collect();
+    let mut spectrum = AudioSpectrum::default();
+    spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
+    let levels = spectrum.display(1.0).expect("audio is flowing");
+
+    // The drawn height of the tallest bucket, through the same mapping the
+    // curve is painted with — bucket index back to MIDI, since the tilt is a
+    // function of pitch.
+    let peak = levels
+        .iter()
+        .enumerate()
+        .map(|(i, &power)| {
+            let midi = lattice_core::spectrum::SPECTRUM_MIN_MIDI
+                + i as f32 / lattice_core::spectrum::BINS_PER_SEMITONE as f32;
+            crate::panes::spectral::loudness(&cfg, power, midi)
+        })
+        .fold(0.0_f32, f32::max);
+
+    assert!(peak > 0.75, "the curve only reaches {peak:.2} of the pane; the top is empty");
+    assert!(peak < 0.99, "the curve is clipped flat against the ceiling at {peak:.2}");
 }
 
 #[test]
@@ -1975,6 +2050,21 @@ fn removed_spectrogram_palettes_load_as_magma() {
     }
 }
 
+/// Put the Notes/Console leaf back on screen, which is what the two wheel
+/// harnesses below are written against: they read the settings leaf as the box
+/// from the tab bar down to the 0.55 split, and the default layout opens that
+/// leaf folded (see
+/// [`the_default_layout_opens_with_the_two_readout_panes_folded`]) so the
+/// settings column runs the whole height instead.
+///
+/// Unfolded rather than measured where it now is, because a taller pane is the
+/// wrong pane to ask these questions of: both tests need content that
+/// OVERFLOWS, and the short window they pick is short relative to this box.
+fn unfold_the_readout_panes(state: &mut SharedState) {
+    let path = state.dock.find_tab(&panes::Tab::Notes).expect("Notes is docked");
+    state.dock[path.surface][path.node].set_collapsed(false);
+}
+
 /// Drive the REAL dock (root_ui, egui_dock, the tab body's ScrollArea and
 /// all) with a wheel over `tab`'s body, and answer how far its content moved.
 /// Negative = the content moved up, i.e. the pane scrolled down.
@@ -1985,6 +2075,7 @@ fn removed_spectrogram_palettes_load_as_magma() {
 /// movement that is). The y of a string drawn in both frames cannot lie.
 fn wheel_over_settings_pane(tab: panes::Tab, screen_h: f32) -> f32 {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    unfold_the_readout_panes(&mut state);
     // The settings leaf opens on Tuning; every other settings pane is a tab
     // behind it.
     let path = state.dock.find_tab(&tab).expect("{tab:?} is not in the default dock");
@@ -2071,6 +2162,117 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     }
 }
 
+/// The window the plugin is dialled in for, and the layout it opens with,
+/// between them leave the settings column with NO scroll bar of either kind:
+/// not the tab bar's, when the six tab names are laid across it, and not a
+/// pane's own, when its controls are stacked down it.
+///
+/// A scroll bar there is a scroll bar over the controls, which is the one place
+/// in the window that is nothing but controls — so it reads as the settings not
+/// fitting the plugin rather than as a list being long. Both halves are tight
+/// enough to lose by accident: the tab bar clears its content by 76pt of the
+/// 423 it gets, and the tallest pane (the Analyzer's) only stopped overflowing
+/// when the Notes/Console leaf folded and handed the column the other half of
+/// its height. Add a settings tab, or unfold that leaf, and one of them comes
+/// back.
+///
+/// 1512x886 because that is the window the sizes in this UI were chosen
+/// against (see `panes::lattice::REFERENCE_HEIGHT`) — this says the defaults
+/// agree with each other there, not that they survive every window. Narrower
+/// than about 1240 and the tab bar does overflow, which is what its own scroll
+/// bar is for.
+#[test]
+fn the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in() {
+    const REFERENCE: egui::Vec2 = egui::vec2(1512.0, 886.0);
+    // Left edge of the settings column: everything right of the split.
+    let column_left = REFERENCE.x * crate::state::SETTINGS_SPLIT;
+
+    for tab in [
+        panes::Tab::Tuning,
+        panes::Tab::Nodes,
+        panes::Tab::Scene,
+        panes::Tab::Analyzer,
+        panes::Tab::Video,
+        panes::Tab::Panel,
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let path = state.dock.find_tab(&tab).expect("a settings tab");
+        state.dock.set_active_tab(path).expect("selecting the tab");
+        let backend = RecordingBackend::default();
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, REFERENCE);
+
+        // Named texts in the column, as the wheel harnesses above track them.
+        let texts = |out: &egui::FullOutput| {
+            let mut map = std::collections::HashMap::new();
+            for cs in &out.shapes {
+                if cs.clip_rect.min.x < column_left {
+                    continue;
+                }
+                if let egui::Shape::Text(t) = &cs.shape {
+                    map.entry(t.galley.text().to_owned()).or_insert(t.pos.y);
+                }
+            }
+            map
+        };
+        // egui_dock draws its tab-bar scroll bar as a 7.5pt-tall rect, and only
+        // when the tabs overflow — so finding one IS the overflow.
+        let scroll_bars = |out: &egui::FullOutput| {
+            out.shapes
+                .iter()
+                .filter(|cs| match &cs.shape {
+                    egui::Shape::Rect(r) => {
+                        (r.rect.height() - 7.5).abs() < 0.01 && r.rect.min.x >= column_left
+                    }
+                    _ => false,
+                })
+                .count()
+        };
+
+        let mut t = 0.0;
+        // Each frame answers with both readings: the named texts, and how many
+        // tab-bar scroll bars the column drew.
+        let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| root_ui(ui, state, &backend, t),
+            );
+            (texts(&out), scroll_bars(&out))
+        };
+
+        // The pointer has to sit over the pane for a frame before the wheel
+        // lands, since egui resolves it from the previous pass.
+        frame(&mut state, vec![egui::Event::PointerMoved(egui::pos2(1250.0, 300.0))]);
+        let (before, bars) = frame(&mut state, vec![]);
+        assert_eq!(bars, 0, "{tab:?}: the tab bar drew a scroll bar at {REFERENCE:?}");
+        frame(
+            &mut state,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -3.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let mut after = before.clone();
+        for _ in 0..20 {
+            after = frame(&mut state, vec![]).0;
+        }
+        let mut deltas: Vec<f32> =
+            before.iter().filter_map(|(text, y)| after.get(text).map(|m| m - y)).collect();
+        assert!(!deltas.is_empty(), "{tab:?} drew no text to measure");
+        deltas.sort_by(f32::total_cmp);
+        let moved = deltas[deltas.len() / 2];
+        assert_eq!(moved, 0.0, "{tab:?} still scrolls at {REFERENCE:?} (content moved {moved})");
+    }
+}
+
 /// A drag whose release never arrives must not take the wheel down with it.
 ///
 /// egui gates every `ScrollArea` on `dragged_id().is_none()` — globally, not
@@ -2108,6 +2310,7 @@ enum Lose {
 /// pane and answer how far its content moved.
 fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    unfold_the_readout_panes(&mut state);
     let path = state.dock.find_tab(&panes::Tab::Analyzer).expect("the Analyzer settings tab");
     state.dock.set_active_tab(path).expect("selecting the tab");
     let backend = RecordingBackend::default();
@@ -2317,23 +2520,36 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
 /// so a field that fails to parse does not degrade — it silently discards the
 /// dock, the camera and the entire `ViewConfig` along with itself, and the
 /// project opens on defaults with no error anywhere. Retiring a setting is
-/// therefore a persistence change, and this is the guard on it: `roll_gap` was
-/// removed with the Gap feature, and every project saved before that still
-/// carries the key.
+/// therefore a persistence change, and this is the guard on it: `roll_gap` went
+/// with the Gap feature and `roll_color` with the roll's Color row, and every
+/// project saved before each still carries its key.
+///
+/// Both SHAPES of value, because they are not the same risk. A retired key
+/// holding a NUMBER is skipped by any parser worth the name. One holding a bare
+/// identifier is the shape that has actually cost a blob here — a
+/// `SpectrogramColor` naming a palette this build no longer has takes the whole
+/// persist with it, which is why the deleted palettes keep serde aliases. What
+/// separates the two is that retiring a FIELD is safe where retiring a VARIANT
+/// is not, and a test that only ever splices a number cannot tell them apart.
 #[test]
 fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.spectrum_config.roll_thickness = 1.75;
-    state.spectrum_config.low_midi = 40.5;
-    let saved = state.save_persist();
-    // A blob from before the retirement: the key spliced back where it sat.
-    let old = saved.replacen("roll_thickness:", "roll_gap:2.5,roll_thickness:", 1);
-    assert_ne!(old, saved, "the splice must have landed for this to test anything");
+    for retired in ["roll_gap:2.5,", "roll_color:Pitch,"] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.spectrum_config.roll_thickness = 1.75;
+        state.spectrum_config.low_midi = 40.5;
+        let saved = state.save_persist();
+        // A blob from before the retirement: the key spliced back where it sat.
+        let old = saved.replacen("roll_thickness:", &format!("{retired}roll_thickness:"), 1);
+        assert_ne!(old, saved, "the {retired} splice must land for this to test anything");
 
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&old);
-    assert_eq!(restored.spectrum_config.roll_thickness, 1.75, "the blob survived");
-    assert_eq!(restored.spectrum_config.low_midi, 40.5);
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&old);
+        assert_eq!(
+            restored.spectrum_config.roll_thickness, 1.75,
+            "the blob carrying {retired} survived",
+        );
+        assert_eq!(restored.spectrum_config.low_midi, 40.5);
+    }
 }
 
 /// The lattice's label-size bar and the clamp its value is persisted through

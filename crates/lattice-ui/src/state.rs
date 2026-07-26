@@ -251,17 +251,38 @@ pub struct CameraPreset {
     pub pitch: f32,
 }
 
+/// Where the pictures end and the settings column begins, as a fraction of
+/// the window's width. The settings column gets what is left.
+///
+/// It is a named constant because two things have to agree on it: the layout,
+/// and the test that holds the settings column to fitting its own content
+/// without a scroll bar. What the column has to clear is the widest thing in
+/// it, which is its own TAB BAR — six tab names need 347.5pt laid across it,
+/// measured — so this fraction and the window width together decide whether
+/// egui_dock draws a scroll bar over the settings.
+///
+/// Widening the column is what a scroll bar over the settings costs, and the
+/// price is charged to the picture twice over: 0.68 would carry the tab bar
+/// down to a window about 1090pt wide instead of 1240, but it also takes 8pt
+/// off the Spectral pane, which is already within a few points of being
+/// narrower than the perf HUD it has to contain. So the column is not widened
+/// on account of a bar that does not appear at the window this is dialled in
+/// for — see `the_settings_column_needs_no_scroll_bar_at_the_window_it_was_
+/// dialled_in`, which is what would notice if that stopped being true.
+pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
+
 /// The default pane arrangement: big lattice with the Spectral pane
 /// beside it on the right (sharing the pitch intuition: what sounds is
 /// what lights up), the tuning column further right, console and notes
-/// tucked below that. Users can re-dock at runtime; the result persists
-/// via UiPersist, and the Panel pane's "Reset layout" button returns here.
+/// folded to a tab bar below that. Users can re-dock at runtime; the result
+/// persists via UiPersist, and the Panel pane's "Reset layout" button
+/// returns here.
 pub(crate) fn default_dock() -> DockState<panes::Tab> {
     let mut dock = DockState::new(vec![panes::Tab::Lattice]);
     let surface = dock.main_surface_mut();
     let [lattice, right] = surface.split_right(
         NodeIndex::root(),
-        0.72,
+        SETTINGS_SPLIT,
         vec![
             // Reading outward from the picture: what the lattice is (its
             // tuning, and how it's framed), then how a note is drawn, the
@@ -277,7 +298,29 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     );
     // Notes first so it sits left of Console and is the selected tab by
     // default (egui_dock makes tab index 0 active).
-    surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
+    let [_, log] = surface.split_below(right, 0.55, vec![panes::Tab::Notes, panes::Tab::Console]);
+    // Folded to its tab bar, because neither pane is looked at while playing:
+    // Notes is a readout of what the tracker already draws on the lattice and
+    // Console is a diagnostic. Open they take 45% of the settings column's
+    // height, which is the half of it the settings themselves want -- see the
+    // scroll every settings pane carries.
+    //
+    // The COLLAPSE ARROW is what brings them back, not the tab name: egui_dock
+    // reaches `set_collapsed` from the arrow's own square alone, and clicking
+    // "Notes" on a folded bar only selects a tab whose body stays hidden. The
+    // split fraction survives the fold, so the pane comes back the size it
+    // went away.
+    //
+    // A vertical fold, so egui_dock does the whole of it; `Folds` only exists
+    // for the horizontal ones (see `fold`).
+    //
+    // This is the DEFAULT, which is to say it reaches a fresh instance and
+    // "Reset layout" and nothing else. A project that has saved a layout keeps
+    // the one it saved, since the arrangement is persisted and
+    // `UI_PERSIST_VERSION` is bumped for a changed tab SET rather than a
+    // changed default -- and throwing away a dialed-in layout to deliver a
+    // default is the worse trade.
+    surface[log].set_collapsed(true);
     // Spectral as a column just right of the lattice: what sounds is directly
     // beside what lights up. Paired with the "Across" default orientation
     // (SpectrumConfig::default). Drag it wherever from here — egui_dock docks
