@@ -28,11 +28,15 @@ sessions' merges and bury yours.
 ```sh
 git diff --stat <base>...HEAD          # size the job first
 git diff <base>...HEAD --name-only     # what the lenses will be pointed at
+git diff <base>...HEAD --name-only | grep -E '\.(rs|sh|py)$'   # executable?
 ```
 
-If the diff is trivial — a doc edit, a comment fix, a one-line constant with
-an obvious test — say so and stop. Five agents over a two-line change trains
-you to skim the output, and skimmed review is worse than none.
+That third command decides how much of the rest of this file you run. Keep
+its output.
+
+If the diff is trivial — a comment fix, a one-line constant with an obvious
+test — say so and stop. Five agents over a two-line change trains you to skim
+the output, and skimmed review is worse than none.
 
 ## Who does the reading
 
@@ -41,10 +45,37 @@ a single message so they run concurrently.** Each gets the same range and one
 lens; each returns findings only. It is read-only on purpose — it hands back
 candidates, and the fix and its failing test are written here by you.
 
-Give every agent the range command verbatim and its lens in full. Scale down
-for a small diff: a self-contained change to one file does not need the
-history or test-reach lenses, and dropping them is a judgement call you
-should state rather than make silently.
+Give every agent the range command verbatim and its lens in full.
+
+### Run the suite once, here, before you spawn anything
+
+If the executable-files grep came back non-empty, run `./ci.sh` and **paste
+its output into every lens prompt.** Red means stop and fix first — there is
+nothing to review on a branch that does not build, and five agents would
+each rediscover the same failure.
+
+The agents have `Bash` and will otherwise each reach for cargo themselves.
+Across the runs measured so far, 36 of 37 spawned agents invoked cargo, 386
+times between them: five lenses clippying and testing the same tree, for the
+same branch, five times over. One run here costs a fraction of that, and it
+gives every lens the same ground truth to argue against instead of five
+private ones.
+
+### Which lenses to run
+
+**Key the lens set on that grep, not on what the diff feels like.** Empty —
+no `.rs`, `.sh` or `.py` touched — and the conventions lens runs alone.
+Non-empty, and the full set runs.
+
+The gate is mechanical because judgement reads a rename sweep or a backlog
+drain as a docs change and scales down on it. #114 was exactly that shape,
+and its worst defect was two lines of shell: both loader scripts built
+`lib${PKG}.dylib`, which the old underscored package name had made correct
+by accident, so the rename pointed them at a file cargo does not write.
+
+Below that gate, dropping a lens is still yours to call — a self-contained
+change to one file does not need the history lens — but name the ones you
+dropped rather than dropping them silently.
 
 ### The lenses
 
@@ -77,10 +108,15 @@ should state rather than make silently.
    wrong reason and reads as coverage. Name any path this diff adds that no
    test reaches.
 
-5. **History.** `git log` and `git blame` the lines this diff changes. Ask
-   why the code was the way it was: a hunk that reverts a deliberate fix,
-   re-opens a bug someone closed, or drops a guard added in response to a
-   real failure is invisible to every other lens.
+5. **History.** `git blame` the lines this diff *modifies or deletes* — not
+   the ones it adds, which have no history to read — and `git log -n 5` the
+   commits behind them. Ask why the code was the way it was: a hunk that
+   reverts a deliberate fix, re-opens a bug someone closed, or drops a guard
+   added in response to a real failure is invisible to every other lens.
+   Hold to that bound. This is the most expensive lens of the five by a wide
+   margin — it has read around three times the median lens's context — and
+   it earns its place on the defects only it can see, not on breadth of
+   history read.
 
 ## Verifying, before you believe any of it
 
