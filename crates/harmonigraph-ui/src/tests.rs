@@ -2362,6 +2362,46 @@ fn settings_pane_at_width(tab: panes::Tab, width: f32) -> Vec<egui::epaint::Clip
     out.shapes
 }
 
+/// The y a named text run was painted at in `shapes`, or `None`.
+fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
+    shapes.iter().find_map(|cs| match &cs.shape {
+        egui::Shape::Text(t) if t.galley.text() == needle => Some(t.pos.y),
+        _ => None,
+    })
+}
+
+/// The Options row is a label and its field on ONE line, at the column widths
+/// wide enough to hold both.
+///
+/// Inside a wrapping row `Ui::available_width()` is the whole ROW, not what is
+/// left of the current line: `Layout::available_size` takes its `main_wrap`
+/// branch and returns `max_rect.width()`, ignoring the cursor. A field sized
+/// from it therefore asks for the entire column, cannot fit after its own
+/// label, and drops to a line of its own at every width — costing a row of
+/// height in the pane whose height budget is the tight one (see
+/// [`the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`]).
+/// `available_size_before_wrap` is the accessor that means the rest of this
+/// line, and the one a widget filling a row wants.
+///
+/// Swept only down to 240pt: below about 148 the label and a usable field
+/// genuinely do not fit on one line, and wrapping is then the right answer.
+#[test]
+fn the_options_field_sits_beside_its_label() {
+    for width in [423.0f32, 300.0, 240.0] {
+        let shapes = settings_pane_at_width(panes::Tab::Video, width);
+        let label = text_y(&shapes, "Options").expect("the Options label");
+        // The field is not empty by default, so its own text locates it.
+        let field = text_y(&shapes, "--size 1920x1080").expect("the Options field's text");
+        // A field beside its label sits a few points off it (the text box has
+        // its own margin); a field that has wrapped is a whole row away.
+        assert!(
+            (label - field).abs() < 10.0,
+            "at {width}pt the Options label sits at y {label} and its field at y {field}: \
+             the field has dropped onto a line of its own"
+        );
+    }
+}
+
 /// The bar tracks a pane drew, by width. A `ValueBar`/`RangeBar` track is the
 /// one thing in a settings pane painted as a `BAR_HEIGHT`-tall rect in
 /// `well()`: the accent fill over it is the same height in a different color,
@@ -2449,6 +2489,15 @@ fn no_settings_pane_overruns_a_narrow_column() {
                 // Shapes that carry no geometry answer with an inverted or
                 // infinite rect; egui's own `is_finite` lets those through.
                 if !rect.is_finite() || rect.width() > 1.0e4 {
+                    continue;
+                }
+                // A widget that set its own clip, narrower than the pane, is
+                // managing its own overflow — a single-line text box scrolls
+                // its content inside the field, so its galley is routinely
+                // wider than the box and correctly cut off there. Only the
+                // pane's own clip means "cut off by the pane edge", which is
+                // the thing that cannot be reached or read.
+                if cs.clip_rect.right() < width - 0.5 {
                     continue;
                 }
                 let over = rect.right() - width;

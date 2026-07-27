@@ -379,10 +379,17 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
 fn labeled_path(ui: &mut egui::Ui, label: &str, value: &mut String) -> egui::Response {
     button_row(ui, |ui| {
         ui.label(label);
-        // The rest of the line, down to a width still worth typing a flag into.
-        // Below that the row wraps and the field takes a line of its own, which
+        // The rest of the line, down to a width still worth typing a flag into;
+        // under that the row wraps and the field takes a line of its own, which
         // is the only way a narrow pane can offer it any width at all.
-        let width = ui.available_width().max(OPTIONS_FIELD_MIN_WIDTH);
+        //
+        // `available_size_before_wrap`, NOT `available_width`. This is a
+        // wrapping row, and there egui's `available_width` is the whole row
+        // (`Layout::available_size` takes its `main_wrap` branch and returns
+        // `max_rect.width()`, cursor and all) — so a field sized from it asks
+        // for the entire column, cannot fit after its own label, and drops to
+        // its own line at every width rather than only at narrow ones.
+        let width = ui.available_size_before_wrap().x.max(OPTIONS_FIELD_MIN_WIDTH);
         ui.add(egui::TextEdit::singleline(value).desired_width(width))
     })
 }
