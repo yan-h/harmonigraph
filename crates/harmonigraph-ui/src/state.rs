@@ -54,8 +54,16 @@ pub struct SharedState {
     /// persisted).
     pub frame_params: FrameParams,
     pub camera: Camera,
-    /// The pitch-class node the pointer is over, if any — shared so *every*
-    /// pane can highlight it (lattice glow, tuning pane readout, ...).
+    /// The lattice node the pointer is over, if any.
+    ///
+    /// Shared state that one pane writes and one pane reads: the lattice
+    /// picks it and the lattice highlights it. It sits here rather than in
+    /// the pane because the offline renderer has to force it to `None` (no
+    /// pointer, and a recorded frame must not carry one), and because a
+    /// second pane answering "which node is this pitch" is a standing
+    /// temptation — the analyzer did, and its pitch axis is continuous, so
+    /// it wrote a node the pointer had only landed near. Nothing outside
+    /// [`crate::panes::lattice`] should write this.
     pub hovered: Option<LatticePos>,
     pub console: Console,
     /// Surface format of the shell's swapchain; the lattice render pipeline

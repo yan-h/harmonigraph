@@ -667,7 +667,7 @@ fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<Lat
 /// flip silently if that were ever changed for an unrelated reason. Sharps are
 /// preferred, which is a convention rather than a deduction; what matters is
 /// that it is written down here and not implied by a loop elsewhere.
-pub(super) fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32, i32) {
+fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32, i32) {
     (
         name.syntonic_commas.abs() + name.septimal_commas.abs(),
         name.sharps.abs(),
@@ -1247,68 +1247,6 @@ mod tests {
         assert_eq!(named(0), "C");
         for centre in [-2, -1, 1, 2] {
             assert_eq!(named(centre), "C", "panned to {centre}, middle C is still C");
-        }
-    }
-
-    /// The name on a ribbon and the node the pointer lights are the same node.
-    ///
-    /// They are two answers to one question asked from opposite ends of the
-    /// same pane — `note_name` for a note the roll is drawing, `node_pointed_at`
-    /// for the pitch under the pointer — and the pane draws both at once. Given
-    /// their own tie-breaks they disagree in an equal temperament, where a
-    /// dozen nodes answer to one pitch: order by steps from the view's center
-    /// and E is named on `(0,1,0)`, which spells `E-`, while the ribbon beside
-    /// it reads `E` off `(4,0,0)`. One rule, `spelling_cost`, is what stops
-    /// the picture contradicting itself.
-    ///
-    /// Every pitch class, not a chosen one: the two agree trivially on C and
-    /// the disagreement is class by class.
-    #[test]
-    fn the_hovered_node_and_the_ribbon_name_agree() {
-        let view = harmonigraph_scene::ViewConfig::default();
-        let equal = harmonigraph_core::Tuning::default();
-        for semitone in 0..12 {
-            let midi = 60.0 + semitone as f32;
-            let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
-            let pointed = super::super::node_pointed_at(&view, &equal, pc)
-                .expect("every 12-TET class has a node in the default view");
-            assert_eq!(
-                super::super::display_note_name(pointed, view.meantone).to_string(),
-                note_name(&view, &equal, midi).to_string(),
-                "the hover and the ribbon disagree at midi {midi}",
-            );
-        }
-    }
-
-    /// A pitch no visible node carries lights nothing.
-    ///
-    /// The half-semitone window is the whole of what can say so, and with the
-    /// shipped extents it never has to: 12-TET covers all twelve classes, so
-    /// the nearest node is always well inside the window and dropping the
-    /// filter entirely changes no answer. Narrow the lattice to one step on
-    /// each axis and three classes have no node at all — without the window
-    /// the hover answers those with a node up to a whole semitone away, which
-    /// is the highlight pointing somewhere the pitch is not.
-    #[test]
-    fn a_pitch_off_the_visible_lattice_lights_nothing() {
-        let view = harmonigraph_scene::ViewConfig {
-            extent_threes: 1,
-            extent_fives: 1,
-            extent_sevens: 0,
-            ..harmonigraph_scene::ViewConfig::default()
-        };
-        let equal = harmonigraph_core::Tuning::default();
-        let lit = |semitone: i32| {
-            let pc = PitchClass::from_cents(semitone as f32 * 100.0);
-            super::super::node_pointed_at(&view, &equal, pc)
-        };
-        // Nine of the twelve are reachable from a 3x3 block of fifths and
-        // thirds; D (2), F#(6) and A#(10) are not.
-        for absent in [2, 6, 10] {
-            assert_eq!(lit(absent), None, "semitone {absent} has no node here, so nothing lights");
-        }
-        for present in [0, 1, 3, 4, 5, 7, 8, 9, 11] {
-            assert!(lit(present).is_some(), "semitone {present} has a node here and should light");
         }
     }
 

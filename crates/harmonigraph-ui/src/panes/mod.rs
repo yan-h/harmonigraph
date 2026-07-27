@@ -256,11 +256,10 @@ pub(super) fn display_note_name(
 /// to light. `Tuning::tolerance` is load-bearing in both — a note off every
 /// node is a note the lattice cannot show, and saying so is the point.
 ///
-/// Two neighbours answer questions close enough to be reached for by
-/// mistake, and neither wants the tolerance. [`node_pointed_at`] takes a
-/// POINTER, which aims rather than plays. [`names::naming_node`](names)
-/// takes the same played pitch but asks what to CALL it, where a collapsed
-/// equal temperament makes the choice among matches the whole problem.
+/// One neighbour is close enough to be reached for by mistake and does not
+/// want the tolerance: [`names::naming_node`](names) takes the same played
+/// pitch but asks what to CALL it, where a collapsed equal temperament makes
+/// the choice AMONG matches the whole problem rather than an afterthought.
 pub(super) fn nearest_visible_node(
     view: &harmonigraph_scene::ViewConfig,
     tuning: &harmonigraph_core::Tuning,
@@ -269,66 +268,6 @@ pub(super) fn nearest_visible_node(
     view.visible_positions()
         .filter(|&pos| tuning.matches(pc, tuning.pitch_class(pos)))
         .min_by_key(|&pos| pc.distance_to(tuning.pitch_class(pos)))
-}
-
-/// How far off a node a POINTER may be and still be pointing at it: half a
-/// semitone, so every pitch on a continuous axis belongs to at most one node
-/// and the highlight goes dark only where there is genuinely nothing near.
-const POINTED_AT_CENTS: f32 = 50.0;
-
-/// The visible node a pointer on a CONTINUOUS pitch axis is aiming at — the
-/// analyzer's, where the pointer lands on a fractional MIDI number rather than
-/// on a note.
-///
-/// Separate from [`nearest_visible_node`] because the two answer different
-/// questions, and the difference is the whole of this function. That one
-/// matches a PLAYED pitch, where `Tuning::tolerance` is the point: a note
-/// off every node is a note the lattice cannot show, and saying so is what
-/// the Notes pane and the analyzer's out-of-lattice bands are for. A pointer
-/// is never off by mistake, so the same gate reads as a bug: Tolerance ships
-/// at half a cent, which across the analyzer's default ten-octave range is a
-/// band a fortieth of a point wide, and a sweep down the axis lights a node
-/// at 17 of 1716 pointer positions — a label flashing on for one frame,
-/// nowhere near the pointer, at what looks like a random node.
-///
-/// The tie is the other half of "looks random", and it is a separate cause
-/// that survives fixing the first. At 12-TET dozens of visible nodes share a
-/// pitch class EXACTLY, so every candidate is at distance zero, and a plain
-/// `min_by_key` on distance keeps whichever `visible_positions` yields first
-/// — out at the corner of the lattice, and a different corner for the next
-/// pitch.
-///
-/// So the ORDER here is `names::spelling_cost`, which is the rule
-/// [`names::naming_node`](names) already breaks that same tie by, and the
-/// two differ only in which nodes they will accept. Sharing it is not
-/// tidiness: the analyzer writes a note name onto every ribbon through
-/// `naming_node`, and the hover lights a node in the same picture, so a
-/// second rule here means the ribbon reading `E` while the node it points
-/// at reads `E-`. It also settles two things a step count does not — a
-/// septimal mark costs a comma, so an off-sheet node loses to a home-sheet
-/// one it would otherwise beat on distance, which matters because an idle
-/// off-sheet node draws no label at all (`NodeInstance::is_visible`); and
-/// the tritone's symmetric tie is decided by rule rather than by the order
-/// `positions_within` happens to walk.
-///
-/// Being view-independent is the other reason. A key measured from
-/// `view.center()` renames a pitch when the lattice is panned, which is what
-/// `names::panning_the_lattice_does_not_rename_a_pitch` forbids for the
-/// ribbons.
-pub(super) fn node_pointed_at(
-    view: &harmonigraph_scene::ViewConfig,
-    tuning: &harmonigraph_core::Tuning,
-    pc: harmonigraph_core::PitchClass,
-) -> Option<harmonigraph_core::LatticePos> {
-    let window = harmonigraph_core::PitchClassDistance::from_cents(POINTED_AT_CENTS);
-    view.visible_positions()
-        .filter(|&pos| pc.distance_to(tuning.pitch_class(pos)) <= window)
-        .min_by_key(|&pos| {
-            (
-                pc.distance_to(tuning.pitch_class(pos)),
-                names::spelling_cost(display_note_name(pos, view.meantone), pos),
-            )
-        })
 }
 
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe
