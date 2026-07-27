@@ -60,8 +60,6 @@ both sides. Never resolve one by dropping an item you did not finish.
 
 [ui] with Notes/Console folded by default, collapsing the settings leaf makes BOTH children of that split collapsed, so the whole settings column folds sideways to one rail — one click where it used to take two. Three reviewers read `fold::paint` as labelling that rail "Notes" (the settings leaf's body is 0px, so only the log leaf gets a name painted). Nobody could drive the painter to confirm it. If true, the rail naming the wrong pane is the bug, not the one-click fold.
 
-[lattice] when resizing the pane, I see text popping in for a split second at random nodes
-
 > Work through BACKLOG.md. First triage: restate each item as you understand
 > it and flag anything ambiguous — ask me about those before touching them.
 > Then fix the clear ones, one commit per item. Remove completed items from

@@ -261,6 +261,51 @@ pub(super) fn nearest_visible_node(
         .min_by_key(|&pos| pc.distance_to(tuning.pitch_class(pos)))
 }
 
+/// How far off a node a POINTER may be and still be pointing at it: half a
+/// semitone, so every pitch on a continuous axis belongs to at most one node
+/// and the highlight goes dark only where there is genuinely nothing near.
+const POINTED_AT_CENTS: f32 = 50.0;
+
+/// The visible node a pointer on a CONTINUOUS pitch axis is aiming at — the
+/// analyzer's, where the pointer lands on a fractional MIDI number rather than
+/// on a note.
+///
+/// Separate from [`nearest_visible_node`] because the two answer different
+/// questions, and the difference is the whole of this function. That one
+/// matches a PLAYED pitch, where `Tuning::tolerance` is the point: a note
+/// off every node is a note the lattice cannot show, and saying so is what
+/// the Notes pane and the analyzer's out-of-lattice bands are for. A pointer
+/// is never off by mistake, so the same gate reads as a bug: Tolerance ships
+/// at half a cent, which across the analyzer's default ten-octave range is a
+/// band a fortieth of a point wide, and a sweep down the axis lights a node
+/// at 17 of 1716 pointer positions — a label flashing on for one frame,
+/// nowhere near the pointer, at what looks like a random node.
+///
+/// The tie-break is the other half of "looks random". At 12-TET dozens of
+/// visible nodes share a pitch class EXACTLY, so every candidate is at
+/// distance zero and `min_by_key` alone keeps whichever `visible_positions`
+/// happens to yield first — out at the corner of the lattice. Broken toward
+/// the view's center instead, the lit node is the one nearest the middle of
+/// what is on screen, which is the node a reader would name that pitch by.
+pub(super) fn node_pointed_at(
+    view: &harmonigraph_scene::ViewConfig,
+    tuning: &harmonigraph_core::Tuning,
+    pc: harmonigraph_core::PitchClass,
+) -> Option<harmonigraph_core::LatticePos> {
+    let window = harmonigraph_core::PitchClassDistance::from_cents(POINTED_AT_CENTS);
+    let center = view.center();
+    let from_center = |pos: harmonigraph_core::LatticePos| {
+        (pos.threes - center.threes).unsigned_abs()
+            + (pos.fives - center.fives).unsigned_abs()
+            + (pos.sevens - center.sevens).unsigned_abs()
+    };
+    view.visible_positions()
+        .map(|pos| (pc.distance_to(tuning.pitch_class(pos)), from_center(pos), pos))
+        .filter(|&(distance, ..)| distance <= window)
+        .min_by_key(|&(distance, steps, _)| (distance, steps))
+        .map(|(.., pos)| pos)
+}
+
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe
 /// (calm "armed", not "alarmed").
 pub(super) fn learn_pulse(now: f64) -> f32 {

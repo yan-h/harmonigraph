@@ -9,7 +9,7 @@
 
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::{theme, SharedState};
-use super::{names, nearest_visible_node, section};
+use super::{names, nearest_visible_node, node_pointed_at, section};
 use egui::Sense;
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
@@ -1275,12 +1275,14 @@ pub(crate) fn spectral_pane(
     // is already labelled.
     //
     // Be exact about what did NOT replace it, because the highlight below
-    // looks like it should have: `nearest_visible_node` goes through
-    // `Tuning::matches`, so a node lights only within Tolerance of the
-    // hovered pitch class — and Tolerance ships at 0.5 cents, against a
-    // `midi` that is continuous. Off a node the pane now answers a hover
-    // with nothing at all. That is the trade; it is not the highlight
-    // covering the readout's job.
+    // looks like it should have: a lit node says WHERE the pitch under the
+    // pointer lives on the lattice, and nothing about how loud it is or
+    // whether anything is playing there. That is the trade; the highlight
+    // does not cover the readout's job.
+    //
+    // `node_pointed_at`, not `nearest_visible_node` — a pointer aims, it does
+    // not play, and matching it against `Tuning::tolerance` is what made this
+    // hover read as a glitch. See the note on that function.
     let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
     if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
@@ -1290,7 +1292,7 @@ pub(crate) fn spectral_pane(
         // class by wherever the zoom happened to start, so hovering the
         // spectrum lights up the wrong lattice node.
         let pc_cents = midi.rem_euclid(12.0) * 100.0;
-        state.hovered = nearest_visible_node(
+        state.hovered = node_pointed_at(
             &state.view,
             &state.tuning,
             harmonigraph_core::PitchClass::from_cents(pc_cents),

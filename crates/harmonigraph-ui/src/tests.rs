@@ -1659,21 +1659,14 @@ impl DockHarness {
 /// is made and reads as `None` by the end of one. The highlight is real; the
 /// end-of-frame value is not where to look for it.
 ///
-/// Tolerance is opened up deliberately. It ships at half a cent, against a
-/// hovered pitch that is continuous, so at the default a node lights only
-/// within a sub-pixel band of an exact semitone and a test aiming at one
-/// would be asserting the pane's pixel geometry rather than its hover.
+/// The tuning is the SHIPPED one, half-cent Tolerance and all. A pointer is
+/// matched by `node_pointed_at`, which does not consult Tolerance — that is
+/// the whole of the difference between aiming at a pitch and playing one, and
+/// a test that opened Tolerance up would be testing a path no user is on.
 #[test]
 fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
     let hovered_at = |frac: f32| {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.tuning = harmonigraph_core::Tuning::from_cents(
-            0.0,
-            harmonigraph_core::tuning::THREE_12TET,
-            harmonigraph_core::tuning::FIVE_12TET,
-            harmonigraph_core::tuning::SEVEN_12TET,
-            50.0,
-        );
         // One octave on the axis, so two points on it are two pitch CLASSES.
         // Across the default ten-octave range, 0.2 and 0.8 sit exactly six
         // octaves apart and reduce to the same class — which looks like a
@@ -1707,6 +1700,87 @@ fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
     assert_ne!(
         low, high,
         "the hover should follow the pointer along the pitch axis, not sit on one node",
+    );
+}
+
+/// A pointer sweeping the analyzer names a node at EVERY step of the sweep,
+/// and names it from the middle of the lattice.
+///
+/// This is the flicker, pinned. Gated on `Tuning::matches` instead — half a
+/// cent, against an axis whose default range puts about fourteen cents in a
+/// point — the window a node lights in is a fortieth of a point wide, so a
+/// sweep down the pane lights something at 17 of 1716 pointer positions and
+/// nothing at the other 1699. On the lattice that is a label appearing for
+/// one frame at a moment nothing caused: text popping in for a split second,
+/// which is what it was reported as.
+///
+/// The second half is why "at random NODES" is a separate complaint from "for
+/// a split second", and it survives fixing the first. At 12-TET dozens of
+/// visible nodes share a pitch class EXACTLY, so a nearest-by-pitch search
+/// finds a whole tie at distance zero and keeps whichever `visible_positions`
+/// yields first — out at a corner of the lattice, and a different corner for
+/// the next pitch. Ordered by distance from the view's center instead, the
+/// twelve classes of the default tuning name the twelve nodes packed around
+/// the origin, which is where a reader looks for them.
+///
+/// Both halves are asserted over a whole sweep rather than at chosen points:
+/// a hover that fires at 1% of positions passes any single-point test that
+/// happens to aim at one of them, which is how this shipped.
+#[test]
+fn sweeping_the_analyzer_lights_a_node_the_whole_way_down() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 860.0));
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let mut hover_at = |y: f32| {
+        // Twice: egui resolves the widget under the pointer from the previous
+        // pass, so the pane has to exist before the hover lands on it.
+        for _ in 0..2 {
+            state.hovered = None;
+            let raw = egui::RawInput {
+                screen_rect: Some(rect),
+                events: vec![egui::Event::PointerMoved(egui::pos2(rect.center().x, y))],
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.5, 0);
+            });
+        }
+        state.hovered
+    };
+
+    // A physical pixel at a time on a Retina display, which is the step size
+    // the reported flicker was seen at.
+    let mut named = std::collections::HashSet::new();
+    let mut y = rect.top() + 1.0;
+    while y < rect.bottom() - 1.0 {
+        let hovered = hover_at(y).unwrap_or_else(|| {
+            panic!("the analyzer named no node at y={y}, so the highlight blinks off mid-sweep")
+        });
+        named.insert(hovered);
+        y += 0.5;
+    }
+
+    // The default view is centered on the origin, so distance from it is the
+    // node's own coordinates. Three steps is the packed block of twelve
+    // around C; the first-in-iteration-order tie lands 14 to 16 steps out.
+    let farthest = named
+        .iter()
+        .map(|p| p.threes.unsigned_abs() + p.fives.unsigned_abs() + p.sevens.unsigned_abs())
+        .max()
+        .expect("the sweep named at least one node");
+    assert!(
+        farthest <= 3,
+        "the hover names a node {farthest} steps out; it should name the central one: {named:?}",
+    );
+    // Twelve pitch classes, twelve nodes: the same class names the same node
+    // in every octave the sweep crosses, so the highlight is a readout of the
+    // pitch rather than of where on the pane the pointer happens to be.
+    assert_eq!(
+        named.len(),
+        12,
+        "a 12-TET sweep should name one node per pitch class, got {named:?}",
     );
 }
 
