@@ -19,7 +19,7 @@ use harmonigraph_render::lattice_paint_callback;
 use harmonigraph_scene::derive_scene;
 
 use super::section;
-use crate::widgets::{button_row, record_button, ValueBar};
+use crate::widgets::{button_row, choice_row, record_button, ValueBar};
 use crate::{theme, Layout, Pane, SharedState};
 
 /// The preview's lattice is a second live view, so it needs its own GPU id —
@@ -36,6 +36,10 @@ const FRAME_CHROME_PAD: f32 = 8.0;
 /// it have already used the pane up. See [`render_pane`] — the floor is what
 /// lets the pane overflow, and overflow is what the wheel scrolls.
 const PREVIEW_MIN_HEIGHT: f32 = 160.0;
+
+/// Narrowest the Options field goes before it wraps onto its own line. See
+/// [`labeled_path`].
+const OPTIONS_FIELD_MIN_WIDTH: f32 = 90.0;
 
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
@@ -114,7 +118,10 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
 fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Frame");
     let f = &mut state.render_config.frame;
-    ui.horizontal(|ui| {
+    // A `button_row` rather than a `choice_row`: the selection is a PAIR of
+    // numbers, not one enum value, so there is nothing for choice_row's
+    // `selectable_value` to compare against.
+    button_row(ui, |ui| {
         ui.label("Aspect");
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
@@ -124,11 +131,15 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             }
         }
     });
-    ui.horizontal(|ui| {
-        ui.label("Arrange");
-        ui.selectable_value(&mut f.stacked, false, "Side by side");
-        ui.selectable_value(&mut f.stacked, true, "Stacked");
-    });
+    choice_row(
+        ui,
+        "Arrange",
+        &mut f.stacked,
+        &[
+            (false, "Side by side", "Lattice left, spectral pane right"),
+            (true, "Stacked", "Lattice above, spectral pane below"),
+        ],
+    );
     let label = if f.stacked { "Lattice height" } else { "Lattice width" };
     ValueBar::new(&mut f.split, 0.15..=0.85, label).show(ui);
 }
@@ -140,17 +151,21 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 /// preview's spectral region blank — see `playhead_placeholder`.
 fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Spectrogram");
-    let playhead = &mut state.render_config.playhead;
-    ui.horizontal(|ui| {
-        ui.label("Render");
-        ui.selectable_value(playhead, false, "Live")
-            .on_hover_text("Bake the live scrolling spectrogram, exactly as previewed here");
-        ui.selectable_value(playhead, true, "Playhead").on_hover_text(
-            "Lay the whole take's spectrogram out at once with a sweeping playhead. \
-             Needs recorded audio. The live preview has neither, so it leaves that \
-             region of the frame blank.",
-        );
-    });
+    choice_row(
+        ui,
+        "Render",
+        &mut state.render_config.playhead,
+        &[
+            (false, "Live", "Bake the live scrolling spectrogram, exactly as previewed here"),
+            (
+                true,
+                "Playhead",
+                "Lay the whole take's spectrogram out at once with a sweeping playhead. \
+                 Needs recorded audio. The live preview has neither, so it leaves that \
+                 region of the frame blank.",
+            ),
+        ],
+    );
 }
 
 /// The marks that say "this rectangle is the video frame", drawn entirely
@@ -305,24 +320,32 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
 
     // When a take finishes and turns into a video. No other home, so it sits
     // right under the switch that starts one.
-    ui.horizontal(|ui| {
-        ui.label("Finish");
-        let trigger = &mut state.render_config.trigger;
-        ui.selectable_value(trigger, crate::RenderTrigger::OnDisarm, "On disarm").on_hover_text(
-            "Render when you switch Record take off — predictable, and works however the \
-             transport behaves.",
-        );
-        ui.selectable_value(trigger, crate::RenderTrigger::OnTransportStop, "On stop")
-            .on_hover_text(
+    choice_row(
+        ui,
+        "Finish",
+        &mut state.render_config.trigger,
+        &[
+            (
+                crate::RenderTrigger::OnDisarm,
+                "On disarm",
+                "Render when you switch Record take off — predictable, and works however the \
+                 transport behaves.",
+            ),
+            (
+                crate::RenderTrigger::OnTransportStop,
+                "On stop",
                 "Render as soon as the transport stops after recording something, disarming at \
                  the same moment — a play-through renders itself.",
-            );
-        ui.selectable_value(trigger, crate::RenderTrigger::AtLoopEnd, "At loop end").on_hover_text(
-            "Record one arranger-loop pass, then end the moment the loop repeats and render it — \
-             no manual stop to mistime. Turn LOOPING ON: it ends when the transport wraps back. \
-             With looping off it just waits for you to disarm.",
-        );
-    });
+            ),
+            (
+                crate::RenderTrigger::AtLoopEnd,
+                "At loop end",
+                "Record one arranger-loop pass, then end the moment the loop repeats and render \
+                 it — no manual stop to mistime. Turn LOOPING ON: it ends when the transport \
+                 wraps back. With looping off it just waits for you to disarm.",
+            ),
+        ],
+    );
 
     // Resolution and any other harmonigraph-offline flags, split on spaces. The
     // frame's aspect already picks a default resolution, so this is only for
@@ -356,6 +379,17 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
 fn labeled_path(ui: &mut egui::Ui, label: &str, value: &mut String) -> egui::Response {
     button_row(ui, |ui| {
         ui.label(label);
-        ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width()))
+        // The rest of the line, down to a width still worth typing a flag into;
+        // under that the row wraps and the field takes a line of its own, which
+        // is the only way a narrow pane can offer it any width at all.
+        //
+        // `available_size_before_wrap`, NOT `available_width`. This is a
+        // wrapping row, and there egui's `available_width` is the whole row
+        // (`Layout::available_size` takes its `main_wrap` branch and returns
+        // `max_rect.width()`, cursor and all) — so a field sized from it asks
+        // for the entire column, cannot fit after its own label, and drops to
+        // its own line at every width rather than only at narrow ones.
+        let width = ui.available_size_before_wrap().x.max(OPTIONS_FIELD_MIN_WIDTH);
+        ui.add(egui::TextEdit::singleline(value).desired_width(width))
     })
 }

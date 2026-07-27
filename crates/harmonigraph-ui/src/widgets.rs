@@ -6,9 +6,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{
-    Align2, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2,
-};
+use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use crate::theme;
 
@@ -160,6 +158,43 @@ const BAR_HEIGHT: f32 = 20.0;
 /// Corner rounding of the bar track — the shared control radius, so a bar and
 /// a button beside it round the same.
 const BAR_RADIUS: u8 = theme::CONTROL_RADIUS;
+/// Inset of a bar's name and its value readout from the bar's own ends.
+const BAR_TEXT_PAD: f32 = 8.0;
+/// Clear space kept between the two, so an elided name stops short of the
+/// number rather than touching it.
+const BAR_LABEL_GAP: f32 = 6.0;
+
+/// How wide a bar draws: the width the layout offers, but never past the
+/// visible edge of the pane. Shared by [`ValueBar`] and [`RangeBar`], so every
+/// bar in a settings column comes out the same length and they all narrow
+/// together as the column does.
+///
+/// `available_width` alone is not enough, and the reason is worth stating
+/// because nothing about it is visible here: egui's
+/// `Region::expand_to_include_rect` unions `max_rect` as well as `min_rect`, so
+/// any control that overruns the column widens the region for everything AFTER
+/// it, and a bar sizing itself from the layout inherits the overrun as a floor
+/// it cannot shrink past. Each bar's minimum length is then the width of the
+/// widest thing above it — several different minimums down one pane, the bars
+/// under a wide control running their value readout off the pane edge while the
+/// ones above compress properly.
+///
+/// [`button_row`] keeps rows and their button labels inside the column, which is
+/// what removes the usual sources; this covers the ones with nowhere to wrap to,
+/// like the record button and the Options field in a very narrow Video pane.
+///
+/// The limit comes from [`crate::panes::pane_content_right`], which the pane
+/// records on the way in. Deliberately not the clip rect: that is the tab BODY,
+/// a [`theme::PANE_INNER_MARGIN`] wider than the content box on each side, so a
+/// bar clamped to it comes out a margin longer than its neighbours and flush on
+/// the pane border. Outside a pane — the widget's own tests — there is nothing
+/// to hand a value over, and the clip is then the honest fallback.
+fn bar_width(ui: &Ui) -> f32 {
+    let right = ui
+        .data(|d| d.get_temp::<f32>(crate::panes::pane_content_right()))
+        .unwrap_or_else(|| ui.clip_rect().right());
+    ui.available_width().min(right - ui.cursor().left()).max(0.0)
+}
 
 pub struct ValueBar<'a> {
     value: &'a mut f32,
@@ -276,7 +311,7 @@ impl<'a> ValueBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let width = ui.available_width();
+        let width = bar_width(ui);
         // Locked bars are read-only: sense hover (so a tooltip still works)
         // but not clicks/drags.
         let sense = if self.locked { Sense::hover() } else { Sense::click_and_drag() };
@@ -374,21 +409,60 @@ impl<'a> ValueBar<'a> {
         } else {
             theme::text_dim()
         };
-        painter.text(
-            rect.left_center() + Vec2::new(8.0, 0.0),
-            Align2::LEFT_CENTER,
-            self.label,
+        // The value is laid out first and the name takes what is left, elided.
+        // The number is what the bar is FOR — a name that runs over it, or out
+        // past the pane edge, costs the reading the control exists to give.
+        // Values in monospace: digits align and don't wiggle as they
+        // change. Dimmed too while locked, to match the fill.
+        let mono = TextStyle::Monospace.resolve(ui.style());
+        let value = painter.layout_no_wrap(
+            self.shown(*self.value),
+            mono.clone(),
+            if self.locked { theme::text_dim() } else { theme::text() },
+        );
+        // Room kept clear for the readout, measured from the widest one the
+        // bar's RANGE can produce rather than from the number currently in it.
+        // Taking it from the current number makes the name re-elide the moment
+        // the value gains a digit — the name wobbling under the pointer
+        // mid-drag, which is exactly what the monospace face buys for the
+        // digits themselves. The ends bound it for a plain decimal readout;
+        // the current value is in the max as well so that a `display` whose
+        // length is not monotonic in the value can still never be overlapped.
+        let reserve = [self.shown(self.min()), self.shown(self.max()), self.shown(*self.value)]
+            .into_iter()
+            .map(|text| painter.layout_no_wrap(text, mono.clone(), theme::text()).size().x)
+            .fold(0.0f32, f32::max);
+        // A locked bar wears the word at the FRONT of its name, because that is
+        // the end elision cannot reach. Spelled into the tail it is the first
+        // thing dropped in a narrow column — and the bar then reads as an
+        // ordinary one that ran out of room, which is worse than saying
+        // nothing, since the unlocked name is the shorter of the two and draws
+        // in full at the same width. Here rather than in the caller's label so
+        // every locked bar gets it, and so the name is the same string locked
+        // or not.
+        let name = if self.locked {
+            format!("Locked · {}", self.label)
+        } else {
+            self.label.to_owned()
+        };
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            name,
             TextStyle::Body.resolve(ui.style()),
             text_color,
         );
-        // Values in monospace: digits align and don't wiggle as they
-        // change. Dimmed too while locked, to match the fill.
-        painter.text(
-            rect.right_center() - Vec2::new(8.0, 0.0),
-            Align2::RIGHT_CENTER,
-            self.shown(*self.value),
-            TextStyle::Monospace.resolve(ui.style()),
-            if self.locked { theme::text_dim() } else { theme::text() },
+        job.wrap.max_width =
+            (rect.width() - 2.0 * BAR_TEXT_PAD - BAR_LABEL_GAP - reserve).max(0.0);
+        job.wrap.max_rows = 1;
+        job.wrap.overflow_character = Some('\u{2026}');
+        let label = painter.layout_job(job);
+        let centered = |galley: &egui::Galley, x: f32| {
+            egui::pos2(x, rect.center().y - galley.size().y * 0.5)
+        };
+        painter.galley(centered(&label, rect.left() + BAR_TEXT_PAD), label, text_color);
+        painter.galley(
+            centered(&value, rect.right() - BAR_TEXT_PAD - value.size().x),
+            value,
+            theme::text(),
         );
 
         if self.locked {
@@ -546,7 +620,7 @@ impl<'a> RangeBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let width = ui.available_width();
+        let width = bar_width(ui);
         let (rect, mut response) =
             ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::click_and_drag());
         let (min, max) = (*self.range.start(), *self.range.end());
@@ -678,20 +752,40 @@ impl<'a> RangeBar<'a> {
     }
 }
 
-/// A horizontal row sized up front to framed-button height.
+/// A horizontal row of controls in a settings column, sized up front to
+/// framed-button height and wrapping onto further lines when the column is too
+/// narrow to hold it.
 ///
 /// Plain `ui.horizontal*` starts its row at `interact_size.y`, which is
 /// shorter than a padded button: egui centers early widgets in that short
 /// row, then grows the row downward under the first button it meets, so a
 /// bare label (or checkbox) next to buttons sits a few pixels above their
 /// text. Starting the row at button height centers everything on one line.
+///
+/// The single row helper, deliberately: a settings pane is a column whose width
+/// the dock hands it, and a row that cannot wrap runs its last buttons out past
+/// the pane edge where they can be neither read nor clicked. A non-wrapping
+/// variant is only ever the wrong choice here, and having one to reach for is
+/// what left the panes disagreeing about whether their buttons wrap at all —
+/// Projection and Tilt overran a narrow column while Style and Palette wrapped.
+///
+/// Wrapping settles the harder half too, and not obviously: `horizontal_wrapped`
+/// sets the row's wrap mode, so each BUTTON's own label wraps onto a second line
+/// rather than extending past its frame. A single button too wide for the column
+/// (Orthographic, at any column narrow enough) has nowhere to wrap TO, and would
+/// otherwise overrun the pane whatever the row did — and take every control
+/// under it along, since egui's `Region::expand_to_include_rect` unions
+/// `max_rect` as well as `min_rect`.
 pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    button_row_impl(ui, false, add)
-}
-
-/// [`button_row`], wrapping onto new rows like `horizontal_wrapped`.
-pub fn button_row_wrapped<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    button_row_impl(ui, true, add)
+    let height =
+        ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
+    ui.scope(|ui| {
+        // The row ui reads this as its initial height; buttons already
+        // size to at least it, so only the shorter widgets move.
+        ui.style_mut().spacing.interact_size.y = height;
+        ui.horizontal_wrapped(add).inner
+    })
+    .inner
 }
 
 /// A labelled row of mutually-exclusive choices for `value`: the standard
@@ -706,7 +800,7 @@ pub fn choice_row<T: Copy + PartialEq>(
     value: &mut T,
     options: &[(T, &str, &str)],
 ) {
-    button_row_wrapped(ui, |ui| {
+    button_row(ui, |ui| {
         ui.label(name);
         for (option, label, hint) in options {
             let response = ui.selectable_value(value, *option, *label);
@@ -715,22 +809,6 @@ pub fn choice_row<T: Copy + PartialEq>(
             }
         }
     });
-}
-
-fn button_row_impl<R>(ui: &mut Ui, wrap: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let height =
-        ui.text_style_height(&TextStyle::Button) + 2.0 * ui.spacing().button_padding.y;
-    ui.scope(|ui| {
-        // The row ui reads this as its initial height; buttons already
-        // size to at least it, so only the shorter widgets move.
-        ui.style_mut().spacing.interact_size.y = height;
-        if wrap {
-            ui.horizontal_wrapped(add).inner
-        } else {
-            ui.horizontal(add).inner
-        }
-    })
-    .inner
 }
 
 #[cfg(test)]
@@ -1016,7 +1094,7 @@ mod tests {
         offset
     }
 
-    /// A bare label centers on the button text in both row variants. The
+    /// A bare label centers on the button text in a `button_row`. The
     /// companion assert shows plain `horizontal` still misaligns them —
     /// when an egui upgrade fixes row sizing upstream, that assert fails
     /// and this whole workaround becomes deletable.
@@ -1031,10 +1109,234 @@ mod tests {
             button_row(ui, |ui| add(ui));
         });
         assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
+    }
 
-        let wrapped = row_offset(|ui, add| {
-            button_row_wrapped(ui, |ui| add(ui));
-        });
-        assert!(wrapped.abs() < 0.5, "button_row_wrapped label off by {wrapped}px");
+    /// A bar's two text runs keep out of each other's way and stay inside the
+    /// track, at every width.
+    ///
+    /// Three separate things in the paint have to hold for that, and nothing
+    /// else in the suite relates one run to the other or either to the track:
+    ///
+    /// - the name's budget subtracts the room the readout needs, or the name
+    ///   runs over the number (measured: 6pt of overlap at 160, 16pt at 120);
+    /// - the name is held to ONE row, or it wraps to two and spills above and
+    ///   below into the bars either side (a 29pt galley in a 20pt track);
+    /// - both runs are offset by half their own height, or they sit a half-line
+    ///   low with 7pt of a 17pt line below the track.
+    ///
+    /// Each is a live regression rather than a hypothetical: all three are
+    /// clippy-clean and leave the rest of the suite green.
+    /// `LayoutJob::simple_singleline` invites the second in particular — the
+    /// name says the row cap is already set, and it is not.
+    #[test]
+    fn a_bars_name_and_readout_never_collide_or_leave_the_track() {
+        let cases: [(&str, f32, RangeInclusive<f32>); 3] = [
+            ("Harmonic seventh (¢)", 1000.0, SEVENTH_RANGE),
+            ("Perfect fifth (¢)", 701.96, 680.0..=720.0),
+            ("Sevenths angle", 45.0, 0.0..=90.0),
+        ];
+        for width in [400.0f32, 240.0, 180.0, 157.0, 120.0] {
+            for (label, value, range) in cases.clone() {
+                let ctx = egui::Context::default();
+                crate::theme::apply_theme(&ctx);
+                let screen =
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+                let mut value = value;
+                let out = ctx.run_ui(
+                    egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                    |ui| {
+                        ValueBar::new(&mut value, range.clone(), label).show(ui);
+                    },
+                );
+                let mut runs: Vec<egui::Rect> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|cs| match &cs.shape {
+                        egui::Shape::Text(t) => Some(t.visual_bounding_rect()),
+                        _ => None,
+                    })
+                    .collect();
+                runs.sort_by(|a, b| a.left().total_cmp(&b.left()));
+                assert_eq!(runs.len(), 2, "{label} at {width}pt painted {} runs", runs.len());
+                let track = out
+                    .shapes
+                    .iter()
+                    .find_map(|cs| match &cs.shape {
+                        egui::Shape::Rect(r) if r.fill == crate::theme::well() => Some(r.rect),
+                        _ => None,
+                    })
+                    .expect("the bar painted no track");
+                assert!(
+                    runs[0].right() <= runs[1].left() + 0.5,
+                    "{label} at {width}pt: the name reaches {} and the readout starts at {}",
+                    runs[0].right(),
+                    runs[1].left()
+                );
+                for run in &runs {
+                    assert!(
+                        run.top() >= track.top() - 0.5 && run.bottom() <= track.bottom() + 0.5,
+                        "{label} at {width}pt: a run spans y {}..{} in a track of {}..{}",
+                        run.top(),
+                        run.bottom(),
+                        track.top(),
+                        track.bottom()
+                    );
+                }
+            }
+        }
+    }
+
+    /// What a galley actually PUTS ON SCREEN. `Galley::text()` answers with the
+    /// source string, so it cannot see an elision; the glyphs can.
+    fn painted_text(galley: &egui::Galley) -> String {
+        galley.rows.iter().flat_map(|row| row.glyphs.iter()).map(|g| g.chr).collect()
+    }
+
+    /// A locked bar still says it is locked when its name has to be elided.
+    ///
+    /// Elision eats the tail, so a lock spelled into the END of a name is the
+    /// first thing to go — and worse than merely lost: the UNLOCKED name is the
+    /// shorter of the two and draws in full at the same width, so the locked
+    /// bar is the one that looks like it ran out of room. State has to sit
+    /// where elision cannot reach it, which is the front.
+    ///
+    /// 157pt is the bar a 173pt column gives, and 173 is where the column
+    /// floors — one separator drag from the default window, no resize needed.
+    #[test]
+    fn a_locked_bar_says_so_even_when_its_name_is_elided() {
+        for width in [157.0f32, 180.0, 200.0, 400.0] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+            let mut value = 386.31;
+            let out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)")
+                        .locked(true)
+                        .show(ui);
+                },
+            );
+            let name = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t) => Some((t.pos.x, painted_text(&t.galley))),
+                    _ => None,
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .expect("the bar painted no text")
+                .1;
+            assert!(
+                name.to_lowercase().contains("lock"),
+                "a {width}pt locked bar painted its name as {name:?}, which does not say so"
+            );
+        }
+    }
+
+    /// The name painted by a bar of `width` holding `value`, as its rendered
+    /// (post-elision) width. The name is the left-hand run; the readout is
+    /// right-aligned, so smallest x picks the name out.
+    fn painted_name_width(width: f32, value: f32) -> f32 {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+        let mut value = value;
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                ValueBar::new(&mut value, SEVENTH_RANGE, "Harmonic seventh (¢)").show(ui);
+            },
+        );
+        out.shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) => Some((t.pos.x, t.galley.size().x)),
+                _ => None,
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("the bar painted no text")
+            .1
+    }
+
+    /// The harmonic-seventh bar's range, which straddles a digit boundary: the
+    /// 12-TET value (and the param's default) is 1000.00, the just one 968.83.
+    const SEVENTH_RANGE: RangeInclusive<f32> = 928.83..=1008.83;
+
+    /// A bar's NAME holds still while its number changes width.
+    ///
+    /// The name is elided against the room the readout leaves it, so a budget
+    /// measured from the CURRENT readout re-elides the name the moment the
+    /// value gains a digit — the name reflowing under the pointer mid-drag,
+    /// which is the very thing the monospace readout buys for the digits. The
+    /// budget has to come from the widest readout the bar's RANGE can produce.
+    ///
+    /// Swept across the band where it bites. Iosevka is 6pt per glyph and epaint
+    /// rounds `wrap.max_width` only to whole points, so a digit is twelve times
+    /// the rounding granularity and there is nothing to absorb it.
+    #[test]
+    fn a_bars_name_holds_still_while_its_number_changes_width() {
+        for width in [174.0f32, 180.0, 184.0, 187.0, 200.0, 260.0] {
+            let narrow = painted_name_width(width, 999.99);
+            let wide = painted_name_width(width, 1000.00);
+            assert!(
+                (narrow - wide).abs() < 0.01,
+                "a {width}pt bar draws its name {narrow}pt wide at 999.99 and {wide}pt at \
+                 1000.00 — the name re-elides when the number gains a digit"
+            );
+        }
+    }
+
+    /// A row of buttons too wide for its column stays inside the column: the
+    /// buttons take further lines, and a button whose own label cannot fit on
+    /// one line wraps that label rather than extending past its frame.
+    ///
+    /// Both halves come from `horizontal_wrapped` and neither is visible at the
+    /// call site, which is the reason to pin them: what the panes need from
+    /// [`button_row`] is that nothing it holds can leave the column, and a
+    /// non-wrapping row helper looks identical in the code that calls it.
+    ///
+    /// 90pt because the second half does not start until 95: above that every
+    /// label fits on one line, and turning per-button wrapping off changes
+    /// nothing the asserts can see. At 90 the widest label wraps to two rows,
+    /// leaving 2.2pt of slack on the passing side and failing by 5.2pt without
+    /// it. Wider would pin only the first half, which is what 120 did.
+    #[test]
+    fn a_row_too_wide_for_its_column_wraps_inside_it() {
+        const COLUMN: f32 = 90.0;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(COLUMN, 400.0));
+        let mut rects = Vec::new();
+        let _ = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                button_row(ui, |ui| {
+                    ui.label("Projection");
+                    for label in ["Perspective", "Orthographic", "Cabinet"] {
+                        rects.push(ui.button(label).rect);
+                    }
+                });
+            },
+        );
+        for (label, rect) in ["Perspective", "Orthographic", "Cabinet"].iter().zip(&rects) {
+            assert!(
+                rect.right() <= COLUMN + 1.0,
+                "{label} reached {} in a {COLUMN}px column",
+                rect.right()
+            );
+        }
+        // And they really did stack rather than all landing on one line.
+        assert!(
+            rects[2].top() > rects[0].top(),
+            "three wide buttons stayed on one line: {rects:?}"
+        );
+        // The second half, made self-evident rather than incidental: a button
+        // taller than one padded text row is one whose label wrapped.
+        let row = 25.0;
+        assert!(
+            rects.iter().any(|r| r.height() > row + 5.0),
+            "no label wrapped, so only the row-wrap half is under test: {rects:?}"
+        );
     }
 }

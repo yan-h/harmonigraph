@@ -9,12 +9,18 @@
 //! controls. Kept as a file because the two halves have nothing to say to each
 //! other beyond sharing a tab.
 
-use crate::widgets::{button_row, button_row_wrapped, choice_row, ValueBar};
+use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::{CameraPreset, SharedState};
 use super::normalize_deg;
 use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
 use harmonigraph_scene::SevensLabel;
+
+/// Room for a short camera-preset name. Asked for flat, with no clamp against
+/// the pane: `TextEdit` already takes `desired_width.at_most(available_width)`,
+/// so the field shrinks with the row on its own and a narrow column caps it
+/// well under this.
+const PRESET_NAME_WIDTH: f32 = 110.0;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
 /// extents/center. Drawn into the Tuning tab, under its own section heading.
@@ -90,7 +96,7 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         }
 
         // One-click reading angles: built-ins plus user-saved presets.
-        button_row_wrapped(ui, |ui| {
+        button_row(ui, |ui| {
             ui.label("Angle");
             if ui
                 .button("Flat")
@@ -132,7 +138,7 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             ui.add(
                 egui::TextEdit::singleline(&mut state.preset_name)
                     .hint_text("preset name")
-                    .desired_width(110.0),
+                    .desired_width(PRESET_NAME_WIDTH),
             );
             if ui.button("Save angle").clicked() {
                 let trimmed = state.preset_name.trim();

@@ -17,10 +17,15 @@ use harmonigraph_core::tuning;
 
 /// The major-third bar while meantone mode drives it: read-only, showing
 /// the derived value (four fifths minus two octaves) the lattice actually
-/// uses. Distinct label + dimmed bar make the lock obvious.
+/// uses. The dimmed bar and the word the `locked` flag puts at the front of
+/// its name make the lock obvious.
+///
+/// The NAME is the same string the unlocked bar carries. `ValueBar` adds the
+/// word itself, so it lands ahead of the name where a narrow column's elision
+/// cannot eat it — see the `locked` branch in `ValueBar::show`.
 fn locked_third_bar(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     let mut derived = tuning::meantone_third(params.get(ParamKey::Three));
-    ValueBar::new(&mut derived, ParamKey::Five.range(), "Major third (¢, locked)")
+    ValueBar::new(&mut derived, ParamKey::Five.range(), "Major third (¢)")
         .decimals(2)
         .locked(true)
         .show(ui)
