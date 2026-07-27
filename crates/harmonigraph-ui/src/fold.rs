@@ -52,6 +52,15 @@
 //! dialed in, and the width the window gave up for it — which is what [`Folds`]
 //! holds, one entry per folded split, persisted with the dock and handed back
 //! the moment the pane unfolds.
+//!
+//! That width is not frozen while the pane is away. Resize the window with a
+//! pane folded and every pane on screen gives or takes a share of the change;
+//! a pane that came back with the width it had BEFORE all that would have been
+//! spared a squeeze its neighbours wore, and would take the difference out of
+//! them — which is what "opening a pane made the other two smaller" looks like
+//! from the outside. So what a rail is holding follows its sibling (see
+//! [`Taken::track`]), and folding, resizing and unfolding compose: the pane
+//! comes back beside its neighbour in exactly the share it left it in.
 
 use egui_dock::{DockState, Node, NodeIndex, Surface, SurfaceIndex, Tree};
 
@@ -116,6 +125,55 @@ struct Taken {
     /// layout" throws the whole arrangement away, with no rail left anywhere
     /// to measure the difference against.
     shrink: f32,
+    /// How wide the pane's sibling was when the two above were last measured,
+    /// which is what [`Taken::track`] follows the window by.
+    ///
+    /// serde(default) reads a blob written before folds tracked the window as
+    /// zero, which starts the tracking from the first frame it is seen rather
+    /// than from a width measured in some other window.
+    #[serde(default)]
+    kept: f32,
+}
+
+impl Taken {
+    /// Follow the window: scale what the rail is holding by however much its
+    /// sibling has moved since this last ran.
+    ///
+    /// The sibling is the proxy because it is the pane the folded one shares
+    /// its split with, so the two would have taken a window resize in the same
+    /// proportion had both been on screen — and because a fold deadens the
+    /// separator between them, so nothing else can move it.
+    ///
+    /// The whole width scales, not just the part outside the rail: what is
+    /// held is the width the pane would have if it were OPEN, and an open pane
+    /// takes a resize across all of it. Scaling the remainder instead leaves
+    /// the pane coming back a rail's worth ahead of its neighbour, which is a
+    /// smaller version of the complaint this exists to answer. What the WINDOW
+    /// saves by the fold — the width less the rail standing in for it — falls
+    /// out of that, and never goes below nothing.
+    fn track(&mut self, kept: f32, span: f32) {
+        if kept <= 0.0 || !kept.is_finite() {
+            return;
+        }
+        // A blob from before this tracked anything, or a fold on its way back
+        // out of a bigger one, has nothing to measure against: start here.
+        if self.kept <= 0.0 {
+            self.kept = kept;
+            return;
+        }
+        // Under a point, this is not a resize — it is a window landing on a
+        // whole pixel a fraction away from what was asked for. Following that
+        // would fold the rounding into what the pane is owed, once per fold,
+        // in whichever direction the rounding leans. The baseline is left
+        // where it is rather than moved, so a drag made a point at a time
+        // still adds up to a resize worth following.
+        if (kept - self.kept).abs() < 1.0 {
+            return;
+        }
+        self.width = (self.width * kept / self.kept).max(span);
+        self.shrink = self.width - span;
+        self.kept = kept;
+    }
 }
 
 /// Which child of a split is the folded one.
@@ -270,20 +328,17 @@ impl Folds {
                 // fold in a floating dock window has no plugin window to take
                 // from and keeps egui_dock's trade of handing the width to the
                 // sibling.
-                let taken = child
+                let shrink = child
                     .filter(|_| new && surface == SurfaceIndex::main())
                     .map(|child| granted[child.0])
                     .filter(|pane| *pane > span)
-                    .map(|pane| {
-                        let shrink = (pane - span).min(room);
-                        Taken { side, width: span + shrink, shrink }
-                    })
-                    .filter(|taken| taken.shrink > 0.0);
+                    .map(|pane| (pane - span).min(room))
+                    .filter(|shrink| *shrink > 0.0);
                 // The width this split is left with once the window has taken
                 // its share — which is what the fold is laid out against, so
                 // that the frame it settles on is the first one after the
                 // resize rather than the one after that.
-                let width = width - taken.map_or(0.0, |taken| taken.shrink);
+                let width = width - shrink.unwrap_or(0.0);
                 // A split hands each child the space up to half a separator
                 // short of its midpoint, so the midpoint has to sit that much
                 // further out for the rails themselves to come out `span` wide.
@@ -298,6 +353,40 @@ impl Folds {
                     Side::Left => (granted[left.0], granted[right.0]) = (span, rest),
                     Side::Right => (granted[left.0], granted[right.0]) = (rest, span),
                 }
+                // A rail is not exempt from what the window does next. Resize
+                // it while a pane is folded and every pane on screen gives or
+                // takes a share; a pane that comes back with the width it had
+                // BEFORE all that has been spared a squeeze the others wore,
+                // and takes the difference out of them — which reads, from the
+                // outside, as opening a pane making its neighbours smaller.
+                //
+                // So what the rail is holding tracks its sibling, which is the
+                // pane it will share the split with and — the separator being
+                // dead while a fold pins it — the only one that can move under
+                // it. Fold, resize, unfold then lands where resizing alone
+                // would have.
+                //
+                // Only the fold that owns the window's width tracks it. A
+                // split INSIDE a bigger fold has no sibling pane to follow —
+                // what sits beside it there is another rail — and the fold
+                // above it is already following the window on its behalf. It
+                // forgets where it was measured from instead, so that coming
+                // back out starts a fresh baseline rather than reading the
+                // rail it sat beside as a pane that shrank.
+                if !new {
+                    if let Some(taken) = self
+                        .0
+                        .iter_mut()
+                        .find(|fold| fold.is(surface, node))
+                        .and_then(|fold| fold.taken.as_mut())
+                    {
+                        if holds[index].inside {
+                            taken.kept = 0.0;
+                        } else {
+                            taken.track(rest, span);
+                        }
+                    }
+                }
                 let Node::Horizontal(split) = &mut tree[node] else {
                     continue;
                 };
@@ -308,7 +397,8 @@ impl Folds {
                         surface: surface.0,
                         node: node.0,
                         fraction: split.fraction,
-                        taken,
+                        taken: shrink
+                            .map(|shrink| Taken { side, width: span + shrink, shrink, kept: rest }),
                     });
                 }
                 split.fraction = fraction;
@@ -316,10 +406,10 @@ impl Folds {
                 // narrows the split itself, all the way out to the window, so
                 // that what the fold took comes off the window instead of
                 // going to the pane next door.
-                if let Some(taken) = taken {
-                    resize -= taken.shrink;
-                    room -= taken.shrink;
-                    reflow(tree, &mut granted, node, -taken.shrink, separator);
+                if let Some(shrink) = shrink {
+                    resize -= shrink;
+                    room -= shrink;
+                    reflow(tree, &mut granted, node, -shrink, separator);
                 }
             }
         }
@@ -1100,28 +1190,57 @@ mod tests {
         }
     }
 
-    /// A pane is given back the WIDTH it had, not the share of the window it
-    /// had — so a window the user resized while the pane was folded keeps
-    /// every other pane exactly where it is, and grows by the pane.
+    /// Folding, resizing the window, and unfolding compose to the layout that
+    /// resizing alone would have reached.
+    ///
+    /// A rail is not spared what the window does to everything else. Freeze
+    /// what it is holding and the pane comes back at a width measured in some
+    /// earlier, wider window, taking the difference out of the panes that DID
+    /// wear the resize — which is what "opening a pane made the other two
+    /// smaller" looks like from the outside.
     #[test]
-    fn a_pane_comes_back_the_width_it_went_away_at_any_window_size() {
+    fn a_fold_across_a_resize_lands_where_the_resize_alone_would_have() {
         let mut dock = dock();
         let mut folds = Folds::default();
         lay_out(&mut dock, 1000.0);
-        let pane = width(&dock, LATTICE);
+        let share = width(&dock, LATTICE) / width(&dock, SPECTRAL);
         collapse(&mut dock, Tab::Lattice, true);
-        let window = frame(&mut folds, &mut dock, 1000.0);
-        let window = frame(&mut folds, &mut dock, window);
+        let window = settle(&mut folds, &mut dock, 1000.0);
         // The user drags the window border in while the lattice is a rail.
         let dragged = window - 120.0;
-        let _ = frame(&mut folds, &mut dock, dragged);
-        let sibling = width(&dock, SPECTRAL);
+        let _ = settle(&mut folds, &mut dock, dragged);
         collapse(&mut dock, Tab::Lattice, false);
-        let window = frame(&mut folds, &mut dock, dragged);
-        let _ = frame(&mut folds, &mut dock, window);
-        assert!((window - (dragged + pane - 26.0)).abs() < 0.01, "the window grows by the pane");
-        assert!((width(&dock, LATTICE) - pane).abs() < 0.01, "which comes back as it was");
-        assert!((width(&dock, SPECTRAL) - sibling).abs() < 0.01, "the analyzer never moved");
+        let window = settle(&mut folds, &mut dock, dragged);
+        let folded = [LATTICE, SPECTRAL, SETTINGS].map(|node| width(&dock, node));
+
+        // Exactly, because both took the resize in the same proportion: the
+        // pane comes back beside its neighbour in the share it left it in.
+        // This is the one the complaint is about — a pane that comes back at
+        // a width measured in an older, wider window is a pane taking that
+        // share out of its neighbour.
+        assert!(
+            (width(&dock, LATTICE) / width(&dock, SPECTRAL) - share).abs() < 0.001,
+            "the lattice and the analyzer keep the share they had",
+        );
+
+        // And the whole layout lands within a few points of the same dock,
+        // never folded, dragged straight to where this one ended up. Not
+        // exactly: while a pane is a rail the split above it divides the
+        // window between "rail plus analyzer" and the settings column rather
+        // than between three panes, so a resize made then is shared out in
+        // slightly different proportions — about 6% of the drag, 7 points of
+        // the 120 dragged here, and all of it in the column that was never
+        // folded rather than between the two panes that trade with it.
+        let mut plain = self::dock();
+        lay_out(&mut plain, 1000.0);
+        lay_out(&mut plain, window);
+        for (node, folded) in [LATTICE, SPECTRAL, SETTINGS].iter().zip(folded) {
+            let plain = width(&plain, *node);
+            assert!(
+                (folded - plain).abs() < 8.0,
+                "{node:?} came out {folded} across the fold, {plain} across the resize alone",
+            );
+        }
     }
 
     /// A settings column folds away as one rail once everything in it is
