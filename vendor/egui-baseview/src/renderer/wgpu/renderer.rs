@@ -463,19 +463,6 @@ impl Renderer {
         let user_cmd_bufs = {
             let mut renderer = self.render_state.renderer.write();
             let tex_start = std::time::Instant::now();
-            // TEMPORARY: which textures a frame re-uploads, and how big. A
-            // resize frame spends ~10ms here and nowhere else.
-            for (id, image_delta) in &full_output.textures_delta.set {
-                let [w, h] = image_delta.image.size();
-                eprintln!(
-                    "[hg-tex] {id:?} {w}x{h} {} {}",
-                    if image_delta.is_whole() { "whole" } else { "patch" },
-                    match &image_delta.image {
-                        egui::ImageData::Color(_) => "color",
-                        _ => "font",
-                    },
-                );
-            }
             for (id, image_delta) in &full_output.textures_delta.set {
                 // NOTE: `update_buffers` is also where egui-wgpu runs paint
             // callbacks' `prepare`, so the lattice's buffer writes — and the

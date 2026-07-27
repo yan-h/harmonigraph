@@ -1328,6 +1328,35 @@ fn ring_capacity(planned: usize, visible: usize) -> usize {
 /// `2 * (1024 + 8)` = 2064 texels across.
 const RING_HEADROOM: usize = 8;
 
+/// Compose a whole ring texture: every column of the run at its own texel and
+/// at its twin, the guard column outside the oldest end, and black everywhere
+/// the run does not reach.
+///
+/// Split out from [`write_ring`] to be testable — the texture it goes into is
+/// opaque once uploaded, so the placement is only checkable here, and getting
+/// it wrong scrambles the picture rather than failing anything.
+fn restart_pixels(
+    ring: &SpectrogramRing,
+    tex_w: usize,
+    h: usize,
+    first_key: i64,
+    last_key: i64,
+    mut column: impl FnMut(usize) -> Vec<Color32>,
+) -> Vec<Color32> {
+    let mut pixels = vec![Color32::BLACK; tex_w * h];
+    // From one before the run: that key is the guard, which duplicates the
+    // oldest slab, so it reads the same column as `first_key`.
+    for key in first_key - 1..=last_key {
+        let column = column((key.max(first_key) - first_key) as usize);
+        let x = ring.x_of(key);
+        for (row, texel) in column.iter().enumerate().take(h) {
+            pixels[row * tex_w + x] = *texel;
+            pixels[row * tex_w + x + ring.capacity] = *texel;
+        }
+    }
+    pixels
+}
+
 /// Bring the ring's texture up to date for the visible slabs, allocating or
 /// restarting it when it cannot be carried forward.
 ///
@@ -1366,15 +1395,32 @@ fn write_ring(
         // restart re-blanks the texture and repaints every column, and nothing
         // about the picture says it happened.
         spectrum.spectrogram[surface].restarts[why.slot()] += 1;
-        // A fresh texture starts black, so a column never written reads as
-        // silence rather than as whatever the allocation happened to contain.
-        let blank = egui::ColorImage::new([tex_w, h], vec![Color32::BLACK; tex_w * h]);
+        // Every column at once, as ONE upload.
+        //
+        // A restart repaints the whole run, and a column at a time is two
+        // uploads per column — each its own texture delta, each carrying a
+        // texel of payload and a call's worth of overhead. At a full-width
+        // pane that is some two thousand of them in a single frame, which
+        // measured 7-10ms: the whole of what makes a window resize stutter,
+        // since every step of a drag changes the pane and restarts the ring.
+        // Composed here instead, it is one upload of the same pixels.
+        //
+        // Black behind them for the same reason a fresh texture was blanked:
+        // a column never written has to read as silence rather than as
+        // whatever the allocation held.
+        let fresh = SpectrogramRing::restarted(capacity, style, first_key);
+        let pixels = restart_pixels(&fresh, tex_w, h, first_key, last_key, |i| {
+            fill_column(cfg, bins, &power[i * h..(i + 1) * h])
+        });
+        let image = egui::ColorImage::new([tex_w, h], pixels);
         match &mut spectrum.spectrogram[surface].tex {
-            Some(handle) => handle.set(blank, opts),
-            slot => *slot = Some(ctx.load_texture("spectrogram", blank, opts)),
+            Some(handle) => handle.set(image, opts),
+            slot => *slot = Some(ctx.load_texture("spectrogram", image, opts)),
         }
-        spectrum.spectrogram[surface].ring =
-            Some(SpectrogramRing::restarted(capacity, style, first_key));
+        let mut ring = fresh;
+        ring.wrote(first_key, last_key);
+        spectrum.spectrogram[surface].ring = Some(ring);
+        return;
     }
 
     let (Some(ring), Some(tex)) =
@@ -1388,6 +1434,11 @@ fn write_ring(
     // uploaded mid-accumulation and may have gained energy since. Backward is
     // the slabs a zoomed-out window has just revealed — none on an ordinary
     // frame, a handful on the frames of a widening gesture.
+    //
+    // A handful is the whole point of the column-at-a-time writes that follow:
+    // this is the steady state, where one or two columns are stale and
+    // uploading the other thousand would be the waste. The restart above is
+    // the other case, and it is the one that has to go wide.
     let back = first_key..ring.oldest_valid.min(last_key + 1);
     let forward = ring.written_through.max(first_key)..=last_key;
     for key in back.chain(forward) {
@@ -2804,4 +2855,51 @@ mod tests {
             );
         }
     }
+
+    /// A restart paints every column of the run at its own texel AND at its
+    /// twin, duplicates the oldest as the guard outside the run, and leaves
+    /// black wherever the run does not reach.
+    ///
+    /// The picture is only checkable here: once the pixels are in a texture
+    /// they are opaque, so a misplaced column shows up as a scrambled
+    /// spectrogram after every window resize rather than as a failure.
+    #[test]
+    fn a_restart_paints_every_column_and_its_twin() {
+        const CAPACITY: usize = 6;
+        const H: usize = 2;
+        let tex_w = CAPACITY * 2;
+        let style = style_for(H, 0.05, 1.0, &SWEEP_SCALE);
+        let ring = SpectrogramRing::restarted(CAPACITY, style, 10);
+        // One flat colour per column, so where each lands is readable.
+        let shade = |i: usize| Color32::from_gray(10 * (i as u8 + 1));
+        let pixels =
+            restart_pixels(&ring, tex_w, H, 10, 12, |i| vec![shade(i); H]);
+
+        for (i, key) in (10..=12).enumerate() {
+            let x = ring.x_of(key);
+            for row in 0..H {
+                assert_eq!(pixels[row * tex_w + x], shade(i), "column {key} at {x}");
+                assert_eq!(
+                    pixels[row * tex_w + x + CAPACITY],
+                    shade(i),
+                    "column {key}'s twin",
+                );
+            }
+        }
+        // The guard duplicates the oldest slab, one texel before the run.
+        let guard = ring.x_of(9);
+        assert_eq!(pixels[guard], shade(0), "the guard column");
+        assert_eq!(pixels[guard + CAPACITY], shade(0), "and its twin");
+        // Everything the run does not reach stays silent rather than showing
+        // whatever the allocation held.
+        let painted: Vec<usize> = (9..=12)
+            .flat_map(|key| [ring.x_of(key), ring.x_of(key) + CAPACITY])
+            .collect();
+        for (x, texel) in pixels.iter().take(tex_w).enumerate() {
+            if !painted.contains(&x) {
+                assert_eq!(*texel, Color32::BLACK, "unwritten column {x}");
+            }
+        }
+    }
+
 }

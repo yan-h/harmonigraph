@@ -315,15 +315,6 @@ impl EditorShared {
     }
 }
 
-/// TEMPORARY resize probe. Prints to stderr, which Bitwig collects into
-/// ~/Library/Logs/Bitwig/BitwigStudio.log, so a drag can be read back after
-/// the fact. Removed once the resize seam is understood.
-pub(crate) fn probe(line: std::fmt::Arguments) {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let ms = START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0;
-    eprintln!("[hg-resize {ms:9.1}] {line}");
-}
-
 /// Logical → physical pixels for queue.resize.
 fn physical(size: (u32, u32), scale: f32) -> PhySize {
     PhySize::new(
@@ -441,54 +432,6 @@ fn frame(
     shared.ui.encode_ms = queue.encode_ms();
     shared.ui.submit_ms = queue.submit_ms();
     shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
-    {
-        use std::cell::Cell;
-        // The worst frame in each 100ms window, and where its time went. The
-        // readings are the shell's own (one frame stale by construction, see
-        // the fields' docs), so this is the same breakdown the perf overlay
-        // draws — printed, so a drag can be read back afterwards.
-        thread_local! {
-            static FRAMES: Cell<u32> = const { Cell::new(0) };
-            static LAST: Cell<Option<Instant>> = const { Cell::new(None) };
-            static WORST: Cell<[f32; 9]> = const { Cell::new([0.0; 9]) };
-        }
-        FRAMES.with(|f| f.set(f.get() + 1));
-        let stages = [
-            shared.ui.tick_ms,
-            shared.ui.shell_ms,
-            shared.ui.tess_ms,
-            shared.ui.upload_ms,
-            shared.ui.texture_ms,
-            shared.ui.encode_ms,
-            shared.ui.submit_ms,
-            shared.ui.acquire_ms,
-            shared.ui.egui_gpu_ms,
-        ];
-        WORST.with(|w| {
-            if stages[0] > w.get()[0] {
-                w.set(stages);
-            }
-        });
-        let due = LAST.with(|l| match l.get() {
-            Some(at) if at.elapsed().as_millis() < 100 => false,
-            _ => {
-                l.set(Some(Instant::now()));
-                true
-            }
-        });
-        if due {
-            let frames = FRAMES.with(|f| f.replace(0));
-            let w = WORST.with(|w| w.replace([0.0; 9]));
-            let area = ui.max_rect();
-            probe(format_args!(
-                "frames {frames:3} ui {:6.0}x{:<5.0} worst tick {:6.2} shell {:5.2} tess {:5.2} \
-                 upload {:5.2} tex {:5.2} encode {:5.2} submit {:5.2} acquire {:6.2} gpu {:5.2}",
-                area.width(),
-                area.height(),
-                w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8],
-            ));
-        }
-    }
     harmonigraph_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
     // A pane folded sideways (or came back) leaves every other pane its width
@@ -817,7 +760,6 @@ impl Editor for LatticeEditor {
             // lock: the frame's own lock is taken later in the same callback,
             // so this is uncontended in practice, and a resize is not worth
             // blocking a frame for if it ever is not.
-            probe(format_args!("adopt   {width}x{height}"));
             if let Some(mut shared) = logging.try_lock() {
                 shared.ui.console.log(format!("host resize {width}x{height}"));
             }
@@ -905,7 +847,6 @@ impl Editor for LatticeEditor {
         }
         // Report the new size immediately (the host may read size() right
         // after); the GUI thread lays the next frame out at it.
-        probe(format_args!("set_size {}x{}", clamped.0, clamped.1));
         self.egui_state.size.store(clamped);
         self.egui_state.host_resized.store(Some(clamped));
         true
