@@ -95,6 +95,16 @@ pub(crate) const CONTROL_RADIUS: u8 = 5;
 
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 
+/// Padding between a settings pane's controls and the edge of its tab body —
+/// what stops the bars and labels running into the pane edge.
+///
+/// Named because the geometry around it is easy to get wrong: egui_dock clips
+/// the tab body to the WHOLE body rect and only then insets it by this margin
+/// (a `Frame`, which does not clip), so inside a pane the clip rect sits this
+/// far OUTSIDE the content box. Anything asking "where does the pane end"
+/// wants the content box, not the clip.
+pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
+
 // ---- Fonts -----------------------------------------------------------------
 
 /// The named family headings resolve to (Atkinson Bold first).
@@ -297,7 +307,7 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     tab.tab_body.stroke = Stroke::NONE;
     tab.tab_body.corner_radius = CornerRadius::ZERO;
     tab.tab_body.bg_fill = panel();
-    tab.tab_body.inner_margin = egui::Margin::same(8);
+    tab.tab_body.inner_margin = egui::Margin::same(PANE_INNER_MARGIN as i8);
 
     style
 }

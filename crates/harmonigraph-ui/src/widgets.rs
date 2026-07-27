@@ -183,12 +183,17 @@ const BAR_LABEL_GAP: f32 = 6.0;
 /// what removes the usual sources; this covers the ones with nowhere to wrap to,
 /// like the record button and the Options field in a very narrow Video pane.
 ///
-/// The clip rect is the pane the dock actually painted, and nothing grows it, so
-/// it is the honest limit. A bar drawn past it has its value readout and its
-/// full-scale end off screen, where they can be neither read nor dragged to.
+/// The limit comes from [`crate::panes::pane_content_right`], which the pane
+/// records on the way in. Deliberately not the clip rect: that is the tab BODY,
+/// a [`theme::PANE_INNER_MARGIN`] wider than the content box on each side, so a
+/// bar clamped to it comes out a margin longer than its neighbours and flush on
+/// the pane border. Outside a pane — the widget's own tests — there is nothing
+/// to hand a value over, and the clip is then the honest fallback.
 fn bar_width(ui: &Ui) -> f32 {
-    let visible = ui.clip_rect().right() - ui.cursor().left();
-    ui.available_width().min(visible).max(0.0)
+    let right = ui
+        .data(|d| d.get_temp::<f32>(crate::panes::pane_content_right()))
+        .unwrap_or_else(|| ui.clip_rect().right());
+    ui.available_width().min(right - ui.cursor().left()).max(0.0)
 }
 
 pub struct ValueBar<'a> {

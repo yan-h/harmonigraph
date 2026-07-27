@@ -103,6 +103,27 @@ pub struct Viewer<'a> {
     pub now: f64,
 }
 
+/// Where the settings pane being drawn ends on the right, written by
+/// [`Viewer::ui`] before the body draws anything and read by
+/// [`crate::widgets::bar_width`].
+///
+/// A bar fills the pane, so it has to ask how wide the pane is, and neither
+/// obvious answer survives contact with the dock. `max_rect` is no good by the
+/// time a bar asks: egui's `Region::expand_to_include_rect` unions it when a
+/// control overruns, so it may already have grown past the pane. Nor is the
+/// clip rect, which is the tab BODY — egui_dock clips to the whole body and
+/// only then insets it by [`crate::theme::PANE_INNER_MARGIN`] via a `Frame`,
+/// which does not clip — so a bar clamped to it comes out a margin longer than
+/// its neighbours and sits flush on the pane border.
+///
+/// What is wanted is `max_rect` as it stood on the way in, before anything in
+/// the pane could widen it, which is a thing only the caller can know. Hence
+/// the hand-off. It is written every frame, immediately before the body, so no
+/// bar can read a value from another pane or another size.
+pub(crate) fn pane_content_right() -> egui::Id {
+    egui::Id::new("pane-content-right")
+}
+
 /// What a tab is called, wherever its name is drawn: its own tab, and the rail
 /// a folded pane leaves behind (see [`crate::fold`]).
 pub fn tab_title(tab: &Tab) -> &'static str {
@@ -163,6 +184,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        // Before the body draws anything — see [`pane_content_right`].
+        let right = ui.max_rect().right();
+        ui.data_mut(|d| d.insert_temp(pane_content_right(), right));
         match tab {
             Tab::Lattice => lattice_pane(ui, self.state, self.now),
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),

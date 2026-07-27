@@ -2335,10 +2335,18 @@ const SETTINGS_TABS: [panes::Tab; 8] = [
     panes::Tab::Notes,
 ];
 
-/// One settings pane drawn into a column `width` points wide, as the shapes it
+/// One settings pane whose content box is `width` points wide, as the shapes it
 /// emitted. Driven through [`panes::Viewer`] rather than the dock, so a sweep
 /// over widths costs one pane each instead of a whole window, and the width
 /// under test is the pane's own rather than a window size minus chrome.
+///
+/// The dock's nesting IS reproduced, though, because the one thing it does that
+/// a bare `Ui` does not is the thing these tests are about: egui_dock clips the
+/// tab body to the whole body rect and only THEN insets it by
+/// `tab_body.inner_margin` via a `Frame`, which does not clip. So a pane's clip
+/// rect sits a margin's width OUTSIDE its content box, and a harness without
+/// the margin cannot tell a control clamped to the content box from one clamped
+/// to the painted edge — they are the same number there.
 ///
 /// Tall on purpose (a pane's controls are a column, and the point here is the
 /// other axis) and with the take controls switched on, so the Video tab draws
@@ -2350,16 +2358,30 @@ fn settings_pane_at_width(tab: panes::Tab, width: f32) -> Vec<egui::epaint::Clip
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 2400.0));
+    let margin = crate::theme::PANE_INNER_MARGIN;
+    let body = egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(width + 2.0 * margin, 2400.0),
+    );
     let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
+        egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
         |ui| {
+            // The body ui's clip is the whole body (the screen here); the pane
+            // ui inside it is inset, exactly as the dock's Frame leaves it.
+            let mut pane =
+                ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
             let mut tab = tab;
             let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
-            egui_dock::TabViewer::ui(&mut viewer, ui, &mut tab);
+            egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
         },
     );
     out.shapes
+}
+
+/// Where a pane's content box ends, in the coordinates
+/// [`settings_pane_at_width`] lays it out at.
+fn pane_content_right(width: f32) -> f32 {
+    crate::theme::PANE_INNER_MARGIN + width
 }
 
 /// The y a named text run was painted at in `shapes`, or `None`.
@@ -2481,6 +2503,10 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 #[test]
 fn no_settings_pane_overruns_a_narrow_column() {
     for width in [400.0f32, 300.0, 240.0, 200.0, 160.0, 120.0] {
+        let edge = pane_content_right(width);
+        // The pane's own clip is the tab body, a margin wider than the content
+        // box on each side.
+        let body_right = edge + crate::theme::PANE_INNER_MARGIN;
         for tab in SETTINGS_TABS {
             let shapes = settings_pane_at_width(tab, width);
             let mut worst: Option<(f32, String)> = None;
@@ -2491,16 +2517,16 @@ fn no_settings_pane_overruns_a_narrow_column() {
                 if !rect.is_finite() || rect.width() > 1.0e4 {
                     continue;
                 }
-                // A widget that set its own clip, narrower than the pane, is
+                // A widget that set its own clip, tighter than the body, is
                 // managing its own overflow — a single-line text box scrolls
                 // its content inside the field, so its galley is routinely
                 // wider than the box and correctly cut off there. Only the
-                // pane's own clip means "cut off by the pane edge", which is
-                // the thing that cannot be reached or read.
-                if cs.clip_rect.right() < width - 0.5 {
+                // body's own clip means "cut off by the pane", which is the
+                // thing that can be neither reached nor read.
+                if cs.clip_rect.right() < body_right - 0.5 {
                     continue;
                 }
-                let over = rect.right() - width;
+                let over = rect.right() - edge;
                 if over > 1.0 && worst.as_ref().is_none_or(|(w, _)| over > *w) {
                     let what = match &cs.shape {
                         egui::Shape::Text(t) => format!("{:?}", t.galley.text()),
