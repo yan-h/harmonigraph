@@ -17,6 +17,7 @@ use objc2_app_kit::{
     NSApplication, NSDragOperation, NSDraggingInfo, NSEvent, NSFilenamesPboardType, NSTrackingArea,
     NSTrackingAreaOptions, NSView, NSWindow, NSWindowOcclusionState,
 };
+use objc2_quartz_core::CATransaction;
 use objc2_foundation::{NSArray, NSNotification, NSPoint, NSRect, NSSize, NSString};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -151,7 +152,22 @@ impl BaseviewView {
         // though the size is in fractional pixels.
         let size = NSSize::new(size.width.round(), size.height.round());
 
+        // Inside a transaction with actions off, because a layer-backed view's
+        // bounds change is an ANIMATABLE property: left to itself, Core
+        // Animation interpolates it over a quarter of a second, and every
+        // frame drawn during that is composited against a layer still on its
+        // way to the new size. The frames are correct and the window is the
+        // right size; what is on screen slides. That is the whole of what a
+        // resize looks like wrong, and it survives any amount of getting the
+        // drawing right, which is why it is worth the two lines.
+        //
+        // A live drag hides it — each new size restarts the interpolation
+        // before much of it has run — so it reads as jitter there and as a
+        // slide on a single step, such as a pane collapsing.
+        CATransaction::begin();
+        CATransaction::setDisableActions(true);
         this.view.setFrameSize(size);
+        CATransaction::commit();
         this.view.setNeedsDisplay(true);
 
         // When using OpenGL the `NSOpenGLView` needs to be resized separately? Why? Because
