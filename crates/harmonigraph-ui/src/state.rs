@@ -127,9 +127,23 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     pub(crate) reset_layout: bool,
     pub(crate) dock: DockState<panes::Tab>,
-    /// The split fractions the sideways folds are holding onto, so an unfolded
-    /// pane comes back the width it was (see [`fold`]).
+    /// The widths the sideways folds are holding onto, so an unfolded pane
+    /// comes back the width it was (see [`fold`]).
     pub(crate) folds: fold::Folds,
+    /// Points the window has to gain (or lose, if negative) before the next
+    /// frame, because a pane folded sideways or came back and every other pane
+    /// is keeping its width.
+    ///
+    /// The UI cannot resize the window itself — the plugin has to ask its
+    /// host, the standalone harness its windowing system — so it says how many
+    /// points and the shell spends them. Logical points, which is what both
+    /// shells size their windows in.
+    ///
+    /// Runtime-only, and TAKEN rather than read (see
+    /// [`take_window_width_change`](Self::take_window_width_change)), so a
+    /// shell that never asks — the offline renderer, which never reaches
+    /// `root_ui` at all — simply never resizes.
+    pub(crate) window_width_change: f32,
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
     /// by the render callback and read by the performance overlay. 0 means no
     /// reading — the device didn't grant timestamp queries, or none has landed
@@ -363,6 +377,7 @@ impl SharedState {
             reset_layout: false,
             dock,
             folds: fold::Folds::default(),
+            window_width_change: 0.0,
             lattice_stats: {
                 let stats = harmonigraph_render::LatticeStats::default();
                 stats
@@ -392,6 +407,25 @@ impl SharedState {
 
     pub fn log(&mut self, line: impl Into<String>) {
         self.console.log(line);
+    }
+
+    /// How much wider (or, negative, narrower) the window has to be for the
+    /// sideways folds the last frame settled — `None` when it can stay as it
+    /// is, which is nearly every frame.
+    ///
+    /// Shells call this once per frame, AFTER [`root_ui`](crate::root_ui), and
+    /// resize by the points they are given. Taking it rather than reading it
+    /// is what keeps one fold to one resize: a shell whose host refuses the
+    /// new size is not asked again on the next frame, since asking forever
+    /// would fight the host over every frame for as long as the pane stays
+    /// folded.
+    ///
+    /// Sub-point changes are dropped rather than passed on. A window is sized
+    /// in whole pixels, so they would round to a resize that never happens and
+    /// a request that is never satisfied.
+    pub fn take_window_width_change(&mut self) -> Option<f32> {
+        let change = std::mem::take(&mut self.window_width_change);
+        (change.abs() >= 0.5).then_some(change)
     }
 
     /// Discard the (persisted) dock arrangement and return to the default
@@ -451,7 +485,10 @@ impl SharedState {
             // rather than with fractions pointing into a tree that is gone.
             // Same reason "Reset layout" clears them.
             self.dock = if persist.version < UI_PERSIST_VERSION {
-                self.folds.clear();
+                // The refreshed arrangement has every pane open, so the window
+                // gets back what the folds being dropped were holding — the
+                // same trade as "Reset layout", which is what this is.
+                self.window_width_change += self.folds.clear();
                 default_dock()
             } else {
                 self.folds = persist.folds;

@@ -437,6 +437,23 @@ fn frame(
     shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
     harmonigraph_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
+    // A pane folded sideways (or came back) leaves every other pane its width
+    // and asks the WINDOW for the difference. Queued rather than applied:
+    // `request_resize` is the host's round trip, and `apply_pending_resizes`
+    // at the top of the next frame is where this window takes those.
+    //
+    // Measured against the size already requested where there is one, so two
+    // folds in consecutive frames add up instead of the second one cancelling
+    // the first — `egui_state.size` is not the new size until the host has
+    // agreed to it.
+    if let Some(change) = shared.ui.take_window_width_change() {
+        let (width, height) =
+            egui_state.requested_size.load().unwrap_or_else(|| egui_state.size());
+        let width = (width as f32 + change).round().max(MIN_SIZE.0 as f32) as u32;
+        egui_state.requested_size.store(Some((width, height)));
+        ui.ctx().request_repaint();
+    }
+
     // Pace the window AFTER the UI has run, so a cap picked this frame takes
     // effect on the next tick rather than the one after it.
     let target = target_frame_interval(shared.ui.fps_cap, queue.display_max_fps());
