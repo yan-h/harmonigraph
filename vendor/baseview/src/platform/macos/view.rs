@@ -166,10 +166,21 @@ impl BaseviewView {
         // slide on a single step, such as a pane collapsing.
         CATransaction::begin();
         CATransaction::setDisableActions(true);
+        // The layer holds the LAST frame drawn, and its bounds are about to
+        // change under it. Left at Core Animation's default gravity — `resize`
+        // — those contents are stretched to fill the new bounds, so a window
+        // that narrows squeezes the whole picture leftward until the next
+        // present replaces it. Vsync can hold that for several frames, and it
+        // reads as everything teleporting left and easing back.
+        //
+        // Pinned top-left, the stale contents stay where they are and the new
+        // edge is briefly blank instead. Both are one frame of wrong; only one
+        // of them moves the whole picture.
+        if let Some(layer) = this.view.layer() {
+            unsafe { layer.setContentsGravity(objc2_quartz_core::kCAGravityTopLeft) };
+        }
         this.view.setFrameSize(size);
         CATransaction::commit();
-        eprintln!("[hg-view] set    {:7.1}x{:<7.1}", size.width, size.height);
-        Self::probe_bounds(this, "after");
         this.view.setNeedsDisplay(true);
 
         // When using OpenGL the `NSOpenGLView` needs to be resized separately? Why? Because
@@ -232,33 +243,7 @@ impl BaseviewView {
         }));
     }
 
-    /// TEMPORARY: what AppKit thinks this view's size is, each frame, against
-    /// what was last asked of it. A drawable composited into a view that has
-    /// not taken its new size yet lands bottom-left, which is what "everything
-    /// jumps to the left" looks like.
-    fn probe_bounds(this: ViewRef<Self>, tag: &str) {
-        use std::cell::Cell;
-        thread_local! {
-            static PREV: Cell<(i64, i64)> = const { Cell::new((0, 0)) };
-            static TAIL: Cell<u32> = const { Cell::new(0) };
-        }
-        let bounds = this.view.bounds();
-        let now = (bounds.size.width as i64, bounds.size.height as i64);
-        if PREV.with(|p| p.replace(now)) != now {
-            TAIL.with(|t| t.set(12));
-        }
-        let left = TAIL.with(|t| {
-            let n = t.get();
-            t.set(n.saturating_sub(1));
-            n
-        });
-        if left > 0 {
-            eprintln!("[hg-view] {tag:6} bounds {:7.1}x{:<7.1}", bounds.size.width, bounds.size.height);
-        }
-    }
-
     fn trigger_frame(this: ViewRef<Self>) {
-        Self::probe_bounds(this, "frame");
         let mut handler = this.window_handler.borrow_mut();
         let Some(handler) = handler.as_mut() else { return };
 

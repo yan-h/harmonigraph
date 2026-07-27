@@ -116,6 +116,7 @@ features = [
     "NSView",
     "NSWindow",
     "objc2-core-foundation",
+    "objc2-quartz-core",
 ]
 default-features = false
 
@@ -132,7 +133,7 @@ default-features = false
 
 [target.'cfg(target_os="macos")'.dependencies.objc2-quartz-core]
 version = "0.3.2"
-features = ["std", "CATransaction"]
+features = ["std", "CATransaction", "CALayer"]
 default-features = false
 
 [target.'cfg(target_os="macos")'.dependencies.objc2-foundation]
