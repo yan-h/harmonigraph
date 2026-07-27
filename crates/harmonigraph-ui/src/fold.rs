@@ -219,38 +219,59 @@ impl Folds {
             // between what a fold asked for and what it got as though the user
             // had widened the window, and hand it back on the way out.
             let settled = (area - dial.area).abs() < 0.01 && dial.width > 0.0;
-            if (!settled && !moved && area > floor + 1.0) || dial.width <= 0.0 {
+            // An ask that went unanswered — a host that refused, or a floor it
+            // will not go under — leaves the layout wanting a window that is
+            // not coming. Take what there is instead of drawing past the edge.
+            // Not at the floor, where "the window did not move" is what the
+            // floor MEANS rather than a refusal — re-dialling there is the
+            // inflation the floor pin exists to stop.
+            let refused = dial.asked && settled && area > floor + 1.0;
+            if (!settled && !moved && area > floor + 1.0) || dial.width <= 0.0 || refused {
                 if let Some(dialled) = fit.dialled_for(area) {
                     dial.width = dialled;
                 }
             }
+            dial.asked = moved;
             dial.area = area;
             let Some(widths) = fit.widths(dial.width) else {
                 continue;
             };
-            // On the frame a fold appears or goes, the window is still the one
-            // it is leaving — the resize has been asked for and not yet
-            // answered — and laying the SETTLED arrangement out in it stretches
-            // every pane by the ratio between the two windows, which for one
-            // picture pane in a 1000pt editor is 1.85. That is the jump a click
-            // shows.
+            // A fold is a two-step, and the step it is NOT is this one. The
+            // window is still the one being left — the resize has been asked
+            // for and not yet answered — and every arrangement that fits the
+            // old window is a lie about where the panes are going. Drawn
+            // settled, they stretch by the ratio between the two windows (1.85
+            // for a picture pane in a 1000pt editor). Drawn fitted, the folded
+            // pane's neighbour swells to take the freed width and gives it
+            // back a frame later. Both read as a flicker for the sake of one
+            // frame.
             //
-            // So for that one frame, draw the arrangement that fits the window
-            // there IS: the folded pane at its rail and its neighbour taking
-            // the width, which is what a dock does when a pane collapses
-            // anyway. Nothing is remembered from it — `dial` is untouched, and
-            // the ask below is still the settled layout's — so the frame after
-            // arrives at the size it was computed for and draws the real thing.
-            let drawn = moved
-                .then(|| fit.dialled_for(area).and_then(|fitted| fit.widths(fitted)))
-                .flatten();
-            write_fractions(tree, &holds, drawn.as_ref().unwrap_or(&widths), separator);
+            // So this frame draws what it drew last frame: the fractions in
+            // the tree are left where they are, and the layout changes on the
+            // frame that has the window it was computed for. What a click
+            // costs is a frame of nothing happening, which is a frame nobody
+            // sees.
+            // Only where there IS a window to wait for. A floating dock
+            // window never asks for one, so deferring there would be a frame
+            // of nothing followed by a frame of nothing.
+            if !(moved && main) {
+                write_fractions(tree, &holds, &widths, separator);
+            }
             // Only a fold or an unfold moves the window. Any other gap between
             // the layout and the window is one the window is not answering for
             // — a host that refused, or a floor it will not go under — and
             // asking again every frame would be an argument, not a request.
             if main && moved {
-                ask += widths.window - area;
+                // Never past the widest this window has actually been. Fold a
+                // pane and drag the window back out, and the layout is dialled
+                // for a window bigger still — the visible panes grew, and the
+                // folded one's share grew with them — so unfolding asks for a
+                // window that can be twice the display. The host grants it,
+                // which is how a plugin window ends up wider than the monitor
+                // it is on. Shrinking is never capped; only the growth is.
+                dial.widest = dial.widest.max(area);
+                let want = widths.window - area;
+                ask += want.min((dial.widest - area).max(0.0));
             }
         }
         // Entries naming a surface the dock no longer has.
@@ -353,6 +374,13 @@ impl Fold {
 pub struct Dial {
     pub(crate) width: f32,
     area: f32,
+    /// Whether the last frame asked the window to change. If the window has
+    /// not moved by the next one, the ask was refused and the layout takes
+    /// what it has.
+    asked: bool,
+    /// The widest this window has actually been, which is as far as an unfold
+    /// may ask it to grow. See the ask in [`Folds::apply`].
+    widest: f32,
 }
 
 /// The layout as a function of the window it is dialled in at.
@@ -1562,8 +1590,10 @@ mod tests {
     }
 
     /// A shell, as the plugin's is: it holds a floor, sizes its window in whole
-    /// points, and answers a resize a frame late (egui-baseview reads the
-    /// window's size before running the UI in it).
+    /// points, and answers an ask at the TOP of the next frame — the plugin
+    /// collects both its own resizes and the host's before the frame's input
+    /// is built, so the frame after an ask is laid out at the size it asked
+    /// for. What it does not grant (the floor) it simply does not grant.
     struct Window {
         size: f32,
         area: f32,
@@ -1581,6 +1611,7 @@ mod tests {
         fn frame(&mut self, folds: &mut Folds, dock: &mut DockState<Tab>) {
             if let Some(want) = self.pending.take() {
                 self.size = want;
+                self.area = want;
             }
             let area = self.area;
             let change = folds.apply(dock, &style(), area, Self::FLOOR, &mut self.dial);
@@ -1628,6 +1659,34 @@ mod tests {
             let rail = dock[path.surface][path.node].rect().expect("on screen").width();
             assert!((rail - 26.0).abs() < 0.01, "{tab:?} came out {rail} wide, not a rail");
         }
+    }
+
+
+    /// Folding a pane and then dragging the window back out leaves the layout
+    /// dialled for a window bigger still — the visible panes grew and the
+    /// folded one's share grew with them. Unfolding must not then ask for a
+    /// window the display cannot hold: the host grants whatever is asked, and
+    /// a plugin window wider than the monitor is how that ends.
+    #[test]
+    fn an_unfold_never_asks_past_the_widest_the_window_has_been() {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut window = Window::new(1500.0);
+        window.settle(&mut folds, &mut dock);
+        collapse(&mut dock, Tab::Lattice, true);
+        window.settle(&mut folds, &mut dock);
+        assert!(window.size < 1000.0, "the fold shrank the window to {}", window.size);
+        // Dragged back out while the pane is a rail.
+        window.size = 1500.0;
+        window.area = 1500.0;
+        window.settle(&mut folds, &mut dock);
+        collapse(&mut dock, Tab::Lattice, false);
+        window.settle(&mut folds, &mut dock);
+        assert!(
+            window.size <= 1500.5,
+            "unfolding asked for {} against a window that has never been wider than 1500",
+            window.size,
+        );
     }
 
 }

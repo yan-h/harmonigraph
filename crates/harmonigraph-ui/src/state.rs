@@ -440,11 +440,6 @@ impl SharedState {
     /// Changes under half a point are dropped rather than passed on, which is
     /// where rounding to whole pixels stops moving a window at all: below it a
     /// shell would ask for the size it already has, and never be satisfied.
-    /// TEMPORARY, for the fold probe: the pending change without consuming it.
-    pub fn peek_window_width_change(&self) -> Option<f32> {
-        (self.window_width_change.abs() >= 0.5).then_some(self.window_width_change)
-    }
-
     pub fn take_window_width_change(&mut self) -> Option<f32> {
         let change = std::mem::take(&mut self.window_width_change);
         (change.abs() >= 0.5).then_some(change)

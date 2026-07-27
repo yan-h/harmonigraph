@@ -315,15 +315,6 @@ impl EditorShared {
     }
 }
 
-/// TEMPORARY fold probe: every frame around a window-size change, with where
-/// its time went. Prints to stderr, which Bitwig collects into
-/// ~/Library/Logs/Bitwig/engine.log.
-pub(crate) fn probe(line: std::fmt::Arguments) {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let ms = START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0;
-    eprintln!("[hg-fold {ms:9.1}] {line}");
-}
-
 /// The plugin's per-frame GUI work, in order: take the frame's lock, close
 /// out the note frame, apply any pending host/self resize, drain the MIDI
 /// and audio rings, then hand the shared UI state to `harmonigraph_ui::root_ui`.
@@ -395,50 +386,6 @@ fn frame(
     // since `apply_pending_resizes` clears it on refusal as well as on accept,
     // and `size` is only updated when the host agrees. So two folds in
     // consecutive frames add up rather than the second cancelling the first.
-    let asked = shared.ui.peek_window_width_change();
-    {
-        use std::cell::Cell;
-        thread_local! {
-            static PREV: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
-            static TAIL: Cell<u32> = const { Cell::new(0) };
-            static SEQ: Cell<u32> = const { Cell::new(0) };
-        }
-        let area = ui.max_rect();
-        let now = (area.width(), area.height());
-        let moved = PREV.with(|p| p.replace(now)) != now;
-        // A burst around each change: the frame that asks, and the ones it
-        // takes to settle.
-        if moved || asked.is_some() {
-            TAIL.with(|t| t.set(10));
-        }
-        let left = TAIL.with(|t| {
-            let n = t.get();
-            t.set(n.saturating_sub(1));
-            n
-        });
-        if left > 0 {
-            let seq = SEQ.with(|s| {
-                let n = s.get() + 1;
-                s.set(n);
-                n
-            });
-            probe(format_args!(
-                "{seq:4} ui {:6.1}x{:<6.1} host {:?} ask {:>8} tick {:6.2} shell {:5.2} \
-                 tess {:5.2} upload {:5.2} tex {:5.2} gpu {:5.2} acquire {:6.2}",
-                now.0,
-                now.1,
-                egui_state.size(),
-                asked.map(|a| format!("{a:.1}")).unwrap_or_else(|| "-".into()),
-                shared.ui.tick_ms,
-                shared.ui.shell_ms,
-                shared.ui.tess_ms,
-                shared.ui.upload_ms,
-                shared.ui.texture_ms,
-                shared.ui.egui_gpu_ms,
-                shared.ui.acquire_ms,
-            ));
-        }
-    }
     if let Some(change) = shared.ui.take_window_width_change() {
         let (width, height) = egui_state.size();
         let width = (width as f32 + change).round().max(MIN_SIZE.0 as f32) as u32;
