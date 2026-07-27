@@ -1295,9 +1295,15 @@ mod tests {
     /// call site, which is the reason to pin them: what the panes need from
     /// [`button_row`] is that nothing it holds can leave the column, and a
     /// non-wrapping row helper looks identical in the code that calls it.
+    ///
+    /// 90pt because the second half does not start until 95: above that every
+    /// label fits on one line, and turning per-button wrapping off changes
+    /// nothing the asserts can see. At 90 the widest label wraps to two rows,
+    /// leaving 2.2pt of slack on the passing side and failing by 5.2pt without
+    /// it. Wider would pin only the first half, which is what 120 did.
     #[test]
     fn a_row_too_wide_for_its_column_wraps_inside_it() {
-        const COLUMN: f32 = 120.0;
+        const COLUMN: f32 = 90.0;
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(COLUMN, 400.0));
@@ -1324,6 +1330,13 @@ mod tests {
         assert!(
             rects[2].top() > rects[0].top(),
             "three wide buttons stayed on one line: {rects:?}"
+        );
+        // The second half, made self-evident rather than incidental: a button
+        // taller than one padded text row is one whose label wrapped.
+        let row = 25.0;
+        assert!(
+            rects.iter().any(|r| r.height() > row + 5.0),
+            "no label wrapped, so only the row-wrap half is under test: {rects:?}"
         );
     }
 }
