@@ -228,7 +228,23 @@ impl Folds {
             let Some(widths) = fit.widths(dial.width) else {
                 continue;
             };
-            write_fractions(tree, &holds, &widths, separator);
+            // On the frame a fold appears or goes, the window is still the one
+            // it is leaving — the resize has been asked for and not yet
+            // answered — and laying the SETTLED arrangement out in it stretches
+            // every pane by the ratio between the two windows, which for one
+            // picture pane in a 1000pt editor is 1.85. That is the jump a click
+            // shows.
+            //
+            // So for that one frame, draw the arrangement that fits the window
+            // there IS: the folded pane at its rail and its neighbour taking
+            // the width, which is what a dock does when a pane collapses
+            // anyway. Nothing is remembered from it — `dial` is untouched, and
+            // the ask below is still the settled layout's — so the frame after
+            // arrives at the size it was computed for and draws the real thing.
+            let drawn = moved
+                .then(|| fit.dialled_for(area).and_then(|fitted| fit.widths(fitted)))
+                .flatten();
+            write_fractions(tree, &holds, drawn.as_ref().unwrap_or(&widths), separator);
             // Only a fold or an unfold moves the window. Any other gap between
             // the layout and the window is one the window is not answering for
             // — a host that refused, or a floor it will not go under — and
