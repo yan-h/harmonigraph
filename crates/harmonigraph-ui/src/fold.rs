@@ -16,18 +16,43 @@
 //! comes off the WINDOW. Every other pane keeps the width it had, which is the
 //! difference between folding as a way to make the window narrower and folding
 //! as a way to redistribute it: a lattice that doubles because the analyzer
-//! folded is a re-layout nobody asked for, and unfolding cannot undo it —
-//! the sibling that grew has no memory of what it was. Unfolding is the same
-//! trade run backwards: the pane comes back the width it went away, and the
-//! window grows by exactly that. The result reads as a rail down the edge of
-//! the window, so [`paint`] draws the rail as the pane's own tab, name and all.
+//! folded is a re-layout nobody asked for. The result reads as a rail down the
+//! edge of the window, so [`paint`] draws the rail as the pane's own tab, name
+//! and all.
+//!
+//! ## The layout is the fractions; the rails are a rendering of it
+//!
+//! Nothing here remembers a WIDTH. That is the whole design, and it is the
+//! second one: the first remembered what each fold took, in points, and gave
+//! it back on the way out — which is right until something else moves. The
+//! window resizes and every pane on screen wears a share of it, except the one
+//! that is folded, which comes back having been spared and takes the
+//! difference out of its neighbours. A pane inside the neighbour folds, and
+//! the neighbour narrows for a reason that has nothing to do with the window.
+//! A fold the window will not shrink far enough for leaves the difference next
+//! door, where measuring it later reads it as the neighbour's own. Each of
+//! those is a pane quietly losing width across a fold and an unfold, and every
+//! patch for one of them was a new way to get the next wrong.
+//!
+//! What does not go stale is the fraction the user dialled in. So the fractions
+//! ARE the layout, [`Folds`] holds the ones a fold overwrites, and what is on
+//! screen is derived from them each frame: the layout as it would be with every
+//! pane open, with the folded subtrees squeezed to rails and the difference
+//! taken off the window. [`Fit`] is that derivation, and it is linear in one
+//! unknown — the window the layout is dialled in AT — which is the only thing
+//! carried between frames ([`Dial`]).
+//!
+//! Everything else falls out of it. A window the user resizes re-dials the
+//! layout, folded panes and all, so a fold across a resize lands exactly where
+//! the resize alone would have. Folds compose, because two folded subtrees are
+//! two terms in the same sum. A resize the window refuses costs nothing, since
+//! nothing was booked against it. `every_round_trip_of_clicks_lands_where_it_
+//! started` is the test that holds all of that: every sequence of up to six
+//! arrow clicks that ends where it started, at three window sizes.
 //!
 //! Resizing the window is the shell's, not ours: [`Folds::apply`] returns the
 //! points to lose or regain and the plugin asks its host for them (see
-//! `SharedState::take_window_width_change`). Holding the other panes still
-//! while the window moves takes more than the folding split's own fraction —
-//! every horizontal split ABOVE it has to hand the change outward rather than
-//! absorb it, which is [`reflow`].
+//! `SharedState::take_window_width_change`).
 //!
 //! The window answers a frame late — the plugin asks its host at the top of
 //! the next frame, and egui-baseview reads the window's size for a frame
@@ -47,20 +72,7 @@
 //! folded pair divides the width it was given into one rail each.
 //!
 //! Whether a pane is folded stays egui_dock's own `collapsed` flag, set by its
-//! own arrow: nothing here duplicates that bookkeeping, it only reads it. What
-//! does need remembering is what the fold overwrote — the fraction the user
-//! dialed in, and the width the window gave up for it — which is what [`Folds`]
-//! holds, one entry per folded split, persisted with the dock and handed back
-//! the moment the pane unfolds.
-//!
-//! That width is not frozen while the pane is away. Resize the window with a
-//! pane folded and every pane on screen gives or takes a share of the change;
-//! a pane that came back with the width it had BEFORE all that would have been
-//! spared a squeeze its neighbours wore, and would take the difference out of
-//! them — which is what "opening a pane made the other two smaller" looks like
-//! from the outside. So what a rail is holding follows its sibling (see
-//! [`Taken::track`]), and folding, resizing and unfolding compose: the pane
-//! comes back beside its neighbour in exactly the share it left it in.
+//! own arrow: nothing here duplicates that bookkeeping, it only reads it.
 
 use egui_dock::{DockState, Node, NodeIndex, Surface, SurfaceIndex, Tree};
 
@@ -74,11 +86,19 @@ use crate::panes::Tab;
 /// button's own square in [`paint`].
 const ARROW_BUTTON: f32 = 24.0;
 
-/// What each sideways-folded split is holding for the pane it folded away: the
-/// `fraction` it had before it folded, and the width the window gave up for it.
+/// The fraction each sideways-folded split was dialled in at, which is the
+/// layout: what is on screen is a rendering of it with some panes squeezed to
+/// rails, and unfolding is that rendering going away.
+///
+/// Nothing here records a WIDTH. A width measured when the fold happened is
+/// only true until something else moves — the window resized, a pane inside
+/// the neighbour folded, a fold the window could not pay for in full leaving
+/// the difference next door — and handing a stale one back is how a fold stops
+/// being reversible. The fractions are not measurements; they are what the
+/// user dialled, and they are as true at one window size as another.
 ///
 /// Persisted with the dock (see `UiPersist`), so a pane folded when the editor
-/// window closed still unfolds to the layout — and the window — it came from.
+/// window closed still unfolds to the layout it came from.
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Folds(Vec<Fold>);
 
@@ -86,134 +106,66 @@ pub struct Folds(Vec<Fold>);
 struct Fold {
     /// Which split, as indices into the dock. Valid only while the tree keeps
     /// its shape — [`Folds::apply`] drops the entry as soon as the node stops
-    /// being a horizontal split with a folded child, which covers re-docking.
+    /// being folded, which covers re-docking.
     surface: usize,
     node: usize,
-    /// What to give back on unfold when [`Fold::taken`] cannot say it in
-    /// points: a split INSIDE a bigger fold, which only divides what the fold
-    /// above it hands down, and an entry from a blob written before folds
-    /// moved the window.
+    /// The fraction the user dialled in, which the fold overwrites in the tree
+    /// and every width below is derived from.
     fraction: f32,
-    /// What the window gave up for this fold, for the one split per fold that
-    /// moved it. `None` on three kinds of entry: the splits inside that fold
-    /// (the outermost one asked for the whole subtree's width, so an inner one
-    /// asking again would count it twice), every fold in a floating dock
-    /// window (no plugin window of its own to take from), and entries restored
-    /// from a blob written before folds moved the window.
+    /// Whether this split was rendering a fold — a rail — when it was last
+    /// looked at, as opposed to merely handing a fold below it outward.
     ///
-    /// serde(default) is what keeps those blobs loadable, as folds that give
-    /// back a fraction and no width — which is what they took.
-    #[serde(default)]
-    taken: Option<Taken>,
-}
-
-/// The width one fold took out of the window.
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
-struct Taken {
-    /// Which child folded. Recorded because a released fold is no longer
-    /// collapsed and the tree can no longer say — and because a split whose
-    /// folded child CHANGES sides is holding a width that belongs to a pane
-    /// that is open again, which is only visible by comparing the two.
-    side: Side,
-    /// The width unfolding gives that child back, which is the rail it leaves
-    /// plus `shrink` — what the window actually gave up, rather than what the
-    /// pane had. The two are the same whenever the window had the room; where
-    /// it did not, giving back more than was taken would leave the window
-    /// wider than it started, one fold at a time.
-    width: f32,
-    /// The points the window gave up. Held as well as `width` because "Reset
-    /// layout" throws the whole arrangement away, with no rail left anywhere
-    /// to measure the difference against.
-    shrink: f32,
-    /// How wide the pane's sibling was when the two above were last measured,
-    /// which is what [`Taken::track`] follows the window by.
+    /// This is what "something folded or unfolded" is read from, and it has to
+    /// be per split rather than per entry: a split that already holds a
+    /// fraction because a fold sits below it can go on to fold a child of its
+    /// own, and the window has to hear about it.
     ///
-    /// serde(default) reads a blob written before folds tracked the window as
-    /// zero, which starts the tracking from the first frame it is seen rather
-    /// than from a width measured in some other window.
-    #[serde(default)]
-    kept: f32,
-}
-
-impl Taken {
-    /// Follow the window: scale what the rail is holding by however much its
-    /// sibling has moved since this last ran.
-    ///
-    /// The sibling is the proxy because it is the pane the folded one shares
-    /// its split with, so the two would have taken a window resize in the same
-    /// proportion had both been on screen — and because a fold deadens the
-    /// separator between them, so nothing else can move it.
-    ///
-    /// The whole width scales, not just the part outside the rail: what is
-    /// held is the width the pane would have if it were OPEN, and an open pane
-    /// takes a resize across all of it. Scaling the remainder instead leaves
-    /// the pane coming back a rail's worth ahead of its neighbour, which is a
-    /// smaller version of the complaint this exists to answer. What the WINDOW
-    /// saves by the fold — the width less the rail standing in for it — falls
-    /// out of that, and never goes below nothing.
-    fn track(&mut self, kept: f32, span: f32) {
-        if kept <= 0.0 || !kept.is_finite() {
-            return;
-        }
-        // A blob from before this tracked anything, or a fold on its way back
-        // out of a bigger one, has nothing to measure against: start here.
-        if self.kept <= 0.0 {
-            self.kept = kept;
-            return;
-        }
-        // Under a point, this is not a resize — it is a window landing on a
-        // whole pixel a fraction away from what was asked for. Following that
-        // would fold the rounding into what the pane is owed, once per fold,
-        // in whichever direction the rounding leans. The baseline is left
-        // where it is rather than moved, so a drag made a point at a time
-        // still adds up to a resize worth following.
-        if (kept - self.kept).abs() < 1.0 {
-            return;
-        }
-        self.width = (self.width * kept / self.kept).max(span);
-        self.shrink = self.width - span;
-        self.kept = kept;
-    }
+    /// Runtime-only: a layout is loaded into whatever window it finds, so the
+    /// first frame after a load moves nothing.
+    #[serde(skip)]
+    rail: bool,
 }
 
 /// Which child of a split is the folded one.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Side {
     Left,
     Right,
 }
 
 impl Folds {
-    /// Squeeze every sideways-folded pane down to a rail, and give back the
-    /// width of every split that is not folded any more.
+    /// Squeeze every sideways-folded pane down to a rail, and take what it gave
+    /// up out of the window.
     ///
     /// Runs BEFORE the dock lays out, because `fraction` is the input layout
     /// reads. Idempotent: re-running it on an unchanged dock writes the same
-    /// fractions, which is what keeps the rail a fixed number of POINTS wide
-    /// as the window resizes (a fraction alone would grow with it).
+    /// fractions, which is what keeps a rail a fixed number of POINTS wide as
+    /// the window resizes (a fraction alone would grow with it).
     ///
     /// `area` is the width `DockArea` is about to lay the main surface out in
     /// — THIS frame's, from the `Ui` (see [`area_width`]), not the rectangles
-    /// left in the tree by the last one. Every width below is derived from it
-    /// rather than measured, because a fold that resizes the window makes last
-    /// frame's rectangles a scale model of this frame's: measure them and a
-    /// rail comes out a rail's worth of the wrong window.
+    /// left in the tree by the last one, which a resize in flight makes a scale
+    /// model of the frame being built.
     ///
-    /// `floor` is the narrowest the shell will let its window become, in the
-    /// same points as `area`. A fold asks for no more than the window can
-    /// actually give up, because what it records is what it hands back: ask
-    /// past the floor and the pane beside it absorbs the difference, while the
-    /// unfold pays out the full amount — leaving the window wider than it
-    /// started, once per fold. Zero means no floor at all.
+    /// `floor` is the narrowest the shell will let the window become.
     ///
-    /// Returns the points the WINDOW has to gain (negative: lose) for the
-    /// panes that are not folding to keep their width — zero on every frame
-    /// that neither folds nor unfolds anything, which is nearly all of them.
-    /// Idempotence is what makes that safe: a fold asks for its width once, on
-    /// the frame the arrow is clicked, and the frames after it re-derive the
-    /// same layout without asking again. A host that refuses the resize
-    /// outright is therefore not fought over it either — the panes settle back
-    /// into the window they have, with the rail still exactly a rail.
+    /// `dialled` is the width the user's layout is dialled in AT: the window it
+    /// would need with every pane open. It is the one number carried between
+    /// frames, and the whole of the bookkeeping.
+    ///
+    /// - Nothing folded or unfolded this frame: it is re-derived from `area`,
+    ///   so a window the user resizes carries the layout with it, folded panes
+    ///   and all.
+    /// - Something did: it is held, and the difference between the window the
+    ///   layout now needs and the one it has is what this returns — the points
+    ///   the window has to gain (negative: lose) for every pane that is not
+    ///   folding to keep its width.
+    ///
+    /// `floor` is the narrowest the shell will let the window become. At the
+    /// floor the window is no longer a free variable, so the layout stops
+    /// following it: without that, a fold the window cannot pay for in full
+    /// would re-derive a layout dialled for the window it got rather than the
+    /// one it asked for, and unfolding would hand back the difference.
     #[must_use]
     pub fn apply(
         &mut self,
@@ -221,14 +173,11 @@ impl Folds {
         style: &egui_dock::Style,
         area: f32,
         floor: f32,
+        dial: &mut Dial,
     ) -> f32 {
-        let mut resize = 0.0;
         let rail = style.tab_bar.height;
         let separator = style.separator.width;
-        // What the window has left to give, spent by the folds below and
-        // returned by the unfolds. One budget for the whole dock, because
-        // there is one window.
-        let mut room = (area - floor).max(0.0);
+        let mut ask = 0.0;
         let mut reached = Vec::new();
         for index in 0..dock.surfaces_count() {
             let surface = SurfaceIndex(index);
@@ -239,201 +188,117 @@ impl Folds {
                 continue;
             }
             reached.push(surface.0);
+            let main = surface == SurfaceIndex::main();
             // A floating dock window is laid out in its own window rather than
-            // in the dock area, and its size is not ours to know — so that
-            // root is measured, a frame stale, which is all a fold there needs:
-            // it moves no window and hands its width to the pane beside it.
-            let root = if surface == SurfaceIndex::main() {
+            // in the dock area, and its size is not ours to know — so that root
+            // is measured, a frame stale, which is all a fold there needs: it
+            // moves no window, so its layout simply re-derives to fit.
+            let area = if main {
                 area
             } else {
                 tree[NodeIndex::root()].rect().map_or(f32::NAN, |rect| rect.width())
             };
-            // What is folded, read from the collapsed flags before anything is
-            // moved, so that the two passes below agree about it.
-            let holds = holds(tree);
-
-            // Unfold first. An entry gives its width back to the layout it took
-            // it from, which is the one still in the tree — run this after the
-            // folds and it would be measuring rails the same pass had just
-            // written. Outermost entry first, for the same reason one level
-            // down: an outer fold hands its subtree a width the entries inside
-            // it then divide, and a parent always precedes its children in the
-            // tree's array.
-            let mut granted = derive(tree, root, separator);
-            let mut released = Vec::new();
-            self.0.retain(|fold| {
-                let stays = fold.surface != surface.0
-                    || holds.get(fold.node).is_some_and(|hold| hold.holds(fold));
-                if !stays {
-                    released.push(fold.clone());
-                }
-                stays
-            });
-            released.sort_by_key(|fold| fold.node);
-            for fold in released {
-                let grow = restore(tree, &mut granted, &fold, separator);
-                resize += grow;
-                room += grow;
+            if !area.is_finite() || area <= 0.0 {
+                continue;
             }
-
-            // Then fold, against the width the window is being asked for
-            // rather than the one it still has: an unfold above has already
-            // moved the root, and a fold measured against the area of a window
-            // that is on its way out would take the pane's share of the wrong
-            // one. A parent always comes before its children in the tree's
-            // array, so one forward pass can carry that down — and a fold that
-            // narrows a split this frame has to tell its children itself, or
-            // every level below it would settle a frame late.
-            let mut granted = derive(tree, granted[0], separator);
-            for index in 0..tree.len() {
-                let node = NodeIndex(index);
-                let (left, right) = (node.left(), node.right());
-                if right.0 >= tree.len() || !tree[node].is_horizontal() {
-                    continue;
+            let holds = holds(tree);
+            let moved = self.reconcile(tree, surface, &holds);
+            // A floating surface has no window to ask, so its layout is simply
+            // the one that fits the window it is in, every frame.
+            let mut own = Dial::default();
+            let dial = if main { &mut *dial } else { &mut own };
+            let fit = Fit::of(tree, &holds, self, surface, rail, separator);
+            // Re-dialled when the WINDOW has moved, and only then. That is
+            // what carries a resize into a folded layout — and, just as
+            // important, what keeps this from re-dialling to a window that is
+            // on its way out: the frames between asking for a resize and
+            // getting one still measure the old width, and re-deriving from
+            // that would undo the fold before the window ever answered. Once
+            // the window does land where the fold asked, re-dialling is a
+            // no-op, which is what makes "has it moved" the whole test.
+            // At the floor the window has stopped answering, so the layout
+            // stops following it: re-dialling there would bank the difference
+            // between what a fold asked for and what it got as though the user
+            // had widened the window, and hand it back on the way out.
+            let settled = (area - dial.area).abs() < 0.01 && dial.width > 0.0;
+            if (!settled && !moved && area > floor + 1.0) || dial.width <= 0.0 {
+                if let Some(dialled) = fit.dialled_for(area) {
+                    dial.width = dialled;
                 }
-                // Either one child is folded and hands its width to the other,
-                // or this split is inside a fold already and divides what it
-                // was given into a rail per pane.
-                let (span, side, child) = if holds[index].inside {
-                    (rail_span(rail_columns(tree, left), rail, separator), Side::Left, None)
-                } else if let Some(side) = holds[index].side {
-                    let child = match side {
-                        Side::Left => left,
-                        Side::Right => right,
-                    };
-                    (rail_span(rail_columns(tree, child), rail, separator), side, Some(child))
-                } else {
-                    continue;
-                };
-                // No width to divide yet — a floating window on its first
-                // frame, waiting for a rectangle to measure. A fold also waits
-                // until there is room for it: a pane squeezed to a rail has to
-                // leave its sibling at least one too, or the click that would
-                // undo it lands nowhere. A split already inside a fold is
-                // exempt from THAT — it was handed exactly the width its rails
-                // need — but not from having a width at all.
-                let width = granted[index];
-                if !width.is_finite()
-                    || !(holds[index].inside || width > span + separator + rail)
-                {
-                    continue;
-                }
-                let new = !self.0.iter().any(|fold| fold.is(surface, node));
-                // What the window gives up, decided on the one frame this fold
-                // is new: the pane's whole width, less the rail that stands in
-                // for it, and no more than the window has left to give. Only
-                // the split that owns the fold asks — one inside it is dividing
-                // width already claimed, and asking again would charge the
-                // window for it twice — and only on the main surface, since a
-                // fold in a floating dock window has no plugin window to take
-                // from and keeps egui_dock's trade of handing the width to the
-                // sibling.
-                let shrink = child
-                    .filter(|_| new && surface == SurfaceIndex::main())
-                    .map(|child| granted[child.0])
-                    .filter(|pane| *pane > span)
-                    .map(|pane| (pane - span).min(room))
-                    .filter(|shrink| *shrink > 0.0);
-                // The width this split is left with once the window has taken
-                // its share — which is what the fold is laid out against, so
-                // that the frame it settles on is the first one after the
-                // resize rather than the one after that.
-                let width = width - shrink.unwrap_or(0.0);
-                // A split hands each child the space up to half a separator
-                // short of its midpoint, so the midpoint has to sit that much
-                // further out for the rails themselves to come out `span` wide.
-                let edge = (span + separator * 0.5) / width;
-                let fraction = match side {
-                    Side::Left => edge,
-                    Side::Right => 1.0 - edge,
-                };
-                let rest = width - span - separator;
-                granted[index] = width;
-                match side {
-                    Side::Left => (granted[left.0], granted[right.0]) = (span, rest),
-                    Side::Right => (granted[left.0], granted[right.0]) = (rest, span),
-                }
-                // A rail is not exempt from what the window does next. Resize
-                // it while a pane is folded and every pane on screen gives or
-                // takes a share; a pane that comes back with the width it had
-                // BEFORE all that has been spared a squeeze the others wore,
-                // and takes the difference out of them — which reads, from the
-                // outside, as opening a pane making its neighbours smaller.
-                //
-                // So what the rail is holding tracks its sibling, which is the
-                // pane it will share the split with and — the separator being
-                // dead while a fold pins it — the only one that can move under
-                // it. Fold, resize, unfold then lands where resizing alone
-                // would have.
-                //
-                // Only the fold that owns the window's width tracks it. A
-                // split INSIDE a bigger fold has no sibling pane to follow —
-                // what sits beside it there is another rail — and the fold
-                // above it is already following the window on its behalf. It
-                // forgets where it was measured from instead, so that coming
-                // back out starts a fresh baseline rather than reading the
-                // rail it sat beside as a pane that shrank.
-                if !new {
-                    if let Some(taken) = self
-                        .0
-                        .iter_mut()
-                        .find(|fold| fold.is(surface, node))
-                        .and_then(|fold| fold.taken.as_mut())
-                    {
-                        if holds[index].inside {
-                            taken.kept = 0.0;
-                        } else {
-                            taken.track(rest, span);
-                        }
-                    }
-                }
-                let Node::Horizontal(split) = &mut tree[node] else {
-                    continue;
-                };
-                // First frame of this fold: the fraction still in the split is
-                // the user's, and this is the last chance to keep it.
-                if new {
-                    self.0.push(Fold {
-                        surface: surface.0,
-                        node: node.0,
-                        fraction: split.fraction,
-                        taken: shrink
-                            .map(|shrink| Taken { side, width: span + shrink, shrink, kept: rest }),
-                    });
-                }
-                split.fraction = fraction;
-                // The fraction above narrows this split's folded child; this
-                // narrows the split itself, all the way out to the window, so
-                // that what the fold took comes off the window instead of
-                // going to the pane next door.
-                if let Some(shrink) = shrink {
-                    resize -= shrink;
-                    room -= shrink;
-                    reflow(tree, &mut granted, node, -shrink, separator);
-                }
+            }
+            dial.area = area;
+            let Some(widths) = fit.widths(dial.width) else {
+                continue;
+            };
+            write_fractions(tree, &holds, &widths, separator);
+            // Only a fold or an unfold moves the window. Any other gap between
+            // the layout and the window is one the window is not answering for
+            // — a host that refused, or a floor it will not go under — and
+            // asking again every frame would be an argument, not a request.
+            if main && moved {
+                ask += widths.window - area;
             }
         }
-        // Entries naming a surface the dock no longer has: nothing left to give
-        // a width back to, and — as with a re-docked entry — no way to tell
-        // whether the pane they were holding is folded somewhere else now, so
-        // they are dropped rather than paid out.
+        // Entries naming a surface the dock no longer has.
         self.0.retain(|fold| reached.contains(&fold.surface));
-        resize
+        ask
+    }
+
+    /// Take the fraction of every split that has just folded, and give back the
+    /// fraction of every split that has just unfolded. Answers whether either
+    /// happened, which is what decides if the window has to move.
+    fn reconcile(&mut self, tree: &mut Tree<Tab>, surface: SurfaceIndex, holds: &[Hold]) -> bool {
+        let mut moved = false;
+        self.0.retain(|fold| {
+            if fold.surface != surface.0 {
+                return true;
+            }
+            if holds.get(fold.node).is_some_and(Hold::held) {
+                return true;
+            }
+            // Unfolded, or re-docked out from under the entry: the fraction it
+            // was holding goes back where it came from.
+            if fold.node < tree.len() {
+                set_fraction(tree, NodeIndex(fold.node), fold.fraction);
+            }
+            moved |= fold.rail;
+            false
+        });
+        for (index, hold) in holds.iter().enumerate() {
+            let node = NodeIndex(index);
+            if !hold.held() {
+                continue;
+            }
+            let rail = hold.folded();
+            if let Some(fold) = self.0.iter_mut().find(|fold| fold.is(surface, node)) {
+                // A split that was already holding a fraction for a fold below
+                // it has now folded a child of its own, or stopped.
+                moved |= fold.rail != rail;
+                fold.rail = rail;
+                continue;
+            }
+            let Node::Horizontal(split) = &tree[node] else {
+                continue;
+            };
+            // First frame of this fold: the fraction in the split is still the
+            // user's, and this is the last chance to keep it.
+            self.0.push(Fold { surface: surface.0, node: index, fraction: split.fraction, rail });
+            moved |= rail;
+        }
+        moved
     }
 
     /// Forget every fold, for a dock that is being replaced wholesale (the
     /// Panel pane's "Reset layout"): the indices would otherwise name splits
     /// in a tree that no longer exists.
     ///
-    /// Returns the points the window is owed for the folds being forgotten,
-    /// the same as unfolding each of them would. A layout reset that left the
-    /// window at the width two folds had squeezed it to would hand back the
-    /// full arrangement with nowhere to put it.
+    /// Returns the points the window is owed for them. The layout that replaces
+    /// this one has every pane open, so it wants the whole width the folds were
+    /// keeping off the window.
     #[must_use]
-    pub fn clear(&mut self) -> f32 {
-        let owed = self.0.iter().filter_map(|fold| fold.taken).map(|taken| taken.shrink).sum();
+    pub fn clear(&mut self, dialled: f32, area: f32) -> f32 {
         self.0.clear();
-        owed
+        if dialled > area { dialled - area } else { 0.0 }
     }
 
     /// Whether anything is being remembered. Nothing in the draw needs this —
@@ -443,11 +308,229 @@ impl Folds {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// The fraction a split is dialled in at: the one the user set, which for a
+    /// folded split is the one held here rather than the rail's in the tree.
+    fn dialled(&self, tree: &Tree<Tab>, surface: SurfaceIndex, node: NodeIndex) -> f32 {
+        self.0
+            .iter()
+            .find(|fold| fold.is(surface, node))
+            .map(|fold| fold.fraction)
+            .unwrap_or_else(|| match &tree[node] {
+                Node::Horizontal(split) | Node::Vertical(split) => split.fraction,
+                _ => 0.5,
+            })
+    }
 }
 
 impl Fold {
     fn is(&self, surface: SurfaceIndex, node: NodeIndex) -> bool {
         self.surface == surface.0 && self.node == node.0
+    }
+}
+
+/// What a shell carries between frames for the fold layout: the window width
+/// the layout is dialled in at, and the window it last saw.
+///
+/// Runtime-only. A layout loaded into a window it was not saved at dials itself
+/// to the window it finds, which is the same thing that happens when the window
+/// is dragged.
+#[derive(Default)]
+pub struct Dial {
+    pub(crate) width: f32,
+    area: f32,
+}
+
+/// The layout as a function of the window it is dialled in at.
+///
+/// Every node's width is `slope * dialled + offset` — linear, because a split
+/// hands its children a fraction of itself less half a separator, and both of
+/// those are constants. That is what lets the window a folded layout needs be
+/// SOLVED rather than accumulated: the panes that are folded want
+/// `slope * dialled + offset` between them, they are being given a rail each
+/// instead, and the difference is what the window does not have to hold.
+struct Fit {
+    /// Per node, the width it is dialled in at.
+    slope: Vec<f32>,
+    offset: Vec<f32>,
+    /// Per node, the rail span if this split's child is folded away, and which
+    /// child it is.
+    folds: Vec<Option<(NodeIndex, f32)>>,
+    /// Per node, how a rail span divides between its children once this split
+    /// is inside a fold: `None` for a stacked split, where both children are
+    /// the whole rail.
+    columns: Vec<Option<(f32, f32)>>,
+}
+
+/// The widths a [`Fit`] comes out at, once the window it is dialled in at is
+/// known: what each node gets on screen with the folds rendered as rails, and
+/// the window that adds up to.
+struct Widths {
+    real: Vec<f32>,
+    window: f32,
+}
+
+impl Fit {
+    fn of(
+        tree: &Tree<Tab>,
+        holds: &[Hold],
+        folds: &Folds,
+        surface: SurfaceIndex,
+        rail: f32,
+        separator: f32,
+    ) -> Fit {
+        let mut fit = Fit {
+            slope: vec![0.0; tree.len()],
+            offset: vec![0.0; tree.len()],
+            folds: vec![None; tree.len()],
+            columns: vec![None; tree.len()],
+        };
+        fit.slope[0] = 1.0;
+        for (index, hold) in holds.iter().enumerate() {
+            let node = NodeIndex(index);
+            let (left, right) = (node.left(), node.right());
+            if right.0 >= tree.len() || !tree[node].is_parent() {
+                continue;
+            }
+            // The dialled fractions, not the ones a fold has written into the
+            // tree: this is the layout, and the rails are a rendering of it.
+            let (slope, offset) = (fit.slope[index], fit.offset[index]);
+            match &tree[node] {
+                Node::Vertical(_) => {
+                    (fit.slope[left.0], fit.offset[left.0]) = (slope, offset);
+                    (fit.slope[right.0], fit.offset[right.0]) = (slope, offset);
+                }
+                _ => {
+                    let fraction = folds.dialled(tree, surface, node);
+                    (fit.slope[left.0], fit.offset[left.0]) =
+                        (slope * fraction, offset * fraction - separator * 0.5);
+                    (fit.slope[right.0], fit.offset[right.0]) =
+                        (slope * (1.0 - fraction), offset * (1.0 - fraction) - separator * 0.5);
+                }
+            }
+            if tree[node].is_horizontal() {
+                fit.columns[index] = Some((
+                    rail_span(rail_columns(tree, left), rail, separator),
+                    rail_span(rail_columns(tree, right), rail, separator),
+                ));
+            }
+            // Only the outermost fold of a subtree squeezes anything: the
+            // splits inside it are dividing a width that is already spoken for.
+            if let (Some(side), false) = (hold.side, hold.inside) {
+                let child = match side {
+                    Side::Left => left,
+                    Side::Right => right,
+                };
+                fit.folds[index] =
+                    Some((child, rail_span(rail_columns(tree, child), rail, separator)));
+            }
+        }
+        fit
+    }
+
+    /// The window this layout needs so that what is left after the folds is
+    /// exactly `area` wide — the inverse of [`Fit::widths`], and the reason
+    /// nothing here has to remember a width.
+    fn dialled_for(&self, area: f32) -> Option<f32> {
+        let mut slope = 1.0;
+        let mut offset = 0.0;
+        for (index, fold) in self.folds.iter().enumerate() {
+            if let Some((child, span)) = fold {
+                slope -= self.slope[child.0];
+                offset += span - self.offset[child.0];
+                let _ = index;
+            }
+        }
+        // Everything folded: the layout is all rails and no pane, and there is
+        // no window that makes it come out at `area`.
+        (slope > 0.01).then(|| (area - offset) / slope).filter(|dialled| dialled.is_finite() && *dialled > 0.0)
+    }
+
+    /// The widths at a given dialled window: what each node wants, and what it
+    /// gets once the folds are rendered as rails.
+    fn widths(&self, dialled: f32) -> Option<Widths> {
+        if !dialled.is_finite() || dialled <= 0.0 {
+            return None;
+        }
+        let want: Vec<f32> =
+            (0..self.slope.len()).map(|i| self.slope[i] * dialled + self.offset[i]).collect();
+        // What the folds take out of every split above them, the root included.
+        let mut deficit = vec![0.0; want.len()];
+        for (index, fold) in self.folds.iter().enumerate() {
+            let Some((child, span)) = *fold else { continue };
+            let gap = want[child.0] - span;
+            if gap <= 0.0 {
+                continue;
+            }
+            deficit[child.0] += gap;
+            let mut node = NodeIndex(index);
+            loop {
+                deficit[node.0] += gap;
+                match node.parent() {
+                    Some(parent) => node = parent,
+                    None => break,
+                }
+            }
+        }
+        let mut real: Vec<f32> = want.iter().zip(&deficit).map(|(w, d)| w - d).collect();
+        // Inside a fold, the widths are not the dialled ones divided down —
+        // they are the rail span shared out, one rail per pane that ends up
+        // beside another. Which is why the deficit above stops at the folded
+        // child: everything under it is chrome.
+        for (child, span) in self.folds.iter().flatten() {
+            self.rails(*child, *span, &mut real);
+        }
+        Some(Widths { window: real[0], real })
+    }
+
+    /// Share a folded subtree's rail span out among the rails it becomes.
+    fn rails(&self, node: NodeIndex, span: f32, real: &mut [f32]) {
+        if node.0 >= real.len() {
+            return;
+        }
+        real[node.0] = span;
+        let (left, right) = (node.left(), node.right());
+        if right.0 >= real.len() {
+            return;
+        }
+        match self.columns[node.0] {
+            // Stacked panes fold onto each other's tab bars, so both halves of
+            // the split are the whole rail.
+            None => {
+                self.rails(left, span, real);
+                self.rails(right, span, real);
+            }
+            Some((before, after)) => {
+                self.rails(left, before, real);
+                self.rails(right, after, real);
+            }
+        }
+    }
+}
+
+/// Write the fraction every split needs for the widths [`Fit`] worked out.
+///
+/// Only splits with a fold under them are touched: everywhere else the fraction
+/// in the tree IS the dialled one, and rewriting it from a width would only
+/// round it off its mark.
+fn write_fractions(tree: &mut Tree<Tab>, holds: &[Hold], widths: &Widths, separator: f32) {
+    for (index, hold) in holds.iter().enumerate() {
+        let node = NodeIndex(index);
+        let (left, right) = (node.left(), node.right());
+        if right.0 >= tree.len() || !tree[node].is_horizontal() || !hold.held() {
+            continue;
+        }
+        let (whole, before) = (widths.real[index], widths.real[left.0]);
+        if !before.is_finite() || whole <= 0.0 {
+            continue;
+        }
+        set_fraction(tree, node, (before + separator * 0.5) / whole);
+    }
+}
+
+fn set_fraction(tree: &mut Tree<Tab>, node: NodeIndex, fraction: f32) {
+    if let Node::Horizontal(split) = &mut tree[node] {
+        split.fraction = fraction.clamp(0.0, 1.0);
     }
 }
 
@@ -460,24 +543,26 @@ struct Hold {
     /// already claimed, into a rail per pane, rather than folding on its own
     /// account.
     inside: bool,
+    /// A fold sits somewhere BELOW this split, so the fold rewrites its
+    /// fraction to send the width outward — which means the fraction in the
+    /// tree is no longer the one the user dialled, and the dialled one has to
+    /// be held here alongside the folds' own.
+    above: bool,
 }
 
 impl Hold {
-    /// Whether `fold` is still the fold it was recorded as.
-    ///
-    /// Being folded is not enough: a split whose folded child changes SIDES —
-    /// one pane opening as the other closes, which egui_dock does in a single
-    /// click, since expanding a leaf clears the collapsed flag on every
-    /// ancestor — is holding a width that belongs to a pane that is open
-    /// again. Recognising that as a release is what pays the opened pane back
-    /// and lets the closed one be taken afresh.
-    fn holds(&self, fold: &Fold) -> bool {
-        match (self.inside, self.side, fold.taken) {
-            (true, _, _) => true,
-            (false, Some(side), Some(taken)) => taken.side == side,
-            (false, Some(_), None) => true,
-            (false, None, _) => false,
-        }
+    /// Whether a fold is holding this split at all: either its own child is
+    /// folded away, or it sits inside a fold that claimed the whole subtree and
+    /// divides what that hands down into a rail per pane.
+    fn folded(&self) -> bool {
+        self.side.is_some() || self.inside
+    }
+
+    /// Whether the fold machinery owns this split's fraction — either because
+    /// it is folded, or because a fold below it rewrites the fraction on its
+    /// way out to the window. Both have to hand the user's fraction back.
+    fn held(&self) -> bool {
+        self.folded() || self.above
     }
 }
 
@@ -499,40 +584,19 @@ fn holds(tree: &Tree<Tab>) -> Vec<Hold> {
         } else if let Some(side) = folded_side(tree, node) {
             holds[index].side = Some(side);
             holds[match side { Side::Left => left, Side::Right => right }.0].inside = true;
+            // Every split above this one hands the width outward, so the fold
+            // owns its fraction too.
+            let mut above = node;
+            while let Some(parent) = above.parent() {
+                holds[parent.0].above = true;
+                above = parent;
+            }
         }
     }
     holds
 }
 
-/// Every node's width as the dock is about to lay it out: the root gets what it
-/// is given, and each split divides its own between its children.
-fn derive(tree: &Tree<Tab>, root: f32, separator: f32) -> Vec<f32> {
-    let mut granted = vec![f32::NAN; tree.len()];
-    granted[0] = root;
-    for index in 0..tree.len() {
-        let node = NodeIndex(index);
-        let (left, right) = (node.left(), node.right());
-        if right.0 >= tree.len() || !tree[node].is_parent() {
-            continue;
-        }
-        (granted[left.0], granted[right.0]) = share(&tree[node], granted[index], separator);
-    }
-    granted
-}
 
-/// The widths a split hands its two children, by the arithmetic the dock uses:
-/// stacked panes are each as wide as the split, and a horizontal split's
-/// children meet at the fraction, half a separator short on either side.
-fn share(node: &Node<Tab>, width: f32, separator: f32) -> (f32, f32) {
-    match node {
-        Node::Vertical(_) => (width, width),
-        Node::Horizontal(split) => (
-            width * split.fraction - separator * 0.5,
-            width * (1.0 - split.fraction) - separator * 0.5,
-        ),
-        _ => (f32::NAN, f32::NAN),
-    }
-}
 
 /// Which child of `node` is folded sideways, if exactly one of them is.
 ///
@@ -584,128 +648,8 @@ fn rail_columns(tree: &Tree<Tab>, node: NodeIndex) -> i32 {
     }
 }
 
-/// Take `delta` points of width out of (negative) or put them into (positive)
-/// the subtree at `node`, by rewriting every horizontal split ABOVE it so that
-/// the other side of each keeps the width it has.
-///
-/// This is what sends a fold's width out to the window rather than to the pane
-/// beside it. The folding split divides its own width between a rail and a
-/// sibling; without this, that is all that changes, and the sibling swallows
-/// everything the fold gave up. With it, each split up the tree narrows by the
-/// same points while its other child holds still, until the change reaches the
-/// root — where nothing is left to absorb it but the window.
-///
-/// Fractions, not rectangles: the dock lays out from fractions. Vertical
-/// splits need no fraction changed — both their children are as wide as the
-/// split, so the change passes through — but every split on the way up is now
-/// `delta` wider or narrower, and `granted` is corrected as the walk passes so
-/// that a second fold in the same pass divides the width the first one left.
-///
-/// Best effort, and deliberately so: a split with no width to divide yet stops
-/// the walk rather than have a fraction derived from `NaN` written into it.
-fn reflow(
-    tree: &mut Tree<Tab>,
-    granted: &mut [f32],
-    node: NodeIndex,
-    delta: f32,
-    separator: f32,
-) {
-    let mut child = node;
-    while let Some(parent) = child.parent() {
-        if parent.0 >= tree.len() || parent.0 >= granted.len() {
-            return;
-        }
-        let (whole, grown) = (granted[parent.0], granted[parent.0] + delta);
-        if !whole.is_finite() || grown <= 0.0 {
-            return;
-        }
-        let (left, right) = (parent.left(), parent.right());
-        if tree[parent].is_horizontal() {
-            // The children's widths are already what they are becoming — the
-            // one on the way up carries the change, and the other holds still,
-            // which is the whole point — so the fraction that puts the two of
-            // them in a split this wide is all that is left to write.
-            if !granted[left.0].is_finite() {
-                return;
-            }
-            let fraction = (granted[left.0] + separator * 0.5) / grown;
-            if let Node::Horizontal(split) = &mut tree[parent] {
-                split.fraction = fraction.clamp(0.0, 1.0);
-            }
-        } else {
-            // Stacked, so the pane above or below is as wide as the split and
-            // narrows with it. Correcting it here is what lets a second fold
-            // in the same pass divide the width the first one left.
-            let other = if child == left { right } else { left };
-            if other.0 < granted.len() {
-                granted[other.0] += delta;
-            }
-        }
-        granted[parent.0] = grown;
-        child = parent;
-    }
-}
 
-/// Undo one fold: give the pane back the width it had, hold its sibling still,
-/// and report the points the window has to grow to cover the difference.
-///
-/// The mirror of what [`Folds::apply`] does when the fold appears, and the
-/// reason [`Taken`] records a width in points rather than trusting the
-/// remembered fraction to a window that may have been resized since: a pane
-/// comes back the size it went away, whatever the window did in between.
-///
-/// Entries with nothing taken — the splits inside a bigger fold, the folds in a
-/// floating dock window, and blobs written before folds moved the window — get
-/// the other trade: the fraction back, and no window movement.
-fn restore(tree: &mut Tree<Tab>, granted: &mut [f32], fold: &Fold, separator: f32) -> f32 {
-    let node = NodeIndex(fold.node);
-    // Re-docked out from under the entry: the node it named is not a fold any
-    // more, and the pane it was holding may perfectly well still be folded
-    // somewhere else in the tree — where this same pass charges the window for
-    // it afresh, at the width it has there. Paying the old width back on top of
-    // that would move the window twice for one fold, so an entry that loses its
-    // split loses its claim.
-    if node.0 >= tree.len() || !tree[node].is_horizontal() {
-        return 0.0;
-    }
-    let Some(taken) = fold.taken else {
-        set_fraction(tree, node, fold.fraction);
-        return 0.0;
-    };
-    let child = match taken.side {
-        Side::Left => node.left(),
-        Side::Right => node.right(),
-    };
-    // The sibling keeps every point it has; the split grows to hold it beside
-    // the pane coming back.
-    let whole = granted[node.0];
-    let kept = granted.get(child.0).map_or(f32::NAN, |rail| whole - rail - separator);
-    let grown = kept + taken.width + separator;
-    // Finiteness first, and separately: a width that is not a number fails
-    // every comparison below rather than tripping one of them.
-    if !kept.is_finite() || !grown.is_finite() || kept <= 0.0 || grown <= 0.0 {
-        // Nothing to divide, so the fraction is all there is to go on, and the
-        // window is left where it is rather than moved off a width nobody can
-        // measure.
-        set_fraction(tree, node, fold.fraction);
-        return 0.0;
-    }
-    let before = if taken.side == Side::Left { taken.width } else { kept };
-    set_fraction(tree, node, (before + separator * 0.5) / grown);
-    // The subtree is as wide as the pane just handed back to it, and the split
-    // as wide as both — which is what an entry restored after this one, deeper
-    // in the same subtree, goes on to divide.
-    granted[child.0] = taken.width;
-    granted[node.0] = grown;
-    reflow(tree, granted, node, grown - whole, separator);
-    grown - whole
-}
 
-fn set_fraction(tree: &mut Tree<Tab>, node: NodeIndex, fraction: f32) {
-    if let Node::Horizontal(split) = &mut tree[node] {
-        split.fraction = fraction.clamp(0.0, 1.0);
-    }
-}
 
 /// The width `DockArea` is about to lay the main surface out in: what is left
 /// of `ui` once the dock has taken its own padding and border out of it.
@@ -1021,9 +965,17 @@ mod tests {
     /// A fold therefore takes two frames to settle in a test as it does in the
     /// editor: one that decides what to ask the window for, and one at the
     /// size it was given.
+    /// The one number a shell carries between frames for the fold layout (see
+    /// `SharedState::dialled_width`). Tests thread it the same way.
     #[must_use]
-    fn frame_within(folds: &mut Folds, dock: &mut DockState<Tab>, width: f32, floor: f32) -> f32 {
-        let change = folds.apply(dock, &style(), width, floor);
+    fn frame_within(
+        folds: &mut Folds,
+        dock: &mut DockState<Tab>,
+        dial: &mut Dial,
+        width: f32,
+        floor: f32,
+    ) -> f32 {
+        let change = folds.apply(dock, &style(), width, floor, dial);
         lay_out(dock, width);
         (width + change).max(floor)
     }
@@ -1031,26 +983,27 @@ mod tests {
     /// One frame in a shell whose window can be as narrow as the fold asks,
     /// which is every test that is not about the floor.
     #[must_use]
-    fn frame(folds: &mut Folds, dock: &mut DockState<Tab>, width: f32) -> f32 {
-        frame_within(folds, dock, width, 0.0)
+    fn frame(folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial, width: f32) -> f32 {
+        frame_within(folds, dock, dial, width, 0.0)
     }
 
     /// A click settled: the frame that asks the window for its new width, and
     /// the frame that is laid out in it.
     #[must_use]
-    fn settle(folds: &mut Folds, dock: &mut DockState<Tab>, width: f32) -> f32 {
-        settle_within(folds, dock, width, 0.0)
+    fn settle(folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial, width: f32) -> f32 {
+        settle_within(folds, dock, dial, width, 0.0)
     }
 
     #[must_use]
     fn settle_within(
         folds: &mut Folds,
         dock: &mut DockState<Tab>,
+        dial: &mut Dial,
         width: f32,
         floor: f32,
     ) -> f32 {
-        let asked = frame_within(folds, dock, width, floor);
-        frame_within(folds, dock, asked, floor)
+        let asked = frame_within(folds, dock, dial, width, floor);
+        frame_within(folds, dock, dial, asked, floor)
     }
 
     fn width(dock: &DockState<Tab>, node: NodeIndex) -> f32 {
@@ -1109,18 +1062,21 @@ mod tests {
     fn folding_a_pane_takes_its_width_out_of_the_window() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         let (pane, sibling, column) =
             (width(&dock, LATTICE), width(&dock, SPECTRAL), width(&dock, SETTINGS));
         collapse(&mut dock, Tab::Lattice, true);
-        let window = frame(&mut folds, &mut dock, 1000.0);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         assert!(
             (window - (1000.0 - (pane - 26.0))).abs() < 0.01,
             "the window loses the pane's width, less the rail standing in for it"
         );
         // The frame after, at the size the window was asked for, is where the
         // layout settles — and asks for nothing more.
-        let settled = frame(&mut folds, &mut dock, window);
+        let settled = frame(&mut folds, &mut dock, &mut dial, window);
         assert!((settled - window).abs() < 0.01, "one fold, one resize");
         assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "a rail, not a column");
         assert!(
@@ -1140,10 +1096,11 @@ mod tests {
         for size in [600.0, 2400.0] {
             let mut dock = dock();
             let mut folds = Folds::default();
+        let mut dial = Dial::default();
             lay_out(&mut dock, size);
             collapse(&mut dock, Tab::Lattice, true);
-            let window = frame(&mut folds, &mut dock, size);
-            let _ = frame(&mut folds, &mut dock, window);
+            let window = frame(&mut folds, &mut dock, &mut dial, size);
+            let _ = frame(&mut folds, &mut dock, &mut dial, window);
             assert!(
                 (width(&dock, LATTICE) - 26.0).abs() < 0.01,
                 "at {size} wide, in the {window} the fold asked for"
@@ -1156,14 +1113,17 @@ mod tests {
     fn unfolding_gives_back_the_fraction_the_user_had() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         collapse(&mut dock, Tab::Lattice, true);
         // Twice, because the fold is re-applied every frame: the second pass
         // must not mistake its own rail fraction for the user's.
-        let window = frame(&mut folds, &mut dock, 1000.0);
-        let window = frame(&mut folds, &mut dock, window);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let window = frame(&mut folds, &mut dock, &mut dial, window);
         collapse(&mut dock, Tab::Lattice, false);
-        let window = frame(&mut folds, &mut dock, window);
+        let window = frame(&mut folds, &mut dock, &mut dial, window);
         assert!((fraction(&dock, PICTURES) - 0.7).abs() < 0.001);
         assert!((window - 1000.0).abs() < 0.01, "and the window it came out of");
     }
@@ -1175,15 +1135,18 @@ mod tests {
     fn unfolding_gives_the_window_back_what_folding_took() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         let before: Vec<f32> =
             [LATTICE, SPECTRAL, SETTINGS].iter().map(|node| width(&dock, *node)).collect();
         collapse(&mut dock, Tab::Lattice, true);
-        let window = frame(&mut folds, &mut dock, 1000.0);
-        let window = frame(&mut folds, &mut dock, window);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let window = frame(&mut folds, &mut dock, &mut dial, window);
         collapse(&mut dock, Tab::Lattice, false);
-        let window = frame(&mut folds, &mut dock, window);
-        let window = frame(&mut folds, &mut dock, window);
+        let window = frame(&mut folds, &mut dock, &mut dial, window);
+        let window = frame(&mut folds, &mut dock, &mut dial, window);
         assert!((window - 1000.0).abs() < 0.01, "the window is the one it started at");
         for (node, was) in [LATTICE, SPECTRAL, SETTINGS].iter().zip(before) {
             assert!((width(&dock, *node) - was).abs() < 0.01, "{node:?} is back to {was}");
@@ -1202,47 +1165,101 @@ mod tests {
     fn a_fold_across_a_resize_lands_where_the_resize_alone_would_have() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
-        let share = width(&dock, LATTICE) / width(&dock, SPECTRAL);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         collapse(&mut dock, Tab::Lattice, true);
-        let window = settle(&mut folds, &mut dock, 1000.0);
+        let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
         // The user drags the window border in while the lattice is a rail.
         let dragged = window - 120.0;
-        let _ = settle(&mut folds, &mut dock, dragged);
+        let _ = settle(&mut folds, &mut dock, &mut dial, dragged);
         collapse(&mut dock, Tab::Lattice, false);
-        let window = settle(&mut folds, &mut dock, dragged);
+        let window = settle(&mut folds, &mut dock, &mut dial, dragged);
         let folded = [LATTICE, SPECTRAL, SETTINGS].map(|node| width(&dock, node));
 
-        // Exactly, because both took the resize in the same proportion: the
-        // pane comes back beside its neighbour in the share it left it in.
-        // This is the one the complaint is about — a pane that comes back at
-        // a width measured in an older, wider window is a pane taking that
-        // share out of its neighbour.
-        assert!(
-            (width(&dock, LATTICE) / width(&dock, SPECTRAL) - share).abs() < 0.001,
-            "the lattice and the analyzer keep the share they had",
-        );
-
-        // And the whole layout lands within a few points of the same dock,
-        // never folded, dragged straight to where this one ended up. Not
-        // exactly: while a pane is a rail the split above it divides the
-        // window between "rail plus analyzer" and the settings column rather
-        // than between three panes, so a resize made then is shared out in
-        // slightly different proportions — about 6% of the drag, 7 points of
-        // the 120 dragged here, and all of it in the column that was never
-        // folded rather than between the two panes that trade with it.
+        // The same dock, never folded, dragged straight to where this one
+        // ended up. The layout is derived from the fractions the user dialled
+        // and the window it is being drawn in, and a fold changes neither —
+        // so carrying one through a resize is the resize, exactly.
         let mut plain = self::dock();
         lay_out(&mut plain, 1000.0);
         lay_out(&mut plain, window);
         for (node, folded) in [LATTICE, SPECTRAL, SETTINGS].iter().zip(folded) {
             let plain = width(&plain, *node);
             assert!(
-                (folded - plain).abs() < 8.0,
+                (folded - plain).abs() < 0.5,
                 "{node:?} came out {folded} across the fold, {plain} across the resize alone",
             );
         }
     }
 
+    /// A pane folded when the editor window closed unfolds, next session, into
+    /// the layout it came from: the entry goes into the persisted blob and has
+    /// to come back knowing the fraction it is holding.
+    #[test]
+    fn a_persisted_fold_still_holds_the_fraction_it_was_dialled_at() {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let pane = width(&dock, LATTICE);
+        collapse(&mut dock, Tab::Lattice, true);
+        let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+        // Saved and loaded the way `UiPersist` carries it, alongside the dock
+        // whose splits the entry names, into a window the same size.
+        let saved = ron::to_string(&folds).expect("folds serialize");
+        let mut folds: Folds = ron::from_str(&saved).expect("folds deserialize");
+        let reopened = settle(&mut folds, &mut dock, &mut dial, window);
+        assert!((reopened - window).abs() < 0.01, "the editor opens where it closed");
+        collapse(&mut dock, Tab::Lattice, false);
+        let window = settle(&mut folds, &mut dock, &mut dial, reopened);
+        assert!((window - 1000.0).abs() < 0.01, "and the window comes back");
+        assert!((width(&dock, LATTICE) - pane).abs() < 0.01, "with the pane in it");
+    }
+
+    /// An entry from a blob written before folds moved the window has no width
+    /// to give back, and taking one out of that window would move a window
+    /// that never gave anything up. The fraction is what those entries hold,
+    /// and all they hold — which is also the wire format this has to keep
+    /// reading, since a blob it cannot parse costs the whole saved layout.
+    #[test]
+    fn a_fold_from_before_the_window_moved_gives_back_only_its_fraction() {
+        let mut dock = dock();
+        let mut folds: Folds = ron::from_str("([(surface:0,node:1,fraction:0.35)])")
+            .expect("an older blob still loads");
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        // Nothing in the dock is collapsed, so the entry is released the first
+        // time it is looked at — the unfold path, with nothing taken.
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        assert!((fraction(&dock, PICTURES) - 0.35).abs() < 0.001, "the fraction it remembered");
+        assert_eq!(window, 1000.0, "and no width, because it took none");
+        assert!(folds.is_empty());
+    }
+
+    /// A fold in a floating dock window is that window's own business: there
+    /// is no plugin window behind it to take the width from, so it keeps
+    /// egui_dock's trade and hands the width to the pane beside it.
+    #[test]
+    fn a_fold_in_a_floating_window_leaves_the_plugin_window_alone() {
+        let mut dock = dock();
+        let floating = dock.add_window(vec![Tab::Nodes]);
+        dock[floating].split_right(NodeIndex::root(), 0.5, vec![Tab::Scene]);
+        lay_out(&mut dock, 1000.0);
+        lay_out_surface(&mut dock, floating, 500.0);
+        let path = dock.find_tab(&Tab::Nodes).expect("tab is in the floating window");
+        dock[path.surface][path.node].set_collapsed(true);
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let window = folds.apply(&mut dock, &style(), 1000.0, 0.0, &mut dial);
+        lay_out_surface(&mut dock, floating, 500.0);
+        assert_eq!(window, 0.0, "the plugin window is not the one that folded");
+        let rail = dock[floating][NodeIndex(1)].rect().expect("on screen").width();
+        assert!((rail - 26.0).abs() < 0.01, "the fold itself still happens");
+    }
     /// A settings column folds away as one rail once everything in it is
     /// collapsed: the stacked leaves fold onto each other's tab bars, so the
     /// column itself is one rail wide — and the pictures beside it are no
@@ -1251,13 +1268,16 @@ mod tests {
     fn a_column_of_collapsed_panes_folds_as_a_single_rail() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         let (column, pictures) = (width(&dock, SETTINGS), width(&dock, PICTURES));
         collapse(&mut dock, Tab::Tuning, true);
         collapse(&mut dock, Tab::Notes, true);
-        let window = frame(&mut folds, &mut dock, 1000.0);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         assert!((window - (1000.0 - (column - 26.0))).abs() < 0.01);
-        let window = frame(&mut folds, &mut dock, window);
+        let window = frame(&mut folds, &mut dock, &mut dial, window);
         assert!((width(&dock, SETTINGS) - 26.0).abs() < 0.01);
         assert!((width(&dock, PICTURES) - pictures).abs() < 0.01);
         // And back: a column is folded on the RIGHT of its split, where the
@@ -1265,7 +1285,7 @@ mod tests {
         // from — get that the wrong way round and the two swap widths.
         collapse(&mut dock, Tab::Tuning, false);
         collapse(&mut dock, Tab::Notes, false);
-        let window = settle(&mut folds, &mut dock, window);
+        let window = settle(&mut folds, &mut dock, &mut dial, window);
         assert!((window - 1000.0).abs() < 0.01, "the window it came out of");
         assert!((width(&dock, SETTINGS) - column).abs() < 0.01, "the column, as it was");
         assert!((width(&dock, PICTURES) - pictures).abs() < 0.01, "the pictures, still");
@@ -1279,7 +1299,10 @@ mod tests {
     fn a_folded_pair_becomes_two_rails_side_by_side() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         let (pair, column) = (width(&dock, PICTURES), width(&dock, SETTINGS));
         collapse(&mut dock, Tab::Lattice, true);
         collapse(&mut dock, Tab::Spectral, true);
@@ -1287,14 +1310,14 @@ mod tests {
         // is about to be given rather than leaving it to read that next frame,
         // so both rails are in the same set of fractions.
         let rails = 26.0 + 4.0 + 26.0;
-        let window = frame(&mut folds, &mut dock, 1000.0);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         assert!(
             (window - (1000.0 - (pair - rails))).abs() < 0.01,
             "the window loses the pair, less the two rails it leaves"
         );
         // The inner split divides what the fold hands it; only the fold itself
         // charges the window, or the pair would be paid for twice.
-        let settled = frame(&mut folds, &mut dock, window);
+        let settled = frame(&mut folds, &mut dock, &mut dial, window);
         assert!((settled - window).abs() < 0.01, "one fold, one resize");
         assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "the lattice's own rail");
         assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01, "the analyzer's own rail");
@@ -1314,7 +1337,7 @@ mod tests {
         let mut dock = dock();
         lay_out(&mut dock, 1000.0);
         collapse(&mut dock, Tab::Tuning, true);
-        let window = frame(&mut Folds::default(), &mut dock, 1000.0);
+        let window = frame(&mut Folds::default(), &mut dock, &mut Dial::default(), 1000.0);
         assert_eq!(fraction(&dock, SETTINGS), 0.5);
         assert_eq!(fraction(&dock, NodeIndex::root()), 0.7, "the column keeps its width");
         assert_eq!(window, 1000.0, "and the window its own");
@@ -1331,7 +1354,7 @@ mod tests {
         for tab in [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes] {
             collapse(&mut dock, tab, true);
         }
-        let window = frame(&mut Folds::default(), &mut dock, 1000.0);
+        let window = frame(&mut Folds::default(), &mut dock, &mut Dial::default(), 1000.0);
         assert_eq!(fraction(&dock, NodeIndex::root()), 0.7);
         assert_eq!(fraction(&dock, PICTURES), 0.7);
         assert_eq!(window, 1000.0);
@@ -1344,10 +1367,13 @@ mod tests {
     fn a_layout_reset_hands_back_every_fold_it_holds() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         collapse(&mut dock, Tab::Lattice, true);
-        let window = frame(&mut folds, &mut dock, 1000.0);
-        assert!((window + folds.clear() - 1000.0).abs() < 0.01);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        assert!((window + folds.clear(dial.width, window) - 1000.0).abs() < 0.01);
         assert!(folds.is_empty());
     }
 
@@ -1361,21 +1387,24 @@ mod tests {
     fn a_fold_that_changes_sides_pays_back_the_pane_that_opened() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         let (lattice, analyzer) = (width(&dock, LATTICE), width(&dock, SPECTRAL));
         // Fold both pictures, a click at a time: the second collapses the pair
         // itself, so the root folds the whole subtree into two rails.
         collapse(&mut dock, Tab::Lattice, true);
-        let window = settle(&mut folds, &mut dock, 1000.0);
+        let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
         collapse(&mut dock, Tab::Spectral, true);
-        let window = settle(&mut folds, &mut dock, window);
+        let window = settle(&mut folds, &mut dock, &mut dial, window);
         // Open the lattice again. The pair's split is folded on the right now.
         collapse(&mut dock, Tab::Lattice, false);
-        let window = settle(&mut folds, &mut dock, window);
+        let window = settle(&mut folds, &mut dock, &mut dial, window);
         assert!((width(&dock, LATTICE) - lattice).abs() < 0.01, "the lattice comes back whole");
         assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01, "the analyzer is the rail now");
         collapse(&mut dock, Tab::Spectral, false);
-        let window = settle(&mut folds, &mut dock, window);
+        let window = settle(&mut folds, &mut dock, &mut dial, window);
         assert!((window - 1000.0).abs() < 0.01, "the window is the one it started in");
         assert!((width(&dock, SPECTRAL) - analyzer).abs() < 0.01, "and the analyzer with it");
     }
@@ -1389,17 +1418,20 @@ mod tests {
     fn two_folds_released_at_once_hand_back_what_each_took() {
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         collapse(&mut dock, Tab::Lattice, true);
-        let window = settle(&mut folds, &mut dock, 1000.0);
+        let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
         collapse(&mut dock, Tab::Spectral, true);
-        let window = settle(&mut folds, &mut dock, window);
+        let window = settle(&mut folds, &mut dock, &mut dial, window);
         // Collapsing the settings column too leaves the root with two collapsed
         // children and nothing to hand anything to, so every fold is released
         // at once — the inner one recorded first.
         collapse(&mut dock, Tab::Tuning, true);
         collapse(&mut dock, Tab::Notes, true);
-        let window = settle(&mut folds, &mut dock, window);
+        let window = settle(&mut folds, &mut dock, &mut dial, window);
         assert!((window - 1000.0).abs() < 0.01, "both folds hand back what they took");
     }
 
@@ -1408,92 +1440,149 @@ mod tests {
     /// NOT do is hand back a width the window never gave up — that leaves the
     /// window wider than it started, one fold at a time.
     #[test]
-    fn a_fold_asks_for_no_more_width_than_the_window_can_give() {
+    fn a_fold_the_window_cannot_pay_for_still_gives_it_all_back() {
         const FLOOR: f32 = 400.0;
         let mut dock = dock();
         let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
+        let mut dial = Dial::default();
+        // A settled frame before the click, as the editor always has: the
+        // layout is dialled in at the window it is being drawn in.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let before = [LATTICE, SPECTRAL, SETTINGS].map(|node| width(&dock, node));
         collapse(&mut dock, Tab::Lattice, true);
-        let window = settle_within(&mut folds, &mut dock, 1000.0, FLOOR);
+        let window = settle_within(&mut folds, &mut dock, &mut dial, 1000.0, FLOOR);
         // The pair folds as a subtree, and wants more than the floor leaves.
         collapse(&mut dock, Tab::Spectral, true);
-        let window = settle_within(&mut folds, &mut dock, window, FLOOR);
+        let window = settle_within(&mut folds, &mut dock, &mut dial, window, FLOOR);
         assert!((window - FLOOR).abs() < 0.01, "the window stops at the floor");
-        assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "the rails are still rails");
-        assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01);
-        // Back out the way we came in, which is the order that never moves the
-        // fold from one side of a split to the other.
+        // Rails, give or take: the window is wider than the layout it is
+        // holding, so everything in it is drawn a few percent over — the
+        // visible half of a window that would not shrink any further.
+        assert!((width(&dock, LATTICE) - 26.0).abs() < 5.0, "the rails are still rails");
+        assert!((width(&dock, SPECTRAL) - 26.0).abs() < 5.0);
+        // The width the window would not give up is squeezed out of the panes
+        // still on screen instead, which is the only place left for it.
+        assert!(width(&dock, SETTINGS) > before[2], "the column takes what the window would not");
+        // Back out again. The layout is still dialled in at the window it was
+        // dialled in at — the floor is where it stopped following the window,
+        // exactly so that this comes back whole.
         collapse(&mut dock, Tab::Spectral, false);
-        let window = settle_within(&mut folds, &mut dock, window, FLOOR);
+        let window = settle_within(&mut folds, &mut dock, &mut dial, window, FLOOR);
         collapse(&mut dock, Tab::Lattice, false);
-        let window = settle_within(&mut folds, &mut dock, window, FLOOR);
-        assert!(
-            (window - 1000.0).abs() < 0.01,
-            "and gives back exactly what it took, not what it asked for"
-        );
+        let window = settle_within(&mut folds, &mut dock, &mut dial, window, FLOOR);
+        assert!((window - 1000.0).abs() < 0.01, "the window it started in");
+        for (node, was) in [LATTICE, SPECTRAL, SETTINGS].iter().zip(before) {
+            assert!((width(&dock, *node) - was).abs() < 0.01, "{node:?} is back to {was}");
+        }
     }
 
-    /// A pane folded when the editor window closed unfolds, next session, into
-    /// the window it took its width out of: the entry goes into the persisted
-    /// blob and has to come back knowing what that width was.
+
+    /// Every sequence of collapse clicks that ends where it started leaves the
+    /// LAYOUT where it started.
+    ///
+    /// The property the rest of this module is written to keep, and the only
+    /// one that catches what a hand-written case does not: the leaks here all
+    /// came from a second fold interacting with a first, in an order nobody
+    /// thought to write down. Four panes, up to six clicks, three window sizes
+    /// — every arrangement the arrows can reach and come back from. Six
+    /// because the settings column takes two clicks to fold, so anything that
+    /// pairs it with another pane needs six to get back.
+    ///
+    /// Driven through [`Window`], not `frame`, because a shell is part of the
+    /// loop: it rounds the width to whole points, holds a floor, and answers a
+    /// frame late. Two of the leaks this found lived in exactly that gap.
     #[test]
-    fn a_persisted_fold_still_knows_what_the_window_gave_up() {
-        let mut dock = dock();
-        let mut folds = Folds::default();
-        lay_out(&mut dock, 1000.0);
-        let pane = width(&dock, LATTICE);
-        collapse(&mut dock, Tab::Lattice, true);
-        let window = frame(&mut folds, &mut dock, 1000.0);
-        let window = frame(&mut folds, &mut dock, window);
-        // Saved and loaded the way `UiPersist` carries it, alongside the dock
-        // whose splits the entry names.
-        let saved = ron::to_string(&folds).expect("folds serialize");
-        let mut folds: Folds = ron::from_str(&saved).expect("folds deserialize");
-        collapse(&mut dock, Tab::Lattice, false);
-        let window = frame(&mut folds, &mut dock, window);
-        let _ = frame(&mut folds, &mut dock, window);
-        assert!((window - 1000.0).abs() < 0.01, "the window comes back");
-        assert!((width(&dock, LATTICE) - pane).abs() < 0.01, "and the pane with it");
+    fn every_round_trip_of_clicks_lands_where_it_started() {
+        let tabs = [Tab::Lattice, Tab::Spectral, Tab::Tuning, Tab::Notes];
+        let mut drifted = Vec::new();
+        for start in [700.0f32, 1000.0, 1512.0] {
+            for length in [2usize, 4, 6] {
+                for sequence in sequences(&tabs, length) {
+                    let mut dock = dock();
+                    let mut folds = Folds::default();
+                    let mut window = Window::new(start);
+                    window.settle(&mut folds, &mut dock);
+                    let before = [LATTICE, SPECTRAL, SETTINGS].map(|node| width(&dock, node));
+                    for tab in &sequence {
+                        let open = !collapsed_tab(&dock, *tab);
+                        collapse(&mut dock, *tab, open);
+                        window.settle(&mut folds, &mut dock);
+                    }
+                    if tabs.iter().any(|tab| collapsed_tab(&dock, *tab)) {
+                        continue;
+                    }
+                    let after = [LATTICE, SPECTRAL, SETTINGS].map(|node| width(&dock, node));
+                    let worst = before
+                        .iter()
+                        .zip(after)
+                        .fold(0.0f32, |worst, (was, now)| worst.max((now - was).abs()));
+                    if worst > 1.0 {
+                        drifted.push(format!("{start}: {sequence:?} drifted {worst:.1}pt"));
+                    }
+                }
+            }
+        }
+        assert!(drifted.is_empty(), "{} of them, worst first:\n{}", drifted.len(), drifted.join("\n"));
     }
 
-    /// An entry from a blob written before folds moved the window has no width
-    /// to give back, and taking one out of that window would move a window
-    /// that never gave anything up. The fraction is what those entries hold,
-    /// and all they hold — which is also the wire format this has to keep
-    /// reading, since a blob it cannot parse costs the whole saved layout.
-    #[test]
-    fn a_fold_from_before_the_window_moved_gives_back_only_its_fraction() {
-        let mut dock = dock();
-        let mut folds: Folds = ron::from_str("([(surface:0,node:1,fraction:0.35)])")
-            .expect("a pre-`taken` blob still loads");
-        lay_out(&mut dock, 1000.0);
-        // Nothing in the dock is collapsed, so the entry is released the first
-        // time it is looked at — the unfold path, with nothing taken.
-        let window = frame(&mut folds, &mut dock, 1000.0);
-        assert!((fraction(&dock, PICTURES) - 0.35).abs() < 0.001, "the fraction it remembered");
-        assert_eq!(window, 1000.0, "and no width, because it took none");
-        assert!(folds.is_empty());
+    /// Every sequence of `length` clicks over `tabs`.
+    fn sequences(tabs: &[Tab], length: usize) -> Vec<Vec<Tab>> {
+        let mut sequences = vec![Vec::new()];
+        for _ in 0..length {
+            sequences = sequences
+                .into_iter()
+                .flat_map(|sequence| {
+                    tabs.iter().map(move |tab| {
+                        let mut next = sequence.clone();
+                        next.push(*tab);
+                        next
+                    })
+                })
+                .collect();
+        }
+        sequences
     }
 
-    /// A fold in a floating dock window is that window's own business: there
-    /// is no plugin window behind it to take the width from, so it keeps
-    /// egui_dock's trade and hands the width to the pane beside it.
-    #[test]
-    fn a_fold_in_a_floating_window_leaves_the_plugin_window_alone() {
-        let mut dock = dock();
-        let floating = dock.add_window(vec![Tab::Nodes]);
-        dock[floating].split_right(NodeIndex::root(), 0.5, vec![Tab::Scene]);
-        lay_out(&mut dock, 1000.0);
-        lay_out_surface(&mut dock, floating, 500.0);
-        let path = dock.find_tab(&Tab::Nodes).expect("tab is in the floating window");
-        dock[path.surface][path.node].set_collapsed(true);
-        let mut folds = Folds::default();
-        let window = folds.apply(&mut dock, &style(), 1000.0, 0.0);
-        lay_out_surface(&mut dock, floating, 500.0);
-        assert_eq!(window, 0.0, "the plugin window is not the one that folded");
-        let rail = dock[floating][NodeIndex(1)].rect().expect("on screen").width();
-        let sibling = dock[floating][NodeIndex(2)].rect().expect("on screen").width();
-        assert!((rail - 26.0).abs() < 0.01, "the fold itself still happens");
-        assert!((sibling - (500.0 - 26.0 - 4.0)).abs() < 0.01, "its sibling takes the width");
+    fn collapsed_tab(dock: &DockState<Tab>, tab: Tab) -> bool {
+        let path = dock.find_tab(&tab).expect("docked");
+        dock[path.surface][path.node].is_collapsed()
     }
+
+    /// A shell, as the plugin's is: it holds a floor, sizes its window in whole
+    /// points, and answers a resize a frame late (egui-baseview reads the
+    /// window's size before running the UI in it).
+    struct Window {
+        size: f32,
+        area: f32,
+        pending: Option<f32>,
+        dial: Dial,
+    }
+
+    impl Window {
+        const FLOOR: f32 = 400.0;
+
+        fn new(width: f32) -> Self {
+            Window { size: width, area: width, pending: None, dial: Dial::default() }
+        }
+
+        fn frame(&mut self, folds: &mut Folds, dock: &mut DockState<Tab>) {
+            if let Some(want) = self.pending.take() {
+                self.size = want;
+            }
+            let area = self.area;
+            let change = folds.apply(dock, &style(), area, Self::FLOOR, &mut self.dial);
+            lay_out(dock, area);
+            if change.abs() >= 0.5 {
+                self.pending = Some((self.size + change).round().max(Self::FLOOR));
+            }
+            self.area = self.size;
+        }
+
+        fn settle(&mut self, folds: &mut Folds, dock: &mut DockState<Tab>) {
+            for _ in 0..6 {
+                self.frame(folds, dock);
+            }
+        }
+    }
+
 }

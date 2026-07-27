@@ -127,8 +127,8 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     pub(crate) reset_layout: bool,
     pub(crate) dock: DockState<panes::Tab>,
-    /// The widths the sideways folds are holding onto, so an unfolded pane
-    /// comes back the width it was (see [`fold`]).
+    /// The fractions the sideways folds are holding onto, which are the layout
+    /// the rails on screen are a rendering of (see [`fold`]).
     pub(crate) folds: fold::Folds,
     /// Points the window has to gain (or lose, if negative) before the next
     /// frame, because a pane folded sideways or came back and every other pane
@@ -146,14 +146,19 @@ pub struct SharedState {
     pub(crate) window_width_change: f32,
     /// The narrowest the shell will let its window become, in the same points
     /// [`take_window_width_change`](Self::take_window_width_change) is answered
-    /// in. A sideways fold asks for no more width than that leaves (see
-    /// [`fold`]), because what it takes is what it gives back: asking past the
-    /// floor books a width the window never gives up, and pays it out anyway on
-    /// the way back.
+    /// in. At the floor a window has stopped answering, and the pane layout
+    /// stops following it (see [`fold`]) — otherwise a fold the window will not
+    /// shrink far enough for would re-dial the layout to the window it got
+    /// rather than the one it asked for, and hand the difference back on the
+    /// way out.
     ///
     /// Set by the shell. Zero — the default, and what a shell that never
     /// resizes leaves it at — means no floor.
     pub min_window_width: f32,
+    /// The window the pane layout is dialled in at, and the window it last
+    /// saw — the whole of what a sideways fold carries between frames (see
+    /// [`fold::Dial`]). Runtime-only.
+    pub(crate) dial: fold::Dial,
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
     /// by the render callback and read by the performance overlay. 0 means no
     /// reading — the device didn't grant timestamp queries, or none has landed
@@ -389,6 +394,7 @@ impl SharedState {
             folds: fold::Folds::default(),
             window_width_change: 0.0,
             min_window_width: 0.0,
+            dial: fold::Dial::default(),
             lattice_stats: {
                 let stats = harmonigraph_render::LatticeStats::default();
                 stats
@@ -503,7 +509,7 @@ impl SharedState {
                 // leaving rather than the one it is arriving in. Paying them
                 // back here would widen a freshly restored window by whatever
                 // the last project had folded.
-                let _ = self.folds.clear();
+                let _ = self.folds.clear(0.0, 0.0);
                 default_dock()
             } else {
                 self.folds = persist.folds;

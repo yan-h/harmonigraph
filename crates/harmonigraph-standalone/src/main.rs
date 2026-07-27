@@ -24,10 +24,10 @@ const UI_STATE_STORAGE_KEY: &str = "harmonigraph-ui-state";
 /// The narrowest a sideways fold may leave this window, mirroring the plugin
 /// editor's own floor (`MIN_SIZE.0`) so a fold behaves the same in both shells.
 ///
-/// The fold arithmetic is told this number too (`root_ui`'s `floor`), because a
-/// window that stops short of what a fold asked for leaves the fold holding a
-/// width it never got — and hands it back, to a window that never gave it, on
-/// the way out.
+/// The fold layout is told this number too (`SharedState::min_window_width`),
+/// because a window that stops short of what a fold asked for is a window that
+/// has stopped answering, and a layout that kept following it there would bank
+/// the difference and hand it back on the way out.
 const MIN_WINDOW_WIDTH: f32 = 400.0;
 
 fn main() -> eframe::Result {

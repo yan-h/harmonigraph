@@ -150,7 +150,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // it.
     let area = fold::area_width(ui, &dock_style);
     state.window_width_change +=
-        state.folds.apply(&mut dock, &dock_style, area, state.min_window_width);
+        state.folds.apply(&mut dock, &dock_style, area, state.min_window_width, &mut state.dial);
     // Time the whole dock build — every pane's layout and the scene
     // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
     // is submitted inside and finishes off-thread, so this is CPU, not GPU.
@@ -176,7 +176,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         state.dock = default_dock();
         // The default layout has every pane open, so the window gets back
         // whatever the folds being thrown away were holding.
-        state.window_width_change += state.folds.clear();
+        state.window_width_change += state.folds.clear(state.dial.width, area);
     }
 
     // Render continuously only while something is animating (sounding or
