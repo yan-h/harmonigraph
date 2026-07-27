@@ -16,7 +16,10 @@ use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
 use harmonigraph_scene::SevensLabel;
 
-/// Width of the camera-preset name field, when the pane has that much to give.
+/// Room for a short camera-preset name. Asked for flat, with no clamp against
+/// the pane: `TextEdit` already takes `desired_width.at_most(available_width)`,
+/// so the field shrinks with the row on its own and a narrow column caps it
+/// well under this.
 const PRESET_NAME_WIDTH: f32 = 110.0;
 
 /// Camera framing and the lattice window: projection, angle, and per-axis
@@ -132,17 +135,10 @@ pub(super) fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             }
         });
         button_row(ui, |ui| {
-            // Room for a short name, or the whole row when the pane is
-            // narrower than that. Asked for flat, the field is the one control
-            // in the pane that cannot shrink, so it alone decides how thin the
-            // settings column may get. `max_rect` rather than
-            // `available_width`: this is a wrapping row, so the width worth
-            // measuring against is the row's, not what is left of this line.
-            let width = ui.max_rect().width().min(PRESET_NAME_WIDTH);
             ui.add(
                 egui::TextEdit::singleline(&mut state.preset_name)
                     .hint_text("preset name")
-                    .desired_width(width),
+                    .desired_width(PRESET_NAME_WIDTH),
             );
             if ui.button("Save angle").clicked() {
                 let trimmed = state.preset_name.trim();

@@ -2323,6 +2323,20 @@ fn the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in() {
     }
 }
 
+/// The projections a settings sweep has to cover, default first.
+///
+/// Only the Tuning pane's content turns on this, and it turns on it hard:
+/// `frame_controls` hides the whole camera-angle half — Camera yaw and pitch,
+/// the Angle presets, the Save-angle row — under Cabinet, which has a fixed
+/// viewpoint and no angle to set, and hides the two cabinet knobs under the
+/// others. `Camera::default()` IS Cabinet, so a fixture that takes the default
+/// and stops there never draws that half of the pane at all.
+const PROJECTIONS: [harmonigraph_scene::Projection; 3] = [
+    harmonigraph_scene::Projection::Cabinet,
+    harmonigraph_scene::Projection::Perspective,
+    harmonigraph_scene::Projection::Orthographic,
+];
+
 /// Every settings tab, and the tabs that share the column with them.
 const SETTINGS_TABS: [panes::Tab; 8] = [
     panes::Tab::Tuning,
@@ -2351,10 +2365,17 @@ const SETTINGS_TABS: [panes::Tab; 8] = [
 /// Tall on purpose (a pane's controls are a column, and the point here is the
 /// other axis) and with the take controls switched on, so the Video tab draws
 /// the record button and the Options field a real session has.
-fn settings_pane_at_width(tab: panes::Tab, width: f32) -> Vec<egui::epaint::ClippedShape> {
+fn settings_pane_at_width(
+    tab: panes::Tab,
+    width: f32,
+    projection: harmonigraph_scene::Projection,
+) -> Vec<egui::epaint::ClippedShape> {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.take_supported = true;
     state.last_take_ready = true;
+    state.camera.projection = projection;
+    // A saved angle, so the Angle row has the button a real session gives it.
+    state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
@@ -2384,6 +2405,13 @@ fn pane_content_right(width: f32) -> f32 {
     crate::theme::PANE_INNER_MARGIN + width
 }
 
+/// The projections worth drawing `tab` at: all of them for Tuning, whose
+/// content depends on it (see [`PROJECTIONS`]), and the default alone for the
+/// panes that draw the same thing either way.
+fn projections_for(tab: panes::Tab) -> &'static [harmonigraph_scene::Projection] {
+    if tab == panes::Tab::Tuning { &PROJECTIONS } else { &PROJECTIONS[..1] }
+}
+
 /// The y a named text run was painted at in `shapes`, or `None`.
 fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
     shapes.iter().find_map(|cs| match &cs.shape {
@@ -2410,7 +2438,7 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 #[test]
 fn the_options_field_sits_beside_its_label() {
     for width in [423.0f32, 300.0, 240.0] {
-        let shapes = settings_pane_at_width(panes::Tab::Video, width);
+        let shapes = settings_pane_at_width(panes::Tab::Video, width, PROJECTIONS[0]);
         let label = text_y(&shapes, "Options").expect("the Options label");
         // The field is not empty by default, so its own text locates it.
         let field = text_y(&shapes, "--size 1920x1080").expect("the Options field's text");
@@ -2464,19 +2492,23 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
 fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     for width in [400.0f32, 240.0, 160.0, 120.0, 100.0, 80.0] {
         for tab in SETTINGS_TABS {
-            let widths = bar_track_widths(&settings_pane_at_width(tab, width));
-            for bar in &widths {
-                assert!(
-                    (bar - width).abs() < 1.0,
-                    "{tab:?} at {width}pt drew a {bar}pt bar (all of {widths:?})"
-                );
+            for &projection in projections_for(tab) {
+                let widths = bar_track_widths(&settings_pane_at_width(tab, width, projection));
+                for bar in &widths {
+                    assert!(
+                        (bar - width).abs() < 1.0,
+                        "{tab:?}/{projection:?} at {width}pt drew a {bar}pt bar \
+                         (all of {widths:?})"
+                    );
+                }
             }
         }
     }
     // The sniffing above finds nothing if the bars stop being painted this way,
     // and a test that measures nothing passes. The Tuning pane is the deepest
     // stack of bars in the dock.
-    let bars = bar_track_widths(&settings_pane_at_width(panes::Tab::Tuning, 400.0)).len();
+    let bars =
+        bar_track_widths(&settings_pane_at_width(panes::Tab::Tuning, 400.0, PROJECTIONS[0])).len();
     assert!(bars >= 10, "only found {bars} bar tracks in the Tuning pane; has the paint changed?");
 }
 
@@ -2507,15 +2539,17 @@ fn no_settings_pane_overruns_a_narrow_column() {
         // The pane's own clip is the tab body, a margin wider than the content
         // box on each side.
         let body_right = edge + crate::theme::PANE_INNER_MARGIN;
-        for tab in SETTINGS_TABS {
-            let shapes = settings_pane_at_width(tab, width);
-            let mut worst: Option<(f32, String)> = None;
-            for cs in &shapes {
+        let panes = SETTINGS_TABS
+            .into_iter()
+            .flat_map(|tab| projections_for(tab).iter().map(move |&p| (tab, p)));
+        for (tab, projection) in panes {
+            let shapes = settings_pane_at_width(tab, width, projection);
+            let over_edge = |cs: &egui::epaint::ClippedShape| {
                 let rect = cs.shape.visual_bounding_rect();
                 // Shapes that carry no geometry answer with an inverted or
                 // infinite rect; egui's own `is_finite` lets those through.
                 if !rect.is_finite() || rect.width() > 1.0e4 {
-                    continue;
+                    return None;
                 }
                 // A widget that set its own clip, tighter than the body, is
                 // managing its own overflow — a single-line text box scrolls
@@ -2524,20 +2558,24 @@ fn no_settings_pane_overruns_a_narrow_column() {
                 // body's own clip means "cut off by the pane", which is the
                 // thing that can be neither reached nor read.
                 if cs.clip_rect.right() < body_right - 0.5 {
-                    continue;
+                    return None;
                 }
-                let over = rect.right() - edge;
-                if over > 1.0 && worst.as_ref().is_none_or(|(w, _)| over > *w) {
+                (rect.right() - edge > 1.0).then(|| rect.right() - edge)
+            };
+            let worst = shapes
+                .iter()
+                .filter_map(|cs| over_edge(cs).map(|over| (over, cs)))
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(over, cs)| {
                     let what = match &cs.shape {
                         egui::Shape::Text(t) => format!("{:?}", t.galley.text()),
                         other => format!("{other:?}").chars().take(40).collect(),
                     };
-                    worst = Some((over, what));
-                }
-            }
+                    (over, what)
+                });
             assert!(
                 worst.is_none(),
-                "{tab:?} at {width}pt ran {:?} past the pane edge",
+                "{tab:?}/{projection:?} at {width}pt ran {:?} past the pane edge",
                 worst.unwrap()
             );
         }
