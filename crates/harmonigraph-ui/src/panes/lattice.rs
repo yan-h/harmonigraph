@@ -214,10 +214,11 @@ pub(crate) fn draw_node_labels(
     let keeps_names = view.trail_labels && view.trail_mark != TrailMark::Off;
     for node in &scene.nodes {
         let trailed = view.trail_labels && node.trail > 0.0;
-        // `is_visible` re-checks what `Scene::pick` already enforces,
-        // because hover also arrives from the Spectral pane
-        // (`nearest_visible_node`), which can land on an off-sheet node.
-        // Either way a label only belongs on a node you can actually see.
+        // `is_visible` re-checks what `Scene::pick` already enforces, and
+        // `hovered` is picking's alone, so this is a second lock on one door.
+        // It stays because the field is public shared state rather than
+        // picking's private output, and what it costs to be wrong is a name
+        // floating in the sevens dimension on a node that draws nothing.
         if !(node.hovered || node.activation > 0.0 || trailed) || !node.is_visible() {
             continue;
         }

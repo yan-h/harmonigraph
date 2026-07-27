@@ -382,7 +382,7 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 /// every frame of a drag (see [`crate::text::snap_scale`]).
 #[derive(Clone, Copy, Debug)]
 struct TextScales {
-    /// The axis gridline labels and the hover readout.
+    /// The axis gridline labels.
     markings: f32,
     /// The name written on each ribbon.
     names: f32,
@@ -941,11 +941,15 @@ impl TimeAxis {
 /// bars hang from: a note crosses that one line out of the roll and into
 /// the spectrum peak it is making.
 ///
-/// Hovering a pitch here highlights the matching lattice node (if one is in
-/// view) and reads the pitch out. Nothing comes back the other way: lighting
-/// a band here for the lattice-hovered pitch class, in every octave, puts a
-/// stripe across the whole picture — too loud an answer to a pointer resting
-/// somewhere else.
+/// A pointer over this pane changes nothing on it and nothing on the
+/// lattice, in either direction. Hovering here to light the matching lattice
+/// node is the version that shipped and was withdrawn: the pitch axis is
+/// continuous and about fourteen cents wide per point, so a pointer on it
+/// does not aim at a node so much as land near one, and the highlight read
+/// as a label flickering at unrelated nodes rather than as an answer.
+/// Lighting a band here for the lattice-hovered pitch class is the same
+/// trade the other way round — in every octave, it puts a stripe across the
+/// whole picture, too loud an answer to a pointer resting somewhere else.
 pub(crate) fn spectral_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
@@ -1262,39 +1266,6 @@ pub(crate) fn spectral_pane(
         if let Some(color) = lit {
             painter.line_segment(axes.across_pitch(split), egui::Stroke::new(2.0, color));
         }
-    }
-
-    // Hovering here highlights the matching lattice node, if it is in view.
-    // Gated on contains_pointer (pure geometry) rather than hovered(): the
-    // divider sits on top of the pane, and hovered() would drop the highlight
-    // every time the pointer crossed it.
-    //
-    // The pitch under the cursor is no longer also printed beside it. A
-    // name-and-Hz readout tracking the pointer is a second thing moving over
-    // a picture whose whole subject is movement, and the axis it moves along
-    // is already labelled.
-    //
-    // Be exact about what did NOT replace it, because the highlight below
-    // looks like it should have: `nearest_visible_node` goes through
-    // `Tuning::matches`, so a node lights only within Tolerance of the
-    // hovered pitch class — and Tolerance ships at 0.5 cents, against a
-    // `midi` that is continuous. Off a node the pane now answers a hover
-    // with nothing at all. That is the trade; it is not the highlight
-    // covering the readout's job.
-    let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
-    if let Some(pointer) = hover {
-        let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
-        // Cents from C, measured from MIDI 0 (which IS a C) rather than from
-        // the range's own start: the range is continuous and generally does
-        // not begin on a C. Measuring from it offsets every hovered pitch
-        // class by wherever the zoom happened to start, so hovering the
-        // spectrum lights up the wrong lattice node.
-        let pc_cents = midi.rem_euclid(12.0) * 100.0;
-        state.hovered = nearest_visible_node(
-            &state.view,
-            &state.tuning,
-            harmonigraph_core::PitchClass::from_cents(pc_cents),
-        );
     }
 }
 

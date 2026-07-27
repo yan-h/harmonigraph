@@ -1636,78 +1636,17 @@ impl DockHarness {
     /// of the divider a drag starts on decides whether it is the Span's.
     /// Left, the default orientation, runs depth rightward.
     fn spectral_grab_at(&self, state: &SharedState, depth: f32) -> egui::Pos2 {
-        // The perf overlay already answers "where is the Spectral pane's
-        // body", and falls back to the whole window when it isn't on screen.
-        let rect = perf_overlay_area(state, self.screen);
-        assert_ne!(rect, self.screen, "the Spectral pane should be visible in the default dock");
+        // Asked of the Spectral pane BY NAME, so a dock that has taken it off
+        // screen trips this rather than aiming the drag somewhere else.
+        // `perf_overlay_area` answers the same question and is the wrong
+        // oracle for it: it now falls back to the Lattice pane's body, which
+        // is a perfectly good rect that a drag orbits the camera in — the
+        // grab would land in the wrong pane and the test would fail three
+        // asserts later, naming the analyzer.
+        let rect = crate::pane_body(state, &panes::Tab::Spectral)
+            .expect("the Spectral pane should be visible in the default dock");
         rect.lerp_inside(egui::vec2(depth, 0.5))
     }
-}
-
-/// Hovering the analyzer writes the matching lattice node into the shared
-/// hover state, and follows the pointer up the pitch axis.
-///
-/// This is the whole of what the hover does now that it no longer also prints
-/// the pitch beside the cursor, and nothing asserted it: several tests drive a
-/// pointer into this pane for other reasons, so the write was executed
-/// constantly and checked never — deleting it outright left the suite green.
-///
-/// Driven at the pane rather than through the dock, because the dock does not
-/// leave the value observable: `lattice_pane` re-derives the scene from
-/// `state.hovered` and then clears it when the pointer is not over ITS rect
-/// (`panes::lattice`), so the analyzer's write is consumed inside the frame it
-/// is made and reads as `None` by the end of one. The highlight is real; the
-/// end-of-frame value is not where to look for it.
-///
-/// Tolerance is opened up deliberately. It ships at half a cent, against a
-/// hovered pitch that is continuous, so at the default a node lights only
-/// within a sub-pixel band of an exact semitone and a test aiming at one
-/// would be asserting the pane's pixel geometry rather than its hover.
-#[test]
-fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
-    let hovered_at = |frac: f32| {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.tuning = harmonigraph_core::Tuning::from_cents(
-            0.0,
-            harmonigraph_core::tuning::THREE_12TET,
-            harmonigraph_core::tuning::FIVE_12TET,
-            harmonigraph_core::tuning::SEVEN_12TET,
-            50.0,
-        );
-        // One octave on the axis, so two points on it are two pitch CLASSES.
-        // Across the default ten-octave range, 0.2 and 0.8 sit exactly six
-        // octaves apart and reduce to the same class — which looks like a
-        // hover that does not track and is really the range being wide.
-        state.spectrum_config.low_midi = 60.0;
-        state.spectrum_config.high_midi = 72.0;
-        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 400.0));
-        let ctx = egui::Context::default();
-        crate::theme::apply_theme(&ctx);
-        // Twice: egui resolves the widget under the pointer from the previous
-        // pass, so the pane has to exist before the hover lands on it.
-        for _ in 0..2 {
-            let raw = egui::RawInput {
-                screen_rect: Some(rect),
-                events: vec![egui::Event::PointerMoved(rect.lerp_inside(egui::vec2(0.8, frac)))],
-                ..Default::default()
-            };
-            let _ = ctx.run_ui(raw, |ui| {
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.5, 0);
-            });
-        }
-        state.hovered
-    };
-
-    // Left is the default orientation, so pitch climbs UP the screen: two
-    // points a good way apart vertically are two different pitches.
-    let (low, high) = (hovered_at(0.8), hovered_at(0.2));
-    assert!(low.is_some(), "hovering the analyzer should name a node, got None");
-    assert!(high.is_some(), "hovering the analyzer should name a node, got None");
-    assert_ne!(
-        low, high,
-        "the hover should follow the pointer along the pitch axis, not sit on one node",
-    );
 }
 
 fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
@@ -2747,8 +2686,9 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
 
-/// The performance overlay hangs off the analyzer pane, and falls back to the
-/// whole editor when that pane isn't the one on screen.
+/// The performance overlay hangs off the analyzer pane; off the lattice when
+/// that pane isn't on screen; off the editor, clear of the tab bar, when
+/// neither is. All three land somewhere no tab bar's collapse arrow is.
 #[test]
 fn the_perf_overlay_follows_the_analyzer_pane() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -2790,15 +2730,7 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     );
     // The backing plate, which is the HUD's actual extent — the rows inside it
     // are left-aligned, so no single string reveals where the box sits.
-    let plate = egui::Color32::from_black_alpha(0xC0);
-    let hud = output
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
-            _ => None,
-        })
-        .expect("the overlay should paint its backing plate");
+    let hud = hud_of(&output);
     assert!(area.contains_rect(hud), "the HUD should sit inside the analyzer pane: {hud:?}");
     assert!(
         (hud.right() - (area.right() - 8.0)).abs() < 1.0,
@@ -2842,17 +2774,75 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     assert!(area.right() < screen.right(), "the settings column is right of it");
 
     // Its leaf holds Spectral alone, so collapsing it is what takes it off
-    // screen; the overlay then falls back to the whole editor.
+    // screen; the overlay then falls back to the OTHER picture pane.
     let path = state.dock.find_tab(&panes::Tab::Spectral).expect("Spectral is docked");
     let egui_dock::Node::Leaf(leaf) = &mut state.dock[path.surface][path.node] else {
         panic!("Spectral should live in a leaf");
     };
     leaf.collapsed = true;
+    frame(&mut state);
+    let output = frame(&mut state);
+    let lattice = state.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
+    let egui_dock::Node::Leaf(lattice) = &state.dock[lattice.surface][lattice.node] else {
+        panic!("Lattice should live in a leaf");
+    };
     assert_eq!(
         perf_overlay_area(&state, screen),
-        screen,
-        "a collapsed analyzer pane should hand the overlay back to the editor",
+        lattice.viewport,
+        "a collapsed analyzer should hand the overlay to the lattice, not to the window",
     );
+
+    // ...and the point of that, which is what the fallback is FOR: the HUD is
+    // painted on a foreground layer over the whole dock, so hanging it off the
+    // window puts it on the chrome along the top — the settings column's tab
+    // bar, and the collapse arrow at the left of every bar, which is the
+    // control that brings a folded pane back. A tab body starts below its own
+    // bar, so landing in one is what keeps it clear of all of them.
+    fn hud_of(output: &egui::FullOutput) -> egui::Rect {
+        let plate = egui::Color32::from_black_alpha(0xC0);
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
+                _ => None,
+            })
+            .expect("the overlay should paint its backing plate")
+    }
+    fn clear_of_every_tab_bar(state: &SharedState, hud: egui::Rect, what: &str) {
+        for node in state.dock.main_surface().iter() {
+            let egui_dock::Node::Leaf(leaf) = node else {
+                continue;
+            };
+            let mut bar = leaf.rect;
+            bar.max.y = bar.min.y + crate::theme::TAB_BAR_HEIGHT;
+            assert!(
+                !hud.intersects(bar),
+                "{what}: the HUD covers a tab bar and its collapse arrow: {hud:?} over {bar:?}",
+            );
+        }
+    }
+    clear_of_every_tab_bar(&state, hud_of(&output), "on the lattice");
+
+    // Fold the lattice too and there is no picture left to hang off, which is
+    // the last resort. It is the only branch that does arithmetic — the editor
+    // rect pushed down past the tab bar — and the arithmetic is the whole of
+    // what keeps the HUD off the collapse arrows in the one state where those
+    // arrows are the only way back.
+    let path = state.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
+    let egui_dock::Node::Leaf(leaf) = &mut state.dock[path.surface][path.node] else {
+        panic!("Lattice should live in a leaf");
+    };
+    leaf.collapsed = true;
+    frame(&mut state);
+    let output = frame(&mut state);
+    let area = perf_overlay_area(&state, screen);
+    assert_eq!(
+        area.min.y,
+        screen.min.y + crate::theme::TAB_BAR_HEIGHT,
+        "with neither picture on screen the overlay should clear the tab bar: {area:?}",
+    );
+    clear_of_every_tab_bar(&state, hud_of(&output), "with both pictures folded");
 }
 
 
@@ -3007,3 +2997,4 @@ fn the_next_pass_destroys_what_the_last_one_retired() {
     let bad: Vec<_> = freed_second.iter().copied().filter(|id| drawn.contains(id)).collect();
     assert!(bad.is_empty(), "the second pass freed {} textures it had drawn: {bad:?}", bad.len());
 }
+

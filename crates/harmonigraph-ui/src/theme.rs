@@ -105,6 +105,12 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 /// wants the content box, not the clip.
 pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 
+/// Height of a leaf's tab bar, which is also the thickness a folded pane is
+/// squeezed to (see [`crate::fold`]) and the depth of dock chrome along the
+/// top of the window: tab titles and the collapse arrow at the left of every
+/// bar. Anything drawn OVER the dock keeps clear of it.
+pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
+
 // ---- Fonts -----------------------------------------------------------------
 
 /// The named family headings resolve to (Atkinson Bold first).
@@ -275,7 +281,7 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     // Tab bar: a quiet strip of the same surface, divided from the body by
     // a hairline; the active tab fills seamlessly into the body below it.
     style.tab_bar.bg_fill = well();
-    style.tab_bar.height = 26.0;
+    style.tab_bar.height = TAB_BAR_HEIGHT;
     style.tab_bar.hline_color = well();
     style.tab_bar.corner_radius = CornerRadius::ZERO;
 

@@ -695,8 +695,9 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     rows
 }
 
-/// Draw the overlay in the top-right corner of `area` — the analyzer pane when
-/// it is on screen, the whole editor otherwise (see `perf_overlay_area`). A
+/// Draw the overlay in the top-right corner of `area` — a picture pane's
+/// body, or the editor clear of the tab bar when neither is on screen (see
+/// `perf_overlay_area`, which is where the choice and its reasons live). A
 /// floating, non-interactive panel so it never steals clicks from the view
 /// under it.
 pub(crate) fn draw_overlay(
