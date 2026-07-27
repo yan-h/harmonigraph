@@ -1111,6 +1111,81 @@ mod tests {
         assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
     }
 
+    /// A bar's two text runs keep out of each other's way and stay inside the
+    /// track, at every width.
+    ///
+    /// Three separate things in the paint have to hold for that, and nothing
+    /// else in the suite relates one run to the other or either to the track:
+    ///
+    /// - the name's budget subtracts the room the readout needs, or the name
+    ///   runs over the number (measured: 6pt of overlap at 160, 16pt at 120);
+    /// - the name is held to ONE row, or it wraps to two and spills above and
+    ///   below into the bars either side (a 29pt galley in a 20pt track);
+    /// - both runs are offset by half their own height, or they sit a half-line
+    ///   low with 7pt of a 17pt line below the track.
+    ///
+    /// Each is a live regression rather than a hypothetical: all three are
+    /// clippy-clean and leave the rest of the suite green.
+    /// `LayoutJob::simple_singleline` invites the second in particular — the
+    /// name says the row cap is already set, and it is not.
+    #[test]
+    fn a_bars_name_and_readout_never_collide_or_leave_the_track() {
+        let cases: [(&str, f32, RangeInclusive<f32>); 3] = [
+            ("Harmonic seventh (¢)", 1000.0, SEVENTH_RANGE),
+            ("Perfect fifth (¢)", 701.96, 680.0..=720.0),
+            ("Sevenths angle", 45.0, 0.0..=90.0),
+        ];
+        for width in [400.0f32, 240.0, 180.0, 157.0, 120.0] {
+            for (label, value, range) in cases.clone() {
+                let ctx = egui::Context::default();
+                crate::theme::apply_theme(&ctx);
+                let screen =
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+                let mut value = value;
+                let out = ctx.run_ui(
+                    egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                    |ui| {
+                        ValueBar::new(&mut value, range.clone(), label).show(ui);
+                    },
+                );
+                let mut runs: Vec<egui::Rect> = out
+                    .shapes
+                    .iter()
+                    .filter_map(|cs| match &cs.shape {
+                        egui::Shape::Text(t) => Some(t.visual_bounding_rect()),
+                        _ => None,
+                    })
+                    .collect();
+                runs.sort_by(|a, b| a.left().total_cmp(&b.left()));
+                assert_eq!(runs.len(), 2, "{label} at {width}pt painted {} runs", runs.len());
+                let track = out
+                    .shapes
+                    .iter()
+                    .find_map(|cs| match &cs.shape {
+                        egui::Shape::Rect(r) if r.fill == crate::theme::well() => Some(r.rect),
+                        _ => None,
+                    })
+                    .expect("the bar painted no track");
+                assert!(
+                    runs[0].right() <= runs[1].left() + 0.5,
+                    "{label} at {width}pt: the name reaches {} and the readout starts at {}",
+                    runs[0].right(),
+                    runs[1].left()
+                );
+                for run in &runs {
+                    assert!(
+                        run.top() >= track.top() - 0.5 && run.bottom() <= track.bottom() + 0.5,
+                        "{label} at {width}pt: a run spans y {}..{} in a track of {}..{}",
+                        run.top(),
+                        run.bottom(),
+                        track.top(),
+                        track.bottom()
+                    );
+                }
+            }
+        }
+    }
+
     /// What a galley actually PUTS ON SCREEN. `Galley::text()` answers with the
     /// source string, so it cannot see an elision; the glyphs can.
     fn painted_text(galley: &egui::Galley) -> String {
