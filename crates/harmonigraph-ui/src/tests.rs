@@ -2100,6 +2100,39 @@ fn removed_spectrogram_palettes_load_as_magma() {
     }
 }
 
+/// The width a sideways fold gives up reaches the shell, through the whole
+/// path the editor uses: `root_ui` measures the dock area from THIS frame's
+/// `Ui`, the fold takes the pane's width out of it, and what is left over is
+/// banked for the shell to spend on the window.
+///
+/// Driven through the real dock because that is the only place the area is
+/// read from a live `Ui` rather than from the tree — `fold`'s own tests hand
+/// `apply` a width directly, so a `root_ui` that measured the wrong rectangle,
+/// or never asked at all, would leave every one of them green.
+#[test]
+fn collapsing_a_pane_banks_the_width_it_gave_up() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    assert_eq!(state.take_window_width_change(), None, "an idle frame asks for nothing");
+
+    let path = state.dock.find_tab(&panes::Tab::Lattice).expect("the lattice is docked");
+    let pane = state.dock[path.surface][path.node].rect().expect("laid out").width();
+    state.dock[path.surface][path.node].set_collapsed(true);
+    h.frame(&mut state, vec![]);
+
+    // A rail's worth of the pane stays behind; the rest comes off the window.
+    let rail = theme::dock_style(&egui::Style::default()).tab_bar.height;
+    let change = state.take_window_width_change().expect("the fold asks for a narrower window");
+    assert!(
+        (change + (pane - rail)).abs() < 1.0,
+        "a {pane}pt pane leaving a {rail}pt rail should ask for {}, asked {change}",
+        rail - pane,
+    );
+    h.frame(&mut state, vec![]);
+    assert_eq!(state.take_window_width_change(), None, "and asks exactly once");
+}
+
 /// Put the Notes/Console leaf back on screen, which is what the two wheel
 /// harnesses below are written against: they read the settings leaf as the box
 /// from the tab bar down to the 0.55 split, and the default layout opens that

@@ -442,13 +442,13 @@ fn frame(
     // `request_resize` is the host's round trip, and `apply_pending_resizes`
     // at the top of the next frame is where this window takes those.
     //
-    // Measured against the size already requested where there is one, so two
-    // folds in consecutive frames add up instead of the second one cancelling
-    // the first — `egui_state.size` is not the new size until the host has
-    // agreed to it.
+    // Measured against `egui_state.size`, which is the size the window
+    // actually has: `requested_size` is empty by now whatever happened above,
+    // since `apply_pending_resizes` clears it on refusal as well as on accept,
+    // and `size` is only updated when the host agrees. So two folds in
+    // consecutive frames add up rather than the second cancelling the first.
     if let Some(change) = shared.ui.take_window_width_change() {
-        let (width, height) =
-            egui_state.requested_size.load().unwrap_or_else(|| egui_state.size());
+        let (width, height) = egui_state.size();
         let width = (width as f32 + change).round().max(MIN_SIZE.0 as f32) as u32;
         egui_state.requested_size.store(Some((width, height)));
         ui.ctx().request_repaint();
@@ -767,6 +767,10 @@ impl Editor for LatticeEditor {
                 // window was hidden and shown again.
                 let mut shared = state.shared.lock();
                 shared.ui.release_context_resources();
+                // The floor this editor holds its window to, which a sideways
+                // fold has to know before it asks for width the window cannot
+                // give (see `SharedState::min_window_width`).
+                shared.ui.min_window_width = MIN_SIZE.0 as f32;
                 // Restore dock layout / camera / view settings persisted
                 // with the plugin state (saved when the editor closes).
                 let serialized = state.params.ui_state.read().clone();

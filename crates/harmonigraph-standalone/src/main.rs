@@ -21,10 +21,13 @@ use harmonigraph_ui::SharedState;
 // inside it is the old one too.
 const UI_STATE_STORAGE_KEY: &str = "harmonigraph-ui-state";
 
-/// The narrowest a sideways fold may leave this window (the plugin editor's
-/// `MIN_SIZE.0`). Folding every pane in a column asks for most of the window's
-/// width back, and a window narrow enough to hold nothing but rails has no way
-/// left to click them open.
+/// The narrowest a sideways fold may leave this window, mirroring the plugin
+/// editor's own floor (`MIN_SIZE.0`) so a fold behaves the same in both shells.
+///
+/// The fold arithmetic is told this number too (`root_ui`'s `floor`), because a
+/// window that stops short of what a fold asked for leaves the fold holding a
+/// width it never got — and hands it back, to a window that never gave it, on
+/// the way out.
 const MIN_WINDOW_WIDTH: f32 = 400.0;
 
 fn main() -> eframe::Result {
@@ -61,6 +64,10 @@ fn main() -> eframe::Result {
                 .as_ref()
                 .expect("eframe was built with the wgpu backend");
             let mut app = App::new(render_state.target_format);
+            // The floor this window is held to, which a sideways fold has to
+            // know before it asks for width the window cannot give (see
+            // `SharedState::min_window_width`).
+            app.state.min_window_width = MIN_WINDOW_WIDTH;
             // A no-op here — this state is built alongside the context it will
             // use — but every shell owes it on context creation, and the day
             // this harness gains a second window it would stop being one.

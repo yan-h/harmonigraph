@@ -149,7 +149,8 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // frame of its neighbour holding the space before the window closes over
     // it.
     let area = fold::area_width(ui, &dock_style);
-    state.window_width_change += state.folds.apply(&mut dock, &dock_style, area);
+    state.window_width_change +=
+        state.folds.apply(&mut dock, &dock_style, area, state.min_window_width);
     // Time the whole dock build — every pane's layout and the scene
     // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
     // is submitted inside and finishes off-thread, so this is CPU, not GPU.
