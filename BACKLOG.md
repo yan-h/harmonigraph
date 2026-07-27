@@ -39,6 +39,25 @@ both sides. Never resolve one by dropping an item you did not finish.
 
 ## Items
 
+[ui] collapsing or expanding a pane still flickers: everything teleports a
+large amount LEFT for an instant and eases back over what looks like several
+frames. Dragging the window border is fine since the spectrogram upload fix.
+Measured and eliminated, so a future look need not repeat any of it: the frame
+loop is clean (host streams set_size continuously, adopted within 1-2ms, `ui`
+size matches `host` on every frame, ~5ms ticks, no hitch, one transitional
+frame); no font-atlas uploads happen at all during a resize; the view's bounds
+are applied exactly and immediately (`set 400x766` -> AppKit reports 400x766 on
+the same call and every frame after, no intermediate values, nothing
+animating). Two compositor hypotheses were tried in the plugin and did NOT fix
+it, and were reverted rather than left in: disabling Core Animation's implicit
+bounds animation (CATransaction with actions off around setFrameSize) and
+pinning the layer's contentsGravity to top-left so stale contents are not
+stretched across the new bounds. Both are in the history of PR #120 if wanted.
+What has NOT been tried: making the bounds change and the new content land in
+one commit (`presentsWithTransaction` on the CAMetalLayer, which needs
+wgpu-hal-level access), and looking at what Bitwig does with the parent window
+around the resize.
+
 [settings] I don't like having the scrollbar on the top list of settings. Any solutions you can think of?
   — at 1512x886 there is now no scrollbar of either kind in the settings column: the tab bar clears its six names by 76pt, and folding Notes/Console gave the panes the height they were short of (Tuning/Nodes/Analyzer scrolled by 20/63/120pt before it, zero after). Pinned by `the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`. Widening the column was tried and withdrawn: it takes 8pt off the Spectral pane, which is already within a few points of being narrower than the perf HUD it has to hold. Reopen with the window size you saw it at if it is still there.
 
