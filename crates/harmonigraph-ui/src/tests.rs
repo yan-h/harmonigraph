@@ -1605,7 +1605,7 @@ impl DockHarness {
         }
     }
 
-    fn frame(&mut self, state: &mut SharedState, events: Vec<egui::Event>) {
+    fn frame(&mut self, state: &mut SharedState, events: Vec<egui::Event>) -> egui::FullOutput {
         self.t += 1.0 / 60.0;
         let raw = egui::RawInput {
             screen_rect: Some(self.screen),
@@ -1615,7 +1615,45 @@ impl DockHarness {
         };
         let t = self.t;
         let backend = &self.backend;
-        let _ = self.ctx.run_ui(raw, |ui| root_ui(ui, state, backend, t));
+        self.ctx.run_ui(raw, |ui| root_ui(ui, state, backend, t))
+    }
+
+    /// Answer a sideways fold's resize the way a shell does — the window it
+    /// asked for, never below the floor it holds (see `fold`). Without this
+    /// the harness is a host that refuses every resize, which is a state the
+    /// fold layout has its own handling for.
+    fn resize(&mut self, state: &mut SharedState) {
+        if let Some(change) = state.take_window_width_change() {
+            let width = (self.screen.width() + change).max(state.min_window_width);
+            self.screen.max.x = self.screen.min.x + width;
+        }
+    }
+
+    /// Frames until a fold has the window it asked for. A fold is a two-step —
+    /// the frame that asks and the frame drawn at the size it was given — and
+    /// one fold can release another, so this runs a few.
+    fn settle_folds(&mut self, state: &mut SharedState) -> egui::FullOutput {
+        let mut output = None;
+        for _ in 0..4 {
+            self.resize(state);
+            output = Some(self.frame(state, vec![]));
+        }
+        output.expect("a settled frame")
+    }
+
+    /// A click on the collapse arrow of the leaf holding `tab`, settled.
+    ///
+    /// The ARROW, not the tab name: egui_dock reaches `set_collapsed` from its
+    /// own square at the left end of the tab bar, and clicking the title only
+    /// selects a tab.
+    fn collapse_click(&mut self, state: &mut SharedState, tab: panes::Tab) -> egui::FullOutput {
+        let path = state.dock.find_tab(&tab).expect("tab is in the dock");
+        let rect = state.dock[path.surface][path.node].rect().expect("the leaf is laid out");
+        let at = rect.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
+        self.frame(state, vec![egui::Event::PointerMoved(at)]);
+        self.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+        self.frame(state, vec![press(at, false)]);
+        self.settle_folds(state)
     }
 
     /// Two warm-ups: egui resolves the top widget at the pointer from the
@@ -2998,3 +3036,62 @@ fn the_next_pass_destroys_what_the_last_one_retired() {
     assert!(bad.is_empty(), "the second pass freed {} textures it had drawn: {bad:?}", bad.len());
 }
 
+
+
+/// The pane names painted up a rail this frame, top to bottom.
+///
+/// `fold::paint` sets them a quarter turn anticlockwise, which nothing else in
+/// the dock does — so the angle is what tells a rail's name from a tab title,
+/// and the rail's own rectangle is what keeps another pane's rotated text out.
+fn rail_names(output: &egui::FullOutput, rail: egui::Rect) -> Vec<String> {
+    fn walk(shape: &egui::Shape, rail: egui::Rect, found: &mut Vec<(f32, String)>) {
+        match shape {
+            egui::Shape::Text(text) if text.angle != 0.0 && rail.contains(text.pos) => {
+                found.push((text.pos.y, text.galley.text().to_owned()));
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, rail, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, rail, &mut found);
+    }
+    found.sort_by(|(a, _), (b, _)| a.total_cmp(b));
+    found.into_iter().map(|(_, name)| name).collect()
+}
+
+/// The rail a folded subtree left behind: the leaves' rectangles, which are
+/// the rail's own once they have nothing else in them.
+fn rail_rect(state: &SharedState, tabs: &[panes::Tab]) -> egui::Rect {
+    tabs.iter().fold(egui::Rect::NOTHING, |rail, tab| {
+        let path = state.dock.find_tab(tab).expect("tab is in the dock");
+        rail.union(state.dock[path.surface][path.node].rect().expect("the leaf is laid out"))
+    })
+}
+
+/// A folded column names every pane in it, not just the one at the bottom.
+///
+/// egui_dock stacks a collapsed leaf's tab bar at the top of the column and
+/// hands everything below it to whichever leaf is LAST, so the rail carried a
+/// single name — "Notes", the pane at the bottom of the settings column and
+/// the one that says least about what folded. The names now divide the rail
+/// by the fractions the column is dialled at, so both of them are on it.
+#[test]
+fn a_folded_column_names_every_pane_in_it() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.min_window_width = 400.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    // Notes/Console is folded in the default layout, so collapsing the
+    // settings leaf collapses the column itself and the whole of it folds
+    // sideways to one rail.
+    let output = h.collapse_click(&mut state, panes::Tab::Tuning);
+    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
+    assert!(rail.width() < 40.0, "the column should have folded to a rail ({rail:?})");
+    assert_eq!(
+        rail_names(&output, rail),
+        ["Tuning", "Notes"],
+        "both panes in the folded column should be named, in the order they are stacked",
+    );
+}

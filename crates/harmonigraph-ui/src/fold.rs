@@ -729,8 +729,9 @@ pub fn area_width(ui: &egui::Ui, style: &egui_dock::Style) -> f32 {
 }
 
 /// Draw what a sideways fold needs and egui_dock cannot know it wants: the
-/// rail's own surface, the folded pane's name up it, and an arrow pointing at
-/// the space that pane will take when it comes back.
+/// rail's own surface, a name up it for every pane it holds (see
+/// [`name_bands`]), and an arrow pointing at the space each will take when it
+/// comes back.
 ///
 /// Runs AFTER the dock, so it works from this frame's rectangles and paints
 /// over the parts of the tab bar it is replacing.
@@ -778,14 +779,12 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
             {
                 continue;
             }
-            for leaf in leaves(tree, folded) {
-                let mut body = leaf.rect;
-                body.min.y += rail;
-                if body.is_positive() {
+            for (leaf, band) in name_bands(tree, folded, rail) {
+                if band.is_positive() {
                     let fill = style.tab.active.bg_fill;
-                    ui.painter().rect_filled(body, egui::CornerRadius::ZERO, fill);
+                    ui.painter().rect_filled(band, egui::CornerRadius::ZERO, fill);
                     if let Some(tab) = leaf.tabs.get(leaf.active.0) {
-                        paint_name(ui, body, crate::panes::tab_title(tab), style);
+                        paint_name(ui, band, crate::panes::tab_title(tab), style);
                     }
                 }
                 paint_arrow(ui, leaf.rect, side, style);
@@ -801,6 +800,68 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
                 deaden(ui, band, style);
             }
         }
+    }
+}
+
+/// Each pane in a folded subtree with the stretch of rail it says its name in.
+///
+/// A folded column is ONE rail holding several panes, and egui_dock's own
+/// division of it is all or nothing: a collapsed leaf is one tab bar tall and
+/// whichever is last takes everything left over, so the rail carries one name
+/// — the bottom pane's — for a column of any depth. A folded settings column
+/// reads as "Notes", which is the pane furthest from what it is.
+///
+/// So the rail is shared out by the fractions the column is dialled at, the
+/// same ones that decide the panes' heights when it is open: every pane is
+/// named, and the rail reads as a miniature of the column it restores.
+///
+/// The bands start below every collapse arrow in the fold, since those are
+/// stacked down the top of the rail and are what bring the panes back — a
+/// name is worth less than the button that undoes the fold.
+fn name_bands(
+    tree: &Tree<Tab>,
+    node: NodeIndex,
+    rail: f32,
+) -> Vec<(&egui_dock::LeafNode<Tab>, egui::Rect)> {
+    let mut bands = Vec::new();
+    let Some(rect) = tree[node].rect() else {
+        return bands;
+    };
+    let top = leaves(tree, node)
+        .iter()
+        .fold(rect.top(), |top: f32, leaf| top.max(leaf.rect.top() + rail));
+    divide(tree, node, top, rect.bottom(), &mut bands);
+    bands
+}
+
+/// Share a folded subtree's height out among its panes, as [`Fit::rails`]
+/// shares out its width.
+fn divide<'a>(
+    tree: &'a Tree<Tab>,
+    node: NodeIndex,
+    top: f32,
+    bottom: f32,
+    bands: &mut Vec<(&'a egui_dock::LeafNode<Tab>, egui::Rect)>,
+) {
+    if node.0 >= tree.len() {
+        return;
+    }
+    match &tree[node] {
+        Node::Leaf(leaf) => {
+            bands.push((leaf, egui::Rect::from_x_y_ranges(leaf.rect.x_range(), top..=bottom)));
+        }
+        Node::Vertical(split) => {
+            let mid = top + (bottom - top) * split.fraction;
+            divide(tree, node.left(), top, mid, bands);
+            divide(tree, node.right(), mid, bottom, bands);
+        }
+        // Panes side by side, a rail each: they divide the fold's WIDTH, so
+        // both of them get the whole of its height.
+        Node::Horizontal(_) => {
+            divide(tree, node.left(), top, bottom, bands);
+            divide(tree, node.right(), top, bottom, bands);
+        }
+        Node::Empty => {}
     }
 }
 
