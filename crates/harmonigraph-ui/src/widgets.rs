@@ -414,18 +414,31 @@ impl<'a> ValueBar<'a> {
         // past the pane edge, costs the reading the control exists to give.
         // Values in monospace: digits align and don't wiggle as they
         // change. Dimmed too while locked, to match the fill.
+        let mono = TextStyle::Monospace.resolve(ui.style());
         let value = painter.layout_no_wrap(
             self.shown(*self.value),
-            TextStyle::Monospace.resolve(ui.style()),
+            mono.clone(),
             if self.locked { theme::text_dim() } else { theme::text() },
         );
+        // Room kept clear for the readout, measured from the widest one the
+        // bar's RANGE can produce rather than from the number currently in it.
+        // Taking it from the current number makes the name re-elide the moment
+        // the value gains a digit — the name wobbling under the pointer
+        // mid-drag, which is exactly what the monospace face buys for the
+        // digits themselves. The ends bound it for a plain decimal readout;
+        // the current value is in the max as well so that a `display` whose
+        // length is not monotonic in the value can still never be overlapped.
+        let reserve = [self.shown(self.min()), self.shown(self.max()), self.shown(*self.value)]
+            .into_iter()
+            .map(|text| painter.layout_no_wrap(text, mono.clone(), theme::text()).size().x)
+            .fold(0.0f32, f32::max);
         let mut job = egui::text::LayoutJob::simple_singleline(
             self.label.to_owned(),
             TextStyle::Body.resolve(ui.style()),
             text_color,
         );
         job.wrap.max_width =
-            (rect.width() - 2.0 * BAR_TEXT_PAD - BAR_LABEL_GAP - value.size().x).max(0.0);
+            (rect.width() - 2.0 * BAR_TEXT_PAD - BAR_LABEL_GAP - reserve).max(0.0);
         job.wrap.max_rows = 1;
         job.wrap.overflow_character = Some('\u{2026}');
         let label = painter.layout_job(job);
@@ -1083,6 +1096,59 @@ mod tests {
             button_row(ui, |ui| add(ui));
         });
         assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
+    }
+
+    /// The name painted by a bar of `width` holding `value`, as its rendered
+    /// (post-elision) width. The name is the left-hand run; the readout is
+    /// right-aligned, so smallest x picks the name out.
+    fn painted_name_width(width: f32, value: f32) -> f32 {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+        let mut value = value;
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                ValueBar::new(&mut value, SEVENTH_RANGE, "Harmonic seventh (¢)").show(ui);
+            },
+        );
+        out.shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) => Some((t.pos.x, t.galley.size().x)),
+                _ => None,
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("the bar painted no text")
+            .1
+    }
+
+    /// The harmonic-seventh bar's range, which straddles a digit boundary: the
+    /// 12-TET value (and the param's default) is 1000.00, the just one 968.83.
+    const SEVENTH_RANGE: RangeInclusive<f32> = 928.83..=1008.83;
+
+    /// A bar's NAME holds still while its number changes width.
+    ///
+    /// The name is elided against the room the readout leaves it, so a budget
+    /// measured from the CURRENT readout re-elides the name the moment the
+    /// value gains a digit — the name reflowing under the pointer mid-drag,
+    /// which is the very thing the monospace readout buys for the digits. The
+    /// budget has to come from the widest readout the bar's RANGE can produce.
+    ///
+    /// Swept across the band where it bites. Iosevka is 6pt per glyph and epaint
+    /// rounds `wrap.max_width` only to whole points, so a digit is twelve times
+    /// the rounding granularity and there is nothing to absorb it.
+    #[test]
+    fn a_bars_name_holds_still_while_its_number_changes_width() {
+        for width in [174.0f32, 180.0, 184.0, 187.0, 200.0, 260.0] {
+            let narrow = painted_name_width(width, 999.99);
+            let wide = painted_name_width(width, 1000.00);
+            assert!(
+                (narrow - wide).abs() < 0.01,
+                "a {width}pt bar draws its name {narrow}pt wide at 999.99 and {wide}pt at \
+                 1000.00 — the name re-elides when the number gains a digit"
+            );
+        }
     }
 
     /// A row of buttons too wide for its column stays inside the column: the
