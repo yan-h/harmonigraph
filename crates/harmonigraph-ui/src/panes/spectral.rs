@@ -1281,9 +1281,19 @@ pub(crate) fn spectral_pane(
     // does not cover the readout's job.
     //
     // `node_pointed_at`, not `nearest_visible_node` — a pointer aims, it does
-    // not play, and matching it against `Tuning::tolerance` is what made this
+    // not play, and matching it against `Tuning::tolerance` is what makes this
     // hover read as a glitch. See the note on that function.
-    let hover = response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten();
+    //
+    // The DOCKED copy only. The Video pane draws a second live analyzer as
+    // its preview (surface 1), against this same state, and a hover there
+    // reaching across to light the docked lattice is a picture of the render
+    // driving the thing it is a picture of — `preview_lattice` passes `None`
+    // for exactly that reason. It reads worse than it sounds: the preview
+    // fits the whole range into a thumbnail, so one pixel of pointer is most
+    // of a semitone and the highlight jumps the lattice per pixel.
+    let hover = (surface == 0)
+        .then(|| response.contains_pointer().then(|| ui.ctx().pointer_hover_pos()).flatten())
+        .flatten();
     if let Some(pointer) = hover {
         let midi = (min_midi + axes.pitch_at(pointer) * scale.span).clamp(min_midi, max_midi);
         // Cents from C, measured from MIDI 0 (which IS a C) rather than from

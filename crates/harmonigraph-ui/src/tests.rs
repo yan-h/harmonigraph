@@ -1636,10 +1636,15 @@ impl DockHarness {
     /// of the divider a drag starts on decides whether it is the Span's.
     /// Left, the default orientation, runs depth rightward.
     fn spectral_grab_at(&self, state: &SharedState, depth: f32) -> egui::Pos2 {
-        // The perf overlay already answers "where is the Spectral pane's
-        // body", and falls back to the whole window when it isn't on screen.
-        let rect = perf_overlay_area(state, self.screen);
-        assert_ne!(rect, self.screen, "the Spectral pane should be visible in the default dock");
+        // Asked of the Spectral pane BY NAME, so a dock that has taken it off
+        // screen trips this rather than aiming the drag somewhere else.
+        // `perf_overlay_area` answers the same question and is the wrong
+        // oracle for it: it now falls back to the Lattice pane's body, which
+        // is a perfectly good rect that a drag orbits the camera in — the
+        // grab would land in the wrong pane and the test would fail three
+        // asserts later, naming the analyzer.
+        let rect = crate::pane_body(state, &panes::Tab::Spectral)
+            .expect("the Spectral pane should be visible in the default dock");
         rect.lerp_inside(egui::vec2(depth, 0.5))
     }
 }
@@ -1711,8 +1716,8 @@ fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
 /// point — the window a node lights in is a fortieth of a point wide, so a
 /// sweep down the pane lights something at 17 of 1716 pointer positions and
 /// nothing at the other 1699. On the lattice that is a label appearing for
-/// one frame at a moment nothing caused: text popping in for a split second,
-/// which is what it was reported as.
+/// one frame at a moment nothing caused, which is what "text popping in for
+/// a split second" describes.
 ///
 /// The second half is why "at random NODES" is a separate complaint from "for
 /// a split second", and it survives fixing the first. At 12-TET dozens of
@@ -1723,9 +1728,9 @@ fn hovering_the_analyzer_names_the_lattice_node_under_the_pointer() {
 /// twelve classes of the default tuning name the twelve nodes packed around
 /// the origin, which is where a reader looks for them.
 ///
-/// Both halves are asserted over a whole sweep rather than at chosen points:
-/// a hover that fires at 1% of positions passes any single-point test that
-/// happens to aim at one of them, which is how this shipped.
+/// Both halves are asserted over a whole sweep rather than at chosen points,
+/// because a hover that fires at 1% of positions passes any single-point test
+/// that happens to aim at one of them — which is a coin flip, not coverage.
 #[test]
 fn sweeping_the_analyzer_lights_a_node_the_whole_way_down() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -1750,8 +1755,8 @@ fn sweeping_the_analyzer_lights_a_node_the_whole_way_down() {
         state.hovered
     };
 
-    // A physical pixel at a time on a Retina display, which is the step size
-    // the reported flicker was seen at.
+    // A physical pixel at a time on a Retina display, which is the finest
+    // step a pointer can actually take on the machine this runs on.
     let mut named = std::collections::HashSet::new();
     let mut y = rect.top() + 1.0;
     while y < rect.bottom() - 1.0 {
@@ -1783,6 +1788,45 @@ fn sweeping_the_analyzer_lights_a_node_the_whole_way_down() {
         12,
         "a 12-TET sweep should name one node per pitch class, got {named:?}",
     );
+}
+
+/// The Video pane's preview analyzer does not reach across and light the
+/// docked lattice.
+///
+/// It is the same `spectral_pane`, drawn a second time against the same state
+/// with texture slot 1, so every write it makes lands on the real thing. The
+/// hover is the one that reads as a bug: `preview_lattice` already passes
+/// `None` rather than let the preview drive the picture it is a preview OF,
+/// and the analyzer half has to agree. The preview also squeezes ten octaves
+/// into a thumbnail, so a pointer moving one pixel across it covers most of a
+/// semitone — a highlight driven from there crosses the lattice per pixel.
+///
+/// Asserted at the pane with the two surfaces side by side, because the
+/// difference between them IS the assertion.
+#[test]
+fn the_render_previews_analyzer_does_not_drive_the_lattice_highlight() {
+    let hovered_on = |surface: usize| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 400.0));
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        // Twice: egui resolves the widget under the pointer from the previous
+        // pass, so the pane has to exist before the hover lands on it.
+        for _ in 0..2 {
+            let raw = egui::RawInput {
+                screen_rect: Some(rect),
+                events: vec![egui::Event::PointerMoved(rect.center())],
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                crate::panes::spectral::spectral_pane(&mut child, &mut state, 0.5, surface);
+            });
+        }
+        state.hovered
+    };
+    assert!(hovered_on(0).is_some(), "the docked analyzer should light a node");
+    assert_eq!(hovered_on(1), None, "the Video preview should light nothing");
 }
 
 fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
@@ -2822,8 +2866,9 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
 
-/// The performance overlay hangs off the analyzer pane, and falls back to the
-/// whole editor when that pane isn't the one on screen.
+/// The performance overlay hangs off the analyzer pane; off the lattice when
+/// that pane isn't on screen; off the editor, clear of the tab bar, when
+/// neither is. All three land somewhere no tab bar's collapse arrow is.
 #[test]
 fn the_perf_overlay_follows_the_analyzer_pane() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -2865,15 +2910,7 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     );
     // The backing plate, which is the HUD's actual extent — the rows inside it
     // are left-aligned, so no single string reveals where the box sits.
-    let plate = egui::Color32::from_black_alpha(0xC0);
-    let hud = output
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
-            _ => None,
-        })
-        .expect("the overlay should paint its backing plate");
+    let hud = hud_of(&output);
     assert!(area.contains_rect(hud), "the HUD should sit inside the analyzer pane: {hud:?}");
     assert!(
         (hud.right() - (area.right() - 8.0)).abs() < 1.0,
@@ -2941,25 +2978,51 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     // bar, and the collapse arrow at the left of every bar, which is the
     // control that brings a folded pane back. A tab body starts below its own
     // bar, so landing in one is what keeps it clear of all of them.
-    let hud = output
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
-            _ => None,
-        })
-        .expect("the overlay should paint its backing plate");
-    for node in state.dock.main_surface().iter() {
-        let egui_dock::Node::Leaf(leaf) = node else {
-            continue;
-        };
-        let mut bar = leaf.rect;
-        bar.max.y = bar.min.y + crate::theme::TAB_BAR_HEIGHT;
-        assert!(
-            !hud.intersects(bar),
-            "the HUD covers a tab bar (and its collapse arrow): {hud:?} over {bar:?}",
-        );
+    fn hud_of(output: &egui::FullOutput) -> egui::Rect {
+        let plate = egui::Color32::from_black_alpha(0xC0);
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
+                _ => None,
+            })
+            .expect("the overlay should paint its backing plate")
     }
+    fn clear_of_every_tab_bar(state: &SharedState, hud: egui::Rect, what: &str) {
+        for node in state.dock.main_surface().iter() {
+            let egui_dock::Node::Leaf(leaf) = node else {
+                continue;
+            };
+            let mut bar = leaf.rect;
+            bar.max.y = bar.min.y + crate::theme::TAB_BAR_HEIGHT;
+            assert!(
+                !hud.intersects(bar),
+                "{what}: the HUD covers a tab bar and its collapse arrow: {hud:?} over {bar:?}",
+            );
+        }
+    }
+    clear_of_every_tab_bar(&state, hud_of(&output), "on the lattice");
+
+    // Fold the lattice too and there is no picture left to hang off, which is
+    // the last resort. It is the only branch that does arithmetic — the editor
+    // rect pushed down past the tab bar — and the arithmetic is the whole of
+    // what keeps the HUD off the collapse arrows in the one state where those
+    // arrows are the only way back.
+    let path = state.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
+    let egui_dock::Node::Leaf(leaf) = &mut state.dock[path.surface][path.node] else {
+        panic!("Lattice should live in a leaf");
+    };
+    leaf.collapsed = true;
+    frame(&mut state);
+    let output = frame(&mut state);
+    let area = perf_overlay_area(&state, screen);
+    assert_eq!(
+        area.min.y,
+        screen.min.y + crate::theme::TAB_BAR_HEIGHT,
+        "with neither picture on screen the overlay should clear the tab bar: {area:?}",
+    );
+    clear_of_every_tab_bar(&state, hud_of(&output), "with both pictures folded");
 }
 
 
