@@ -126,10 +126,22 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // meet with no chrome between them — clean for captures). The pane
     // separators keep their regular width, so the spacing between windows
     // matches framed mode. No tab bar also means no way to click back to
-    // the Panel pane (which holds the toggle) if it's hidden, so Esc always
-    // restores.
-    if state.view.frameless && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        state.view.frameless = false;
+    // the Panel pane (which holds the checkbox) if it's hidden, so Tab
+    // works from anywhere. It toggles rather than only restoring, so the
+    // chrome comes and goes on one key while a take is set up — the
+    // checkbox is then just where the feature is documented.
+    //
+    // Tab is egui's focus-walk key, and this takes it: nothing here is
+    // driven from the keyboard, and the one place typing Tab means
+    // something else — a text field mid-edit — keeps it. Cancelling the
+    // focus move egui already queued from the same press is part of the
+    // toggle, or a capture grows a focus ring around whatever control the
+    // walk landed on.
+    if !ui.ctx().text_edit_focused()
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+    {
+        state.view.frameless = !state.view.frameless;
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
     let mut dock_style = theme::dock_style(ui.style());
     if state.view.frameless {

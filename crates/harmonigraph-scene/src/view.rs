@@ -348,7 +348,7 @@ pub struct ViewConfig {
     pub meantone: bool,
     /// Hide all dock chrome (tab bars; separators thin to a hairline) so
     /// adjacent panes — lattice above spectrum, in the default layout —
-    /// record as one seamless surface. Esc restores.
+    /// record as one seamless surface. Tab toggles it.
     #[serde(default)]
     pub frameless: bool,
     /// Show the performance overlay (a small corner HUD with frame rate,

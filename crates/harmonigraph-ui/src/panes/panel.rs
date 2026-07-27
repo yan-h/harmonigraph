@@ -64,9 +64,12 @@ pub(super) fn panel_pane(ui: &mut egui::Ui, state: &mut SharedState) {
 
     // Layout: the pane arrangement itself.
     section(ui, "Layout");
-    ui.checkbox(&mut state.view.frameless, "Frameless").on_hover_text(
+    ui.checkbox(&mut state.view.frameless, "Frameless (Tab)").on_hover_text(
         "Hide the tab bars so adjacent panes (lattice over spectrum) \
-         record as one seamless surface. Esc restores.",
+         record as one seamless surface. Tab toggles it from anywhere, \
+         which is the way in and out once this checkbox is behind a \
+         hidden tab bar — except while typing in a text field, where Tab \
+         is the field's.",
     );
     button_row(ui, |ui| {
         // Escape hatch for the persisted dock arrangement (it survives
