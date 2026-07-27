@@ -120,6 +120,24 @@ not try to invoke them.** They are billed, and the built-in sets
 Bash route either. Details of both halves, and the squash rule, are in the
 `pr-hygiene` skill.
 
+## What you could not finish goes to an ISSUE, not the backlog
+
+A session that measures a bug and does not fix it is holding the most
+expensive thing it produced: the list of what the bug is NOT. File that
+with `gh issue create` — reproduction, what was eliminated and by what
+measurement, what was tried and reverted, what is left to try — and link
+the PR the probes are in.
+
+`BACKLOG.md` is not that. An item there is a line of prose, restated at
+dispatch and deleted by whoever fixes it, so an investigation parked in it
+dies with the fix. It is for things that take five seconds to notice and
+need no context to act on.
+
+Issue #121 is the worked example and the reason this is written down: four
+hypotheses eliminated by instrumentation across a whole session, and the
+first instinct was to compress that into one backlog line. The measurements
+are what a future session needs; the symptom it can see for itself.
+
 ## Before running sessions in parallel, check for file overlap
 
 Parallelism buys wall-clock only when the work is disjoint; when three
