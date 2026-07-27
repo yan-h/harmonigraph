@@ -432,8 +432,21 @@ impl<'a> ValueBar<'a> {
             .into_iter()
             .map(|text| painter.layout_no_wrap(text, mono.clone(), theme::text()).size().x)
             .fold(0.0f32, f32::max);
+        // A locked bar wears the word at the FRONT of its name, because that is
+        // the end elision cannot reach. Spelled into the tail it is the first
+        // thing dropped in a narrow column — and the bar then reads as an
+        // ordinary one that ran out of room, which is worse than saying
+        // nothing, since the unlocked name is the shorter of the two and draws
+        // in full at the same width. Here rather than in the caller's label so
+        // every locked bar gets it, and so the name is the same string locked
+        // or not.
+        let name = if self.locked {
+            format!("Locked · {}", self.label)
+        } else {
+            self.label.to_owned()
+        };
         let mut job = egui::text::LayoutJob::simple_singleline(
-            self.label.to_owned(),
+            name,
             TextStyle::Body.resolve(ui.style()),
             text_color,
         );
@@ -1096,6 +1109,54 @@ mod tests {
             button_row(ui, |ui| add(ui));
         });
         assert!(fixed.abs() < 0.5, "button_row label off by {fixed}px");
+    }
+
+    /// What a galley actually PUTS ON SCREEN. `Galley::text()` answers with the
+    /// source string, so it cannot see an elision; the glyphs can.
+    fn painted_text(galley: &egui::Galley) -> String {
+        galley.rows.iter().flat_map(|row| row.glyphs.iter()).map(|g| g.chr).collect()
+    }
+
+    /// A locked bar still says it is locked when its name has to be elided.
+    ///
+    /// Elision eats the tail, so a lock spelled into the END of a name is the
+    /// first thing to go — and worse than merely lost: the UNLOCKED name is the
+    /// shorter of the two and draws in full at the same width, so the locked
+    /// bar is the one that looks like it ran out of room. State has to sit
+    /// where elision cannot reach it, which is the front.
+    ///
+    /// 157pt is the bar a 173pt column gives, and 173 is where the column
+    /// floors — one separator drag from the default window, no resize needed.
+    #[test]
+    fn a_locked_bar_says_so_even_when_its_name_is_elided() {
+        for width in [157.0f32, 180.0, 200.0, 400.0] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(width, 100.0));
+            let mut value = 386.31;
+            let out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+                |ui| {
+                    ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)")
+                        .locked(true)
+                        .show(ui);
+                },
+            );
+            let name = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t) => Some((t.pos.x, painted_text(&t.galley))),
+                    _ => None,
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .expect("the bar painted no text")
+                .1;
+            assert!(
+                name.to_lowercase().contains("lock"),
+                "a {width}pt locked bar painted its name as {name:?}, which does not say so"
+            );
+        }
     }
 
     /// The name painted by a bar of `width` holding `value`, as its rendered
