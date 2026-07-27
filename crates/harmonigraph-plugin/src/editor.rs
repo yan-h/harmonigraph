@@ -443,11 +443,32 @@ fn frame(
     shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
     {
         use std::cell::Cell;
+        // The worst frame in each 100ms window, and where its time went. The
+        // readings are the shell's own (one frame stale by construction, see
+        // the fields' docs), so this is the same breakdown the perf overlay
+        // draws — printed, so a drag can be read back afterwards.
         thread_local! {
             static FRAMES: Cell<u32> = const { Cell::new(0) };
             static LAST: Cell<Option<Instant>> = const { Cell::new(None) };
+            static WORST: Cell<[f32; 9]> = const { Cell::new([0.0; 9]) };
         }
         FRAMES.with(|f| f.set(f.get() + 1));
+        let stages = [
+            shared.ui.tick_ms,
+            shared.ui.shell_ms,
+            shared.ui.tess_ms,
+            shared.ui.upload_ms,
+            shared.ui.texture_ms,
+            shared.ui.encode_ms,
+            shared.ui.submit_ms,
+            shared.ui.acquire_ms,
+            shared.ui.egui_gpu_ms,
+        ];
+        WORST.with(|w| {
+            if stages[0] > w.get()[0] {
+                w.set(stages);
+            }
+        });
         let due = LAST.with(|l| match l.get() {
             Some(at) if at.elapsed().as_millis() < 100 => false,
             _ => {
@@ -457,13 +478,14 @@ fn frame(
         });
         if due {
             let frames = FRAMES.with(|f| f.replace(0));
+            let w = WORST.with(|w| w.replace([0.0; 9]));
             let area = ui.max_rect();
             probe(format_args!(
-                "frames {frames:3} ui {:7.1}x{:<7.1} host {:?} ppp {:.2}",
+                "frames {frames:3} ui {:6.0}x{:<5.0} worst tick {:6.2} shell {:5.2} tess {:5.2} \
+                 upload {:5.2} tex {:5.2} encode {:5.2} submit {:5.2} acquire {:6.2} gpu {:5.2}",
                 area.width(),
                 area.height(),
-                egui_state.size(),
-                ui.ctx().pixels_per_point(),
+                w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8],
             ));
         }
     }
