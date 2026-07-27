@@ -269,23 +269,41 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 /// pane's body, so the HUD sits over the spectrogram rather than over the
 /// lattice, which is the picture being watched.
 ///
-/// Falls back to `editor` (the whole window) whenever that pane is not on
-/// screen — another tab selected in its leaf, or the leaf collapsed — so the
-/// overlay never strands itself on a pane nobody can see.
+/// The Lattice's body when the analyzer is not on screen — another tab
+/// selected in its leaf, or the leaf folded away — so the overlay never
+/// strands itself on a pane nobody can see. A tab BODY either way, and that
+/// is the point rather than a detail of which pane: dock chrome lives along
+/// the top of the window, so the HUD hung on the window instead lands ON it,
+/// over the settings column's tab bar and, with the column folded, over the
+/// collapse arrow that brings a pane back. Covering the control that undoes
+/// the fold is the worst place on screen for it, and it is exactly where
+/// folding the analyzer would otherwise put it.
+///
+/// `editor` is the last resort, for a dock with neither picture on screen,
+/// and is inset past the tab bar on the same grounds.
 fn perf_overlay_area(state: &SharedState, editor: egui::Rect) -> egui::Rect {
-    let Some(path) = state.dock.find_tab(&panes::Tab::Spectral) else {
-        return editor;
-    };
+    pane_body(state, &panes::Tab::Spectral)
+        .or_else(|| pane_body(state, &panes::Tab::Lattice))
+        .unwrap_or_else(|| {
+            let mut area = editor;
+            area.min.y += theme::TAB_BAR_HEIGHT;
+            area
+        })
+}
+
+/// A docked tab's drawn surface, or `None` when it is not on screen.
+fn pane_body(state: &SharedState, tab: &panes::Tab) -> Option<egui::Rect> {
+    let path = state.dock.find_tab(tab)?;
     let egui_dock::Node::Leaf(leaf) = &state.dock[path.surface][path.node] else {
-        return editor;
+        return None;
     };
     // `viewport` is the tab BODY; the picture panes drop their margin, so it
     // is exactly the drawn surface. `Rect::NOTHING` until the dock has laid
-    // out once (a first frame, or a freshly loaded layout).
-    if leaf.collapsed || leaf.active != path.tab || !leaf.viewport.is_positive() {
-        return editor;
-    }
-    leaf.viewport
+    // out once (a first frame, or a freshly loaded layout) — and STALE while
+    // the leaf is collapsed, which is why the flag is checked rather than the
+    // rect: a folded leaf keeps the viewport it had when it was open.
+    (!leaf.collapsed && leaf.active == path.tab && leaf.viewport.is_positive())
+        .then_some(leaf.viewport)
 }
 
 /// Everything that must happen once per frame before any pane draws:

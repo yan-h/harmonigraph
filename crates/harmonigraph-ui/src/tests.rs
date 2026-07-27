@@ -2916,17 +2916,49 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     assert!(area.right() < screen.right(), "the settings column is right of it");
 
     // Its leaf holds Spectral alone, so collapsing it is what takes it off
-    // screen; the overlay then falls back to the whole editor.
+    // screen; the overlay then falls back to the OTHER picture pane.
     let path = state.dock.find_tab(&panes::Tab::Spectral).expect("Spectral is docked");
     let egui_dock::Node::Leaf(leaf) = &mut state.dock[path.surface][path.node] else {
         panic!("Spectral should live in a leaf");
     };
     leaf.collapsed = true;
+    frame(&mut state);
+    let output = frame(&mut state);
+    let lattice = state.dock.find_tab(&panes::Tab::Lattice).expect("Lattice is docked");
+    let egui_dock::Node::Leaf(lattice) = &state.dock[lattice.surface][lattice.node] else {
+        panic!("Lattice should live in a leaf");
+    };
     assert_eq!(
         perf_overlay_area(&state, screen),
-        screen,
-        "a collapsed analyzer pane should hand the overlay back to the editor",
+        lattice.viewport,
+        "a collapsed analyzer should hand the overlay to the lattice, not to the window",
     );
+
+    // ...and the point of that, which is what the fallback is FOR: the HUD is
+    // painted on a foreground layer over the whole dock, so hanging it off the
+    // window puts it on the chrome along the top — the settings column's tab
+    // bar, and the collapse arrow at the left of every bar, which is the
+    // control that brings a folded pane back. A tab body starts below its own
+    // bar, so landing in one is what keeps it clear of all of them.
+    let hud = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
+            _ => None,
+        })
+        .expect("the overlay should paint its backing plate");
+    for node in state.dock.main_surface().iter() {
+        let egui_dock::Node::Leaf(leaf) = node else {
+            continue;
+        };
+        let mut bar = leaf.rect;
+        bar.max.y = bar.min.y + crate::theme::TAB_BAR_HEIGHT;
+        assert!(
+            !hud.intersects(bar),
+            "the HUD covers a tab bar (and its collapse arrow): {hud:?} over {bar:?}",
+        );
+    }
 }
 
 
