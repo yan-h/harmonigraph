@@ -281,29 +281,44 @@ const POINTED_AT_CENTS: f32 = 50.0;
 /// at 17 of 1716 pointer positions — a label flashing on for one frame,
 /// nowhere near the pointer, at what looks like a random node.
 ///
-/// The tie-break is the other half of "looks random". At 12-TET dozens of
-/// visible nodes share a pitch class EXACTLY, so every candidate is at
-/// distance zero and `min_by_key` alone keeps whichever `visible_positions`
-/// happens to yield first — out at the corner of the lattice. Broken toward
-/// the view's center instead, the lit node is the one nearest the middle of
-/// what is on screen, which is the node a reader would name that pitch by.
+/// The tie is the other half of "looks random", and it is a separate cause
+/// that survives fixing the first. At 12-TET dozens of visible nodes share a
+/// pitch class EXACTLY, so every candidate is at distance zero, and a plain
+/// `min_by_key` on distance keeps whichever `visible_positions` yields first
+/// — out at the corner of the lattice, and a different corner for the next
+/// pitch.
+///
+/// So the ORDER here is `names::spelling_cost`, which is the rule
+/// [`names::naming_node`](names) already breaks that same tie by, and the
+/// two differ only in which nodes they will accept. Sharing it is not
+/// tidiness: the analyzer writes a note name onto every ribbon through
+/// `naming_node`, and the hover lights a node in the same picture, so a
+/// second rule here means the ribbon reading `E` while the node it points
+/// at reads `E-`. It also settles two things a step count does not — a
+/// septimal mark costs a comma, so an off-sheet node loses to a home-sheet
+/// one it would otherwise beat on distance, which matters because an idle
+/// off-sheet node draws no label at all (`NodeInstance::is_visible`); and
+/// the tritone's symmetric tie is decided by rule rather than by the order
+/// `positions_within` happens to walk.
+///
+/// Being view-independent is the other reason. A key measured from
+/// `view.center()` renames a pitch when the lattice is panned, which is what
+/// `names::panning_the_lattice_does_not_rename_a_pitch` forbids for the
+/// ribbons.
 pub(super) fn node_pointed_at(
     view: &harmonigraph_scene::ViewConfig,
     tuning: &harmonigraph_core::Tuning,
     pc: harmonigraph_core::PitchClass,
 ) -> Option<harmonigraph_core::LatticePos> {
     let window = harmonigraph_core::PitchClassDistance::from_cents(POINTED_AT_CENTS);
-    let center = view.center();
-    let from_center = |pos: harmonigraph_core::LatticePos| {
-        (pos.threes - center.threes).unsigned_abs()
-            + (pos.fives - center.fives).unsigned_abs()
-            + (pos.sevens - center.sevens).unsigned_abs()
-    };
     view.visible_positions()
-        .map(|pos| (pc.distance_to(tuning.pitch_class(pos)), from_center(pos), pos))
-        .filter(|&(distance, ..)| distance <= window)
-        .min_by_key(|&(distance, steps, _)| (distance, steps))
-        .map(|(.., pos)| pos)
+        .filter(|&pos| pc.distance_to(tuning.pitch_class(pos)) <= window)
+        .min_by_key(|&pos| {
+            (
+                pc.distance_to(tuning.pitch_class(pos)),
+                names::spelling_cost(display_note_name(pos, view.meantone), pos),
+            )
+        })
 }
 
 /// Attention pulse for armed-mode indicators: a slow, shallow breathe

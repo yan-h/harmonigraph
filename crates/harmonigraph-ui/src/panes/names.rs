@@ -667,7 +667,7 @@ fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<Lat
 /// flip silently if that were ever changed for an unrelated reason. Sharps are
 /// preferred, which is a convention rather than a deduction; what matters is
 /// that it is written down here and not implied by a loop elsewhere.
-fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32, i32) {
+pub(super) fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32, i32) {
     (
         name.syntonic_commas.abs() + name.septimal_commas.abs(),
         name.sharps.abs(),
@@ -1247,6 +1247,36 @@ mod tests {
         assert_eq!(named(0), "C");
         for centre in [-2, -1, 1, 2] {
             assert_eq!(named(centre), "C", "panned to {centre}, middle C is still C");
+        }
+    }
+
+    /// The name on a ribbon and the node the pointer lights are the same node.
+    ///
+    /// They are two answers to one question asked from opposite ends of the
+    /// same pane — `note_name` for a note the roll is drawing, `node_pointed_at`
+    /// for the pitch under the pointer — and the pane draws both at once. Given
+    /// their own tie-breaks they disagree in an equal temperament, where a
+    /// dozen nodes answer to one pitch: order by steps from the view's center
+    /// and E is named on `(0,1,0)`, which spells `E-`, while the ribbon beside
+    /// it reads `E` off `(4,0,0)`. One rule, `spelling_cost`, is what stops
+    /// the picture contradicting itself.
+    ///
+    /// Every pitch class, not a chosen one: the two agree trivially on C and
+    /// the disagreement is class by class.
+    #[test]
+    fn the_hovered_node_and_the_ribbon_name_agree() {
+        let view = harmonigraph_scene::ViewConfig::default();
+        let equal = harmonigraph_core::Tuning::default();
+        for semitone in 0..12 {
+            let midi = 60.0 + semitone as f32;
+            let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
+            let pointed = super::super::node_pointed_at(&view, &equal, pc)
+                .expect("every 12-TET class has a node in the default view");
+            assert_eq!(
+                super::super::display_note_name(pointed, view.meantone).to_string(),
+                note_name(&view, &equal, midi).to_string(),
+                "the hover and the ribbon disagree at midi {midi}",
+            );
         }
     }
 

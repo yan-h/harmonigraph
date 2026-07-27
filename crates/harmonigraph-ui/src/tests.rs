@@ -1762,17 +1762,18 @@ fn sweeping_the_analyzer_lights_a_node_the_whole_way_down() {
         y += 0.5;
     }
 
-    // The default view is centered on the origin, so distance from it is the
-    // node's own coordinates. Three steps is the packed block of twelve
-    // around C; the first-in-iteration-order tie lands 14 to 16 steps out.
+    // Six steps is the far end of the plainest spellings — the tritone, six
+    // fifths out, which is as far as `names::spelling_cost` ever reaches for
+    // a name with no comma on it. An unbroken tie lands 14 to 16 steps out,
+    // at the corner of a view whose extents are 10 and 6.
     let farthest = named
         .iter()
         .map(|p| p.threes.unsigned_abs() + p.fives.unsigned_abs() + p.sevens.unsigned_abs())
         .max()
         .expect("the sweep named at least one node");
     assert!(
-        farthest <= 3,
-        "the hover names a node {farthest} steps out; it should name the central one: {named:?}",
+        farthest <= 6,
+        "the hover names a node {farthest} steps out, which is the corner tie: {named:?}",
     );
     // Twelve pitch classes, twelve nodes: the same class names the same node
     // in every octave the sweep crosses, so the highlight is a readout of the
@@ -3113,3 +3114,4 @@ fn the_next_pass_destroys_what_the_last_one_retired() {
     let bad: Vec<_> = freed_second.iter().copied().filter(|id| drawn.contains(id)).collect();
     assert!(bad.is_empty(), "the second pass freed {} textures it had drawn: {bad:?}", bad.len());
 }
+
