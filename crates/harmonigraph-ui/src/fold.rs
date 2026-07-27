@@ -54,6 +54,16 @@
 //! points to lose or regain and the plugin asks its host for them (see
 //! `SharedState::take_window_width_change`).
 //!
+//! A window that will not go where a fold asked — a host that refused, the
+//! floor it will not go under — leaves the layout dialled for a window that is
+//! not coming. What is DRAWN there is the layout that fits the window there
+//! IS, which is not the dialled one stretched to fill it: a stretch scales
+//! every pane by the ratio between the two windows, and a rail is a fixed
+//! number of points by construction — at the plugin's 400pt floor that ratio
+//! reaches 1.8, which is every rail on screen drawn at 46. The dial itself
+//! does not move, so unfolding still hands back exactly what folding took, and
+//! the width the window would not give up is spent on the panes still open.
+//!
 //! The window answers a frame late — the plugin asks its host at the top of
 //! the next frame, and egui-baseview reads the window's size for a frame
 //! before the UI runs in it — so the two frames after the click are drawn with
@@ -254,8 +264,21 @@ impl Folds {
             // Only where there IS a window to wait for. A floating dock
             // window never asks for one, so deferring there would be a frame
             // of nothing followed by a frame of nothing.
+            //
+            // Drawn at the window there IS, which is not always the one the
+            // layout is dialled for: a host that refused the resize, or a
+            // floor it will not go under. The dialled layout stretched to fit
+            // is the wrong picture of it — fractions scale everything by the
+            // ratio between the two windows, rails included, and a rail is a
+            // fixed number of points by construction. At the plugin's 400pt
+            // floor that ratio reaches 1.8, so every rail on screen comes out
+            // at 46. Fitting the window instead leaves the rails alone and
+            // spends the difference on the panes that are still open, which
+            // is the only place it can come from. `dial` itself does not
+            // move, so unfolding still hands back exactly what folding took.
             if !(moved && main) {
-                write_fractions(tree, &holds, &widths, separator);
+                let fitted = fit.dialled_for(area).and_then(|dialled| fit.widths(dialled));
+                write_fractions(tree, &holds, fitted.as_ref().unwrap_or(&widths), separator);
             }
             // Only a fold or an unfold moves the window. Any other gap between
             // the layout and the window is one the window is not answering for
@@ -1496,11 +1519,12 @@ mod tests {
         collapse(&mut dock, Tab::Spectral, true);
         let window = settle_within(&mut folds, &mut dock, &mut dial, window, FLOOR);
         assert!((window - FLOOR).abs() < 0.01, "the window stops at the floor");
-        // Rails, give or take: the window is wider than the layout it is
-        // holding, so everything in it is drawn a few percent over — the
-        // visible half of a window that would not shrink any further.
-        assert!((width(&dock, LATTICE) - 26.0).abs() < 5.0, "the rails are still rails");
-        assert!((width(&dock, SPECTRAL) - 26.0).abs() < 5.0);
+        // Rails, to the point: the window is wider than the layout it holds,
+        // and the difference is spent on the panes still open rather than
+        // shared out by fraction (see
+        // `a_rail_is_the_same_width_in_a_window_that_would_not_shrink`).
+        assert!((width(&dock, LATTICE) - 26.0).abs() < 0.01, "the rails are still rails");
+        assert!((width(&dock, SPECTRAL) - 26.0).abs() < 0.01);
         // The width the window would not give up is squeezed out of the panes
         // still on screen instead, which is the only place left for it.
         assert!(width(&dock, SETTINGS) > before[2], "the column takes what the window would not");
@@ -1517,6 +1541,38 @@ mod tests {
         }
     }
 
+
+    /// A rail is a fixed number of points in a window that would not shrink,
+    /// too — the case the rail's whole width lives or dies on.
+    ///
+    /// The layout is then dialled for a window it cannot have, and drawing it
+    /// stretched across the window it HAS scales every pane by the ratio
+    /// between the two. That ratio reaches 1.8 at the plugin's own 400pt
+    /// floor, which is 26pt rails drawn at 46 — and it lands on every rail on
+    /// screen at once, since they all wear the same stretch.
+    #[test]
+    fn a_rail_is_the_same_width_in_a_window_that_would_not_shrink() {
+        // High enough that the fold cannot have what it asks for: folding the
+        // lattice out of a 1000pt window wants a window in the 500s.
+        const FLOOR: f32 = 700.0;
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame_within(&mut folds, &mut dock, &mut dial, 1000.0, FLOOR);
+        let sibling = width(&dock, SPECTRAL);
+        collapse(&mut dock, Tab::Lattice, true);
+        let window = settle_within(&mut folds, &mut dock, &mut dial, 1000.0, FLOOR);
+        assert!((window - FLOOR).abs() < 0.01, "the window stops at the floor");
+        assert!(
+            (width(&dock, LATTICE) - 26.0).abs() < 0.01,
+            "a rail is a rail: {}",
+            width(&dock, LATTICE)
+        );
+        // Where the width the window would not give up goes instead. It has
+        // to land somewhere, and the panes that are still on screen are the
+        // only ones with anything to say about how wide they are.
+        assert!(width(&dock, SPECTRAL) > sibling, "the analyzer takes what the window would not");
+    }
 
     /// Every sequence of collapse clicks that ends where it started leaves the
     /// LAYOUT where it started.
