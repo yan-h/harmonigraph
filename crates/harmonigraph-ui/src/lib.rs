@@ -141,7 +141,16 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Before the dock lays out: a pane collapsed inside a horizontal split
     // folds sideways to a rail, which is a split fraction, which is layout's
     // input. egui_dock's own vertical folds need nothing from us.
-    state.folds.apply(&mut dock, &dock_style);
+    //
+    // What the fold takes comes off the window rather than off the pane beside
+    // it, and the window is the shell's to resize — so the points are banked
+    // here and spent after this frame (see `take_window_width_change`). This
+    // frame still lays out at the size the window IS, so a fold shows one
+    // frame of its neighbour holding the space before the window closes over
+    // it.
+    let area = fold::area_width(ui, &dock_style);
+    state.window_width_change +=
+        state.folds.apply(&mut dock, &dock_style, area, state.min_window_width, &mut state.dial);
     // Time the whole dock build — every pane's layout and the scene
     // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
     // is submitted inside and finishes off-thread, so this is CPU, not GPU.
@@ -165,7 +174,9 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // write-back above would be silently undone.
     if std::mem::take(&mut state.reset_layout) {
         state.dock = default_dock();
-        state.folds.clear();
+        // The default layout has every pane open, so the window gets back
+        // whatever the folds being thrown away were holding.
+        state.window_width_change += state.folds.clear(state.dial.width, area);
     }
 
     // Render continuously only while something is animating (sounding or

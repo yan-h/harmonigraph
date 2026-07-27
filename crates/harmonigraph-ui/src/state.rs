@@ -127,9 +127,38 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     pub(crate) reset_layout: bool,
     pub(crate) dock: DockState<panes::Tab>,
-    /// The split fractions the sideways folds are holding onto, so an unfolded
-    /// pane comes back the width it was (see [`fold`]).
+    /// The fractions the sideways folds are holding onto, which are the layout
+    /// the rails on screen are a rendering of (see [`fold`]).
     pub(crate) folds: fold::Folds,
+    /// Points the window has to gain (or lose, if negative) before the next
+    /// frame, because a pane folded sideways or came back and every other pane
+    /// is keeping its width.
+    ///
+    /// The UI cannot resize the window itself — the plugin has to ask its
+    /// host, the standalone harness its windowing system — so it says how many
+    /// points and the shell spends them. Logical points, which is what both
+    /// shells size their windows in.
+    ///
+    /// Runtime-only, and TAKEN rather than read (see
+    /// [`take_window_width_change`](Self::take_window_width_change)), so a
+    /// shell that never asks — the offline renderer, which never reaches
+    /// `root_ui` at all — simply never resizes.
+    pub(crate) window_width_change: f32,
+    /// The narrowest the shell will let its window become, in the same points
+    /// [`take_window_width_change`](Self::take_window_width_change) is answered
+    /// in. At the floor a window has stopped answering, and the pane layout
+    /// stops following it (see [`fold`]) — otherwise a fold the window will not
+    /// shrink far enough for would re-dial the layout to the window it got
+    /// rather than the one it asked for, and hand the difference back on the
+    /// way out.
+    ///
+    /// Set by the shell. Zero — the default, and what a shell that never
+    /// resizes leaves it at — means no floor.
+    pub min_window_width: f32,
+    /// The window the pane layout is dialled in at, and the window it last
+    /// saw — the whole of what a sideways fold carries between frames (see
+    /// [`fold::Dial`]). Runtime-only.
+    pub(crate) dial: fold::Dial,
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
     /// by the render callback and read by the performance overlay. 0 means no
     /// reading — the device didn't grant timestamp queries, or none has landed
@@ -363,6 +392,9 @@ impl SharedState {
             reset_layout: false,
             dock,
             folds: fold::Folds::default(),
+            window_width_change: 0.0,
+            min_window_width: 0.0,
+            dial: fold::Dial::default(),
             lattice_stats: {
                 let stats = harmonigraph_render::LatticeStats::default();
                 stats
@@ -392,6 +424,25 @@ impl SharedState {
 
     pub fn log(&mut self, line: impl Into<String>) {
         self.console.log(line);
+    }
+
+    /// How much wider (or, negative, narrower) the window has to be for the
+    /// sideways folds the last frame settled — `None` when it can stay as it
+    /// is, which is nearly every frame.
+    ///
+    /// Shells call this once per frame, AFTER [`root_ui`](crate::root_ui), and
+    /// resize by the points they are given. Taking it rather than reading it
+    /// is what keeps one fold to one resize: a shell whose host refuses the
+    /// new size is not asked again on the next frame, since asking forever
+    /// would fight the host over every frame for as long as the pane stays
+    /// folded.
+    ///
+    /// Changes under half a point are dropped rather than passed on, which is
+    /// where rounding to whole pixels stops moving a window at all: below it a
+    /// shell would ask for the size it already has, and never be satisfied.
+    pub fn take_window_width_change(&mut self) -> Option<f32> {
+        let change = std::mem::take(&mut self.window_width_change);
+        (change.abs() >= 0.5).then_some(change)
     }
 
     /// Discard the (persisted) dock arrangement and return to the default
@@ -451,7 +502,14 @@ impl SharedState {
             // rather than with fractions pointing into a tree that is gone.
             // Same reason "Reset layout" clears them.
             self.dock = if persist.version < UI_PERSIST_VERSION {
-                self.folds.clear();
+                // The width those folds took is NOT handed back, unlike "Reset
+                // layout", which this otherwise resembles: a load brings its
+                // own window size along with its layout, and the folds being
+                // dropped were measured against the window the editor is
+                // leaving rather than the one it is arriving in. Paying them
+                // back here would widen a freshly restored window by whatever
+                // the last project had folded.
+                let _ = self.folds.clear(0.0, 0.0);
                 default_dock()
             } else {
                 self.folds = persist.folds;
