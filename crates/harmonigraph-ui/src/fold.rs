@@ -147,11 +147,9 @@ impl Folds {
     /// left in the tree by the last one, which a resize in flight makes a scale
     /// model of the frame being built.
     ///
-    /// `floor` is the narrowest the shell will let the window become.
-    ///
-    /// `dialled` is the width the user's layout is dialled in AT: the window it
-    /// would need with every pane open. It is the one number carried between
-    /// frames, and the whole of the bookkeeping.
+    /// `dial` carries the width the user's layout is dialled in AT — the window
+    /// it would need with every pane open — and the window last seen. It is the
+    /// whole of the bookkeeping.
     ///
     /// - Nothing folded or unfolded this frame: it is re-derived from `area`,
     ///   so a window the user resizes carries the layout with it, folded panes
@@ -434,12 +432,9 @@ impl Fit {
     fn dialled_for(&self, area: f32) -> Option<f32> {
         let mut slope = 1.0;
         let mut offset = 0.0;
-        for (index, fold) in self.folds.iter().enumerate() {
-            if let Some((child, span)) = fold {
-                slope -= self.slope[child.0];
-                offset += span - self.offset[child.0];
-                let _ = index;
-            }
+        for (child, span) in self.folds.iter().flatten() {
+            slope -= self.slope[child.0];
+            offset += span - self.offset[child.0];
         }
         // Everything folded: the layout is all rails and no pane, and there is
         // no window that makes it come out at `area`.
@@ -458,10 +453,12 @@ impl Fit {
         let mut deficit = vec![0.0; want.len()];
         for (index, fold) in self.folds.iter().enumerate() {
             let Some((child, span)) = *fold else { continue };
+            // Negative where a pane was dialled narrower than the rail that
+            // stands in for it — the window pays those few points rather than
+            // saving them, which is what `dialled_for` solves for either way.
+            // Skipping them here instead would leave the two disagreeing, and
+            // the sibling quietly making up the difference.
             let gap = want[child.0] - span;
-            if gap <= 0.0 {
-                continue;
-            }
             deficit[child.0] += gap;
             let mut node = NodeIndex(index);
             loop {
@@ -1582,6 +1579,38 @@ mod tests {
             for _ in 0..6 {
                 self.frame(folds, dock);
             }
+        }
+    }
+
+
+    /// A folded subtree divides its rail span by how many rails each side
+    /// holds, not evenly: fold three panes that sit side by side and the split
+    /// between "two of them" and "one of them" is not down the middle.
+    ///
+    /// The fixture everywhere else folds two panes, where the two shares are
+    /// equal and any division of the span looks right — so this is the only
+    /// test that can tell the difference.
+    #[test]
+    fn a_folded_subtree_gives_each_side_the_rails_it_holds() {
+        let mut dock = DockState::new(vec![Tab::Lattice]);
+        let surface = dock.main_surface_mut();
+        // Three panes across, nested so one side of the picture split holds two
+        // of them: [[Lattice | Spectral] | Notes] beside the settings column.
+        let [pictures, _] = surface.split_right(NodeIndex::root(), 0.7, vec![Tab::Tuning]);
+        let [pair, _] = surface.split_right(pictures, 0.7, vec![Tab::Notes]);
+        surface.split_right(pair, 0.5, vec![Tab::Spectral]);
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        for tab in [Tab::Lattice, Tab::Spectral, Tab::Notes] {
+            collapse(&mut dock, tab, true);
+        }
+        let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+        let _ = settle(&mut folds, &mut dock, &mut dial, window);
+        for tab in [Tab::Lattice, Tab::Spectral, Tab::Notes] {
+            let path = dock.find_tab(&tab).expect("docked");
+            let rail = dock[path.surface][path.node].rect().expect("on screen").width();
+            assert!((rail - 26.0).abs() < 0.01, "{tab:?} came out {rail} wide, not a rail");
         }
     }
 
