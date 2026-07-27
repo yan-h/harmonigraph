@@ -248,9 +248,19 @@ pub(super) fn display_note_name(
 }
 
 /// The visible lattice node whose pitch class most closely matches `pc`
-/// under the current tuning (several can match when the tolerance is
-/// wide). Every pane that answers "which node is this pitch class" uses
-/// this, so they can't disagree.
+/// under the current tuning (several can match when the tolerance is wide).
+///
+/// The question is "is this PLAYED pitch on the lattice, and where", and
+/// every pane that asks it uses this, so they can't disagree: the Notes
+/// pane's node column, and the analyzer's red band for a voice with no node
+/// to light. `Tuning::tolerance` is load-bearing in both — a note off every
+/// node is a note the lattice cannot show, and saying so is the point.
+///
+/// Two neighbours answer questions close enough to be reached for by
+/// mistake, and neither wants the tolerance. [`node_pointed_at`] takes a
+/// POINTER, which aims rather than plays. [`names::naming_node`](names)
+/// takes the same played pitch but asks what to CALL it, where a collapsed
+/// equal temperament makes the choice among matches the whole problem.
 pub(super) fn nearest_visible_node(
     view: &harmonigraph_scene::ViewConfig,
     tuning: &harmonigraph_core::Tuning,

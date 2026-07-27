@@ -216,7 +216,7 @@ pub(crate) fn draw_node_labels(
         let trailed = view.trail_labels && node.trail > 0.0;
         // `is_visible` re-checks what `Scene::pick` already enforces,
         // because hover also arrives from the Spectral pane
-        // (`nearest_visible_node`), which can land on an off-sheet node.
+        // (`node_pointed_at`), which can land on an off-sheet node.
         // Either way a label only belongs on a node you can actually see.
         if !(node.hovered || node.activation > 0.0 || trailed) || !node.is_visible() {
             continue;

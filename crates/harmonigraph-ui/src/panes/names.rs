@@ -1280,6 +1280,38 @@ mod tests {
         }
     }
 
+    /// A pitch no visible node carries lights nothing.
+    ///
+    /// The half-semitone window is the whole of what can say so, and with the
+    /// shipped extents it never has to: 12-TET covers all twelve classes, so
+    /// the nearest node is always well inside the window and dropping the
+    /// filter entirely changes no answer. Narrow the lattice to one step on
+    /// each axis and three classes have no node at all — without the window
+    /// the hover answers those with a node up to a whole semitone away, which
+    /// is the highlight pointing somewhere the pitch is not.
+    #[test]
+    fn a_pitch_off_the_visible_lattice_lights_nothing() {
+        let view = harmonigraph_scene::ViewConfig {
+            extent_threes: 1,
+            extent_fives: 1,
+            extent_sevens: 0,
+            ..harmonigraph_scene::ViewConfig::default()
+        };
+        let equal = harmonigraph_core::Tuning::default();
+        let lit = |semitone: i32| {
+            let pc = PitchClass::from_cents(semitone as f32 * 100.0);
+            super::super::node_pointed_at(&view, &equal, pc)
+        };
+        // Nine of the twelve are reachable from a 3x3 block of fifths and
+        // thirds; D (2), F#(6) and A#(10) are not.
+        for absent in [2, 6, 10] {
+            assert_eq!(lit(absent), None, "semitone {absent} has no node here, so nothing lights");
+        }
+        for present in [0, 1, 3, 4, 5, 7, 8, 9, 11] {
+            assert!(lit(present).is_some(), "semitone {present} has a node here and should light");
+        }
+    }
+
     /// The tritone is a genuine tie — six fifths up spells F♯, six down spells
     /// G♭, and in an equal temperament they are one pitch costing the same on
     /// every count that reads. Something has to break it, and it has to be
