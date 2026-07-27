@@ -3,6 +3,22 @@
 Parking lot for small things noticed while verifying changes (usually in
 Bitwig). Capture takes five seconds; nothing here is assigned work.
 
+**Anything with an investigation behind it goes to a GitHub issue instead**
+— `gh issue create`. The two are not the same shape. An item here is a line
+of prose that gets restated at dispatch and DELETED by whoever fixes it, so
+whatever was learned before the fix dies with it. A bug that has been
+measured has more than a line to say: how to reproduce it, what has been
+ruled out and by what measurement, what was tried and reverted, what is
+left to try. That is worth keeping addressable from outside the repo, and
+worth surviving the session that wrote it. Issue #121 — the pane-collapse
+flicker, where four hypotheses were eliminated by instrumentation before
+the trail went cold — is the worked example, and started life as a
+paragraph crammed into this file.
+
+The line between them is not size, it is whether the next person needs to
+know what has already been done. "The scrollbar bothers me" needs nothing;
+"this flickers, and here are the five things it is not" needs all of it.
+
 **Claude: never work on items in this file unless explicitly asked to.**
 If asked mid-session to "add X to the backlog," append it under Items and
 return to what you were doing — do not fix it.
@@ -38,25 +54,6 @@ file is always trivial, because it is a list of independent lines: take
 both sides. Never resolve one by dropping an item you did not finish.
 
 ## Items
-
-[ui] collapsing or expanding a pane still flickers: everything teleports a
-large amount LEFT for an instant and eases back over what looks like several
-frames. Dragging the window border is fine since the spectrogram upload fix.
-Measured and eliminated, so a future look need not repeat any of it: the frame
-loop is clean (host streams set_size continuously, adopted within 1-2ms, `ui`
-size matches `host` on every frame, ~5ms ticks, no hitch, one transitional
-frame); no font-atlas uploads happen at all during a resize; the view's bounds
-are applied exactly and immediately (`set 400x766` -> AppKit reports 400x766 on
-the same call and every frame after, no intermediate values, nothing
-animating). Two compositor hypotheses were tried in the plugin and did NOT fix
-it, and were reverted rather than left in: disabling Core Animation's implicit
-bounds animation (CATransaction with actions off around setFrameSize) and
-pinning the layer's contentsGravity to top-left so stale contents are not
-stretched across the new bounds. Both are in the history of PR #120 if wanted.
-What has NOT been tried: making the bounds change and the new content land in
-one commit (`presentsWithTransaction` on the CAMetalLayer, which needs
-wgpu-hal-level access), and looking at what Bitwig does with the parent window
-around the resize.
 
 [settings] I don't like having the scrollbar on the top list of settings. Any solutions you can think of?
   — at 1512x886 there is now no scrollbar of either kind in the settings column: the tab bar clears its six names by 76pt, and folding Notes/Console gave the panes the height they were short of (Tuning/Nodes/Analyzer scrolled by 20/63/120pt before it, zero after). Pinned by `the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`. Widening the column was tried and withdrawn: it takes 8pt off the Spectral pane, which is already within a few points of being narrower than the perf HUD it has to hold. Reopen with the window size you saw it at if it is still there.
