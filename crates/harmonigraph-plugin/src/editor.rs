@@ -11,7 +11,7 @@ use std::time::Instant;
 use baseview::{PhySize, Size, WindowHandle, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
 use egui::Context;
-use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, Queue};
+use egui_baseview::{EguiWindow, EguiWindowSettings, GraphicsConfig, Queue, SizeSource};
 use harmonigraph_core::notes::NoteEvent as CoreNoteEvent;
 use harmonigraph_ui::SharedState;
 use nice_plug::prelude::{Editor, GuiContext, ParamSetter, ParentWindowHandle, ResizeHint};
@@ -323,18 +323,16 @@ fn physical(size: (u32, u32), scale: f32) -> PhySize {
     )
 }
 
-/// Apply window resizes negotiated outside the frame loop. Two paths:
+/// Ask the host for the window size the UI wants (`Editor::set_size` is the
+/// other direction, and no longer comes through here — see
+/// [`LatticeEditor::spawn`]'s size source).
 ///
-/// - Host-initiated (native window border): the parent is already the new
-///   size; just bring the child view and render surface along, with no
-///   request_resize round-trip.
-/// - Plugin-initiated (Editor::set_size): PEEK — don't consume — the
-///   requested size, because the host reads `Editor::size()` *during*
-///   `request_resize()` and must see the NEW size there. Consuming first
-///   (as nih_plug_egui does) makes the host resize the parent to the
-///   previous size while the child resizes to the new one; the mismatch
-///   shows up as content shifted toward the bottom (macOS anchors child
-///   views bottom-left).
+/// PEEK — don't consume — the requested size, because the host reads
+/// `Editor::size()` *during* `request_resize()` and must see the NEW size
+/// there. Consuming first (as nih_plug_egui does) makes the host resize the
+/// parent to the previous size while the child resizes to the new one; the
+/// mismatch shows up as content shifted toward the bottom (macOS anchors child
+/// views bottom-left).
 ///
 /// Context::pixels_per_point() is the scale the renderer itself uses; the
 /// input's viewport info is not reliably populated on this stack (reading
@@ -343,6 +341,11 @@ fn physical(size: (u32, u32), scale: f32) -> PhySize {
 /// view to the matching logical size (macOS baseview emits no Resized
 /// event for programmatic resizes, so that patch is the only thing
 /// keeping view and surface in sync).
+///
+/// This one still lands mid-frame, so the frame that asks is laid out at the
+/// old size: a fold's own resize wears one stale frame. The host's resizes no
+/// longer do, and routing this through the same size source would close the
+/// gap for both — the round trip would have to move ahead of the frame with it.
 fn apply_pending_resizes(
     egui_state: &EguiState,
     egui_ctx: &Context,
@@ -350,12 +353,6 @@ fn apply_pending_resizes(
     context: &dyn GuiContext,
     console: &mut harmonigraph_ui::Console,
 ) {
-    if let Some((w, h)) = egui_state.host_resized.swap(None) {
-        let scale = egui_ctx.pixels_per_point();
-        queue.resize(physical((w, h), scale));
-        console.log(format!("host resize {}x{} (scale {:.2})", w, h, scale));
-    }
-
     if let Some(new_size) = egui_state.requested_size.load() {
         let t0 = Instant::now();
         let accepted = context.request_resize();
@@ -651,9 +648,13 @@ pub struct EguiState {
     #[serde(skip)]
     requested_size: AtomicCell<Option<(u32, u32)>>,
     /// A size the host already applied to the parent window (native border
-    /// drag); the GUI thread must resize the child view/surface to match,
+    /// drag); the child view and render surface must be brought to match,
     /// WITHOUT the request_resize round-trip used for plugin-initiated
     /// resizes.
+    ///
+    /// Collected by the window's size source (see [`LatticeEditor::spawn`])
+    /// rather than in the frame, because the frame has to be LAID OUT at this
+    /// size, and by the time the frame is running it is too late to say so.
     #[serde(skip)]
     host_resized: AtomicCell<Option<(u32, u32)>>,
     #[serde(skip)]
@@ -740,6 +741,30 @@ impl Editor for LatticeEditor {
         let egui_state = self.egui_state.clone();
         let (unscaled_width, unscaled_height) = self.egui_state.size();
         let scaling_factor = self.scaling_factor.load();
+        // Where the window collects a size the HOST gave it (a border drag),
+        // before it builds the frame that has to be laid out at that size. It
+        // used to be applied from inside the frame instead, which left every
+        // frame of a drag showing content built for the size the window had a
+        // moment ago — visible as the whole layout jumping while the border
+        // moves, since macOS anchors a child view bottom-left.
+        //
+        // macOS is also why there is nothing to listen to instead: baseview
+        // raises `Resized` there for the initial size and for backing-property
+        // changes, and for nothing else — a host resizing the parent view
+        // reaches the plugin only as `Editor::set_size`, on another thread.
+        let resized = self.egui_state.clone();
+        let logging = self.shared.clone();
+        let size_source = SizeSource::new(move || {
+            let (width, height) = resized.host_resized.swap(None)?;
+            // The one diagnostic this path had, kept. try_lock rather than
+            // lock: the frame's own lock is taken later in the same callback,
+            // so this is uncontended in practice, and a resize is not worth
+            // blocking a frame for if it ever is not.
+            if let Some(mut shared) = logging.try_lock() {
+                shared.ui.console.log(format!("host resize {width}x{height}"));
+            }
+            Some(Size::new(f64::from(width), f64::from(height)))
+        });
 
         let window = EguiWindow::open_parented(
             &ParentWindowHandleAdapter(parent),
@@ -753,7 +778,8 @@ impl Editor for LatticeEditor {
                         .map(|factor| WindowScalePolicy::ScaleFactor(f64::from(factor)))
                         .unwrap_or(WindowScalePolicy::SystemScaleFactor),
                 )
-                .with_graphics_config(graphics_config()),
+                .with_graphics_config(graphics_config())
+                .with_size_source(size_source),
             WindowState {
                 shared: self.shared.clone(),
                 params: self.params.clone(),
@@ -820,7 +846,7 @@ impl Editor for LatticeEditor {
             return true;
         }
         // Report the new size immediately (the host may read size() right
-        // after); the GUI thread applies it to the view/surface next frame.
+        // after); the GUI thread lays the next frame out at it.
         self.egui_state.size.store(clamped);
         self.egui_state.host_resized.store(Some(clamped));
         true

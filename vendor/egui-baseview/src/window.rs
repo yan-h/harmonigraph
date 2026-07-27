@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use baseview::{
@@ -16,6 +17,37 @@ use nice_plug_core::{nice_error as error, nice_warn as warn};
 
 #[cfg(all(feature = "tracing", not(feature = "nice-log")))]
 use tracing::{error, warn};
+
+/// Somewhere to ask, once a frame, whether this window has been resized from
+/// OUTSIDE — a plugin host dragging the border of the window the view is
+/// parented into, which on macOS arrives as no event at all.
+///
+/// Answered in logical size, since the window owns the scale factor.
+///
+/// The point of it is WHEN it is asked: before the frame's input is built. A
+/// host resize applied later — from inside the update closure, which is where
+/// a plugin would otherwise have to do it — lays the frame out at the size the
+/// window has stopped being and presents it into a surface that has already
+/// changed, so every frame of a drag is one frame of content that does not
+/// fit.
+#[derive(Clone)]
+pub struct SizeSource(Arc<dyn Fn() -> Option<Size> + Send + Sync>);
+
+impl SizeSource {
+    pub fn new(source: impl Fn() -> Option<Size> + Send + Sync + 'static) -> Self {
+        SizeSource(Arc::new(source))
+    }
+
+    fn take(&self) -> Option<Size> {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for SizeSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SizeSource")
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct EguiWindowSettings {
@@ -36,6 +68,10 @@ pub struct EguiWindowSettings {
     /// [`baseview::WindowOpenOptions::frame_interval`]; change it later
     /// through [`Queue::set_frame_interval`].
     pub frame_interval: f64,
+
+    /// Where a size given to this window from outside arrives, if anywhere.
+    /// See [`SizeSource`].
+    pub size_source: Option<SizeSource>,
 }
 
 impl EguiWindowSettings {
@@ -67,6 +103,11 @@ impl EguiWindowSettings {
         self.frame_interval = frame_interval;
         self
     }
+
+    pub fn with_size_source(mut self, source: SizeSource) -> Self {
+        self.size_source = Some(source);
+        self
+    }
 }
 
 impl Default for EguiWindowSettings {
@@ -80,6 +121,7 @@ impl Default for EguiWindowSettings {
             scale_policy: WindowScalePolicy::default(),
             graphics: GraphicsConfig::default(),
             frame_interval: baseview::DEFAULT_FRAME_INTERVAL,
+            size_source: None,
         }
     }
 }
@@ -306,6 +348,9 @@ where
     clipboard_ctx: Option<copypasta::ClipboardContext>,
 
     physical_size: PhySize,
+    /// See [`SizeSource`]: polled at the top of every frame, before the input
+    /// that the frame is laid out from is built.
+    size_source: Option<SizeSource>,
     scale_policy: WindowScalePolicy,
     pixels_per_point: f32,
     points_per_pixel: f32,
@@ -466,6 +511,7 @@ where
             clipboard_ctx,
 
             physical_size,
+            size_source: settings.size_source.clone(),
             pixels_per_point,
             points_per_pixel,
             scale_policy: settings.scale_policy,
@@ -581,14 +627,27 @@ where
             return;
         };
 
+        // BEFORE the input the frame is laid out from: a size this window has
+        // already been given from outside (see `SizeSource`). Read after it,
+        // the frame is built for a window that has stopped being that size,
+        // and lands in a surface that is already the new one.
+        let old_physical_size = self.physical_size;
+        if let Some(size) = self.size_source.as_ref().and_then(SizeSource::take) {
+            let adopted = PhySize::new(
+                (size.width * self.pixels_per_point as f64).round().max(1.0) as u32,
+                (size.height * self.pixels_per_point as f64).round().max(1.0) as u32,
+            );
+            self.physical_size = adopted;
+        }
+
         self.egui_input.time = Some(self.start_time.elapsed().as_secs_f64());
-        self.egui_input.screen_rect = Some(calculate_screen_rect(
-            self.physical_size,
-            self.points_per_pixel,
-        ));
+        let screen_rect = calculate_screen_rect(self.physical_size, self.points_per_pixel);
+        self.egui_input.screen_rect = Some(screen_rect);
+        if let Some(viewport) = self.egui_input.viewports.get_mut(&self.viewport_id) {
+            viewport.inner_rect = Some(screen_rect);
+        }
 
         //let mut repaint_requested = false;
-        let old_physical_size = self.physical_size;
         let mut frame_interval = None;
         let mut queue = Queue::new(
             &mut self.bg_color,
