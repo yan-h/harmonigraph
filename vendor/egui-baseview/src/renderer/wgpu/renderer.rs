@@ -862,10 +862,13 @@ mod fold_present {
 
         /// The render size is about to change: raise pwt for this frame and
         /// a short tail, and open a probe window if this is the start of a
-        /// gesture (pwt still down) — re-arming mid-gesture would log a
-        /// border drag's every step instead of one window per gesture.
+        /// gesture — pwt down AND no window still draining. Both terms are
+        /// needed: re-arming while pwt is up would log a fast border drag's
+        /// every step, and re-arming while a window is open would restart it
+        /// whenever a gesture's steps arrive slower than the pwt tail drains,
+        /// so a paused or slow drag would log for as long as it lasts.
         pub(super) fn size_changed(&mut self) {
-            if self.pwt_frames == 0 {
+            if self.pwt_frames == 0 && self.probe_frames == 0 {
                 self.probe_frames = PROBE_FRAMES;
                 self.probe_frame = 0;
             }
