@@ -90,7 +90,7 @@ View. Tooltip now leads with the name.
 **Audit**: hover the origin node — "C"; one node up — "G".
 
 ## ca8b352 — Skin mechanism (no visual change)
-`lattice_scene::skin::Skin` owns every color (scene + UI chrome); theme
+`harmonigraph_scene::skin::Skin` owns every color (scene + UI chrome); theme
 constants became accessors. The single built-in skin reproduces the old
 constants exactly.
 **Audit**: the UI looks identical to last night; `git show ca8b352` for
