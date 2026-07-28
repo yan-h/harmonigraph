@@ -780,14 +780,26 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
                 continue;
             }
             for band in name_bands(tree, folded, rail) {
+                // A rail lights up with its own arrow, in the fill the arrow
+                // takes when hovered, so the two read as one thing. It is the
+                // only answer available to "which pane does THIS arrow bring
+                // back" down a folded column: egui_dock stacks every arrow in
+                // the column at the top of the one rail, one tab bar each, and
+                // a 26pt rail has no room to write a name beside any of them.
+                // Pointing at one is also exactly when the question is asked.
+                let hovered = ui.rect_contains_pointer(arrow_button(band.leaf.rect, style));
                 if band.rect.is_positive() {
-                    let fill = style.tab.active.bg_fill;
+                    let fill = if hovered {
+                        style.buttons.collapse_tabs_bg_fill
+                    } else {
+                        style.tab.active.bg_fill
+                    };
                     ui.painter().rect_filled(band.rect, egui::CornerRadius::ZERO, fill);
                     if let Some(tab) = band.leaf.tabs.get(band.leaf.active.0) {
                         paint_name(ui, &band, crate::panes::tab_title(tab), style);
                     }
                 }
-                paint_arrow(ui, band.leaf.rect, side, style);
+                paint_arrow(ui, band.leaf.rect, side, hovered, style);
             }
             // The separator the rail sits against, and any between rails of a
             // folded pair: all of them inert now, for the same reason.
@@ -985,6 +997,12 @@ fn paint_name(ui: &egui::Ui, band: &Band, name: &str, style: &egui_dock::Style) 
     );
 }
 
+/// egui_dock's collapse button for a leaf: its own square at the left end of
+/// the leaf's tab bar, which for a folded pane is the top of its rail.
+fn arrow_button(leaf: egui::Rect, style: &egui_dock::Style) -> egui::Rect {
+    egui::Rect::from_min_size(leaf.left_top(), egui::vec2(ARROW_BUTTON, style.tab_bar.height))
+}
+
 /// Repaint a rail's collapse arrow to point at the space its pane will take
 /// when it comes back: rightwards out of a rail on the left, leftwards out of
 /// one on the right.
@@ -999,11 +1017,16 @@ fn paint_name(ui: &egui::Ui, band: &Band, name: &str, style: &egui_dock::Style) 
 ///
 /// The button underneath is left alone and keeps handling the click; this is
 /// paint over paint, including the hover fill, which is why it has to run after
-/// the dock rather than before it.
-fn paint_arrow(ui: &egui::Ui, leaf: egui::Rect, side: Side, style: &egui_dock::Style) {
-    let button =
-        egui::Rect::from_min_size(leaf.left_top(), egui::vec2(ARROW_BUTTON, style.tab_bar.height));
-    let hovered = ui.rect_contains_pointer(button);
+/// the dock rather than before it. `hovered` is the caller's, because the rail
+/// this arrow opens lights up with it.
+fn paint_arrow(
+    ui: &egui::Ui,
+    leaf: egui::Rect,
+    side: Side,
+    hovered: bool,
+    style: &egui_dock::Style,
+) {
+    let button = arrow_button(leaf, style);
     let painter = ui.painter();
     painter.rect_filled(
         button,

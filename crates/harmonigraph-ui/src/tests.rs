@@ -3141,3 +3141,78 @@ fn a_folded_pair_names_each_rail_under_its_own_arrow() {
         );
     }
 }
+
+/// The band rectangles painted on a rail this frame, with the fill each got.
+///
+/// A rail's bands are the only rects that wide-and-tall inside it — the
+/// arrow's own square is one tab bar tall, and everything else on a rail is
+/// text.
+fn band_fills(output: &egui::FullOutput, rail: egui::Rect) -> Vec<(egui::Rect, egui::Color32)> {
+    fn walk(shape: &egui::Shape, rail: egui::Rect, found: &mut Vec<(egui::Rect, egui::Color32)>) {
+        match shape {
+            egui::Shape::Rect(rect)
+                if rail.contains(rect.rect.center())
+                    && rect.rect.height() > crate::theme::TAB_BAR_HEIGHT =>
+            {
+                found.push((rect.rect, rect.fill));
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, rail, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, rail, &mut found);
+    }
+    found
+}
+
+/// Pointing at one of a folded column's arrows lights the pane it opens.
+///
+/// A column folds to ONE rail with an arrow per pane stacked at the top of it,
+/// a tab bar each, all pointing the same way — and 26pt of width has no room
+/// to write a name beside any of them, so nothing on the rail says which arrow
+/// brings back which pane. The rail lighting up with the arrow does, at the
+/// moment the question gets asked.
+#[test]
+fn hovering_a_folded_columns_arrow_lights_the_pane_it_opens() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.min_window_width = 400.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    h.collapse_click(&mut state, panes::Tab::Tuning);
+    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
+
+    // The pointer well clear of the rail: every band in its resting fill.
+    let away = egui::pos2(rail.left() - 200.0, rail.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(away)]);
+    let idle = h.frame(&mut state, vec![egui::Event::PointerMoved(away)]);
+    let resting = band_fills(&idle, rail);
+    assert_eq!(resting.len(), 2, "a folded column of two panes is two bands");
+    let (_, resting_fill) = resting[0];
+    assert!(resting.iter().all(|(_, fill)| *fill == resting_fill), "and both are at rest");
+
+    // Each arrow in turn: the leaf's own square, at the top of its tab bar.
+    let lit_by = |h: &mut DockHarness, state: &mut SharedState, tab| {
+        let path = state.dock.find_tab(&tab).expect("tab is in the dock");
+        let leaf = state.dock[path.surface][path.node].rect().expect("laid out");
+        let at = leaf.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
+        h.frame(state, vec![egui::Event::PointerMoved(at)]);
+        let output = h.frame(state, vec![egui::Event::PointerMoved(at)]);
+        let lit: Vec<egui::Rect> = band_fills(&output, rail)
+            .into_iter()
+            .filter(|(_, fill)| *fill != resting_fill)
+            .map(|(rect, _)| rect)
+            .collect();
+        assert_eq!(lit.len(), 1, "{tab:?}'s arrow should light one band, not {}", lit.len());
+        lit[0]
+    };
+    let upper = lit_by(&mut h, &mut state, panes::Tab::Tuning);
+    let lower = lit_by(&mut h, &mut state, panes::Tab::Notes);
+
+    assert!(
+        upper.top() < lower.top() && upper.bottom() <= lower.top() + 0.5,
+        "each arrow lights its own share of the rail, in the order they are stacked: \
+         {upper:?} then {lower:?}",
+    );
+}
