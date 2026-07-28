@@ -346,6 +346,13 @@ impl Folds {
         moved
     }
 
+    /// Forget every fold without handing anything back, for a load that brings
+    /// its own window along with its layout. The entries name splits by index,
+    /// so a tree they were not measured against has to start with none.
+    pub fn forget(&mut self) {
+        self.0.clear();
+    }
+
     /// Forget every fold, for a dock that is being replaced wholesale (the
     /// Panel pane's "Reset layout"): the indices would otherwise name splits
     /// in a tree that no longer exists.
@@ -354,9 +361,17 @@ impl Folds {
     /// this one has every pane open, so it wants the whole width the folds were
     /// keeping off the window.
     #[must_use]
-    pub fn clear(&mut self, dialled: f32, area: f32) -> f32 {
-        self.0.clear();
-        if dialled > area { dialled - area } else { 0.0 }
+    pub fn clear(&mut self, dial: &Dial, area: f32) -> f32 {
+        self.forget();
+        // Held to the same ceiling as the rail's arrow (see the ask in
+        // [`Folds::apply`]), because it undoes the same fold and therefore owes
+        // the same width. A layout dialled for a window that never arrived —
+        // a host that refused the fold's resize, or a drag back out while
+        // folded — prices itself well above anything the window has been, and
+        // a button that hands that price to the host is how the editor ends up
+        // wider than the display it is on.
+        let want = if dial.width > area { dial.width - area } else { 0.0 };
+        want.min((dial.widest - area).max(0.0))
     }
 
     /// Whether anything is being remembered. Nothing in the draw needs this —
@@ -1568,8 +1583,32 @@ mod tests {
         let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         collapse(&mut dock, Tab::Lattice, true);
         let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
-        assert!((window + folds.clear(dial.width, window) - 1000.0).abs() < 0.01);
+        assert!((window + folds.clear(&dial, window) - 1000.0).abs() < 0.01);
         assert!(folds.is_empty());
+    }
+
+    /// A host that refuses the fold's resize leaves the layout dialled for a
+    /// window that is not coming, and the re-dial that copes with it prices the
+    /// arrangement at a window far wider than the one on screen. "Reset layout"
+    /// turns that price straight into an ask, so the route that undoes a fold
+    /// with a button grows the window where the route that undoes it with the
+    /// rail's arrow is capped at the widest the window has been.
+    ///
+    /// Both routes hand back the same fold, so they owe the same width.
+    #[test]
+    fn a_layout_reset_asks_for_no_more_window_than_an_unfold_would() {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        collapse(&mut dock, Tab::Lattice, true);
+        // The fold asks; the host refuses, so the next frame arrives at the
+        // width it already had. That is what re-dials the layout upwards.
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        assert!((window - 1000.0).abs() < 0.01, "the host refused, so the window did not move");
+        let owed = folds.clear(&dial, window);
+        assert!(owed < 0.5, "reset asked the host for {} points on top of {window}", owed.round());
     }
 
     /// One click can move a fold from one child of a split to the other, and
