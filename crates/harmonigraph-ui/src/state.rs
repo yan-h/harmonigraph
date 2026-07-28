@@ -138,6 +138,20 @@ pub struct SharedState {
     /// The fractions the sideways folds are holding onto, which are the layout
     /// the rails on screen are a rendering of (see [`fold`]).
     pub(crate) folds: fold::Folds,
+    /// Drives the fold measurement (issue #121): `HG_AUTO_FOLD=<frames>` in
+    /// the environment toggles the Lattice pane's fold every so many frames,
+    /// so a screen recording can hold what a fold does to the display without
+    /// a hand on the mouse. Unset — or unparsable — is the feature off, which
+    /// is every run that is not a measurement.
+    pub(crate) auto_fold: AutoFold,
+    /// The shell has an accepted window resize it is deliberately not
+    /// adopting yet (the plugin holds a grown layout back a few frames while
+    /// the host repaints its chrome — see the plugin editor's
+    /// `pending_grow`). While it is up, "the window did not move" means
+    /// WAITING, and the fold layout's refusal detection must not read it as
+    /// the host saying no. Set by the shell every frame; the shells that
+    /// adopt immediately (standalone, offline) never raise it.
+    pub resize_pending: bool,
     /// Points the window has to gain (or lose, if negative) before the next
     /// frame, because a pane folded sideways or came back and every other pane
     /// is keeping its width.
@@ -368,6 +382,25 @@ pub(crate) fn default_dock() -> DockState<panes::Tab> {
     dock
 }
 
+/// See [`SharedState::auto_fold`]. The interval is read from the environment
+/// once, at state construction, because a measurement flag that can change
+/// mid-session is one more variable in the thing being measured.
+pub(crate) struct AutoFold {
+    pub(crate) every: Option<u32>,
+    pub(crate) frames: u32,
+    pub(crate) folded: bool,
+}
+
+impl Default for AutoFold {
+    fn default() -> Self {
+        AutoFold {
+            every: std::env::var("HG_AUTO_FOLD").ok().and_then(|v| v.parse().ok()),
+            frames: 0,
+            folded: false,
+        }
+    }
+}
+
 impl SharedState {
     pub fn new(target_format: TextureFormat) -> Self {
         let dock = default_dock();
@@ -400,6 +433,8 @@ impl SharedState {
             reset_layout: false,
             dock,
             folds: fold::Folds::default(),
+            auto_fold: AutoFold::default(),
+            resize_pending: false,
             window_width_change: 0.0,
             min_window_width: 0.0,
             dial: fold::Dial::default(),

@@ -374,6 +374,10 @@ fn frame(
     shared.ui.encode_ms = queue.encode_ms();
     shared.ui.submit_ms = queue.submit_ms();
     shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
+    // The frames between an accepted GROWING resize and its adoption (see
+    // `EguiState::pending_grow`) must not read as the host refusing: the fold
+    // layout would re-dial itself back into the window it is leaving.
+    shared.ui.resize_pending = egui_state.pending_grow.load().is_some();
     harmonigraph_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
     // A pane folded sideways (or came back) leaves every other pane its width
@@ -599,8 +603,39 @@ pub struct EguiState {
     /// size, and by the time the frame is running it is too late to say so.
     #[serde(skip)]
     host_resized: AtomicCell<Option<(u32, u32)>>,
+    /// A GROWING resize the host has accepted but the frames are not adopting
+    /// yet: the size, and how many frames of the old layout remain.
+    ///
+    /// Screen capture of issue #121 shows Bitwig repainting its window chrome
+    /// ~2 recorded frames (~35 ms, 4-5 ticks at 144 Hz) after it commits the
+    /// window's new bounds — our content flips atomically with the BOUNDS, so
+    /// for those frames the new wide layout sits clipped inside the old
+    /// narrow chrome, which is the fold's visible teleport. Holding the OLD
+    /// layout for a few frames after the ask flips the order: the window
+    /// grows first (a brief background strip at the new edge, the same mild
+    /// artifact a border drag wears), and the content lands once the chrome
+    /// has caught up. Growth only: on a shrink the current order is already
+    /// the mild one (content narrows first, chrome follows).
+    #[serde(skip)]
+    pending_grow: AtomicCell<Option<((u32, u32), u8)>>,
     #[serde(skip)]
     open: AtomicBool,
+}
+
+/// Frames the old layout holds after an accepted GROWING resize, and the env
+/// override for A/B-ing the value in a host (`HG_FOLD_DELAY=0..=30`; the
+/// variable must be in the HOST's environment, so from a Finder-launched
+/// Bitwig it takes `launchctl setenv` and a relaunch — rebuilding with a new
+/// default is usually less effort).
+fn grow_delay_frames() -> u8 {
+    static DELAY: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *DELAY.get_or_init(|| {
+        std::env::var("HG_FOLD_DELAY")
+            .ok()
+            .and_then(|v| v.parse::<u8>().ok())
+            .map(|v| v.min(30))
+            .unwrap_or(5)
+    })
 }
 
 impl EguiState {
@@ -609,6 +644,7 @@ impl EguiState {
             size: AtomicCell::new((width, height)),
             requested_size: AtomicCell::new(None),
             host_resized: AtomicCell::new(None),
+            pending_grow: AtomicCell::new(None),
             open: AtomicBool::new(false),
         })
     }
@@ -719,15 +755,40 @@ impl Editor for LatticeEditor {
                     ));
                 }
                 if accepted {
+                    let (was, _) = resized.size.load();
                     resized.size.store(size);
                     // The host may have echoed the same size straight back
                     // through `set_size`; taking it here keeps the next frame
                     // from adopting it a second time as though it were a drag.
                     resized.host_resized.swap(None);
-                    return Some(Size::new(f64::from(size.0), f64::from(size.1)));
+                    // A new ask replaces whatever wait an earlier one left.
+                    resized.pending_grow.store(None);
+                    let delay = grow_delay_frames();
+                    if size.0 > was && delay > 0 {
+                        // Growing: the window first, the content once the
+                        // host's chrome has caught up (see `pending_grow`).
+                        resized.pending_grow.store(Some((size, delay)));
+                    } else {
+                        return Some(Size::new(f64::from(size.0), f64::from(size.1)));
+                    }
                 }
             }
+            if let Some((size, left)) = resized.pending_grow.load() {
+                // The echo of the pending ask lands whenever the host gets to
+                // it; swallowed here so the drag path below cannot adopt the
+                // grown size early and void the wait.
+                if resized.host_resized.load() == Some(size) {
+                    resized.host_resized.swap(None);
+                }
+                if left == 0 {
+                    resized.pending_grow.store(None);
+                    return Some(Size::new(f64::from(size.0), f64::from(size.1)));
+                }
+                resized.pending_grow.store(Some((size, left - 1)));
+            }
             let (width, height) = resized.host_resized.swap(None)?;
+            // A real drag mid-wait outranks the wait: the user has the border.
+            resized.pending_grow.store(None);
             // The one diagnostic this path had, kept. try_lock rather than
             // lock: the frame's own lock is taken later in the same callback,
             // so this is uncontended in practice, and a resize is not worth

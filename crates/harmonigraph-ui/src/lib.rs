@@ -150,6 +150,19 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 
     // DockState has to be moved out while panes borrow the rest of `state`.
     let mut dock = std::mem::replace(&mut state.dock, DockState::new(vec![]));
+    // HG_AUTO_FOLD=<frames>: fold and unfold the Lattice pane on a timer, so
+    // a screen recording can hold what a fold does to the display (issue
+    // #121) without a hand on the mouse. Placed where a real click lands —
+    // before the fold pass reads the collapse flags — so the measured path
+    // is the path.
+    if let Some(every) = state.auto_fold.every {
+        state.auto_fold.frames += 1;
+        if state.auto_fold.frames >= every {
+            state.auto_fold.frames = 0;
+            state.auto_fold.folded = !state.auto_fold.folded;
+            fold::collapse(&mut dock, panes::Tab::Lattice, state.auto_fold.folded);
+        }
+    }
     // Before the dock lays out: a pane collapsed inside a horizontal split
     // folds sideways to a rail, which is a split fraction, which is layout's
     // input. egui_dock's own vertical folds need nothing from us.
@@ -161,8 +174,14 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // frame of its neighbour holding the space before the window closes over
     // it.
     let area = fold::area_width(ui, &dock_style);
-    state.window_width_change +=
-        state.folds.apply(&mut dock, &dock_style, area, state.min_window_width, &mut state.dial);
+    state.window_width_change += state.folds.apply(
+        &mut dock,
+        &dock_style,
+        area,
+        state.min_window_width,
+        state.resize_pending,
+        &mut state.dial,
+    );
     // Time the whole dock build — every pane's layout and the scene
     // derivation — as the GUI thread's own per-frame CPU cost. The wgpu draw
     // is submitted inside and finishes off-thread, so this is CPU, not GPU.

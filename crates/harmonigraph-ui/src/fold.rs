@@ -198,6 +198,10 @@ impl Folds {
     /// following it: without that, a fold the window cannot pay for in full
     /// would re-derive a layout dialled for the window it got rather than the
     /// one it asked for, and unfolding would hand back the difference.
+    /// `ask_outstanding` says the shell has an ACCEPTED resize it is not
+    /// adopting yet (the plugin holds a grown layout back while the host
+    /// repaints its chrome), so an unmoved window is a wait rather than a
+    /// refusal, and refusal detection stands down for the duration.
     #[must_use]
     pub fn apply(
         &mut self,
@@ -205,6 +209,7 @@ impl Folds {
         style: &egui_dock::Style,
         area: f32,
         floor: f32,
+        ask_outstanding: bool,
         dial: &mut Dial,
     ) -> f32 {
         let rail = style.tab_bar.height;
@@ -234,7 +239,7 @@ impl Folds {
                 continue;
             }
             let holds = holds(tree);
-            let moved = self.reconcile(tree, surface, &holds, area);
+            let moved = self.reconcile(tree, surface, &holds, area, ask_outstanding);
             // The widest this window has been, for a session that was not there
             // to watch it get that wide: the folds came off the persist blob,
             // and each one remembers the window it was taken at.
@@ -269,8 +274,11 @@ impl Folds {
             // not coming. Take what there is instead of drawing past the edge.
             // Not at the floor, where "the window did not move" is what the
             // floor MEANS rather than a refusal — re-dialling there is the
-            // inflation the floor pin exists to stop.
-            let refused = dial.asked && settled && area > floor + 1.0;
+            // inflation the floor pin exists to stop. And not while the shell
+            // says the answer is deliberately on its way (`ask_outstanding`):
+            // re-dialling there would squeeze the unfolding layout back into
+            // the window it is already leaving, every frame of the wait.
+            let refused = dial.asked && settled && !ask_outstanding && area > floor + 1.0;
             if (!settled && !moved && area > floor + 1.0) || dial.width <= 0.0 || refused {
                 if let Some(dialled) = fit.dialled_for(area) {
                     dial.width = dialled;
@@ -311,7 +319,13 @@ impl Folds {
             // spends the difference on the panes that are still open, which
             // is the only place it can come from. `dial` itself does not
             // move, so unfolding still hands back exactly what folding took.
-            if !(moved && main) {
+            // `ask_outstanding` holds the writes exactly the way the click
+            // frame's `moved` does, for as many frames as the shell sits on
+            // the answer: the fitted write below prices the pane as OPEN the
+            // moment its collapse flag clears, and writing that into the
+            // window being left is the same squeeze the restore deferral
+            // exists to stop.
+            if !((moved || ask_outstanding) && main) {
                 let fitted = fit.dialled_for(area).and_then(|dialled| fit.widths(dialled));
                 write_fractions(tree, &holds, fitted.as_ref().unwrap_or(&widths), separator);
             }
@@ -346,29 +360,32 @@ impl Folds {
         surface: SurfaceIndex,
         holds: &[Hold],
         area: f32,
+        ask_outstanding: bool,
     ) -> bool {
         let mut moved = false;
-        // Whether this pass is the click frame of a window-moving unfold: a
-        // split that was rendering a rail on the main surface has just
-        // stopped being held. Every restore on the surface then waits a
-        // frame WITH it — the ancestors holding the same fold outward
-        // included, because an ancestor's fraction landing early moves the
-        // layout exactly the way the rail's own would. Restored on the click
-        // frame, they are laid out into the window being left: a full-width
-        // pane squeezing every neighbour leftward for one frame, which is
-        // issue #121's teleport. The restore lands on the next apply, the
-        // frame laid out at the window the unfold asked for.
+        // Whether restores wait: the click frame of a window-moving unfold
+        // (a split that was rendering a rail on the main surface has just
+        // stopped being held), and every frame the shell is still sitting on
+        // the accepted answer (`ask_outstanding`). Every restore on the
+        // surface waits WITH the rail — the ancestors holding the same fold
+        // outward included, because an ancestor's fraction landing early
+        // moves the layout exactly the way the rail's own would. Restored
+        // early, they are laid out into the window being left: a full-width
+        // pane squeezing every neighbour leftward, which is issue #121's
+        // teleport. The restore lands on the frame laid out at the window
+        // the unfold asked for.
         //
         // A release with no rail in it — a pane re-docked out from under its
         // entry, a floating surface's fold — moves no window, and restores
         // in place as it always has.
         let deferring = surface == SurfaceIndex::main()
-            && self.0.iter().any(|fold| {
-                fold.surface == surface.0
-                    && fold.rail
-                    && !fold.releasing
-                    && !holds.get(fold.node).is_some_and(Hold::held)
-            });
+            && (ask_outstanding
+                || self.0.iter().any(|fold| {
+                    fold.surface == surface.0
+                        && fold.rail
+                        && !fold.releasing
+                        && !holds.get(fold.node).is_some_and(Hold::held)
+                }));
         self.0.retain_mut(|fold| {
             if fold.surface != surface.0 {
                 return true;
@@ -464,7 +481,45 @@ impl Folds {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+}
 
+/// One click on a pane's collapse arrow, ancestors and all.
+///
+/// egui_dock flips the leaf's own flag and then runs `node_update_collapsed`
+/// over its ancestors, which is crate-private, so this reproduces it: a
+/// split whose children are both collapsed is collapsed too, and expanding
+/// anything clears the flag all the way to the root — which is how one
+/// click can move a fold from one child of a split to the other.
+///
+/// Worth reproducing rather than setting the flags a caller happens to want:
+/// the sequence of states a user can actually reach is the whole question
+/// for anything that remembers what it folded. Tests drive fold scenarios
+/// with it, and the `HG_AUTO_FOLD` measurement hook in `root_ui` clicks it
+/// on a timer (see `SharedState::auto_fold`).
+pub(crate) fn collapse(dock: &mut DockState<Tab>, tab: Tab, collapsed: bool) {
+    let Some(path) = dock.find_tab(&tab) else {
+        return;
+    };
+    dock[path.surface][path.node].set_collapsed(collapsed);
+    let tree = &mut dock[path.surface];
+    let mut child = path.node;
+    while let Some(parent) = child.parent() {
+        let (left, right) = (parent.left(), parent.right());
+        let (below, beside) =
+            (tree[left].collapsed_leaf_count(), tree[right].collapsed_leaf_count());
+        if !collapsed {
+            tree[parent].set_collapsed(false);
+        } else if tree[left].is_collapsed() && tree[right].is_collapsed() {
+            tree[parent].set_collapsed(true);
+        }
+        let leaves =
+            if tree[parent].is_horizontal() { below.max(beside) } else { below + beside };
+        tree[parent].set_collapsed_leaf_count(leaves);
+        child = parent;
+    }
+}
+
+impl Folds {
     /// The fraction a split is dialled in at: the one the user set, which for a
     /// folded split is the one held here rather than the rail's in the tree.
     fn dialled(&self, tree: &Tree<Tab>, surface: SurfaceIndex, node: NodeIndex) -> f32 {
@@ -1268,9 +1323,24 @@ mod tests {
         width: f32,
         floor: f32,
     ) -> f32 {
-        let change = folds.apply(dock, &style(), width, floor, dial);
+        let change = folds.apply(dock, &style(), width, floor, false, dial);
         lay_out(dock, width);
         (width + change).max(floor)
+    }
+
+    /// One frame in a shell that is deliberately sitting on an accepted
+    /// resize (the plugin's chrome-lag wait): the window has not moved, and
+    /// the fold layout must hold rather than re-dial itself into it.
+    #[must_use]
+    fn frame_waiting(
+        folds: &mut Folds,
+        dock: &mut DockState<Tab>,
+        dial: &mut Dial,
+        width: f32,
+    ) -> f32 {
+        let change = folds.apply(dock, &style(), width, 0.0, true, dial);
+        lay_out(dock, width);
+        width + change
     }
 
     /// One frame in a shell whose window can be as narrow as the fold asks,
@@ -1307,38 +1377,6 @@ mod tests {
         match &dock[SurfaceIndex::main()][node] {
             Node::Horizontal(split) | Node::Vertical(split) => split.fraction,
             _ => panic!("{node:?} is not a split"),
-        }
-    }
-
-    /// One click on a pane's collapse arrow, ancestors and all.
-    ///
-    /// egui_dock flips the leaf's own flag and then runs `node_update_collapsed`
-    /// over its ancestors, which is crate-private, so this reproduces it: a
-    /// split whose children are both collapsed is collapsed too, and expanding
-    /// anything clears the flag all the way to the root — which is how one
-    /// click can move a fold from one child of a split to the other.
-    ///
-    /// Worth reproducing rather than setting the flags a test happens to want:
-    /// the sequence of states a user can actually reach is the whole question
-    /// for anything that remembers what it folded.
-    fn collapse(dock: &mut DockState<Tab>, tab: Tab, collapsed: bool) {
-        let path = dock.find_tab(&tab).expect("tab is in the dock");
-        dock[path.surface][path.node].set_collapsed(collapsed);
-        let tree = &mut dock[path.surface];
-        let mut child = path.node;
-        while let Some(parent) = child.parent() {
-            let (left, right) = (parent.left(), parent.right());
-            let (below, beside) =
-                (tree[left].collapsed_leaf_count(), tree[right].collapsed_leaf_count());
-            if !collapsed {
-                tree[parent].set_collapsed(false);
-            } else if tree[left].is_collapsed() && tree[right].is_collapsed() {
-                tree[parent].set_collapsed(true);
-            }
-            let leaves =
-                if tree[parent].is_horizontal() { below.max(beside) } else { below + beside };
-            tree[parent].set_collapsed_leaf_count(leaves);
-            child = parent;
         }
     }
 
@@ -1463,6 +1501,52 @@ mod tests {
                     "{node:?} drifted {at} -> {now} on frame {pass} after the unfold landed"
                 );
             }
+        }
+    }
+
+    /// While the shell is deliberately sitting on an accepted resize (the
+    /// plugin's chrome-lag wait), the window has not moved and the layout
+    /// must not move either: no restore landing, no fitted re-write, no
+    /// refusal re-dial — every wait frame draws what the click frame drew.
+    /// Then the adoption frame lands the whole unfold at once.
+    #[test]
+    fn the_layout_holds_through_the_chrome_lag_wait() {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        collapse(&mut dock, Tab::Lattice, true);
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let folded = frame(&mut folds, &mut dock, &mut dial, window);
+        collapse(&mut dock, Tab::Lattice, false);
+        let asked = frame(&mut folds, &mut dock, &mut dial, folded);
+        assert!(asked > folded + 1.0, "the unfold asks for a wider window");
+        let nodes = [PICTURES, SETTINGS, LATTICE, SPECTRAL];
+        let held = nodes.map(|node| width(&dock, node));
+        for pass in 0..6 {
+            let ask = frame_waiting(&mut folds, &mut dock, &mut dial, folded);
+            assert!(
+                (ask - folded).abs() < 0.01,
+                "no new ask on wait frame {pass} (asked {ask} over {folded})"
+            );
+            for (node, was) in nodes.iter().zip(held) {
+                let now = width(&dock, *node);
+                assert!(
+                    (now - was).abs() < 0.01,
+                    "{node:?} moved {was} -> {now} on wait frame {pass}"
+                );
+            }
+        }
+        // Adoption: laid out at the window the unfold asked for, in one step,
+        // asking for nothing more.
+        let settled = frame(&mut folds, &mut dock, &mut dial, asked);
+        assert!((settled - asked).abs() < 0.01, "adoption asks for nothing more");
+        assert!((fraction(&dock, PICTURES) - 0.7).abs() < 0.001, "the user's fraction is back");
+        let landed = nodes.map(|node| width(&dock, node));
+        let _ = frame(&mut folds, &mut dock, &mut dial, settled);
+        for (node, at) in nodes.iter().zip(landed) {
+            let now = width(&dock, *node);
+            assert!((now - at).abs() < 0.01, "{node:?} drifted {at} -> {now} after landing");
         }
     }
 
@@ -1616,7 +1700,7 @@ mod tests {
         dock[path.surface][path.node].set_collapsed(true);
         let mut folds = Folds::default();
         let mut dial = Dial::default();
-        let window = folds.apply(&mut dock, &style(), 1000.0, 0.0, &mut dial);
+        let window = folds.apply(&mut dock, &style(), 1000.0, 0.0, false, &mut dial);
         lay_out_surface(&mut dock, floating, 500.0);
         assert_eq!(window, 0.0, "the plugin window is not the one that folded");
         let rail = dock[floating][NodeIndex(1)].rect().expect("on screen").width();
@@ -2049,7 +2133,7 @@ mod tests {
                 self.area = want;
             }
             let area = self.area;
-            let change = folds.apply(dock, &style(), area, Self::FLOOR, &mut self.dial);
+            let change = folds.apply(dock, &style(), area, Self::FLOOR, false, &mut self.dial);
             lay_out(dock, area);
             if change.abs() >= 0.5 {
                 self.pending = Some((self.size + change).round().max(Self::FLOOR));
