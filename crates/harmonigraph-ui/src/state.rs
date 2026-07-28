@@ -40,6 +40,29 @@ impl Console {
     }
 }
 
+/// How far a video render running in the background has got.
+///
+/// Frames rather than a fraction, because frames are what the renderer counts
+/// and "3400/5400" says something a filled bar cannot: how long is left, at
+/// whatever rate you have been watching it go.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderProgress {
+    /// Frames written so far.
+    pub done: u64,
+    /// Frames the render is aiming for — 0 until the renderer has said, which
+    /// is a moment into the run (it has a take to read and an encoder to
+    /// start first).
+    pub total: u64,
+}
+
+impl RenderProgress {
+    /// The share done, in `0..=1`, or `None` while the total is unknown —
+    /// which is not the same as zero, and must not draw as it.
+    pub fn fraction(self) -> Option<f32> {
+        (self.total > 0).then(|| (self.done as f32 / self.total as f32).clamp(0.0, 1.0))
+    }
+}
+
 /// Everything the UI reads and mutates each frame. One instance lives in the
 /// shell (inside the editor state in the plugin, inside the app in the
 /// standalone harness).
@@ -121,6 +144,10 @@ pub struct SharedState {
     /// Shell-supplied one-liner shown under the toggle: where the file is
     /// going, how many events, or what went wrong.
     pub take_status: String,
+    /// How far the video render running in the background has got, or `None`
+    /// when none is. Shell-set every frame, like
+    /// [`take_status`](Self::take_status). Runtime-only.
+    pub render_progress: Option<RenderProgress>,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// The Spectral pane's settings (Analyzer tab; persisted).
@@ -394,6 +421,7 @@ impl SharedState {
             take_audio: false,
             render_config: RenderConfig::default(),
             take_status: String::new(),
+            render_progress: None,
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             whole_song: None,
@@ -534,6 +562,9 @@ impl SharedState {
             // octave numbers.
             self.spectrum_config.migrate_legacy();
             self.render_config = persist.render;
+            // And for the render frame, whose two-way `stacked` flag became a
+            // named side.
+            self.render_config.frame.migrate_legacy();
             self.fps_cap = persist.fps_cap;
         }
     }
@@ -580,7 +611,15 @@ pub(crate) struct UiPersist {
 /// offline renderer can default its size and layout to what the take was
 /// composed for, without building a whole [`SharedState`].
 pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
-    ron::from_str::<UiPersist>(serialized).ok().map(|persist| persist.render.frame)
+    ron::from_str::<UiPersist>(serialized).ok().map(|persist| {
+        // Takes recorded before the four sides carry a `stacked` flag in this
+        // blob, and the renderer reading them is the whole reason the shim
+        // exists — re-rendering one must still compose the frame it was framed
+        // at. See `RenderFrame::migrate_legacy`.
+        let mut frame = persist.render.frame;
+        frame.migrate_legacy();
+        frame
+    })
 }
 
 impl SharedState {

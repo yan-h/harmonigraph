@@ -384,6 +384,8 @@ pub struct Control {
     /// Set by the audio thread when a loop wrapped under AtLoopEnd: the take is
     /// done and the GUI should stop + render it.
     hit_loop_end: Arc<AtomicBool>,
+    /// How far the background render has got, for the Video pane's bar.
+    progress: Arc<Progress>,
 }
 
 impl Control {
@@ -421,9 +423,17 @@ impl Control {
     /// (which carries the current look, bounce, and offset).
     pub fn render_now(&self, request: RenderRequest) {
         match self.last_take() {
-            Some(path) => spawn_render(request, path, self.status.clone()),
+            Some(path) => {
+                spawn_render(request, path, self.status.clone(), self.progress.clone())
+            }
             None => *self.status.lock() = "no take recorded yet to render".into(),
         }
+    }
+
+    /// How far the render running in the background has got, or `None` when
+    /// none is. Read every GUI frame; see [`Progress`].
+    pub fn render_progress(&self) -> Option<harmonigraph_ui::RenderProgress> {
+        self.progress.read()
     }
 
     /// Begin a take. `ui_state` is the persist blob that decides how the
@@ -527,9 +537,11 @@ pub fn channel() -> (Recorder, Control) {
     let hit_loop_end = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
+    let progress = Arc::new(Progress::default());
 
     let thread_status = status.clone();
     let thread_last_take = last_take.clone();
+    let thread_progress = progress.clone();
     let _ = std::thread::Builder::new()
         .name("harmonigraph-take-writer".into())
         .spawn(move || {
@@ -548,7 +560,12 @@ pub fn channel() -> (Recorder, Control) {
                             *thread_last_take.lock() = Some(path.clone());
                         }
                         if let (Some(path), Some(render)) = (finished, render) {
-                            spawn_render(*render, path, thread_status.clone());
+                            spawn_render(
+                                *render,
+                                path,
+                                thread_status.clone(),
+                                thread_progress.clone(),
+                            );
                         }
                     }
                     Err(mpsc::TryRecvError::Empty) => {}
@@ -593,6 +610,7 @@ pub fn channel() -> (Recorder, Control) {
             with_audio,
             stop_at_loop_end,
             hit_loop_end,
+            progress,
         },
     )
 }
@@ -764,6 +782,137 @@ fn drain(
     any
 }
 
+/// Frames done and frames planned for the render(s) in flight, published by
+/// the thread following the renderer's stderr and read by the GUI each frame.
+///
+/// `in_flight` is a COUNT rather than a flag because two renders can overlap —
+/// "Render now" pressed while an auto-render is still going — and a flag would
+/// have the first one to finish clear the bar out from under the second.
+#[derive(Default)]
+struct Progress {
+    done: AtomicU64,
+    /// 0 until the renderer announces how many frames it is composing.
+    total: AtomicU64,
+    in_flight: AtomicU64,
+}
+
+impl Progress {
+    /// A render is starting: clear the last one's counts, then join the flight.
+    /// Release-ordered against [`read`](Self::read)'s acquire, so a bar can
+    /// never appear over the previous render's numbers.
+    fn begin(&self) {
+        self.done.store(0, Ordering::Relaxed);
+        self.total.store(0, Ordering::Relaxed);
+        self.in_flight.fetch_add(1, Ordering::Release);
+    }
+
+    fn end(&self) {
+        self.in_flight.fetch_sub(1, Ordering::Release);
+    }
+
+    fn read(&self) -> Option<harmonigraph_ui::RenderProgress> {
+        (self.in_flight.load(Ordering::Acquire) > 0).then(|| harmonigraph_ui::RenderProgress {
+            done: self.done.load(Ordering::Relaxed),
+            total: self.total.load(Ordering::Relaxed),
+        })
+    }
+}
+
+/// What one segment of the renderer's stderr says about how far it has got.
+enum Report {
+    /// How many frames the render is composing, from the line it opens with.
+    Total(u64),
+    /// Frames written of frames planned, from the counter it rewrites as it
+    /// goes.
+    Frames { done: u64, total: u64 },
+}
+
+/// Read a progress report out of one line of `harmonigraph-offline`'s stderr,
+/// if that is what it is.
+///
+/// **This parses another binary's human-readable output**, which is a contract
+/// worth naming: the renderer opens with `... -> 5400 frames at 60 fps ...`
+/// and then rewrites `  120/5400 frames (2%)` in place. Both are matched here
+/// off the count that precedes ` frames`. The alternative — a `--progress`
+/// flag emitting something machine-shaped — fails far worse when the installed
+/// renderer is older than the plugin: it would reject the unknown flag and
+/// render nothing at all, where a format this no longer recognizes just leaves
+/// the bar empty and everything else working.
+fn parse_report(segment: &str) -> Option<Report> {
+    // The count is the last token before ` frames`, so a take path with a
+    // slash (or a space) in it has nothing to say here.
+    let token = segment.split_once(" frames")?.0.split_whitespace().next_back()?;
+    match token.split_once('/') {
+        Some((done, total)) => {
+            Some(Report::Frames { done: done.parse().ok()?, total: total.parse().ok()? })
+        }
+        None => Some(Report::Total(token.parse().ok()?)),
+    }
+}
+
+/// Longest stderr run with no separator in it that is worth keeping. Past this
+/// the segment is not a line the renderer meant to print, and buffering it
+/// only costs memory.
+const STDERR_SEGMENT_CAP: usize = 8 * 1024;
+
+/// Follow the renderer's stderr to its end, publishing progress as it arrives,
+/// and hand back the last line that ISN'T progress — which is the one worth
+/// showing if the render then fails.
+///
+/// Read continuously rather than collected at the end (what `Command::output`
+/// would do) for two reasons: a frame counter is only useful while the render
+/// is still running, and the renderer — plus the ffmpeg it inherits this pipe
+/// to — would eventually block on a pipe nobody is draining.
+///
+/// Split on `\r` as well as `\n`: the counter is REWRITTEN in place on one
+/// terminal line, so newlines alone would deliver the whole run of it as a
+/// single line, once, at the end.
+fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> String {
+    let mut buffer = [0u8; 4096];
+    let mut segment: Vec<u8> = Vec::new();
+    let mut last = String::new();
+    let take = |segment: &mut Vec<u8>, last: &mut String| {
+        let text = String::from_utf8_lossy(segment);
+        let text = text.trim();
+        match parse_report(text) {
+            Some(Report::Frames { done, total }) => {
+                progress.done.store(done, Ordering::Relaxed);
+                progress.total.store(total, Ordering::Relaxed);
+            }
+            Some(Report::Total(total)) => progress.total.store(total, Ordering::Relaxed),
+            // Diagnostics, warnings, the renderer's own error: keep the last
+            // one for the status line.
+            None if !text.is_empty() => *last = text.to_owned(),
+            None => {}
+        }
+        segment.clear();
+    };
+    loop {
+        let read = match stderr.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => n,
+            // A signal arriving mid-read is not the end of the render, and
+            // treating it as one would freeze the bar and truncate the
+            // diagnostics for a render still going perfectly well.
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        for &byte in &buffer[..read] {
+            if byte == b'\r' || byte == b'\n' {
+                take(&mut segment, &mut last);
+            } else {
+                segment.push(byte);
+                if segment.len() >= STDERR_SEGMENT_CAP {
+                    take(&mut segment, &mut last);
+                }
+            }
+        }
+    }
+    // Whatever the renderer left unterminated on its way out.
+    take(&mut segment, &mut last);
+    last
+}
+
 /// Run the renderer on the finished take, on a thread of its own so a
 /// long render neither blocks the writer nor the DAW. The video lands
 /// next to the take.
@@ -771,6 +920,7 @@ fn spawn_render(
     request: RenderRequest,
     take_path: std::path::PathBuf,
     status: Arc<Mutex<String>>,
+    progress: Arc<Progress>,
 ) {
     let _ = std::thread::Builder::new()
         .name("harmonigraph-take-render".into())
@@ -801,29 +951,45 @@ fn spawn_render(
             // audio — the renderer notes it and falls back to the scrolling view.
             command.arg("--playhead");
 
+            // stdout is the renderer's `--dump-layout` channel and nothing
+            // else; stderr carries everything this cares about, so pipe that
+            // one and follow it.
+            command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+
             *status.lock() = format!("rendering {}...", out.display());
-            let result = command.output();
-            if let Some(file) = &ui_state_file {
-                let _ = std::fs::remove_file(file);
-            }
-            match result {
-                Ok(done) if done.status.success() => {
-                    *status.lock() = format!("rendered {}", out.display());
+            let spawned = command.spawn();
+            let cleanup = || {
+                if let Some(file) = &ui_state_file {
+                    let _ = std::fs::remove_file(file);
                 }
-                Ok(done) => {
-                    // The renderer's own diagnostics are far more useful
-                    // than the exit code, and this is the only place a
-                    // plugin user will ever see them.
-                    let stderr = String::from_utf8_lossy(&done.stderr);
-                    let last = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
-                    *status.lock() = format!("render failed: {last}");
-                }
+            };
+            let mut child = match spawned {
+                Ok(child) => child,
                 Err(err) => {
+                    cleanup();
                     *status.lock() = format!(
                         "could not run {}: {err} — check the Renderer path",
                         request.program.display()
                     );
+                    return;
                 }
+            };
+
+            progress.begin();
+            let last = child.stderr.take().map(|pipe| follow(pipe, &progress)).unwrap_or_default();
+            let result = child.wait();
+            progress.end();
+            cleanup();
+
+            match result {
+                Ok(exit) if exit.success() => {
+                    *status.lock() = format!("rendered {}", out.display());
+                }
+                // The renderer's own diagnostics are far more useful than the
+                // exit code, and this is the only place a plugin user will
+                // ever see them.
+                Ok(_) => *status.lock() = format!("render failed: {last}"),
+                Err(err) => *status.lock() = format!("render failed: {err}"),
             }
         });
 }
@@ -872,6 +1038,103 @@ mod tests {
             request.extra_args,
             vec!["--size", "3840x2160", "--layout", "side-by-side"]
         );
+    }
+
+    /// Verbatim shapes from `harmonigraph-offline`'s stderr — the opening line
+    /// that announces the frame count, and the counter it rewrites as it goes.
+    #[test]
+    fn the_renderers_own_output_is_what_puts_numbers_on_the_bar() {
+        let header = "/Users/yan/Music/Harmonigraph Takes/take-1.take: 16.5s of events \
+                      -> 990 frames at 60 fps, 1920x1080 @ 1.50x -> take-1.mp4";
+        assert!(matches!(parse_report(header), Some(Report::Total(990))));
+        assert!(matches!(
+            parse_report("  120/990 frames (12%)"),
+            Some(Report::Frames { done: 120, total: 990 })
+        ));
+
+        // Everything else is a diagnostic, and belongs in the status line
+        // instead of quietly moving the bar. A path with a slash in it is the
+        // one that could be mistaken for a done/total pair.
+        assert!(parse_report("harmonigraph-offline: no take file given").is_none());
+        assert!(parse_report("note: no scratch recording, assuming take zero").is_none());
+        assert!(parse_report("/Users/yan/odd frames/take.take: could not be read").is_none());
+        assert!(parse_report("").is_none());
+    }
+
+    /// A whole run of a real render's stderr, captured verbatim from
+    /// `harmonigraph-offline` (the paths shortened, nothing else): the opening
+    /// line, the counter rewritten in place four times, and the closing line.
+    ///
+    /// The `\r`s are the point. They mean the counter is one terminal line
+    /// being overwritten, so splitting on newlines alone delivers the whole run
+    /// of it as a single line, once, at the end — a progress bar that fills
+    /// only when the render is already over.
+    const REAL_RENDER_STDERR: &str = "probe.take: 1.6s of events -> 108 frames at 30 fps, \
+         320x180 @ 1.00x -> probe.rgba\n\
+         \r  30/108 frames (28%)\r  60/108 frames (56%)\r  90/108 frames (83%)\
+         \r  108/108 frames (100%)\n\
+         done: 108 frames -> probe.rgba\n";
+
+    #[test]
+    fn the_rewritten_counter_reaches_the_bar_as_the_render_goes() {
+        let progress = Progress::default();
+        progress.begin();
+        follow(REAL_RENDER_STDERR.as_bytes(), &progress);
+        // 108, not 30: the closing `done: 108 frames` line names a total and
+        // says nothing about frames written, so it must not reset the count
+        // the render finished on either.
+        assert_eq!(
+            progress.read(),
+            Some(harmonigraph_ui::RenderProgress { done: 108, total: 108 })
+        );
+
+        progress.end();
+        assert_eq!(progress.read(), None, "no bar once nothing is rendering");
+    }
+
+    /// What the status line shows when a render fails is the renderer's own
+    /// last word — which means the counters have to be passed over on the way
+    /// to it, however recently they were printed.
+    #[test]
+    fn a_failed_renders_last_word_is_kept_over_the_counters() {
+        let stream = "take.take: 5.0s of events -> 300 frames at 60 fps, 640x360 @ 1.00x \
+                      -> take.mp4\n\
+                      \r  30/300 frames (10%)\r  60/300 frames (20%)\n\
+                      harmonigraph-offline: ffmpeg exited with status 1\n";
+        let progress = Progress::default();
+        progress.begin();
+        assert_eq!(
+            follow(stream.as_bytes(), &progress),
+            "harmonigraph-offline: ffmpeg exited with status 1"
+        );
+    }
+
+    /// A render killed mid-frame leaves its last counter unterminated. It is
+    /// still the truest thing known about how far it got, so the tail of the
+    /// stream counts even without a separator to end it.
+    #[test]
+    fn an_unterminated_last_counter_still_counts() {
+        let progress = Progress::default();
+        progress.begin();
+        follow("x.take: -> 300 frames at 60 fps\n\r  240/300 frames (80%)".as_bytes(), &progress);
+        assert_eq!(
+            progress.read(),
+            Some(harmonigraph_ui::RenderProgress { done: 240, total: 300 })
+        );
+    }
+
+    /// Two renders can overlap — "Render now" pressed while the auto-render
+    /// from a just-finished take is still going. The first to end must not
+    /// take the bar away from the one still running.
+    #[test]
+    fn overlapping_renders_keep_the_bar_until_the_last_one_ends() {
+        let progress = Progress::default();
+        progress.begin();
+        progress.begin();
+        progress.end();
+        assert!(progress.read().is_some(), "one render is still in flight");
+        progress.end();
+        assert_eq!(progress.read(), None);
     }
 
     #[test]

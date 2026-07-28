@@ -34,7 +34,7 @@ pub use layout::{Layout, Placement, PRESETS};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    RenderConfig, RenderFrame, RenderTrigger, SpectralOrientation, SpectrogramColor,
+    LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectralOrientation, SpectrogramColor,
     SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE, TILT_STEPS,
 };
 pub(crate) use config::{
@@ -43,7 +43,9 @@ pub(crate) use config::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
-pub use state::{render_frame_from_persist, CameraPreset, Console, SharedState};
+pub use state::{
+    render_frame_from_persist, CameraPreset, Console, RenderProgress, SharedState,
+};
 pub(crate) use state::default_dock;
 
 use harmonigraph_core::PitchClass;

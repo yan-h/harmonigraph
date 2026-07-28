@@ -326,7 +326,7 @@ fn run() -> Result<(), String> {
         .unwrap_or_default();
     let layout = match &args.layout {
         Some(spec) => Layout::load(spec)?,
-        None => Layout::split(frame.stacked, frame.split),
+        None => Layout::split(frame.lattice, frame.split),
     };
     let size = args.size.unwrap_or_else(|| size_for_frame(&frame));
 
@@ -476,6 +476,12 @@ fn run() -> Result<(), String> {
         done += 1;
         // Progress on one rewritten line; renders are long enough that
         // silence reads as a hang.
+        //
+        // This line and the `-> {total} frames` one above it are also READ, by
+        // the plugin's Video pane, which follows this stderr to drive its
+        // progress bar (`take::parse_report`): the count before ` frames` is
+        // the part it matches, so keep that shape. Reformatting the rest is
+        // free; losing the count leaves the bar empty.
         if done.is_multiple_of(30) || done == total {
             eprint!("\r  {done}/{total} frames ({:.0}%)", 100.0 * done as f64 / total as f64);
         }
@@ -532,7 +538,11 @@ mod tests {
     #[test]
     fn size_for_frame_puts_the_short_edge_at_1080_with_even_dimensions() {
         let sz = |aspect_w, aspect_h| {
-            size_for_frame(&harmonigraph_ui::RenderFrame { aspect_w, aspect_h, split: 0.5, stacked: false })
+            size_for_frame(&harmonigraph_ui::RenderFrame {
+                aspect_w,
+                aspect_h,
+                ..Default::default()
+            })
         };
         assert_eq!(sz(16, 9), [1920, 1080]);
         assert_eq!(sz(9, 16), [1080, 1920]);

@@ -20,7 +20,7 @@ use harmonigraph_scene::derive_scene;
 
 use super::section;
 use crate::widgets::{button_row, choice_row, record_button, ValueBar};
-use crate::{theme, Layout, Pane, SharedState};
+use crate::{theme, LatticeSide, Layout, Pane, SharedState};
 
 /// The preview's lattice is a second live view, so it needs its own GPU id —
 /// the docked Lattice tab owns 0, and two views sharing an id overwrite each
@@ -71,7 +71,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     let pad = FRAME_CHROME_PAD.min(size.min_elem() * 0.15);
     let box_rect = letterbox(outer.shrink(pad), aspect);
     // Compose with the SAME Layout the offline renderer resolves.
-    let layout = Layout::split(frame.stacked, frame.split);
+    let layout = Layout::split(frame.lattice, frame.split);
 
     // Make the render frame obvious against the pane. The letterbox padding
     // takes the panel color, so it reads as inert chrome rather than part of
@@ -131,16 +131,22 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             }
         }
     });
-    choice_row(
-        ui,
-        "Arrange",
-        &mut f.stacked,
-        &[
-            (false, "Side by side", "Lattice left, spectral pane right"),
-            (true, "Stacked", "Lattice above, spectral pane below"),
-        ],
-    );
-    let label = if f.stacked { "Lattice height" } else { "Lattice width" };
+    // Named for where the LATTICE goes, so the row reads as the placement it
+    // is — "Lattice: Top" rather than an axis plus a convention about which
+    // pane leads. Off `ALL` with an exhaustive match, like the Spectral pane's
+    // own four-sided row: a fifth side cannot reach the pane without a name
+    // and a hint of its own.
+    let sides = LatticeSide::ALL.map(|side| {
+        let (label, hint) = match side {
+            LatticeSide::Left => ("Left", "Lattice left, spectral pane right"),
+            LatticeSide::Right => ("Right", "Lattice right, spectral pane left"),
+            LatticeSide::Top => ("Top", "Lattice above, spectral pane below"),
+            LatticeSide::Bottom => ("Bottom", "Lattice below, spectral pane above"),
+        };
+        (side, label, hint)
+    });
+    choice_row(ui, "Lattice", &mut f.lattice, &sides);
+    let label = if f.lattice.sizes_by_height() { "Lattice height" } else { "Lattice width" };
     ValueBar::new(&mut f.split, 0.15..=0.85, label).show(ui);
 }
 
@@ -267,7 +273,7 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
     // render layout's background rather than to the panel this preview
     // happens to sit on — the same color `harmonigraph-offline` will clear to.
     scene.background = harmonigraph_scene::skin::ground_color(
-        Layout::split(state.render_config.frame.stacked, state.render_config.frame.split)
+        Layout::split(state.render_config.frame.lattice, state.render_config.frame.split)
             .background,
     );
     // No GPU-time slot: the Video pane's preview is a second lattice on
@@ -317,6 +323,7 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     if !state.take_status.is_empty() {
         ui.weak(&state.take_status);
     }
+    render_progress(ui, state);
 
     // When a take finishes and turns into a video. No other home, so it sits
     // right under the switch that starts one.
@@ -372,6 +379,34 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
             state.render_now = true;
         }
     }
+}
+
+/// How far the background render has got, while one is running.
+///
+/// A render is minutes of work started by a button that then looks like
+/// nothing happened: the status line names the file and never changes again
+/// until it is finished, so a long render and a hung one read identically. The
+/// bar is the difference between them, and the frame counts are what say how
+/// much longer — the renderer counts frames, and a rate you have watched for
+/// ten seconds turns "3400/5400" into a time.
+///
+/// Absent, not greyed, when nothing is rendering: the take controls are the
+/// pane's steady state and a permanent empty bar under them would read as a
+/// render stuck at zero.
+fn render_progress(ui: &mut egui::Ui, state: &SharedState) {
+    let Some(progress) = state.render_progress else { return };
+    let value = match progress.total {
+        // Pad `done` to the width of `total` so the readout keeps one width as
+        // it counts up: monospace, so that holds the name still beside it —
+        // `progress_bar` has no range to reserve from, unlike `ValueBar`.
+        0 => "starting".to_owned(),
+        total => format!("{:>width$}/{total}", progress.done, width = total.to_string().len()),
+    };
+    ui.add_space(2.0);
+    crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value).on_hover_text(
+        "Frames written of the frames this render is composing. It runs in \
+         the background — the DAW, and this window, keep going while it does.",
+    );
 }
 
 /// A labeled single-line text field that fills the pane width — the shape every

@@ -239,6 +239,59 @@ impl Default for RenderConfig {
     }
 }
 
+/// Which side of the video frame the lattice takes; the Spectral pane takes
+/// whatever is left.
+///
+/// Named for where the LATTICE lands rather than for the axis the frame is cut
+/// on, because the placement is what you are choosing — "side by side" says
+/// which axis and leaves which pane goes where to a convention, and there is no
+/// name at all for the mirror of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LatticeSide {
+    /// Lattice left, Spectral pane right.
+    #[default]
+    Left,
+    /// Lattice right, Spectral pane left.
+    Right,
+    /// Lattice above, Spectral pane below.
+    Top,
+    /// Lattice below, Spectral pane above.
+    Bottom,
+}
+
+impl LatticeSide {
+    /// Every side, for the settings row and the layout tests.
+    ///
+    /// Built from an exhaustive `match` rather than written out as a literal,
+    /// so the list cannot fall behind the enum — the same guard
+    /// [`SpectralOrientation::ALL`] uses, for the same reason.
+    pub(crate) const ALL: [LatticeSide; 4] = {
+        use LatticeSide::*;
+        // Exhaustive, and the compiler checks it. The arm is `()` because what
+        // is wanted is the coverage error, not the value.
+        const fn covered(side: LatticeSide) {
+            match side {
+                Left | Right | Top | Bottom => (),
+            }
+        }
+        covered(Left);
+        [Left, Right, Top, Bottom]
+    };
+
+    /// Whether the lattice's share of the frame is a HEIGHT — the frame cut
+    /// across rather than down.
+    ///
+    /// An exhaustive `match` rather than a `matches!`: a `matches!` answers
+    /// `false` for a variant nobody has thought about yet, so a fifth side
+    /// would silently be measured as a width instead of failing to build.
+    pub fn sizes_by_height(self) -> bool {
+        match self {
+            LatticeSide::Top | LatticeSide::Bottom => true,
+            LatticeSide::Left | LatticeSide::Right => false,
+        }
+    }
+}
+
 /// The video frame the Video pane composes: an aspect ratio plus the
 /// lattice/spectral split. Aspect is size-agnostic (the render's resolution is
 /// chosen separately); the split feeds [`Layout::split`](crate::Layout::split),
@@ -252,12 +305,37 @@ pub struct RenderFrame {
     pub aspect_w: u32,
     #[serde(default = "default_aspect_h")]
     pub aspect_h: u32,
-    /// The lattice's share of the frame, `0..1` (the rest is the spectral pane).
+    /// The lattice's share of the frame, `0..1` (the rest is the spectral
+    /// pane) — a width beside the Spectral pane, a height above or below it.
+    /// The lattice's share whichever side it takes, so this number means one
+    /// thing as [`lattice`](Self::lattice) changes under it.
     #[serde(default = "default_frame_split")]
     pub split: f32,
-    /// Lattice over spectral, rather than side by side.
+    /// Where the lattice sits; see [`LatticeSide`].
     #[serde(default)]
-    pub stacked: bool,
+    pub lattice: LatticeSide,
+    /// Load-only shim: blobs written before the four sides — and the
+    /// `ui_state` carried inside takes recorded then — say `stacked: bool`
+    /// here, the two-way choice this replaced. Folded into
+    /// [`lattice`](Self::lattice) by
+    /// [`migrate_legacy`](Self::migrate_legacy) and never written back.
+    #[serde(default, skip_serializing, rename = "stacked")]
+    pub legacy_stacked: bool,
+}
+
+impl RenderFrame {
+    /// Fold `stacked: bool` onto [`lattice`](Self::lattice); call after
+    /// deserializing a persisted frame.
+    ///
+    /// `true` meant lattice above the Spectral pane and `false` meant lattice
+    /// to its left, so only the stacked half has anything to say — and a blob
+    /// new enough to name a side carries no `stacked` at all, which is what
+    /// keeps this from overwriting one.
+    pub fn migrate_legacy(&mut self) {
+        if std::mem::take(&mut self.legacy_stacked) {
+            self.lattice = LatticeSide::Top;
+        }
+    }
 }
 
 pub(crate) fn default_aspect_w() -> u32 {
@@ -272,7 +350,13 @@ pub(crate) fn default_frame_split() -> f32 {
 
 impl Default for RenderFrame {
     fn default() -> Self {
-        RenderFrame { aspect_w: 16, aspect_h: 9, split: 0.68, stacked: false }
+        RenderFrame {
+            aspect_w: 16,
+            aspect_h: 9,
+            split: 0.68,
+            lattice: LatticeSide::Left,
+            legacy_stacked: false,
+        }
     }
 }
 

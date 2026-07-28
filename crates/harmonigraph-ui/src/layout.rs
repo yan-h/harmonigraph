@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::Pane;
+use crate::{LatticeSide, Pane};
 
 /// One pane and the slice of the frame it fills.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -107,23 +107,27 @@ impl Layout {
         ron::from_str(&text).map_err(|e| format!("layout {spec:?}: {e}"))
     }
 
-    /// A two-pane composition of the lattice and the spectral pane, split at
-    /// `fraction` — the lattice's share. Side by side unless `stacked`, then
-    /// lattice over spectral. Shared by the Video panel's live preview and
-    /// the offline renderer, so both compose the identical frame.
-    pub fn split(stacked: bool, fraction: f32) -> Layout {
+    /// A two-pane composition of the lattice and the spectral pane, with the
+    /// lattice on `side` taking `fraction` of the frame. Shared by the Video
+    /// panel's live preview and the offline renderer, so both compose the
+    /// identical frame.
+    ///
+    /// `fraction` is the LATTICE's share on all four sides — the spectral pane
+    /// gets the complement — so the split bar keeps meaning one thing when the
+    /// side changes under it.
+    pub fn split(side: LatticeSide, fraction: f32) -> Layout {
         let f = fraction.clamp(0.05, 0.95);
-        let panes = if stacked {
-            vec![
-                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 1.0, f) },
-                Placement { pane: Pane::Spectral, rect: (0.0, f, 1.0, 1.0) },
-            ]
-        } else {
-            vec![
-                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, f, 1.0) },
-                Placement { pane: Pane::Spectral, rect: (f, 0.0, 1.0, 1.0) },
-            ]
+        let rest = 1.0 - f;
+        let (lattice, spectral) = match side {
+            LatticeSide::Left => ((0.0, 0.0, f, 1.0), (f, 0.0, 1.0, 1.0)),
+            LatticeSide::Right => ((rest, 0.0, 1.0, 1.0), (0.0, 0.0, rest, 1.0)),
+            LatticeSide::Top => ((0.0, 0.0, 1.0, f), (0.0, f, 1.0, 1.0)),
+            LatticeSide::Bottom => ((0.0, rest, 1.0, 1.0), (0.0, 0.0, 1.0, rest)),
         };
+        let panes = vec![
+            Placement { pane: Pane::Lattice, rect: lattice },
+            Placement { pane: Pane::Spectral, rect: spectral },
+        ];
         Layout { background: default_background(), margin: 0.0, gap: 8.0, panes }
     }
 
@@ -282,7 +286,7 @@ mod tests {
     /// whichever way the two panes are arranged.
     #[test]
     fn adjacent_panes_get_one_divider_centered_in_their_gap() {
-        let layout = Layout { gap: 20.0, ..Layout::split(false, 0.6) };
+        let layout = Layout { gap: 20.0, ..Layout::split(LatticeSide::Left, 0.6) };
         let resolved = layout.resolve(FRAME);
         let lines = layout.dividers(&resolved);
         assert_eq!(lines.len(), 1, "two panes, one boundary");
@@ -291,12 +295,41 @@ mod tests {
         assert_eq!(a.x, b.x, "side by side means a vertical line");
         assert_eq!((a.y, b.y), (0.0, 1080.0), "spanning the whole shared edge");
 
-        let stacked = Layout { gap: 20.0, ..Layout::split(true, 0.6) };
+        let stacked = Layout { gap: 20.0, ..Layout::split(LatticeSide::Top, 0.6) };
         let lines = stacked.dividers(&stacked.resolve(FRAME));
         assert_eq!(lines.len(), 1);
         let [a, b] = lines[0];
         assert!((a.y - 1080.0 * 0.6).abs() < 0.01);
         assert_eq!((a.x, b.x), (0.0, 1920.0), "stacked means a horizontal line");
+    }
+
+    /// The whole point of naming the sides: the lattice lands on the one it is
+    /// asked for, and takes the same share of the frame on each.
+    #[test]
+    fn the_lattice_takes_the_side_it_names_and_the_same_share_of_it() {
+        for side in LatticeSide::ALL {
+            let layout = Layout { gap: 0.0, ..Layout::split(side, 0.6) };
+            let resolved = layout.resolve(FRAME);
+            let find = |want: Pane| {
+                resolved.iter().find(|(p, _)| *p == want).map(|(_, r)| *r).expect("both panes")
+            };
+            let (lattice, spectral) = (find(Pane::Lattice), find(Pane::Spectral));
+            let share = if side.sizes_by_height() {
+                lattice.height() / FRAME.y
+            } else {
+                lattice.width() / FRAME.x
+            };
+            assert!((share - 0.6).abs() < 0.01, "{side:?}: lattice took {share} of the frame");
+            // The named side is the one the lattice reaches and the spectral
+            // pane does not — which is what the name is a claim about.
+            let (near, far) = match side {
+                LatticeSide::Left => (lattice.left(), spectral.left()),
+                LatticeSide::Right => (-lattice.right(), -spectral.right()),
+                LatticeSide::Top => (lattice.top(), spectral.top()),
+                LatticeSide::Bottom => (-lattice.bottom(), -spectral.bottom()),
+            };
+            assert!(near < far, "{side:?}: the lattice should be the pane on that edge");
+        }
     }
 
     /// Nothing to delineate: one pane has no neighbour, and panes that don't

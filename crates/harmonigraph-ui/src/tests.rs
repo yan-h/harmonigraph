@@ -137,6 +137,51 @@ fn a_pre_split_melody_bass_blob_loads_as_the_two_flags() {
 }
 
 #[test]
+fn a_render_frame_saved_as_stacked_loads_as_the_side_it_meant() {
+    // The frame's arrangement was `stacked: bool` before it became four named
+    // sides: `true` put the lattice above the spectral pane, `false` to its
+    // left. Old blobs carry the flag and no `lattice`, and so does the
+    // `ui_state` inside every take recorded then — which is why both doors
+    // into the blob have to fold it, or a take framed stacked re-renders side
+    // by side.
+    for (flag, side) in [(true, LatticeSide::Top), (false, LatticeSide::Left)] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        // A side the migration can't reach by accident, so a shim that failed
+        // to fire is visible rather than looking like the default.
+        state.render_config.frame.lattice = LatticeSide::Right;
+        state.render_config.frame.split = 0.42;
+        let saved = state.save_persist().replace("lattice:Right", &format!("stacked:{flag}"));
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {flag}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.render_config.frame.lattice, side, "stacked:{flag}");
+        assert_eq!(restored.render_config.frame.split, 0.42, "the rest of the frame survives");
+        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
+
+        // The offline renderer's own door into the blob.
+        let frame = crate::render_frame_from_persist(&saved).expect("still parses");
+        assert_eq!(frame.lattice, side, "stacked:{flag} through render_frame_from_persist");
+    }
+}
+
+/// The flag is load-only: a saved frame names its side and says nothing about
+/// `stacked`, so a blob written now cannot be read back as a migration.
+#[test]
+fn a_saved_render_frame_carries_the_side_and_not_the_old_flag() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.render_config.frame.lattice = LatticeSide::Bottom;
+    let saved = state.save_persist();
+    assert!(saved.contains("lattice:Bottom"), "the side is what gets written");
+    assert!(!saved.contains("stacked:"), "the shim must never be written back");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    assert_eq!(restored.render_config.frame.lattice, LatticeSide::Bottom);
+}
+
+#[test]
 fn pre_rename_octave_style_and_slice_band_fields_still_load() {
     // The outer layer's band fields were renamed (slice_inner/outer ->
     // outer_inner/outer); aliases must keep blobs with the old names
@@ -2373,8 +2418,9 @@ const SETTINGS_TABS: [panes::Tab; 8] = [
 /// to the painted edge — they are the same number there.
 ///
 /// Tall on purpose (a pane's controls are a column, and the point here is the
-/// other axis) and with the take controls switched on, so the Video tab draws
-/// the record button and the Options field a real session has.
+/// other axis) and with the take controls switched on — and a render in
+/// flight — so the Video tab draws the record button, the Options field, and
+/// the progress bar a real session has.
 fn settings_pane_at_width(
     tab: panes::Tab,
     width: f32,
@@ -2383,6 +2429,7 @@ fn settings_pane_at_width(
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.take_supported = true;
     state.last_take_ready = true;
+    state.render_progress = Some(FIXTURE_RENDER);
     state.camera.projection = projection;
     // A saved angle, so the Angle row has the button a real session gives it.
     state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
@@ -2466,6 +2513,13 @@ fn the_options_field_sits_beside_its_label() {
 /// one thing in a settings pane painted as a `BAR_HEIGHT`-tall rect in
 /// `well()`: the accent fill over it is the same height in a different color,
 /// and the record button's own `well()` panel is taller.
+/// The render the pane fixtures have in flight, so the Video pane's progress
+/// bar is drawn in every sweep over the settings panes rather than only in the
+/// test below — it takes the column's width like every other bar, and that is
+/// what the sweeps are for. The two digits of `done` against three of `total`
+/// also put the padded readout through them.
+const FIXTURE_RENDER: RenderProgress = RenderProgress { done: 120, total: 990 };
+
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
     shapes
@@ -2520,6 +2574,48 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     let bars =
         bar_track_widths(&settings_pane_at_width(panes::Tab::Tuning, 400.0, PROJECTIONS[0])).len();
     assert!(bars >= 10, "only found {bars} bar tracks in the Tuning pane; has the paint changed?");
+}
+
+/// The render bar fills to the share of frames done — which is the whole
+/// reason it is a bar and not another sentence in the status line, since a
+/// render is minutes long and the sentence never changes while it runs.
+///
+/// The fraction is also what tells it apart from the `ValueBar` beside it,
+/// which paints the same accent fill: the frame's split sits at 0.68 by
+/// default, and the fixture render is a shade over a tenth done.
+#[test]
+fn the_render_bar_fills_to_the_share_of_frames_done() {
+    const WIDTH: f32 = 400.0;
+    let shapes = settings_pane_at_width(panes::Tab::Video, WIDTH, PROJECTIONS[0]);
+    let share = FIXTURE_RENDER.fraction().expect("the fixture render knows its total");
+    let fills: Vec<f32> = shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Rect(r)
+                if r.fill == crate::theme::accent_fill()
+                    && (r.rect.height() - 20.0).abs() < 0.6 =>
+            {
+                Some(r.rect.width() / WIDTH)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        fills.iter().any(|filled| (filled - share).abs() < 0.01),
+        "no bar filled to {share} of the column; found {fills:?}"
+    );
+}
+
+/// Before the renderer has said how many frames it is composing there is no
+/// share to draw, and an empty track says "starting" where a track filled to
+/// zero would say "none of it done yet" — a claim nothing has made.
+#[test]
+fn a_render_that_has_not_announced_its_total_has_no_fraction() {
+    assert_eq!(RenderProgress { done: 0, total: 0 }.fraction(), None);
+    assert_eq!(RenderProgress { done: 90, total: 0 }.fraction(), None);
+    assert_eq!(RenderProgress { done: 1, total: 4 }.fraction(), Some(0.25));
+    // A renderer that overshot its own estimate still fills a bar, not past it.
+    assert_eq!(RenderProgress { done: 9, total: 4 }.fraction(), Some(1.0));
 }
 
 /// No settings pane's controls run out past the column, at any width worth
