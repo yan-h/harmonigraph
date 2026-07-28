@@ -534,6 +534,9 @@ impl SharedState {
             // octave numbers.
             self.spectrum_config.migrate_legacy();
             self.render_config = persist.render;
+            // And for the render frame, whose two-way `stacked` flag became a
+            // named side.
+            self.render_config.frame.migrate_legacy();
             self.fps_cap = persist.fps_cap;
         }
     }
@@ -580,7 +583,15 @@ pub(crate) struct UiPersist {
 /// offline renderer can default its size and layout to what the take was
 /// composed for, without building a whole [`SharedState`].
 pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
-    ron::from_str::<UiPersist>(serialized).ok().map(|persist| persist.render.frame)
+    ron::from_str::<UiPersist>(serialized).ok().map(|persist| {
+        // Takes recorded before the four sides carry a `stacked` flag in this
+        // blob, and the renderer reading them is the whole reason the shim
+        // exists — re-rendering one must still compose the frame it was framed
+        // at. See `RenderFrame::migrate_legacy`.
+        let mut frame = persist.render.frame;
+        frame.migrate_legacy();
+        frame
+    })
 }
 
 impl SharedState {

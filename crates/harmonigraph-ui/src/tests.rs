@@ -137,6 +137,51 @@ fn a_pre_split_melody_bass_blob_loads_as_the_two_flags() {
 }
 
 #[test]
+fn a_render_frame_saved_as_stacked_loads_as_the_side_it_meant() {
+    // The frame's arrangement was `stacked: bool` before it became four named
+    // sides: `true` put the lattice above the spectral pane, `false` to its
+    // left. Old blobs carry the flag and no `lattice`, and so does the
+    // `ui_state` inside every take recorded then — which is why both doors
+    // into the blob have to fold it, or a take framed stacked re-renders side
+    // by side.
+    for (flag, side) in [(true, LatticeSide::Top), (false, LatticeSide::Left)] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        // A side the migration can't reach by accident, so a shim that failed
+        // to fire is visible rather than looking like the default.
+        state.render_config.frame.lattice = LatticeSide::Right;
+        state.render_config.frame.split = 0.42;
+        let saved = state.save_persist().replace("lattice:Right", &format!("stacked:{flag}"));
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for {flag}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(restored.render_config.frame.lattice, side, "stacked:{flag}");
+        assert_eq!(restored.render_config.frame.split, 0.42, "the rest of the frame survives");
+        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
+
+        // The offline renderer's own door into the blob.
+        let frame = crate::render_frame_from_persist(&saved).expect("still parses");
+        assert_eq!(frame.lattice, side, "stacked:{flag} through render_frame_from_persist");
+    }
+}
+
+/// The flag is load-only: a saved frame names its side and says nothing about
+/// `stacked`, so a blob written now cannot be read back as a migration.
+#[test]
+fn a_saved_render_frame_carries_the_side_and_not_the_old_flag() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.render_config.frame.lattice = LatticeSide::Bottom;
+    let saved = state.save_persist();
+    assert!(saved.contains("lattice:Bottom"), "the side is what gets written");
+    assert!(!saved.contains("stacked:"), "the shim must never be written back");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    assert_eq!(restored.render_config.frame.lattice, LatticeSide::Bottom);
+}
+
+#[test]
 fn pre_rename_octave_style_and_slice_band_fields_still_load() {
     // The outer layer's band fields were renamed (slice_inner/outer ->
     // outer_inner/outer); aliases must keep blobs with the old names

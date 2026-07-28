@@ -34,7 +34,7 @@ pub use layout::{Layout, Placement, PRESETS};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    RenderConfig, RenderFrame, RenderTrigger, SpectralOrientation, SpectrogramColor,
+    LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectralOrientation, SpectrogramColor,
     SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE, TILT_STEPS,
 };
 pub(crate) use config::{

@@ -326,7 +326,7 @@ fn run() -> Result<(), String> {
         .unwrap_or_default();
     let layout = match &args.layout {
         Some(spec) => Layout::load(spec)?,
-        None => Layout::split(frame.stacked, frame.split),
+        None => Layout::split(frame.lattice, frame.split),
     };
     let size = args.size.unwrap_or_else(|| size_for_frame(&frame));
 
@@ -532,7 +532,11 @@ mod tests {
     #[test]
     fn size_for_frame_puts_the_short_edge_at_1080_with_even_dimensions() {
         let sz = |aspect_w, aspect_h| {
-            size_for_frame(&harmonigraph_ui::RenderFrame { aspect_w, aspect_h, split: 0.5, stacked: false })
+            size_for_frame(&harmonigraph_ui::RenderFrame {
+                aspect_w,
+                aspect_h,
+                ..Default::default()
+            })
         };
         assert_eq!(sz(16, 9), [1920, 1080]);
         assert_eq!(sz(9, 16), [1080, 1920]);
