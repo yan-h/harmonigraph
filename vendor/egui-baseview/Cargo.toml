@@ -125,6 +125,29 @@ optional = true
 version = "29"
 optional = true
 
+# The same objc2 generation wgpu-hal 29 builds against, so the
+# `Retained<CAMetalLayer>` pulled out of `Surface::as_hal` in the wgpu
+# renderer is the same type on both sides. Only used on macOS with the
+# `wgpu` feature (src/renderer/wgpu/renderer.rs, `fold_present`).
+[target.'cfg(target_os = "macos")'.dependencies.objc2]
+version = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3"
+features = [
+    "NSDictionary",
+    "NSString",
+    "NSNull",
+    "NSObject",
+]
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-quartz-core]
+version = "0.3"
+features = [
+    "CALayer",
+    "CAMetalLayer",
+]
+
 [dev-dependencies.egui]
 version = "0.35.0"
 features = ["default_fonts"]
