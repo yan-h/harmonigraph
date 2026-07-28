@@ -549,6 +549,22 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 ///
 /// Along the time axis it grows from the leading edge INTO the note, so a name
 /// lies over its own ribbon rather than over the picture in front of it.
+///
+/// The LETTER's own position inside that box has to be independent of the
+/// growth direction, or `C` and `C♯` disagree about where the letter goes and
+/// a column of names stops reading as one. [`draw_stacked_name`] always sets
+/// the letter first and lets the accidental/comma columns trail after it, so
+/// growth that runs the same way (time left-to-right or top-to-bottom) already
+/// puts the letter flush against the leading edge, same as it would with no
+/// marks at all -- nothing to do there. Growth that runs backward (Right's
+/// leftward time) is the mismatch: "first" is still the box's FAR edge from
+/// the leading edge, not its near one, so centring on the FULL name drags the
+/// letter along with however wide its marks happen to be. Measuring the pure
+/// letter's reach instead of the whole name's is what keeps it still; the
+/// marks are what absorb the difference, at the cost of a name with marks
+/// reaching a little closer to the leading edge than a bare letter would.
+///
+/// [`draw_stacked_name`]: super::lattice::draw_stacked_name
 fn label_rect(
     axes: &Axes,
     p: f32,
@@ -564,8 +580,22 @@ fn label_rect(
     // when time runs up or down it. Projecting answers all four without naming a
     // screen side.
     let along_depth = (extent.x * depth.x).abs() + (extent.y * depth.y).abs();
+    // The same projection, but of the bare letter alone -- no accidental,
+    // comma, or septimal mark -- which is what backward growth measures from.
+    let bare = NoteName { letter: name.letter, sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
+    let letter_extent = name_extent(&bare, size);
+    let letter_along_depth =
+        (letter_extent.x * depth.x).abs() + (letter_extent.y * depth.y).abs();
     let inset = LABEL_INSET * label_scale;
-    let centre = axes.at(p, d) + depth * (inset + along_depth * 0.5);
+    // `depth.x + depth.y` is `depth`'s own sign: +1 forward (time runs the
+    // screen's own way), -1 backward. Backward is where the letter and the box
+    // disagree on which end is "first" -- see above.
+    let growth = if depth.x + depth.y < 0.0 {
+        letter_along_depth - along_depth * 0.5
+    } else {
+        along_depth * 0.5
+    };
+    let centre = axes.at(p, d) + depth * (inset + growth);
     egui::Rect::from_center_size(centre, extent).expand(LABEL_PAD * label_scale)
 }
 
@@ -1001,6 +1031,83 @@ mod tests {
         assert!(rect.min.x >= lead.x, "it starts at the leading edge");
         assert!(rect.min.x < lead.x + 2.0 * LABEL_INSET, "...and right at it");
         assert!(rect.max.x < axes.at(0.5, 0.8).x, "growing back into the note, not past it");
+    }
+
+    /// The LETTER lands in the same place whether or not its name carries an
+    /// accidental — in every orientation, not only the ones where the box
+    /// happens to grow the same way the letter is typeset.
+    ///
+    /// Right's leftward time is the one where the two disagree: the box grows
+    /// away from the leading edge, but [`draw_stacked_name`] always sets the
+    /// letter first and the accidental after it, so growing away would drag
+    /// the letter along with however wide the accidental happens to be.
+    /// `rect.min.x` is where that letter lands (see
+    /// [`a_name_sits_on_its_ribbon_at_the_leading_edge`]), so that is what has
+    /// to agree between a plain letter and one carrying a mark.
+    ///
+    /// [`draw_stacked_name`]: super::lattice::draw_stacked_name
+    #[test]
+    fn the_letter_lines_up_with_or_without_an_accidental() {
+        let plain = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
+        let sharp = NoteName { letter: 'C', sharps: 1, syntonic_commas: 0, septimal_commas: 0 };
+        for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
+            let cfg = SpectrumConfig { orientation, ..SpectrumConfig::default() };
+            let axes = Axes::new(PANE, &cfg);
+            let plain_rect = label_rect(&axes, 0.5, 0.5, &plain, 12.0, 1.0);
+            let sharp_rect = label_rect(&axes, 0.5, 0.5, &sharp, 12.0, 1.0);
+            assert!(
+                (plain_rect.min.x - sharp_rect.min.x).abs() < 0.01,
+                "{orientation:?}: C's letter at {} but C♯'s at {}",
+                plain_rect.min.x,
+                sharp_rect.min.x,
+            );
+        }
+    }
+
+    /// The same claim as
+    /// [`the_letter_lines_up_with_or_without_an_accidental`], but read off
+    /// the glyphs [`draw`] actually queues through a real `egui::Context` —
+    /// real font metrics, not [`name_extent`]'s estimate — so it would catch
+    /// the estimate and the real measurement disagreeing by enough to move
+    /// the letter visibly, which the arithmetic-only test cannot see.
+    #[test]
+    fn the_drawn_letter_lines_up_across_notes_in_right_orientation() {
+        let cfg =
+            SpectrumConfig { orientation: SpectralOrientation::Right, ..SpectrumConfig::default() };
+        let axes = Axes::new(PANE, &cfg);
+        let names = [
+            NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 },
+            NoteName { letter: 'E', sharps: 0, syntonic_commas: 1, septimal_commas: 0 },
+        ];
+        let labels: Vec<NoteLabel> = names
+            .iter()
+            .map(|&name| NoteLabel {
+                name,
+                rect: label_rect(&axes, 0.5, 0.5, &name, LABEL_PT, 1.0),
+                #[cfg(test)]
+                at: 0.0,
+            })
+            .collect();
+
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx); // the real Iosevka metrics
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        let mut batch = crate::text::TextBatch::default();
+        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            draw(ui.painter(), &labels, 1.0, &mut batch);
+        });
+
+        let left_of = |letter: &str| {
+            batch
+                .pieces()
+                .iter()
+                .find(|p| p.text == letter)
+                .unwrap_or_else(|| panic!("no {letter:?} drawn, got {:?}", batch.pieces()))
+                .galley
+                .left()
+        };
+        let (c, e) = (left_of("C"), left_of("E"));
+        assert!((c - e).abs() < 0.5, "C's letter drawn at {c} but E's (with a comma) at {e}");
     }
 
     /// A name sits on the ribbon the ROLL DREW, read from the roll's own
