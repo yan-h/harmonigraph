@@ -180,7 +180,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
     // After it: the rails the folds left behind, which only this frame's
     // rectangles can place.
-    fold::paint(ui, &dock, &dock_style);
+    fold::paint(ui, &mut dock, &dock_style);
     state.dock = dock;
     // Deferred from the Panel pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
