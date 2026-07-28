@@ -74,20 +74,34 @@ prompt, and they run concurrently.
 5. **Tests that pass for the wrong reason.** A test whose fixture is too
    small to reach the new code path — in #85 the aggregator test pushed 14
    columns into a tier holding 2048, so no test ever reached a tier merge.
-6. **Agent prompts that have gone stale.** `.claude/agents/*.md` assert
+6. **Prose that has gone stale.** `.claude/` and the shell scripts assert
    invariants about the code they describe, and nothing in the build notices
-   when those stop being true. For each agent file, check whether the range
-   changed what it describes:
+   when those stop being true. Check the range against all of it:
 
    ```sh
    git diff --name-only <since>..HEAD -- crates/
+   ls .claude/agents/*.md .claude/skills/*/SKILL.md .claude/commands/*.md
    ```
 
-   Cross-reference against the paths each agent names. A prompt carrying last
+   Cross-reference against the paths each file names. Prose carrying last
    month's invariants is the same defect class as a cache with a missing
    invalidation key — it is just one whose consumer is a future session
    rather than a frame. Report drift as a finding; the fix is an edit to the
-   agent file in the audit PR.
+   file in the audit PR.
+
+   **The skills are where this actually bites, not the agents.** By
+   `pr-hygiene`'s own rule an agent encodes a job or a constraint and never a
+   description of the code, so by construction there is little in
+   `.claude/agents/` that CAN rot — and a check scoped to it comes back clean
+   while saying nothing. The skills are the opposite: they are full of paths,
+   crate names, commands and pane names. #114 had to hand-fix five of them two
+   merges after #107 created them, and the audit of #107–#126 found three more
+   there plus one in `.claude/reclaim-worktrees.sh`, against zero in
+   `.claude/agents/`.
+
+   The scripts are the highest stakes of all, because a path that stops
+   matching makes one a silent no-op rather than an error. `test -e` every
+   path they glob, grep or copy.
 
 ## The bar for reporting something
 
