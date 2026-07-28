@@ -473,6 +473,64 @@ impl<'a> ValueBar<'a> {
     }
 }
 
+/// A read-only bar reporting how far something running in the background has
+/// got: `fraction` of the track filled, `label` on the left and `value` read
+/// out on the right.
+///
+/// The same shape as [`ValueBar`] — same track, fill, and text placement — so
+/// a pane reads as one kind of control whether the number is one you set or
+/// one you are being told. It senses hover only: there is nothing here to
+/// drag, and a bar that moved under the pointer would claim there was.
+///
+/// `fraction` is `None` while the total is still unknown, and then the track
+/// draws EMPTY rather than at zero — "no idea yet" and "none of it done" are
+/// different things, and only one of them is a number.
+///
+/// Nothing keeps the name from re-eliding as the readout grows, unlike
+/// `ValueBar`, which reserves the width of the widest value its range can
+/// reach. There is no range to ask here, so a caller whose readout changes
+/// width pads it to a fixed one instead (monospace, so that is enough).
+pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str) -> Response {
+    let width = bar_width(ui);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::hover());
+
+    let radius = CornerRadius::same(BAR_RADIUS);
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, theme::well());
+    if let Some(t) = fraction {
+        let mut fill = rect;
+        fill.set_width(rect.width() * t.clamp(0.0, 1.0));
+        painter.rect_filled(fill, radius, theme::accent_fill());
+    }
+
+    // Value laid out first and the name elided into what is left, the order
+    // and the reason `ValueBar` uses: the number is what the bar is for.
+    let value = painter.layout_no_wrap(
+        value.to_owned(),
+        TextStyle::Monospace.resolve(ui.style()),
+        theme::text(),
+    );
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        label.to_owned(),
+        TextStyle::Body.resolve(ui.style()),
+        theme::text_dim(),
+    );
+    job.wrap.max_width =
+        (rect.width() - 2.0 * BAR_TEXT_PAD - BAR_LABEL_GAP - value.size().x).max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.overflow_character = Some('\u{2026}');
+    let label = painter.layout_job(job);
+    let centered =
+        |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+    painter.galley(centered(&label, rect.left() + BAR_TEXT_PAD), label, theme::text_dim());
+    painter.galley(
+        centered(&value, rect.right() - BAR_TEXT_PAD - value.size().x),
+        value,
+        theme::text(),
+    );
+    response
+}
+
 /// How near a handle the pointer has to start for the drag to take that
 /// handle rather than the span between them. Generous on purpose: grabbing
 /// the span when you meant an end is the easy mistake, and the expensive one

@@ -323,6 +323,7 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     if !state.take_status.is_empty() {
         ui.weak(&state.take_status);
     }
+    render_progress(ui, state);
 
     // When a take finishes and turns into a video. No other home, so it sits
     // right under the switch that starts one.
@@ -378,6 +379,34 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
             state.render_now = true;
         }
     }
+}
+
+/// How far the background render has got, while one is running.
+///
+/// A render is minutes of work started by a button that then looks like
+/// nothing happened: the status line names the file and never changes again
+/// until it is finished, so a long render and a hung one read identically. The
+/// bar is the difference between them, and the frame counts are what say how
+/// much longer — the renderer counts frames, and a rate you have watched for
+/// ten seconds turns "3400/5400" into a time.
+///
+/// Absent, not greyed, when nothing is rendering: the take controls are the
+/// pane's steady state and a permanent empty bar under them would read as a
+/// render stuck at zero.
+fn render_progress(ui: &mut egui::Ui, state: &SharedState) {
+    let Some(progress) = state.render_progress else { return };
+    let value = match progress.total {
+        // Pad `done` to the width of `total` so the readout keeps one width as
+        // it counts up: monospace, so that holds the name still beside it —
+        // `progress_bar` has no range to reserve from, unlike `ValueBar`.
+        0 => "starting".to_owned(),
+        total => format!("{:>width$}/{total}", progress.done, width = total.to_string().len()),
+    };
+    ui.add_space(2.0);
+    crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value).on_hover_text(
+        "Frames written of the frames this render is composing. It runs in \
+         the background — the DAW, and this window, keep going while it does.",
+    );
 }
 
 /// A labeled single-line text field that fills the pane width — the shape every

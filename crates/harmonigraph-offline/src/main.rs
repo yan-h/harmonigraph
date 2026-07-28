@@ -476,6 +476,12 @@ fn run() -> Result<(), String> {
         done += 1;
         // Progress on one rewritten line; renders are long enough that
         // silence reads as a hang.
+        //
+        // This line and the `-> {total} frames` one above it are also READ, by
+        // the plugin's Video pane, which follows this stderr to drive its
+        // progress bar (`take::parse_report`): the count before ` frames` is
+        // the part it matches, so keep that shape. Reformatting the rest is
+        // free; losing the count leaves the bar empty.
         if done.is_multiple_of(30) || done == total {
             eprint!("\r  {done}/{total} frames ({:.0}%)", 100.0 * done as f64 / total as f64);
         }

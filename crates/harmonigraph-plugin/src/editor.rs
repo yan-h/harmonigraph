@@ -251,6 +251,7 @@ impl EditorShared {
         }
         self.take.tick(self.take_rolling, count);
         self.ui.take_status = self.take.status();
+        self.ui.render_progress = self.take.render_progress();
         // The shell may have refused to start (unwritable directory);
         // don't leave the indicator claiming otherwise.
         self.ui.take_recording = self.take.is_recording();
