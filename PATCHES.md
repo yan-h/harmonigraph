@@ -187,9 +187,10 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   dictionary on the layer kills the lookup for every caller. Second: a
   present is decoupled from the transaction carrying the new bounds, so
   the resize commit shows the old drawable stretched into the new geometry
-  for a frame; `presentsWithTransaction`, raised for the adopting frame
-  plus a 3-frame tail (set before the acquire — the flag is captured
-  there), folds new content and new bounds into one commit. Costs a
+  for a frame; `presentsWithTransaction`, raised for three presents
+  starting with the adopting frame's (`PWT_FRAMES = 3`, drained one per
+  frame from the frame that arms it; set before the acquire — the flag is
+  captured there), folds new content and new bounds into one commit. Costs a
   main-thread wait per present, so it is not left on. Includes a bounded
   probe: 48 stderr lines of model-vs-presentation geometry per resize
   gesture, arming only when pwt is down so a border drag logs one window,
