@@ -239,6 +239,10 @@ impl Folds {
                 continue;
             }
             let holds = holds(tree);
+            // For the [121f] probe line below: the horizontal fractions as
+            // this pass FOUND them, against which its own writes are told
+            // apart from anything that moved them between passes.
+            let entry_fractions = (probe_fraction(tree, 0), probe_fraction(tree, 1));
             let moved = self.reconcile(tree, surface, &holds, area, ask_outstanding);
             // The widest this window has been, for a session that was not there
             // to watch it get that wide: the folds came off the persist blob,
@@ -325,9 +329,29 @@ impl Folds {
             // moment its collapse flag clears, and writing that into the
             // window being left is the same squeeze the restore deferral
             // exists to stop.
-            if !((moved || ask_outstanding) && main) {
+            let wrote = !((moved || ask_outstanding) && main);
+            if wrote {
                 let fitted = fit.dialled_for(area).and_then(|dialled| fit.widths(dialled));
                 write_fractions(tree, &holds, fitted.as_ref().unwrap_or(&widths), separator);
+            }
+            // Fold probe (issue #121), stderr -> the host's engine log. One
+            // line per frame while anything is in flight, with the horizontal
+            // fractions at entry and exit of this pass: a fraction that moves
+            // BETWEEN passes names a writer outside this module.
+            if main && (moved || ask_outstanding || (area - dial.area).abs() >= 0.01) {
+                eprintln!(
+                    "[121f] area={area:.0} moved={} wait={} settled={} refused={} wrote={} \
+                     in=[{:.4},{:.4}] out=[{:.4},{:.4}]",
+                    u8::from(moved),
+                    u8::from(ask_outstanding),
+                    u8::from(settled),
+                    u8::from(refused),
+                    u8::from(wrote),
+                    entry_fractions.0,
+                    entry_fractions.1,
+                    probe_fraction(tree, 0),
+                    probe_fraction(tree, 1),
+                );
             }
             // Only a fold or an unfold moves the window. Any other gap between
             // the layout and the window is one the window is not answering for
@@ -749,6 +773,17 @@ fn set_fraction(tree: &mut Tree<Tab>, node: NodeIndex, fraction: f32) {
     if let Node::Horizontal(split) = &mut tree[node] {
         split.fraction = fraction.clamp(0.0, 1.0);
     }
+}
+
+/// A horizontal split's fraction for the `[121f]` probe line; NaN where the
+/// node is missing or not a horizontal split, so the line still prints.
+fn probe_fraction(tree: &Tree<Tab>, node: usize) -> f32 {
+    if node < tree.len() {
+        if let Node::Horizontal(split) = &tree[NodeIndex(node)] {
+            return split.fraction;
+        }
+    }
+    f32::NAN
 }
 
 /// What a fold is holding at one split.
