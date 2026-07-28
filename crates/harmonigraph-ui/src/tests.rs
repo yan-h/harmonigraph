@@ -3099,11 +3099,20 @@ fn a_folded_column_names_every_pane_in_it() {
         ["Tuning", "Notes"],
         "both panes in the folded column should be named, in the order they are stacked",
     );
-    // Centred in their shares rather than tucked under the arrows, which are
-    // all stacked at the top of this one rail: a name up there would caption
-    // whichever arrow it happened to land under (see `fold::paint_name`).
-    let (_, first) = labels.first().expect("a name");
-    assert!(*first > 100.0, "the first name should sit in its share, not under the stack: {first}");
+    // Each in ITS share of the rail, under its own arrow: the shares are the
+    // column's own fractions (the log leaf is dialled at 0.45 of it), and a
+    // name hangs one tab bar plus a little padding below the top of its share,
+    // which is the arrow that brings that pane back.
+    let boundary = rail.top() + rail.height() * 0.55;
+    let under = |top: f32| top..top + crate::theme::TAB_BAR_HEIGHT + 20.0;
+    assert!(
+        under(rail.top()).contains(&labels[0].1),
+        "the upper pane's name should sit under the arrow at the top of the rail: {labels:?}",
+    );
+    assert!(
+        under(boundary).contains(&labels[1].1),
+        "the lower pane's name should sit under its own arrow at {boundary}: {labels:?}",
+    );
 }
 
 /// Two panes folded side by side name themselves under their own arrows.
@@ -3142,40 +3151,64 @@ fn a_folded_pair_names_each_rail_under_its_own_arrow() {
     }
 }
 
-/// The band rectangles painted on a rail this frame, with the fill each got.
-///
-/// A rail's bands are the only rects that wide-and-tall inside it — the
-/// arrow's own square is one tab bar tall, and everything else on a rail is
-/// text.
-fn band_fills(output: &egui::FullOutput, rail: egui::Rect) -> Vec<(egui::Rect, egui::Color32)> {
-    fn walk(shape: &egui::Shape, rail: egui::Rect, found: &mut Vec<(egui::Rect, egui::Color32)>) {
-        match shape {
-            egui::Shape::Rect(rect)
-                if rail.contains(rect.rect.center())
-                    && rect.rect.height() > crate::theme::TAB_BAR_HEIGHT =>
-            {
-                found.push((rect.rect, rect.fill));
-            }
-            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, rail, found)),
-            _ => {}
-        }
-    }
-    let mut found = Vec::new();
-    for clipped in &output.shapes {
-        walk(&clipped.shape, rail, &mut found);
-    }
-    found
+/// Whether the leaf holding `tab` is folded away.
+fn collapsed(state: &SharedState, tab: panes::Tab) -> bool {
+    let path = state.dock.find_tab(&tab).expect("tab is in the dock");
+    state.dock[path.surface][path.node].is_collapsed()
 }
 
-/// Pointing at one of a folded column's arrows lights the pane it opens.
+/// A click on the arrow at the top of a folded column's LOWER share opens the
+/// pane that share belongs to.
 ///
-/// A column folds to ONE rail with an arrow per pane stacked at the top of it,
-/// a tab bar each, all pointing the same way — and 26pt of width has no room
-/// to write a name beside any of them, so nothing on the rail says which arrow
-/// brings back which pane. The rail lighting up with the arrow does, at the
-/// moment the question gets asked.
+/// egui_dock puts a collapsed leaf's arrow at the top of its own rectangle,
+/// and down a folded column those rectangles start one after another — so its
+/// arrows stack in the first inches of the rail, out of reach of the panes
+/// they name. `fold` places them on the shares instead and takes the clicks
+/// itself, which is the half of this that cannot be done in paint alone.
 #[test]
-fn hovering_a_folded_columns_arrow_lights_the_pane_it_opens() {
+fn a_folded_columns_lower_arrow_opens_its_own_pane() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.min_window_width = 400.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    h.collapse_click(&mut state, panes::Tab::Tuning);
+    let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
+    assert!(collapsed(&state, panes::Tab::Tuning) && collapsed(&state, panes::Tab::Notes));
+
+    // The lower share's own arrow, at 0.55 down the rail.
+    let at = egui::pos2(
+        rail.left() + 12.0,
+        rail.top() + rail.height() * 0.55 + crate::theme::TAB_BAR_HEIGHT * 0.5,
+    );
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(&mut state, vec![press(at, false)]);
+    h.settle_folds(&mut state);
+
+    assert!(!collapsed(&state, panes::Tab::Notes), "the lower arrow opens the lower pane");
+    assert!(
+        collapsed(&state, panes::Tab::Tuning),
+        "and only that one — the settings leaf keeps its own arrow",
+    );
+    // The column is a column again, and the leaf still folded is one tab bar
+    // tall. That last one is where a botched collapsed-leaf count shows up:
+    // not as a pane that fails to open, but as a bar drawn some multiple of a
+    // tab bar thick afterwards (see `fold::uncollapse`).
+    let path = state.dock.find_tab(&panes::Tab::Tuning).expect("tab is in the dock");
+    let folded = state.dock[path.surface][path.node].rect().expect("laid out");
+    assert!(folded.width() > 100.0, "the rail should be a column again: {folded:?}");
+    assert!(
+        (folded.height() - crate::theme::TAB_BAR_HEIGHT).abs() < 4.0,
+        "the settings leaf should be one tab bar tall, not {}",
+        folded.height(),
+    );
+}
+
+/// The arrow egui_dock left stacked at the top of the rail no longer opens
+/// anything: it sits inside the share above it now, under another pane's name,
+/// and a click there would open a pane the rail says nothing about.
+#[test]
+fn a_folded_columns_stacked_arrow_is_inert() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.min_window_width = 400.0;
     let mut h = DockHarness::new();
@@ -3183,36 +3216,22 @@ fn hovering_a_folded_columns_arrow_lights_the_pane_it_opens() {
     h.collapse_click(&mut state, panes::Tab::Tuning);
     let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
 
-    // The pointer well clear of the rail: every band in its resting fill.
-    let away = egui::pos2(rail.left() - 200.0, rail.center().y);
-    h.frame(&mut state, vec![egui::Event::PointerMoved(away)]);
-    let idle = h.frame(&mut state, vec![egui::Event::PointerMoved(away)]);
-    let resting = band_fills(&idle, rail);
-    assert_eq!(resting.len(), 2, "a folded column of two panes is two bands");
-    let (_, resting_fill) = resting[0];
-    assert!(resting.iter().all(|(_, fill)| *fill == resting_fill), "and both are at rest");
-
-    // Each arrow in turn: the leaf's own square, at the top of its tab bar.
-    let lit_by = |h: &mut DockHarness, state: &mut SharedState, tab| {
-        let path = state.dock.find_tab(&tab).expect("tab is in the dock");
-        let leaf = state.dock[path.surface][path.node].rect().expect("laid out");
-        let at = leaf.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
-        h.frame(state, vec![egui::Event::PointerMoved(at)]);
-        let output = h.frame(state, vec![egui::Event::PointerMoved(at)]);
-        let lit: Vec<egui::Rect> = band_fills(&output, rail)
-            .into_iter()
-            .filter(|(_, fill)| *fill != resting_fill)
-            .map(|(rect, _)| rect)
-            .collect();
-        assert_eq!(lit.len(), 1, "{tab:?}'s arrow should light one band, not {}", lit.len());
-        lit[0]
-    };
-    let upper = lit_by(&mut h, &mut state, panes::Tab::Tuning);
-    let lower = lit_by(&mut h, &mut state, panes::Tab::Notes);
+    // Where egui_dock puts the log leaf's button: directly under the settings
+    // leaf's, one tab bar down from the top of the rail.
+    let path = state.dock.find_tab(&panes::Tab::Notes).expect("tab is in the dock");
+    let stacked = state.dock[path.surface][path.node].rect().expect("laid out");
+    let at = stacked.left_top() + egui::vec2(12.0, crate::theme::TAB_BAR_HEIGHT * 0.5);
+    assert!(
+        at.y < rail.top() + rail.height() * 0.5,
+        "the stacked arrow should be near the top of the rail, at {at:?}",
+    );
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(&mut state, vec![press(at, false)]);
+    h.settle_folds(&mut state);
 
     assert!(
-        upper.top() < lower.top() && upper.bottom() <= lower.top() + 0.5,
-        "each arrow lights its own share of the rail, in the order they are stacked: \
-         {upper:?} then {lower:?}",
+        collapsed(&state, panes::Tab::Notes),
+        "the log pane should not open from a button that is no longer drawn",
     );
 }

@@ -729,25 +729,33 @@ pub fn area_width(ui: &egui::Ui, style: &egui_dock::Style) -> f32 {
 }
 
 /// Draw what a sideways fold needs and egui_dock cannot know it wants: the
-/// rail's own surface, a name up it for every pane it holds (see
-/// [`name_bands`]), and an arrow pointing at the space each will take when it
-/// comes back.
+/// rail's own surface, and on each pane's stretch of it (see [`name_bands`])
+/// the arrow that brings that pane back, with its name under it.
 ///
 /// Runs AFTER the dock, so it works from this frame's rectangles and paints
 /// over the parts of the tab bar it is replacing.
+///
+/// It takes the CLICK too, wherever egui_dock's own button for a pane is not
+/// where the pane's stretch of rail begins — down a folded column that is all
+/// of them but the first. Hence `&mut`: an arrow that opens nothing would be
+/// worse than one in the wrong place, so the button has to move for real
+/// rather than just in paint.
 ///
 /// A rail is drawn as the pane's own TAB — the tab's fill, the tab title's type
 /// and color — because that is what it has become: a pane too narrow to hold
 /// anything but the tab that names it. The tab bar's darker well stays where it
 /// always is, in the collapse button's square and the separator beside the
 /// rail, so a rail still ends where a pane's edge would.
-pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
+pub fn paint(ui: &egui::Ui, dock: &mut DockState<Tab>, style: &egui_dock::Style) {
     let rail = style.tab_bar.height;
     // Frameless mode hides every tab bar, which takes the arrow with it: a
     // fold there is a pane squeezed to nothing, with no chrome to draw.
     if rail <= 0.0 {
         return;
     }
+    // The pane an arrow of ours was clicked for, applied once the tree is no
+    // longer being read from.
+    let mut opened = None;
     for index in 0..dock.surfaces_count() {
         let surface = SurfaceIndex(index);
         let Some(tree) = dock.get_surface(surface).and_then(Surface::node_tree) else {
@@ -779,27 +787,10 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
             {
                 continue;
             }
-            for band in name_bands(tree, folded, rail) {
-                // A rail lights up with its own arrow, in the fill the arrow
-                // takes when hovered, so the two read as one thing. It is the
-                // only answer available to "which pane does THIS arrow bring
-                // back" down a folded column: egui_dock stacks every arrow in
-                // the column at the top of the one rail, one tab bar each, and
-                // a 26pt rail has no room to write a name beside any of them.
-                // Pointing at one is also exactly when the question is asked.
-                let hovered = ui.rect_contains_pointer(arrow_button(band.leaf.rect, style));
-                if band.rect.is_positive() {
-                    let fill = if hovered {
-                        style.buttons.collapse_tabs_bg_fill
-                    } else {
-                        style.tab.active.bg_fill
-                    };
-                    ui.painter().rect_filled(band.rect, egui::CornerRadius::ZERO, fill);
-                    if let Some(tab) = band.leaf.tabs.get(band.leaf.active.0) {
-                        paint_name(ui, &band, crate::panes::tab_title(tab), style);
-                    }
+            for band in name_bands(tree, folded) {
+                if paint_band(ui, &band, side, surface, style) {
+                    opened = Some((surface, band.node));
                 }
-                paint_arrow(ui, band.leaf.rect, side, hovered, style);
             }
             // The separator the rail sits against, and any between rails of a
             // folded pair: all of them inert now, for the same reason.
@@ -813,40 +804,108 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
             }
         }
     }
+    if let Some((surface, node)) = opened {
+        if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {
+            uncollapse(tree, node);
+        }
+    }
 }
 
-/// Each pane in a folded subtree with the stretch of rail it says its name in.
+/// One pane's stretch of a rail: its own arrow at the top, its name under it.
+/// Answers whether that arrow was clicked.
 ///
-/// A folded column is ONE rail holding several panes, and egui_dock's own
-/// division of it is all or nothing: a collapsed leaf is one tab bar tall and
-/// whichever is last takes everything left over, so the rail carries one name
-/// — the bottom pane's — for a column of any depth. A folded settings column
-/// reads as "Notes", which is the pane furthest from what it is.
+/// The arrow goes at the top of the pane's OWN stretch, which is not where
+/// egui_dock puts it. A collapsed leaf gets one tab bar at the top of its
+/// rectangle, and down a folded column those rectangles start one after
+/// another — so the whole column's arrows end up stacked in the first inches
+/// of the rail, identical and all pointing the same way, with nothing to say
+/// which pane each one opens. So this draws the arrow where it belongs and
+/// takes the click there, and egui_dock's own is painted over and lifted out
+/// of the frame's hit test: left live it would open a pane from a point the
+/// rail now gives to another pane's name.
+fn paint_band(
+    ui: &egui::Ui,
+    band: &Band,
+    side: Side,
+    surface: SurfaceIndex,
+    style: &egui_dock::Style,
+) -> bool {
+    if !band.rect.is_positive() {
+        return false;
+    }
+    let rail = style.tab_bar.height;
+    ui.painter().rect_filled(band.rect, egui::CornerRadius::ZERO, style.tab.active.bg_fill);
+    let arrow = egui::Rect::from_min_size(band.rect.left_top(), egui::vec2(ARROW_BUTTON, rail));
+    let mut body = band.rect;
+    body.min.y += rail;
+    if let Some(tab) = band.leaf.tabs.get(band.leaf.active.0) {
+        paint_name(ui, body, crate::panes::tab_title(tab), style);
+    }
+    paint_arrow(ui, arrow, side, style);
+    // Where egui_dock already put the button, a rail with one pane on it and
+    // the first pane of a column alike: its own arrow is under ours and needs
+    // nothing from us.
+    if (band.rect.top() - band.leaf.rect.top()).abs() < 0.5 {
+        return false;
+    }
+    let id = egui::Id::new(("fold arrow", surface.0, band.node.0));
+    let clicked = ui.interact(arrow, id, egui::Sense::click()).clicked();
+    ui.interact(arrow_button(band.leaf.rect, style), id.with("stacked"), egui::Sense::click());
+    clicked
+}
+
+/// Open a folded pane, as egui_dock's own arrow would have.
 ///
-/// So the rail is shared out by the fractions the column is dialled at, the
-/// same ones that decide the panes' heights when it is open: every pane is
-/// named, and the rail reads as a miniature of the column it restores.
+/// Its `node_update_collapsed` is crate-private, so the half of it an unfold
+/// needs is here: the flag comes off every split above the leaf, since a split
+/// is collapsed only while both its children are, and each one's count of
+/// collapsed leaves is remade from the two below it — a horizontal split holds
+/// as many tab bars as its deeper side, a vertical one as many as both.
 ///
-/// The bands start below every collapse arrow in the fold, since those are
-/// stacked down the top of the rail and are what bring the panes back — a
-/// name is worth less than the button that undoes the fold.
+/// Getting this wrong does not show up as a pane that fails to open; it shows
+/// up later, as a collapsed leaf drawn some multiple of a tab bar tall.
+fn uncollapse(tree: &mut Tree<Tab>, leaf: NodeIndex) {
+    tree[leaf].set_collapsed(false);
+    let mut child = leaf;
+    while let Some(parent) = child.parent() {
+        let (left, right) = (parent.left(), parent.right());
+        let (below, beside) =
+            (tree[left].collapsed_leaf_count(), tree[right].collapsed_leaf_count());
+        tree[parent].set_collapsed(false);
+        let leaves = if tree[parent].is_horizontal() { below.max(beside) } else { below + beside };
+        tree[parent].set_collapsed_leaf_count(leaves);
+        child = parent;
+    }
+}
+
+/// Each pane in a folded subtree with the stretch of rail that is ITS pane:
+/// the arrow that brings it back at the top, its name below that.
+///
+/// A folded column is ONE rail holding several panes, and egui_dock's division
+/// of it is all or nothing: a collapsed leaf is one tab bar tall and whichever
+/// is last takes everything left over. So every arrow in the column lands in
+/// the first few inches of the rail — one tab bar each, stacked, all pointing
+/// the same way — and every name but the last had a 0px body to go in, which
+/// is how a folded settings column came to read as "Notes", the pane at the
+/// bottom of it.
+///
+/// The rail is shared out instead by the fractions the column is dialled at,
+/// the same ones that decide the panes' heights when it is open. Each pane
+/// gets a stretch of rail the size it will come back at, with the button that
+/// brings it back at the top of it — the rail as a miniature of the column it
+/// restores, rather than a stack of arrows over a list of names.
 struct Band<'a> {
+    node: NodeIndex,
     leaf: &'a egui_dock::LeafNode<Tab>,
     rect: egui::Rect,
-    /// Whether the collapse arrow at the top of this band is the band's own
-    /// pane's, which is where its name can be tucked (see [`paint_name`]).
-    under_its_arrow: bool,
 }
 
-fn name_bands(tree: &Tree<Tab>, node: NodeIndex, rail: f32) -> Vec<Band<'_>> {
+fn name_bands(tree: &Tree<Tab>, node: NodeIndex) -> Vec<Band<'_>> {
     let mut bands = Vec::new();
     let Some(rect) = tree[node].rect() else {
         return bands;
     };
-    let top = leaves(tree, node)
-        .iter()
-        .fold(rect.top(), |top: f32, leaf| top.max(leaf.rect.top() + rail));
-    divide(tree, node, rail, top, rect.bottom(), &mut bands);
+    divide(tree, node, rect.top(), rect.bottom(), &mut bands);
     bands
 }
 
@@ -855,7 +914,6 @@ fn name_bands(tree: &Tree<Tab>, node: NodeIndex, rail: f32) -> Vec<Band<'_>> {
 fn divide<'a>(
     tree: &'a Tree<Tab>,
     node: NodeIndex,
-    rail: f32,
     top: f32,
     bottom: f32,
     bands: &mut Vec<Band<'a>>,
@@ -865,43 +923,22 @@ fn divide<'a>(
     }
     match &tree[node] {
         Node::Leaf(leaf) => bands.push(Band {
+            node,
             leaf,
             rect: egui::Rect::from_x_y_ranges(leaf.rect.x_range(), top..=bottom),
-            // Whether the band begins where this pane's OWN collapse arrow
-            // ends, which decides where the name goes (see [`paint_name`]).
-            // True of a rail on its own and of both halves of a folded pair,
-            // false down a column, where the arrows are stacked together
-            // above the first band and the rest start nowhere near one.
-            under_its_arrow: (top - (leaf.rect.top() + rail)).abs() < 0.5,
         }),
         Node::Vertical(split) => {
             let mid = top + (bottom - top) * split.fraction;
-            divide(tree, node.left(), rail, top, mid, bands);
-            divide(tree, node.right(), rail, mid, bottom, bands);
+            divide(tree, node.left(), top, mid, bands);
+            divide(tree, node.right(), mid, bottom, bands);
         }
         // Panes side by side, a rail each: they divide the fold's WIDTH, so
         // both of them get the whole of its height.
         Node::Horizontal(_) => {
-            divide(tree, node.left(), rail, top, bottom, bands);
-            divide(tree, node.right(), rail, top, bottom, bands);
+            divide(tree, node.left(), top, bottom, bands);
+            divide(tree, node.right(), top, bottom, bands);
         }
         Node::Empty => {}
-    }
-}
-
-/// Every leaf in the subtree at `node`, in tree order.
-fn leaves(tree: &Tree<Tab>, node: NodeIndex) -> Vec<&egui_dock::LeafNode<Tab>> {
-    if node.0 >= tree.len() {
-        return Vec::new();
-    }
-    match &tree[node] {
-        Node::Leaf(leaf) => vec![leaf],
-        Node::Horizontal(_) | Node::Vertical(_) => {
-            let mut found = leaves(tree, node.left());
-            found.extend(leaves(tree, node.right()));
-            found
-        }
-        Node::Empty => Vec::new(),
     }
 }
 
@@ -952,23 +989,15 @@ fn deaden(ui: &egui::Ui, band: egui::Rect, style: &egui_dock::Style) {
 /// that is what it stands in for: a rail is the tab of a pane too narrow to
 /// hold one, and `TextStyle::Button` is what egui_dock lays a tab title out in.
 ///
-/// Skipped rather than clipped when the rail is too short for the whole name:
-/// half a word up the side of the window says less than the arrow above it
-/// already does.
+/// Hung from the top of `body`, which is the pane's stretch of rail below its
+/// own arrow: the name captions the button that brings the pane back. Centred,
+/// it would drift half a window away from that button down a tall rail, and a
+/// name that far off says nothing about which arrow it belongs to.
 ///
-/// Tucked under the collapse arrow wherever the arrow above the band is the
-/// band's own, which is what tells a folded PAIR apart. Two panes side by side
-/// fold to two rails, and their arrows end up next to each other at the top
-/// pointing the same way — both panes come back into the same space, so
-/// direction cannot separate them and neither can position, a whole window's
-/// height away from a name floating at the middle of its rail. Under the arrow
-/// the two read as a caption each.
-///
-/// Centred in the band instead where the arrow above it belongs to someone
-/// else: a folded COLUMN stacks every arrow it has at the top of the one rail,
-/// so a name tucked up there would caption the wrong pane, and the bands are
-/// shares of the column rather than rails of their own.
-fn paint_name(ui: &egui::Ui, band: &Band, name: &str, style: &egui_dock::Style) {
+/// Skipped rather than clipped when the stretch is too short for the whole
+/// name: half a word up the side of the window says less than the arrow above
+/// it already does.
+fn paint_name(ui: &egui::Ui, body: egui::Rect, name: &str, style: &egui_dock::Style) {
     const PAD: f32 = 8.0;
     let painter = ui.painter();
     let galley = painter.layout_no_wrap(
@@ -976,20 +1005,15 @@ fn paint_name(ui: &egui::Ui, band: &Band, name: &str, style: &egui_dock::Style) 
         egui::TextStyle::Button.resolve(ui.style()),
         style.tab.active.text_color,
     );
-    let rail = band.rect;
-    if galley.size().x + 2.0 * PAD > rail.height() {
+    if !body.is_positive() || galley.size().x + 2.0 * PAD > body.height() {
         return;
     }
     // Rotating a quarter turn anticlockwise maps the galley's own x onto the
     // rail's height (upwards, hence the anchor at the text's far end) and its
     // height onto the rail's width.
     let anchor = egui::pos2(
-        rail.center().x - galley.size().y * 0.5,
-        if band.under_its_arrow {
-            rail.top() + PAD + galley.size().x
-        } else {
-            rail.center().y + galley.size().x * 0.5
-        },
+        body.center().x - galley.size().y * 0.5,
+        body.top() + PAD + galley.size().x,
     );
     painter.add(
         egui::epaint::TextShape::new(anchor, galley, style.tab.active.text_color)
@@ -997,8 +1021,8 @@ fn paint_name(ui: &egui::Ui, band: &Band, name: &str, style: &egui_dock::Style) 
     );
 }
 
-/// egui_dock's collapse button for a leaf: its own square at the left end of
-/// the leaf's tab bar, which for a folded pane is the top of its rail.
+/// egui_dock's own collapse button for a leaf: its square at the left end of
+/// the leaf's tab bar, which for a folded pane is the top of its rect.
 fn arrow_button(leaf: egui::Rect, style: &egui_dock::Style) -> egui::Rect {
     egui::Rect::from_min_size(leaf.left_top(), egui::vec2(ARROW_BUTTON, style.tab_bar.height))
 }
@@ -1017,16 +1041,9 @@ fn arrow_button(leaf: egui::Rect, style: &egui_dock::Style) -> egui::Rect {
 ///
 /// The button underneath is left alone and keeps handling the click; this is
 /// paint over paint, including the hover fill, which is why it has to run after
-/// the dock rather than before it. `hovered` is the caller's, because the rail
-/// this arrow opens lights up with it.
-fn paint_arrow(
-    ui: &egui::Ui,
-    leaf: egui::Rect,
-    side: Side,
-    hovered: bool,
-    style: &egui_dock::Style,
-) {
-    let button = arrow_button(leaf, style);
+/// the dock rather than before it.
+fn paint_arrow(ui: &egui::Ui, button: egui::Rect, side: Side, style: &egui_dock::Style) {
+    let hovered = ui.rect_contains_pointer(button);
     let painter = ui.painter();
     painter.rect_filled(
         button,
