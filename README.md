@@ -138,7 +138,7 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 - **Skins**: the mechanism exists (`harmonigraph_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
 - **Making videos**: done, by offline replay rather than screen capture.
-  Arm "Record take" in the View pane and play the piece; the plugin writes
+  Arm "Record take" in the Video pane and play the piece; the plugin writes
   a *take* (every note event and parameter change, stamped on the host
   transport so it lines up with a bounce). `harmonigraph-offline` replays it
   headless into an exact-CFR video at any resolution, with its own pane

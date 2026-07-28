@@ -10,7 +10,7 @@ resolution.
 That is the whole idea:
 
 ```
-   arm "Record take" in the View pane, play the piece once
+   arm "Record take" in the Video pane, play the piece once
                     │
                     ├──> take-<stamp>.take   what the plugin saw
    export audio ────┴──> piece.wav           the bounce, as always
@@ -31,7 +31,7 @@ your refresh rate, or whether a window was in front.
 ## The short version
 
 ```sh
-# 1. In Bitwig: arm "Record take" (View pane), play the piece, disarm.
+# 1. In Bitwig: arm "Record take" (Video pane), play the piece, disarm.
 #    Export audio as usual for the soundtrack.
 # 2. Render:
 cargo build --release -p harmonigraph-offline
@@ -45,7 +45,7 @@ cargo build --release -p harmonigraph-offline
 
 ### From the DAW
 
-**Turn on "Record take" in the View pane, then play the piece.** That's
+**Turn on "Record take" in the Video pane, then play the piece.** That's
 it. You do not have to export, and you do not have to do anything
 differently from how you'd play it anyway.
 
