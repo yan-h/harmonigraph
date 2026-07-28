@@ -3043,11 +3043,15 @@ fn the_next_pass_destroys_what_the_last_one_retired() {
 /// `fold::paint` sets them a quarter turn anticlockwise, which nothing else in
 /// the dock does — so the angle is what tells a rail's name from a tab title,
 /// and the rail's own rectangle is what keeps another pane's rotated text out.
-fn rail_names(output: &egui::FullOutput, rail: egui::Rect) -> Vec<String> {
+///
+/// Each comes with the y its text STARTS at — the top of the drawn word. A
+/// name is anchored at its far end and drawn upwards, so that is the anchor
+/// less the galley's length.
+fn rail_labels(output: &egui::FullOutput, rail: egui::Rect) -> Vec<(String, f32)> {
     fn walk(shape: &egui::Shape, rail: egui::Rect, found: &mut Vec<(f32, String)>) {
         match shape {
             egui::Shape::Text(text) if text.angle != 0.0 && rail.contains(text.pos) => {
-                found.push((text.pos.y, text.galley.text().to_owned()));
+                found.push((text.pos.y - text.galley.size().x, text.galley.text().to_owned()));
             }
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, rail, found)),
             _ => {}
@@ -3058,7 +3062,7 @@ fn rail_names(output: &egui::FullOutput, rail: egui::Rect) -> Vec<String> {
         walk(&clipped.shape, rail, &mut found);
     }
     found.sort_by(|(a, _), (b, _)| a.total_cmp(b));
-    found.into_iter().map(|(_, name)| name).collect()
+    found.into_iter().map(|(top, name)| (name, top)).collect()
 }
 
 /// The rail a folded subtree left behind: the leaves' rectangles, which are
@@ -3089,9 +3093,51 @@ fn a_folded_column_names_every_pane_in_it() {
     let output = h.collapse_click(&mut state, panes::Tab::Tuning);
     let rail = rail_rect(&state, &[panes::Tab::Tuning, panes::Tab::Notes]);
     assert!(rail.width() < 40.0, "the column should have folded to a rail ({rail:?})");
+    let labels = rail_labels(&output, rail);
     assert_eq!(
-        rail_names(&output, rail),
+        labels.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
         ["Tuning", "Notes"],
         "both panes in the folded column should be named, in the order they are stacked",
     );
+    // Centred in their shares rather than tucked under the arrows, which are
+    // all stacked at the top of this one rail: a name up there would caption
+    // whichever arrow it happened to land under (see `fold::paint_name`).
+    let (_, first) = labels.first().expect("a name");
+    assert!(*first > 100.0, "the first name should sit in its share, not under the stack: {first}");
+}
+
+/// Two panes folded side by side name themselves under their own arrows.
+///
+/// A folded pair is two rails, and their collapse arrows end up next to each
+/// other at the top of the window pointing the SAME way — both panes come back
+/// into the space the pair gave up, so the direction cannot separate them.
+/// That leaves the name, and a name floating at the middle of its rail is most
+/// of a window away from the arrow it belongs to. Under the arrow the two read
+/// as a caption each.
+#[test]
+fn a_folded_pair_names_each_rail_under_its_own_arrow() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.min_window_width = 400.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    // The picture pair: collapsing both leaves the split itself collapsed, so
+    // the whole subtree folds as one and comes out two rails wide.
+    h.collapse_click(&mut state, panes::Tab::Lattice);
+    let output = h.collapse_click(&mut state, panes::Tab::Spectral);
+
+    for tab in [panes::Tab::Lattice, panes::Tab::Spectral] {
+        let rail = rail_rect(&state, &[tab]);
+        assert!(rail.width() < 40.0, "{tab:?} should have folded to a rail ({rail:?})");
+        let labels = rail_labels(&output, rail);
+        let (name, top) = labels.first().expect("a rail says which pane it is");
+        assert_eq!(name, crate::panes::tab_title(&tab), "each rail names its own pane");
+        // The arrow is the leaf's tab bar, at the top of the rail. Clear of
+        // it, and within a word's length of it — not adrift at mid-window,
+        // which for this dock would be past 380.
+        let arrow = rail.top() + crate::theme::TAB_BAR_HEIGHT;
+        assert!(
+            (arrow..arrow + 20.0).contains(top),
+            "{name} sits at {top}, and its arrow ends at {arrow}",
+        );
+    }
 }

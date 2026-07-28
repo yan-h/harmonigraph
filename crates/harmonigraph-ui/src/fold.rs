@@ -779,15 +779,15 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
             {
                 continue;
             }
-            for (leaf, band) in name_bands(tree, folded, rail) {
-                if band.is_positive() {
+            for band in name_bands(tree, folded, rail) {
+                if band.rect.is_positive() {
                     let fill = style.tab.active.bg_fill;
-                    ui.painter().rect_filled(band, egui::CornerRadius::ZERO, fill);
-                    if let Some(tab) = leaf.tabs.get(leaf.active.0) {
-                        paint_name(ui, band, crate::panes::tab_title(tab), style);
+                    ui.painter().rect_filled(band.rect, egui::CornerRadius::ZERO, fill);
+                    if let Some(tab) = band.leaf.tabs.get(band.leaf.active.0) {
+                        paint_name(ui, &band, crate::panes::tab_title(tab), style);
                     }
                 }
-                paint_arrow(ui, leaf.rect, side, style);
+                paint_arrow(ui, band.leaf.rect, side, style);
             }
             // The separator the rail sits against, and any between rails of a
             // folded pair: all of them inert now, for the same reason.
@@ -818,11 +818,15 @@ pub fn paint(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style) {
 /// The bands start below every collapse arrow in the fold, since those are
 /// stacked down the top of the rail and are what bring the panes back — a
 /// name is worth less than the button that undoes the fold.
-fn name_bands(
-    tree: &Tree<Tab>,
-    node: NodeIndex,
-    rail: f32,
-) -> Vec<(&egui_dock::LeafNode<Tab>, egui::Rect)> {
+struct Band<'a> {
+    leaf: &'a egui_dock::LeafNode<Tab>,
+    rect: egui::Rect,
+    /// Whether the collapse arrow at the top of this band is the band's own
+    /// pane's, which is where its name can be tucked (see [`paint_name`]).
+    under_its_arrow: bool,
+}
+
+fn name_bands(tree: &Tree<Tab>, node: NodeIndex, rail: f32) -> Vec<Band<'_>> {
     let mut bands = Vec::new();
     let Some(rect) = tree[node].rect() else {
         return bands;
@@ -830,7 +834,7 @@ fn name_bands(
     let top = leaves(tree, node)
         .iter()
         .fold(rect.top(), |top: f32, leaf| top.max(leaf.rect.top() + rail));
-    divide(tree, node, top, rect.bottom(), &mut bands);
+    divide(tree, node, rail, top, rect.bottom(), &mut bands);
     bands
 }
 
@@ -839,27 +843,35 @@ fn name_bands(
 fn divide<'a>(
     tree: &'a Tree<Tab>,
     node: NodeIndex,
+    rail: f32,
     top: f32,
     bottom: f32,
-    bands: &mut Vec<(&'a egui_dock::LeafNode<Tab>, egui::Rect)>,
+    bands: &mut Vec<Band<'a>>,
 ) {
     if node.0 >= tree.len() {
         return;
     }
     match &tree[node] {
-        Node::Leaf(leaf) => {
-            bands.push((leaf, egui::Rect::from_x_y_ranges(leaf.rect.x_range(), top..=bottom)));
-        }
+        Node::Leaf(leaf) => bands.push(Band {
+            leaf,
+            rect: egui::Rect::from_x_y_ranges(leaf.rect.x_range(), top..=bottom),
+            // Whether the band begins where this pane's OWN collapse arrow
+            // ends, which decides where the name goes (see [`paint_name`]).
+            // True of a rail on its own and of both halves of a folded pair,
+            // false down a column, where the arrows are stacked together
+            // above the first band and the rest start nowhere near one.
+            under_its_arrow: (top - (leaf.rect.top() + rail)).abs() < 0.5,
+        }),
         Node::Vertical(split) => {
             let mid = top + (bottom - top) * split.fraction;
-            divide(tree, node.left(), top, mid, bands);
-            divide(tree, node.right(), mid, bottom, bands);
+            divide(tree, node.left(), rail, top, mid, bands);
+            divide(tree, node.right(), rail, mid, bottom, bands);
         }
         // Panes side by side, a rail each: they divide the fold's WIDTH, so
         // both of them get the whole of its height.
         Node::Horizontal(_) => {
-            divide(tree, node.left(), top, bottom, bands);
-            divide(tree, node.right(), top, bottom, bands);
+            divide(tree, node.left(), rail, top, bottom, bands);
+            divide(tree, node.right(), rail, top, bottom, bands);
         }
         Node::Empty => {}
     }
@@ -931,7 +943,20 @@ fn deaden(ui: &egui::Ui, band: egui::Rect, style: &egui_dock::Style) {
 /// Skipped rather than clipped when the rail is too short for the whole name:
 /// half a word up the side of the window says less than the arrow above it
 /// already does.
-fn paint_name(ui: &egui::Ui, rail: egui::Rect, name: &str, style: &egui_dock::Style) {
+///
+/// Tucked under the collapse arrow wherever the arrow above the band is the
+/// band's own, which is what tells a folded PAIR apart. Two panes side by side
+/// fold to two rails, and their arrows end up next to each other at the top
+/// pointing the same way — both panes come back into the same space, so
+/// direction cannot separate them and neither can position, a whole window's
+/// height away from a name floating at the middle of its rail. Under the arrow
+/// the two read as a caption each.
+///
+/// Centred in the band instead where the arrow above it belongs to someone
+/// else: a folded COLUMN stacks every arrow it has at the top of the one rail,
+/// so a name tucked up there would caption the wrong pane, and the bands are
+/// shares of the column rather than rails of their own.
+fn paint_name(ui: &egui::Ui, band: &Band, name: &str, style: &egui_dock::Style) {
     const PAD: f32 = 8.0;
     let painter = ui.painter();
     let galley = painter.layout_no_wrap(
@@ -939,6 +964,7 @@ fn paint_name(ui: &egui::Ui, rail: egui::Rect, name: &str, style: &egui_dock::St
         egui::TextStyle::Button.resolve(ui.style()),
         style.tab.active.text_color,
     );
+    let rail = band.rect;
     if galley.size().x + 2.0 * PAD > rail.height() {
         return;
     }
@@ -947,7 +973,11 @@ fn paint_name(ui: &egui::Ui, rail: egui::Rect, name: &str, style: &egui_dock::St
     // height onto the rail's width.
     let anchor = egui::pos2(
         rail.center().x - galley.size().y * 0.5,
-        rail.center().y + galley.size().x * 0.5,
+        if band.under_its_arrow {
+            rail.top() + PAD + galley.size().x
+        } else {
+            rail.center().y + galley.size().x * 0.5
+        },
     );
     painter.add(
         egui::epaint::TextShape::new(anchor, galley, style.tab.active.text_color)
