@@ -1064,6 +1064,52 @@ mod tests {
         }
     }
 
+    /// The same claim as
+    /// [`the_letter_lines_up_with_or_without_an_accidental`], but read off
+    /// the glyphs [`draw`] actually queues through a real `egui::Context` —
+    /// real font metrics, not [`name_extent`]'s estimate — so it would catch
+    /// the estimate and the real measurement disagreeing by enough to move
+    /// the letter visibly, which the arithmetic-only test cannot see.
+    #[test]
+    fn the_drawn_letter_lines_up_across_notes_in_right_orientation() {
+        let cfg =
+            SpectrumConfig { orientation: SpectralOrientation::Right, ..SpectrumConfig::default() };
+        let axes = Axes::new(PANE, &cfg);
+        let names = [
+            NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 },
+            NoteName { letter: 'E', sharps: 0, syntonic_commas: 1, septimal_commas: 0 },
+        ];
+        let labels: Vec<NoteLabel> = names
+            .iter()
+            .map(|&name| NoteLabel {
+                name,
+                rect: label_rect(&axes, 0.5, 0.5, &name, LABEL_PT, 1.0),
+                #[cfg(test)]
+                at: 0.0,
+            })
+            .collect();
+
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx); // the real Iosevka metrics
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+        let mut batch = crate::text::TextBatch::default();
+        let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            draw(ui.painter(), &labels, 1.0, &mut batch);
+        });
+
+        let left_of = |letter: &str| {
+            batch
+                .pieces()
+                .iter()
+                .find(|p| p.text == letter)
+                .unwrap_or_else(|| panic!("no {letter:?} drawn, got {:?}", batch.pieces()))
+                .galley
+                .left()
+        };
+        let (c, e) = (left_of("C"), left_of("E"));
+        assert!((c - e).abs() < 0.5, "C's letter drawn at {c} but E's (with a comma) at {e}");
+    }
+
     /// A name sits on the ribbon the ROLL DREW, read from the roll's own
     /// geometry rather than recomputed here.
     ///
