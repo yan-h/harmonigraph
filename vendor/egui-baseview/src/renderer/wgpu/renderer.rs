@@ -798,7 +798,11 @@ mod fold_present {
 
     /// Presented frames of geometry logging per gesture — long enough to
     /// span the quarter-second implicit ease at the ~5 ms tick a fold shows,
-    /// so if an ease survives it is visible end to end in the log.
+    /// so if an ease survives it is visible end to end in the log. The
+    /// renderer's size starts at zero, so the first frame of a window's life
+    /// counts as a size change: every editor open logs one window (and takes
+    /// the pwt tail), which doubles as proof the probe is alive without
+    /// folding anything.
     const PROBE_FRAMES: u32 = 48;
 
     pub(super) struct FoldPresent {

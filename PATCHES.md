@@ -193,8 +193,10 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   captured there), folds new content and new bounds into one commit. Costs a
   main-thread wait per present, so it is not left on. Includes a bounded
   probe: 48 stderr lines of model-vs-presentation geometry per resize
-  gesture, arming only when pwt is down so a border drag logs one window,
-  not one per step.
+  gesture, arming only when pwt is down and no window is still draining, so
+  a border drag logs one window, not one per step. The renderer's size
+  starts at zero, so editor open counts as a gesture and logs one window
+  too.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
