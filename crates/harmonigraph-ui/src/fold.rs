@@ -122,6 +122,17 @@ struct Fold {
     /// The fraction the user dialled in, which the fold overwrites in the tree
     /// and every width below is derived from.
     fraction: f32,
+    /// The window this fold was taken at, which is the window unfolding it owes
+    /// back. [`Dial`] is runtime-only, so without this a project reopened with
+    /// a pane already folded has no record of how wide the window has been —
+    /// and the unfold's growth cap reads exactly that record, so an empty one
+    /// holds the window at the width the fold left it.
+    ///
+    /// Zero in a blob written before it was recorded. There is no history to
+    /// recover there, so the cap falls back to the window on screen, which is
+    /// what it did for every blob then.
+    #[serde(default)]
+    window: f32,
     /// Whether this split was rendering a fold — a rail — when it was last
     /// looked at, as opposed to merely handing a fold below it outward.
     ///
@@ -210,11 +221,22 @@ impl Folds {
                 continue;
             }
             let holds = holds(tree);
-            let moved = self.reconcile(tree, surface, &holds);
+            let moved = self.reconcile(tree, surface, &holds, area);
+            // The widest this window has been, for a session that was not there
+            // to watch it get that wide: the folds came off the persist blob,
+            // and each one remembers the window it was taken at.
+            let remembered = self
+                .0
+                .iter()
+                .filter(|fold| fold.surface == surface.0)
+                .fold(0.0_f32, |widest, fold| widest.max(fold.window));
             // A floating surface has no window to ask, so its layout is simply
             // the one that fits the window it is in, every frame.
             let mut own = Dial::default();
             let dial = if main { &mut *dial } else { &mut own };
+            if dial.widest <= 0.0 {
+                dial.widest = remembered;
+            }
             let fit = Fit::of(tree, &holds, self, surface, rail, separator);
             // Re-dialled when the WINDOW has moved, and only then. That is
             // what carries a resize into a folded layout — and, just as
@@ -305,7 +327,13 @@ impl Folds {
     /// Take the fraction of every split that has just folded, and give back the
     /// fraction of every split that has just unfolded. Answers whether either
     /// happened, which is what decides if the window has to move.
-    fn reconcile(&mut self, tree: &mut Tree<Tab>, surface: SurfaceIndex, holds: &[Hold]) -> bool {
+    fn reconcile(
+        &mut self,
+        tree: &mut Tree<Tab>,
+        surface: SurfaceIndex,
+        holds: &[Hold],
+        area: f32,
+    ) -> bool {
         let mut moved = false;
         self.0.retain(|fold| {
             if fold.surface != surface.0 {
@@ -340,7 +368,16 @@ impl Folds {
             };
             // First frame of this fold: the fraction in the split is still the
             // user's, and this is the last chance to keep it.
-            self.0.push(Fold { surface: surface.0, node: index, fraction: split.fraction, rail });
+            // `area` is still the pre-fold window here — the resize has been
+            // decided and not yet asked for — which is the width this fold is
+            // about to take off it, and the width unfolding it owes back.
+            self.0.push(Fold {
+                surface: surface.0,
+                node: index,
+                fraction: split.fraction,
+                rail,
+                window: area,
+            });
             moved |= rail;
         }
         moved
@@ -1609,6 +1646,63 @@ mod tests {
         assert!((window - 1000.0).abs() < 0.01, "the host refused, so the window did not move");
         let owed = folds.clear(&dial, window);
         assert!(owed < 0.5, "reset asked the host for {} points on top of {window}", owed.round());
+    }
+
+    /// A blob written before a fold recorded its window still loads. There is
+    /// no history in it to recover, so the entry comes back with none — which
+    /// is what every blob had before the field existed.
+    #[test]
+    fn a_fold_blob_predating_the_recorded_window_still_loads() {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        collapse(&mut dock, Tab::Lattice, true);
+        let _ = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+        let saved = ron::to_string(&folds).expect("folds serialize");
+        assert!(saved.contains("window:"), "the field must be there to strip");
+        // The same blob as a build that never wrote the field: drop the key and
+        // the number after it, leaving every other field where it was.
+        let stale: String = saved
+            .split(",window:")
+            .enumerate()
+            .map(|(i, part)| match i {
+                0 => part.to_string(),
+                _ => part[part.find([',', ')']).unwrap_or(part.len())..].to_string(),
+            })
+            .collect();
+        assert_ne!(stale, saved, "the strip must have removed something");
+
+        let loaded: Folds = ron::from_str(&stale).expect("a blob without the field still loads");
+        assert_eq!(loaded.0.len(), folds.0.len(), "every entry survives");
+        assert!(loaded.0.iter().all(|fold| fold.window == 0.0), "no history to recover");
+    }
+
+    /// [`Folds`] is persisted and [`Dial`] is not, so a project reopened with a
+    /// pane folded sideways starts with no record of how wide the window has
+    /// been. The unfold's growth cap reads that record, and an empty one caps
+    /// growth at nothing — so the pane opens back into a window still the width
+    /// the fold left it, which is the one thing persisting the fold is for.
+    #[test]
+    fn a_fold_that_outlived_the_editor_window_still_unfolds_to_its_layout() {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        collapse(&mut dock, Tab::Lattice, true);
+        let folded = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+        // Reopening: the dock and its folds come back off the persist blob,
+        // the dial does not, and the host restores the window the fold left.
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, folded);
+        collapse(&mut dock, Tab::Lattice, false);
+        let reopened = settle(&mut folds, &mut dock, &mut dial, folded);
+        assert!(
+            (reopened - 1000.0).abs() < 1.0,
+            "unfolding a persisted fold left the window at {reopened}, not the 1000 it came from"
+        );
     }
 
     /// One click can move a fold from one child of a split to the other, and
