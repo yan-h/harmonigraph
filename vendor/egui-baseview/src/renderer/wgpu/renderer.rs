@@ -897,6 +897,16 @@ mod fold_present {
         /// implicit ease reads as `pres` gliding toward a constant `model`
         /// across successive lines, which is exactly the signature the
         /// model-side probes cannot see.
+        ///
+        /// `top` is the TOPMOST ancestor layer — the host window's frame
+        /// view, chrome included, reached by walking `superlayer` — logged
+        /// model and presentation both, because every remaining suspect for
+        /// the fold's ease lives between our layer and the window: a host
+        /// window that animates its resize glides in `top`'s MODEL frame by
+        /// frame, a CA implicit action on a host layer glides in `tpres`
+        /// under a jumping `top`, and a window that commits atomically with
+        /// us clears the host and sends the search elsewhere. All of it is
+        /// in-process and readable, host-owned or not.
         pub(super) fn after_present(&mut self, width: u32, height: u32) {
             if self.probe_frames == 0 {
                 return;
@@ -913,15 +923,34 @@ mod fold_present {
                 Some(pres) => (pres.position(), pres.bounds().size),
                 None => (m_pos, m_bounds),
             };
-            let root = layer
-                .superlayer()
-                .map_or(String::from("-"), |r| {
-                    let b = r.bounds().size;
-                    format!("{:.0}x{:.0}", b.width, b.height)
-                });
+            let top = layer.superlayer().map(|mut t| {
+                while let Some(up) = t.superlayer() {
+                    t = up;
+                }
+                t
+            });
+            let top = top.map_or(String::from("top=-"), |t| {
+                let t_pos = t.position();
+                let t_bounds = t.bounds().size;
+                let (tp_pos, tp_bounds) = match unsafe { t.presentationLayer() } {
+                    Some(pres) => (pres.position(), pres.bounds().size),
+                    None => (t_pos, t_bounds),
+                };
+                format!(
+                    "top=({:.1},{:.1}) {:.0}x{:.0} tpres=({:.1},{:.1}) {:.0}x{:.0}",
+                    t_pos.x,
+                    t_pos.y,
+                    t_bounds.width,
+                    t_bounds.height,
+                    tp_pos.x,
+                    tp_pos.y,
+                    tp_bounds.width,
+                    tp_bounds.height,
+                )
+            });
             eprintln!(
                 "[121] f{n:02} surface={width}x{height} pwt={} \
-                 model=({:.1},{:.1}) {:.0}x{:.0} pres=({:.1},{:.1}) {:.0}x{:.0} root={root}",
+                 model=({:.1},{:.1}) {:.0}x{:.0} pres=({:.1},{:.1}) {:.0}x{:.0} {top}",
                 u8::from(self.pwt_raised),
                 m_pos.x,
                 m_pos.y,
