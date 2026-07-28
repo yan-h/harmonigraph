@@ -627,6 +627,14 @@ pub struct EguiState {
 /// variable must be in the HOST's environment, so from a Finder-launched
 /// Bitwig it takes `launchctl setenv` and a relaunch — rebuilding with a new
 /// default is usually less effort).
+///
+/// DEFAULT 0 — the wait is parked, not tuned. The `[121f]` probe shows
+/// egui_dock restoring the wide fractions from inside `DockArea::show` on
+/// the unfold click's own frame, before any deferral downstream of it can
+/// act, so the wait holds the narrow WINDOW while the CONTENT is already
+/// wide — it lengthens the mismatch it exists to hide. It earns a nonzero
+/// value only alongside something that keeps the click frame's layout
+/// folded too (issue #121 has the candidates).
 fn grow_delay_frames() -> u8 {
     static DELAY: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *DELAY.get_or_init(|| {
@@ -634,7 +642,7 @@ fn grow_delay_frames() -> u8 {
             .ok()
             .and_then(|v| v.parse::<u8>().ok())
             .map(|v| v.min(30))
-            .unwrap_or(5)
+            .unwrap_or(0)
     })
 }
 
@@ -742,6 +750,11 @@ impl Editor for LatticeEditor {
             // the layout that wanted it and the arrangement wears an extra
             // frame stretched across the old window.
             if let Some(size) = resized.requested_size.load() {
+                // Read BEFORE the round trip: Bitwig answers request_resize
+                // by calling set_size from inside it, which stores the new
+                // size — read after, "did the window grow" compares the new
+                // size with itself and the grow wait never engages.
+                let (was, _) = resized.size.load();
                 let started = Instant::now();
                 let accepted = asking.request_resize();
                 let roundtrip = started.elapsed().as_secs_f64() * 1000.0;
@@ -755,7 +768,6 @@ impl Editor for LatticeEditor {
                     ));
                 }
                 if accepted {
-                    let (was, _) = resized.size.load();
                     resized.size.store(size);
                     // The host may have echoed the same size straight back
                     // through `set_size`; taking it here keeps the next frame
