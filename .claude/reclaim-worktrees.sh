@@ -22,9 +22,10 @@
 # `debug` holds test and clippy output that only `ci.sh` consumes.
 #
 # HOW TIER 2 SEES A SQUASH MERGE, which is the thing that made merged
-# worktrees pile up. `git merge-base --is-ancestor` cannot see one, and
-# CLAUDE.md makes squashing the default, so four already-merged PRs (#101,
-# #103, #104, #105) sat undeletable while every gate said "unmerged, keep".
+# worktrees pile up. `git merge-base --is-ancestor` cannot see one, and the
+# `pr-hygiene` skill makes squashing the default, so four already-merged
+# PRs (#101, #103, #104, #105) sat undeletable while every gate said
+# "unmerged, keep".
 # Tier 2 therefore takes TWO signals, and a worktree needs either:
 #   - HEAD is an ancestor of main. Offline, instant, covers merge-commit PRs.
 #   - a MERGED PR's head sha EQUALS this worktree's HEAD, from one

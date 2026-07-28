@@ -188,7 +188,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         state.dock = default_dock();
         // The default layout has every pane open, so the window gets back
         // whatever the folds being thrown away were holding.
-        state.window_width_change += state.folds.clear(state.dial.width, area);
+        state.window_width_change += state.folds.clear(&state.dial, area);
     }
 
     // Render continuously only while something is animating (sounding or

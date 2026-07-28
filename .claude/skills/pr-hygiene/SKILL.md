@@ -125,4 +125,6 @@ a session finds it by reading. Reach for an agent when it restricts tools in
 a way that changes what can happen, encodes a repeatable job, or isolates
 genuinely noisy searching — not when a subsystem merely feels important.
 `/audit-merges` still checks the range for drift in whatever agents do exist,
-because nothing in the build can catch a prompt that has gone stale.
+because nothing in the build can catch a prompt that has gone stale — and it
+checks the skills and the scripts harder, since this rule is what keeps the
+rottable facts out of the agents and puts them there instead.

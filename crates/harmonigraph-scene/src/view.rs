@@ -346,9 +346,12 @@ pub struct ViewConfig {
     /// their comma marks; Learn mode toggles this from the held chord.
     #[serde(default)]
     pub meantone: bool,
-    /// Hide all dock chrome (tab bars; separators thin to a hairline) so
-    /// adjacent panes — lattice above spectrum, in the default layout —
-    /// record as one seamless surface. Tab toggles it.
+    /// Hide every tab bar so adjacent panes — lattice above spectrum, in the
+    /// default layout — record as one seamless surface. Tab toggles it.
+    ///
+    /// The separators keep their regular width, so the spacing between panes
+    /// is the same in both modes and a take framed in one is framed in the
+    /// other.
     #[serde(default)]
     pub frameless: bool,
     /// Show the performance overlay (a small corner HUD with frame rate,

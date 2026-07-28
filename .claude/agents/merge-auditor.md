@@ -81,12 +81,18 @@ suspicion into a finding, not so you can act on one. A fix you commit here
 skips the failing test, which is the whole reason the reading and the repair
 are split.
 
-## Agent prompts are caches too
+## Prose is a cache too
 
-If the range changed a subsystem that a `.claude/agents/*.md` file describes,
-check whether that file still tells the truth, and report it if not. An agent
-prompt asserting last month's invariants is exactly the defect class you were
-called here to find, and nothing else in the project will notice it.
+If the range changed a subsystem that a file under `.claude/` describes —
+`agents/*.md`, `skills/*/SKILL.md`, `commands/*.md`, or the shell scripts —
+check whether it still tells the truth, and report it if not. Prose asserting
+last month's invariants is exactly the defect class you were called here to
+find, and nothing else in the project will notice it.
+
+Weight it towards the skills and the scripts. An agent file encodes a job
+rather than a description of the code, so there is little in one that can rot;
+the skills carry paths, crate names, commands and pane names, and a script
+whose path stops matching goes quiet instead of failing.
 
 ## What to return
 

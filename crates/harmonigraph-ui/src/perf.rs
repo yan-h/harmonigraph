@@ -868,16 +868,30 @@ pub(crate) fn draw_overlay(
     // right edge has to stay put as the numbers change width underneath it.
     // Measuring the galleys up front settles the size before anything is
     // drawn, so the position is simply known.
+    // ...and never wider than the pane it hangs in. Clamping the left edge is
+    // not enough on its own: this is painted on a foreground layer whose clip
+    // is the whole screen, so nothing else stops a readout wider than its pane
+    // from crossing the separator and covering the settings column — including
+    // the collapse arrow at the left of every tab bar, which is the control
+    // that brings a folded pane back, and the thing the overlay's placement
+    // exists to stay off. The analyzer is the narrowest pane the default dock
+    // has, and a sideways fold can drive the window to its floor without anyone
+    // dragging it there.
+    //
+    // A readout too wide for its pane is cut off rather than moved or dropped.
+    // At a window that narrow no arrangement of it is readable, and the numbers
+    // are worth less than the controls underneath them.
     let size = egui::vec2(width, height) + margin * 2.0;
+    let size = egui::vec2(size.x.min((area.width() - OVERLAY_INSET * 2.0).max(0.0)), size.y);
     let origin = egui::pos2(
         (area.right() - OVERLAY_INSET - size.x).max(area.left()),
         area.top() + OVERLAY_INSET,
     );
-    painter.rect_filled(
-        egui::Rect::from_min_size(origin, size),
-        4.0,
-        egui::Color32::from_black_alpha(0xC0),
-    );
+    let plate = egui::Rect::from_min_size(origin, size);
+    painter.rect_filled(plate, 4.0, egui::Color32::from_black_alpha(0xC0));
+    // The rows are laid out at their own width, which the clamp above does not
+    // change, so the plate is what holds them in.
+    let painter = painter.with_clip_rect(plate);
 
     let mut y = origin.y + margin.y;
     for parts in lines {

@@ -238,8 +238,9 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
         "Write each note's name on its own ribbon, at the leading edge — so a \
          held note's name waits at the now-line and travels off with the note \
          when you let go. For reading the heatmap: a band of energy sits at \
-         some height on an axis marked only every octave, and the ribbon over \
-         that band is the same note, so naming the ribbon names the band.\n\n\
+         some height on an axis marked only in decades of hertz, and the \
+         ribbon over that band is the same note, so naming the ribbon names \
+         the band.\n\n\
          Names are the lattice's own, in its own hand: the node's spelling \
          with its accidental and comma mark, so a just third reads E- rather \
          than as an E and a cents offset.\n\nWhere repeats of a note come too \

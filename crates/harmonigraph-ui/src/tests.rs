@@ -2883,6 +2883,50 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     clear_of_every_tab_bar(&state, hud_of(&output), "with both pictures folded");
 }
 
+/// Landing in the analyzer's body is only half of staying out of the way: the
+/// HUD is painted on a foreground layer whose clip is the whole screen, so a
+/// pane too narrow to hold it does not crop it — it spills across the separator
+/// and over the settings column, and over whatever collapse arrow is there.
+///
+/// The analyzer is the NARROWEST pane in `default_dock` (0.2016 of the window),
+/// so it is the first to run out of room, and a sideways fold can drive the
+/// window to its floor without the user ever dragging it there.
+#[test]
+fn the_perf_overlay_stays_inside_its_pane_at_the_narrowest_window() {
+    // The plugin's own minimum editor width (`MIN_SIZE` in the plugin crate's
+    // editor), which is a window the shell will actually hand the UI.
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 800.0));
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState| {
+        t += 1.0 / 60.0;
+        let raw =
+            egui::RawInput { screen_rect: Some(screen), time: Some(t), ..Default::default() };
+        ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t))
+    };
+    frame(&mut state);
+    let output = frame(&mut state);
+
+    let plate = egui::Color32::from_black_alpha(0xC0);
+    let hud = output
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect) if rect.fill == plate => Some(rect.rect),
+            _ => None,
+        })
+        .expect("the overlay should paint its backing plate");
+    let area = perf_overlay_area(&state, screen);
+    assert!(
+        area.contains_rect(hud),
+        "the HUD ran {:.0}pt past its {:.0}pt pane: {hud:?} in {area:?}",
+        hud.right() - area.right(),
+        area.width(),
+    );
+}
+
 
 /// A key this build has RETIRED does not cost the blob it sits in.
 ///

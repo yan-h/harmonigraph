@@ -33,7 +33,8 @@ The performance overlay's bottom line reads `build  <branch> @<sha>` — the
 branch with its `worktree-` prefix stripped, so it is exactly the argument
 `./load-plugin.sh <branch>` takes. It is stamped at compile time by
 `crates/harmonigraph-ui/build.rs` and is on by default, so it needs nothing from
-Yan but a look at the corner of the Analyzer pane.
+Yan but a look at the corner of the Analyzer pane — or of the Lattice, which is
+where the overlay goes when the Analyzer is folded or off screen.
 
 This exists because a swap can silently not have happened: no rescan, a build
 that landed in a different worktree, the wrong branch named, or a build that

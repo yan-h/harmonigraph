@@ -517,7 +517,7 @@ impl SharedState {
                 // leaving rather than the one it is arriving in. Paying them
                 // back here would widen a freshly restored window by whatever
                 // the last project had folded.
-                let _ = self.folds.clear(0.0, 0.0);
+                self.folds.forget();
                 default_dock()
             } else {
                 self.folds = persist.folds;
