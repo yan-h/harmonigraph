@@ -145,6 +145,19 @@ struct Fold {
     /// first frame after a load moves nothing.
     #[serde(skip)]
     rail: bool,
+    /// Unfolded this frame, restore still pending. The fraction goes back into
+    /// the tree on the NEXT [`Folds::apply`] — the frame laid out at the window
+    /// the unfold asked for — because restored on the click frame it is drawn
+    /// into the window being left: a full-width pane squeezing everything else
+    /// leftward for one frame (issue #121's teleport). The entry stays alive
+    /// through the wait so [`Folds::dialled`] still prices the ask from the
+    /// held fraction, exactly as it does for a fold that is staying.
+    ///
+    /// Runtime-only, one frame long: a persisted mid-release entry is not a
+    /// state a save can carry, since persisting happens when the editor
+    /// closes.
+    #[serde(skip)]
+    releasing: bool,
 }
 
 /// Which child of a split is the folded one.
@@ -335,19 +348,51 @@ impl Folds {
         area: f32,
     ) -> bool {
         let mut moved = false;
-        self.0.retain(|fold| {
+        // Whether this pass is the click frame of a window-moving unfold: a
+        // split that was rendering a rail on the main surface has just
+        // stopped being held. Every restore on the surface then waits a
+        // frame WITH it — the ancestors holding the same fold outward
+        // included, because an ancestor's fraction landing early moves the
+        // layout exactly the way the rail's own would. Restored on the click
+        // frame, they are laid out into the window being left: a full-width
+        // pane squeezing every neighbour leftward for one frame, which is
+        // issue #121's teleport. The restore lands on the next apply, the
+        // frame laid out at the window the unfold asked for.
+        //
+        // A release with no rail in it — a pane re-docked out from under its
+        // entry, a floating surface's fold — moves no window, and restores
+        // in place as it always has.
+        let deferring = surface == SurfaceIndex::main()
+            && self.0.iter().any(|fold| {
+                fold.surface == surface.0
+                    && fold.rail
+                    && !fold.releasing
+                    && !holds.get(fold.node).is_some_and(Hold::held)
+            });
+        self.0.retain_mut(|fold| {
             if fold.surface != surface.0 {
                 return true;
             }
             if holds.get(fold.node).is_some_and(Hold::held) {
+                // Folded again before a pending restore landed: back to an
+                // ordinary fold, the fraction never having left the entry.
+                fold.releasing = false;
                 return true;
             }
-            // Unfolded, or re-docked out from under the entry: the fraction it
-            // was holding goes back where it came from.
+            if deferring {
+                // The rail entry alone speaks for the window move, and only
+                // once: counting a releasing entry again on the frame its
+                // restore lands would defer the landing layout a frame more.
+                moved |= fold.rail && !fold.releasing;
+                fold.releasing = true;
+                return true;
+            }
+            // Unfolded, or re-docked out from under the entry: the fraction
+            // it was holding goes back where it came from.
             if fold.node < tree.len() {
                 set_fraction(tree, NodeIndex(fold.node), fold.fraction);
             }
-            moved |= fold.rail;
+            moved |= fold.rail && !fold.releasing;
             false
         });
         for (index, hold) in holds.iter().enumerate() {
@@ -377,6 +422,7 @@ impl Folds {
                 fraction: split.fraction,
                 rail,
                 window: area,
+                releasing: false,
             });
             moved |= rail;
         }
@@ -1355,6 +1401,71 @@ mod tests {
         }
     }
 
+    /// Every frame after a fold's window lands draws the SAME layout, and
+    /// the click frame draws the one before it — the deferral fold.rs
+    /// promises. Per-frame drift here is issue #121's "ease back": the
+    /// compositor is measured atomic (the window and our layer flip in one
+    /// commit), so contents that visibly slide into place can only be the
+    /// layout converging across frames instead of landing in one.
+    #[test]
+    fn a_fold_lands_in_one_frame_and_stays_put() {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let nodes = [PICTURES, SETTINGS, LATTICE, SPECTRAL];
+        let before = nodes.map(|node| width(&dock, node));
+        collapse(&mut dock, Tab::Lattice, true);
+        // The click frame asks the window to shrink and must draw the
+        // layout it already had — the resize has not been answered yet.
+        let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        let click = nodes.map(|node| width(&dock, node));
+        for ((node, was), now) in nodes.iter().zip(before).zip(click) {
+            assert!(
+                (now - was).abs() < 0.01,
+                "{node:?} moved on the click frame: {was} -> {now}, before the window answered"
+            );
+        }
+        // The frame with the window the fold asked for draws the folded
+        // layout; every frame after it draws that layout again, exactly.
+        let mut asked = frame(&mut folds, &mut dock, &mut dial, window);
+        let landed = nodes.map(|node| width(&dock, node));
+        for pass in 0..8 {
+            asked = frame(&mut folds, &mut dock, &mut dial, asked);
+            for (node, at) in nodes.iter().zip(landed) {
+                let now = width(&dock, *node);
+                assert!(
+                    (now - at).abs() < 0.01,
+                    "{node:?} drifted {at} -> {now} on frame {pass} after the fold landed"
+                );
+            }
+        }
+        // And back out: the unfold's click frame holds still the same way,
+        // and the frames after ITS window draw one layout.
+        collapse(&mut dock, Tab::Lattice, false);
+        let held = nodes.map(|node| width(&dock, node));
+        let window = frame(&mut folds, &mut dock, &mut dial, asked);
+        let click = nodes.map(|node| width(&dock, node));
+        for ((node, was), now) in nodes.iter().zip(held).zip(click) {
+            assert!(
+                (now - was).abs() < 0.01,
+                "{node:?} moved on the unfold's click frame: {was} -> {now}"
+            );
+        }
+        let mut asked = frame(&mut folds, &mut dock, &mut dial, window);
+        let landed = nodes.map(|node| width(&dock, node));
+        for pass in 0..8 {
+            asked = frame(&mut folds, &mut dock, &mut dial, asked);
+            for (node, at) in nodes.iter().zip(landed) {
+                let now = width(&dock, *node);
+                assert!(
+                    (now - at).abs() < 0.01,
+                    "{node:?} drifted {at} -> {now} on frame {pass} after the unfold landed"
+                );
+            }
+        }
+    }
+
     /// Unfolding is the fraction coming back, not a guess at a new one.
     #[test]
     fn unfolding_gives_back_the_fraction_the_user_had() {
@@ -1370,6 +1481,10 @@ mod tests {
         let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
         let window = frame(&mut folds, &mut dock, &mut dial, window);
         collapse(&mut dock, Tab::Lattice, false);
+        // Two frames again: the click frame asks the window for the width it
+        // owes and holds the layout it has; the restore lands on the frame
+        // laid out at the window it asked for.
+        let window = frame(&mut folds, &mut dock, &mut dial, window);
         let window = frame(&mut folds, &mut dock, &mut dial, window);
         assert!((fraction(&dock, PICTURES) - 0.7).abs() < 0.001);
         assert!((window - 1000.0).abs() < 0.01, "and the window it came out of");
