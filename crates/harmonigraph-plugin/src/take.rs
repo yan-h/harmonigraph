@@ -110,7 +110,7 @@ pub struct RenderRequest {
     /// `--align` value (take-time the audio starts), if set; else auto-align.
     pub align: Option<String>,
     /// A persist blob passed as `--ui-state`, overriding the take's record-time
-    /// look — set for "Render now" so post-record settings reach the video;
+    /// look — set for "Re-render take" so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
     pub ui_state: Option<String>,
     /// Output pixels, from the Video pane's Aspect and Resolution.
@@ -139,7 +139,7 @@ impl RenderRequest {
         Some(Self::build(config, None))
     }
 
-    /// Build a request for an explicit "Render now": always built, and it
+    /// Build a request for an explicit "Re-render take": always built, and it
     /// carries the CURRENT `ui_state` blob so the render reflects the frame,
     /// bounce, and offset dialed in *after* recording — not the take's
     /// record-time snapshot.
@@ -1029,7 +1029,7 @@ fn spawn_render(
             // run means the straggler writes somewhere nobody is reading, and
             // the file at `out` is only ever produced whole, by rename.
             let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
-            // A "Render now" carries the current look as a persist blob; write
+            // A "Re-render take" carries the current look as a persist blob; write
             // it beside the take and pass --ui-state so post-record settings
             // override the take's record-time snapshot. Per-run for the same
             // reason as `partial`, and removed after the run.
@@ -1203,7 +1203,7 @@ mod tests {
             let config = RenderConfig { playhead, ..Default::default() };
             assert_eq!(RenderRequest::from_config(&config).unwrap().playhead, None);
             let now = RenderRequest::render_now(&config, "(dummy)".into());
-            assert_eq!(now.playhead, None, "Render now must not force it either");
+            assert_eq!(now.playhead, None, "Re-render take must not force it either");
         }
     }
 
@@ -1251,7 +1251,7 @@ mod tests {
         panic!("timed out waiting for {what}");
     }
 
-    /// Pressing "Render now" during a render kills the one in flight instead
+    /// Pressing "Re-render take" during a render kills the one in flight instead
     /// of running a second alongside it.
     ///
     /// Against a real process, because that is the whole claim: the generation
@@ -1402,11 +1402,14 @@ mod tests {
         );
     }
 
-    /// Two renders can overlap — "Render now" pressed while the auto-render
-    /// from a just-finished take is still going. The first to end must not
-    /// take the bar away from the one still running.
+    /// The bar survives a render ending while another is in flight.
+    ///
+    /// `RenderControl` serialises renders, so nothing should reach two — but
+    /// the count is what makes that a belt rather than the only strap, and a
+    /// flag cleared by whichever finished first would blank the bar out from
+    /// under a running render. This holds the counting to that.
     #[test]
-    fn overlapping_renders_keep_the_bar_until_the_last_one_ends() {
+    fn the_bar_lasts_until_the_last_render_ends() {
         let progress = Progress::default();
         progress.begin();
         progress.begin();

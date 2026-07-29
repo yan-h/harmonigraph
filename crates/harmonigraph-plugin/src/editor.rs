@@ -194,7 +194,7 @@ impl EditorShared {
             self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
         }
 
-        // "Render now": render the last finished take with the CURRENT settings.
+        // "Re-render take": render the last finished take with the CURRENT settings.
         // The persist blob rides along as --ui-state, so the frame, bounce, and
         // offset dialed in after recording all reach the video.
         self.ui.last_take_ready = self.take.last_take().is_some();

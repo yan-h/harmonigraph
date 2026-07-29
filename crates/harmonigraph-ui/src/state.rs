@@ -128,11 +128,11 @@ pub struct SharedState {
     /// opposed to armed-and-waiting. Drives the record indicator: a steady dot
     /// while rolling, a breathing one while it waits. Shell-set, runtime-only.
     pub take_rolling: bool,
-    /// One-shot: set by the Video pane's "Render now" button, consumed by the
+    /// One-shot: set by the Video pane's "Re-render take" button, consumed by the
     /// shell to render the last take with the CURRENT settings. Runtime-only.
     pub render_now: bool,
     /// Whether a take has been recorded this session — the shell sets it so the
-    /// Video pane can offer "Render now". Runtime-only.
+    /// Video pane can offer "Re-render take". Runtime-only.
     pub last_take_ready: bool,
     /// Record the input bus alongside the notes, so the render has a
     /// spectrum and a soundtrack without a separate bounce. Persisted
