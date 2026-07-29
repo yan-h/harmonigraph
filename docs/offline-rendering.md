@@ -178,9 +178,36 @@ The flags worth knowing (`--help` lists them all):
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect with its short edge at 1080 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
-| `--start` / `--end` / `--tail` | trim; `--tail` is the run-out after the last note |
+| `--lead` | extra empty frame before the recording starts; default is the take's own **Lead-in** |
+| `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note |
 | `--ui-state` | use a different look than the one in the take |
 | `--playhead` | lay the whole take's spectrogram out at once and sweep a playhead through it |
+
+### Where the video starts
+
+Take times are the **host's transport position**, so time zero is the song's
+start, not the record button's. Play a passage from a minute into the
+arrangement and its first note lands at 60-odd seconds — so a render from
+zero opens with a minute of empty lattice, however little silence you heard
+before playing.
+
+The render therefore begins **where the recording did**, wherever in the song
+that falls. Nothing exists before that point — no events, no audio — so
+everything it trims was guaranteed empty. The anchor is the take's first
+event, and arming writes a full parameter snapshot whether or not anything is
+played, so a take carrying sound but **no MIDI at all** anchors correctly too;
+recorded audio contributes its own start as well, and the earliest wins.
+
+The Video pane's `Lead-in` slider (0–5s, default 0) adds stillness *before*
+that, and `--lead` overrides it per render. Default 0 because the run-up you
+actually played is already in the video — the lead is a taste, not a
+correction, and it is empty frame by construction.
+
+`--start` still means an absolute song position and outranks the lead: use it
+to skip *to* a passage, or `--start 0` to open at song zero.
+
+A take played from song zero is unaffected either way — the recording already
+begins at the start, so there is nothing to trim.
 
 `--size` is a *size*, not a shape. Left off, it takes the aspect the take
 was framed at and puts the short edge at 1080 — 16:9 renders 1920x1080,

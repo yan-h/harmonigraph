@@ -47,7 +47,14 @@ OPTIONS:
                            chunkier text relative to the frame.
                            [default: sized so the UI reads like the plugin]
         --fps <N>          Frames per second.  [default: 60]
-        --start <SEC>      Skip to here.  [default: 0]
+        --start <SEC>      Skip to here, as a song position — take times are
+                           the host transport's, so 0 is the song's start, not
+                           the recording's.
+                           [default: where the recording begins, less --lead]
+        --lead <SEC>       Extra empty frame before the recording starts. The
+                           render already opens where the take was captured,
+                           so this is only for holding on a still frame first.
+                           [default: the take's own Lead-in setting]
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear.  [default: 4]
@@ -94,7 +101,12 @@ struct Args {
     size: Option<[u32; 2]>,
     scale: Option<f32>,
     fps: f64,
-    start: f64,
+    /// `None` means "start a lead-in before the first note" — see
+    /// `start_of_render`. An explicit `--start 0` is NOT the same thing, which
+    /// is why this is an Option rather than defaulting to zero.
+    start: Option<f64>,
+    /// `None` means "use the take's own Lead-in setting".
+    lead: Option<f64>,
     end: Option<f64>,
     tail: f64,
     crf: u32,
@@ -128,7 +140,8 @@ impl Default for Args {
             size: None,
             scale: None,
             fps: 60.0,
-            start: 0.0,
+            start: None,
+            lead: None,
             end: None,
             tail: 4.0,
             crf: 16,
@@ -171,7 +184,8 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "-s" | "--size" => args.size = Some(parse_size(&value("--size")?)?),
             "--scale" => args.scale = Some(parse_number("--scale", &value("--scale")?)?),
             "--fps" => args.fps = parse_number("--fps", &value("--fps")?)?,
-            "--start" => args.start = parse_number("--start", &value("--start")?)?,
+            "--start" => args.start = Some(parse_number("--start", &value("--start")?)?),
+            "--lead" => args.lead = Some(parse_number("--lead", &value("--lead")?)?),
             "--end" => args.end = Some(parse_number("--end", &value("--end")?)?),
             "--tail" => args.tail = parse_number("--tail", &value("--tail")?)?,
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
@@ -239,6 +253,39 @@ fn default_scale(size: [u32; 2]) -> f32 {
 /// A render launched from the plugin passes an explicit `--size` and never
 /// reaches this; it is the default for running the renderer by hand.
 const DEFAULT_SHORT_EDGE: u32 = 1080;
+
+/// Where the video starts, in take time.
+///
+/// Take times are the host's TRANSPORT position, so time zero is the song's
+/// start and not the record button's. A passage played from a minute into the
+/// arrangement was captured from 60-odd seconds, and rendering from zero opens
+/// the video with a minute of empty lattice — nothing was recorded there to
+/// draw. That is the bug this exists to fix, reported against a take whose
+/// recording begins at 5.48s.
+///
+/// So the anchor is where the RECORDING begins, not where the song does, and
+/// not where the first note lands: a take can carry sound without any MIDI at
+/// all, and anchoring to notes would send that case back to song zero. The
+/// take's first event serves, since arming writes a full parameter snapshot
+/// whether or not anything is played; recorded audio contributes its own start
+/// too, and the earliest of them wins.
+///
+/// `lead` then backs off from that point, for a beat of stillness before the
+/// music. It is empty frame by construction — nothing was captured before the
+/// recording started — which is why it defaults to none and is a choice rather
+/// than a correction.
+///
+/// `--start` overrides, and stays absolute: it answers "where in the song",
+/// which is what you want when skipping to a passage, and it is the only way
+/// back to opening at song zero (`--start 0`).
+fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64) -> f64 {
+    match (explicit, capture_start) {
+        (Some(start), _) => start,
+        // An empty take: no events, no audio, nothing to anchor to.
+        (None, None) => 0.0,
+        (None, Some(capture)) => (capture - lead.max(0.0)).max(0.0),
+    }
+}
 
 /// Whether an explicit `--size` composes the frame the take was dialed in at.
 ///
@@ -343,12 +390,13 @@ fn run() -> Result<(), String> {
     // render defaults its size and layout to this, so a plain `harmonigraph-offline
     // take.take` reproduces exactly what was previewed; --size / --layout
     // override.
-    let frame = take
+    let render_config = take
         .header
         .ui_state
         .as_deref()
-        .and_then(harmonigraph_ui::render_frame_from_persist)
+        .and_then(harmonigraph_ui::render_config_from_persist)
         .unwrap_or_default();
+    let frame = render_config.frame;
     let layout = match &args.layout {
         Some(spec) => Layout::load(spec)?,
         None => Layout::split(frame.lattice, frame.split),
@@ -462,20 +510,30 @@ fn run() -> Result<(), String> {
         audio.as_ref().map_or(visual, |a| visual.max(audio_start + a.seconds()))
     });
     let scale = args.scale.unwrap_or_else(|| default_scale(size));
+    // The take's own Lead-in unless the command line says otherwise.
+    let lead = args.lead.unwrap_or(render_config.lead_in as f64);
+    // Where the recording begins: its first event, or the start of its own
+    // audio if that came first (an audio part can be captured before anything
+    // is played, and a take may carry no notes at all).
+    let capture_start = match (take.first_event(), take.header.audio_start) {
+        (Some(event), Some(audio)) => Some(event.min(audio)),
+        (only, None) => only,
+        (None, only) => only,
+    };
+    let start = start_of_render(args.start, capture_start, lead);
     let settings = Settings {
         layout,
         size,
         pixels_per_point: scale,
         fps: args.fps,
-        start: args.start,
+        start,
         end,
         audio_start,
         whole_song_spectrogram: args.playhead,
     };
     if settings.frame_count() == 0 {
         return Err(format!(
-            "nothing to render: --start {} is at or past the end ({end:.2}s)",
-            args.start
+            "nothing to render: the start ({start:.2}s) is at or past the end ({end:.2}s)"
         ));
     }
 
@@ -491,7 +549,7 @@ fn run() -> Result<(), String> {
             audio: audio_path.as_deref(),
             crf: args.crf,
             ffmpeg: args.ffmpeg.as_deref(),
-            audio_offset: args.start - audio_start,
+            audio_offset: start - audio_start,
         },
     )?;
 
@@ -611,6 +669,50 @@ mod tests {
         );
         // And with nothing after it, the only one stands.
         assert_eq!(parse(&["--size", "1080x1920", "--fps", "30"]), Some([1080, 1920]));
+    }
+
+    /// The render opens where the RECORDING did, wherever in the song that
+    /// falls — the bug being that take times are transport positions, so a
+    /// passage played from a minute in used to open on a minute of empty
+    /// lattice.
+    #[test]
+    fn the_render_starts_where_the_recording_did() {
+        // The take that prompted this: captured from 5.48s of song time.
+        assert!((start_of_render(None, Some(5.48), 0.0) - 5.48).abs() < 1e-9);
+        // A lead backs off from there, into frame that is empty by
+        // construction — nothing was captured before the take began.
+        assert!((start_of_render(None, Some(5.48), 2.0) - 3.48).abs() < 1e-9);
+        // ...but never past song zero, which has no frames behind it.
+        assert_eq!(start_of_render(None, Some(0.2), 1.0), 0.0);
+        assert_eq!(start_of_render(None, Some(0.0), 0.0), 0.0);
+        // A negative lead would push the start PAST the capture point and clip
+        // the opening, so it is treated as none.
+        assert!((start_of_render(None, Some(5.48), -2.0) - 5.48).abs() < 1e-9);
+        // An empty take: nothing to anchor to.
+        assert_eq!(start_of_render(None, None, 1.0), 0.0);
+    }
+
+    /// `--start` is absolute song position and outranks the lead — the only
+    /// way back to opening at song zero, and what you want when skipping to a
+    /// passage rather than trimming the run-up to one.
+    #[test]
+    fn an_explicit_start_beats_the_lead() {
+        assert_eq!(start_of_render(Some(0.0), Some(5.48), 1.0), 0.0);
+        assert_eq!(start_of_render(Some(30.0), Some(5.48), 1.0), 30.0);
+        // Including when there are no notes to anchor to.
+        assert_eq!(start_of_render(Some(12.0), None, 1.0), 12.0);
+    }
+
+    /// `--start 0` has to survive parsing as a REQUEST, not as the absence of
+    /// one: if it collapsed to the default the flag would silently do the
+    /// opposite of what it says, since the default is now nonzero.
+    #[test]
+    fn start_zero_is_distinguishable_from_no_start() {
+        let parse = |flags: &[&str]| {
+            parse_args_from(flags.iter().map(|s| s.to_string())).unwrap().unwrap().start
+        };
+        assert_eq!(parse(&["--start", "0"]), Some(0.0));
+        assert_eq!(parse(&["--fps", "30"]), None);
     }
 
     /// The warning fires on a different SHAPE and stays quiet for a bigger

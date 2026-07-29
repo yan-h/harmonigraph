@@ -227,6 +227,28 @@ pub struct RenderConfig {
     /// turns it on. Needs audio.
     #[serde(default)]
     pub playhead: bool,
+    /// Extra seconds of empty frame before the recording starts, which is
+    /// where the render begins.
+    ///
+    /// Zero by default, and that is the fix rather than a lack of one: the
+    /// render already opens where the take was CAPTURED rather than at song
+    /// zero, so whatever run-up was played is in the video and no padding is
+    /// needed to see it. Event times are the host's transport position, so a
+    /// passage played from a minute into the arrangement was captured from
+    /// 60-odd seconds, and rendering from zero would open on a minute of empty
+    /// lattice.
+    ///
+    /// What this adds is a beat of stillness BEFORE that — empty frame by
+    /// construction, since nothing was captured there. A taste, not a
+    /// correction. The mirror of the renderer's `--tail`, which extends past
+    /// the last event so releases finish rather than cutting mid-decay.
+    ///
+    /// Read by the offline renderer out of the take, like
+    /// [`playhead`](Self::playhead); `--lead` overrides it and `--start`
+    /// overrides both, being an absolute song position rather than a
+    /// relative one.
+    #[serde(default = "default_lead_in")]
+    pub lead_in: f32,
     /// The composed video frame — aspect ratio and the lattice/spectral split.
     /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
@@ -255,10 +277,19 @@ impl Default for RenderConfig {
             audio_offset: String::new(),
             legacy_extra_args: String::new(),
             playhead: false,
+            lead_in: default_lead_in(),
             frame: RenderFrame::default(),
             short_edge: default_short_edge(),
         }
     }
+}
+
+/// None: the render opens where the recording did, so the run-up actually
+/// played is already in the video. Padding beyond it is a deliberate taste,
+/// and empty frame by construction — nothing was captured before the take
+/// started — so it is not something to hand out by default.
+pub(crate) fn default_lead_in() -> f32 {
+    0.0
 }
 
 /// 1080 on the short edge — 1920x1080 at the default 16:9 frame, and the
