@@ -3522,3 +3522,47 @@ fn a_folded_columns_stacked_arrow_is_inert() {
     );
 }
 
+
+/// "Clear everything" empties all three accumulations, not two of them.
+///
+/// Each is filled by a different path — the trail only once a released voice
+/// has faded past `prune`, the roll on the note-off, the spectrogram from
+/// analyzed audio — so the interesting failure is one of the three quietly
+/// not being wired up. Asserting they are non-empty FIRST is what makes this
+/// a test of the clear rather than of three things that were already empty.
+#[test]
+fn clearing_everything_empties_all_three_accumulations() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+
+    // A note played and released; `prune` past its fade turns the released
+    // voice into trail history and leaves the roll's record of it.
+    state.tracker.handle_event(harmonigraph_core::NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+    });
+    state.tracker.handle_event(harmonigraph_core::NoteEvent {
+        time: 0.5,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::Off,
+    });
+    state.tracker.prune(600.0, 0.1);
+    // One analyzed column is enough; how audio becomes columns is the
+    // spectrogram's own business and tested there.
+    state.spectrum.history.push(harmonigraph_core::SpectrogramColumn::from_power(
+        0.0,
+        &[1.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
+    ));
+
+    assert!(!state.tracker.history().is_empty(), "no trail to clear");
+    assert!(!state.tracker.roll().is_empty(), "no roll to clear");
+    assert!(!state.spectrum.history().is_empty(), "no spectrogram to clear");
+
+    state.clear_accumulated();
+
+    assert!(state.tracker.history().is_empty(), "the lattice trail survived");
+    assert!(state.tracker.roll().is_empty(), "the piano roll survived");
+    assert!(state.spectrum.history().is_empty(), "the spectrogram survived");
+}
