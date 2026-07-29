@@ -39,7 +39,10 @@ OPTIONS:
     -l, --layout <SPEC>    Preset name or path to a .ron layout.
                            Presets: side-by-side, stacked, lattice, spectral
                            [default: side-by-side]
-    -s, --size <WxH>       Output pixels.  [default: 1920x1080]
+    -s, --size <WxH>       Output pixels. At an aspect other than the one the
+                           take was framed at, the picture is recomposed to
+                           fit rather than letterboxed, and it says so.
+                           [default: the take's own aspect, short edge 1080]
         --scale <F>        Pixels per point — the UI's zoom. Bigger means
                            chunkier text relative to the frame.
                            [default: sized so the UI reads like the plugin]
@@ -139,8 +142,21 @@ impl Default for Args {
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+/// Split from [`parse_args`] so the flag handling can be tested without a
+/// process to hang it off.
+///
+/// A repeated flag keeps the LAST one, which falls out of assigning into
+/// `args` as the loop goes. That is not an accident to be tidied away: the
+/// plugin passes the Video pane's size first and the Options field's flags
+/// after, so last-wins is exactly what makes a hand-typed `--size` an override
+/// of the Resolution control rather than a flag the control ignores. Make a
+/// repeat an error and `RenderRequest`'s argument order becomes a bug.
+fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>, String> {
     let mut args = Args::default();
-    let mut raw = std::env::args().skip(1);
+    let mut raw = raw.into_iter();
     while let Some(arg) = raw.next() {
         let mut value = |name: &str| -> Result<String, String> {
             raw.next().ok_or_else(|| format!("{name} needs a value"))
@@ -216,18 +232,28 @@ fn default_scale(size: [u32; 2]) -> f32 {
     (size[0] as f32 / REFERENCE_POINTS_ACROSS).clamp(1.0, 4.0)
 }
 
-/// Output pixels for a take's frame aspect when `--size` isn't given: the
-/// shorter edge at 1080, so 16:9 lands on 1920x1080 and 9:16 on 1080x1920.
-/// Even dimensions (ffmpeg requires them).
-fn size_for_frame(frame: &harmonigraph_ui::RenderFrame) -> [u32; 2] {
-    let (w, h) = (frame.aspect_w.max(1) as f64, frame.aspect_h.max(1) as f64);
-    let short = 1080.0;
-    let even = |x: f64| ((x.round() as u32).max(2)) & !1;
-    if w >= h {
-        [even(short * w / h), even(short)]
-    } else {
-        [even(short), even(short * h / w)]
-    }
+/// Short edge for a take's frame aspect when `--size` isn't given, so 16:9
+/// lands on 1920x1080 and 9:16 on 1080x1920. The pixels themselves come from
+/// [`RenderFrame::pixels`], which the Video pane's Resolution control also
+/// sizes by — one definition, so the preview and the render cannot drift.
+///
+/// A render launched from the plugin passes an explicit `--size` and never
+/// reaches this; it is the default for running the renderer by hand.
+const DEFAULT_SHORT_EDGE: u32 = 1080;
+
+/// Whether an explicit `--size` composes the frame the take was dialed in at.
+///
+/// Compares shape, not pixels: `--size` is how you render the same picture
+/// larger, and 3840x2160 is the same picture as 1920x1080. A ratio that
+/// disagrees is a different composition — the split falls elsewhere and the
+/// lattice camera exposes a different amount of the board — so the render
+/// stops matching the preview it was framed in. Half a percent of tolerance
+/// covers rounding an odd ratio onto even pixels (21:9 at 1080 is 2520x1080,
+/// which is 2.333 against 2.334).
+fn size_matches_frame(size: [u32; 2], frame: &harmonigraph_ui::RenderFrame) -> bool {
+    let asked = size[0] as f64 / size[1].max(1) as f64;
+    let framed = frame.aspect_w.max(1) as f64 / frame.aspect_h.max(1) as f64;
+    (asked - framed).abs() <= framed * 0.005
 }
 
 /// Line a replacement soundtrack up with the take timeline, reporting what it
@@ -328,7 +354,22 @@ fn run() -> Result<(), String> {
         Some(spec) => Layout::load(spec)?,
         None => Layout::split(frame.lattice, frame.split),
     };
-    let size = args.size.unwrap_or_else(|| size_for_frame(&frame));
+    let size = args.size.unwrap_or_else(|| frame.pixels(DEFAULT_SHORT_EDGE));
+    // An explicit --size at a different aspect renders a DIFFERENT picture
+    // from the one the take was framed in — nothing letterboxes or crops to
+    // reconcile them, the layout simply recomposes at the pixels it is given.
+    // It stays legal (rendering a take at a new shape on purpose is a real
+    // thing to want), but silently is how you end up with a tall composition
+    // in a wide video and no idea which setting did it.
+    if args.size.is_some() && !size_matches_frame(size, &frame) {
+        let [w, h] = size;
+        eprintln!(
+            "warning: --size {w}x{h} is not the {}:{} this take was framed at — \
+             the picture is recomposed to fit, not letterboxed. Drop --size to \
+             render the frame as previewed.",
+            frame.aspect_w, frame.aspect_h
+        );
+    }
 
     if take.truncated {
         eprintln!(
@@ -535,15 +576,13 @@ mod tests {
         assert_eq!(default_scale([640, 360]), 1.0);
     }
 
+    fn frame(aspect_w: u32, aspect_h: u32) -> harmonigraph_ui::RenderFrame {
+        harmonigraph_ui::RenderFrame { aspect_w, aspect_h, ..Default::default() }
+    }
+
     #[test]
-    fn size_for_frame_puts_the_short_edge_at_1080_with_even_dimensions() {
-        let sz = |aspect_w, aspect_h| {
-            size_for_frame(&harmonigraph_ui::RenderFrame {
-                aspect_w,
-                aspect_h,
-                ..Default::default()
-            })
-        };
+    fn the_default_size_puts_the_short_edge_at_1080_with_even_dimensions() {
+        let sz = |w, h| frame(w, h).pixels(DEFAULT_SHORT_EDGE);
         assert_eq!(sz(16, 9), [1920, 1080]);
         assert_eq!(sz(9, 16), [1080, 1920]);
         assert_eq!(sz(1, 1), [1080, 1080]);
@@ -551,5 +590,46 @@ mod tests {
         let [w, h] = sz(21, 9);
         assert_eq!(h, 1080);
         assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h} not even");
+    }
+
+    /// A repeated `--size` keeps the last, which is what lets the plugin pass
+    /// the Video pane's size first and the Options field after and have a
+    /// hand-typed size override the control. `RenderRequest::render_args`
+    /// orders the two on this behaviour, so it is a contract between the
+    /// crates rather than a detail of the loop.
+    #[test]
+    fn a_repeated_size_keeps_the_last_one() {
+        let parse = |flags: &[&str]| {
+            parse_args_from(flags.iter().map(|s| s.to_string()))
+                .expect("flags parse")
+                .expect("not --help")
+                .size
+        };
+        assert_eq!(parse(&["--size", "1920x1080", "--size", "3840x2160"]), Some([3840, 2160]));
+        // The plugin's own shape: its size, then the Options text after it.
+        assert_eq!(
+            parse(&["--size", "1080x1920", "--fps", "30", "-s", "2560x1440"]),
+            Some([2560, 1440])
+        );
+        // And with nothing to override it, the leading one stands.
+        assert_eq!(parse(&["--size", "1080x1920", "--fps", "30"]), Some([1080, 1920]));
+    }
+
+    /// The warning fires on a different SHAPE and stays quiet for a bigger
+    /// render of the same one — otherwise every 4K render nags.
+    #[test]
+    fn a_size_at_the_frames_own_aspect_is_not_a_mismatch() {
+        for short in [1080, 1440, 2160] {
+            for (w, h) in [(16, 9), (9, 16), (1, 1), (4, 5), (21, 9)] {
+                let f = frame(w, h);
+                let size = f.pixels(short);
+                assert!(size_matches_frame(size, &f), "{w}:{h} at {short} read as a mismatch");
+            }
+        }
+        // The default Options string this replaced, against a portrait frame:
+        // the case that shipped a wide video from a tall preview.
+        assert!(!size_matches_frame([1920, 1080], &frame(9, 16)));
+        assert!(!size_matches_frame([1920, 1080], &frame(1, 1)));
+        assert!(!size_matches_frame([1080, 1080], &frame(16, 9)));
     }
 }

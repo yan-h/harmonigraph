@@ -150,11 +150,30 @@ impl RenderRequest {
             audio: None,
             align: None,
             ui_state,
-            // Whitespace split, no shell quoting: these are flags like
-            // `--size 3840x2160`.
-            extra_args: config.extra_args.split_whitespace().map(str::to_owned).collect(),
+            extra_args: render_args(config),
         }
     }
+}
+
+/// The renderer flags a config implies: the frame's size, then whatever the
+/// Options field adds.
+///
+/// The size is passed rather than left to the renderer's own default so the
+/// Video pane's Resolution reaches the video at all — the renderer's fallback
+/// knows the take's aspect but not which of 1080/1440/2160 was picked beside
+/// it. Options comes second because the renderer takes the LAST `--size` it is
+/// given, which makes a hand-typed one an override of the control rather than
+/// a flag fighting it. That is the way round it has to be: as the Options
+/// default, `--size 1920x1080` outranked every Aspect but 16:9, so a 9:16
+/// frame previewed tall and rendered wide.
+///
+/// Options is whitespace-split with no shell quoting — these are flags like
+/// `--fps 30`, and no path among them has ever needed a space.
+fn render_args(config: &harmonigraph_ui::RenderConfig) -> Vec<String> {
+    let [w, h] = config.frame.pixels(config.short_edge);
+    let mut args = vec!["--size".to_string(), format!("{w}x{h}")];
+    args.extend(config.extra_args.split_whitespace().map(str::to_owned));
+    args
 }
 
 /// The user's home directory, or `.` when `HOME` is unset — the base for the
@@ -1019,11 +1038,30 @@ mod tests {
         let request = RenderRequest::from_config(&config).unwrap();
         assert_eq!(request.program, default_renderer_path());
         assert_eq!(request.audio, None);
-        assert!(request.extra_args.is_empty());
+        // The size is always passed, so "no options" is the size and nothing
+        // else — in particular not an empty string among the arguments.
+        assert_eq!(request.extra_args, vec!["--size", "1920x1080"]);
+    }
+
+    /// The pane's Aspect and Resolution are what size the video, without the
+    /// Options field being involved.
+    #[test]
+    fn the_frame_sizes_the_render() {
+        let portrait_4k = RenderConfig {
+            frame: harmonigraph_ui::RenderFrame {
+                aspect_w: 9,
+                aspect_h: 16,
+                ..Default::default()
+            },
+            short_edge: 2160,
+            ..Default::default()
+        };
+        let request = RenderRequest::from_config(&portrait_4k).unwrap();
+        assert_eq!(request.extra_args, vec!["--size", "2160x3840"]);
     }
 
     #[test]
-    fn options_split_on_whitespace() {
+    fn options_split_on_whitespace_and_override_the_frames_size() {
         let config = RenderConfig {
             renderer_path: "/opt/harmonigraph-offline".into(),
             extra_args: "--size 3840x2160   --layout side-by-side".into(),
@@ -1034,9 +1072,12 @@ mod tests {
         // Bounced audio is shelved: a render always uses the take's own
         // recording, never a --audio replacement.
         assert_eq!(request.audio, None);
+        // The frame's size leads and Options follows, so the typed `--size` is
+        // the one the renderer keeps. Reversed, the control could never be
+        // overridden and a typed size would be silently ignored instead.
         assert_eq!(
             request.extra_args,
-            vec!["--size", "3840x2160", "--layout", "side-by-side"]
+            vec!["--size", "1920x1080", "--size", "3840x2160", "--layout", "side-by-side"]
         );
     }
 

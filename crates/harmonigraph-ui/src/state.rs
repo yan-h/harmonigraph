@@ -563,8 +563,9 @@ impl SharedState {
             self.spectrum_config.migrate_legacy();
             self.render_config = persist.render;
             // And for the render frame, whose two-way `stacked` flag became a
-            // named side.
-            self.render_config.frame.migrate_legacy();
+            // named side — plus the `--size` that used to sit in the Options
+            // text, now the Resolution control.
+            self.render_config.migrate_legacy();
             self.fps_cap = persist.fps_cap;
         }
     }

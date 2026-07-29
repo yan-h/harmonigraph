@@ -113,7 +113,15 @@ the take. Three fields appear:
 | Renderer | path to the `harmonigraph-offline` binary — leave empty to use the copy `update-plugin.sh` installs |
 | Audio | bounced WAV to mux in and feed the spectrum; empty renders silent, with no spectrum curve |
 | When | what counts as "done" — see below |
-| Options | extra flags, split on spaces: `--size 3840x2160 --layout side-by-side` |
+| Options | extra flags, split on spaces: `--fps 30 --layout side-by-side` |
+
+The video's size is **not** one of the options — it comes from **Aspect**
+and **Resolution** in the Frame section, which the plugin passes as
+`--size`. A `--size` typed into Options still wins (the renderer keeps the
+last one it is given), so it remains available as an override; it is just
+no longer the normal route. It used to be, and it was the wrong way round:
+the field defaulted to `--size 1920x1080` and was read *after* the aspect,
+so every frame but 16:9 previewed at one shape and rendered at another.
 
 **When** is either *Switched off* (render when you turn Record take off —
 predictable, and the only choice that survives a looping transport) or
@@ -168,12 +176,20 @@ The flags worth knowing (`--help` lists them all):
 | `--audio` | audio to use instead of the take's own: feeds the spectrum **and** is muxed in |
 | `--align` | how `--audio` lines up: `auto` (default), `off`, or a start in seconds |
 | `--layout` | preset name or a `.ron` file (see below) |
-| `--size` | output pixels, e.g. `3840x2160` |
+| `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect with its short edge at 1080 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--start` / `--end` / `--tail` | trim; `--tail` is the run-out after the last note |
 | `--ui-state` | use a different look than the one in the take |
 | `--playhead` | lay the whole take's spectrogram out at once and sweep a playhead through it |
+
+`--size` is a *size*, not a shape. Left off, it takes the aspect the take
+was framed at and puts the short edge at 1080 — 16:9 renders 1920x1080,
+9:16 renders 1080x1920. Given a different aspect it does not letterbox or
+crop: the layout recomposes at whatever pixels it is handed, so the split
+falls elsewhere and the lattice camera exposes a different amount of the
+board. That is a legitimate thing to ask for, so it is allowed, but it
+renders a different picture from the preview and the renderer says so.
 
 `--scale` is the one that isn't obvious. Font sizes and paddings are in
 *points*, so the scale decides how large the UI reads **relative to the

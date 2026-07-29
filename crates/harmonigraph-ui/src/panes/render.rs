@@ -114,15 +114,16 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     layout.paint_dividers(ui.painter(), &translated);
 }
 
-/// Aspect ratio, arrangement, and split — editing the persisted `RenderFrame`.
+/// Aspect ratio, resolution, arrangement, and split — editing the persisted
+/// `RenderFrame` and the resolution beside it.
 fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Frame");
-    let f = &mut state.render_config.frame;
     // A `button_row` rather than a `choice_row`: the selection is a PAIR of
     // numbers, not one enum value, so there is nothing for choice_row's
     // `selectable_value` to compare against.
     button_row(ui, |ui| {
         ui.label("Aspect");
+        let f = &mut state.render_config.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
             if ui.selectable_label(on, format!("{w}:{h}")).clicked() {
@@ -131,6 +132,31 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
             }
         }
     });
+    // The SHORT edge, not a named format: "1080p" means nothing to a 9:16
+    // frame, where 1080 is the width. Aspect decides the shape and this
+    // decides only how big, so each option shows the pixels it lands on and
+    // the pair is what the render is passed. Sizes are held here rather than
+    // typed into Options because a `--size` there is read after the Aspect row
+    // and silently outranks it.
+    //
+    // A size lifted out of an old Options string (see
+    // `RenderConfig::migrate_legacy`) can land between these, and then no
+    // button reads as selected until one is clicked. That is why 720 is on the
+    // list rather than only the three sizes worth delivering: it is both a
+    // real draft setting for a render measured in minutes and where a
+    // `--size 1280x720` migrates to.
+    let frame = state.render_config.frame;
+    let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
+        .iter()
+        .map(|&short| {
+            let [w, h] = frame.pixels(short);
+            (short, short.to_string(), format!("{w}x{h}"))
+        })
+        .collect();
+    let options: Vec<(u32, &str, &str)> =
+        sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
+    choice_row(ui, "Resolution", &mut state.render_config.short_edge, &options);
+    let f = &mut state.render_config.frame;
     // Named for where the LATTICE goes, so the row reads as the placement it
     // is — "Lattice: Top" rather than an axis plus a convention about which
     // pane leads. Off `ALL` with an exhaustive match, like the Spectral pane's
@@ -147,7 +173,14 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     });
     choice_row(ui, "Lattice", &mut f.lattice, &sides);
     let label = if f.lattice.sizes_by_height() { "Lattice height" } else { "Lattice width" };
-    ValueBar::new(&mut f.split, 0.15..=0.85, label).show(ui);
+    // The range `Layout::split` itself honours, rather than a tighter one on
+    // top of it: the layout clamps to 0.05..=0.95, so a bar that went wider
+    // would move under the pointer and render the same picture either side of
+    // the clamp. Both panes stay on screen at the ends — a frame that is all
+    // lattice or all spectrum is what the `lattice` and `spectral` layout
+    // presets are for, and they say so in the render rather than by a slider
+    // pushed to its stop.
+    ValueBar::new(&mut f.split, 0.05..=0.95, label).show(ui);
 }
 
 /// Which spectrogram the render bakes: the live scrolling window (exactly what
@@ -354,13 +387,15 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
         ],
     );
 
-    // Resolution and any other harmonigraph-offline flags, split on spaces. The
-    // frame's aspect already picks a default resolution, so this is only for
-    // going bigger (e.g. 4K) or the occasional override.
+    // Anything the pane has no control for, split on spaces. Size is NOT one
+    // of them any more — Aspect and Resolution decide it and the plugin passes
+    // the `--size` itself. A `--size` typed here still wins (the renderer takes
+    // the last one), which is the override, not the normal route.
     let render = &mut state.render_config;
     labeled_path(ui, "Options", &mut render.extra_args).on_hover_text(
-        "Extra harmonigraph-offline flags, split on spaces — resolution and the \
-         like: --size 3840x2160",
+        "Extra harmonigraph-offline flags, split on spaces: --fps 30, \
+         --layout side-by-side. Size comes from Aspect and Resolution above; \
+         a --size here overrides them.",
     );
 
     // Re-render the last take with the frame you've dialed in since recording.

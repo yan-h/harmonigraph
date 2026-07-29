@@ -181,6 +181,71 @@ fn a_saved_render_frame_carries_the_side_and_not_the_old_flag() {
     assert_eq!(restored.render_config.frame.lattice, LatticeSide::Bottom);
 }
 
+/// A saved `--size` in the Options text becomes the Resolution control, and
+/// stops overriding the aspect it was saved beside.
+///
+/// This is the whole point of the migration: `--size 1920x1080` was the
+/// Options DEFAULT, so every project carries it, and it was read after the
+/// Aspect row — a 9:16 frame previewed tall and rendered 16:9. Lifting the
+/// short edge out keeps the size the user chose and hands the shape back to
+/// the frame.
+#[test]
+fn a_size_saved_in_the_options_text_loads_as_the_resolution() {
+    let mut config = crate::RenderConfig {
+        extra_args: "--size 1920x1080".into(),
+        frame: crate::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
+        ..Default::default()
+    };
+    config.migrate_legacy();
+    assert_eq!(config.short_edge, 1080, "the short edge is what the flag meant");
+    assert_eq!(config.extra_args, "", "and the flag itself is gone");
+    // The frame now decides the shape, which it never got to before.
+    assert_eq!(config.frame.pixels(config.short_edge), [1080, 1920]);
+}
+
+/// The migration reads sizes the way the renderer does, and leaves everything
+/// it does not understand for the renderer to answer for.
+#[test]
+fn lifting_a_size_out_of_the_options_text_leaves_the_rest_of_it_alone() {
+    let migrated = |args: &str| {
+        let mut config = crate::RenderConfig { extra_args: args.into(), ..Default::default() };
+        config.migrate_legacy();
+        (config.short_edge, config.extra_args)
+    };
+
+    // Other flags keep their order and their spacing is normalized.
+    assert_eq!(
+        migrated("--fps 30 --size 3840x2160 --layout stacked"),
+        (2160, "--fps 30 --layout stacked".to_string())
+    );
+    // The short edge, not the width: a portrait size means a portrait render.
+    assert_eq!(migrated("--size 1080x1920"), (1080, String::new()));
+    // The renderer keeps the LAST of a repeated flag, so the migration has to
+    // agree with it or it would change the picture it claims to preserve.
+    assert_eq!(migrated("--size 1920x1080 --size 2560x1440"), (1440, String::new()));
+    // The renderer's other spellings.
+    assert_eq!(migrated("-s 3840X2160"), (2160, String::new()));
+    // No size to lift: the control keeps its default and the text is untouched.
+    assert_eq!(migrated("--fps 30"), (1080, "--fps 30".to_string()));
+    // An unparseable size stays put, for the renderer to reject out loud
+    // rather than being silently eaten here.
+    assert_eq!(migrated("--size wide"), (1080, "--size wide".to_string()));
+}
+
+/// The lift happens on the real load path, not just when called directly.
+#[test]
+fn a_loaded_blob_has_its_options_size_lifted() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.render_config.extra_args = "--size 2560x1440".into();
+    state.render_config.short_edge = 1080;
+    let saved = state.save_persist();
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    assert_eq!(restored.render_config.short_edge, 1440);
+    assert_eq!(restored.render_config.extra_args, "");
+}
+
 #[test]
 fn pre_rename_octave_style_and_slice_band_fields_still_load() {
     // The outer layer's band fields were renamed (slice_inner/outer ->
@@ -2433,6 +2498,10 @@ fn settings_pane_at_width(
     state.camera.projection = projection;
     // A saved angle, so the Angle row has the button a real session gives it.
     state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
+    // Options defaults to empty (size comes from the Frame section), and an
+    // empty field paints no text to find it by — see
+    // `the_options_field_sits_beside_its_label`, which locates it that way.
+    state.render_config.extra_args = FIXTURE_OPTIONS.into();
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
@@ -2454,6 +2523,34 @@ fn settings_pane_at_width(
         },
     );
     out.shapes
+}
+
+/// The Video pane drawn through the REAL dock, soloed, for a shell that can or
+/// cannot record takes — the one thing that changes which section leads it.
+///
+/// Through `root_ui` and `DockArea` rather than calling `TabViewer::ui` on a
+/// hand-built child, because the wrapping is the part under test: egui_dock
+/// puts every body inside a `ScrollArea`, and that ui arrives with a
+/// full-height `min_rect` where a hand-built one arrives empty. A fixture that
+/// skips it cannot see the difference — see `section`.
+fn video_pane_shapes(take_supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui::Color32) {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.take_supported = take_supported;
+    // Soloed so the Video pane's body is the only settings body on screen and
+    // the first heading found is unambiguously its own.
+    state.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 1200.0));
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
+        |ui| root_ui(ui, &mut state, &backend, 0.0),
+    );
+    // What `ui.separator()` strokes with, so the assertion names the rule
+    // rather than "some line" — the tab bar draws its own, in its own colors.
+    let rule = ctx.style_of(egui::Theme::Dark).visuals.widgets.noninteractive.bg_stroke.color;
+    (out.shapes, rule)
 }
 
 /// Where a pane's content box ends, in the coordinates
@@ -2497,14 +2594,55 @@ fn the_options_field_sits_beside_its_label() {
     for width in [423.0f32, 300.0, 240.0] {
         let shapes = settings_pane_at_width(panes::Tab::Video, width, PROJECTIONS[0]);
         let label = text_y(&shapes, "Options").expect("the Options label");
-        // The field is not empty by default, so its own text locates it.
-        let field = text_y(&shapes, "--size 1920x1080").expect("the Options field's text");
+        // The fixture puts text in the field, and that text is what locates it.
+        let field = text_y(&shapes, FIXTURE_OPTIONS).expect("the Options field's text");
         // A field beside its label sits a few points off it (the text box has
         // its own margin); a field that has wrapped is a whole row away.
         assert!(
             (label - field).abs() < 10.0,
             "at {width}pt the Options label sits at y {label} and its field at y {field}: \
              the field has dropped onto a line of its own"
+        );
+    }
+}
+
+/// The Video pane's first heading has no rule above it — there is nothing
+/// above it to be separated from, and a rule there reads as the pane hanging
+/// off a line.
+///
+/// The Video pane and not every pane, because it is the only one that leads
+/// with a `section` call: the rest draw content first, so their rules all
+/// separate something. What this pins is the MECHANISM in `section`, which
+/// any pane gets — so a new pane that leads with a section needs no test of
+/// its own, and this one has to keep working for it to stay that way.
+///
+/// Both shells, because which section leads the Video pane depends on the
+/// shell: a host can record takes, so Record leads; the standalone cannot, so
+/// `render_settings` returns early and Frame leads instead. `section` decides
+/// it from what has been drawn rather than from the caller, and this is what
+/// holds it to that for the case the caller could not have known.
+#[test]
+fn the_video_pane_does_not_start_with_a_rule() {
+    // Which section leads, per shell: a host can record takes, so Record
+    // leads; the standalone cannot, so `render_settings` returns early.
+    for (take_supported, leads) in [(true, "Record"), (false, "Frame")] {
+        let (shapes, rule) = video_pane_shapes(take_supported);
+        let heading = text_y(&shapes, leads)
+            .unwrap_or_else(|| panic!("the Video pane drew no {leads:?} heading"));
+        // Only rules BELOW the tab bar are the pane's own. The dock's chrome
+        // draws lines of its own above the body, in its own colors, and those
+        // are not this test's business — hence matching on the separator
+        // stroke rather than on any line segment.
+        let above = shapes.iter().any(|cs| match &cs.shape {
+            egui::Shape::LineSegment { points, stroke } => {
+                stroke.color == rule && points[0].y < heading
+            }
+            _ => false,
+        });
+        assert!(
+            !above,
+            "take_supported={take_supported}: a rule sits above {leads:?}, the pane's \
+             first heading, at y {heading}"
         );
     }
 }
@@ -2519,6 +2657,11 @@ fn the_options_field_sits_beside_its_label() {
 /// what the sweeps are for. The two digits of `done` against three of `total`
 /// also put the padded readout through them.
 const FIXTURE_RENDER: RenderProgress = RenderProgress { done: 120, total: 990 };
+
+/// Text for the Options field in the pane fixtures. A flag the Video pane has
+/// no control of its own for, since that is what the field is for now that
+/// Aspect and Resolution carry the size.
+const FIXTURE_OPTIONS: &str = "--fps 30";
 
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
@@ -2581,8 +2724,11 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// render is minutes long and the sentence never changes while it runs.
 ///
 /// The fraction is also what tells it apart from the `ValueBar` beside it,
-/// which paints the same accent fill: the frame's split sits at 0.68 by
-/// default, and the fixture render is a shade over a tenth done.
+/// which paints the same accent fill. The split bar fills to its position in
+/// its RANGE, not to its value: 0.20 across 0.05..=0.95 is a sixth of the
+/// track, against the fixture render's eighth. They have to stay further
+/// apart than the tolerance below, so moving the split's default or its range
+/// close to an eighth is what would make this pass on the wrong bar.
 #[test]
 fn the_render_bar_fills_to_the_share_of_frames_done() {
     const WIDTH: f32 = 400.0;
@@ -3375,3 +3521,4 @@ fn a_folded_columns_stacked_arrow_is_inert() {
         "the log pane should not open from a button that is no longer drawn",
     );
 }
+

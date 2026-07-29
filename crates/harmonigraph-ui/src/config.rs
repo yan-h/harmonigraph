@@ -221,6 +221,16 @@ pub struct RenderConfig {
     /// to compose the same picture.
     #[serde(default)]
     pub frame: RenderFrame,
+    /// The render's short edge in pixels; with [`frame`](Self::frame)'s aspect
+    /// this is the whole output size (see [`RenderFrame::pixels`]).
+    ///
+    /// Deliberately NOT part of `RenderFrame`: the frame is a composition, and
+    /// it rides inside a take so a re-render reproduces the framing it was
+    /// dialed in at. Resolution is a per-export choice — draft at 1080, final
+    /// at 2160, same picture — so it stays out here where changing it cannot
+    /// mean the take was framed differently.
+    #[serde(default = "default_short_edge")]
+    pub short_edge: u32,
 }
 
 impl Default for RenderConfig {
@@ -232,11 +242,97 @@ impl Default for RenderConfig {
             renderer_path: String::new(),
             audio_path: String::new(),
             audio_offset: String::new(),
-            extra_args: "--size 1920x1080".into(),
+            // Empty: the size now comes from Aspect x Resolution, which the
+            // plugin passes as `--size` itself. A default that named a
+            // resolution here silently outranked the Aspect row above it —
+            // a 9:16 frame rendered 1920x1080 and only the preview was tall.
+            extra_args: String::new(),
             playhead: false,
             frame: RenderFrame::default(),
+            short_edge: default_short_edge(),
         }
     }
+}
+
+/// 1080 on the short edge — 1920x1080 at the default 16:9 frame, and the
+/// resolution every host and site takes without transcoding.
+pub(crate) fn default_short_edge() -> u32 {
+    1080
+}
+
+impl RenderConfig {
+    /// Fold older blob layouts onto the current fields; call after
+    /// deserializing a persisted config.
+    ///
+    /// Blobs written before the Resolution control carry the size in
+    /// `extra_args` as a literal `--size WxH` — for most of them the old
+    /// default, `--size 1920x1080`, which was applied whatever the Aspect row
+    /// said. Lifting its short edge into [`short_edge`](Self::short_edge) and
+    /// dropping the flag is what makes a saved project pick up the aspect it
+    /// always displayed: the frame decides the shape, the lifted number
+    /// decides only how big.
+    ///
+    /// It lifts EVERY `--size`, not only the retired default, and the cost of
+    /// that is worth naming: a `--size` deliberately typed at an aspect the
+    /// frame does not have — a landscape render of a portrait composition —
+    /// comes back after a reload as the frame's own shape at that size. The
+    /// blob cannot tell that apart from the bug (both are a `--size` fighting
+    /// the aspect), so one of the two has to lose, and leaving the bug in
+    /// place would mean every project that never touched the field keeps
+    /// rendering the wrong shape. The deliberate case is re-typed in a
+    /// second, is warned about on every render, and is the rarer by far.
+    pub fn migrate_legacy(&mut self) {
+        self.frame.migrate_legacy();
+        if let Some(short) = take_size_flag(&mut self.extra_args) {
+            self.short_edge = short;
+        }
+    }
+}
+
+/// Remove a `--size WxH` (or `-s WxH`) pair from a whitespace-split flag
+/// string, returning the size's short edge.
+///
+/// Only the LAST one decides, because that is what the renderer's own parser
+/// does with a repeated flag — so a migration reading a different size than
+/// the render used would be a migration that changes the picture.
+fn take_size_flag(args: &mut String) -> Option<u32> {
+    let mut short = None;
+    // `kept` borrows `args`, so it has to become an owned string before the
+    // assignment below can touch `args` again.
+    let kept = {
+        let tokens: Vec<&str> = args.split_whitespace().collect();
+        let mut kept: Vec<&str> = Vec::with_capacity(tokens.len());
+        let mut i = 0;
+        while i < tokens.len() {
+            let is_size = matches!(tokens[i], "--size" | "-s");
+            match (is_size, tokens.get(i + 1).and_then(|v| parse_wxh(v))) {
+                (true, Some((w, h))) => {
+                    short = Some(w.min(h));
+                    i += 2;
+                }
+                _ => {
+                    kept.push(tokens[i]);
+                    i += 1;
+                }
+            }
+        }
+        kept.join(" ")
+    };
+    // A `--size` with an unparseable value is left in place: the renderer
+    // should reject it and say so, rather than this quietly eating it.
+    if short.is_some() {
+        *args = kept;
+    }
+    short
+}
+
+/// `WxH` as the renderer's `--size` accepts it. A zero edge is treated as
+/// unparseable rather than lifted: it would leave the control on a size no
+/// button shows, and the renderer is the right place to reject it.
+fn parse_wxh(text: &str) -> Option<(u32, u32)> {
+    let (w, h) = text.split_once(['x', 'X', '*'])?;
+    let (w, h) = (w.parse().ok()?, h.parse().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 /// Which side of the video frame the lattice takes; the Spectral pane takes
@@ -336,6 +432,30 @@ impl RenderFrame {
             self.lattice = LatticeSide::Top;
         }
     }
+
+    /// Output pixels for this aspect with its SHORT edge at `short_edge`: 16:9
+    /// at 1080 is 1920x1080, 9:16 at 1080 is 1080x1920.
+    ///
+    /// The short edge is the dimension people name a format by ("1080p", "4K"
+    /// notwithstanding), and it is the one that keeps a portrait render as
+    /// tall as a landscape one is wide instead of a fifth the pixels.
+    /// Both dimensions come out even, which ffmpeg's yuv420p requires.
+    ///
+    /// The single definition of aspect-to-pixels: the Video pane displays it,
+    /// the plugin passes it as `--size`, and `harmonigraph-offline` falls back
+    /// to it when no `--size` is given. Three callers agreeing by construction
+    /// is the point — a second copy is how the preview and the render come to
+    /// disagree about the shape of the picture.
+    pub fn pixels(&self, short_edge: u32) -> [u32; 2] {
+        let (w, h) = (self.aspect_w.max(1) as f64, self.aspect_h.max(1) as f64);
+        let short = short_edge.max(2) as f64;
+        let even = |x: f64| ((x.round() as u32).max(2)) & !1;
+        if w >= h {
+            [even(short * w / h), even(short)]
+        } else {
+            [even(short), even(short * h / w)]
+        }
+    }
 }
 
 pub(crate) fn default_aspect_w() -> u32 {
@@ -344,8 +464,15 @@ pub(crate) fn default_aspect_w() -> u32 {
 pub(crate) fn default_aspect_h() -> u32 {
     9
 }
+/// A fifth of the frame to the lattice, the rest to the spectral pane. The
+/// two are not competing for the same job: the lattice reads at whatever size
+/// it is given (it is a handful of nodes, and the camera frames them), while
+/// the spectrogram's width IS its time axis, so width buys it seconds on
+/// screen. Kept in step with `RenderFrame::default`'s `split` — the serde
+/// default and the struct default answering differently would mean a blob
+/// that omits the field loads as a frame nobody chose.
 pub(crate) fn default_frame_split() -> f32 {
-    0.68
+    0.20
 }
 
 impl Default for RenderFrame {
@@ -353,7 +480,7 @@ impl Default for RenderFrame {
         RenderFrame {
             aspect_w: 16,
             aspect_h: 9,
-            split: 0.68,
+            split: default_frame_split(),
             lattice: LatticeSide::Left,
             legacy_stacked: false,
         }
