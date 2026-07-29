@@ -149,11 +149,10 @@ fn parse_args() -> Result<Option<Args>, String> {
 /// process to hang it off.
 ///
 /// A repeated flag keeps the LAST one, which falls out of assigning into
-/// `args` as the loop goes. That is not an accident to be tidied away: the
-/// plugin passes the Video pane's size first and the Options field's flags
-/// after, so last-wins is exactly what makes a hand-typed `--size` an override
-/// of the Resolution control rather than a flag the control ignores. Make a
-/// repeat an error and `RenderRequest`'s argument order becomes a bug.
+/// `args` as the loop goes and is what a person recalling a command line and
+/// appending a new `--size` expects. Worth a test rather than left implicit:
+/// the alternative failure is silent, keeping the earlier value while the
+/// typed one looks like it took.
 fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>, String> {
     let mut args = Args::default();
     let mut raw = raw.into_iter();
@@ -592,11 +591,10 @@ mod tests {
         assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h} not even");
     }
 
-    /// A repeated `--size` keeps the last, which is what lets the plugin pass
-    /// the Video pane's size first and the Options field after and have a
-    /// hand-typed size override the control. `RenderRequest::render_args`
-    /// orders the two on this behaviour, so it is a contract between the
-    /// crates rather than a detail of the loop.
+    /// A repeated flag keeps the last, the way every CLI a person types at
+    /// behaves — so a second `--size` on the end of a recalled command line
+    /// replaces the first rather than erroring or, worse, silently keeping the
+    /// earlier one.
     #[test]
     fn a_repeated_size_keeps_the_last_one() {
         let parse = |flags: &[&str]| {
@@ -606,12 +604,12 @@ mod tests {
                 .size
         };
         assert_eq!(parse(&["--size", "1920x1080", "--size", "3840x2160"]), Some([3840, 2160]));
-        // The plugin's own shape: its size, then the Options text after it.
+        // Across other flags, and across the two spellings.
         assert_eq!(
             parse(&["--size", "1080x1920", "--fps", "30", "-s", "2560x1440"]),
             Some([2560, 1440])
         );
-        // And with nothing to override it, the leading one stands.
+        // And with nothing after it, the only one stands.
         assert_eq!(parse(&["--size", "1080x1920", "--fps", "30"]), Some([1080, 1920]));
     }
 

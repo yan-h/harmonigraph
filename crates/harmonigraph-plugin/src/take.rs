@@ -113,8 +113,21 @@ pub struct RenderRequest {
     /// look — set for "Render now" so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
     pub ui_state: Option<String>,
-    /// Extra flags, already split.
-    pub extra_args: Vec<String>,
+    /// Output pixels, from the Video pane's Aspect and Resolution.
+    ///
+    /// Passed rather than left to the renderer's own default because that
+    /// default knows the take's aspect but not which resolution was picked
+    /// beside it.
+    pub size: [u32; 2],
+    /// Whether to bake the whole-song playhead spectrogram rather than the
+    /// live scrolling one.
+    ///
+    /// `None` leaves it to the take's own recorded setting, which is what the
+    /// Video pane's Spectrogram row writes — so the choice reaches the render
+    /// through the take rather than through a flag. `Some(true)` forces it on;
+    /// there is no forcing it off, because the renderer ORs the flag with the
+    /// take's setting and a flag cannot subtract.
+    pub playhead: Option<bool>,
 }
 
 impl RenderRequest {
@@ -150,30 +163,14 @@ impl RenderRequest {
             audio: None,
             align: None,
             ui_state,
-            extra_args: render_args(config),
+            size: config.frame.pixels(config.short_edge),
+            // Not forced: the take carries the Video pane's Spectrogram choice
+            // and the renderer reads it, so passing `--playhead` here would
+            // OR itself over a "Live" the user had picked and the row would
+            // control nothing.
+            playhead: None,
         }
     }
-}
-
-/// The renderer flags a config implies: the frame's size, then whatever the
-/// Options field adds.
-///
-/// The size is passed rather than left to the renderer's own default so the
-/// Video pane's Resolution reaches the video at all — the renderer's fallback
-/// knows the take's aspect but not which of 1080/1440/2160 was picked beside
-/// it. Options comes second because the renderer takes the LAST `--size` it is
-/// given, which makes a hand-typed one an override of the control rather than
-/// a flag fighting it. That is the way round it has to be: as the Options
-/// default, `--size 1920x1080` outranked every Aspect but 16:9, so a 9:16
-/// frame previewed tall and rendered wide.
-///
-/// Options is whitespace-split with no shell quoting — these are flags like
-/// `--fps 30`, and no path among them has ever needed a space.
-fn render_args(config: &harmonigraph_ui::RenderConfig) -> Vec<String> {
-    let [w, h] = config.frame.pixels(config.short_edge);
-    let mut args = vec!["--size".to_string(), format!("{w}x{h}")];
-    args.extend(config.extra_args.split_whitespace().map(str::to_owned));
-    args
 }
 
 /// The user's home directory, or `.` when `HOME` is unset — the base for the
@@ -964,11 +961,17 @@ fn spawn_render(
             if let Some(file) = &ui_state_file {
                 command.arg("--ui-state").arg(file);
             }
-            command.args(&request.extra_args);
-            // The take's own recording is the spectrogram: lay the whole piece
-            // out and sweep a playhead over it. Harmless if the take has no
-            // audio — the renderer notes it and falls back to the scrolling view.
-            command.arg("--playhead");
+            let [w, h] = request.size;
+            command.arg("--size").arg(format!("{w}x{h}"));
+            // Only when something forces it. The renderer turns the whole-song
+            // playhead on for `--playhead` OR the take's own recorded setting,
+            // so a flag passed unconditionally here is one the Video pane's
+            // Spectrogram row can never turn back off — which is exactly what
+            // it was, and why picking "Live" did nothing. Left alone, the
+            // take's setting is the whole answer, in both directions.
+            if request.playhead == Some(true) {
+                command.arg("--playhead");
+            }
 
             // stdout is the renderer's `--dump-layout` channel and nothing
             // else; stderr carries everything this cares about, so pipe that
@@ -1026,25 +1029,18 @@ mod tests {
         assert!(RenderRequest::from_config(&config).is_some());
     }
 
-    /// A blank renderer path must fall back to the default, and blank options
-    /// must not become an empty argument the renderer would choke on.
+    /// A blank renderer path must fall back to the default rather than becoming
+    /// an empty argument the renderer would reject.
     #[test]
     fn blank_settings_fall_back_rather_than_passing_empty_arguments() {
-        let config = RenderConfig {
-            renderer_path: "  ".into(),
-            extra_args: "   ".into(),
-            ..Default::default()
-        };
+        let config = RenderConfig { renderer_path: "  ".into(), ..Default::default() };
         let request = RenderRequest::from_config(&config).unwrap();
         assert_eq!(request.program, default_renderer_path());
         assert_eq!(request.audio, None);
-        // The size is always passed, so "no options" is the size and nothing
-        // else — in particular not an empty string among the arguments.
-        assert_eq!(request.extra_args, vec!["--size", "1920x1080"]);
+        assert_eq!(request.size, [1920, 1080]);
     }
 
-    /// The pane's Aspect and Resolution are what size the video, without the
-    /// Options field being involved.
+    /// The pane's Aspect and Resolution are the whole of what sizes the video.
     #[test]
     fn the_frame_sizes_the_render() {
         let portrait_4k = RenderConfig {
@@ -1057,28 +1053,25 @@ mod tests {
             ..Default::default()
         };
         let request = RenderRequest::from_config(&portrait_4k).unwrap();
-        assert_eq!(request.extra_args, vec!["--size", "2160x3840"]);
+        assert_eq!(request.size, [2160, 3840]);
     }
 
+    /// The renderer is never told to use the whole-song playhead.
+    ///
+    /// It ORs `--playhead` with the take's own recorded setting, so a flag
+    /// passed here can only add. Passing it unconditionally — which is what
+    /// this used to do — made the Video pane's "Live" choice unreachable: the
+    /// pane wrote `playhead: false` into the take and the flag turned it
+    /// straight back on. Leaving it unset is what lets the row decide both
+    /// ways, so this holds the request to saying nothing.
     #[test]
-    fn options_split_on_whitespace_and_override_the_frames_size() {
-        let config = RenderConfig {
-            renderer_path: "/opt/harmonigraph-offline".into(),
-            extra_args: "--size 3840x2160   --layout side-by-side".into(),
-            ..Default::default()
-        };
-        let request = RenderRequest::from_config(&config).unwrap();
-        assert_eq!(request.program, std::path::PathBuf::from("/opt/harmonigraph-offline"));
-        // Bounced audio is shelved: a render always uses the take's own
-        // recording, never a --audio replacement.
-        assert_eq!(request.audio, None);
-        // The frame's size leads and Options follows, so the typed `--size` is
-        // the one the renderer keeps. Reversed, the control could never be
-        // overridden and a typed size would be silently ignored instead.
-        assert_eq!(
-            request.extra_args,
-            vec!["--size", "1920x1080", "--size", "3840x2160", "--layout", "side-by-side"]
-        );
+    fn the_take_decides_the_spectrogram_not_a_forced_flag() {
+        for playhead in [false, true] {
+            let config = RenderConfig { playhead, ..Default::default() };
+            assert_eq!(RenderRequest::from_config(&config).unwrap().playhead, None);
+            let now = RenderRequest::render_now(&config, "(dummy)".into());
+            assert_eq!(now.playhead, None, "Render now must not force it either");
+        }
     }
 
     /// Verbatim shapes from `harmonigraph-offline`'s stderr — the opening line

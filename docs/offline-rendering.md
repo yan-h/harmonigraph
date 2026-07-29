@@ -113,15 +113,14 @@ the take. Three fields appear:
 | Renderer | path to the `harmonigraph-offline` binary — leave empty to use the copy `update-plugin.sh` installs |
 | Audio | bounced WAV to mux in and feed the spectrum; empty renders silent, with no spectrum curve |
 | When | what counts as "done" — see below |
-| Options | extra flags, split on spaces: `--fps 30 --layout side-by-side` |
 
-The video's size is **not** one of the options — it comes from **Aspect**
-and **Resolution** in the Frame section, which the plugin passes as
-`--size`. A `--size` typed into Options still wins (the renderer keeps the
-last one it is given), so it remains available as an override; it is just
-no longer the normal route. It used to be, and it was the wrong way round:
-the field defaulted to `--size 1920x1080` and was read *after* the aspect,
-so every frame but 16:9 previewed at one shape and rendered at another.
+The video's size comes from **Aspect** and **Resolution** in the Frame
+section, which the plugin passes as `--size`. There is no field for raw
+renderer flags: there was one, defaulting to `--size 1920x1080`, and since
+the renderer reads `--size` *after* resolving the take's frame it outranked
+every Aspect but 16:9 — a 9:16 frame previewed tall and rendered wide. The
+flags it could reach are all reachable by running the renderer on the take
+by hand, which has completion, `--help`, and real error messages.
 
 **When** is either *Switched off* (render when you turn Record take off —
 predictable, and the only choice that survives a looping transport) or
@@ -134,8 +133,8 @@ ffmpeg is found automatically — on `PATH`, then in the usual install
 locations. This matters more than it sounds: a macOS app launched from
 Finder gets a `PATH` of `/usr/bin:/bin:/usr/sbin:/sbin`, with no Homebrew
 in it, so a plugin-launched render would otherwise fail with "install
-ffmpeg" on a machine that has ffmpeg. Override with `--ffmpeg /path` in
-the Options field if you need to.
+ffmpeg" on a machine that has ffmpeg. Override with `--ffmpeg /path` when
+running the renderer by hand, or set `LATTICE_FFMPEG`.
 
 The render runs on its own thread and never touches the audio thread or
 the GUI, so a long one does not hold up the DAW. The status line reports
