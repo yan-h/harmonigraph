@@ -142,8 +142,21 @@ impl Default for Args {
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+/// Split from [`parse_args`] so the flag handling can be tested without a
+/// process to hang it off.
+///
+/// A repeated flag keeps the LAST one, which falls out of assigning into
+/// `args` as the loop goes. That is not an accident to be tidied away: the
+/// plugin passes the Video pane's size first and the Options field's flags
+/// after, so last-wins is exactly what makes a hand-typed `--size` an override
+/// of the Resolution control rather than a flag the control ignores. Make a
+/// repeat an error and `RenderRequest`'s argument order becomes a bug.
+fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>, String> {
     let mut args = Args::default();
-    let mut raw = std::env::args().skip(1);
+    let mut raw = raw.into_iter();
     while let Some(arg) = raw.next() {
         let mut value = |name: &str| -> Result<String, String> {
             raw.next().ok_or_else(|| format!("{name} needs a value"))
@@ -577,6 +590,29 @@ mod tests {
         let [w, h] = sz(21, 9);
         assert_eq!(h, 1080);
         assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h} not even");
+    }
+
+    /// A repeated `--size` keeps the last, which is what lets the plugin pass
+    /// the Video pane's size first and the Options field after and have a
+    /// hand-typed size override the control. `RenderRequest::render_args`
+    /// orders the two on this behaviour, so it is a contract between the
+    /// crates rather than a detail of the loop.
+    #[test]
+    fn a_repeated_size_keeps_the_last_one() {
+        let parse = |flags: &[&str]| {
+            parse_args_from(flags.iter().map(|s| s.to_string()))
+                .expect("flags parse")
+                .expect("not --help")
+                .size
+        };
+        assert_eq!(parse(&["--size", "1920x1080", "--size", "3840x2160"]), Some([3840, 2160]));
+        // The plugin's own shape: its size, then the Options text after it.
+        assert_eq!(
+            parse(&["--size", "1080x1920", "--fps", "30", "-s", "2560x1440"]),
+            Some([2560, 1440])
+        );
+        // And with nothing to override it, the leading one stands.
+        assert_eq!(parse(&["--size", "1080x1920", "--fps", "30"]), Some([1080, 1920]));
     }
 
     /// The warning fires on a different SHAPE and stays quiet for a bigger

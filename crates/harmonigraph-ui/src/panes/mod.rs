@@ -360,8 +360,8 @@ pub(super) fn section(ui: &mut egui::Ui, title: &str) {
     // whose ui arrives with `min_rect` already equal to `max_rect`, so it is a
     // full-height rect before the pane draws a thing. A fixture that builds
     // the pane ui directly sees an empty `min_rect` instead and cannot tell
-    // the two apart — which is why `no_pane_starts_with_a_rule` goes through
-    // the real dock.
+    // the two apart — which is why `the_video_pane_does_not_start_with_a_rule`
+    // goes through the real dock.
     if ui.cursor().top() > ui.max_rect().top() + 0.5 {
         ui.add_space(4.0);
         ui.separator();

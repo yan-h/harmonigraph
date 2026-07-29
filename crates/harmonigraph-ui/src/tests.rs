@@ -2606,8 +2606,15 @@ fn the_options_field_sits_beside_its_label() {
     }
 }
 
-/// A pane's first heading has no rule above it — there is nothing above it to
-/// be separated from, and a rule there reads as the pane hanging off a line.
+/// The Video pane's first heading has no rule above it — there is nothing
+/// above it to be separated from, and a rule there reads as the pane hanging
+/// off a line.
+///
+/// The Video pane and not every pane, because it is the only one that leads
+/// with a `section` call: the rest draw content first, so their rules all
+/// separate something. What this pins is the MECHANISM in `section`, which
+/// any pane gets — so a new pane that leads with a section needs no test of
+/// its own, and this one has to keep working for it to stay that way.
 ///
 /// Both shells, because which section leads the Video pane depends on the
 /// shell: a host can record takes, so Record leads; the standalone cannot, so
@@ -2615,7 +2622,7 @@ fn the_options_field_sits_beside_its_label() {
 /// it from what has been drawn rather than from the caller, and this is what
 /// holds it to that for the case the caller could not have known.
 #[test]
-fn no_pane_starts_with_a_rule() {
+fn the_video_pane_does_not_start_with_a_rule() {
     // Which section leads, per shell: a host can record takes, so Record
     // leads; the standalone cannot, so `render_settings` returns early.
     for (take_supported, leads) in [(true, "Record"), (false, "Frame")] {
