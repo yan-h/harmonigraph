@@ -32,11 +32,10 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         TextStyle::Button.resolve(ui.style()),
         theme::text(),
     );
-    let gap = 6.0;
-    let desired = Vec2::new(
-        SWITCH_SIZE.x + gap + galley.size().x,
-        SWITCH_SIZE.y.max(galley.size().y),
-    );
+    let scale = theme::ui_scale(ui.ctx());
+    let switch = SWITCH_SIZE * scale;
+    let gap = 6.0 * scale;
+    let desired = Vec2::new(switch.x + gap + galley.size().x, switch.y.max(galley.size().y));
     let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
     if response.clicked() {
         *on = !*on;
@@ -51,8 +50,8 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         // the track cross-fades.
         let t = ui.ctx().animate_bool_responsive(response.id, *on);
         let track = egui::Rect::from_min_size(
-            egui::pos2(rect.left(), rect.center().y - SWITCH_SIZE.y / 2.0),
-            SWITCH_SIZE,
+            egui::pos2(rect.left(), rect.center().y - switch.y / 2.0),
+            switch,
         );
         let radius = track.height() / 2.0;
         let mix = |a: egui::Color32, b: egui::Color32| -> egui::Color32 {
@@ -74,7 +73,7 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         );
         painter.circle_filled(
             egui::pos2(knob_x, track.center().y),
-            radius - 2.5,
+            radius - 2.5 * scale,
             theme::text(),
         );
         painter.galley(
@@ -103,9 +102,10 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
         TextStyle::Button.resolve(ui.style()),
         theme::text(),
     );
-    let dot_r = 5.0;
-    let gap = 8.0;
-    let pad = Vec2::new(10.0, 5.0);
+    let scale = theme::ui_scale(ui.ctx());
+    let dot_r = 5.0 * scale;
+    let gap = 8.0 * scale;
+    let pad = Vec2::new(10.0, 5.0) * scale;
     let inner = Vec2::new(dot_r * 2.0 + gap + galley.size().x, galley.size().y.max(dot_r * 2.0));
     let (rect, mut response) = ui.allocate_exact_size(inner + pad * 2.0, Sense::click());
     if response.clicked() {
@@ -128,11 +128,11 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
         };
         let painter = ui.painter();
         let bg = if response.hovered() { theme::panel() } else { theme::well() };
-        painter.rect_filled(rect, CornerRadius::same(theme::CONTROL_RADIUS), bg);
+        painter.rect_filled(rect, CornerRadius::same(theme::control_radius(scale)), bg);
         if response.hovered() {
             painter.rect_stroke(
                 rect,
-                CornerRadius::same(theme::CONTROL_RADIUS),
+                CornerRadius::same(theme::control_radius(scale)),
                 egui::Stroke::new(1.0, theme::accent_edge()),
                 egui::StrokeKind::Inside,
             );
@@ -141,7 +141,11 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
         if *on {
             painter.circle_filled(dot, dot_r, theme::armed().gamma_multiply(alpha));
         } else {
-            painter.circle_stroke(dot, dot_r - 0.75, egui::Stroke::new(1.5, theme::text_dim()));
+            painter.circle_stroke(
+                dot,
+                dot_r - 0.75 * scale,
+                egui::Stroke::new(1.5, theme::text_dim()),
+            );
         }
         painter.galley(
             egui::pos2(rect.left() + pad.x + dot_r * 2.0 + gap, rect.center().y - galley.size().y / 2.0),
@@ -152,12 +156,18 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
     response
 }
 
+// The bars' own geometry, written at the design size — scale 1.0. Each is
+// multiplied by `theme::ui_scale` where it is drawn, so a bar shrinks with the
+// type inside it rather than keeping a 20-point row around 9-point text.
+
 /// Row height of a ValueBar (taller than the theme's interact_size: these
 /// are the primary controls and carry two text runs).
 const BAR_HEIGHT: f32 = 20.0;
 /// Corner rounding of the bar track — the shared control radius, so a bar and
 /// a button beside it round the same.
-const BAR_RADIUS: u8 = theme::CONTROL_RADIUS;
+fn bar_radius(scale: f32) -> u8 {
+    theme::control_radius(scale)
+}
 /// Inset of a bar's name and its value readout from the bar's own ends.
 const BAR_TEXT_PAD: f32 = 8.0;
 /// Clear space kept between the two, so an elided name stops short of the
@@ -311,11 +321,13 @@ impl<'a> ValueBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
+        let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
         // Locked bars are read-only: sense hover (so a tooltip still works)
         // but not clicks/drags.
         let sense = if self.locked { Sense::hover() } else { Sense::click_and_drag() };
-        let (rect, mut response) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), sense);
+        let (rect, mut response) =
+            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), sense);
 
         // Skip all editing (text-entry + drag) while locked; the value is
         // driven from elsewhere (meantone derives the third from the fifth).
@@ -385,7 +397,7 @@ impl<'a> ValueBar<'a> {
         }
 
         // ---- Paint ----------------------------------------------------------
-        let radius = CornerRadius::same(BAR_RADIUS);
+        let radius = CornerRadius::same(bar_radius(scale));
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
 
@@ -450,17 +462,18 @@ impl<'a> ValueBar<'a> {
             TextStyle::Body.resolve(ui.style()),
             text_color,
         );
+        let text_pad = BAR_TEXT_PAD * scale;
         job.wrap.max_width =
-            (rect.width() - 2.0 * BAR_TEXT_PAD - BAR_LABEL_GAP - reserve).max(0.0);
+            (rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - reserve).max(0.0);
         job.wrap.max_rows = 1;
         job.wrap.overflow_character = Some('\u{2026}');
         let label = painter.layout_job(job);
         let centered = |galley: &egui::Galley, x: f32| {
             egui::pos2(x, rect.center().y - galley.size().y * 0.5)
         };
-        painter.galley(centered(&label, rect.left() + BAR_TEXT_PAD), label, text_color);
+        painter.galley(centered(&label, rect.left() + text_pad), label, text_color);
         painter.galley(
-            centered(&value, rect.right() - BAR_TEXT_PAD - value.size().x),
+            centered(&value, rect.right() - text_pad - value.size().x),
             value,
             theme::text(),
         );
@@ -491,10 +504,12 @@ impl<'a> ValueBar<'a> {
 /// reach. There is no range to ask here, so a caller whose readout changes
 /// width pads it to a fixed one instead (monospace, so that is enough).
 pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str) -> Response {
+    let scale = theme::ui_scale(ui.ctx());
     let width = bar_width(ui);
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::hover());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::hover());
 
-    let radius = CornerRadius::same(BAR_RADIUS);
+    let radius = CornerRadius::same(bar_radius(scale));
     let painter = ui.painter();
     painter.rect_filled(rect, radius, theme::well());
     if let Some(t) = fraction {
@@ -515,16 +530,17 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
         TextStyle::Body.resolve(ui.style()),
         theme::text_dim(),
     );
+    let text_pad = BAR_TEXT_PAD * scale;
     job.wrap.max_width =
-        (rect.width() - 2.0 * BAR_TEXT_PAD - BAR_LABEL_GAP - value.size().x).max(0.0);
+        (rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - value.size().x).max(0.0);
     job.wrap.max_rows = 1;
     job.wrap.overflow_character = Some('\u{2026}');
     let label = painter.layout_job(job);
     let centered =
         |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
-    painter.galley(centered(&label, rect.left() + BAR_TEXT_PAD), label, theme::text_dim());
+    painter.galley(centered(&label, rect.left() + text_pad), label, theme::text_dim());
     painter.galley(
-        centered(&value, rect.right() - BAR_TEXT_PAD - value.size().x),
+        centered(&value, rect.right() - text_pad - value.size().x),
         value,
         theme::text(),
     );
@@ -535,6 +551,11 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
 /// handle rather than the span between them. Generous on purpose: grabbing
 /// the span when you meant an end is the easy mistake, and the expensive one
 /// — it moves BOTH values instead of the one you were aiming at.
+///
+/// The one length here the chrome scale leaves alone, because it is a reach
+/// rather than a drawn thing: a bar dialled smaller is a smaller target, which
+/// is the case for keeping the reach where it was rather than shrinking it
+/// too. `HANDLE_REACH_SHARE` already stops it swallowing a narrow bar.
 const GRAB_PX: f32 = 14.0;
 /// Ceiling on that reach, as a share of the span from each side, so the two
 /// handles can never claim the whole of a narrow range and leave nothing to
@@ -678,13 +699,14 @@ impl<'a> RangeBar<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
+        let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
         let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT), Sense::click_and_drag());
+            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
         let (min, max) = (*self.range.start(), *self.range.end());
         // Values live on an inset track, so both limits are positions a handle
         // can sit AT rather than edges it merges into. See HANDLE_INSET.
-        let track = rect.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let track = rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
         let x_of =
             |v: f32| track.left() + track.width() * ((v - min) / (max - min)).clamp(0.0, 1.0);
         let value_at = |x: f32| {
@@ -732,7 +754,7 @@ impl<'a> RangeBar<'a> {
         }
 
         // ---- Paint ----------------------------------------------------------
-        let radius = CornerRadius::same(BAR_RADIUS);
+        let radius = CornerRadius::same(bar_radius(scale));
         let painter = ui.painter();
         painter.rect_filled(rect, radius, theme::well());
 
@@ -755,8 +777,9 @@ impl<'a> RangeBar<'a> {
         // room, it moves inside instead, over the fill. (At the full range
         // there is no empty track at all, so both go inside.)
         let font = TextStyle::Monospace.resolve(ui.style());
-        let half = HANDLE_W * 0.5;
-        let reach = half + TEXT_GAP;
+        let handle_w = HANDLE_W * scale;
+        let text_gap = TEXT_GAP * scale;
+        let reach = handle_w * 0.5 + text_gap;
         for (x, value, outward) in
             [(lx, *self.low, -1.0f32), (hx, *self.high, 1.0f32)]
         {
@@ -767,15 +790,15 @@ impl<'a> RangeBar<'a> {
             let outside = if outward < 0.0 { x - reach - w } else { x + reach };
             let inside = if outward < 0.0 { x + reach } else { x - reach - w };
             let fits = if outward < 0.0 {
-                outside >= rect.left() + TEXT_GAP
+                outside >= rect.left() + text_gap
             } else {
-                outside + w <= rect.right() - TEXT_GAP
+                outside + w <= rect.right() - text_gap
             };
             let left = if fits { outside } else { inside };
             // Never let a readout escape the bar, however cramped the row.
             let left = left.clamp(
-                rect.left() + TEXT_GAP,
-                (rect.right() - TEXT_GAP - w).max(rect.left() + TEXT_GAP),
+                rect.left() + text_gap,
+                (rect.right() - text_gap - w).max(rect.left() + text_gap),
             );
             let y = rect.center().y - galley.size().y * 0.5;
             painter.galley(egui::pos2(left, y), galley, theme::text());
@@ -791,9 +814,10 @@ impl<'a> RangeBar<'a> {
         for x in [lx, hx] {
             let grip = egui::Rect::from_center_size(
                 egui::pos2(x, rect.center().y),
-                Vec2::new(HANDLE_W, rect.height() - 3.0),
+                Vec2::new(handle_w, rect.height() - 3.0 * scale),
             );
-            painter.rect_filled(grip, CornerRadius::same(2), theme::text());
+            let grip_radius = CornerRadius::same(theme::scaled_points(2, scale));
+            painter.rect_filled(grip, grip_radius, theme::text());
         }
 
         // The cursor says which of the two gestures a press would start, so the

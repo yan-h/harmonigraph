@@ -62,8 +62,25 @@ pub(super) fn panel_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         );
     }
 
-    // Layout: the pane arrangement itself.
+    // Layout: how big the chrome draws, then the pane arrangement itself.
     section(ui, "Layout");
+    // Sizes the panel, not the picture. Everything the lattice, the roll and
+    // the spectrogram draw is measured off the pane it lands in, so this moves
+    // the knobs and the tab bars out of the way and leaves what they are
+    // pointed at exactly as it was — which is the point of it on a laptop,
+    // where the settings column costs more of the screen than the picture can
+    // spare. A render is unaffected for the same reason, and deliberately: the
+    // offline renderer draws the picture panes and never this.
+    ValueBar::new(&mut state.ui_scale, crate::theme::UI_SCALE_RANGE, "UI scale")
+        .display(|v| format!("{:.0}%", v * 100.0))
+        .show(ui)
+        .on_hover_text(
+            "How big the panel's own type and controls draw — text, bars, \
+             checkboxes, tab bars. Turn it down to give a small screen back \
+             to the lattice; the lattice, roll and spectrogram are drawn from \
+             the space their panes have and do not change with it, and \
+             neither does a video render.",
+        );
     ui.checkbox(&mut state.view.frameless, "Frameless (Tab)").on_hover_text(
         "Hide the tab bars so adjacent panes (lattice over spectrum) \
          record as one seamless surface. Tab toggles it from anywhere, \

@@ -91,6 +91,9 @@ pub fn warning_bg() -> Color32 {
 /// the value/range bars, the record button. Shared so they read as one family
 /// instead of each rounding to its own taste. (Pill-shaped things — the toggle
 /// switch, a bar's own handle — are their own shape and don't use it.)
+///
+/// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
+/// [`control_radius`].
 pub(crate) const CONTROL_RADIUS: u8 = 5;
 
 const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
@@ -103,13 +106,127 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 /// (a `Frame`, which does not clip), so inside a pane the clip rect sits this
 /// far OUTSIDE the content box. Anything asking "where does the pane end"
 /// wants the content box, not the clip.
+///
+/// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
+/// [`pane_inner_margin`].
 pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 
 /// Height of a leaf's tab bar, which is also the thickness a folded pane is
 /// squeezed to (see [`crate::fold`]) and the depth of dock chrome along the
 /// top of the window: tab titles and the collapse arrow at the left of every
 /// bar. Anything drawn OVER the dock keeps clear of it.
+///
+/// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
+/// [`tab_bar_height`], which has a floor this does not.
 pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
+
+// ---- Chrome scale ----------------------------------------------------------
+// One factor over every SIZE in the panel chrome — type, spacing, control
+// heights, tab bars — so a small screen can be told to spend fewer of its
+// pixels on knobs and more on the picture.
+//
+// Deliberately not egui's `zoom_factor`, which is the obvious tool and the
+// wrong one here. Zoom works by moving `pixels_per_point`, and the plugin's
+// shell (vendored egui-baseview) builds its `screen_rect`, its pointer
+// coordinates, and its render descriptor from the NATIVE scale alone — so a
+// zoom would lay the UI out for a window a different size than the one it has,
+// and the fix is four edits deep in the input path of a plugin that runs
+// inside somebody else's process. Scaling the style reaches the same chrome
+// through code this crate owns.
+//
+// It also leaves the picture alone, which zoom would not: the lattice, the
+// roll and the spectrogram size themselves off their pane rect, so nothing
+// here moves a single node. That is the whole request — the panel gets out of
+// the way, the picture is untouched.
+
+/// What the chrome scale may be dialled to. Down to 0.7, where the 13.5pt body
+/// text lands near 9.5pt, which is about as small as Atkinson stays legible;
+/// up to 1.5 for a large display seen from across a room.
+pub const UI_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.7..=1.5;
+
+/// Where [`set_ui_scale`] leaves the factor for the chrome to find.
+fn ui_scale_id() -> egui::Id {
+    egui::Id::new("ui-scale")
+}
+
+/// A scale a context can actually be drawn at: in range, and not a NaN or an
+/// infinity out of a hand-edited persisted blob.
+///
+/// Applied on the way IN as well as here, so the control cannot read out a
+/// number the chrome is not actually drawn at.
+pub(crate) fn sane_ui_scale(scale: f32) -> f32 {
+    if scale.is_finite() {
+        scale.clamp(*UI_SCALE_RANGE.start(), *UI_SCALE_RANGE.end())
+    } else {
+        1.0
+    }
+}
+
+/// The chrome scale in force on this context — the design size, 1.0, unless a
+/// shell has set one.
+///
+/// The offline renderer deliberately never sets one. It draws only the picture
+/// panes, which size themselves off their rect rather than off this, so a
+/// recorded frame cannot depend on where this control is left and the
+/// determinism test stays honest.
+pub(crate) fn ui_scale(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp::<f32>(ui_scale_id())).unwrap_or(1.0)
+}
+
+/// Put `scale` in force on this context: rebuild the style at that size, and
+/// leave the factor where [`ui_scale`] can find it. Reports whether anything
+/// moved, which is a caller's cue that a `Ui` built from the old style is now
+/// a frame behind.
+///
+/// Cheap to call every frame, and meant to be: the factor is stored the same
+/// per-frame way as [`crate::panes::pane_content_right`], so a context that
+/// stops being told falls back to the design size rather than keeping a stale
+/// one, and one that loses the value gets it (and its style) back on the next
+/// frame.
+pub fn set_ui_scale(ctx: &egui::Context, scale: f32) -> bool {
+    let scale = sane_ui_scale(scale);
+    let previous = ctx.data(|d| d.get_temp::<f32>(ui_scale_id()));
+    if previous == Some(scale) {
+        return false;
+    }
+    ctx.data_mut(|d| d.insert_temp(ui_scale_id(), scale));
+    // A context that has only ever been at the design size keeps the style it
+    // came with, untouched. [`apply_theme`] has already put it there, so the
+    // rebuild would be a no-op on a shell — and on a context that never had
+    // the theme applied at all it would be worse than one: it would install
+    // this crate's type roles, which name a font FAMILY that only
+    // [`install_fonts`] binds, and every piece of text laid out afterwards
+    // would panic on the missing family.
+    if scale == 1.0 && previous.is_none() {
+        return false;
+    }
+    ctx.set_style_of(egui::Theme::Dark, style_at(scale));
+    true
+}
+
+/// [`CONTROL_RADIUS`] at this scale.
+pub(crate) fn control_radius(scale: f32) -> u8 {
+    scaled_points(CONTROL_RADIUS, scale)
+}
+
+/// [`PANE_INNER_MARGIN`] at this scale.
+pub(crate) fn pane_inner_margin(scale: f32) -> f32 {
+    PANE_INNER_MARGIN * scale
+}
+
+/// [`TAB_BAR_HEIGHT`] at this scale, but never under the collapse arrow it has
+/// to hold.
+///
+/// egui_dock draws that button at a private `TAB_COLLAPSE_BUTTON_SIZE` of 24
+/// points flat — it comes from neither the egui style nor the dock style, so
+/// it is the one piece of chrome here that does not scale. A bar shorter than
+/// it would clip the only control that brings a folded pane back, which is the
+/// worst thing on the bar to lose. So the scale runs out at 24 and the tab bar
+/// stops shrinking, a couple of notches below 1.0.
+pub(crate) fn tab_bar_height(scale: f32) -> f32 {
+    const COLLAPSE_BUTTON: f32 = 24.0;
+    (TAB_BAR_HEIGHT * scale).max(COLLAPSE_BUTTON)
+}
 
 // ---- Fonts -----------------------------------------------------------------
 
@@ -175,21 +292,41 @@ pub fn apply_theme(ctx: &egui::Context) {
     // The lattice is a dark-background instrument; pin the UI to dark
     // rather than following the host/system preference.
     ctx.set_theme(egui::ThemePreference::Dark);
-    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
+    ctx.set_style_of(egui::Theme::Dark, style_at(ui_scale(ctx)));
+}
 
-    // Type roles (families come from install_fonts).
-    style.text_styles = [
-        // Headings differentiate by WEIGHT (Atkinson Bold), not size.
-        (
-            TextStyle::Heading,
-            FontId::new(13.5, egui::FontFamily::Name(HEADING_FAMILY.into())),
-        ),
-        (TextStyle::Body, FontId::proportional(13.5)),
-        (TextStyle::Button, FontId::proportional(13.5)),
-        (TextStyle::Small, FontId::proportional(11.0)),
-        (TextStyle::Monospace, FontId::monospace(12.0)),
-    ]
-    .into();
+/// The theme's style at a given [chrome scale](ui_scale).
+///
+/// Built from egui's defaults rather than from whatever the context is wearing,
+/// because a scale change rebuilds this from scratch: starting from the style
+/// already in force would multiply the last scale by the new one and walk the
+/// chrome off in whichever direction it was dialled. `Style::default` is
+/// exactly egui's dark style (its `Visuals::default` IS `Visuals::dark`), so
+/// this is the same starting point either way.
+///
+/// Everything below is written at the DESIGN size, scale 1.0, and
+/// [`scale_chrome`] multiplies the lot at the end — so this reads as the one
+/// specification of how the panel looks rather than as a spec with a factor
+/// threaded through every number.
+fn style_at(scale: f32) -> egui::Style {
+    // Type roles (families come from install_fonts). In the initializer rather
+    // than assigned after it because clippy reads the assign-after form as a
+    // `Default` that meant to be a struct literal, and it is right.
+    let mut style = egui::Style {
+        text_styles: [
+            // Headings differentiate by WEIGHT (Atkinson Bold), not size.
+            (
+                TextStyle::Heading,
+                FontId::new(13.5, egui::FontFamily::Name(HEADING_FAMILY.into())),
+            ),
+            (TextStyle::Body, FontId::proportional(13.5)),
+            (TextStyle::Button, FontId::proportional(13.5)),
+            (TextStyle::Small, FontId::proportional(11.0)),
+            (TextStyle::Monospace, FontId::monospace(12.0)),
+        ]
+        .into(),
+        ..Default::default()
+    };
 
     // Air between elements, but compact controls: interact_size drives
     // the height of sliders/DragValue boxes and was reading oversized next
@@ -255,7 +392,132 @@ pub fn apply_theme(ctx: &egui::Context) {
     w.open.fg_stroke = Stroke::new(1.0, text());
     w.open.corner_radius = WIDGET_RADIUS;
 
-    ctx.set_style_of(egui::Theme::Dark, style);
+    scale_chrome(&mut style, scale);
+    style
+}
+
+/// Multiply every SIZE in `style` by `scale` — type, spacing, control heights,
+/// the radii and margins that go with them.
+///
+/// Colors and STROKE WIDTHS are the deliberate exceptions. A hairline is a
+/// hairline at any size, and the widths here are all 1-1.2 points: taken down
+/// to 0.7 they land under a single pixel on a display with only one per point,
+/// where the rasterizer pays for the shortfall in alpha. The border would then
+/// read as having faded rather than as having shrunk, which is a different
+/// control, not a smaller one.
+///
+/// Written field by field rather than swept generically because egui's `Style`
+/// mixes sizes with counts, ratios and opacities in the same structs; the ones
+/// listed here are the ones that are lengths.
+fn scale_chrome(style: &mut egui::Style, scale: f32) {
+    if scale == 1.0 {
+        return;
+    }
+    for font in style.text_styles.values_mut() {
+        font.size *= scale;
+    }
+
+    let s = &mut style.spacing;
+    for v in [
+        &mut s.item_spacing,
+        &mut s.button_padding,
+        &mut s.interact_size,
+        &mut s.default_area_size,
+    ] {
+        *v *= scale;
+    }
+    for f in [
+        &mut s.indent,
+        &mut s.slider_width,
+        &mut s.slider_rail_height,
+        &mut s.combo_width,
+        &mut s.text_edit_width,
+        &mut s.icon_width,
+        &mut s.icon_width_inner,
+        &mut s.icon_spacing,
+        &mut s.tooltip_width,
+        &mut s.menu_width,
+        &mut s.menu_spacing,
+        &mut s.combo_height,
+        // The scroll bars a settings pane overflows into, which are chrome
+        // like everything else — a full-size bar down the side of a shrunken
+        // pane is the one piece that would give the game away.
+        &mut s.scroll.bar_width,
+        &mut s.scroll.handle_min_length,
+        &mut s.scroll.bar_inner_margin,
+        &mut s.scroll.bar_outer_margin,
+        &mut s.scroll.floating_width,
+        &mut s.scroll.floating_allocated_width,
+    ] {
+        *f *= scale;
+    }
+    for m in [&mut s.window_margin, &mut s.menu_margin, &mut s.scroll.content_margin] {
+        *m = scale_margin(*m, scale);
+    }
+
+    let v = &mut style.visuals;
+    v.window_corner_radius = scale_corner_radius(v.window_corner_radius, scale);
+    v.menu_corner_radius = scale_corner_radius(v.menu_corner_radius, scale);
+    v.resize_corner_size *= scale;
+    v.clip_rect_margin *= scale;
+    for shadow in [&mut v.window_shadow, &mut v.popup_shadow] {
+        shadow.offset = [scale_i8(shadow.offset[0], scale), scale_i8(shadow.offset[1], scale)];
+        shadow.blur = scaled_points(shadow.blur, scale);
+        shadow.spread = scaled_points(shadow.spread, scale);
+    }
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.corner_radius = scale_corner_radius(w.corner_radius, scale);
+        // How far a hovered widget grows, which is a length in points and
+        // reads as a jump rather than a swell if it stays put while the
+        // widget around it shrinks.
+        w.expansion *= scale;
+    }
+}
+
+/// Scale a rounding, which egui stores per corner as whole points.
+fn scale_corner_radius(radius: CornerRadius, scale: f32) -> CornerRadius {
+    CornerRadius {
+        nw: scaled_points(radius.nw, scale),
+        ne: scaled_points(radius.ne, scale),
+        sw: scaled_points(radius.sw, scale),
+        se: scaled_points(radius.se, scale),
+    }
+}
+
+/// Scale a margin, which egui stores per side as whole points.
+fn scale_margin(margin: egui::Margin, scale: f32) -> egui::Margin {
+    egui::Margin {
+        left: scale_i8(margin.left, scale),
+        right: scale_i8(margin.right, scale),
+        top: scale_i8(margin.top, scale),
+        bottom: scale_i8(margin.bottom, scale),
+    }
+}
+
+/// Scale a whole-point length, keeping a nonzero one nonzero: rounding a 1pt
+/// margin or radius to nothing at 0.7 does not shrink it, it removes it, and
+/// what comes back at 1.0 then looks like a different control rather than the
+/// same one bigger.
+pub(crate) fn scaled_points(value: u8, scale: f32) -> u8 {
+    let scaled = (f32::from(value) * scale).round();
+    if value > 0 { scaled.max(1.0) as u8 } else { 0 }
+}
+
+/// [`scaled_points`] for a signed length (a shadow offset, a margin side),
+/// where the floor applies in whichever direction the value already points.
+fn scale_i8(value: i8, scale: f32) -> i8 {
+    let scaled = (f32::from(value) * scale).round();
+    match value {
+        0 => 0,
+        v if v > 0 => scaled.max(1.0) as i8,
+        _ => scaled.min(-1.0) as i8,
+    }
 }
 
 /// The dock chrome, derived from the egui style plus our own tweaks.
@@ -264,7 +526,11 @@ pub fn apply_theme(ctx: &egui::Context) {
 /// dark lines, with no outlined boxes around bodies or tabs. Buttons that
 /// add noise (per-tab close, collapse arrows) are disabled on the DockArea
 /// itself in `root_ui`.
-pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
+///
+/// `scale` is the [chrome scale](ui_scale) the caller is drawing at. It has to
+/// be passed rather than read off `egui_style`, which carries sizes already
+/// multiplied by it but no record of the factor itself.
+pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     let mut style = egui_dock::Style::from_egui(egui_style);
 
     // No gap between the dock and the window edge, and no outer border.
@@ -272,7 +538,10 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     style.main_surface_border_stroke = Stroke::NONE;
 
     // Separators: slim bands in the well color, accent when grabbed.
-    style.separator.width = 4.0;
+    style.separator.width = 4.0 * scale;
+    // Not scaled: how near a separator the pointer has to come to take hold of
+    // it is a reach, not a drawn thing, and a narrower band is if anything the
+    // case for keeping the reach where it was.
     style.separator.extra_interact_width = 6.0;
     style.separator.color_idle = well();
     style.separator.color_hovered = accent_edge();
@@ -281,7 +550,7 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     // Tab bar: a quiet strip of the same surface, divided from the body by
     // a hairline; the active tab fills seamlessly into the body below it.
     style.tab_bar.bg_fill = well();
-    style.tab_bar.height = TAB_BAR_HEIGHT;
+    style.tab_bar.height = tab_bar_height(scale);
     style.tab_bar.hline_color = well();
     style.tab_bar.corner_radius = CornerRadius::ZERO;
 
@@ -313,7 +582,7 @@ pub fn dock_style(egui_style: &egui::Style) -> egui_dock::Style {
     tab.tab_body.stroke = Stroke::NONE;
     tab.tab_body.corner_radius = CornerRadius::ZERO;
     tab.tab_body.bg_fill = panel();
-    tab.tab_body.inner_margin = egui::Margin::same(PANE_INNER_MARGIN as i8);
+    tab.tab_body.inner_margin = egui::Margin::same(pane_inner_margin(scale) as i8);
 
     style
 }

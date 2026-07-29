@@ -299,6 +299,19 @@ pub struct SharedState {
     /// therefore drives its window's frame timer from this value, which is a
     /// hard bound because a frame that is never asked for is never drawn.
     pub fps_cap: Option<f32>,
+    /// How big the panel chrome draws — type, spacing, control heights, tab
+    /// bars — as a multiple of the design size. Persisted. See
+    /// [`crate::theme::ui_scale`], which is where it takes effect and where
+    /// the reasoning lives.
+    ///
+    /// A property of the SCREEN the plugin is open on rather than of the
+    /// piece, which is why it is here beside `fps_cap` and not in `view`:
+    /// `ViewConfig` is what a recorded frame is composed from, and a laptop
+    /// dialling its panel down must not change what a render of the same
+    /// project comes out looking like. [`root_ui`](crate::root_ui) is the
+    /// only thing that reads it, and the offline renderer never reaches
+    /// there.
+    pub ui_scale: f32,
     /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
     /// Runtime-only; filled and drawn by [`root_ui`](crate::root_ui), never by the offline
     /// renderer (so recorded frames stay deterministic).
@@ -454,6 +467,7 @@ impl SharedState {
             encode_ms: 0.0,
             submit_ms: 0.0,
             fps_cap: None,
+            ui_scale: default_ui_scale(),
             perf: PerfStats::default(),
         }
     }
@@ -504,6 +518,7 @@ impl SharedState {
             spectrum: self.spectrum_config,
             render: self.render_config.clone(),
             fps_cap: self.fps_cap,
+            ui_scale: self.ui_scale,
         })
         .unwrap_or_default()
     }
@@ -567,8 +582,22 @@ impl SharedState {
             // text, now the Resolution control.
             self.render_config.migrate_legacy();
             self.fps_cap = persist.fps_cap;
+            // Clamped here rather than only where it is drawn, so the control
+            // cannot read out a number the chrome is not at: `set_ui_scale`
+            // would take a hand-edited 5.0 down to the top of the range while
+            // the bar went on saying 500%.
+            self.ui_scale = crate::theme::sane_ui_scale(persist.ui_scale);
         }
     }
+}
+
+/// The chrome scale a blob without one loads as: the design size, which is
+/// what every project saved before the control existed was drawn at.
+///
+/// Named rather than `#[serde(default)]`, which for an `f32` is 0.0 — a scale
+/// of nothing, and every one of those blobs.
+fn default_ui_scale() -> f32 {
+    1.0
 }
 
 /// The current [`UiPersist`] layout version. Bumped when the `Tab` set changes
@@ -606,6 +635,9 @@ pub(crate) struct UiPersist {
     /// serde(default) keeps pre-cap blobs loadable (as uncapped).
     #[serde(default)]
     pub(crate) fps_cap: Option<f32>,
+    /// Pre-scale blobs load at the design size — see [`default_ui_scale`].
+    #[serde(default = "default_ui_scale")]
+    pub(crate) ui_scale: f32,
 }
 
 /// Parse just the render settings out of a persisted UI-state blob — so the
