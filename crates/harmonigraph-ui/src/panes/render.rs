@@ -428,7 +428,8 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
             .button("Render now")
             .on_hover_text(
                 "Render the take you last recorded again, now, with the current \
-                 frame. Runs in the background; the video lands next to the take.",
+                 frame. Runs in the background; the video lands next to the take. \
+                 Pressing it during a render cancels that one and starts over.",
             )
             .clicked()
         {

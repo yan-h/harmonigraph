@@ -402,6 +402,9 @@ pub struct Control {
     hit_loop_end: Arc<AtomicBool>,
     /// How far the background render has got, for the Video pane's bar.
     progress: Arc<Progress>,
+    /// Shared by every render this Control starts, so a new request cancels
+    /// the one in flight rather than racing it. See [`RenderControl`].
+    render: Arc<RenderControl>,
 }
 
 impl Control {
@@ -440,7 +443,13 @@ impl Control {
     pub fn render_now(&self, request: RenderRequest) {
         match self.last_take() {
             Some(path) => {
-                spawn_render(request, path, self.status.clone(), self.progress.clone())
+                spawn_render(
+                    request,
+                    path,
+                    self.status.clone(),
+                    self.progress.clone(),
+                    self.render.clone(),
+                )
             }
             None => *self.status.lock() = "no take recorded yet to render".into(),
         }
@@ -554,10 +563,12 @@ pub fn channel() -> (Recorder, Control) {
     let status = Arc::new(Mutex::new(String::new()));
     let last_take = Arc::new(Mutex::new(None));
     let progress = Arc::new(Progress::default());
+    let render = Arc::new(RenderControl::default());
 
     let thread_status = status.clone();
     let thread_last_take = last_take.clone();
     let thread_progress = progress.clone();
+    let thread_render = render.clone();
     let _ = std::thread::Builder::new()
         .name("harmonigraph-take-writer".into())
         .spawn(move || {
@@ -581,6 +592,7 @@ pub fn channel() -> (Recorder, Control) {
                                 path,
                                 thread_status.clone(),
                                 thread_progress.clone(),
+                                thread_render.clone(),
                             );
                         }
                     }
@@ -627,6 +639,7 @@ pub fn channel() -> (Recorder, Control) {
             stop_at_loop_end,
             hit_loop_end,
             progress,
+            render,
         },
     )
 }
@@ -801,15 +814,58 @@ fn drain(
 /// Frames done and frames planned for the render(s) in flight, published by
 /// the thread following the renderer's stderr and read by the GUI each frame.
 ///
-/// `in_flight` is a COUNT rather than a flag because two renders can overlap —
-/// "Render now" pressed while an auto-render is still going — and a flag would
-/// have the first one to finish clear the bar out from under the second.
+/// `in_flight` is a COUNT rather than a flag, though [`RenderControl`] now
+/// serialises renders so it only ever reaches one. It is the cheaper way to be
+/// wrong: a flag cleared by whichever render finished first would blank the
+/// bar out from under a running one, and counting cannot.
 #[derive(Default)]
 struct Progress {
     done: AtomicU64,
     /// 0 until the renderer announces how many frames it is composing.
     total: AtomicU64,
     in_flight: AtomicU64,
+}
+
+/// What a render in flight can be reached by, so the next request can cancel
+/// it instead of running alongside it.
+///
+/// Two renders of one take write one video, and there is no useful way to
+/// merge that — so a second request is treated as a correction of the first,
+/// not an addition to it. That is nearly always what it is: the same take,
+/// with a setting changed since.
+#[derive(Default)]
+struct RenderControl {
+    /// Bumped by every request. A render whose generation is no longer the
+    /// current one has been superseded, and stands down without touching the
+    /// status line or the output.
+    generation: AtomicU64,
+    /// The renderer process now running, for a later request to kill.
+    ///
+    /// The child lives here rather than on its own thread's stack precisely so
+    /// another thread can reach it; the render thread borrows it back to reap
+    /// it once its stderr has closed.
+    child: Mutex<Option<std::process::Child>>,
+    /// Held for the length of a render. A replacement waits on it, which is
+    /// what makes the cancelled run's process reaped before the new one runs
+    /// rather than merely asked to stop.
+    running: Mutex<()>,
+}
+
+impl RenderControl {
+    /// Kill whatever is rendering, if anything. Returns having *asked*: the
+    /// process is reaped by its own thread, which the replacement waits for
+    /// through [`running`](Self::running).
+    fn cancel_in_flight(&self) {
+        if let Some(child) = self.child.lock().as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    /// Whether a newer request has arrived since `generation` claimed the
+    /// flight.
+    fn superseded(&self, generation: u64) -> bool {
+        self.generation.load(Ordering::SeqCst) != generation
+    }
 }
 
 impl Progress {
@@ -937,21 +993,53 @@ fn spawn_render(
     take_path: std::path::PathBuf,
     status: Arc<Mutex<String>>,
     progress: Arc<Progress>,
+    control: Arc<RenderControl>,
 ) {
+    // Claim the flight before spawning anything: a request that arrives while
+    // a render is running cancels it rather than joining it. Two renders of
+    // one take write one video, and the newer request is always the wanted
+    // one — it is the same take with settings changed since.
+    let generation = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    // On the CALLER's thread, so the cancellation lands before the replacement
+    // starts queueing behind a run that now has no reason to finish.
+    control.cancel_in_flight();
+
     let _ = std::thread::Builder::new()
         .name("harmonigraph-take-render".into())
         .spawn(move || {
+            // Wait out the run being cancelled, so its process is reaped
+            // before this one starts. Held for the whole render, which is what
+            // makes "one render at a time" true rather than hoped for.
+            let _flight = control.running.lock();
+            if control.superseded(generation) {
+                // Another request arrived while this one queued. It is already
+                // waiting on the same lock, and rendering here would only be
+                // work to throw away.
+                return;
+            }
+
             let out = take_path.with_extension("mp4");
+            // Written under a name of this run's own, and moved onto `out`
+            // only once it has succeeded.
+            //
+            // Killing the renderer does not kill the ffmpeg it is piping to —
+            // that is a grandchild, and it outlives the kill by however long
+            // finalizing takes. Sharing one output path with it is how a
+            // cancelled render corrupts the video that replaces it. A path per
+            // run means the straggler writes somewhere nobody is reading, and
+            // the file at `out` is only ever produced whole, by rename.
+            let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
             // A "Render now" carries the current look as a persist blob; write
             // it beside the take and pass --ui-state so post-record settings
-            // override the take's record-time snapshot. Removed after the run.
+            // override the take's record-time snapshot. Per-run for the same
+            // reason as `partial`, and removed after the run.
             let ui_state_file = request.ui_state.as_ref().and_then(|blob| {
-                let path = take_path.with_extension("rendernow.ron");
+                let path = take_path.with_extension(format!("rendernow-{generation}.ron"));
                 std::fs::write(&path, blob).ok().map(|()| path)
             });
 
             let mut command = std::process::Command::new(&request.program);
-            command.arg(&take_path).arg("--out").arg(&out);
+            command.arg(&take_path).arg("--out").arg(&partial);
             if let Some(audio) = &request.audio {
                 command.arg("--audio").arg(audio);
             }
@@ -984,6 +1072,7 @@ fn spawn_render(
                 if let Some(file) = &ui_state_file {
                     let _ = std::fs::remove_file(file);
                 }
+                let _ = std::fs::remove_file(&partial);
             };
             let mut child = match spawned {
                 Ok(child) => child,
@@ -998,20 +1087,64 @@ fn spawn_render(
             };
 
             progress.begin();
-            let last = child.stderr.take().map(|pipe| follow(pipe, &progress)).unwrap_or_default();
-            let result = child.wait();
+            let stderr = child.stderr.take();
+            // Hand the process over so a later request can reach it. Under the
+            // same lock a canceller takes, and re-checking the generation
+            // inside it: a request that arrived between the spawn and here
+            // found no child to kill, so this is where that one gets killed
+            // instead of running to completion unnoticed.
+            {
+                let mut in_flight = control.child.lock();
+                if control.superseded(generation) {
+                    let _ = child.kill();
+                }
+                *in_flight = Some(child);
+            }
+            // Ends at EOF on the pipe, which a kill brings about immediately.
+            let last = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
+            let result = match control.child.lock().take() {
+                Some(mut child) => child.wait(),
+                // Unreachable in practice: nothing else takes the child, only
+                // kills it. Reported rather than unwrapped, since a render
+                // thread panicking in a DAW is not worth the tidier code.
+                None => Err(std::io::Error::other("the render process went missing")),
+            };
             progress.end();
-            cleanup();
+
+            // A cancelled render has nothing to say: its replacement is
+            // already running and the failure is one we caused on purpose.
+            // Its partial output goes, and the status line stays the new
+            // render's.
+            if control.superseded(generation) {
+                cleanup();
+                return;
+            }
 
             match result {
                 Ok(exit) if exit.success() => {
-                    *status.lock() = format!("rendered {}", out.display());
+                    // Whole, and only now under the name anything else reads.
+                    match std::fs::rename(&partial, &out) {
+                        Ok(()) => *status.lock() = format!("rendered {}", out.display()),
+                        Err(err) => {
+                            *status.lock() =
+                                format!("rendered, but could not move into place: {err}")
+                        }
+                    }
+                    if let Some(file) = &ui_state_file {
+                        let _ = std::fs::remove_file(file);
+                    }
                 }
                 // The renderer's own diagnostics are far more useful than the
                 // exit code, and this is the only place a plugin user will
                 // ever see them.
-                Ok(_) => *status.lock() = format!("render failed: {last}"),
-                Err(err) => *status.lock() = format!("render failed: {err}"),
+                Ok(_) => {
+                    cleanup();
+                    *status.lock() = format!("render failed: {last}");
+                }
+                Err(err) => {
+                    cleanup();
+                    *status.lock() = format!("render failed: {err}");
+                }
             }
         });
 }
@@ -1072,6 +1205,118 @@ mod tests {
             let now = RenderRequest::render_now(&config, "(dummy)".into());
             assert_eq!(now.playhead, None, "Render now must not force it either");
         }
+    }
+
+    /// A second request supersedes the first, which is what makes "Render
+    /// now" during a render mean restart rather than a second render writing
+    /// the same video.
+    #[test]
+    fn a_later_request_supersedes_the_one_in_flight() {
+        let control = RenderControl::default();
+        let first = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(!control.superseded(first), "the only request in flight is current");
+
+        let second = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(control.superseded(first), "the first must stand down");
+        assert!(!control.superseded(second), "the second is now the live one");
+
+        // Generations are not reused, so a render cannot be revived by a
+        // later one happening to land on its number.
+        let third = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(third > second && second > first);
+        assert!(control.superseded(first) && control.superseded(second));
+    }
+
+    /// Cancelling with nothing running is a no-op rather than a panic: the
+    /// first render of a session takes exactly that path, since every request
+    /// cancels before it spawns.
+    #[test]
+    fn cancelling_an_idle_render_control_does_nothing() {
+        let control = RenderControl::default();
+        control.cancel_in_flight();
+        assert!(control.child.lock().is_none());
+    }
+
+    /// Spin until `done` or the budget runs out, so the concurrency tests
+    /// below wait on the thing they mean rather than on a fixed sleep.
+    #[cfg(unix)]
+    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if done() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// Pressing "Render now" during a render kills the one in flight instead
+    /// of running a second alongside it.
+    ///
+    /// Against a real process, because that is the whole claim: the generation
+    /// bookkeeping above proves only that the arithmetic is right, and the
+    /// thing that used to go wrong — two renderers writing one video — lives
+    /// entirely in the part that spawns and kills.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_request_kills_the_render_in_flight() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("harmonigraph-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        // Stands in for the renderer: ignores its arguments and outlives the
+        // test, so the only way it ends is being killed.
+        let fake = dir.join("slow-renderer");
+        std::fs::write(&fake, "#!/bin/sh\nsleep 300\n").expect("write fake renderer");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let take = dir.join("take-1.take");
+        let control = Arc::new(RenderControl::default());
+        let status = Arc::new(Mutex::new(String::new()));
+        let progress = Arc::new(Progress::default());
+        let start = || {
+            spawn_render(
+                RenderRequest {
+                    program: fake.clone(),
+                    audio: None,
+                    align: None,
+                    ui_state: None,
+                    size: [16, 16],
+                    playhead: None,
+                },
+                take.clone(),
+                status.clone(),
+                progress.clone(),
+                control.clone(),
+            )
+        };
+
+        start();
+        wait_until("the first render to start", || control.child.lock().is_some());
+        let first = control.child.lock().as_ref().map(|c| c.id()).expect("a first child");
+
+        start();
+        // The second cannot run until the first has been reaped, so seeing a
+        // different process here is the cancellation having completed rather
+        // than merely been asked for.
+        wait_until("the second render to replace the first", || {
+            control.child.lock().as_ref().is_some_and(|c| c.id() != first)
+        });
+
+        // The cancelled render must not have reported anything: its failure
+        // was one we caused, and its replacement owns the status line.
+        assert!(
+            !status.lock().contains("failed"),
+            "a cancelled render reported failure: {}",
+            status.lock()
+        );
+        // And exactly one render is in flight, not two.
+        assert!(progress.read().is_some(), "the bar still shows a render");
+
+        control.cancel_in_flight();
+        wait_until("the last render to be reaped", || control.child.lock().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Verbatim shapes from `harmonigraph-offline`'s stderr — the opening line
