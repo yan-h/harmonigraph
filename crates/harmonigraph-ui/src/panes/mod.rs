@@ -350,10 +350,19 @@ pub(super) fn section(ui: &mut egui::Ui, title: &str) {
     //
     // A pane whose first section depends on the shell cannot know: the Video
     // pane leads with Record under a host and with Frame in the standalone,
-    // which has no transport to record. `min_rect` is what answers it without
-    // asking the caller — zero height means nothing has been drawn into this
-    // ui yet, so this heading is the pane's first.
-    if ui.min_rect().height() > 0.0 {
+    // which has no transport to record. The CURSOR is what answers it without
+    // asking the caller — it starts at the top of the ui and only moves down
+    // once something is laid out, so still being there means this heading is
+    // the pane's first.
+    //
+    // `min_rect` is the tempting reading of "has anything been drawn" and it
+    // is the wrong one here: egui_dock wraps every pane body in a `ScrollArea`
+    // whose ui arrives with `min_rect` already equal to `max_rect`, so it is a
+    // full-height rect before the pane draws a thing. A fixture that builds
+    // the pane ui directly sees an empty `min_rect` instead and cannot tell
+    // the two apart — which is why `no_pane_starts_with_a_rule` goes through
+    // the real dock.
+    if ui.cursor().top() > ui.max_rect().top() + 0.5 {
         ui.add_space(4.0);
         ui.separator();
     }

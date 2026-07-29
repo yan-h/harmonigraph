@@ -2525,28 +2525,32 @@ fn settings_pane_at_width(
     out.shapes
 }
 
-/// The Video pane drawn for a shell that can or cannot record takes — the one
-/// thing `settings_pane_at_width` fixes that changes which section leads the
-/// pane. See `no_pane_starts_with_a_rule`.
-fn video_pane_shapes(take_supported: bool) -> Vec<egui::epaint::ClippedShape> {
+/// The Video pane drawn through the REAL dock, soloed, for a shell that can or
+/// cannot record takes — the one thing that changes which section leads it.
+///
+/// Through `root_ui` and `DockArea` rather than calling `TabViewer::ui` on a
+/// hand-built child, because the wrapping is the part under test: egui_dock
+/// puts every body inside a `ScrollArea`, and that ui arrives with a
+/// full-height `min_rect` where a hand-built one arrives empty. A fixture that
+/// skips it cannot see the difference — see `section`.
+fn video_pane_shapes(take_supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui::Color32) {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.take_supported = take_supported;
+    // Soloed so the Video pane's body is the only settings body on screen and
+    // the first heading found is unambiguously its own.
+    state.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
-    let margin = crate::theme::PANE_INNER_MARGIN;
-    let body =
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 1200.0));
     let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
-        |ui| {
-            let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
-            let mut tab = panes::Tab::Video;
-            let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
-            egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
-        },
+        egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
+        |ui| root_ui(ui, &mut state, &backend, 0.0),
     );
-    out.shapes
+    // What `ui.separator()` strokes with, so the assertion names the rule
+    // rather than "some line" — the tab bar draws its own, in its own colors.
+    let rule = ctx.style_of(egui::Theme::Dark).visuals.widgets.noninteractive.bg_stroke.color;
+    (out.shapes, rule)
 }
 
 /// Where a pane's content box ends, in the coordinates
@@ -2612,26 +2616,26 @@ fn the_options_field_sits_beside_its_label() {
 /// holds it to that for the case the caller could not have known.
 #[test]
 fn no_pane_starts_with_a_rule() {
-    for take_supported in [true, false] {
-        let shapes = video_pane_shapes(take_supported);
-        let heading = shapes
-            .iter()
-            .filter_map(|cs| match &cs.shape {
-                egui::Shape::Text(t) => Some(t.pos.y),
-                _ => None,
-            })
-            .fold(f32::INFINITY, f32::min);
-        assert!(heading.is_finite(), "the Video pane drew no text at all");
-        // A separator is a horizontal `LineSegment` (the preview's frame
-        // chrome draws them too, but that is far below the first heading).
-        let rule_above = shapes.iter().any(|cs| match &cs.shape {
-            egui::Shape::LineSegment { points, .. } => points[0].y < heading,
+    // Which section leads, per shell: a host can record takes, so Record
+    // leads; the standalone cannot, so `render_settings` returns early.
+    for (take_supported, leads) in [(true, "Record"), (false, "Frame")] {
+        let (shapes, rule) = video_pane_shapes(take_supported);
+        let heading = text_y(&shapes, leads)
+            .unwrap_or_else(|| panic!("the Video pane drew no {leads:?} heading"));
+        // Only rules BELOW the tab bar are the pane's own. The dock's chrome
+        // draws lines of its own above the body, in its own colors, and those
+        // are not this test's business — hence matching on the separator
+        // stroke rather than on any line segment.
+        let above = shapes.iter().any(|cs| match &cs.shape {
+            egui::Shape::LineSegment { points, stroke } => {
+                stroke.color == rule && points[0].y < heading
+            }
             _ => false,
         });
         assert!(
-            !rule_above,
-            "take_supported={take_supported}: a rule sits above the pane's first \
-             heading at y {heading}"
+            !above,
+            "take_supported={take_supported}: a rule sits above {leads:?}, the pane's \
+             first heading, at y {heading}"
         );
     }
 }
@@ -3510,3 +3514,4 @@ fn a_folded_columns_stacked_arrow_is_inert() {
         "the log pane should not open from a button that is no longer drawn",
     );
 }
+
