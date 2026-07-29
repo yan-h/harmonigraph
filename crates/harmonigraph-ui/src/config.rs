@@ -206,10 +206,21 @@ pub struct RenderConfig {
     /// reads naturally and it matches the other free-text fields.
     #[serde(default)]
     pub audio_offset: String,
-    /// Extra flags, split on whitespace (no shell quoting):
-    /// `--size 3840x2160 --layout side-by-side`.
-    #[serde(default)]
-    pub extra_args: String,
+    /// Load-only shim: the Video pane used to carry an "Options" field of raw
+    /// `harmonigraph-offline` flags, and blobs written then still hold it.
+    /// Read for the `--size` inside it — see
+    /// [`migrate_legacy`](Self::migrate_legacy), which is what stops a saved
+    /// project going on rendering at a size that outranks its own Aspect —
+    /// and never written back.
+    ///
+    /// The field went because every flag it could reach is reachable by
+    /// running the renderer on the take by hand, with completion and `--help`
+    /// and real errors, which a whitespace-split text box in a plugin pane has
+    /// none of. What it uniquely bought was a STANDING non-default for
+    /// auto-render, and that was worth less than a row of a pane whose height
+    /// budget has a test of its own.
+    #[serde(default, skip_serializing, rename = "extra_args")]
+    pub legacy_extra_args: String,
     /// Whole-song playhead spectrogram: lay the take out at once and sweep a
     /// playhead through it, instead of the live scrolling window. Read by the
     /// offline renderer from the take; `--playhead` on the command line also
@@ -242,11 +253,7 @@ impl Default for RenderConfig {
             renderer_path: String::new(),
             audio_path: String::new(),
             audio_offset: String::new(),
-            // Empty: the size now comes from Aspect x Resolution, which the
-            // plugin passes as `--size` itself. A default that named a
-            // resolution here silently outranked the Aspect row above it —
-            // a 9:16 frame rendered 1920x1080 and only the preview was tall.
-            extra_args: String::new(),
+            legacy_extra_args: String::new(),
             playhead: false,
             frame: RenderFrame::default(),
             short_edge: default_short_edge(),
@@ -283,7 +290,7 @@ impl RenderConfig {
     /// second, is warned about on every render, and is the rarer by far.
     pub fn migrate_legacy(&mut self) {
         self.frame.migrate_legacy();
-        if let Some(short) = take_size_flag(&mut self.extra_args) {
+        if let Some(short) = take_size_flag(&mut self.legacy_extra_args) {
             self.short_edge = short;
         }
     }

@@ -37,10 +37,6 @@ const FRAME_CHROME_PAD: f32 = 8.0;
 /// lets the pane overflow, and overflow is what the wheel scrolls.
 const PREVIEW_MIN_HEIGHT: f32 = 160.0;
 
-/// Narrowest the Options field goes before it wraps onto its own line. See
-/// [`labeled_path`].
-const OPTIONS_FIELD_MIN_WIDTH: f32 = 90.0;
-
 /// Frame controls, then a live preview of exactly what the offline render will
 /// compose.
 pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
@@ -135,11 +131,9 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // The SHORT edge, not a named format: "1080p" means nothing to a 9:16
     // frame, where 1080 is the width. Aspect decides the shape and this
     // decides only how big, so each option shows the pixels it lands on and
-    // the pair is what the render is passed. Sizes are held here rather than
-    // typed into Options because a `--size` there is read after the Aspect row
-    // and silently outranks it.
+    // the pair is what the plugin passes as `--size`.
     //
-    // A size lifted out of an old Options string (see
+    // A size lifted out of a pre-Resolution blob (see
     // `RenderConfig::migrate_legacy`) can land between these, and then no
     // button reads as selected until one is clicked. That is why 720 is on the
     // list rather than only the three sizes worth delivering: it is both a
@@ -185,9 +179,16 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
 
 /// Which spectrogram the render bakes: the live scrolling window (exactly what
 /// the preview shows), or the whole take laid out at once with a sweeping
-/// playhead. Sets `RenderConfig.playhead`, which harmonigraph-offline reads. The
-/// live preview can't lay the whole take out, so a Playhead choice leaves the
-/// preview's spectral region blank — see `playhead_placeholder`.
+/// playhead. The live preview can't lay the whole take out, so a Playhead
+/// choice leaves the preview's spectral region blank — see
+/// `playhead_placeholder`.
+///
+/// Sets `RenderConfig.playhead`, which rides in the take's `ui_state` and is
+/// the ONLY thing that decides this. The renderer turns the playhead on for
+/// `--playhead` or this setting, whichever says yes, so a plugin that also
+/// passed the flag would be answering a question the row is supposed to own —
+/// and passing it unconditionally, which the plugin did, made "Live"
+/// unreachable. `RenderRequest::playhead` is why it no longer does.
 fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Spectrogram");
     choice_row(
@@ -387,17 +388,6 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
         ],
     );
 
-    // Anything the pane has no control for, split on spaces. Size is NOT one
-    // of them any more — Aspect and Resolution decide it and the plugin passes
-    // the `--size` itself. A `--size` typed here still wins (the renderer takes
-    // the last one), which is the override, not the normal route.
-    let render = &mut state.render_config;
-    labeled_path(ui, "Options", &mut render.extra_args).on_hover_text(
-        "Extra harmonigraph-offline flags, split on spaces: --fps 30, \
-         --layout side-by-side. Size comes from Aspect and Resolution above; \
-         a --size here overrides them.",
-    );
-
     // Re-render the last take with the frame you've dialed in since recording.
     // The take carries only a record-time snapshot, so this is how a reframed
     // preview reaches the video without recording again.
@@ -442,24 +432,4 @@ fn render_progress(ui: &mut egui::Ui, state: &SharedState) {
         "Frames written of the frames this render is composing. It runs in \
          the background — the DAW, and this window, keep going while it does.",
     );
-}
-
-/// A labeled single-line text field that fills the pane width — the shape every
-/// path setting in the render settings uses.
-fn labeled_path(ui: &mut egui::Ui, label: &str, value: &mut String) -> egui::Response {
-    button_row(ui, |ui| {
-        ui.label(label);
-        // The rest of the line, down to a width still worth typing a flag into;
-        // under that the row wraps and the field takes a line of its own, which
-        // is the only way a narrow pane can offer it any width at all.
-        //
-        // `available_size_before_wrap`, NOT `available_width`. This is a
-        // wrapping row, and there egui's `available_width` is the whole row
-        // (`Layout::available_size` takes its `main_wrap` branch and returns
-        // `max_rect.width()`, cursor and all) — so a field sized from it asks
-        // for the entire column, cannot fit after its own label, and drops to
-        // its own line at every width rather than only at narrow ones.
-        let width = ui.available_size_before_wrap().x.max(OPTIONS_FIELD_MIN_WIDTH);
-        ui.add(egui::TextEdit::singleline(value).desired_width(width))
-    })
 }

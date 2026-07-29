@@ -192,13 +192,13 @@ fn a_saved_render_frame_carries_the_side_and_not_the_old_flag() {
 #[test]
 fn a_size_saved_in_the_options_text_loads_as_the_resolution() {
     let mut config = crate::RenderConfig {
-        extra_args: "--size 1920x1080".into(),
+        legacy_extra_args: "--size 1920x1080".into(),
         frame: crate::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
         ..Default::default()
     };
     config.migrate_legacy();
     assert_eq!(config.short_edge, 1080, "the short edge is what the flag meant");
-    assert_eq!(config.extra_args, "", "and the flag itself is gone");
+    assert_eq!(config.legacy_extra_args, "", "and the flag itself is gone");
     // The frame now decides the shape, which it never got to before.
     assert_eq!(config.frame.pixels(config.short_edge), [1080, 1920]);
 }
@@ -208,9 +208,10 @@ fn a_size_saved_in_the_options_text_loads_as_the_resolution() {
 #[test]
 fn lifting_a_size_out_of_the_options_text_leaves_the_rest_of_it_alone() {
     let migrated = |args: &str| {
-        let mut config = crate::RenderConfig { extra_args: args.into(), ..Default::default() };
+        let mut config =
+            crate::RenderConfig { legacy_extra_args: args.into(), ..Default::default() };
         config.migrate_legacy();
-        (config.short_edge, config.extra_args)
+        (config.short_edge, config.legacy_extra_args)
     };
 
     // Other flags keep their order and their spacing is normalized.
@@ -233,17 +234,25 @@ fn lifting_a_size_out_of_the_options_text_leaves_the_rest_of_it_alone() {
 }
 
 /// The lift happens on the real load path, not just when called directly.
+///
+/// The blob is doctored rather than saved from state, because the field is
+/// `skip_serializing` and a round trip through `save_persist` could no longer
+/// produce one — which is the point of the shim: what it reads is a blob some
+/// EARLIER build wrote, and this build has no way to write another.
 #[test]
 fn a_loaded_blob_has_its_options_size_lifted() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.render_config.extra_args = "--size 2560x1440".into();
-    state.render_config.short_edge = 1080;
+    let state = SharedState::new(TextureFormat::Bgra8Unorm);
     let saved = state.save_persist();
+    assert!(!saved.contains("extra_args"), "the shim must never be written back");
+    // Where an Options field sat in the render config, beside the control it
+    // used to outrank.
+    let old = saved.replace("short_edge:", "extra_args:\"--size 2560x1440\",short_edge:");
+    assert_ne!(old, saved, "the injection must have hit");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&saved);
-    assert_eq!(restored.render_config.short_edge, 1440);
-    assert_eq!(restored.render_config.extra_args, "");
+    restored.load_persist(&old);
+    assert_eq!(restored.render_config.short_edge, 1440, "the size became the Resolution");
+    assert_eq!(restored.render_config.legacy_extra_args, "", "and the text was consumed");
 }
 
 #[test]
@@ -2498,10 +2507,6 @@ fn settings_pane_at_width(
     state.camera.projection = projection;
     // A saved angle, so the Angle row has the button a real session gives it.
     state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
-    // Options defaults to empty (size comes from the Frame section), and an
-    // empty field paints no text to find it by — see
-    // `the_options_field_sits_beside_its_label`, which locates it that way.
-    state.render_config.extra_args = FIXTURE_OPTIONS.into();
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     crate::theme::apply_theme(&ctx);
@@ -2574,38 +2579,6 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
     })
 }
 
-/// The Options row is a label and its field on ONE line, at the column widths
-/// wide enough to hold both.
-///
-/// Inside a wrapping row `Ui::available_width()` is the whole ROW, not what is
-/// left of the current line: `Layout::available_size` takes its `main_wrap`
-/// branch and returns `max_rect.width()`, ignoring the cursor. A field sized
-/// from it therefore asks for the entire column, cannot fit after its own
-/// label, and drops to a line of its own at every width — costing a row of
-/// height in the pane whose height budget is the tight one (see
-/// [`the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`]).
-/// `available_size_before_wrap` is the accessor that means the rest of this
-/// line, and the one a widget filling a row wants.
-///
-/// Swept only down to 240pt: below about 148 the label and a usable field
-/// genuinely do not fit on one line, and wrapping is then the right answer.
-#[test]
-fn the_options_field_sits_beside_its_label() {
-    for width in [423.0f32, 300.0, 240.0] {
-        let shapes = settings_pane_at_width(panes::Tab::Video, width, PROJECTIONS[0]);
-        let label = text_y(&shapes, "Options").expect("the Options label");
-        // The fixture puts text in the field, and that text is what locates it.
-        let field = text_y(&shapes, FIXTURE_OPTIONS).expect("the Options field's text");
-        // A field beside its label sits a few points off it (the text box has
-        // its own margin); a field that has wrapped is a whole row away.
-        assert!(
-            (label - field).abs() < 10.0,
-            "at {width}pt the Options label sits at y {label} and its field at y {field}: \
-             the field has dropped onto a line of its own"
-        );
-    }
-}
-
 /// The Video pane's first heading has no rule above it — there is nothing
 /// above it to be separated from, and a rule there reads as the pane hanging
 /// off a line.
@@ -2657,11 +2630,6 @@ fn the_video_pane_does_not_start_with_a_rule() {
 /// what the sweeps are for. The two digits of `done` against three of `total`
 /// also put the padded readout through them.
 const FIXTURE_RENDER: RenderProgress = RenderProgress { done: 120, total: 990 };
-
-/// Text for the Options field in the pane fixtures. A flag the Video pane has
-/// no control of its own for, since that is what the field is for now that
-/// Aspect and Resolution carry the size.
-const FIXTURE_OPTIONS: &str = "--fps 30";
 
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
