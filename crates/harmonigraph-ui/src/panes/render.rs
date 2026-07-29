@@ -177,6 +177,36 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     ValueBar::new(&mut f.split, 0.05..=0.95, label).show(ui);
 }
 
+/// Empty the three things that accumulate, in one press, next to the button
+/// that starts a take.
+///
+/// Each already has a button in the pane that owns it — Scene's "Clear trail",
+/// the Analyzer's "Clear roll" and "Clear spectrogram" — and those stay, since
+/// clearing one is a real thing to want while dialing that one in. This is for
+/// the other moment, when the three are wanted together and there is only one
+/// reason: a take about to be recorded should start on an empty picture,
+/// because whatever is left over is baked into the video's opening seconds.
+/// Three panes to visit for one intention is what makes it a button here.
+///
+/// It clears display state only — nothing about the take, the render, or the
+/// tuning — so there is nothing to undo and no confirmation to sit through.
+fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
+    button_row(ui, |ui| {
+        if ui
+            .button("Clear everything")
+            .on_hover_text(
+                "Forget the lattice trail, the piano roll, and the spectrogram, so \
+                 the next take opens on an empty picture. A note held across this \
+                 is gone from the roll until it is played again; the lattice keeps \
+                 what is still sounding.",
+            )
+            .clicked()
+        {
+            state.clear_accumulated();
+        }
+    });
+}
+
 /// Which spectrogram the render bakes: the live scrolling window (exactly what
 /// the preview shows), or the whole take laid out at once with a sweeping
 /// playhead. The live preview can't lay the whole take out, so a Playhead
@@ -357,6 +387,7 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     if !state.take_status.is_empty() {
         ui.weak(&state.take_status);
     }
+    clear_everything(ui, state);
     render_progress(ui, state);
 
     // When a take finishes and turns into a video. No other home, so it sits

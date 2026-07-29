@@ -630,4 +630,25 @@ impl SharedState {
     pub fn set_background(&mut self, rgb: (u8, u8, u8)) {
         self.background = harmonigraph_scene::skin::ground_color(rgb);
     }
+
+    /// Forget everything that accumulates as the plugin runs: the lattice
+    /// trail, the piano roll, and the spectrogram. Display state only —
+    /// nothing about the tuning, the take, or the render.
+    ///
+    /// Named as a set because the Video pane's "Clear everything" clears it
+    /// before a take, and a fourth accumulation would have to join it here or
+    /// that button quietly stops living up to its name. The three keep their
+    /// own buttons in the panes that own them; this is not a replacement for
+    /// them, it is the case where all three are wanted at one moment.
+    ///
+    /// Held notes fare differently across the three and deliberately so: the
+    /// lattice keeps what is still sounding while the roll drops it (see
+    /// [`NoteRoll::clear`](harmonigraph_core::NoteRoll::clear)). Each clear
+    /// answers that for itself; evening them up here would make this do
+    /// something neither of the single buttons does.
+    pub fn clear_accumulated(&mut self) {
+        self.tracker.clear_history();
+        self.tracker.clear_roll();
+        self.spectrum.clear_history();
+    }
 }
