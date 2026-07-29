@@ -118,15 +118,15 @@ pub(super) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
          zoom it around the pointer. (Dragging the other way, along time, zooms \
          the roll's Span instead.)",
     );
-    // No choice of what the gridlines say. They are the analyzer-standard
-    // 1-2-5 frequency series, and were switchable to a line at every C with
+    // No choice of what the markings say. They are the analyzer-standard
+    // 1-2-5 frequency series, and were switchable to one at every C with
     // Bitwig octave numbers — which is what the note NAMES on the ribbons
     // already say, in the lattice's own spelling, at the pitch they are
     // sounding rather than at the nearest C below it.
     ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Label size")
         .show(ui)
         .on_hover_text(
-            "Size of the pane's own markings: the label on each gridline, and \
+            "Size of the pane's own markings: the label at each frequency, and \
              the pitch readout that follows the pointer. Fixed against the \
              zoom, unlike the note names on the ribbons -- a marking says what \
              the axis is, and the axis does not change size when you zoom it",
@@ -313,7 +313,7 @@ const PLOT_HEIGHT_FRACTION: f32 = 0.85;
 /// The 1 kHz pivot of the tilt slope, as a MIDI pitch.
 const TILT_PIVOT_MIDI: f32 = 83.213_1;
 
-/// Point size of an axis gridline's label — a dozen standing marks that
+/// Point size of an axis marking's label — a dozen standing marks that
 /// should stay quiet.
 ///
 /// Doubled from the 10 it was drawn at before the Label size bar existed. The
@@ -383,7 +383,7 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 /// every frame of a drag (see [`crate::text::snap_scale`]).
 #[derive(Clone, Copy, Debug)]
 struct TextScales {
-    /// The axis gridline labels.
+    /// The axis marking labels.
     markings: f32,
     /// The name written on each ribbon.
     names: f32,
@@ -510,12 +510,6 @@ impl Axes {
     /// Which way the depth axis points on screen (unit vector).
     pub(super) fn dir_depth(&self) -> egui::Vec2 {
         (self.at(0.0, 1.0) - self.at(0.0, 0.0)).normalized()
-    }
-
-    /// A line clean across the depth axis at pitch `p` — the shape of
-    /// every pitch gridline.
-    pub fn across_depth(&self, p: f32) -> [egui::Pos2; 2] {
-        [self.at(p, 0.0), self.at(p, 1.0)]
     }
 
     /// A line clean across the pitch axis at depth `d` — the shape of the
@@ -1033,27 +1027,23 @@ pub(crate) fn spectral_pane(
     // lighter pane `well` in jarring patches. Black is the heatmap's own silence
     // color, so covered and un-covered silence match whatever the quad is tinted
     // with: `Color32` is premultiplied, so a black texel over this bed
-    // composites to black at every alpha. Drawn under the gridlines, so they
-    // still read as pitch lanes across the region.
+    // composites to black at every alpha.
     if cfg.show_spectrogram && split < 1.0 {
         let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
         painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
     }
 
-    // Axis gridlines: the analyzer-standard 1-2-5 frequency series, and only
-    // that. The alternative is a line at every C with Bitwig octave numbers,
+    // Axis markings: the analyzer-standard 1-2-5 frequency series, and only
+    // that. The alternative is a mark at every C with Bitwig octave numbers,
     // which answers a question the pane answers better elsewhere — every ribbon
     // carries its note NAME, spelled the lattice's way and placed at the pitch
     // that is sounding. What an axis is for is the other reading: where in the
-    // spectrum a band sits, which is a frequency.
-    //
-    // The lines run the full depth, so they double as the roll's pitch lanes.
-    // They lay down here, under the spectrum; their text labels are collected
-    // and drawn last (below the voice bars), so a loud spectrum slab never
-    // buries which pitch a lane is.
-    let gridline = |p: f32| {
-        painter.line_segment(axes.across_depth(p), egui::Stroke::new(1.0, theme::panel()));
-    };
+    // spectrum a band sits, which is a frequency. Numbers only, no gridline: a
+    // line run the full depth would outrun the spectrogram's heatmap (which
+    // only grows out from the now-line as history accumulates) and sit bare on
+    // the bed ahead of it, and a line stopped at the data would still cross the
+    // live spectrum curve and the roll's ribbons for no reading a number
+    // doesn't already give.
     let mut axis_labels: Vec<(f32, String)> = Vec::new();
     for hz in [20.0f32, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0] {
         let midi = hz_to_midi(hz);
@@ -1061,7 +1051,6 @@ pub(crate) fn spectral_pane(
             continue;
         }
         let t = scale.t_of(midi);
-        gridline(t);
         let label = if hz >= 1_000.0 { format!("{}k", hz / 1_000.0) } else { format!("{hz}") };
         axis_labels.push((t, label));
     }
@@ -1223,9 +1212,8 @@ pub(crate) fn spectral_pane(
     }
 
     // Axis labels last, riding on top of the spectrogram, spectrum, and
-    // voice bars: a label only earns its place if you can read which pitch a
-    // lane is, and a loud slab would otherwise bury it. The gridlines
-    // themselves stay underneath (drawn above) as pitch lanes.
+    // voice bars: a label only earns its place if you can read which
+    // frequency it marks, and a loud slab would otherwise bury it.
     // Haloed exactly like the lattice's node labels, and for the same reason:
     // whatever is behind them is a picture, not a background. A pitch label
     // over a bright spectrogram slab, or over the spectrum's own fill, has no
@@ -1653,10 +1641,10 @@ mod tests {
         state.spectrum_config.roll_fraction
     }
 
-    /// A gridline label at the now edge of a wide (Left) pane sits just
+    /// A marking label at the now edge of a wide (Left) pane sits just
     /// inside it and grows up-and-inward (LEFT_BOTTOM anchor).
     #[test]
-    fn gridline_labels_sit_just_inside_the_now_edge() {
+    fn marking_labels_sit_just_inside_the_now_edge() {
         let a = axes(WIDE, SpectralOrientation::Left);
         let (pos, align) = a.text_anchor(0.5, 0.0, 3.0, 2.0);
         assert_eq!(pos, egui::pos2(12.0, 67.0));
