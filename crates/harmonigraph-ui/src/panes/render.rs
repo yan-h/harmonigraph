@@ -173,7 +173,14 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     });
     choice_row(ui, "Lattice", &mut f.lattice, &sides);
     let label = if f.lattice.sizes_by_height() { "Lattice height" } else { "Lattice width" };
-    ValueBar::new(&mut f.split, 0.15..=0.85, label).show(ui);
+    // The range `Layout::split` itself honours, rather than a tighter one on
+    // top of it: the layout clamps to 0.05..=0.95, so a bar that went wider
+    // would move under the pointer and render the same picture either side of
+    // the clamp. Both panes stay on screen at the ends — a frame that is all
+    // lattice or all spectrum is what the `lattice` and `spectral` layout
+    // presets are for, and they say so in the render rather than by a slider
+    // pushed to its stop.
+    ValueBar::new(&mut f.split, 0.05..=0.95, label).show(ui);
 }
 
 /// Which spectrogram the render bakes: the live scrolling window (exactly what

@@ -343,7 +343,19 @@ pub(super) fn param_range_bar(
 /// rule, then the group's name in the heading (bold) face — so each block
 /// of related controls is easy to pick out at a glance.
 pub(super) fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(4.0);
-    ui.separator();
+    // The rule separates a section from the one above it, so the FIRST section
+    // in a pane has nothing to separate from and takes a bare heading. The
+    // Nodes and Scene panes write that case out by hand — they are built from
+    // section functions in a fixed order, so each knows whether it leads.
+    //
+    // A pane whose first section depends on the shell cannot know: the Video
+    // pane leads with Record under a host and with Frame in the standalone,
+    // which has no transport to record. `min_rect` is what answers it without
+    // asking the caller — zero height means nothing has been drawn into this
+    // ui yet, so this heading is the pane's first.
+    if ui.min_rect().height() > 0.0 {
+        ui.add_space(4.0);
+        ui.separator();
+    }
     ui.heading(title);
 }

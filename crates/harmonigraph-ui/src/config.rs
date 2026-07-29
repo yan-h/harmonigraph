@@ -464,8 +464,15 @@ pub(crate) fn default_aspect_w() -> u32 {
 pub(crate) fn default_aspect_h() -> u32 {
     9
 }
+/// A fifth of the frame to the lattice, the rest to the spectral pane. The
+/// two are not competing for the same job: the lattice reads at whatever size
+/// it is given (it is a handful of nodes, and the camera frames them), while
+/// the spectrogram's width IS its time axis, so width buys it seconds on
+/// screen. Kept in step with `RenderFrame::default`'s `split` — the serde
+/// default and the struct default answering differently would mean a blob
+/// that omits the field loads as a frame nobody chose.
 pub(crate) fn default_frame_split() -> f32 {
-    0.68
+    0.20
 }
 
 impl Default for RenderFrame {
@@ -473,7 +480,7 @@ impl Default for RenderFrame {
         RenderFrame {
             aspect_w: 16,
             aspect_h: 9,
-            split: 0.68,
+            split: default_frame_split(),
             lattice: LatticeSide::Left,
             legacy_stacked: false,
         }

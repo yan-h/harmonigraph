@@ -2525,6 +2525,30 @@ fn settings_pane_at_width(
     out.shapes
 }
 
+/// The Video pane drawn for a shell that can or cannot record takes — the one
+/// thing `settings_pane_at_width` fixes that changes which section leads the
+/// pane. See `no_pane_starts_with_a_rule`.
+fn video_pane_shapes(take_supported: bool) -> Vec<egui::epaint::ClippedShape> {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.take_supported = take_supported;
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    let margin = crate::theme::PANE_INNER_MARGIN;
+    let body =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
+        |ui| {
+            let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+            let mut tab = panes::Tab::Video;
+            let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
+            egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
+        },
+    );
+    out.shapes
+}
+
 /// Where a pane's content box ends, in the coordinates
 /// [`settings_pane_at_width`] lays it out at.
 fn pane_content_right(width: f32) -> f32 {
@@ -2574,6 +2598,40 @@ fn the_options_field_sits_beside_its_label() {
             (label - field).abs() < 10.0,
             "at {width}pt the Options label sits at y {label} and its field at y {field}: \
              the field has dropped onto a line of its own"
+        );
+    }
+}
+
+/// A pane's first heading has no rule above it — there is nothing above it to
+/// be separated from, and a rule there reads as the pane hanging off a line.
+///
+/// Both shells, because which section leads the Video pane depends on the
+/// shell: a host can record takes, so Record leads; the standalone cannot, so
+/// `render_settings` returns early and Frame leads instead. `section` decides
+/// it from what has been drawn rather than from the caller, and this is what
+/// holds it to that for the case the caller could not have known.
+#[test]
+fn no_pane_starts_with_a_rule() {
+    for take_supported in [true, false] {
+        let shapes = video_pane_shapes(take_supported);
+        let heading = shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) => Some(t.pos.y),
+                _ => None,
+            })
+            .fold(f32::INFINITY, f32::min);
+        assert!(heading.is_finite(), "the Video pane drew no text at all");
+        // A separator is a horizontal `LineSegment` (the preview's frame
+        // chrome draws them too, but that is far below the first heading).
+        let rule_above = shapes.iter().any(|cs| match &cs.shape {
+            egui::Shape::LineSegment { points, .. } => points[0].y < heading,
+            _ => false,
+        });
+        assert!(
+            !rule_above,
+            "take_supported={take_supported}: a rule sits above the pane's first \
+             heading at y {heading}"
         );
     }
 }
@@ -2655,8 +2713,11 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// render is minutes long and the sentence never changes while it runs.
 ///
 /// The fraction is also what tells it apart from the `ValueBar` beside it,
-/// which paints the same accent fill: the frame's split sits at 0.68 by
-/// default, and the fixture render is a shade over a tenth done.
+/// which paints the same accent fill. The split bar fills to its position in
+/// its RANGE, not to its value: 0.20 across 0.05..=0.95 is a sixth of the
+/// track, against the fixture render's eighth. They have to stay further
+/// apart than the tolerance below, so moving the split's default or its range
+/// close to an eighth is what would make this pass on the wrong bar.
 #[test]
 fn the_render_bar_fills_to_the_share_of_frames_done() {
     const WIDTH: f32 = 400.0;
