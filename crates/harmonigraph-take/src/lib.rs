@@ -260,6 +260,32 @@ impl Take {
         let last_param = self.params.last().map(|p| p.t).unwrap_or(0.0);
         last_note.max(last_param)
     }
+
+    /// When recording actually began: the earliest event of any kind, or
+    /// `None` for an empty take.
+    ///
+    /// Params count, unlike in a "first note" reading, and they are what makes
+    /// this reliable: the first block after arming writes every parameter,
+    /// so a take opens with a full snapshot stamped at the capture point
+    /// whether or not anything was played. A take of a passage with sound but
+    /// no MIDI — an audio part, a held drone, a pad recorded as audio — has
+    /// no notes to anchor to, and anchoring to notes would send it back to
+    /// song zero and the empty opening this exists to remove.
+    ///
+    /// Event times are the host's TRANSPORT position, so this is a song
+    /// position, not a delay after the record button. A take of a passage
+    /// starting a minute into the arrangement has its first event at 60-odd
+    /// seconds, and everything before that is guaranteed empty — nothing was
+    /// captured there to draw.
+    pub fn first_event(&self) -> Option<f64> {
+        let first_note = self.notes.first().map(|n| n.t);
+        let first_param = self.params.first().map(|p| p.t);
+        match (first_note, first_param) {
+            (Some(n), Some(p)) => Some(n.min(p)),
+            (only, None) => only,
+            (None, only) => only,
+        }
+    }
 }
 
 /// Appends records to a take file, one line at a time.
@@ -329,6 +355,32 @@ impl Drop for Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where the render starts is anchored to this, so it has to answer for a
+    /// take with no notes: a passage carrying sound but no MIDI. Arming writes
+    /// a full parameter snapshot regardless, so the params are what keep the
+    /// anchor from falling back to song zero and reopening the empty-video bug.
+    #[test]
+    fn first_event_survives_a_take_with_no_notes() {
+        let take = |notes: Vec<NoteRecord>, params: Vec<ParamRecord>| Take {
+            header: Header::default(),
+            notes,
+            params,
+            truncated: false,
+        };
+        let note = |t| NoteRecord { t, channel: 0, note: 60, kind: NoteKind::On { velocity: 0.8 } };
+        let param = |t| ParamRecord { t, id: "pitch-class-fade".into(), value: 1.0 };
+
+        // Notes and params: the earlier wins, and it is the param snapshot
+        // that arming wrote — which is the real capture point.
+        assert_eq!(take(vec![note(5.87)], vec![param(5.48)]).first_event(), Some(5.48));
+        // Sound but no MIDI: the snapshot is the only anchor there is.
+        assert_eq!(take(vec![], vec![param(5.48)]).first_event(), Some(5.48));
+        // Notes but no params, which a hand-built take could be.
+        assert_eq!(take(vec![note(5.87)], vec![]).first_event(), Some(5.87));
+        // Nothing at all.
+        assert_eq!(take(vec![], vec![]).first_event(), None);
+    }
 
     fn sample() -> (Header, Vec<NoteRecord>, Vec<ParamRecord>) {
         let header = Header {

@@ -161,8 +161,8 @@ fn a_render_frame_saved_as_stacked_loads_as_the_side_it_meant() {
         assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 
         // The offline renderer's own door into the blob.
-        let frame = crate::render_frame_from_persist(&saved).expect("still parses");
-        assert_eq!(frame.lattice, side, "stacked:{flag} through render_frame_from_persist");
+        let render = crate::render_config_from_persist(&saved).expect("still parses");
+        assert_eq!(render.frame.lattice, side, "stacked:{flag} through render_config_from_persist");
     }
 }
 

@@ -11,7 +11,7 @@ use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
 use crate::perf::PerfStats;
 use crate::{fold, panes, text};
-use crate::{AudioSpectrum, RenderConfig, RenderFrame, SpectrumConfig, WholeSong};
+use crate::{AudioSpectrum, RenderConfig, SpectrumConfig, WholeSong};
 
 /// Scrollback for the debug console pane. Shells and panes log via
 /// [`SharedState::log`].
@@ -608,18 +608,26 @@ pub(crate) struct UiPersist {
     pub(crate) fps_cap: Option<f32>,
 }
 
-/// Parse just the render frame out of a persisted UI-state blob — so the
-/// offline renderer can default its size and layout to what the take was
-/// composed for, without building a whole [`SharedState`].
-pub fn render_frame_from_persist(serialized: &str) -> Option<RenderFrame> {
+/// Parse just the render settings out of a persisted UI-state blob — so the
+/// offline renderer can default its size, layout, and lead-in to what the take
+/// was composed for, without building a whole [`SharedState`].
+///
+/// The whole [`RenderConfig`] rather than the frame alone, because more than
+/// the frame is wanted out here: `main` sizes and lays out from
+/// [`frame`](RenderConfig::frame) and starts from
+/// [`lead_in`](RenderConfig::lead_in). One door into the blob, so a setting the
+/// renderer honours cannot be one somebody forgot to add an accessor for.
+///
+/// Migrated on the way out. Takes recorded before the four sides carry a
+/// `stacked` flag here, and before the Resolution control a `--size` inside
+/// `extra_args`; the renderer reading them is the whole reason those shims
+/// exist, since re-rendering an old take must still compose the frame it was
+/// framed at. See [`RenderConfig::migrate_legacy`].
+pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
     ron::from_str::<UiPersist>(serialized).ok().map(|persist| {
-        // Takes recorded before the four sides carry a `stacked` flag in this
-        // blob, and the renderer reading them is the whole reason the shim
-        // exists — re-rendering one must still compose the frame it was framed
-        // at. See `RenderFrame::migrate_legacy`.
-        let mut frame = persist.render.frame;
-        frame.migrate_legacy();
-        frame
+        let mut render = persist.render;
+        render.migrate_legacy();
+        render
     })
 }
 
