@@ -177,8 +177,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // it.
     // What the pointer is doing, before the fold reads the fractions last frame
     // left behind: a fraction that moved with no gesture behind it is egui_dock's
-    // own per-frame clamp, not a resize the layout should follow (see
-    // `fold::hold_floors`).
+    // own per-frame clamp, not a drag the layout should follow (see `fold::drags`).
     state.dial.watch_pointer(ui.input(|i| i.pointer.any_down() || i.pointer.any_released()));
     let area = fold::area_width(ui, &dock_style);
     state.window_width_change +=
