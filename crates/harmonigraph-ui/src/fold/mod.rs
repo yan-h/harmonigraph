@@ -90,6 +90,13 @@
 //! whichever side of the boundary it sits, and a folded pane is holding the
 //! width it comes back at rather than any width the drag can see — so the drag
 //! moves the visible panes on each side and leaves the rest exactly where it is.
+//! The separators drawn between those panes are on neither side of the boundary
+//! either: hand them to one and every frame of a drag pushes the boundary
+//! another separator into whichever subtree holds the more of them, so a
+//! separator wiggled back and forth walks out from under the pointer
+//! ([`Points::shift`]). Of what does trade, a pane that has reached its own
+//! floor stops there and the ones beside it give up the rest
+//! ([`Points::press`]).
 //!
 //! The separators a fold has PINNED cannot resize what they divide at all: the
 //! one the rail sits against, and, where panes have folded side by side, the ones
@@ -668,6 +675,86 @@ impl Points {
         self.stretch_visible(tree, holds, node, width / was);
     }
 
+    /// Move `by` points into the panes ON SCREEN under `node` — the half of a
+    /// drag that lands on one side of the boundary.
+    ///
+    /// Named as a difference rather than as a width, because the width a subtree
+    /// COMES OUT at is not the width its panes hold between them: the separators
+    /// drawn between them are part of the first and none of the second, and a
+    /// drag hands them to neither side. Handed the wrong one of the two, every
+    /// frame of a drag pushes the boundary a separator further into whichever
+    /// subtree has the more of them, and a separator wiggled back and forth walks
+    /// out from under the pointer.
+    fn shift(
+        &mut self,
+        tree: &Tree<Tab>,
+        holds: &[Hold],
+        floors: &[f32],
+        node: NodeIndex,
+        by: f32,
+    ) {
+        let was = self.visible(tree, holds, node);
+        if was <= 0.0 || !by.is_finite() {
+            return;
+        }
+        self.press(tree, holds, floors, node, was + by);
+    }
+
+    /// Share `width` out among the panes ON SCREEN under `node`, in proportion to
+    /// what each is dialled at and never below the floor it needs.
+    ///
+    /// Proportion alone is not enough at the bottom of a drag. A subtree squeezed
+    /// to what its panes need BETWEEN them, divided in proportion, is the widest
+    /// of them keeping most of that and the narrowest going under: a 515/199 pair
+    /// squeezed to the 204 the two of them need comes out 147 and 57. What a
+    /// floor means is that no pane is drawn below it, so a pane that has reached
+    /// its own stops there and the ones with room left give up the rest.
+    ///
+    /// `floors` is per node and in the same points as `width`: what the panes
+    /// under it need between them, rails and separators left out.
+    fn press(
+        &mut self,
+        tree: &Tree<Tab>,
+        holds: &[Hold],
+        floors: &[f32],
+        node: NodeIndex,
+        width: f32,
+    ) {
+        if holds.get(node.0).is_some_and(|hold| hold.inside) {
+            return;
+        }
+        let (left, right) = (node.left(), node.right());
+        let floor = |node: NodeIndex| floors.get(node.0).copied().unwrap_or(0.0);
+        match &tree[node] {
+            Node::Leaf(_) => {
+                if let Some(at) = self.at.get_mut(node.0) {
+                    *at = width.max(floor(node));
+                }
+            }
+            _ if right.0 >= tree.len() => {}
+            // Stacked, so each child is the whole width rather than a share of it.
+            Node::Vertical(_) => {
+                self.press(tree, holds, floors, left, width);
+                self.press(tree, holds, floors, right, width);
+            }
+            _ => {
+                let (before, after) =
+                    (self.visible(tree, holds, left), self.visible(tree, holds, right));
+                let share = match before + after > 0.0 {
+                    true => width * before / (before + after),
+                    false => width * 0.5,
+                };
+                // Too narrow for both floors is not a drag's doing — it is a
+                // window that cannot hold the panes in it — so there proportion
+                // is all there is to go on.
+                let (low, high) = (floor(left), width - floor(right));
+                let share = if low <= high { share.clamp(low, high) } else { share };
+                self.press(tree, holds, floors, left, share);
+                self.press(tree, holds, floors, right, width - share);
+            }
+        }
+    }
+
     /// The points a subtree's visible panes are dialled to, side by side.
     fn visible(&self, tree: &Tree<Tab>, holds: &[Hold], node: NodeIndex) -> f32 {
         if holds.get(node.0).is_some_and(|hold| hold.inside) {
@@ -873,6 +960,10 @@ fn drags(
     let separator = style.separator.width;
     let floor = style.separator.extra - separator * 0.5;
     let mins = min_widths(tree, floor, style.tab_bar.height, separator);
+    // Per node, what its panes need between them: the rails and the separators
+    // are in both of these and cancel, which leaves the same points a drag is in.
+    let floors: Vec<f32> =
+        mins.iter().zip(fixed).map(|(min, fixed)| (min - fixed).max(0.0)).collect();
     let drawn = points.drew.clone();
     for index in 0..tree.len() {
         let node = NodeIndex(index);
@@ -914,16 +1005,13 @@ fn drags(
         // limit does not know: it holds the two CHILDREN of the split apart and
         // nothing deeper in either of them (see [`min_widths`]).
         let room = |span: f32, min: f32| (span - min).max(0.0);
-        let (spare, take) = (
-            room(before, mins[left.0] - fixed[left.0]),
-            room(after, mins[right.0] - fixed[right.0]),
-        );
+        let (spare, take) = (room(before, floors[left.0]), room(after, floors[right.0]));
         let delta = (moved * drew * dialled / whole).clamp(-spare, take);
         if delta.abs() < 1e-4 {
             continue;
         }
-        points.share(tree, holds, left, before + delta);
-        points.share(tree, holds, right, after - delta);
+        points.shift(tree, holds, &floors, left, delta);
+        points.shift(tree, holds, &floors, right, -delta);
     }
 }
 
