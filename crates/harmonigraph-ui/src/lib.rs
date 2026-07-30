@@ -87,23 +87,32 @@ fn end_stranded_drag(ctx: &egui::Context) {
     if ctx.dragged_id().is_none() {
         return;
     }
-    // Focus is read from the EVENT as well as the flag. `InputState::focused`
-    // comes from `RawInput::focused`, which starts true and only moves if an
-    // integration sets it — and the plugin's (vendored egui-baseview) reports
-    // focus by pushing `WindowFocused` and filling in `ViewportInfo`, never
-    // that field. The flag alone would therefore be true forever in the one
-    // shell this is most needed in. Reading both means neither a shell that
-    // sets the flag nor one that only sends the event is missed, and a shell
-    // that says nothing either way (the offline renderer, the tests) is
-    // untouched.
-    let lost = ctx.input(|i| {
-        i.pointer.latest_pos().is_none()
-            || !i.focused
-            || i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))
-    });
-    if lost {
+    if !kept_focus(ctx) || ctx.input(|i| i.pointer.latest_pos().is_none()) {
         ctx.stop_dragging();
     }
+}
+
+/// Whether the editor still has the window whatever gesture is in flight began
+/// in.
+///
+/// A host that takes focus mid-drag is handed the release, so what is left here
+/// is a button egui believes is held forever — and anything of ours that follows
+/// the pointer for as long as it is held would follow it around the screen (see
+/// `fold::Grip`). Losing focus is the one unambiguous end of a gesture: a
+/// pointer that has merely left the window is still dragging, and still ours.
+///
+/// Focus is read from the EVENT as well as the flag. `InputState::focused` comes
+/// from `RawInput::focused`, which starts true and only moves if an integration
+/// sets it — and the plugin's (vendored egui-baseview) reports focus by pushing
+/// `WindowFocused` and filling in `ViewportInfo`, never that field. The flag
+/// alone would therefore be true forever in the one shell this is most needed
+/// in. Reading both means neither a shell that sets the flag nor one that only
+/// sends the event is missed, and a shell that says nothing either way (the
+/// offline renderer, the tests) is untouched.
+fn kept_focus(ctx: &egui::Context) -> bool {
+    ctx.input(|i| {
+        i.focused && !i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))
+    })
 }
 
 /// Draw one frame of the whole UI into `ui`, which is expected to cover the
@@ -180,13 +189,16 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // own per-frame clamp, not a drag the layout should follow — and where the
     // pointer IS is what a drag on a separator asks for, once one has hold of a
     // boundary (see `fold::drags`).
+    // A gesture the window has lost is not one to go on following: the pointer
+    // leaving is a drag that is still ours, but the focus leaving is not (see
+    // `kept_focus`).
     let (gesturing, at) = ui.input(|i| {
         (
             i.pointer.any_down() || i.pointer.any_released(),
             i.pointer.latest_pos().map(|at| at.x),
         )
     });
-    state.dial.watch_pointer(gesturing, at);
+    state.dial.watch_pointer(gesturing && kept_focus(ui.ctx()), at);
     let area = fold::area_width(ui, &dock_style);
     state.window_width_change +=
         state.folds.apply(&mut dock, &dock_style, area, state.min_window_width, &mut state.dial);
