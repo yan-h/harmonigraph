@@ -1205,11 +1205,13 @@ pub fn paint(
     dial: &mut Dial,
 ) {
     let rail = style.tab_bar.height;
-    // Frameless mode hides every tab bar, which takes the arrow with it: a
-    // fold there is a pane squeezed to nothing, with no chrome to draw.
-    if rail <= 0.0 {
-        return;
-    }
+    // Frameless mode hides every tab bar, which takes the rail with it: a fold
+    // there is a pane squeezed to NOTHING, so there is no rail to draw, no name
+    // to put up it and no arrow to bring the pane back with. What is still there
+    // is the separator the pane left behind, and the panes on either side of it
+    // that a drag on it means (see the handles below) — so the chrome is what
+    // gets skipped, not the frame.
+    let chrome = rail > 0.0;
     // The pane an arrow of ours was clicked for, and the split a pinned
     // separator passed a drag out to: both applied once the tree is no longer
     // being read from.
@@ -1235,16 +1237,27 @@ pub fn paint(
             let Some(rect) = tree[folded].rect() else {
                 continue;
             };
-            // Nothing to draw until the fold has actually been laid out: on
-            // the frame a pane is collapsed on it is still its old width, and
-            // a rail's worth of chrome across a whole pane would flash.
+            // Nothing here until the fold has actually been laid out: on the
+            // frame a pane is collapsed on it is still its old width, and a
+            // rail's worth of chrome across a whole pane would flash, while a
+            // handle would sit where the pane's edge is about to stop being.
+            //
+            // A rail's width is the measure of settled, and in frameless mode
+            // that is zero — so the slack there is a couple of points of
+            // rounding rather than a rail's worth of it, and the rect is allowed
+            // to have no width at all.
             let span = rail_span(rail_columns(tree, folded), rail, style.separator.width);
-            if !rect.is_positive() || rect.width() >= span + rail {
+            if rect.height() <= 0.0 || rect.width() < 0.0 {
                 continue;
             }
-            for band in name_bands(tree, folded) {
-                if paint_band(ui, &band, side, surface, style) {
-                    opened = Some((surface, band.node));
+            if rect.width() >= span + rail.max(2.0) {
+                continue;
+            }
+            if chrome {
+                for band in name_bands(tree, folded) {
+                    if paint_band(ui, &band, side, surface, style) {
+                        opened = Some((surface, band.node));
+                    }
                 }
             }
             // Every separator this fold has pinned: the one the rail sits

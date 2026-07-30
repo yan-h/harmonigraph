@@ -2352,6 +2352,92 @@ fn both_handles_beside_a_rail_resize_the_panes_around_it_in_the_default_layout()
     }
 }
 
+/// Frameless mode hides every tab bar, so a folded pane there is squeezed to
+/// NOTHING rather than to a rail — no rail, no name, no arrow. The separator it
+/// left behind is still on screen, and still has a pane on either side of it, so
+/// dragging it still resizes those two.
+#[test]
+fn a_pinned_separator_resizes_in_frameless_mode_too() {
+    for delta in [40.0f32, -40.0] {
+        let mut h = DockHarness::new();
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        h.settle(&mut state);
+        let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
+        let _ = h.settle_folds(&mut state);
+        state.view.frameless = true;
+        let _ = h.settle_folds(&mut state);
+
+        let gone = pane_rect(&state, panes::Tab::Spectral);
+        assert!(gone.width() < 1.0, "a fold with no tab bar to leave is {} wide", gone.width());
+        let before =
+            (pane_width(&state, panes::Tab::Lattice), pane_width(&state, panes::Tab::Tuning));
+        let at = egui::pos2(gone.right() + 2.0, gone.center().y);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+        let target = at + egui::vec2(delta, 0.0);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+        h.frame(&mut state, vec![press(target, false)]);
+        let _ = h.settle_folds(&mut state);
+
+        let after =
+            (pane_width(&state, panes::Tab::Lattice), pane_width(&state, panes::Tab::Tuning));
+        assert!(
+            (after.0 - (before.0 + delta)).abs() < 1.5,
+            "{delta:+}: the lattice should have taken the drag, and moved {}",
+            after.0 - before.0,
+        );
+        assert!(
+            (after.1 - (before.1 - delta)).abs() < 1.5,
+            "{delta:+}: the settings column should have paid it, and moved {}",
+            after.1 - before.1,
+        );
+        assert!(
+            collapsed(&state, panes::Tab::Spectral),
+            "{delta:+}: and the analyzer should still be folded — this was a resize",
+        );
+    }
+}
+
+/// The pull works in frameless mode too, where it is the only way back: the
+/// arrow that brings a folded pane out lives on a tab bar, and frameless mode has
+/// none.
+#[test]
+fn a_folded_column_can_be_pulled_back_in_frameless_mode() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    // Folding the settings leaf takes the whole column with it (the readouts open
+    // folded), which leaves the fold with nothing outward to pass a drag to.
+    let _ = h.collapse_click(&mut state, panes::Tab::Tuning);
+    let _ = h.settle_folds(&mut state);
+    state.view.frameless = true;
+    let _ = h.settle_folds(&mut state);
+    let column = state
+        .dock
+        .find_tab(&panes::Tab::Tuning)
+        .and_then(|path| path.node.parent())
+        .expect("the settings leaf shares a column with the readouts");
+    let main = egui_dock::SurfaceIndex::main();
+    let gone = state.dock[main][column].rect().expect("the fold is laid out");
+    assert!(gone.width() < 1.0, "a fold with no tab bar to leave is {} wide", gone.width());
+
+    let at = egui::pos2(gone.left() - 2.0, gone.top() + 40.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    let target = egui::pos2(gone.right() - 200.0, at.y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+    let _ = h.settle_folds(&mut state);
+
+    assert!(!collapsed(&state, panes::Tab::Tuning), "the pull should have brought the column back");
+    assert!(collapsed(&state, panes::Tab::Notes), "and left the readouts as they were");
+    let width = state.dock[main][column].rect().expect("laid out").width();
+    assert!(
+        (width - 200.0).abs() < 6.0,
+        "the column should come back at the 200 it was pulled to, and is {width}",
+    );
+}
+
 /// The same, with the two collapsed panes SIBLINGS: their own split is collapsed
 /// too, so one fold renders as two rails and the separator between them is inside
 /// it. It has a rail on both sides and used to be inert, which from the outside
