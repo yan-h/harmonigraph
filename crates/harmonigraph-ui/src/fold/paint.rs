@@ -14,6 +14,43 @@ use egui_dock::{DockState, Node, NodeIndex, Surface, SurfaceIndex, Tree};
 use super::*;
 use crate::panes::Tab;
 
+/// Keep the separator being dragged lit for as long as the drag lasts.
+///
+/// egui_dock lights it from its own drag state, and a plugin editor loses that
+/// the moment the pointer crosses out of the host's window: baseview reports the
+/// exit, egui-baseview turns it into `PointerGone`, and the drag that strands is
+/// one the shell has to end for the wheel's sake (see `end_stranded_drag`). The
+/// resize itself carries on, because what it follows is the pointer rather than
+/// egui's opinion of it (see [`Grip`]) — so the bar goes dark under a hand that
+/// is still resizing the pane, which is the one place the two can disagree.
+///
+/// Drawn from the RECTANGLES the two children came out at, not from the split's
+/// fraction: egui_dock updates that after drawing the separator, so a fraction
+/// read here is a frame ahead of the bar on screen and this would paint beside
+/// it rather than over it.
+fn lit(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style, dial: &Dial) {
+    let Some((surface, node)) = dial.held() else {
+        return;
+    };
+    let Some(tree) = dock.get_surface(surface).and_then(Surface::node_tree) else {
+        return;
+    };
+    let (left, right) = (node.left(), node.right());
+    if right.0 >= tree.len() || !tree[node].is_horizontal() {
+        return;
+    }
+    let (Some(whole), Some(before), Some(after)) =
+        (tree[node].rect(), tree[left].rect(), tree[right].rect())
+    else {
+        return;
+    };
+    let bar = egui::Rect::from_x_y_ranges(before.right()..=after.left(), whole.y_range());
+    if bar.width() <= 0.0 || bar.height() <= 0.0 {
+        return;
+    }
+    ui.painter().rect_filled(bar, egui::CornerRadius::ZERO, style.separator.color_dragged);
+}
+
 /// Width of egui_dock's collapse-arrow button (its private
 /// `Style::TAB_COLLAPSE_BUTTON_SIZE`), which a rail has to be able to hold or
 /// there would be no way to unfold what was folded. Tab bars are taller than
@@ -59,6 +96,7 @@ pub fn paint(
     // being read from.
     let mut opened = None;
     let mut shoved = None;
+    lit(ui, dock, style, dial);
     for index in 0..dock.surfaces_count() {
         let surface = SurfaceIndex(index);
         let Some(tree) = dock.get_surface(surface).and_then(Surface::node_tree) else {

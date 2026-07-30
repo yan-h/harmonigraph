@@ -654,6 +654,12 @@ struct Points {
 }
 
 impl Dial {
+    /// The boundary a gesture has hold of, for the chrome that has to show it
+    /// (see [`paint`]).
+    pub(crate) fn held(&self) -> Option<(SurfaceIndex, NodeIndex)> {
+        self.grip.map(|grip| (SurfaceIndex(grip.surface), NodeIndex(grip.node)))
+    }
+
     /// What the shell saw of the pointer this frame, before [`Folds::apply`]
     /// reads the fractions the last one left behind: whether it is doing
     /// anything, and where it is.

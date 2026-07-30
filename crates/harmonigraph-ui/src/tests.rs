@@ -2408,6 +2408,90 @@ fn no_pane_is_dragged_below_its_floor_wherever_it_sits() {
     }
 }
 
+/// Whether any separator on screen is painted the colour a dragged one takes.
+/// Tall and thin is what tells a separator from every other rectangle in the
+/// editor; the colour is what the question is about.
+fn a_bar_is_lit(out: &egui::FullOutput, style: &egui_dock::Style) -> bool {
+    out.shapes.iter().any(|cs| match &cs.shape {
+        egui::Shape::Rect(r) => {
+            r.fill == style.separator.color_dragged
+                && r.rect.width() < 12.0
+                && r.rect.height() > 400.0
+        }
+        _ => false,
+    })
+}
+
+/// Press on the boundary left of the settings column and drag it 60pt left,
+/// which is a resize in progress by the time this returns.
+fn start_dragging_the_settings_boundary(
+    h: &mut DockHarness,
+    state: &mut SharedState,
+    style: &egui_dock::Style,
+) -> egui::Pos2 {
+    h.settle(state);
+    let rect = pane_rect(state, panes::Tab::Tuning);
+    let at = egui::pos2(rect.left() - style.separator.width * 0.5, rect.center().y);
+    h.frame(state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    let target = at + egui::vec2(-60.0, 0.0);
+    h.frame(state, vec![egui::Event::PointerMoved(target)]);
+    target
+}
+
+/// The bar being dragged stays lit while the pointer is off the window.
+///
+/// A plugin editor is small and a separator is often near its edge, so a resize
+/// that carries on past that edge is an ordinary one: the pane goes on following
+/// the pointer, which is what a drag names (see `fold::Grip`). What egui_dock
+/// lights the bar from is its OWN drag, and the shell has to end that one the
+/// moment the pointer leaves — a release delivered elsewhere strands it, and a
+/// stranded drag takes every settings pane's wheel with it (see
+/// `end_stranded_drag`). So the bar went dark under a hand that was still
+/// resizing the pane, unpredictably, since it turns on crossing an edge.
+#[test]
+fn the_bar_being_dragged_stays_lit_when_the_pointer_leaves_the_window() {
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
+    let out = h.frame(&mut state, vec![]);
+    assert!(a_bar_is_lit(&out, &style), "the bar is not lit while it is being dragged");
+    // The boundary itself, which is what the pointer is holding — the panes
+    // behind it share the width it moves in proportion to their own.
+    let was = pane_rect(&state, panes::Tab::Tuning).left();
+    // Out of the window and still held, which the host goes on sending
+    // positions for: the pointer is captured by the view it was pressed in.
+    h.frame(&mut state, vec![egui::Event::PointerGone]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target + egui::vec2(-60.0, 0.0))]);
+    let out = h.frame(&mut state, vec![]);
+    let moved = was - pane_rect(&state, panes::Tab::Tuning).left();
+    assert!((moved - 60.0).abs() < 2.0, "the drag carried on for {moved:.0}pt of the 60 asked");
+    assert!(a_bar_is_lit(&out, &style), "the bar went dark while the pane was still resizing");
+}
+
+/// A gesture the host takes focus from is over, and lets go of its bar.
+///
+/// The release goes to whoever has the window, so egui is left believing the
+/// button is held forever — and anything that follows the pointer for as long as
+/// it is held would follow it around the screen, resizing a pane nobody is
+/// touching. Losing focus is the one unambiguous end of a gesture; a pointer that
+/// has merely left the window is still dragging, which is the test above.
+#[test]
+fn a_drag_the_host_takes_focus_from_lets_go_of_its_bar() {
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
+    h.frame(&mut state, vec![egui::Event::WindowFocused(false)]);
+    let was = pane_rect(&state, panes::Tab::Tuning).left();
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target + egui::vec2(-60.0, 0.0))]);
+    let out = h.frame(&mut state, vec![]);
+    let moved = was - pane_rect(&state, panes::Tab::Tuning).left();
+    assert!(moved.abs() < 1.0, "the pane followed a pointer the host had taken, by {moved:.0}pt");
+    assert!(!a_bar_is_lit(&out, &style), "the bar stayed lit after the gesture was lost");
+}
+
 /// A window dragged narrow enough to squeeze a pane past its floor does NOT
 /// re-dial the layout: the floor holds a drag, and a resize is not one.
 ///
@@ -4188,3 +4272,5 @@ fn an_impossible_ui_scale_is_clamped() {
         );
     }
 }
+
+
