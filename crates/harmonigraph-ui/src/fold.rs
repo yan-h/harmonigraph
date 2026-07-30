@@ -370,6 +370,10 @@ impl Folds {
                 }
             }
             let moved = self.reconcile(tree, surface, &holds, area);
+            // After the fold has handed back whatever it was holding, or the
+            // fractions it wrote would still be in the tree on the frame the
+            // flags say they are nobody's — which reads exactly like a drag.
+            hold_floors(tree, &holds, style, &mut dial.seen, dial.gesturing);
             // The widest this window has been, for a session that was not there
             // to watch it get that wide: the folds came off the persist blob,
             // and each one remembers the window it was taken at.
@@ -539,6 +543,10 @@ impl Folds {
             if (target - written).abs() < 1e-5 || (target - clamped).abs() < 1e-5 {
                 continue;
             }
+            // Held to what the panes on either side need, which egui_dock's own
+            // limit does not know: it holds the two children of this split apart
+            // and nothing deeper in either of them (see [`min_widths`]).
+            let target = floored(tree, node, target, style);
             if let Some(dialled) = self.solve(reading, node, target) {
                 if let Some(fold) = self.0.iter_mut().find(|fold| fold.is(surface, node)) {
                     fold.fraction = dialled;
@@ -858,6 +866,22 @@ pub struct Dial {
     /// [`paint`], which is where the pull is let go of, and taken by
     /// [`Folds::apply`], which is where a width becomes a fraction.
     pull: Option<Pull>,
+    /// Every split's fraction as this pass last left it, so the next one can tell
+    /// a separator the user DRAGGED from one egui_dock has re-clamped behind its
+    /// back — see [`hold_floors`].
+    seen: Vec<f32>,
+    /// Whether a pointer was down (or has just come up) when this frame's input
+    /// was read, which is what tells those two apart: only a gesture moves a
+    /// fraction on purpose.
+    gesturing: bool,
+}
+
+impl Dial {
+    /// What the shell saw of the pointer this frame, before [`Folds::apply`] reads
+    /// the fractions the last one left behind.
+    pub fn watch_pointer(&mut self, gesturing: bool) {
+        self.gesturing = gesturing;
+    }
 }
 
 /// The layout as a function of the window it is dialled in at.
@@ -1024,6 +1048,158 @@ impl Fit {
             }
         }
     }
+}
+
+/// The narrowest each node can be DRAWN: a pane's own floor, a rail for whatever
+/// is folded, and for a split whatever its two children need side by side.
+///
+/// egui_dock's own limit (`separator.extra`) is a single number applied to the two
+/// children of whichever split is being dragged — so a pane deeper inside either
+/// of them keeps none of it: drag the boundary between a picture pair and the
+/// settings column far enough and the pair stops at one pane's floor, with the two
+/// panes inside it sharing that between them, 71 points and 27. What a floor means
+/// is that no PANE is drawn below it, wherever it sits in the tree, which is this
+/// sum.
+///
+/// Indexed by node. Bottom-up, which a reverse walk is: a node's children are
+/// always further along than it is.
+fn min_widths(tree: &Tree<Tab>, floor: f32, rail: f32, separator: f32) -> Vec<f32> {
+    let mut mins = vec![0.0; tree.len()];
+    for index in (0..tree.len()).rev() {
+        let node = NodeIndex(index);
+        // Folded, and drawn as the rails it holds: folding is how a pane gets
+        // smaller than the floor, and a rail is what it gets instead.
+        if tree[node].is_collapsed() {
+            mins[index] = rail_span(rail_columns(tree, node), rail, separator);
+            continue;
+        }
+        let (left, right) = (node.left(), node.right());
+        mins[index] = match &tree[node] {
+            Node::Leaf(_) => floor,
+            Node::Horizontal(_) if right.0 < tree.len() => {
+                mins[left.0] + separator + mins[right.0]
+            }
+            Node::Vertical(_) if right.0 < tree.len() => mins[left.0].max(mins[right.0]),
+            _ => 0.0,
+        };
+    }
+    mins
+}
+
+/// Hold every pane to its floor against a separator the user has just dragged,
+/// for the splits the fold does not own (its own are held in [`Folds::absorb`],
+/// where a drag on them is read).
+///
+/// Only fractions that have MOVED, which is only ever a drag: a window resize
+/// leaves every fraction where it was and re-derives the widths from it, so a
+/// floor enforced against every frame would take a narrow window as licence to
+/// re-dial the layout — and a layout that quietly rearranges itself when the
+/// window moves is the thing [`Folds`] is built to prevent.
+fn hold_floors(
+    tree: &mut Tree<Tab>,
+    holds: &[Hold],
+    style: &egui_dock::Style,
+    seen: &mut Vec<f32>,
+    gesturing: bool,
+) {
+    let separator = style.separator.width;
+    let floor = style.separator.extra - separator * 0.5;
+    let fraction_of = |tree: &Tree<Tab>, node: NodeIndex| match &tree[node] {
+        Node::Horizontal(split) | Node::Vertical(split) => Some(split.fraction),
+        _ => None,
+    };
+    // A tree that has changed shape has no history to compare against, and
+    // re-docking is not a drag: take this pass to write one down.
+    if seen.len() != tree.len() {
+        *seen = (0..tree.len())
+            .map(|index| fraction_of(tree, NodeIndex(index)).unwrap_or(f32::NAN))
+            .collect();
+        return;
+    }
+    let mins = min_widths(tree, floor, style.tab_bar.height, separator);
+    let was = seen.clone();
+    for (index, was) in was.iter().enumerate() {
+        let node = NodeIndex(index);
+        let (left, right) = (node.left(), node.right());
+        let Some(fraction) = fraction_of(tree, node) else {
+            continue;
+        };
+        // Widths, so only the splits that divide any. A pane's height keeps
+        // egui_dock's own limit, which bounds the two panes either side of the
+        // separator being dragged and no others.
+        // Not the fold's own: it rewrites those every frame to hold a rail at a
+        // rail's width, which is below every floor here by construction, and a
+        // drag on one of them is read (and held) in [`Folds::absorb`] instead.
+        let owned = holds.get(index).is_some_and(Hold::held);
+        let moved = (fraction - was).abs() > 1e-6;
+        let along = tree[node].rect().map(|rect| match tree[node].is_horizontal() {
+            true => rect.width(),
+            false => rect.height(),
+        });
+        // Moved with nobody touching it: egui_dock re-clamps every separator's
+        // fraction on every frame, dragged or not, to keep `separator.extra`
+        // points of pane on either side — so a window narrow enough for that to
+        // bite walks the layout toward 50/50 by itself, a pane at a time, and
+        // what the user dialled is gone for good. The layout it clamped was
+        // already drawn (the clamp lands after `compute_rect_sizes`), so putting
+        // the fraction back before the next one costs nothing at all.
+        if !owned && moved && !gesturing {
+            let range = along.unwrap_or(0.0);
+            if (fraction - unmoved(*was, range, style.separator.extra)).abs() < 1e-6 {
+                set_fraction(tree, node, *was);
+                continue;
+            }
+        }
+        let dragged = !owned && moved && gesturing;
+        if dragged && tree[node].is_horizontal() && right.0 < tree.len() {
+            if let Some(size) = along {
+                let (before, after) = (mins[left.0], mins[right.0]);
+                // Room for both, or there is nothing to hold either of them to:
+                // a window too narrow for the panes it holds is not a drag's
+                // doing, and refusing to move at all would be worse.
+                if before + separator + after <= size && size > 0.0 {
+                    let low = (before + separator * 0.5) / size;
+                    let high = 1.0 - (after + separator * 0.5) / size;
+                    set_fraction(tree, node, fraction.clamp(low.min(high), high.max(low)));
+                }
+            }
+        }
+        // Left where it was while the fold owns the split, so that the fraction
+        // the fold hands BACK on the way out reads as the one the user dialled
+        // rather than as a drag: what is in the tree meanwhile is a rail's, and
+        // comparing against that would take every unfold for a gesture.
+        if !owned {
+            seen[index] = fraction_of(tree, node).unwrap_or(f32::NAN);
+        }
+    }
+}
+
+/// A dragged fraction held to what the panes on either side of the split need —
+/// the same sum [`hold_floors`] holds the fold's own splits to, for the ones whose
+/// drag arrives as a rendered fraction instead ([`Folds::absorb`]).
+fn floored(
+    tree: &Tree<Tab>,
+    node: NodeIndex,
+    fraction: f32,
+    style: &egui_dock::Style,
+) -> f32 {
+    let separator = style.separator.width;
+    let floor = style.separator.extra - separator * 0.5;
+    let (left, right) = (node.left(), node.right());
+    let Some(rect) = tree[node].rect() else {
+        return fraction;
+    };
+    if right.0 >= tree.len() || rect.width() <= 0.0 {
+        return fraction;
+    }
+    let mins = min_widths(tree, floor, style.tab_bar.height, separator);
+    let (size, before, after) = (rect.width(), mins[left.0], mins[right.0]);
+    if before + separator + after > size {
+        return fraction;
+    }
+    let low = (before + separator * 0.5) / size;
+    let high = 1.0 - (after + separator * 0.5) / size;
+    fraction.clamp(low.min(high), high.max(low))
 }
 
 /// The fraction a split comes back off the tree with when nobody dragged its
@@ -1788,10 +1964,19 @@ mod tests {
         dock
     }
 
+    /// The dock chrome as `theme::dock_style` sets it, in the numbers that
+    /// matter here: a tab bar's height, a separator's width, and the floor a pane
+    /// can be dragged to.
+    ///
+    /// The floor especially. egui_dock's own default is 175pt, which the app
+    /// replaces (`theme::min_pane`) — and leaving the default here means every
+    /// test measures drags against a limit the editor does not have, in a module
+    /// whose whole subject is which fraction ends up in which split.
     fn style() -> egui_dock::Style {
         let mut style = egui_dock::Style::from_egui(&egui::Style::default());
         style.tab_bar.height = 26.0;
         style.separator.width = 4.0;
+        style.separator.extra = 4.0 * 26.0;
         style
     }
 

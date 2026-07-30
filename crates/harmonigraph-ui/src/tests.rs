@@ -2352,6 +2352,92 @@ fn both_handles_beside_a_rail_resize_the_panes_around_it_in_the_default_layout()
     }
 }
 
+/// No pane is dragged below its floor, wherever it sits in the tree.
+///
+/// egui_dock's own limit holds apart the two children of whichever split is being
+/// dragged, and nothing deeper in either of them: dragging the settings boundary
+/// outward used to leave the picture pair at one pane's floor with the two panes
+/// inside it sharing that between them, 71 points and 27. A rail is exempt, being
+/// what a pane folds to.
+#[test]
+fn no_pane_is_dragged_below_its_floor_wherever_it_sits() {
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    let floor = style.separator.extra - style.separator.width * 0.5;
+    let panes = [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
+    for fold in [None, Some(panes::Tab::Spectral)] {
+        for (grab, delta) in [
+            (panes::Tab::Spectral, 900.0f32),
+            (panes::Tab::Tuning, 900.0),
+            (panes::Tab::Tuning, -900.0),
+        ] {
+            let mut h = DockHarness::new();
+            let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+            h.settle(&mut state);
+            if let Some(tab) = fold {
+                let _ = h.collapse_click(&mut state, tab);
+                let _ = h.settle_folds(&mut state);
+            }
+            // The separator on the left of `grab`, dragged past every floor there
+            // is — egui_dock's clamp and ours both stop it somewhere.
+            let rect = pane_rect(&state, grab);
+            let at = egui::pos2(rect.left() - style.separator.width * 0.5, rect.center().y);
+            h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+            h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+            let target = at + egui::vec2(delta, 0.0);
+            h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+            h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+            h.frame(&mut state, vec![press(target, false)]);
+            let _ = h.settle_folds(&mut state);
+
+            let what = format!("{fold:?} folded, {grab:?} boundary, {delta:+}");
+            for tab in panes {
+                let width = pane_width(&state, tab);
+                if collapsed(&state, tab) {
+                    assert!(
+                        (width - style.tab_bar.height).abs() < 1.0,
+                        "{what}: {tab:?} is a rail and should be a tab bar wide, and is {width}",
+                    );
+                    continue;
+                }
+                assert!(
+                    width >= floor - 1.0,
+                    "{what}: {tab:?} came out {width} wide, under the {floor} floor",
+                );
+            }
+        }
+    }
+}
+
+/// A window dragged narrow enough to squeeze a pane past its floor does NOT
+/// re-dial the layout: the floor holds a drag, and a resize is not one.
+///
+/// The distinction is what keeps the floor from eating the layout. A resize moves
+/// no fraction — that is what "the layout is the fractions" means — so the widths
+/// it derives can dip under the floor and come back out of it, and the proportions
+/// the user dialled are still there when the window returns.
+#[test]
+fn a_window_narrow_enough_to_squeeze_a_pane_does_not_re_dial_the_layout() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    let panes = [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
+    let before = panes.map(|tab| pane_width(&state, tab));
+
+    // Narrow enough that the analyzer cannot have its floor, and back again.
+    let wide = h.screen.width();
+    h.screen.max.x = h.screen.min.x + 420.0;
+    h.settle(&mut state);
+    let squeezed = pane_width(&state, panes::Tab::Spectral);
+    assert!(squeezed < 102.0, "the point of the test is a pane under its floor, not {squeezed}");
+    h.screen.max.x = h.screen.min.x + wide;
+    h.settle(&mut state);
+
+    for (tab, was) in panes.iter().zip(before) {
+        let now = pane_width(&state, *tab);
+        assert!((now - was).abs() < 1.5, "{tab:?} came back {now} wide, from {was}");
+    }
+}
+
 /// Frameless mode hides every tab bar, so a folded pane there is squeezed to
 /// NOTHING rather than to a rail — no rail, no name, no arrow. The separator it
 /// left behind is still on screen, and still has a pane on either side of it, so

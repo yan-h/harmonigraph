@@ -232,6 +232,17 @@ pub(crate) fn tab_bar_height(scale: f32) -> f32 {
     TAB_BAR_HEIGHT * scale
 }
 
+/// The narrowest (or shortest) a pane may be dragged: four tab bars, which is
+/// about where a settings pane still has room for a label and a value beside it,
+/// and where a picture is still a picture.
+///
+/// Not the width a FOLD leaves behind (that is one tab bar): a pane dragged this
+/// small is still a pane, drawing its body, with none of a rail's chrome. Folding
+/// is the way to get it out of the way, and it is a click on the arrow.
+pub(crate) fn min_pane(scale: f32) -> f32 {
+    4.0 * tab_bar_height(scale)
+}
+
 // ---- Fonts -----------------------------------------------------------------
 
 /// The named family headings resolve to (Atkinson Bold first).
@@ -559,7 +570,7 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     // fractions a fold hands back on the way out are exactly that. A tab bar
     // clears every fold's own fractions with a couple of points to spare, a
     // rail being one tab bar wide by construction.
-    style.separator.extra = tab_bar_height(scale);
+    style.separator.extra = min_pane(scale);
     style.separator.color_idle = well();
     style.separator.color_hovered = accent_edge();
     style.separator.color_dragged = accent();
