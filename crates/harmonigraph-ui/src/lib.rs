@@ -175,6 +175,11 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // frame still lays out at the size the window IS, so a fold shows one
     // frame of its neighbour holding the space before the window closes over
     // it.
+    // What the pointer is doing, before the fold reads the fractions last frame
+    // left behind: a fraction that moved with no gesture behind it is egui_dock's
+    // own per-frame clamp, not a resize the layout should follow (see
+    // `fold::hold_floors`).
+    state.dial.watch_pointer(ui.input(|i| i.pointer.any_down() || i.pointer.any_released()));
     let area = fold::area_width(ui, &dock_style);
     state.window_width_change +=
         state.folds.apply(&mut dock, &dock_style, area, state.min_window_width, &mut state.dial);
@@ -194,8 +199,9 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         .show_inside(ui, &mut panes::Viewer { state, params, now });
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
     // After it: the rails the folds left behind, which only this frame's
-    // rectangles can place.
-    fold::paint(ui, &mut dock, &dock_style);
+    // rectangles can place — and the handles that pull them back open, which
+    // land on `dial` for the next frame to price (see `fold::grab`).
+    fold::paint(ui, &mut dock, &dock_style, &mut state.dial);
     state.dock = dock;
     // Deferred from the Panel pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.

@@ -232,6 +232,17 @@ pub(crate) fn tab_bar_height(scale: f32) -> f32 {
     TAB_BAR_HEIGHT * scale
 }
 
+/// The narrowest (or shortest) a pane may be dragged: four tab bars, which is
+/// about where a settings pane still has room for a label and a value beside it,
+/// and where a picture is still a picture.
+///
+/// Not the width a FOLD leaves behind (that is one tab bar): a pane dragged this
+/// small is still a pane, drawing its body, with none of a rail's chrome. Folding
+/// is the way to get it out of the way, and it is a click on the arrow.
+pub(crate) fn min_pane(scale: f32) -> f32 {
+    4.0 * tab_bar_height(scale)
+}
+
 // ---- Fonts -----------------------------------------------------------------
 
 /// The named family headings resolve to (Atkinson Bold first).
@@ -547,6 +558,19 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     // it is a reach, not a drawn thing, and a narrower band is if anything the
     // case for keeping the reach where it was.
     style.separator.extra_interact_width = 6.0;
+    // The narrowest a pane may be dragged, which is its own tab bar: the width
+    // a fold leaves behind, so a pane can be dragged down to the rail it would
+    // fold to and no further.
+    //
+    // egui_dock's own default is 175pt, and it applies this as a clamp on EVERY
+    // separator's fraction on EVERY frame, dragged or not — so in a window
+    // narrow enough for 175 to bite (the plugin's floor is 400) it does not
+    // merely refuse a drag, it walks the layout toward 50/50 by itself, and it
+    // mangles any fraction dialled for a window that has not arrived yet: the
+    // fractions a fold hands back on the way out are exactly that. A tab bar
+    // clears every fold's own fractions with a couple of points to spare, a
+    // rail being one tab bar wide by construction.
+    style.separator.extra = min_pane(scale);
     style.separator.color_idle = well();
     style.separator.color_hovered = accent_edge();
     style.separator.color_dragged = accent();
