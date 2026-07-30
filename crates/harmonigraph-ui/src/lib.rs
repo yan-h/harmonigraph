@@ -161,11 +161,6 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     let mut dock_style = theme::dock_style(ui.style(), ui_scale);
     if state.view.frameless {
         dock_style.tab_bar.height = 0.0;
-        // With it goes the floor a pane can be dragged to, which is the size a
-        // fold leaves behind and is therefore nothing here as well: a pane
-        // dragged to nothing in frameless mode has reached its fold, and folding
-        // it moves nothing (see `theme::drag_floor`).
-        dock_style.separator.extra = theme::drag_floor(0.0, dock_style.separator.width);
     }
 
     // DockState has to be moved out while panes borrow the rest of `state`.
@@ -202,10 +197,6 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // rectangles can place — and the handles that pull them back open, which
     // land on `dial` for the next frame to price (see `fold::grab`).
     fold::paint(ui, &mut dock, &dock_style, &mut state.dial);
-    // And a pane dragged down to the size a fold would leave it at, which folds
-    // when the drag is let go of: the two sizes are the same number, so the dock
-    // has no state where a pane is as narrow as a rail without being one.
-    fold::collapse_at_floor(ui, &mut dock, &dock_style, &mut state.dial);
     state.dock = dock;
     // Deferred from the Panel pane's button: replacing the dock BEFORE the
     // write-back above would be silently undone.
