@@ -2229,6 +2229,183 @@ fn collapsing_a_pane_banks_the_width_it_gave_up() {
     assert_eq!(state.take_window_width_change(), None, "and asks exactly once");
 }
 
+/// The separator beside a rail is the folded pane's own resize handle: pull it
+/// out and the pane comes back at the width it was pulled to.
+///
+/// Driven through the real dock because that is where the handle has to WIN the
+/// pointer. egui_dock draws a separator of its own in exactly that place and
+/// keeps it live, and what puts this one over it is that `fold::paint` runs
+/// after the dock — so a handle that worked against the tree and lost the mouse
+/// would leave `fold`'s own tests green.
+#[test]
+fn pulling_the_separator_beside_a_rail_brings_the_pane_back() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
+    let path = state.dock.find_tab(&panes::Tab::Spectral).expect("the analyzer is docked");
+    assert!(state.dock[path.surface][path.node].is_collapsed(), "the analyzer should be a rail");
+    let rail = state.dock[path.surface][path.node].rect().expect("the rail is laid out");
+    let pair = path.node.parent().expect("the analyzer shares a split with the lattice");
+    let split = state.dock[path.surface][pair].rect().expect("the split is laid out");
+    let separator = theme::dock_style(&egui::Style::default(), 1.0).separator.width;
+
+    // The handle on the rail's OPEN side, which is its left: the analyzer is the
+    // right-hand child of the split it shares with the lattice.
+    let grab = egui::pos2(rail.left() - separator * 0.5, rail.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    // Pulled to a point 240 in from the far side of the split, which is the side
+    // the width is counted from.
+    let target = egui::pos2(split.right() - 240.0, grab.y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    assert!(
+        state.dock[path.surface][path.node].is_collapsed(),
+        "the pane opens when the pull is let go of, not while it is in hand",
+    );
+    h.frame(&mut state, vec![press(target, false)]);
+    let _ = h.settle_folds(&mut state);
+
+    assert!(
+        !state.dock[path.surface][path.node].is_collapsed(),
+        "letting the pull go should have brought the pane back",
+    );
+    let width = state.dock[path.surface][path.node].rect().expect("laid out").width();
+    assert!(
+        (width - 240.0).abs() < 6.0,
+        "the analyzer should come back at the 240 it was pulled to, and is {width}",
+    );
+}
+
+/// The same handle on the other side of a rail: the lattice folds to the LEFT
+/// edge of the split it shares, so its handle is the separator on the rail's
+/// right and the pull runs outward the other way. Worth its own test because the
+/// width is counted from the split's far edge, which is the edge that changes.
+#[test]
+fn a_rail_on_the_left_is_pulled_open_the_other_way() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    let _ = h.collapse_click(&mut state, panes::Tab::Lattice);
+    let path = state.dock.find_tab(&panes::Tab::Lattice).expect("the lattice is docked");
+    assert!(state.dock[path.surface][path.node].is_collapsed(), "the lattice should be a rail");
+    let rail = state.dock[path.surface][path.node].rect().expect("the rail is laid out");
+    let pair = path.node.parent().expect("the lattice shares a split with the analyzer");
+    let split = state.dock[path.surface][pair].rect().expect("the split is laid out");
+    let separator = theme::dock_style(&egui::Style::default(), 1.0).separator.width;
+
+    let grab = egui::pos2(rail.right() + separator * 0.5, rail.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    // Inside the split, which is what a pull can ask for: the window shrank when
+    // the lattice folded, so the pair is not much wider than this.
+    let target = egui::pos2(split.left() + 150.0, grab.y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+    let _ = h.settle_folds(&mut state);
+
+    assert!(
+        !state.dock[path.surface][path.node].is_collapsed(),
+        "letting the pull go should have brought the lattice back",
+    );
+    let width = state.dock[path.surface][path.node].rect().expect("laid out").width();
+    assert!(
+        (width - 150.0).abs() < 6.0,
+        "the lattice should come back at the 150 it was pulled to, and is {width}",
+    );
+}
+
+/// A pull aimed past the far side of the split asks for the most the split can
+/// be asked for and no more: a pointer that has run out of split has run out of
+/// gesture, and the pane comes back at that width rather than at wherever the
+/// pointer ended up.
+#[test]
+fn a_pull_past_the_far_side_of_the_split_asks_for_no_more_than_the_split_holds() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    let _ = h.collapse_click(&mut state, panes::Tab::Lattice);
+    let path = state.dock.find_tab(&panes::Tab::Lattice).expect("the lattice is docked");
+    let rail = state.dock[path.surface][path.node].rect().expect("the rail is laid out");
+    let pair = path.node.parent().expect("the lattice shares a split with the analyzer");
+    let split = state.dock[path.surface][pair].rect().expect("the split is laid out");
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+
+    let grab = egui::pos2(rail.right() + style.separator.width * 0.5, rail.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    let target = egui::pos2(split.right() + 400.0, grab.y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+    let _ = h.settle_folds(&mut state);
+
+    assert!(
+        !state.dock[path.surface][path.node].is_collapsed(),
+        "the lattice should be back on screen",
+    );
+    // The split as it stood while folded, less a rail for the pane beside it.
+    let cap = split.width() - style.separator.width - style.tab_bar.height;
+    let width = state.dock[path.surface][path.node].rect().expect("laid out").width();
+    assert!(
+        (width - cap).abs() < 1.5,
+        "the lattice should come back at the {cap} the pull could ask for, and is {width}",
+    );
+}
+
+/// Unfolding in a window narrow enough for egui_dock's separator clamp to bite
+/// gives the layout back whole.
+///
+/// The fractions a fold hands back are dialled for a window that has not arrived
+/// yet — the ask goes out on the same frame — and egui_dock re-clamps every
+/// separator on every frame, so with its 175pt default those fractions were
+/// walked toward 50/50 in the one frame between handing them back and the window
+/// widening to hold them. The layout came back subtly rearranged, once, for good
+/// (see `separator.extra` in `theme::dock_style`).
+#[test]
+fn unfolding_in_a_narrow_window_gives_the_layout_back_whole() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    let panes = [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
+    let of = |state: &SharedState, tab: panes::Tab| {
+        let path = state.dock.find_tab(&tab).expect("docked");
+        state.dock[path.surface][path.node].rect().expect("laid out").width()
+    };
+    let before = panes.map(|tab| of(&state, tab));
+
+    // The lattice is the widest pane, so folding it takes the window well below
+    // the 175pt-per-pane the clamp used to insist on.
+    let _ = h.collapse_click(&mut state, panes::Tab::Lattice);
+    let _ = h.collapse_click(&mut state, panes::Tab::Lattice);
+
+    for (tab, was) in panes.iter().zip(before) {
+        let now = of(&state, *tab);
+        assert!((now - was).abs() < 1.5, "{tab:?} came back {now} wide, from {was}");
+    }
+}
+
+/// A click on that same handle is not a pull: the pane stays folded, or every
+/// stray press on a separator would open whatever is beside it.
+#[test]
+fn a_click_on_the_handle_beside_a_rail_leaves_the_pane_folded() {
+    let mut h = DockHarness::new();
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    h.settle(&mut state);
+    let _ = h.collapse_click(&mut state, panes::Tab::Spectral);
+    let path = state.dock.find_tab(&panes::Tab::Spectral).expect("the analyzer is docked");
+    let rail = state.dock[path.surface][path.node].rect().expect("the rail is laid out");
+    let separator = theme::dock_style(&egui::Style::default(), 1.0).separator.width;
+    let at = egui::pos2(rail.left() - separator * 0.5, rail.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(&mut state, vec![press(at, false)]);
+    let _ = h.settle_folds(&mut state);
+    assert!(
+        state.dock[path.surface][path.node].is_collapsed(),
+        "a click that went nowhere should have left the rail alone",
+    );
+}
+
 /// Put the Notes/Console leaf back on screen, which is what the two wheel
 /// harnesses below are written against: they read the settings leaf as the box
 /// from the tab bar down to the 0.55 split, and the default layout opens that
