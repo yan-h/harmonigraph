@@ -3664,23 +3664,37 @@ fn the_ui_scale_leaves_the_picture_alone() {
     }
 }
 
-/// A tab bar stops shrinking at the collapse arrow it has to hold.
+/// A tab bar tracks the scale the whole way down, and still leaves room for the
+/// arrow that unfolds a pane.
 ///
-/// egui_dock draws that button at a flat 24 points — from neither style — so it
-/// is the one piece of chrome the scale cannot reach. A bar shorter than it
-/// would clip the only control that brings a folded pane back.
+/// The bar carries egui_dock's collapse button, and the tempting reading of
+/// that button's `TAB_COLLAPSE_BUTTON_SIZE` — 24 points — is a floor the bar
+/// must not go under. It is not one: 24 is the button's WIDTH, its rect is as
+/// tall as the bar it sits in, and what has to fit vertically is the 10-point
+/// arrow centred in it. Flooring the bar at 24 instead left every tab bar in
+/// the editor full size below about 0.9, which is what the scale is for.
 #[test]
-fn a_tab_bar_never_shrinks_under_its_collapse_button() {
-    for scale in [1.5f32, 1.0, 0.9, 0.8, 0.7] {
+fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
+    /// egui_dock's `TAB_COLLAPSE_ARROW_SIZE`: the glyph, not the button.
+    const ARROW_GLYPH: f32 = 10.0;
+
+    let mut previous = 0.0;
+    for scale in [0.7f32, 0.8, 0.9, 1.0, 1.5] {
         let height = crate::theme::tab_bar_height(scale);
         assert!(
-            height >= 24.0,
-            "a tab bar {height} points tall at scale {scale} cannot hold the collapse arrow",
+            height > previous,
+            "a tab bar {height} points tall at scale {scale} did not move from {previous}",
+        );
+        previous = height;
+        assert!(
+            height > ARROW_GLYPH,
+            "a tab bar {height} points tall at scale {scale} clips the collapse arrow",
         );
     }
-    // It does scale, above the floor — a floor that swallowed the whole range
-    // would be a tab bar that simply never moves.
-    assert!(crate::theme::tab_bar_height(1.5) > crate::theme::tab_bar_height(1.0));
+    // Proportional, so the bar keeps its share of the chrome rather than
+    // levelling off somewhere inside the range.
+    let ratio = crate::theme::tab_bar_height(0.7) / crate::theme::tab_bar_height(1.0);
+    assert!((ratio - 0.7).abs() < 1.0e-5, "the bar scaled by {ratio} rather than by 0.7");
 }
 
 /// A blob saved before the control existed loads at the design size. `f32`'s
@@ -3728,3 +3742,4 @@ fn an_impossible_ui_scale_is_clamped() {
         );
     }
 }
+

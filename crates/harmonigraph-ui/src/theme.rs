@@ -117,7 +117,7 @@ pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 /// bar. Anything drawn OVER the dock keeps clear of it.
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
-/// [`tab_bar_height`], which has a floor this does not.
+/// [`tab_bar_height`].
 pub(crate) const TAB_BAR_HEIGHT: f32 = 26.0;
 
 // ---- Chrome scale ----------------------------------------------------------
@@ -214,18 +214,22 @@ pub(crate) fn pane_inner_margin(scale: f32) -> f32 {
     PANE_INNER_MARGIN * scale
 }
 
-/// [`TAB_BAR_HEIGHT`] at this scale, but never under the collapse arrow it has
-/// to hold.
+/// [`TAB_BAR_HEIGHT`] at this scale.
 ///
-/// egui_dock draws that button at a private `TAB_COLLAPSE_BUTTON_SIZE` of 24
-/// points flat — it comes from neither the egui style nor the dock style, so
-/// it is the one piece of chrome here that does not scale. A bar shorter than
-/// it would clip the only control that brings a folded pane back, which is the
-/// worst thing on the bar to lose. So the scale runs out at 24 and the tab bar
-/// stops shrinking, a couple of notches below 1.0.
+/// No floor, and the collapse button is the reason to say so: egui_dock's
+/// `TAB_COLLAPSE_BUTTON_SIZE` of 24 points is its WIDTH alone. The button's
+/// rect runs `tabbar_outer_rect.left_top()` to `left_bottom() + (24, 0)`, so it
+/// is as tall as whatever bar it sits in and only ever 24 wide, and the arrow
+/// centred in it is a 10-point glyph. A bar shorter than 24 therefore clips
+/// nothing — it takes the button's height down with it, which is the point.
+///
+/// What that leaves unscaled is the button's 24-point WIDTH and its 10-point
+/// arrow, both private consts reachable only by forking egui_dock. So the
+/// button grows squatter as the scale comes down rather than shrinking with
+/// everything else. `fold`'s [`ARROW_BUTTON`](crate::fold) mirrors the same 24
+/// deliberately, and has to keep mirroring it.
 pub(crate) fn tab_bar_height(scale: f32) -> f32 {
-    const COLLAPSE_BUTTON: f32 = 24.0;
-    (TAB_BAR_HEIGHT * scale).max(COLLAPSE_BUTTON)
+    TAB_BAR_HEIGHT * scale
 }
 
 // ---- Fonts -----------------------------------------------------------------
