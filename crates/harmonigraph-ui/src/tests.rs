@@ -2218,7 +2218,7 @@ fn collapsing_a_pane_banks_the_width_it_gave_up() {
     h.frame(&mut state, vec![]);
 
     // A rail's worth of the pane stays behind; the rest comes off the window.
-    let rail = theme::dock_style(&egui::Style::default()).tab_bar.height;
+    let rail = theme::dock_style(&egui::Style::default(), 1.0).tab_bar.height;
     let change = state.take_window_width_change().expect("the fold asks for a narrower window");
     assert!(
         (change + (pane - rail)).abs() < 1.0,
@@ -2958,7 +2958,7 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     frame(&mut state);
     let output = frame(&mut state);
 
-    let area = perf_overlay_area(&state, screen);
+    let area = perf_overlay_area(&state, screen, 1.0);
     assert_ne!(area, screen, "the overlay should have found the analyzer pane");
 
     // ...and the HUD really lands in that pane's top-right corner.
@@ -3035,7 +3035,7 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
         panic!("Lattice should live in a leaf");
     };
     assert_eq!(
-        perf_overlay_area(&state, screen),
+        perf_overlay_area(&state, screen, 1.0),
         lattice.viewport,
         "a collapsed analyzer should hand the overlay to the lattice, not to the window",
     );
@@ -3084,7 +3084,7 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
     leaf.collapsed = true;
     frame(&mut state);
     let output = frame(&mut state);
-    let area = perf_overlay_area(&state, screen);
+    let area = perf_overlay_area(&state, screen, 1.0);
     assert_eq!(
         area.min.y,
         screen.min.y + crate::theme::TAB_BAR_HEIGHT,
@@ -3128,7 +3128,7 @@ fn the_perf_overlay_stays_inside_its_pane_at_the_narrowest_window() {
             _ => None,
         })
         .expect("the overlay should paint its backing plate");
-    let area = perf_overlay_area(&state, screen);
+    let area = perf_overlay_area(&state, screen, 1.0);
     assert!(
         area.contains_rect(hud),
         "the HUD ran {:.0}pt past its {:.0}pt pane: {hud:?} in {area:?}",
@@ -3534,3 +3534,212 @@ fn clearing_everything_empties_all_three_accumulations() {
     assert!(state.tracker.roll().is_empty(), "the piano roll survived");
     assert!(state.spectrum.history().is_empty(), "the spectrogram survived");
 }
+
+// ---- The chrome scale ------------------------------------------------------
+
+/// One settings pane drawn at a given [chrome scale](crate::theme::ui_scale),
+/// as the shapes it emitted. The same nesting as
+/// [`settings_pane_at_width`] — the dock's clip outside the pane's content box
+/// — at a fixed width, because here it is the scale that varies.
+fn settings_pane_at_scale(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::ClippedShape> {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.ui_scale = scale;
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    crate::theme::set_ui_scale(&ctx, scale);
+    let margin = crate::theme::pane_inner_margin(scale);
+    let body =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
+        |ui| {
+            let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+            let mut tab = tab;
+            let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
+            egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
+        },
+    );
+    out.shapes
+}
+
+/// Every shape's bottom edge, ignoring the ones that carry no geometry (they
+/// answer with an inverted or infinite rect).
+fn drawn_bottom(shapes: &[egui::epaint::ClippedShape]) -> f32 {
+    shapes
+        .iter()
+        .map(|cs| cs.shape.visual_bounding_rect())
+        .filter(|r| r.is_finite() && r.width() < 1.0e4)
+        .fold(0.0f32, |lowest, r| lowest.max(r.bottom()))
+}
+
+/// The tallest line of type drawn, which is the half of the scale that reads
+/// as "smaller UI" rather than "tighter UI".
+fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
+    shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) => Some(t.galley.size().y),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max)
+}
+
+/// Turning the scale down spends less of the column on the panel — in type and
+/// in the space around it alike, which is what separates this from a font-size
+/// control.
+#[test]
+fn the_ui_scale_shrinks_the_panel_chrome() {
+    for tab in [panes::Tab::Tuning, panes::Tab::Panel, panes::Tab::Nodes] {
+        let (full, small) =
+            (settings_pane_at_scale(tab, 1.0), settings_pane_at_scale(tab, 0.7));
+
+        let (tall, short) = (tallest_text(&full), tallest_text(&small));
+        assert!(tall > 0.0, "{tab:?} drew no text to measure");
+        assert!(short < tall, "{tab:?} type stayed at {tall} points with the scale at 0.7");
+
+        // The column, not just the glyphs in it: a control's height and the
+        // gaps between rows come from the style's spacing, so a pane that only
+        // shrank its type would land well short of the type's own ratio.
+        let (deep, shallow) = (drawn_bottom(&full), drawn_bottom(&small));
+        assert!(
+            shallow < deep * 0.85,
+            "{tab:?} ran to {shallow} points at 0.7 against {deep} at 1.0 — \
+             the spacing is not scaling with the type",
+        );
+    }
+}
+
+/// The scale moves the panel and nothing else: a picture pane handed the same
+/// rect draws the same picture whatever the chrome is doing.
+///
+/// This is what makes the control safe to offer. The lattice, the roll and the
+/// spectrogram measure everything off the pane they land in, so a laptop
+/// dialling its panel down is not quietly composing a different picture — and
+/// the offline renderer, which reaches the same panes through
+/// [`draw_pane`](crate::draw_pane) on a context that is never told a scale,
+/// cannot disagree with what the plugin showed. The determinism test would not
+/// catch it if one did: it renders everything at one scale.
+#[test]
+fn the_ui_scale_leaves_the_picture_alone() {
+    let picture = |scale: f32| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let backend = RecordingBackend::default();
+        // Something to draw: a held voice for the roll and the voice bars, and
+        // an analyzed column for the spectrum.
+        state.tracker.handle_event(harmonigraph_core::NoteEvent {
+            time: 0.5,
+            channel: 0,
+            note: 60,
+            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+        });
+        let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
+        bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
+        state.spectrum.push_history(0.5, &bins);
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        crate::theme::set_ui_scale(&ctx, scale);
+        // A rect the scale cannot move, so what is being compared is the
+        // picture rather than the pane it was given.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), time: Some(1.0), ..Default::default() },
+            |ui| {
+                crate::begin_frame(&mut state, &backend, 1.0);
+                let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(screen));
+                crate::draw_pane(&mut pane, crate::Pane::Spectral, &mut state, 1.0);
+            },
+        );
+        // Debug rather than the shapes themselves: they hold floats and
+        // texture handles and are not `PartialEq`, and a difference anywhere
+        // in one is a difference in the picture.
+        out.shapes.iter().map(|cs| format!("{:?}", cs.shape)).collect::<Vec<_>>()
+    };
+
+    let (design, small) = (picture(1.0), picture(0.7));
+    assert!(!design.is_empty(), "the analyzer drew nothing to compare");
+    assert_eq!(design.len(), small.len(), "the chrome scale changed what the analyzer draws");
+    for (i, (a, b)) in design.iter().zip(&small).enumerate() {
+        assert_eq!(a, b, "shape {i} of the analyzer moved with the chrome scale");
+    }
+}
+
+/// A tab bar tracks the scale the whole way down, and still leaves room for the
+/// arrow that unfolds a pane.
+///
+/// The bar carries egui_dock's collapse button, and the tempting reading of
+/// that button's `TAB_COLLAPSE_BUTTON_SIZE` — 24 points — is a floor the bar
+/// must not go under. It is not one: 24 is the button's WIDTH, its rect is as
+/// tall as the bar it sits in, and what has to fit vertically is the 10-point
+/// arrow centred in it. Flooring the bar at 24 instead left every tab bar in
+/// the editor full size below about 0.9, which is what the scale is for.
+#[test]
+fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
+    /// egui_dock's `TAB_COLLAPSE_ARROW_SIZE`: the glyph, not the button.
+    const ARROW_GLYPH: f32 = 10.0;
+
+    let mut previous = 0.0;
+    for scale in [0.7f32, 0.8, 0.9, 1.0, 1.5] {
+        let height = crate::theme::tab_bar_height(scale);
+        assert!(
+            height > previous,
+            "a tab bar {height} points tall at scale {scale} did not move from {previous}",
+        );
+        previous = height;
+        assert!(
+            height > ARROW_GLYPH,
+            "a tab bar {height} points tall at scale {scale} clips the collapse arrow",
+        );
+    }
+    // Proportional, so the bar keeps its share of the chrome rather than
+    // levelling off somewhere inside the range.
+    let ratio = crate::theme::tab_bar_height(0.7) / crate::theme::tab_bar_height(1.0);
+    assert!((ratio - 0.7).abs() < 1.0e-5, "the bar scaled by {ratio} rather than by 0.7");
+}
+
+/// A blob saved before the control existed loads at the design size. `f32`'s
+/// own serde default is 0.0 — a scale of nothing, and every one of those
+/// projects.
+#[test]
+fn a_blob_without_a_ui_scale_loads_at_the_design_size() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.ui_scale = 0.75;
+    let saved = state.save_persist();
+    let mut back = SharedState::new(TextureFormat::Bgra8Unorm);
+    back.load_persist(&saved);
+    assert_eq!(back.ui_scale, 0.75, "the scale did not round-trip");
+
+    // The same blob with the field taken back out, which is what every project
+    // saved before this looks like.
+    let stripped = saved
+        .split(",ui_scale:")
+        .next()
+        .expect("the blob names the field")
+        .to_owned()
+        + ")";
+    let mut older = SharedState::new(TextureFormat::Bgra8Unorm);
+    older.load_persist(&stripped);
+    assert_eq!(older.ui_scale, 1.0, "a blob with no scale did not load at the design size");
+}
+
+/// An out-of-range scale — only a hand-edited blob can produce one — is
+/// clamped rather than drawn at.
+#[test]
+fn an_impossible_ui_scale_is_clamped() {
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    // A nonsense value falls back to the design size rather than to the end of
+    // the range it points at: an infinity is not a request for the largest
+    // chrome available, it is a blob that has lost the number.
+    for (asked, expected) in
+        [(0.01f32, 0.7f32), (99.0, 1.5), (f32::NAN, 1.0), (f32::INFINITY, 1.0)]
+    {
+        crate::theme::set_ui_scale(&ctx, asked);
+        assert_eq!(
+            crate::theme::ui_scale(&ctx),
+            expected,
+            "a scale of {asked} was taken at face value",
+        );
+    }
+}
+

@@ -720,8 +720,13 @@ pub(crate) fn draw_overlay(
 
     let dim = egui::Color32::from_gray(0x9A);
     let bright = egui::Color32::from_gray(0xE6);
-    let mono = egui::FontId::monospace(11.0);
-    let head_font = egui::FontId::monospace(12.0);
+    // Chrome, so it follows the chrome scale — a HUD left at full size over a
+    // panel dialled down would be the largest type in the editor. It sits over
+    // the picture but is not part of it: the offline renderer never reaches
+    // here, so nothing recorded moves with this.
+    let scale = crate::theme::ui_scale(ctx);
+    let mono = egui::FontId::monospace(11.0 * scale);
+    let head_font = egui::FontId::monospace(12.0 * scale);
 
     let rows = overlay_rows(perf, detail);
 
@@ -752,7 +757,7 @@ pub(crate) fn draw_overlay(
     // a hardcoded width: a fixed seven characters fits until a row is called
     // "lattice gpu" — eleven characters, with the value column starting
     // underneath it. Measuring cannot drift out of step with the rows.
-    const COL_GAP: f32 = 10.0;
+    let col_gap = 10.0 * scale;
     // Between the labels and the means: the peak answers a different question
     // from the cost beside it, and reading it as a second opinion on that cost
     // is the misreading worth designing against.
@@ -801,14 +806,14 @@ pub(crate) fn draw_overlay(
         .fold(0.0f32, f32::max);
     // Everything right of the labels: whichever of the two number columns
     // together and the widest spanning row claims more.
-    let nums_x = label_col + COL_GAP;
-    let mean_right = nums_x + (mean_col + COL_GAP + peak_col).max(spanned) - peak_col - COL_GAP;
-    let peak_right = nums_x + (mean_col + COL_GAP + peak_col).max(spanned);
+    let nums_x = label_col + col_gap;
+    let mean_right = nums_x + (mean_col + col_gap + peak_col).max(spanned) - peak_col - col_gap;
+    let peak_right = nums_x + (mean_col + col_gap + peak_col).max(spanned);
 
     let mut lines: Vec<Vec<(f32, std::sync::Arc<egui::Galley>)>> = Vec::new();
     lines.push(vec![
         (0.0, head_fps.clone()),
-        (head_fps.rect.width() + 4.0, head_state),
+        (head_fps.rect.width() + 4.0 * scale, head_state),
     ]);
     lines.push(vec![
         (mean_right - head_mean.rect.width(), head_mean),
@@ -848,7 +853,7 @@ pub(crate) fn draw_overlay(
     });
     lines.push(vec![(0.0, tag)]);
 
-    const ROW_GAP: f32 = 1.0;
+    let row_gap = 1.0 * scale;
     let width = lines
         .iter()
         .map(|parts| parts.iter().map(|(x, g)| x + g.rect.width()).fold(0.0f32, f32::max))
@@ -857,9 +862,9 @@ pub(crate) fn draw_overlay(
         .iter()
         .map(|parts| parts.iter().map(|(_, g)| g.rect.height()).fold(0.0f32, f32::max))
         .sum::<f32>()
-        + ROW_GAP * lines.len().saturating_sub(1) as f32;
+        + row_gap * lines.len().saturating_sub(1) as f32;
 
-    let margin = egui::vec2(8.0, 6.0);
+    let margin = egui::vec2(8.0, 6.0) * scale;
     // Top-RIGHT of `area`, and clamped to it so a pane too narrow to hold the
     // overlay shows its left edge rather than pushing the numbers off screen.
     //
@@ -882,13 +887,14 @@ pub(crate) fn draw_overlay(
     // At a window that narrow no arrangement of it is readable, and the numbers
     // are worth less than the controls underneath them.
     let size = egui::vec2(width, height) + margin * 2.0;
-    let size = egui::vec2(size.x.min((area.width() - OVERLAY_INSET * 2.0).max(0.0)), size.y);
+    let inset = OVERLAY_INSET * scale;
+    let size = egui::vec2(size.x.min((area.width() - inset * 2.0).max(0.0)), size.y);
     let origin = egui::pos2(
-        (area.right() - OVERLAY_INSET - size.x).max(area.left()),
-        area.top() + OVERLAY_INSET,
+        (area.right() - inset - size.x).max(area.left()),
+        area.top() + inset,
     );
     let plate = egui::Rect::from_min_size(origin, size);
-    painter.rect_filled(plate, 4.0, egui::Color32::from_black_alpha(0xC0));
+    painter.rect_filled(plate, 4.0 * scale, egui::Color32::from_black_alpha(0xC0));
     // The rows are laid out at their own width, which the clamp above does not
     // change, so the plate is what holds them in.
     let painter = painter.with_clip_rect(plate);
@@ -900,7 +906,7 @@ pub(crate) fn draw_overlay(
         for (dx, galley) in parts {
             painter.galley(egui::pos2(origin.x + margin.x + dx, y), galley, bright);
         }
-        y += row_height + ROW_GAP;
+        y += row_height + row_gap;
     }
 }
 

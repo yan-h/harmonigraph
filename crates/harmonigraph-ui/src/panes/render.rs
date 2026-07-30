@@ -58,13 +58,14 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     // that would not scroll. Now a squeezed pane overflows instead, and the
     // controls stay reachable by scrolling rather than the preview shrinking
     // to a sliver.
-    let size = egui::vec2(avail.x, avail.y.max(PREVIEW_MIN_HEIGHT));
+    let scale = crate::theme::ui_scale(ui.ctx());
+    let size = egui::vec2(avail.x, avail.y.max(PREVIEW_MIN_HEIGHT * scale));
     let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
     let aspect = frame.aspect_w.max(1) as f32 / frame.aspect_h.max(1) as f32;
     // Inset before letterboxing: `letterbox` fits the box exactly on one axis,
     // so without this the frame's boundary chrome would have nowhere to go on
     // two sides. Shrinks on a small preview rather than eating it.
-    let pad = FRAME_CHROME_PAD.min(size.min_elem() * 0.15);
+    let pad = (FRAME_CHROME_PAD * scale).min(size.min_elem() * 0.15);
     let box_rect = letterbox(outer.shrink(pad), aspect);
     // Compose with the SAME Layout the offline renderer resolves.
     let layout = Layout::split(frame.lattice, frame.split);

@@ -119,6 +119,19 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     begin_frame(state, params, now);
     end_stranded_drag(ui.ctx());
 
+    // The chrome scale, before anything lays out at the old one. The shell
+    // built `ui` from the style as it stood on the way in, so a scale that has
+    // just moved leaves this frame's copy a size behind — and the frame it
+    // would be behind on is the one being dragged, where every intermediate
+    // size shows. `reset_style` takes the rebuilt one from the context, which
+    // `set_ui_scale` has already put there.
+    if theme::set_ui_scale(ui.ctx(), state.ui_scale) {
+        ui.reset_style();
+    }
+    // Read back rather than reused: `set_ui_scale` clamps, and the dock has to
+    // be built at the scale that actually took.
+    let ui_scale = theme::ui_scale(ui.ctx());
+
     // Cleared before the panes run, so a frame with the roll hidden (or the
     // Spectral pane not on screen at all) reports zero notes rather than
     // whatever the last frame that had one reported.
@@ -145,7 +158,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         state.view.frameless = !state.view.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
-    let mut dock_style = theme::dock_style(ui.style());
+    let mut dock_style = theme::dock_style(ui.style(), ui_scale);
     if state.view.frameless {
         dock_style.tab_bar.height = 0.0;
     }
@@ -272,7 +285,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     if state.view.show_perf {
         perf::draw_overlay(
             ui.ctx(),
-            perf_overlay_area(state, ui.max_rect()),
+            perf_overlay_area(state, ui.max_rect(), ui_scale),
             &state.perf,
             state.view.show_perf_detail,
         );
@@ -295,12 +308,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
 ///
 /// `editor` is the last resort, for a dock with neither picture on screen,
 /// and is inset past the tab bar on the same grounds.
-fn perf_overlay_area(state: &SharedState, editor: egui::Rect) -> egui::Rect {
+fn perf_overlay_area(state: &SharedState, editor: egui::Rect, scale: f32) -> egui::Rect {
     pane_body(state, &panes::Tab::Spectral)
         .or_else(|| pane_body(state, &panes::Tab::Lattice))
         .unwrap_or_else(|| {
             let mut area = editor;
-            area.min.y += theme::TAB_BAR_HEIGHT;
+            area.min.y += theme::tab_bar_height(scale);
             area
         })
 }
