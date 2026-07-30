@@ -86,6 +86,18 @@
 //! inverse of the derivation is needed for it: the layout and the thing the
 //! user pointed at are both widths on screen.
 //!
+//! That difference is how a gesture ARRIVES; what it follows from there is the
+//! pointer ([`Grip`]). A drag names a position, so every frame asks the same
+//! question afresh — where is the pointer, and where was it when this boundary
+//! was taken hold of — rather than adding up the steps in between. A sum has no
+//! memory of what a clamp along the way refused, and there are clamps on both
+//! sides of it: this module's own floor, and egui_dock's, which for a leaf is
+//! the same one. So a boundary pushed 300 points past its floor would come away
+//! 300 points from the hand still holding it, and set off again the instant the
+//! pointer turned around. Following the pointer, the overshoot is owed and has
+//! to be paid back before the pane grows, which is what every other resize
+//! handle does.
+//!
 //! Only what is on screen can trade. A rail is a fixed number of points
 //! whichever side of the boundary it sits, and a folded pane is holding the
 //! width it comes back at rather than any width the drag can see — so the drag
@@ -281,7 +293,7 @@ impl Folds {
         // A rail the user pulled open on the frame before this one (see
         // [`grab`]), which is where the width it was pulled to becomes layout.
         let pull = dial.pull.take();
-        let gesturing = dial.gesturing;
+        let (gesturing, pointer) = (dial.gesturing, dial.pointer);
         dial.panes.resize(dock.surfaces_count(), Points::default());
         for index in 0..dock.surfaces_count() {
             let surface = SurfaceIndex(index);
@@ -314,6 +326,9 @@ impl Folds {
             // their fraction in the tree is a rail's.
             if points.at.len() != tree.len() {
                 points.seed(tree, area, separator);
+                // The grip names a split by index, so a tree of another shape is
+                // not the one the gesture took hold of.
+                dial.grip = None;
                 for fold in self.0.iter().filter(|fold| fold.surface == index) {
                     if fold.node >= tree.len() {
                         continue;
@@ -326,11 +341,15 @@ impl Folds {
                     }
                 }
             }
-            // A separator the user dragged lands on a fraction this pass wrote,
-            // so it arrives as a difference from what was written — points
-            // moving across a boundary, which is all a drag ever means.
+            // A separator the user dragged arrives as a fraction that has moved
+            // off the one this pass wrote, and is followed from there by the
+            // pointer — points moving across a boundary, which is all a drag
+            // ever means.
             let (want, fixed) = wants(tree, &holds, &points.at, rail, separator);
-            drags(tree, points, &holds, &want, &fixed, style, gesturing);
+            if gesturing {
+                let gesture = Gesture { surface: index, at: pointer, grip: &mut dial.grip };
+                drags(tree, points, &holds, &want, &fixed, style, gesture);
+            }
             // The pull opens its pane first, so the width it was pulled to is
             // priced against the layout that will hold it.
             let mine = pull.filter(|pull| {
@@ -564,10 +583,55 @@ pub struct Dial {
     /// narrow enough for that clamp to bite reads as a drag every frame and
     /// walks the layout toward 50/50 by itself (see [`drags`]).
     gesturing: bool,
+    /// Where the pointer is, along the axis a horizontal separator moves in.
+    /// What a gesture on a boundary asks for is a POSITION, not a sum of the
+    /// steps it took to get there (see [`Grip`]).
+    pointer: Option<f32>,
+    /// The boundary this gesture has hold of, if it has hold of one.
+    grip: Option<Grip>,
     /// A rail pulled open, waiting for the frame that can price it. Set by
     /// [`paint`], which is where the pull is let go of, and taken by
     /// [`Folds::apply`], which is where a width becomes layout.
     pull: Option<Pull>,
+}
+
+/// A boundary a gesture has hold of: where it stood when the gesture reached it,
+/// and where the pointer was then.
+///
+/// A drag names a position. Once a boundary is held, what it follows is the
+/// pointer's own travel from the grip — never the sum of the steps in between,
+/// which is what every clamp along the way eats a piece of. Dragged past a floor,
+/// the pane stops and the points the drag could not spend are still owed: the
+/// pointer has to come back past the floor before the pane grows again, rather
+/// than the handle setting off the moment the pointer turns around, an overshoot
+/// away from the hand still holding it.
+///
+/// It is also the only way to see a drag egui_dock has stopped answering for. Its
+/// own clamp holds `separator.extra` points of pane either side of the separator
+/// being dragged, which for a leaf is the same floor this holds — so past it the
+/// fraction saturates, and a boundary read off the fraction would have nothing
+/// left to read.
+/// What the pointer is doing to one surface's layout this frame.
+struct Gesture<'a> {
+    surface: usize,
+    /// Where the pointer is, along the axis a horizontal separator moves in.
+    at: Option<f32>,
+    grip: &'a mut Option<Grip>,
+}
+
+#[derive(Clone, Copy)]
+struct Grip {
+    surface: usize,
+    node: usize,
+    /// The points of pane before the boundary when it was taken hold of.
+    at: f32,
+    /// Where the pointer was then.
+    from: f32,
+    /// The points of pane before it as this pass last left them. A boundary that
+    /// has moved since is one something OTHER than this gesture moved — a fold,
+    /// an unfold, a window that would not shrink — and a grip taken in the layout
+    /// before that is not holding anything in this one.
+    left: f32,
 }
 
 /// One surface's layout, in points.
@@ -591,9 +655,16 @@ struct Points {
 
 impl Dial {
     /// What the shell saw of the pointer this frame, before [`Folds::apply`]
-    /// reads the fractions the last one left behind.
-    pub fn watch_pointer(&mut self, gesturing: bool) {
+    /// reads the fractions the last one left behind: whether it is doing
+    /// anything, and where it is.
+    pub fn watch_pointer(&mut self, gesturing: bool, at: Option<f32>) {
         self.gesturing = gesturing;
+        self.pointer = at;
+        // Nothing is being held once the pointer is up, and the next gesture
+        // takes hold of its own boundary wherever that one stands.
+        if !gesturing {
+            self.grip = None;
+        }
     }
 }
 
@@ -928,14 +999,19 @@ fn wants(
     (want, fixed)
 }
 
-/// Read every separator the user dragged since the last pass back into the
-/// layout: points moving across a boundary, which is all a drag ever means.
+/// Read the separator the user is dragging back into the layout: points moving
+/// across a boundary, which is all a drag ever means.
 ///
-/// The drag lands on a fraction this pass wrote, one frame after the rectangles
-/// it was measured against were drawn — so the difference from what was written,
-/// times the width that split came out at, is the points the boundary travelled.
-/// No inverse is needed for it, and no bisection: the layout and the thing the
-/// user pointed at are in the same units.
+/// The gesture ARRIVES as a fraction. It lands on the one this pass wrote, one
+/// frame after the rectangles it was measured against were drawn, so the
+/// difference from what was written times the width that split came out at is
+/// the points the boundary has travelled. No inverse is needed for it, and no
+/// bisection: the layout and the thing the user pointed at are in the same units.
+///
+/// It is FOLLOWED by the pointer. Once the boundary is held ([`Grip`]) the
+/// fraction is not read again — what is asked for is where the pointer is, every
+/// frame from the position it was taken hold of, so that neither a floor nor
+/// egui_dock's own clamp can quietly eat a piece of the gesture on the way past.
 ///
 /// Only while a pointer is doing something, and only past what egui_dock's own
 /// per-frame clamp explains. It re-clamps every separator's fraction on every
@@ -952,11 +1028,9 @@ fn drags(
     want: &[f32],
     fixed: &[f32],
     style: &egui_dock::Style,
-    gesturing: bool,
+    gesture: Gesture,
 ) {
-    if !gesturing {
-        return;
-    }
+    let Gesture { surface, at: pointer, grip } = gesture;
     let separator = style.separator.width;
     let floor = style.separator.extra - separator * 0.5;
     let mins = min_widths(tree, floor, style.tab_bar.height, separator);
@@ -965,26 +1039,23 @@ fn drags(
     let floors: Vec<f32> =
         mins.iter().zip(fixed).map(|(min, fixed)| (min - fixed).max(0.0)).collect();
     let drawn = points.drew.clone();
+    // The drag is in DRAWN points, and the layout is in dialled ones. They are
+    // the same thing at the window the layout wants, and a fixed ratio apart at
+    // the one a host refused it (see [`Points::spread`]).
+    let (dialled, whole) = (want[0] - fixed[0], drawn[0] - fixed[0]);
+    if dialled <= 0.0 || whole <= 0.0 {
+        return;
+    }
     for index in 0..tree.len() {
         let node = NodeIndex(index);
         let (left, right) = (node.left(), node.right());
         if right.0 >= tree.len() || !tree[node].is_horizontal() {
             continue;
         }
-        let (Node::Horizontal(split), Some(wrote)) =
-            (&tree[node], points.wrote.get(index).copied())
-        else {
-            continue;
-        };
-        let drew = drawn.get(index).copied().unwrap_or(0.0);
-        if !wrote.is_finite() || drew <= 0.0 {
-            continue;
-        }
-        let moved = split.fraction - wrote;
-        if moved.abs() < 1e-6 {
-            continue;
-        }
-        if (split.fraction - unmoved(wrote, drew, style.separator.extra)).abs() < 1e-6 {
+        // One pointer, one boundary: once this gesture has hold of one, no other
+        // separator's fraction is anything but egui_dock re-clamping it.
+        let mut held = (*grip).filter(|grip| grip.surface == surface);
+        if held.is_some_and(|grip| grip.node != index) {
             continue;
         }
         // Only what is on SCREEN can trade: a rail is a fixed number of points
@@ -994,24 +1065,64 @@ fn drags(
         if before <= 0.0 || after <= 0.0 {
             continue;
         }
-        // The drag is in DRAWN points, and the layout is in dialled ones. They
-        // are the same thing at the window the layout wants, and a fixed ratio
-        // apart at the one a host refused it (see [`Points::spread`]).
-        let (dialled, whole) = (want[0] - fixed[0], drawn[0] - fixed[0]);
-        if dialled <= 0.0 || whole <= 0.0 {
-            continue;
+        let standing = points.visible(tree, holds, left);
+        // Let go of a boundary something else has moved: the gesture is still on
+        // screen where it was, but what it is over is a different layout.
+        if held.is_some_and(|grip| (standing - grip.left).abs() > 0.5) {
+            (*grip, held) = (None, None);
         }
+        let asked = match held {
+            // Held: where the pointer is, which is the whole of what a drag ever
+            // meant. Every frame answers the same question afresh, so nothing a
+            // clamp refuses along the way is lost or double-counted.
+            Some(grip) => {
+                let Some(at) = pointer else { continue };
+                grip.at + (at - grip.from) * dialled / whole
+            }
+            // Not yet: a fraction that has moved off the one this pass wrote is
+            // the gesture arriving, and this is the frame it is taken hold of.
+            None => {
+                let (Node::Horizontal(split), Some(wrote)) =
+                    (&tree[node], points.wrote.get(index).copied())
+                else {
+                    continue;
+                };
+                let drew = drawn.get(index).copied().unwrap_or(0.0);
+                if !wrote.is_finite() || drew <= 0.0 {
+                    continue;
+                }
+                let moved = split.fraction - wrote;
+                if moved.abs() < 1e-6 {
+                    continue;
+                }
+                if (split.fraction - unmoved(wrote, drew, style.separator.extra)).abs() < 1e-6 {
+                    continue;
+                }
+                // The boundary has already travelled this frame's worth, so the
+                // pointer was that far back when it stood where the layout still
+                // says it does.
+                let travelled = moved * drew;
+                if let Some(at) = pointer {
+                    let (at, from) = (standing, at - travelled);
+                    *grip = Some(Grip { surface, node: index, at, from, left: standing });
+                }
+                standing + travelled * dialled / whole
+            }
+        };
         // Held to what the panes on either side need, which egui_dock's own
         // limit does not know: it holds the two CHILDREN of the split apart and
         // nothing deeper in either of them (see [`min_widths`]).
         let room = |span: f32, min: f32| (span - min).max(0.0);
         let (spare, take) = (room(before, floors[left.0]), room(after, floors[right.0]));
-        let delta = (moved * drew * dialled / whole).clamp(-spare, take);
+        let delta = (asked - standing).clamp(-spare, take);
         if delta.abs() < 1e-4 {
             continue;
         }
         points.shift(tree, holds, &floors, left, delta);
         points.shift(tree, holds, &floors, right, -delta);
+        if let Some(grip) = grip {
+            grip.left = points.visible(tree, holds, left);
+        }
     }
 }
 
