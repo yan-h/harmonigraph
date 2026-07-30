@@ -2601,10 +2601,8 @@ mod tests {
         window = settle(&mut folds, &mut dock, &mut dial, window);
         let (first, last) = (NodeIndex(1), NodeIndex(6));
         let (before_first, before_last) = (width(&dock, first), width(&dock, last));
-        eprintln!("PAIR before: first={before_first} last={before_last} window={window}");
         drag(&mut dock, NodeIndex::root(), 40.0);
         let _ = frame(&mut folds, &mut dock, &mut dial, window);
-        eprintln!("PAIR after: first={} last={}", width(&dock, first), width(&dock, last));
         assert!(
             (width(&dock, first) - (before_first + 40.0)).abs() < 1.0,
             "the first pane moved {}",
@@ -2630,10 +2628,8 @@ mod tests {
         window = settle(&mut folds, &mut dock, &mut dial, window);
         let (first, last) = (NodeIndex(1), NodeIndex(14));
         let (before_first, before_last) = (width(&dock, first), width(&dock, last));
-        eprintln!("before: first={before_first} last={before_last} window={window}");
         drag(&mut dock, NodeIndex::root(), 40.0);
-        let asked = frame(&mut folds, &mut dock, &mut dial, window);
-        eprintln!("after: first={} last={} asked={asked}", width(&dock, first), width(&dock, last));
+        let _ = frame(&mut folds, &mut dock, &mut dial, window);
         assert!(
             (width(&dock, first) - (before_first + 40.0)).abs() < 1.0,
             "the first pane should have taken the 40 the drag gave it, and moved {}",
