@@ -791,8 +791,11 @@ fn every_round_trip_of_clicks_lands_where_it_started() {
 /// drag is the whole of what `unmoved` is for.
 fn drag(dial: &mut Dial, dock: &mut DockState<Tab>, node: NodeIndex, delta: f32) {
     // A drag is a pointer doing something, which is what tells it from the
-    // clamp egui_dock applies to every separator on every frame.
-    dial.watch_pointer(true);
+    // clamp egui_dock applies to every separator on every frame — and the
+    // pointer travels exactly as far as the drag it is making, which is what
+    // the boundary follows once it is held (see `Grip`).
+    let at = dial.pointer.unwrap_or(0.0) + delta;
+    dial.watch_pointer(true, Some(at));
     let extra = style().separator.extra;
     let range = width(dock, node);
     let min = (extra / range).min(1.0);
@@ -940,6 +943,110 @@ fn a_separator_with_a_fold_below_it_still_resizes_what_it_divides() {
         (width(&dock, PICTURES) - (pictures + 40.0)).abs() < 1.0,
         "the frame after should be where the drag left it",
     );
+}
+
+/// A separator the pointer wiggles back and forth stays under the pointer.
+///
+/// What a drag moves is points across a boundary, between the panes that are on
+/// screen to trade them — so the separators drawn BETWEEN those panes are on
+/// neither side of it. Counted into the side that holds them, they are handed
+/// over again on every frame the pointer moves, whichever way it is going, and
+/// the boundary walks out from under it a separator at a time: a second of
+/// wiggling is 40 frames, and 40 points of daylight between the pointer and the
+/// handle it is holding. Holding still leaks nothing, which is what makes this
+/// the gesture that finds it.
+///
+/// Both ways round, since which side gains is whichever holds the more
+/// separators — and the pair of leaves, which holds none either side and so
+/// never drifted at all.
+#[test]
+fn a_separator_wiggled_back_and_forth_stays_under_the_pointer() {
+    for (what, mut dock, node, fold) in [
+        ("the settings boundary", dock(), NodeIndex::root(), None),
+        ("the picture boundary", dock(), PICTURES, None),
+        ("a row's leftmost boundary", row(), NodeIndex::root(), None),
+        ("the settings boundary, analyzer folded", dock(), NodeIndex::root(), Some(Tab::Spectral)),
+    ] {
+        let mut folds = Folds::default();
+        let mut window = Window::new(1000.0);
+        window.settle(&mut folds, &mut dock);
+        if let Some(tab) = fold {
+            collapse(&mut dock, tab, true);
+            window.settle(&mut folds, &mut dock);
+        }
+        // Where the handle is drawn, which is what the pointer is holding.
+        let at = |dock: &DockState<Tab>| {
+            let rect = dock[SurfaceIndex::main()][node].rect().expect("the split is on screen");
+            rect.left() + rect.width() * fraction(dock, node)
+        };
+        let start = at(&dock);
+        let (mut pointer, mut worst) = (start, 0.0f32);
+        for step in 0..40 {
+            let delta = if step % 2 == 0 { 8.0 } else { -8.0 };
+            pointer += delta;
+            drag(&mut window.dial, &mut dock, node, delta);
+            window.frame(&mut folds, &mut dock);
+            worst = worst.max((at(&dock) - pointer).abs());
+        }
+        assert!(worst < 0.5, "{what} came {worst:.1}pt out from under the pointer");
+        assert!((at(&dock) - start).abs() < 0.5, "{what} did not end where it started");
+    }
+}
+
+/// A boundary dragged past a floor does not set off the moment the pointer
+/// turns around: the points the drag could not spend are still owed, and the
+/// pointer has to come back past the floor before the pane grows again.
+///
+/// Which is the same property as the wiggle above, at the one place a drag is
+/// guaranteed to lose points — and the reason the boundary follows the pointer's
+/// travel from where it took hold rather than a sum of per-frame steps. A sum
+/// has no memory of what a clamp refused, so the overshoot is gone the moment it
+/// is made: push 300 points past the floor and the handle comes away 300 points
+/// from the hand still holding it, for as long as the gesture lasts.
+#[test]
+fn a_boundary_dragged_past_a_floor_waits_for_the_pointer_to_come_back() {
+    // Both ways, since each side of the boundary has a floor of its own.
+    for step in [-40.0f32, 40.0] {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut window = Window::new(1000.0);
+        window.settle(&mut folds, &mut dock);
+        let node = NodeIndex::root();
+        let at = |dock: &DockState<Tab>| {
+            let rect = dock[SurfaceIndex::main()][node].rect().expect("the split is on screen");
+            rect.left() + rect.width() * fraction(dock, node)
+        };
+        let start = at(&dock);
+        // 800 points that way, which is further than the panes on it can go.
+        for _ in 0..20 {
+            drag(&mut window.dial, &mut dock, node, step);
+            window.frame(&mut folds, &mut dock);
+        }
+        let stopped = at(&dock);
+        let travelled = (stopped - start).abs();
+        assert!(travelled > 100.0, "the boundary moved only {travelled:.0}pt before stopping");
+        assert!(travelled < 700.0, "the boundary should have stopped, and moved {travelled:.0}pt");
+        // Back, but not yet as far as the boundary is.
+        for _ in 0..2 {
+            drag(&mut window.dial, &mut dock, node, -step);
+            window.frame(&mut folds, &mut dock);
+        }
+        assert!(
+            (at(&dock) - stopped).abs() < 0.5,
+            "the handle set off 80pt into a {:.0}pt overshoot",
+            800.0 - travelled,
+        );
+        // All the way back is all the way back.
+        for _ in 0..18 {
+            drag(&mut window.dial, &mut dock, node, -step);
+            window.frame(&mut folds, &mut dock);
+        }
+        assert!(
+            (at(&dock) - start).abs() < 0.5,
+            "the boundary came back to {:.0}, not the {start:.0} the gesture found it at",
+            at(&dock),
+        );
+    }
 }
 
 /// A drag while a pane is folded is a drag on the LAYOUT, not on the
@@ -1224,3 +1331,4 @@ fn an_unfold_never_asks_past_the_widest_the_window_has_been() {
         window.size,
     );
 }
+
