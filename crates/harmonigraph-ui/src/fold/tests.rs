@@ -232,7 +232,11 @@ fn a_rail_is_the_same_width_at_any_window_size() {
     }
 }
 
-/// Unfolding is the fraction coming back, not a guess at a new one.
+/// Unfolding is the layout coming back, not a guess at a new one — and it
+/// comes back on the frame the WINDOW does. The click alone changes nothing
+/// on screen: the frame it lands on is still being drawn in the window the
+/// fold took its width out of, and drawing the unfolded layout there would
+/// squeeze every pane to fit a window that is one frame from growing.
 #[test]
 fn unfolding_gives_back_the_fraction_the_user_had() {
     let mut dock = dock();
@@ -248,8 +252,9 @@ fn unfolding_gives_back_the_fraction_the_user_had() {
     let window = frame(&mut folds, &mut dock, &mut dial, window);
     collapse(&mut dock, Tab::Lattice, false);
     let window = frame(&mut folds, &mut dock, &mut dial, window);
-    assert!((fraction(&dock, PICTURES) - 0.7).abs() < 0.001);
-    assert!((window - 1000.0).abs() < 0.01, "and the window it came out of");
+    assert!((window - 1000.0).abs() < 0.01, "the window it came out of");
+    let _ = frame(&mut folds, &mut dock, &mut dial, window);
+    assert!((fraction(&dock, PICTURES) - 0.7).abs() < 0.001, "and the layout with it");
 }
 
 /// Unfolding is folding run backwards: the pane comes back the width it
@@ -277,43 +282,57 @@ fn unfolding_gives_the_window_back_what_folding_took() {
     }
 }
 
-/// Folding, resizing the window, and unfolding compose to the layout that
-/// resizing alone would have reached.
+/// A window dragged while a pane is folded is worn by the panes that are on
+/// SCREEN to wear it. The folded one is not being drawn at all, so it has no
+/// share of that window to take, and it comes back exactly the width it went
+/// away — which is what makes a fold reversible across a resize rather than
+/// merely repeatable.
 ///
-/// A rail is not spared what the window does to everything else. Freeze
-/// what it is holding and the pane comes back at a width measured in some
-/// earlier, wider window, taking the difference out of the panes that DID
-/// wear the resize — which is what "opening a pane made the other two
-/// smaller" looks like from the outside.
+/// The layout this lands in is therefore NOT the one the resize alone would
+/// have reached, and that is the point. A folded pane given its share of a
+/// window it spent folded hands that share back on the way out, so unfolding
+/// re-lays-out panes nobody touched: "opening a pane made the other two
+/// smaller" is what that looks like from the outside.
 #[test]
-fn a_fold_across_a_resize_lands_where_the_resize_alone_would_have() {
+fn a_resize_while_a_pane_is_folded_is_worn_by_the_panes_on_screen() {
     let mut dock = dock();
     let mut folds = Folds::default();
     let mut dial = Dial::default();
     // A settled frame before the click, as the editor always has: the
-    // layout is dialled in at the window it is being drawn in.
+    // layout is drawn in the window it is dialled for.
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    let pane = width(&dock, LATTICE);
     collapse(&mut dock, Tab::Lattice, true);
     let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+    let open = [SPECTRAL, SETTINGS].map(|node| width(&dock, node));
+
     // The user drags the window border in while the lattice is a rail.
     let dragged = window - 120.0;
     let _ = settle(&mut folds, &mut dock, &mut dial, dragged);
-    collapse(&mut dock, Tab::Lattice, false);
-    let window = settle(&mut folds, &mut dock, &mut dial, dragged);
-    let folded = [LATTICE, SPECTRAL, SETTINGS].map(|node| width(&dock, node));
+    let now = [SPECTRAL, SETTINGS].map(|node| width(&dock, node));
+    let lost: f32 = open.iter().zip(now).map(|(open, now)| open - now).sum();
+    assert!(
+        (lost - 120.0).abs() < 0.5,
+        "the two panes on screen should have worn the whole 120pt, and wore {lost}",
+    );
+    assert!(
+        (width(&dock, LATTICE) - 26.0).abs() < 0.01,
+        "while the rail stayed a rail: {}",
+        width(&dock, LATTICE),
+    );
 
-    // The same dock, never folded, dragged straight to where this one
-    // ended up. The layout is derived from the fractions the user dialled
-    // and the window it is being drawn in, and a fold changes neither —
-    // so carrying one through a resize is the resize, exactly.
-    let mut plain = self::dock();
-    lay_out(&mut plain, 1000.0);
-    lay_out(&mut plain, window);
-    for (node, folded) in [LATTICE, SPECTRAL, SETTINGS].iter().zip(folded) {
-        let plain = width(&plain, *node);
+    collapse(&mut dock, Tab::Lattice, false);
+    let _ = settle(&mut folds, &mut dock, &mut dial, dragged);
+    assert!(
+        (width(&dock, LATTICE) - pane).abs() < 0.5,
+        "the pane comes back the {pane} it went away, and came back {}",
+        width(&dock, LATTICE),
+    );
+    for (node, was) in [SPECTRAL, SETTINGS].iter().zip(now) {
         assert!(
-            (folded - plain).abs() < 0.5,
-            "{node:?} came out {folded} across the fold, {plain} across the resize alone",
+            (width(&dock, *node) - was).abs() < 0.5,
+            "{node:?} was not touched by the unfold: {was} became {}",
+            width(&dock, *node),
         );
     }
 }
@@ -770,7 +789,10 @@ fn every_round_trip_of_clicks_lands_where_it_started() {
 /// The clamp is part of the drag rather than a detail of it: egui_dock
 /// applies it on every frame, dragged or not, and telling it apart from a
 /// drag is the whole of what `unmoved` is for.
-fn drag(dock: &mut DockState<Tab>, node: NodeIndex, delta: f32) {
+fn drag(dial: &mut Dial, dock: &mut DockState<Tab>, node: NodeIndex, delta: f32) {
+    // A drag is a pointer doing something, which is what tells it from the
+    // clamp egui_dock applies to every separator on every frame.
+    dial.watch_pointer(true);
     let extra = style().separator.extra;
     let range = width(dock, node);
     let min = (extra / range).min(1.0);
@@ -788,10 +810,11 @@ fn drag(dock: &mut DockState<Tab>, node: NodeIndex, delta: f32) {
 /// anything — which is what the tree looks like at the top of every frame a
 /// pane spends folded.
 fn reclamp(dock: &mut DockState<Tab>) {
+    let mut nobody = Dial::default();
     for index in 0..dock[SurfaceIndex::main()].len() {
         let node = NodeIndex(index);
         if dock[SurfaceIndex::main()][node].is_parent() {
-            drag(dock, node, 0.0);
+            drag(&mut nobody, dock, node, 0.0);
         }
     }
 }
@@ -840,7 +863,7 @@ fn a_folded_pair_between_two_open_panes_still_resizes() {
     window = settle(&mut folds, &mut dock, &mut dial, window);
     let (first, last) = (NodeIndex(1), NodeIndex(6));
     let (before_first, before_last) = (width(&dock, first), width(&dock, last));
-    drag(&mut dock, NodeIndex::root(), 40.0);
+    drag(&mut dial, &mut dock, NodeIndex::root(), 40.0);
     let _ = frame(&mut folds, &mut dock, &mut dial, window);
     assert!(
         (width(&dock, first) - (before_first + 40.0)).abs() < 1.0,
@@ -867,7 +890,7 @@ fn two_rails_between_two_open_panes_still_resize() {
     window = settle(&mut folds, &mut dock, &mut dial, window);
     let (first, last) = (NodeIndex(1), NodeIndex(14));
     let (before_first, before_last) = (width(&dock, first), width(&dock, last));
-    drag(&mut dock, NodeIndex::root(), 40.0);
+    drag(&mut dial, &mut dock, NodeIndex::root(), 40.0);
     let _ = frame(&mut folds, &mut dock, &mut dial, window);
     assert!(
         (width(&dock, first) - (before_first + 40.0)).abs() < 1.0,
@@ -898,7 +921,7 @@ fn a_separator_with_a_fold_below_it_still_resizes_what_it_divides() {
     // The handle on the far side of the rail, which belongs to the split
     // above the fold: the picture pair on one side of it, the settings
     // column on the other, and both of them on screen.
-    drag(&mut dock, NodeIndex::root(), 40.0);
+    drag(&mut dial, &mut dock, NodeIndex::root(), 40.0);
     let asked = frame(&mut folds, &mut dock, &mut dial, window);
     assert!(
         (width(&dock, PICTURES) - (pictures + 40.0)).abs() < 1.0,
@@ -930,7 +953,7 @@ fn a_drag_taken_while_a_pane_is_folded_survives_the_unfold() {
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     collapse(&mut dock, Tab::Spectral, true);
     let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
-    drag(&mut dock, NodeIndex::root(), 40.0);
+    drag(&mut dial, &mut dock, NodeIndex::root(), 40.0);
     let window = frame(&mut folds, &mut dock, &mut dial, window);
     let (lattice, settings) = (width(&dock, LATTICE), width(&dock, SETTINGS));
     collapse(&mut dock, Tab::Spectral, false);
@@ -1162,7 +1185,7 @@ fn wiggling_a_separator_while_folded_does_not_raise_that_ceiling() {
     // a separator settles them: one frame apiece.
     for _ in 0..5 {
         for delta in [80.0, -80.0] {
-            drag(&mut dock, NodeIndex::root(), delta);
+            drag(&mut window.dial, &mut dock, NodeIndex::root(), delta);
             window.frame(&mut folds, &mut dock);
         }
     }

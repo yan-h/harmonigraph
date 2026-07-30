@@ -162,8 +162,9 @@ pub struct SharedState {
     /// that pass, so a direct write from one would be overwritten).
     pub(crate) reset_layout: bool,
     pub(crate) dock: DockState<panes::Tab>,
-    /// The fractions the sideways folds are holding onto, which are the layout
-    /// the rails on screen are a rendering of (see [`fold`]).
+    /// What each sideways fold is holding — the width the window owes a folded
+    /// pane when it opens again, which is the one part of the layout that
+    /// cannot be read back off the dock (see [`fold`]).
     pub(crate) folds: fold::Folds,
     /// Points the window has to gain (or lose, if negative) before the next
     /// frame, because a pane folded sideways or came back and every other pane
@@ -190,9 +191,10 @@ pub struct SharedState {
     /// Set by the shell. Zero — the default, and what a shell that never
     /// resizes leaves it at — means no floor.
     pub min_window_width: f32,
-    /// The window the pane layout is dialled in at, and the window it last
-    /// saw — the whole of what a sideways fold carries between frames (see
-    /// [`fold::Dial`]). Runtime-only.
+    /// The pane layout itself: a width per pane in points, and what the window
+    /// is doing to it (see [`fold::Dial`]). Runtime-only — a layout loaded into
+    /// a window it was not saved at is seeded from the fractions it finds in
+    /// the dock.
     pub(crate) dial: fold::Dial,
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
     /// by the render callback and read by the performance overlay. 0 means no

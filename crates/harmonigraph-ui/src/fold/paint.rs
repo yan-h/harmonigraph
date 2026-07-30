@@ -205,7 +205,7 @@ fn shove_target(tree: &Tree<Tab>, holds: &[Hold], fold: NodeIndex) -> Option<Nod
 /// is clamped to keep `separator.extra` points of pane on either side.
 ///
 /// Written straight into the tree, where the next frame reads it as the drag it
-/// is ([`Folds::absorb`]) — which is also how egui_dock's separator hands a drag
+/// is ([`drags`]) — which is also how egui_dock's separator hands a drag
 /// over, so a shoved boundary and a dragged one arrive by the same door.
 fn nudge(tree: &mut Tree<Tab>, node: NodeIndex, delta: f32, style: &egui_dock::Style) {
     let Some(rect) = tree[node].rect() else {
@@ -304,7 +304,7 @@ fn paint_band(
 /// width from but the window itself. What CAN move is the folded pane's own
 /// width, out of the window, which is the fold run backwards at a width the user
 /// chose rather than the one they folded at — so that is what this offers. See
-/// [`Folds::pulled`] for who pays.
+/// [`Folds::apply`] for who pays.
 ///
 /// The pane opens when the drag ENDS. Opening it as the pull went would hand the
 /// rest of the gesture to a separator that has just replaced this handle —
