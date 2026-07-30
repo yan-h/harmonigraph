@@ -232,6 +232,20 @@ pub(crate) fn tab_bar_height(scale: f32) -> f32 {
     TAB_BAR_HEIGHT * scale
 }
 
+/// The narrowest (or shortest) a pane may be dragged, as egui_dock's
+/// `separator.extra`: the size a FOLD leaves the pane at, which is one tab bar,
+/// plus the half separator egui_dock takes off a child's share of its split.
+///
+/// The two being the same number is what makes a pane dragged to nothing and a
+/// pane folded the same state rather than two that look alike: reach the floor
+/// and `fold::collapse_at_floor` folds the pane, and nothing on screen moves,
+/// because the rail it becomes is the width it already had. Frameless mode hides
+/// every tab bar, so there the floor is nothing at all — which is also what a
+/// fold leaves behind there.
+pub(crate) fn drag_floor(tab_bar: f32, separator: f32) -> f32 {
+    tab_bar + separator * 0.5
+}
+
 // ---- Fonts -----------------------------------------------------------------
 
 /// The named family headings resolve to (Atkinson Bold first).
@@ -541,25 +555,28 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     style.dock_area_padding = None;
     style.main_surface_border_stroke = Stroke::NONE;
 
+    // The tab bar's height first: the separator's own limits are measured
+    // against it (see [`drag_floor`]).
+    style.tab_bar.height = tab_bar_height(scale);
+
     // Separators: slim bands in the well color, accent when grabbed.
     style.separator.width = 4.0 * scale;
     // Not scaled: how near a separator the pointer has to come to take hold of
     // it is a reach, not a drawn thing, and a narrower band is if anything the
     // case for keeping the reach where it was.
     style.separator.extra_interact_width = 6.0;
-    // The narrowest a pane may be dragged, which is its own tab bar: the width
-    // a fold leaves behind, so a pane can be dragged down to the rail it would
-    // fold to and no further.
+    // The narrowest a pane may be dragged, which is exactly the size a fold
+    // leaves it at (see [`drag_floor`]) — so dragging a pane down to nothing and
+    // folding it are the same place, and `fold::collapse_at_floor` can turn one
+    // into the other without anything on screen moving.
     //
     // egui_dock's own default is 175pt, and it applies this as a clamp on EVERY
     // separator's fraction on EVERY frame, dragged or not — so in a window
     // narrow enough for 175 to bite (the plugin's floor is 400) it does not
     // merely refuse a drag, it walks the layout toward 50/50 by itself, and it
     // mangles any fraction dialled for a window that has not arrived yet: the
-    // fractions a fold hands back on the way out are exactly that. A tab bar
-    // clears every fold's own fractions with a couple of points to spare, a
-    // rail being one tab bar wide by construction.
-    style.separator.extra = tab_bar_height(scale);
+    // fractions a fold hands back on the way out are exactly that.
+    style.separator.extra = drag_floor(style.tab_bar.height, style.separator.width);
     style.separator.color_idle = well();
     style.separator.color_hovered = accent_edge();
     style.separator.color_dragged = accent();
@@ -567,7 +584,6 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     // Tab bar: a quiet strip of the same surface, divided from the body by
     // a hairline; the active tab fills seamlessly into the body below it.
     style.tab_bar.bg_fill = well();
-    style.tab_bar.height = tab_bar_height(scale);
     style.tab_bar.hline_color = well();
     style.tab_bar.corner_radius = CornerRadius::ZERO;
 

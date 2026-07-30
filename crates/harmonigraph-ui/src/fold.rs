@@ -858,6 +858,36 @@ pub struct Dial {
     /// [`paint`], which is where the pull is let go of, and taken by
     /// [`Folds::apply`], which is where a width becomes a fraction.
     pull: Option<Pull>,
+    /// The separator this gesture has hold of, noted at the press and read at the
+    /// release — see [`collapse_at_floor`].
+    grabbed: Option<Grab>,
+}
+
+/// A separator a press landed on: which split it divides, and whether the pane
+/// beside it was already at its floor when the press happened.
+///
+/// Noted at the press because that is the last moment the separator is under the
+/// pointer — a drag moves it away from where it started — and because "was it
+/// already there" is the difference between a pane the user has just squeezed to
+/// nothing and one the window squeezed for them.
+#[derive(Clone, Copy)]
+struct Grab {
+    surface: usize,
+    node: usize,
+    floored: bool,
+    /// The fraction the split was dialled at before the gesture, which is what a
+    /// pane folded DOWNWARDS comes back at.
+    ///
+    /// Sideways the fold banks the width the drag left, and the rail's own handle
+    /// is how a pane comes back at a width the user picks ([`grab`]). Downwards
+    /// there is no such handle — egui_dock draws no separator beside a pane folded
+    /// down — and no window paying for it either, so the arrow is the only way
+    /// back and a fraction left at the floor would hand back a pane exactly as
+    /// tall as the tab bar it was folded to: open, and indistinguishable from
+    /// folded. The height it had before the drag is the only useful answer, and
+    /// costs nothing to keep, the fraction of a collapsed vertical split being
+    /// invisible until it opens.
+    fraction: f32,
 }
 
 /// The layout as a function of the window it is dialled in at.
@@ -1557,6 +1587,168 @@ fn uncollapse(tree: &mut Tree<Tab>, leaf: NodeIndex) {
         let leaves = if tree[parent].is_horizontal() { below.max(beside) } else { below + beside };
         tree[parent].set_collapsed_leaf_count(leaves);
         child = parent;
+    }
+}
+
+/// Fold a pane away, as egui_dock's own arrow would have — the mirror of
+/// [`uncollapse`], and private for the same reason.
+///
+/// A split becomes collapsed when BOTH its children are, and each one's count of
+/// collapsed leaves is remade from the two below it: a horizontal split holds as
+/// many tab bars as its deeper side, a vertical one as many as both.
+fn collapse(tree: &mut Tree<Tab>, leaf: NodeIndex) {
+    tree[leaf].set_collapsed(true);
+    let mut child = leaf;
+    while let Some(parent) = child.parent() {
+        let (left, right) = (parent.left(), parent.right());
+        let (below, beside) =
+            (tree[left].collapsed_leaf_count(), tree[right].collapsed_leaf_count());
+        if tree[left].is_collapsed() && tree[right].is_collapsed() {
+            tree[parent].set_collapsed(true);
+        }
+        let leaves = if tree[parent].is_horizontal() { below.max(beside) } else { below + beside };
+        tree[parent].set_collapsed_leaf_count(leaves);
+        child = parent;
+    }
+}
+
+/// Fold a pane that has been dragged down to the size a fold would leave it at
+/// anyway, once the drag is let go of.
+///
+/// The floor a separator can be dragged to IS a folded pane's own size (see
+/// `theme::drag_floor`), so without this the dock has two states that look the
+/// same and behave differently: a pane at its floor draws a tab bar's worth of
+/// nothing, keeps its share of the window, and has none of a rail's name or
+/// arrow, while the fold beside it has all three and hands its width back.
+/// Folding what the user has already dragged to nothing turns the lookalike into
+/// the real thing, and because the two sizes are the same number, nothing on
+/// screen moves when it does — not the pane, not its neighbours, not the window.
+///
+/// On the RELEASE, not on reaching the floor: a fold mid-drag ends the gesture,
+/// since egui identifies a separator by a per-frame allocation counter and a
+/// collapsing leaf changes what the dock allocates before it, so the drag is
+/// dropped exactly where the user might want to pull back out of it.
+///
+/// What makes the pane's floor the user's doing is the gesture that put it there,
+/// so the separator is noted at the PRESS ([`Grab`]) — by then it is still under
+/// the pointer, which it stops being the moment the drag moves it — along with
+/// whether the pane was already at its floor before the gesture began. A pane can
+/// reach its floor with no drag at all, a window dragged narrow enough squeezing
+/// every pane it holds, and folding those would be the window quietly rearranging
+/// the layout, which is the one thing [`Folds`] exists to avoid.
+pub fn collapse_at_floor(
+    ui: &egui::Ui,
+    dock: &mut DockState<Tab>,
+    style: &egui_dock::Style,
+    dial: &mut Dial,
+) {
+    let (pressed, released, at) = ui.input(|i| {
+        (i.pointer.any_pressed(), i.pointer.any_released(), i.pointer.press_origin())
+    });
+    if pressed {
+        dial.grabbed = at.and_then(|at| grabbed(dock, style, at));
+    }
+    if !released {
+        return;
+    }
+    // A gesture that found the pane already at its floor is not the one that put
+    // it there: a press on that separator, however brief, must not fold it.
+    let Some(grab) = dial.grabbed.take().filter(|grab| !grab.floored) else {
+        return;
+    };
+    let surface = SurfaceIndex(grab.surface);
+    let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) else {
+        return;
+    };
+    let node = NodeIndex(grab.node);
+    let Some(leaf) = at_floor(tree, node, style) else {
+        return;
+    };
+    collapse(tree, leaf);
+    // Downwards, the height the pane had before the drag is what its arrow gives
+    // back (see [`Grab::fraction`]).
+    if let Node::Vertical(split) = &mut tree[node] {
+        split.fraction = grab.fraction.clamp(0.0, 1.0);
+    }
+}
+
+/// The separator a press has taken hold of, if it landed on one: which split it
+/// divides, and whether the pane beside it was at its floor already.
+fn grabbed(dock: &DockState<Tab>, style: &egui_dock::Style, at: egui::Pos2) -> Option<Grab> {
+    let reach = style.separator.extra_interact_width * 0.5;
+    for index in 0..dock.surfaces_count() {
+        let surface = SurfaceIndex(index);
+        let Some(tree) = dock.get_surface(surface).and_then(Surface::node_tree) else {
+            continue;
+        };
+        for node in 0..tree.len() {
+            let node = NodeIndex(node);
+            let (left, right) = (node.left(), node.right());
+            if right.0 >= tree.len() || !tree[node].is_parent() {
+                continue;
+            }
+            // Downwards, a folded pane has no separator to drag back out of
+            // (egui_dock draws none beside a collapsed leaf in a vertical split),
+            // so there the arrow is what undoes this — which is fine with a tab
+            // bar to click and a trap without one.
+            if tree[node].is_vertical() && style.tab_bar.height <= 0.0 {
+                continue;
+            }
+            let (Some(before), Some(after)) = (tree[left].rect(), tree[right].rect()) else {
+                continue;
+            };
+            let band = match tree[node].is_horizontal() {
+                true => {
+                    egui::Rect::from_x_y_ranges(before.right()..=after.left(), before.y_range())
+                }
+                false => {
+                    egui::Rect::from_x_y_ranges(before.x_range(), before.bottom()..=after.top())
+                }
+            };
+            if !band.expand(reach).contains(at) {
+                continue;
+            }
+            return Some(Grab {
+                surface: surface.0,
+                node: node.0,
+                floored: at_floor(tree, node, style).is_some(),
+                fraction: match &tree[node] {
+                    Node::Horizontal(split) | Node::Vertical(split) => split.fraction,
+                    _ => 0.5,
+                },
+            });
+        }
+    }
+    None
+}
+
+/// The child of `node` that is an open pane squeezed to its floor, if exactly one
+/// of the two is.
+///
+/// Both at once is a split with nothing left in it to divide, and folding either
+/// would be a guess at which; a child that is a whole subtree is not folded here
+/// either, since that would take every pane in it down with a drag aimed at one
+/// boundary.
+fn at_floor(tree: &Tree<Tab>, node: NodeIndex, style: &egui_dock::Style) -> Option<NodeIndex> {
+    // egui_dock clamps a split's fraction to keep `extra` points on either side
+    // of the separator, and a child's share of that is `extra` less the half
+    // separator the split takes off it.
+    let floor = style.separator.extra - style.separator.width * 0.5;
+    let (left, right) = (node.left(), node.right());
+    if right.0 >= tree.len() {
+        return None;
+    }
+    let sitting = |child: NodeIndex| {
+        let Some(rect) = tree[child].rect() else {
+            return false;
+        };
+        let size = if tree[node].is_horizontal() { rect.width() } else { rect.height() };
+        tree[child].is_leaf() && !tree[child].is_collapsed() && size <= floor + 0.5
+    };
+    match (sitting(left), sitting(right)) {
+        (true, false) => Some(left),
+        (false, true) => Some(right),
+        _ => None,
     }
 }
 
@@ -2601,10 +2793,8 @@ mod tests {
         window = settle(&mut folds, &mut dock, &mut dial, window);
         let (first, last) = (NodeIndex(1), NodeIndex(6));
         let (before_first, before_last) = (width(&dock, first), width(&dock, last));
-        eprintln!("PAIR before: first={before_first} last={before_last} window={window}");
         drag(&mut dock, NodeIndex::root(), 40.0);
         let _ = frame(&mut folds, &mut dock, &mut dial, window);
-        eprintln!("PAIR after: first={} last={}", width(&dock, first), width(&dock, last));
         assert!(
             (width(&dock, first) - (before_first + 40.0)).abs() < 1.0,
             "the first pane moved {}",
@@ -2630,10 +2820,8 @@ mod tests {
         window = settle(&mut folds, &mut dock, &mut dial, window);
         let (first, last) = (NodeIndex(1), NodeIndex(14));
         let (before_first, before_last) = (width(&dock, first), width(&dock, last));
-        eprintln!("before: first={before_first} last={before_last} window={window}");
         drag(&mut dock, NodeIndex::root(), 40.0);
-        let asked = frame(&mut folds, &mut dock, &mut dial, window);
-        eprintln!("after: first={} last={} asked={asked}", width(&dock, first), width(&dock, last));
+        let _ = frame(&mut folds, &mut dock, &mut dial, window);
         assert!(
             (width(&dock, first) - (before_first + 40.0)).abs() < 1.0,
             "the first pane should have taken the 40 the drag gave it, and moved {}",
