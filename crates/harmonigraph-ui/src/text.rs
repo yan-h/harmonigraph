@@ -138,9 +138,12 @@ const SIZE_STEP: f32 = 1.04;
 /// where a corrupted glyph is least recoverable.
 const MAX_GLYPH_PX: f32 = 512.0;
 
-/// Which batch a flush belongs to. Unique per batch drawn in one frame,
-/// since each keeps its own instance buffer: the two picture panes and their
-/// Render-preview copies.
+/// Which batch a flush belongs to. Unique per FLUSH drawn in one frame, since
+/// each keeps its own instance buffer — the two picture panes and their
+/// Render-preview copies, plus every pane that flushes more than once to put
+/// something between two groups of text. A pane is not the unit here, which is
+/// what makes adding one a renumbering rather than an append; the ids are
+/// checked for collisions in this module's tests.
 pub(crate) const LATTICE_LABELS: u64 = 0;
 pub(crate) const LATTICE_PREVIEW_LABELS: u64 = 1;
 /// The Lattice pane's second flush: the learn badge, which goes on top of the
