@@ -2,3 +2,6 @@
 .DS_Store
 .claude/settings.local.json
 .claude/worktrees/
+# read-plugin-state.py leaves these behind; the rule belongs here rather than
+# in .git/info/exclude, which is per-clone and so protects nobody else.
+__pycache__/
