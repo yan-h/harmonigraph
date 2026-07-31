@@ -25,6 +25,30 @@ fn drawn_label(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
 ) -> (Vec<(egui::Rect, String)>, Vec<egui::Rect>) {
+    let (pieces, shapes) = label_pieces(name, anchor);
+    (pieces.into_iter().map(|(galley, _, text)| (galley, text)).collect(), shapes)
+}
+
+/// The same label measured as INK — tight to the glyphs, with none of the
+/// leading a galley box carries above and below them.
+///
+/// Which is the only measure that answers whether two rows of the column
+/// actually clear each other: at these sizes the leading alone is worth more
+/// than the air between the rows, so galley boxes overlap while the glyphs
+/// sit comfortably apart.
+fn drawn_label_ink(
+    name: harmonigraph_core::NoteName,
+    anchor: egui::Pos2,
+) -> Vec<(egui::Rect, String)> {
+    label_pieces(name, anchor).0.into_iter().map(|(_, ink, text)| (ink, text)).collect()
+}
+
+/// Every text piece of a label as (galley box, ink box, text), and the boxes
+/// of its drawn marks.
+fn label_pieces(
+    name: harmonigraph_core::NoteName,
+    anchor: egui::Pos2,
+) -> (Vec<(egui::Rect, egui::Rect, String)>, Vec<egui::Rect>) {
     let ctx = egui::Context::default();
     theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
@@ -43,7 +67,7 @@ fn drawn_label(
             );
         },
     );
-    let texts = batch.pieces().iter().map(|p| (p.galley, p.text.clone())).collect();
+    let texts = batch.pieces().iter().map(|p| (p.galley, p.ink, p.text.clone())).collect();
     let shapes = out
         .shapes
         .iter()
@@ -95,15 +119,20 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     );
     // A count multiplies the sign beside it rather than continuing a word, so
     // it is tracked in by MARK_TRACK instead of taking a clear cell after it.
-    // Both halves of the column pin against the same number: a typeset sign's
-    // box IS one cell, which is what the drawn sign claims too.
+    // Both rows pin against the same number, off the same cell: the
+    // accidental sets smaller than the marks below it but still claims that
+    // cell, centered in it, so the grid is shared -- see ACCIDENTAL_SCALE.
+    let cell = panes::lattice::MARK_ADVANCE * panes::lattice::MARK_SIZE;
     let track = panes::lattice::MARK_TRACK * panes::lattice::MARK_SIZE;
-    for (which, c) in [("accidental", accidental_count), ("comma", count)] {
-        assert!(
-            (accidental_sign.right() - track - c.left()).abs() < 0.01,
-            "the {which}'s count should track in by {track} ({accidental_sign:?} then {c:?})"
-        );
-    }
+    assert!(
+        (accidental_count.left() - count.left()).abs() < 0.01,
+        "the two counts should share a left edge ({accidental_count:?} vs {count:?})"
+    );
+    let cell_left = accidental_sign.center().x - cell / 2.0;
+    assert!(
+        (count.left() - (cell_left + cell - track)).abs() < 0.01,
+        "a count should track {track} into its cell (count {count:?}, cell at {cell_left})"
+    );
     // ...but never so far that it climbs onto the sign. The drawn box carries
     // its halo, so it overlaps the count by that much before any ink does.
     assert!(sign.right() <= count.left() + BEARING + track, "the count follows its sign");
@@ -132,6 +161,49 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
         name_box.width() < letter.width() * 2.5,
         "a deep name should still fit a node, got {}",
         name_box.width()
+    );
+}
+
+/// The accidental row has to clear the comma row under it, as INK.
+///
+/// `♯` carries the tallest ink in the column, so the accidental is what
+/// closes on the marks below it, and it is set smaller than them to buy that
+/// air back — see `ACCIDENTAL_SCALE`. Counted on both rows
+/// is the tightest the column ever gets: a count digit reaches further down,
+/// and further up, than the `+` it stands beside.
+#[test]
+fn the_accidental_sets_smaller_than_the_marks_it_stacks_over() {
+    let anchor = egui::pos2(200.0, 200.0);
+    let name = harmonigraph_core::NoteName {
+        letter: 'C',
+        sharps: 3,
+        syntonic_commas: 2,
+        septimal_commas: 0,
+    };
+    let ink = drawn_label_ink(name, anchor);
+    let sharp = text_box(&ink, "\u{266F}");
+    let sharp_count = text_box(&ink, "3");
+    let comma_count = text_box(&ink, "2");
+
+    // Two digits, one per row, so this compares the rows themselves rather
+    // than a `♯` against a `+`.
+    assert!(
+        sharp_count.height() < comma_count.height(),
+        "the accidental row should set smaller than the comma row \
+         ({sharp_count:?} vs {comma_count:?})"
+    );
+    // Same column, and the tightest pair in the label.
+    assert!(
+        sharp_count.bottom() < comma_count.top(),
+        "a count should clear the count below it ({sharp_count:?} over {comma_count:?})"
+    );
+    // The `♯` sits a column to the left of that digit, so nothing collides
+    // either way -- but the two ROWS should not interleave at all, or the
+    // stack stops reading as one row over another.
+    assert!(
+        sharp.bottom() < comma_count.top(),
+        "the accidental should sit entirely above the comma row \
+         ({sharp:?} over {comma_count:?})"
     );
 }
 
