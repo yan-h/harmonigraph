@@ -669,9 +669,11 @@ mod tests {
     /// takes a 4K take back down to 1080 with no flag saying so.
     #[test]
     fn a_plain_command_line_renders_at_the_resolution_the_take_was_composed_at() {
-        let mut config = harmonigraph_ui::RenderConfig::default();
-        config.frame = frame(9, 16);
-        config.short_edge = 2160;
+        let config = harmonigraph_ui::RenderConfig {
+            frame: frame(9, 16),
+            short_edge: 2160,
+            ..Default::default()
+        };
         assert_eq!(output_size(None, &config), [2160, 3840]);
 
         // An explicit --size still wins: it is the override, and the warning

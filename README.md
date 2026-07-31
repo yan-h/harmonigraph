@@ -55,8 +55,9 @@ cargo run -p harmonigraph-standalone
 # The whole test suite; every crate carries tests.
 cargo test
 
-# The exact checks CI runs: clippy -D warnings, the tests, and the
-# harmonigraph-core dependency guard. Green here means green in GitHub Actions.
+# The exact checks .github/workflows/ci.yml runs: clippy -D warnings, the
+# tests, and the harmonigraph-core dependency guard. Actions is currently
+# off, so this is the gate — don't wait on a check to appear on your PR.
 ./ci.sh
 
 # Build the CLAP/VST3 bundles into target/bundled/.
@@ -71,7 +72,8 @@ cargo xtask bundle harmonigraph-plugin --release
 
 To gate every `git push` on `./ci.sh` automatically, enable the tracked hook
 once per clone: `git config core.hooksPath .githooks` (skip a one-off push
-with `git push --no-verify`). This stands in for GitHub Actions when it's off.
+with `git push --no-verify`). With Actions off, this hook is what actually
+gates anything.
 
 ## Getting a build into the DAW
 
