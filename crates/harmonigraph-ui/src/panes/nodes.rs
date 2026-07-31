@@ -86,13 +86,6 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              node center (pie wedges); drag between the handles to move the \
              whole ring in or out.",
         );
-    ValueBar::new(&mut view.outer_solidity, 0.0..=1.0, "Solidity")
-        .show(ui)
-        .on_hover_text(
-            "0 = soft glowy octave marks, 1 = the crisp classic \
-             shapes; only softens the glyph edges, shapes and \
-             angles stay put",
-        );
     // One padding for the whole layer: between sectors, and
     // between the band and the melody/bass rings.
     ValueBar::new(&mut view.outer_gap, 0.0..=0.4, "Gap")
@@ -105,15 +98,10 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              push the bass ring in toward the core -- raise Band \
              inner to make room",
         );
-    // Backdrop: draw the silent octaves faintly so a lone octave
-    // still reads as a whole note.
-    ValueBar::new(&mut view.outer_backdrop, 0.0..=1.0, "Backdrop")
-        .show(ui)
-        .on_hover_text(
-            "Complete the octave ring: draw the silent octaves \
-             faintly behind the sounding sectors, so a lone octave \
-             still reads as a whole note. 0 = off",
-        );
+    // No Solidity and no Backdrop bar: both are fixed at 1. The glyphs are
+    // always the crisp classic shapes, and the silent octaves always ghost
+    // in behind the sounding ones — that backdrop is what completes the
+    // ring, so a lone octave still reads as a whole note.
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line

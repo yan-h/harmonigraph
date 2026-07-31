@@ -842,8 +842,8 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
     assert_eq!(scene.core_solidity, 0.25);
     assert_eq!((scene.outer_inner, scene.outer_outer), (0.0, 0.5));
 
-    // Both solidities are clamped into 0..1 before they reach the shader.
-    let view = ViewConfig { core_solidity: 4.0, outer_solidity: -1.0, ..view };
+    // Core solidity is clamped into 0..1 before it reaches the shader.
+    let view = ViewConfig { core_solidity: 4.0, ..view };
     let scene = scene_of(
         &NoteTracker::new(),
         &Tuning::default(),
@@ -852,7 +852,6 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
         0.0,
     );
     assert_eq!(scene.core_solidity, 1.0);
-    assert_eq!(scene.outer_solidity, 0.0);
 }
 
 #[test]
@@ -878,22 +877,20 @@ fn legacy_core_modes_fold_onto_radius_and_solidity() {
 #[test]
 fn legacy_node_body_folds_into_core_and_outer() {
     // Blobs from the one-build NodeBody experiment: an octave-only body
-    // becomes the core glow (solidity 0, the old core-off under-glow) +
-    // the outer layer's backdrop on. What has to hold is that the blob
+    // becomes the core glow (solidity 0, the old core-off under-glow), the
+    // outer layer carrying the note. What has to hold is that the blob
     // PARSES and the core drops to the glow end. Disc leaves defaults alone.
     for body in [LegacyNodeBody::Slices, LegacyNodeBody::Rings, LegacyNodeBody::Beads] {
         let mut view = ViewConfig { node_body: body, ..ViewConfig::default() };
         view.migrate_legacy();
         assert_eq!(view.core_solidity, 0.0, "{body:?}");
         assert!(view.core_radius > 0.0, "{body:?} still on");
-        assert_eq!(view.outer_backdrop, 1.0, "{body:?}");
         assert_eq!(view.node_body, LegacyNodeBody::Disc, "shim consumed");
     }
 
     let mut view = ViewConfig { node_body: LegacyNodeBody::Disc, ..ViewConfig::default() };
     view.migrate_legacy();
     assert_eq!(view.core_solidity, ViewConfig::default().core_solidity);
-    assert_eq!(view.outer_backdrop, ViewConfig::default().outer_backdrop);
 }
 
 #[test]

@@ -155,41 +155,15 @@ pub struct ViewConfig {
     pub outer_inner: f32,
     #[serde(default = "default_outer_outer", alias = "slice_outer")]
     pub outer_outer: f32,
-    /// Outer-layer cohesion device (independent of the core): draw the
-    /// silent octaves faintly behind the sounding sectors, in the note
-    /// color, so the annulus completes and a lone octave still reads as a
-    /// whole note. Inert while the layer is Off. Was implicitly tied to
-    /// "core off", then its own on/off toggle.
-    ///
-    /// Now an opacity, 0..1: 0 is off (exactly the old `false`) and 1 is
-    /// the old `true`'s strength, with everything between available so the
-    /// backdrop can sit as far under the sounding glyphs as you like. It
-    /// scales the shader's built-in ghost level rather than
-    /// replacing them, so 1 reproduces the previous look byte for byte.
-    /// Serialized under a new key, leaving the old one to the load-only
-    /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop) bool.
-    #[serde(default, rename = "outer_backdrop_alpha")]
-    pub outer_backdrop: f32,
-    /// Load-only shim: blobs from before the backdrop became an opacity
-    /// stored it as a bool under `outer_backdrop`. Folded into
-    /// `outer_backdrop` by [`migrate_legacy`](Self::migrate_legacy) and
-    /// never written back. Without this the bool would fail to
-    /// deserialize into the f32 above and take the WHOLE persist with it
-    /// (the loader drops the blob on any parse error), losing the user's
-    /// layout and camera too.
-    #[serde(
-        default,
-        skip_serializing,
-        rename = "outer_backdrop",
-        deserialize_with = "bare_as_some"
-    )]
-    pub legacy_outer_backdrop: Option<bool>,
-    /// The outer glyphs' solidity, 0..1 (mirrors [`core_solidity`] for the
-    /// octave layer): 1 draws crisp shapes (the classic look), and toward 0
-    /// their soft edges spread until they melt into soft glowy marks. Only
-    /// widens the glyph edges — shapes and angles are unchanged.
-    #[serde(default = "default_outer_solidity")]
-    pub outer_solidity: f32,
+    // The octave layer's backdrop and solidity are fixed at 1 in the shader
+    // and have no fields here. The backdrop — the silent octaves ghosted
+    // faintly behind the sounding sectors, in the note color — is what makes
+    // the annulus complete, so a lone octave still reads as a whole note;
+    // and the glyphs are always the crisp classic shapes. Saved blobs may
+    // still carry the keys these rode on (`outer_backdrop`, first a bool and
+    // then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
+    // serde ignores unknown keys, so such a blob loads intact and simply
+    // drops them on the next save.
     /// Padding inside the octave layer, in quad UV units: the constant
     /// gap between one octave sector and the next, AND the gap separating
     /// the melody/bass rings from the band. One number, because they read
@@ -246,11 +220,10 @@ pub struct ViewConfig {
     /// Load-only shim: blobs from before the two marks became independent
     /// flags carry one `highlight_extremes` token (Off/Melody/Bass/Both).
     /// Folded into the pair by [`migrate_legacy`](Self::migrate_legacy) and
-    /// never written back — the same shape as
-    /// [`legacy_outer_backdrop`](Self::legacy_outer_backdrop), and for the
-    /// same reason: the old blobs wrote the variant BARE, which RON will not
-    /// read into an `Option`'s `Some`, and a failed parse drops the whole
-    /// persist rather than just this field.
+    /// never written back. It reads through `bare_as_some` because the old
+    /// blobs wrote the variant BARE, which RON will not read into an
+    /// `Option`'s `Some`, and a failed parse drops the whole persist rather
+    /// than just this field — losing the user's layout and camera too.
     #[serde(
         default,
         skip_serializing,
@@ -450,12 +423,6 @@ fn default_core_solidity() -> f32 {
     1.0
 }
 
-/// Crisp octave glyphs by default (the classic look, identity end of the
-/// outer solidity axis).
-fn default_outer_solidity() -> f32 {
-    1.0
-}
-
 /// What 0.16 of the band's width came to at the default band, which is
 /// what the rings were fixed at before this was a bar.
 fn default_mark_thickness() -> f32 {
@@ -549,7 +516,7 @@ impl ViewConfig {
     /// (off), the old solid `Orb` becomes solidity 1, and the old glow-only
     /// mode (`Glow`, also the bare `"None"` token) becomes solidity 0. The
     /// one-build NodeBody experiment's octave-only bodies map onto that glow
-    /// (solidity 0) plus the outer layer with its backdrop on. Each of those
+    /// (solidity 0), the outer layer carrying the note alone. Each of those
     /// bodies once had its own matching glyph shape; only slices survives,
     /// so all three now land there. (Their band radii rode the
     /// slice_inner/slice_outer fields, absorbed by the
@@ -565,12 +532,6 @@ impl ViewConfig {
         } else {
             default_label_scale()
         };
-
-        // The backdrop's pre-opacity bool: on means full strength, which
-        // is what that build drew.
-        if let Some(on) = self.legacy_outer_backdrop.take() {
-            self.outer_backdrop = if on { 1.0 } else { 0.0 };
-        }
 
         // The melody/bass marks' pre-split enum, which was exactly these two
         // bits packed into four names.
@@ -591,7 +552,6 @@ impl ViewConfig {
             LegacyNodeBody::Slices | LegacyNodeBody::Rings | LegacyNodeBody::Beads => {}
         }
         self.core_solidity = 0.0;
-        self.outer_backdrop = 1.0;
     }
 }
 
@@ -647,14 +607,10 @@ impl Default for ViewConfig {
             // A narrow octave band, set well off the core and stopping short
             // of the quad edge, with a tight gap between sectors: the octaves
             // read as a ring of distinct marks rather than a solid annulus,
-            // and the core keeps clear space around it. The backdrop runs at
-            // full strength, so the silent slots hold the whole ring's shape
-            // rather than leaving the sounding octaves to imply it.
+            // and the core keeps clear space around it. (The backdrop that
+            // holds the whole ring's shape behind them is fixed on.)
             outer_inner: 0.641_313_55,
             outer_outer: 0.851_483_05,
-            outer_backdrop: 1.0,
-            legacy_outer_backdrop: None,
-            outer_solidity: default_outer_solidity(),
             outer_gap: 0.051_732_67,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions

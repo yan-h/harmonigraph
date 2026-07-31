@@ -17,8 +17,6 @@ fn persist_round_trips_camera_and_view() {
     state.view.core_solidity = 0.4;
     state.view.outer_inner = 0.1;
     state.view.outer_outer = 0.7;
-    state.view.outer_backdrop = 0.62;
-    state.view.outer_solidity = 0.3;
     state.view.idle_marker = harmonigraph_scene::IdleMarker::Dot;
     state.view.idle_radius = 0.31;
     // Melody alone: both marks on is the default, and this test's whole
@@ -47,8 +45,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.core_solidity, 0.4);
     assert_eq!(restored.view.outer_inner, 0.1);
     assert_eq!(restored.view.outer_outer, 0.7);
-    assert_eq!(restored.view.outer_backdrop, 0.62);
-    assert_eq!(restored.view.outer_solidity, 0.3);
     assert_eq!(restored.view.idle_marker, harmonigraph_scene::IdleMarker::Dot);
     assert_eq!(restored.view.idle_radius, 0.31);
     assert!(restored.view.mark_melody);
@@ -449,12 +445,12 @@ fn pre_radius_off_core_modes_fold_onto_radius_and_solidity() {
 }
 
 #[test]
-fn node_body_experiment_blobs_fold_into_the_core_and_backdrop() {
+fn node_body_experiment_blobs_fold_into_the_core() {
     // Blobs saved by the one-build NodeBody experiment carry a
     // node_body field the current layout no longer writes; loading one
     // must both parse and fold the body into the core/outer split
-    // (Beads = the core glow, solidity 0, plus the octave layer with its
-    // backdrop). They wrote the legacy core_style:Orb.
+    // (Beads = the core glow, solidity 0, the octave layer carrying the
+    // note). They wrote the legacy core_style:Orb.
     let state = SharedState::new(TextureFormat::Bgra8Unorm);
     let saved = state
         .save_persist()
@@ -466,10 +462,6 @@ fn node_body_experiment_blobs_fold_into_the_core_and_backdrop() {
     assert_eq!(restored.view.core_solidity, 0.0, "octave-only body is the glow end");
     assert!(restored.view.core_radius > 0.0, "still on");
     assert_eq!(
-        restored.view.outer_backdrop, 1.0,
-        "Beads' cohesion device rides the backdrop, at full strength"
-    );
-    assert_eq!(
         restored.view.node_body,
         harmonigraph_scene::LegacyNodeBody::Disc,
         "shim consumed on load"
@@ -477,30 +469,33 @@ fn node_body_experiment_blobs_fold_into_the_core_and_backdrop() {
 }
 
 #[test]
-fn legacy_bool_backdrop_blobs_load_as_an_opacity() {
-    // The backdrop was a bool before it became an opacity. A stale bool
-    // must not just fail to parse: load_persist drops the WHOLE blob on
-    // any error, so the user would silently lose their layout, camera
-    // and every other view setting along with it.
-    for (token, want) in [("true", 1.0f32), ("false", 0.0)] {
+fn retired_octave_backdrop_and_solidity_keys_do_not_sink_a_blob() {
+    // The backdrop and the octave glyphs' solidity were settings before
+    // both were fixed at 1, and saved blobs still carry the keys they rode
+    // on — the backdrop as a bare bool, then as an opacity under
+    // `outer_backdrop_alpha`. Their fields are gone, so serde skips them as
+    // unknown; what must not happen is a parse error, because load_persist
+    // drops the WHOLE blob on one and the user would silently lose their
+    // layout, camera and every other view setting along with it.
+    for keys in [
+        "outer_backdrop:true,",
+        "outer_backdrop:false,",
+        "outer_backdrop_alpha:0.5,",
+        "outer_solidity:0.3,",
+        "outer_backdrop_alpha:0.5,outer_solidity:0.3,",
+    ] {
         let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        // A value the legacy bool must overrule either way, so both
-        // tokens prove the shim ran rather than matching a default.
-        state.view.outer_backdrop = 0.5;
+        // Something non-default elsewhere in the blob, so surviving the
+        // load means more than landing back on the defaults.
+        state.view.extent_threes = 7;
         let saved = state
             .save_persist()
-            .replace("core_solidity:", &format!("outer_backdrop:{token},core_solidity:"));
-        assert_ne!(saved, state.save_persist(), "injection must have hit");
+            .replace("core_solidity:", &format!("{keys}core_solidity:"));
+        assert_ne!(saved, state.save_persist(), "injection must have hit for {keys}");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
-        assert_eq!(restored.view.outer_backdrop, want, "bool {token}");
-        assert_eq!(
-            restored.view.legacy_outer_backdrop, None,
-            "shim consumed on load"
-        );
-        // The rest of the blob survived rather than being dropped.
-        assert_eq!(restored.view.extent_threes, state.view.extent_threes);
+        assert_eq!(restored.view.extent_threes, 7, "blob survived {keys}");
     }
 }
 
