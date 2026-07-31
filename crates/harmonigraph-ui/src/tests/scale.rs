@@ -1,0 +1,283 @@
+//! The chrome scale — what it resizes and what it deliberately does not —
+//! and that pointing at a control does not move the row it sits in.
+
+use crate::*;
+use harmonigraph_render::wgpu::TextureFormat;
+use super::harness::*;
+
+/// One settings pane drawn at a given [chrome scale](crate::theme::ui_scale),
+/// as the shapes it emitted. The same nesting as
+/// [`settings_pane_at_width`] — the dock's clip outside the pane's content box
+/// — at a fixed width, because here it is the scale that varies.
+fn settings_pane_at_scale(tab: panes::Tab, scale: f32) -> Vec<egui::epaint::ClippedShape> {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.ui_scale = scale;
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    crate::theme::set_ui_scale(&ctx, scale);
+    let margin = crate::theme::pane_inner_margin(scale);
+    let body =
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0 + 2.0 * margin, 2400.0));
+    let out = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(body), time: Some(0.0), ..Default::default() },
+        |ui| {
+            let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(body.shrink(margin)));
+            let mut tab = tab;
+            let mut viewer = panes::Viewer { state: &mut state, params: &backend, now: 0.0 };
+            egui_dock::TabViewer::ui(&mut viewer, &mut pane, &mut tab);
+        },
+    );
+    out.shapes
+}
+
+/// Every shape's bottom edge, ignoring the ones that carry no geometry (they
+/// answer with an inverted or infinite rect).
+fn drawn_bottom(shapes: &[egui::epaint::ClippedShape]) -> f32 {
+    shapes
+        .iter()
+        .map(|cs| cs.shape.visual_bounding_rect())
+        .filter(|r| r.is_finite() && r.width() < 1.0e4)
+        .fold(0.0f32, |lowest, r| lowest.max(r.bottom()))
+}
+
+/// The tallest line of type drawn, which is the half of the scale that reads
+/// as "smaller UI" rather than "tighter UI".
+fn tallest_text(shapes: &[egui::epaint::ClippedShape]) -> f32 {
+    shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) => Some(t.galley.size().y),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max)
+}
+
+/// Turning the scale down spends less of the column on the panel — in type and
+/// in the space around it alike, which is what separates this from a font-size
+/// control.
+#[test]
+fn the_ui_scale_shrinks_the_panel_chrome() {
+    for tab in [panes::Tab::Tuning, panes::Tab::Panel, panes::Tab::Nodes] {
+        let (full, small) =
+            (settings_pane_at_scale(tab, 1.0), settings_pane_at_scale(tab, 0.7));
+
+        let (tall, short) = (tallest_text(&full), tallest_text(&small));
+        assert!(tall > 0.0, "{tab:?} drew no text to measure");
+        assert!(short < tall, "{tab:?} type stayed at {tall} points with the scale at 0.7");
+
+        // The column, not just the glyphs in it: a control's height and the
+        // gaps between rows come from the style's spacing, so a pane that only
+        // shrank its type would land well short of the type's own ratio.
+        let (deep, shallow) = (drawn_bottom(&full), drawn_bottom(&small));
+        assert!(
+            shallow < deep * 0.85,
+            "{tab:?} ran to {shallow} points at 0.7 against {deep} at 1.0 — \
+             the spacing is not scaling with the type",
+        );
+    }
+}
+
+/// The scale moves the panel and nothing else: a picture pane handed the same
+/// rect draws the same picture whatever the chrome is doing.
+///
+/// This is what makes the control safe to offer. The lattice, the roll and the
+/// spectrogram measure everything off the pane they land in, so a laptop
+/// dialling its panel down is not quietly composing a different picture — and
+/// the offline renderer, which reaches the same panes through
+/// [`draw_pane`](crate::draw_pane) on a context that is never told a scale,
+/// cannot disagree with what the plugin showed. The determinism test would not
+/// catch it if one did: it renders everything at one scale.
+#[test]
+fn the_ui_scale_leaves_the_picture_alone() {
+    let picture = |scale: f32| {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let backend = RecordingBackend::default();
+        // Something to draw: a held voice for the roll and the voice bars, and
+        // an analyzed column for the spectrum.
+        state.tracker.handle_event(harmonigraph_core::NoteEvent {
+            time: 0.5,
+            channel: 0,
+            note: 60,
+            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+        });
+        let mut bins = [0.0f32; harmonigraph_core::spectrum::SPECTRUM_BINS];
+        bins[harmonigraph_core::spectrum::SPECTRUM_BINS / 3] = 0.8;
+        state.spectrum.push_history(0.5, &bins);
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        crate::theme::set_ui_scale(&ctx, scale);
+        // A rect the scale cannot move, so what is being compared is the
+        // picture rather than the pane it was given.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), time: Some(1.0), ..Default::default() },
+            |ui| {
+                crate::begin_frame(&mut state, &backend, 1.0);
+                let mut pane = ui.new_child(egui::UiBuilder::new().max_rect(screen));
+                crate::draw_pane(&mut pane, crate::Pane::Spectral, &mut state, 1.0);
+            },
+        );
+        // Debug rather than the shapes themselves: they hold floats and
+        // texture handles and are not `PartialEq`, and a difference anywhere
+        // in one is a difference in the picture.
+        out.shapes.iter().map(|cs| format!("{:?}", cs.shape)).collect::<Vec<_>>()
+    };
+
+    let (design, small) = (picture(1.0), picture(0.7));
+    assert!(!design.is_empty(), "the analyzer drew nothing to compare");
+    assert_eq!(design.len(), small.len(), "the chrome scale changed what the analyzer draws");
+    for (i, (a, b)) in design.iter().zip(&small).enumerate() {
+        assert_eq!(a, b, "shape {i} of the analyzer moved with the chrome scale");
+    }
+}
+
+/// A tab bar tracks the scale the whole way down, and still leaves room for the
+/// arrow that unfolds a pane.
+///
+/// The bar carries egui_dock's collapse button, and the tempting reading of
+/// that button's `TAB_COLLAPSE_BUTTON_SIZE` — 24 points — is a floor the bar
+/// must not go under. It is not one: 24 is the button's WIDTH, its rect is as
+/// tall as the bar it sits in, and what has to fit vertically is the 10-point
+/// arrow centred in it. Flooring the bar at 24 instead left every tab bar in
+/// the editor full size below about 0.9, which is what the scale is for.
+#[test]
+fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
+    /// egui_dock's `TAB_COLLAPSE_ARROW_SIZE`: the glyph, not the button.
+    const ARROW_GLYPH: f32 = 10.0;
+
+    let mut previous = 0.0;
+    for scale in [0.7f32, 0.8, 0.9, 1.0, 1.5] {
+        let height = crate::theme::tab_bar_height(scale);
+        assert!(
+            height > previous,
+            "a tab bar {height} points tall at scale {scale} did not move from {previous}",
+        );
+        previous = height;
+        assert!(
+            height > ARROW_GLYPH,
+            "a tab bar {height} points tall at scale {scale} clips the collapse arrow",
+        );
+    }
+    // Proportional, so the bar keeps its share of the chrome rather than
+    // levelling off somewhere inside the range.
+    let ratio = crate::theme::tab_bar_height(0.7) / crate::theme::tab_bar_height(1.0);
+    assert!((ratio - 0.7).abs() < 1.0e-5, "the bar scaled by {ratio} rather than by 0.7");
+}
+
+/// The controls a settings row is built from: egui's own `button` (the
+/// momentary presets — Just, 12-TET, Reset layout), its `selectable_value`
+/// (every [`choice_row`](crate::widgets::choice_row)) and its `checkbox`, then
+/// the two of ours that allocate their own geometry.
+#[derive(Clone, Copy, Debug)]
+enum Control {
+    Button,
+    Selectable,
+    Checkbox,
+    Switch,
+    Record,
+}
+
+/// A row of four `kind` controls at `scale`, as the rects they allocated, with
+/// the pointer parked at `pointer` and optionally held down there.
+///
+/// Several frames because a widget's visual state comes from the PREVIOUS
+/// frame's response: the first frame after the pointer arrives still draws the
+/// resting look, and it is the one after it that has to land in the same place.
+fn control_row(
+    kind: Control,
+    scale: f32,
+    pointer: Option<egui::Pos2>,
+    pressed: bool,
+) -> Vec<egui::Rect> {
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    crate::theme::set_ui_scale(&ctx, scale);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 200.0));
+    let rects = std::cell::RefCell::new(Vec::new());
+    // Live state, so a control that reads its own value (the switch's knob, the
+    // record dot, the selected choice) is drawn in whatever state the pointer
+    // has put it in rather than always in its resting one.
+    let mut selected = 1usize;
+    let mut flag = false;
+    for frame in 0..4 {
+        rects.borrow_mut().clear();
+        let mut events = Vec::new();
+        if let Some(pos) = pointer {
+            events.push(egui::Event::PointerMoved(pos));
+            // Pressed on the first frame only: egui holds the button down
+            // until a release event, and a fresh press every frame would read
+            // as a click per frame.
+            if pressed && frame == 0 {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+        }
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(f64::from(frame)),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            ui.horizontal(|ui| {
+                for i in 0..4 {
+                    let label = format!("Item {i}");
+                    let response = match kind {
+                        Control::Button => ui.button(label),
+                        Control::Selectable => ui.selectable_value(&mut selected, i, label),
+                        Control::Checkbox => ui.checkbox(&mut flag, label),
+                        Control::Switch => crate::widgets::toggle_switch(ui, &mut flag, &label),
+                        Control::Record => {
+                            crate::widgets::record_button(ui, &mut flag, false, &label)
+                        }
+                    };
+                    rects.borrow_mut().push(response.rect);
+                }
+            });
+        });
+    }
+    rects.into_inner()
+}
+
+/// Hovering or pressing a control changes how it looks and not where anything
+/// is: neither the control's own rect nor the rects of the controls after it in
+/// the row.
+///
+/// egui offers this as `WidgetVisuals::expansion`, a hover swell of a point or
+/// two, and it does not hold: the swell is paid back with a negative outer
+/// margin on the button's frame, egui stores frame margins as whole points, and
+/// the [chrome scale](crate::theme::ui_scale) makes the expansion fractional —
+/// so the two round apart and the residue lands in the ALLOCATED size. Measured
+/// at scale 1.25 with a 1pt expansion: the hovered button 2pt wider and every
+/// button right of it 2pt over; at 1.5, 2pt the other way. In a
+/// [`button_row`](crate::widgets::button_row), which wraps, 2pt is also enough
+/// to push the last button onto a second line and back as the pointer passes.
+///
+/// The whole scale range, because which scales drift is exactly the question:
+/// at the design size the numbers happen to cancel and nothing moves.
+#[test]
+fn pointing_at_a_control_leaves_the_row_where_it_is() {
+    for kind in
+        [Control::Button, Control::Selectable, Control::Checkbox, Control::Switch, Control::Record]
+    {
+        for step in 0..=16u8 {
+            let scale = 0.7 + 0.05 * f32::from(step);
+            let resting = control_row(kind, scale, None, false);
+            // The pointer goes to the middle of the FIRST control, so anything
+            // that moves has three neighbours to its right to show it in.
+            let target = resting[0].center();
+            for (state, pressed) in [("hovered", false), ("pressed", true)] {
+                let pointed = control_row(kind, scale, Some(target), pressed);
+                assert_eq!(
+                    resting, pointed,
+                    "a {state} {kind:?} at scale {scale} moved the row",
+                );
+            }
+        }
+    }
+}
