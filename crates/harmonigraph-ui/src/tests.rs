@@ -3465,6 +3465,9 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
 #[test]
 fn the_perf_overlay_follows_the_analyzer_pane() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Turned on by hand: the overlay ships off, and what is under test is where
+    // it lands once asked for, not whether anything asks.
+    state.view.show_perf = true;
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
@@ -3499,7 +3502,7 @@ fn the_perf_overlay_follows_the_analyzer_pane() {
             &clipped.shape,
             egui::Shape::Text(text) if text.galley.text().contains("fps")
         )),
-        "the overlay should be drawn (show_perf is on by default)",
+        "the overlay should be drawn once show_perf is set",
     );
     // The backing plate, which is the HUD's actual extent — the rows inside it
     // are left-aligned, so no single string reveals where the box sits.
@@ -3632,6 +3635,9 @@ fn the_perf_overlay_stays_inside_its_pane_at_the_narrowest_window() {
     // editor), which is a window the shell will actually hand the UI.
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 800.0));
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Turned on by hand: the overlay ships off, and what is under test is
+    // whether it stays inside its pane once asked for.
+    state.view.show_perf = true;
     let backend = RecordingBackend::default();
     let ctx = egui::Context::default();
     let mut t = 0.0;
@@ -3699,6 +3705,37 @@ fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
         );
         assert_eq!(restored.spectrum_config.low_midi, 40.5);
     }
+}
+
+/// The overlay ships OFF, on a fresh install and in a project saved before the
+/// setting existed alike.
+///
+/// Two separate declarations decide this and they have to agree: the struct
+/// default is what a fresh install reads, and `#[serde(default)]` is what a
+/// blob missing the key reads. A fresh install exercises only the first, so a
+/// disagreement stays invisible until someone opens an old project and finds a
+/// HUD sitting over the picture. Both are asserted here for that reason.
+#[test]
+fn the_performance_overlay_ships_off() {
+    let fresh = SharedState::new(TextureFormat::Bgra8Unorm);
+    assert!(!fresh.view.show_perf, "a fresh install opens with the overlay off");
+
+    // A blob from before the setting existed: the key cut out of a saved one.
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.show_perf = true;
+    let saved = state.save_persist();
+    let old = saved.replacen("show_perf:true,", "", 1);
+    assert_ne!(old, saved, "the show_perf cut must land for this to test anything");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&old);
+    assert!(!restored.view.show_perf, "a pre-show_perf blob opens with the overlay off");
+
+    // And a project that asked for it still gets it: the cut above is what
+    // makes the blob old, not the value, so the round-trip has to still work.
+    let mut kept = SharedState::new(TextureFormat::Bgra8Unorm);
+    kept.load_persist(&saved);
+    assert!(kept.view.show_perf, "a project that turned the overlay on keeps it");
 }
 
 /// The lattice's label-size bar and the clamp its value is persisted through
