@@ -109,6 +109,20 @@ pub struct SharedState {
     pub learn_active: bool,
     /// Held pitch classes the last learn ran against (change detection).
     pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
+    /// The fifth/third pair (microcents) the meantone switch was last
+    /// switched OFF at, while the auto-detect was on. The detect skips
+    /// exactly this pair, and nothing else.
+    ///
+    /// Without it that switch has a dead direction: turning the mode off
+    /// hands the derived third to the param, which leaves a pair that IS a
+    /// meantone, so the detect re-engages on the next frame and the press
+    /// does nothing you can see. With it, "off" holds until the tuning is
+    /// something else — any edit to either axis, however small, is a new
+    /// pair and the detect gets to decide again.
+    ///
+    /// Runtime-only. A saved project carries the mode itself, and reopening
+    /// one is exactly when the detect should look at the tuning afresh.
+    pub(crate) meantone_declined: Option<(i32, i32)>,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see the Frame pane).
     pub camera_presets: Vec<CameraPreset>,
@@ -375,6 +389,7 @@ impl SharedState {
             background: harmonigraph_scene::skin::panel_color(),
             learn_active: false,
             last_learned_classes: None,
+            meantone_declined: None,
             camera_presets: Vec::new(),
             preset_name: String::new(),
             take_supported: false,

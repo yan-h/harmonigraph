@@ -27,53 +27,22 @@ const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
 /// boolean control, default to a checkbox unless it's a mode that keeps
 /// acting after the click.
 pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
-    switch(ui, on, label, true)
-}
-
-/// A [`toggle_switch`] reporting a state that something ELSE decides: same
-/// pill, dimmed, and it swallows the press. The Meantone switch wears this
-/// while the auto-detect drives it — an indicator that keeps its place in
-/// the row, rather than a control that disappears when it stops being one.
-///
-/// Dimmed by hand rather than by `add_enabled_ui`, and the reason is not
-/// cosmetic: a nested `Ui` inside a wrapped row takes the whole remaining
-/// width as its `max_rect`, and `Region::expand_to_include_rect` unions that
-/// into the pane — so every full-width thing BELOW it (the next section rule)
-/// then draws past the pane edge. Same trap [`bar_width`] documents.
-pub fn driven_switch(ui: &mut Ui, on: bool, label: &str) -> Response {
-    // By value, not by reference: nothing here can write back, and taking the
-    // flag as `&mut` would say at the call site that it might.
-    let mut on = on;
-    switch(ui, &mut on, label, false)
-}
-
-/// The switch both public forms are: `live` says whether the press does
-/// anything, and everything else is identical so the two read as one control
-/// in two states.
-fn switch(ui: &mut Ui, on: &mut bool, label: &str, live: bool) -> Response {
-    // The label's color is baked into its galley, so a dimmed switch has to
-    // be dimmed at layout rather than at paint.
-    let dim = if live { 1.0 } else { 0.45 };
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
         TextStyle::Button.resolve(ui.style()),
-        theme::text().gamma_multiply(dim),
+        theme::text(),
     );
     let scale = theme::ui_scale(ui.ctx());
     let switch = SWITCH_SIZE * scale;
     let gap = 6.0 * scale;
     let desired = Vec2::new(switch.x + gap + galley.size().x, switch.y.max(galley.size().y));
-    // Hover only when it isn't live: the press is swallowed at the sense, so
-    // there is no click to ignore later — and the tooltip still works, which
-    // a disabled widget's would not.
-    let sense = if live { Sense::click() } else { Sense::hover() };
-    let (rect, mut response) = ui.allocate_exact_size(desired, sense);
+    let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, live, *on, label)
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label)
     });
 
     if ui.is_rect_visible(rect) {
@@ -89,11 +58,7 @@ fn switch(ui: &mut Ui, on: &mut bool, label: &str, live: bool) -> Response {
             egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
         };
         let painter = ui.painter();
-        painter.rect_filled(
-            track,
-            radius,
-            mix(theme::well(), theme::accent_active()).gamma_multiply(dim),
-        );
+        painter.rect_filled(track, radius, mix(theme::well(), theme::accent_active()));
         if response.hovered() || response.dragged() {
             painter.rect_stroke(
                 track,
@@ -109,12 +74,12 @@ fn switch(ui: &mut Ui, on: &mut bool, label: &str, live: bool) -> Response {
         painter.circle_filled(
             egui::pos2(knob_x, track.center().y),
             radius - 2.5 * scale,
-            theme::text().gamma_multiply(dim),
+            theme::text(),
         );
         painter.galley(
             egui::pos2(track.right() + gap, rect.center().y - galley.size().y / 2.0),
             galley,
-            theme::text().gamma_multiply(dim),
+            theme::text(),
         );
     }
     response

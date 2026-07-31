@@ -355,7 +355,16 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     // lattice — dragging the fifth would drop the lock it is meant to carry
     // along. Releasing is an explicit edit of the third instead (see
     // `panes::tuning`), which is the one gesture that can mean nothing else.
-    if state.view.meantone_auto && !state.view.meantone {
+    //
+    // Or the switch, which is why the declined pair exists: the ONE tuning
+    // the user has just said no to at is skipped, and any other answers to
+    // the detect as usual. An engaged mode has nothing to decline, so the
+    // memory is dropped as soon as it is on again by any route.
+    if state.view.meantone {
+        state.meantone_declined = None;
+    } else if state.view.meantone_auto
+        && state.meantone_declined != Some((state.tuning.three, state.tuning.five))
+    {
         let tuning = &state.tuning;
         state.view.meantone =
             harmonigraph_core::tuning::is_meantone(tuning.three_cents(), tuning.five_cents());

@@ -176,26 +176,39 @@ fn learn_leaves_meantone_alone_when_the_auto_detect_is_off() {
     assert!(state.view.meantone, "with the detect off, learn only retunes the axes");
 }
 
-/// A backend that answers with a real tuning, which [`RecordingBackend`]
-/// cannot: it reports 0.0 for every key, and a 0¢ fifth is not a tuning any
-/// detection could sensibly fire on.
+/// A backend that answers with a real tuning and remembers what is written
+/// to it, neither of which [`RecordingBackend`] does: it reports 0.0 for
+/// every key, and a 0¢ fifth is not a tuning any detection could sensibly
+/// fire on.
 struct TuningBackend {
-    three: f32,
-    five: f32,
+    three: std::cell::Cell<f32>,
+    five: std::cell::Cell<f32>,
+}
+
+impl TuningBackend {
+    fn new(three: f32, five: f32) -> Self {
+        TuningBackend { three: std::cell::Cell::new(three), five: std::cell::Cell::new(five) }
+    }
 }
 
 impl ParamBackend for TuningBackend {
     fn get(&self, key: params::ParamKey) -> f32 {
         match key {
-            params::ParamKey::Three => self.three,
-            params::ParamKey::Five => self.five,
+            params::ParamKey::Three => self.three.get(),
+            params::ParamKey::Five => self.five.get(),
             // A workable matching window; the rest are irrelevant here and
             // 0 is a legal value for each.
             params::ParamKey::Tolerance => 0.5,
             _ => 0.0,
         }
     }
-    fn set(&self, _key: params::ParamKey, _value: f32) {}
+    fn set(&self, key: params::ParamKey, value: f32) {
+        match key {
+            params::ParamKey::Three => self.three.set(value),
+            params::ParamKey::Five => self.five.set(value),
+            _ => {}
+        }
+    }
 }
 
 /// The auto-detect engages the mode from the tuning alone — no learn, no
@@ -208,7 +221,7 @@ fn a_meantone_tuning_engages_the_mode_by_itself() {
     assert!(!state.view.meantone, "and the mode starts off");
     let three = harmonigraph_core::tuning::THREE_JUST
         - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
-    let params = TuningBackend { three, five: harmonigraph_core::tuning::FIVE_JUST };
+    let params = TuningBackend::new(three, harmonigraph_core::tuning::FIVE_JUST);
     begin_frame(&mut state, &params, 0.0);
     assert!(state.view.meantone, "quarter-comma meantone should engage the mode");
     // Engaging it is only half the job: the lattice has to be using the
@@ -225,10 +238,10 @@ fn a_meantone_tuning_engages_the_mode_by_itself() {
 #[test]
 fn just_intonation_does_not_engage_meantone() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let params = TuningBackend {
-        three: harmonigraph_core::tuning::THREE_JUST,
-        five: harmonigraph_core::tuning::FIVE_JUST,
-    };
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_JUST,
+        harmonigraph_core::tuning::FIVE_JUST,
+    );
     begin_frame(&mut state, &params, 0.0);
     assert!(!state.view.meantone, "a just third is a comma away from four fifths");
 }
@@ -239,10 +252,10 @@ fn just_intonation_does_not_engage_meantone() {
 fn the_auto_detect_off_leaves_the_mode_alone() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.view.meantone_auto = false;
-    let params = TuningBackend {
-        three: harmonigraph_core::tuning::THREE_12TET,
-        five: harmonigraph_core::tuning::FIVE_12TET,
-    };
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET,
+    );
     begin_frame(&mut state, &params, 0.0);
     assert!(!state.view.meantone, "the detect is off; nothing should engage");
 }
@@ -257,7 +270,7 @@ fn dragging_the_fifth_does_not_drop_an_engaged_meantone() {
     state.view.meantone = true;
     // 4·690 − 2400 = 360¢: the stale third param is 40¢ away, far outside
     // the tolerance, and irrelevant while the lock holds.
-    let params = TuningBackend { three: 690.0, five: 400.0 };
+    let params = TuningBackend::new(690.0, 400.0);
     begin_frame(&mut state, &params, 0.0);
     assert!(state.view.meantone, "the mode must survive a fifth that moved");
     assert!((state.tuning.five_cents() - 360.0).abs() < 0.001, "the third follows the fifth");
@@ -273,18 +286,77 @@ fn a_third_dragged_clear_of_the_magnet_stays_released() {
     // stay just outside and just inside whatever the tolerance is set to,
     // and fixed offsets stop straddling it the moment it narrows.
     let tolerance = harmonigraph_core::tuning::MEANTONE_TOLERANCE;
-    let params = TuningBackend {
-        three: harmonigraph_core::tuning::THREE_12TET,
-        five: harmonigraph_core::tuning::FIVE_12TET + tolerance * 1.5,
-    };
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET + tolerance * 1.5,
+    );
     begin_frame(&mut state, &params, 0.0);
     assert!(!state.view.meantone, "past the tolerance nothing pulls it back");
     // Just inside, though, and the magnet takes it.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let params = TuningBackend {
-        three: harmonigraph_core::tuning::THREE_12TET,
-        five: harmonigraph_core::tuning::FIVE_12TET + tolerance * 0.5,
-    };
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET + tolerance * 0.5,
+    );
     begin_frame(&mut state, &params, 0.0);
     assert!(state.view.meantone, "inside the tolerance the mode engages");
+}
+
+/// The switch still means something with the detect on: pressed ON at a
+/// tuning the detect would never claim (just intonation, a whole comma out),
+/// it snaps the third to four fifths and stays there. The detect never
+/// releases, so it cannot argue.
+#[test]
+fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_JUST,
+        harmonigraph_core::tuning::FIVE_JUST,
+    );
+    begin_frame(&mut state, &params, 0.0);
+    assert!(!state.view.meantone, "just intonation is not detected as meantone");
+
+    // What the switch does, which is all it does.
+    state.view.meantone = true;
+    for frame in 0..3 {
+        begin_frame(&mut state, &params, frame as f64);
+        assert!(state.view.meantone, "frame {frame} dropped a hand-set lock");
+    }
+    // Snapped: the lattice's third is four fifths, not the just third the
+    // param still holds.
+    let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
+    assert_eq!(
+        i64::from(state.tuning.five),
+        4 * i64::from(state.tuning.three) - 2 * octave,
+    );
+}
+
+/// And the OFF direction, which is the one the detect could undo. Switching
+/// the mode off hands the derived third to the param, leaving a pair that IS
+/// a meantone — so without the declined-pair memory the detect takes it
+/// straight back and the press does nothing you can see.
+#[test]
+fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET,
+    );
+    begin_frame(&mut state, &params, 0.0);
+    assert!(state.view.meantone, "12-TET engages by itself");
+
+    // The switch: the flag, then what the pane does with it.
+    state.view.meantone = false;
+    crate::panes::tuning::release_meantone(&mut state, &params);
+    for frame in 1..4 {
+        begin_frame(&mut state, &params, frame as f64);
+        assert!(!state.view.meantone, "frame {frame} re-engaged a refused tuning");
+    }
+
+    // A different tuning is a fresh question — even one that is still a
+    // meantone, since the refusal was about the pair, not about the mode.
+    params.set(params::ParamKey::Three, 696.0);
+    params.set(params::ParamKey::Five, harmonigraph_core::tuning::meantone_third(696.0));
+    begin_frame(&mut state, &params, 4.0);
+    assert!(state.view.meantone, "a new meantone tuning should engage again");
 }
