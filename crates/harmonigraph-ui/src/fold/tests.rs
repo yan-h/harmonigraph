@@ -1332,3 +1332,180 @@ fn an_unfold_never_asks_past_the_widest_the_window_has_been() {
     );
 }
 
+/// An unfold waits for its window, whoever did it. egui_dock re-derives its
+/// own fractions inside `show` the moment the flag comes off, so a pane opened
+/// against the window it is LEAVING is laid out in that window and every
+/// boundary on screen jumps inward for the frame (see [`Open`]).
+///
+/// Driven through `collapse`, which is egui_dock's own expand: that is the
+/// writer the hold has to catch, and the rail arrow is only the other door
+/// into the same place.
+#[test]
+fn an_unfold_stays_shut_until_the_window_can_hold_the_pane() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    let open_at = width(&dock, LATTICE);
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+    // The unfold, as egui_dock does it from inside `show`.
+    collapse(&mut dock, Tab::Lattice, false);
+    let asked = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(asked > narrow + 0.01, "the click asks the window for the pane's width");
+    assert!(
+        collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "and the pane is still a rail, so the dock lays this frame out without it"
+    );
+
+    // The frame that has the window the ask bought.
+    let _ = frame(&mut folds, &mut dock, &mut dial, asked);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "the flag comes off on the frame wide enough to hold the pane"
+    );
+    assert!(
+        (width(&dock, LATTICE) - open_at).abs() < 1.0,
+        "and the pane is back at the width it folded from, in one step",
+    );
+}
+
+/// A window that will not grow must not leave the pane shut forever. The wait
+/// is for a resize that was asked for, so a resize that never comes ends it
+/// just as arriving would — the pane opens into whatever width there is, which
+/// is what the rest of the pass already does with a refusal.
+#[test]
+fn an_unfold_the_window_refuses_opens_anyway() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+    collapse(&mut dock, Tab::Lattice, false);
+    let _ = frame(&mut folds, &mut dock, &mut dial, narrow);
+    // The host holds the window where it is, so the next frame is laid out at
+    // the width the last one was.
+    let _ = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "a refused resize opens the pane rather than holding it shut"
+    );
+}
+
+/// A shell that can only hand back whole points, which is what `editor.rs`
+/// does with the ask (`(width + change).round()`, and nothing under half a
+/// point asked at all).
+#[must_use]
+fn frame_rounded(folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial, width: f32) -> f32 {
+    let change = folds.apply(dock, &style(), width, 0.0, dial);
+    lay_out(dock, width);
+    if change.abs() < 0.5 { width } else { (width + change).round() }
+}
+
+/// Folding a pane must not move the pane beside it, even by the fraction of a
+/// point the window cannot be asked for.
+///
+/// The layout wants a fractional window and can only be given a whole one, so
+/// there is always a remainder; shared out over the panes it lands on every
+/// boundary at once, and the leftmost pane sliding is what the eye actually
+/// reads. Several starting widths because the remainder's SIGN follows the
+/// window: one width alone can be right by luck.
+#[test]
+fn folding_a_pane_does_not_move_its_neighbour_in_a_whole_point_window() {
+    for start in [1000.0_f32, 1001.0, 1237.0, 1400.5] {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let mut window = start;
+        for _ in 0..3 {
+            window = frame_rounded(&mut folds, &mut dock, &mut dial, window);
+        }
+        let before = width(&dock, LATTICE);
+        collapse(&mut dock, Tab::Spectral, true);
+        for _ in 0..4 {
+            window = frame_rounded(&mut folds, &mut dock, &mut dial, window);
+        }
+        let after = width(&dock, LATTICE);
+        assert!(
+            (after - before).abs() < 0.01,
+            "folding the analyzer at {start} moved the lattice from {before} to {after}",
+        );
+    }
+}
+
+/// A fold worked inside a floating dock window must not cost the main surface
+/// its hold.
+///
+/// A floating window has no window of its own to ask for, so a hold there could
+/// never be released — and the hold is one slot, so an unreleasable one would
+/// sit in it forever and every later unfold on the main surface would go
+/// through unheld. That is #121's flicker, handed back by the fix for it.
+#[test]
+fn a_fold_in_a_floating_window_does_not_cost_the_main_surface_its_hold() {
+    let mut dock = dock();
+    let floating = dock.add_window(vec![Tab::Notes]);
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    // A dock window is laid out in its own window, which the fold pass reads
+    // off the root's rect; without one it is skipped before it reaches any of
+    // this (`mod.rs`, the non-main `area`).
+    let float_frame = |folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial| {
+        lay_out_surface(dock, floating, 300.0);
+        let _ = frame(folds, dock, dial, 1000.0);
+        lay_out_surface(dock, floating, 300.0);
+    };
+    float_frame(&mut folds, &mut dock, &mut dial);
+
+    // Something folds and unfolds out in the floating window.
+    let leaf = dock[floating].find_tab(&Tab::Notes).expect("tab is in the window").0;
+    dock[floating][leaf].set_collapsed(true);
+    float_frame(&mut folds, &mut dock, &mut dial);
+    dock[floating][leaf].set_collapsed(false);
+    float_frame(&mut folds, &mut dock, &mut dial);
+
+    // The main surface's own unfold still waits for its window.
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Lattice, false);
+    let asked = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(
+        collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "the main surface's unfold is still held for the frame that has its window"
+    );
+    let _ = frame(&mut folds, &mut dock, &mut dial, asked);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "and still opens on it"
+    );
+}
+
+/// Resetting the layout while a pane is folded must not fold it again.
+///
+/// The reset swaps the whole dock, and folding never changes the tree's SHAPE,
+/// so the flags left over from the old one fit the new one exactly and read as
+/// an unfold nobody did — putting the pane the reset just opened straight back
+/// for a frame.
+#[test]
+fn resetting_the_layout_does_not_re_fold_the_pane_it_just_opened() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+    // The reset, as `root_ui` does it: a fresh dock, the folds given up, and
+    // the dial told the tree it was reading is gone.
+    let mut dock = super::tests::dock();
+    folds = Folds::default();
+    dial.forget();
+    let _ = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "the reset layout has every pane open, on the first frame and not the second"
+    );
+}
+

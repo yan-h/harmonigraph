@@ -174,12 +174,31 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   `update_buffers` itself measured 0.3 ms. The term is now gated on
   `msaa_samples > 1`; `width`/`height` start at 0, so the first frame still
   configures.
+- **Patch 10** (`src/renderer/wgpu/renderer.rs` `fold_present` module +
+  hooks, `Cargo.toml` objc2 deps): present a resize without the flash
+  (issue #121's fold flicker). Two artifacts, one layer: wgpu presents into
+  a `CAMetalLayer` that raw-window-metal adds as a plain (not view-backed)
+  sublayer, synced to the view's root layer from a KVO observer — so every
+  geometry change it takes carries CA's default quarter-second implicit
+  ease (of the presentation layer only; the model reports final values,
+  which is why #120's probes saw "nothing animating"), and it takes those
+  changes inside the HOST's transaction, out of reach of any
+  `CATransaction` wrapped around our own resize calls. A null `actions`
+  dictionary on the layer kills the lookup for every caller. Second: a
+  present is decoupled from the transaction carrying the new bounds, so
+  the resize commit shows the old drawable stretched into the new geometry
+  for a frame; `presentsWithTransaction`, raised for three presents
+  starting with the adopting frame's (`PWT_FRAMES = 3`, drained one per
+  frame from the frame that arms it; set before the acquire — the flag is
+  captured there), folds new content and new bounds into one commit. Costs a
+  main-thread wait per present, so it is not left on.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
   staged-upload flush, the repaint-deadline fix, the frame-timer
   plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers,
-  and the upload split with its per-frame-reconfigure fix.
+  the upload split with its per-frame-reconfigure fix, and the
+  fold-present module with its hooks and objc2 deps.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 

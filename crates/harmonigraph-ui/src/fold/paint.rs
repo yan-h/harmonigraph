@@ -197,6 +197,12 @@ pub fn paint(
             }
         }
     }
+    // Opened here, and held shut again by [`Folds::apply`] on the next frame
+    // until the window can hold the pane (see [`Open`]). Nothing is handed
+    // over: the hold watches the collapsed flags themselves, so it does not
+    // care which arrow moved them — and egui_dock's own collapse button, which
+    // it draws for a folded leaf too, moves them from inside `show` where
+    // nothing of ours can intercept it.
     if let Some((surface, node)) = opened {
         if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {
             uncollapse(tree, node);
