@@ -30,6 +30,9 @@ fn persist_round_trips_camera_and_view() {
     state.view.grid_inset = 0.0;
     state.view.grid_dashed = true;
     state.view.meantone = true;
+    // Off is the non-default here, and the one a project has to keep: the
+    // detect would otherwise re-engage the mode the user switched it off for.
+    state.view.meantone_auto = false;
     state.camera_presets.push(CameraPreset {
         name: "reading".into(),
         yaw: 0.7,
@@ -55,9 +58,29 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
     assert!(restored.view.grid_dashed);
     assert!(restored.view.meantone);
+    assert!(!restored.view.meantone_auto, "a switched-off auto-detect round-trips");
     assert_eq!(restored.camera_presets.len(), 1);
     assert_eq!(restored.camera_presets[0].name, "reading");
     assert_eq!(restored.camera_presets[0].yaw, 0.7);
+}
+
+#[test]
+fn a_blob_written_before_the_auto_detect_opts_into_it() {
+    // Every project saved before the switch existed carries no key for it,
+    // and each one has a tuning that already answers the question: a 12-TET
+    // project IS a meantone (400 = 4·700 − 2400), and its E and E- name one
+    // pitch whether or not anyone said "meantone". Defaulting the missing
+    // key to OFF would leave exactly those projects the only ones the
+    // feature never reaches.
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    let saved = state.save_persist().replace("meantone_auto:true,", "");
+    assert_ne!(saved, state.save_persist(), "removal must have hit");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&saved);
+    assert!(restored.view.meantone_auto, "a missing key means on");
+    assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 }
 
 #[test]

@@ -15,24 +15,66 @@ use crate::{theme, SharedState};
 use super::learn_pulse;
 use harmonigraph_core::tuning;
 
-/// The major-third bar while meantone mode drives it: read-only, showing
-/// the derived value (four fifths minus two octaves) the lattice actually
-/// uses. The dimmed bar and the word the `locked` flag puts at the front of
-/// its name make the lock obvious.
+/// The major-third bar while meantone mode drives it. It reads out the
+/// DERIVED third — four fifths minus two octaves, the value the lattice
+/// actually uses — rather than the third param, which is inert while the
+/// lock holds; the badge at the front of its name is what says the number
+/// is not the param's. (Front, because that is the end a narrow column's
+/// elision cannot reach — see `ValueBar::show`.)
 ///
-/// The NAME is the same string the unlocked bar carries. `ValueBar` adds the
-/// word itself, so it lands ahead of the name where a narrow column's elision
-/// cannot eat it — see the `locked` branch in `ValueBar::show`.
-fn locked_third_bar(ui: &mut egui::Ui, params: &dyn ParamBackend) {
-    let mut derived = tuning::meantone_third(params.get(ParamKey::Three));
-    ValueBar::new(&mut derived, ParamKey::Five.range(), "Major third (¢)")
+/// Draggable all the same: dragging it clear of the derived value is how the
+/// mode is let go of. [`tuning::MEANTONE_TOLERANCE`] is the width of that
+/// clearance, held by the bar's own magnet so a value inside it reads back
+/// as the derived one — but at half a cent on an 80¢ bar the magnet is a
+/// pixel or two, so in practice any drag you can see releases. It is a
+/// release threshold rather than a snap you can feel; what actually snaps
+/// TO meantone is a preset, a learned chord, or the switch.
+///
+/// Two things the swap to a plain [`param_bar`] on release rests on. The
+/// widget id is the same either way — both allocate at the same position in
+/// the same loop — so a drag that releases mid-gesture carries on into the
+/// bar that replaces it instead of ending on the spot. And the value it then
+/// draws is whatever the third param reports, which for a frame or more is
+/// the value the release is still writing (see `begin_frame` on the
+/// plugin's queued writes) — while the lock held, that param was inert and
+/// can be anywhere on the bar, so the readout flickers through it on the way.
+///
+/// The derived third can also be off the bar's ends: the fifth's range is
+/// wider than a quarter of the third's, so a fifth outside ~686.6–706.6¢
+/// derives a third the Five range excludes. The readout is still the honest
+/// value (the lattice really is using it), the fill saturates, and no drag
+/// can reach the magnet — so every drag releases, which is the right answer
+/// for a value you cannot get back to anyway.
+fn meantone_third_bar(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
+    let three = params.get(ParamKey::Three);
+    let derived = tuning::meantone_third(three);
+    let mut value = derived;
+    let response = ValueBar::new(&mut value, ParamKey::Five.range(), ParamKey::Five.label())
         .decimals(2)
-        .locked(true)
+        .badge("Meantone")
+        .magnet(derived, tuning::MEANTONE_TOLERANCE)
         .show(ui)
-        .on_hover_text(
-            "Meantone: the major third follows the perfect fifth \
-             (four fifths minus two octaves)",
-        );
+        .on_hover_text(format!(
+            "Meantone: the major third follows the perfect fifth (four fifths \
+             minus two octaves). Drag it more than {}¢ away to release the mode",
+            tuning::MEANTONE_TOLERANCE,
+        ));
+    // Bracketed like `param_bar`, so a drag that ends in a release records as
+    // one host gesture rather than a bare set in the middle of nothing.
+    if response.drag_started() {
+        params.begin_set(ParamKey::Five);
+    }
+    // A drag inside the window comes back at the derived value and reports no
+    // change at all, so this fires only on an edit that escaped. The distance
+    // is re-checked for the typed path, which reports every commit as a change
+    // whether or not the magnet took the value.
+    if response.changed() && !tuning::is_meantone(three, value) {
+        state.view.meantone = false;
+        params.set(ParamKey::Five, value);
+    }
+    if response.drag_stopped() {
+        params.end_set(ParamKey::Five);
+    }
 }
 
 pub(super) fn tuning_pane(
@@ -46,10 +88,10 @@ pub(super) fn tuning_pane(
     // the Nodes, Scene, Panel and Analyzer panes.
     ui.heading("Tuning");
     // Tuning sliders. In meantone mode the major third is locked to four
-    // perfect fifths, so its bar is shown read-only at the derived value.
+    // perfect fifths, so its bar shows the derived value and is the release.
     for &key in &ParamKey::TUNING {
         if key == ParamKey::Five && state.view.meantone {
-            locked_third_bar(ui, params);
+            meantone_third_bar(ui, state, params);
         } else {
             param_bar(ui, params, key);
         }
@@ -71,24 +113,51 @@ pub(super) fn tuning_pane(
             params.set(ParamKey::Three, tuning::THREE_12TET);
             params.set(ParamKey::Five, tuning::FIVE_12TET);
             params.set(ParamKey::Seven, tuning::SEVEN_12TET);
-            // 12-TET is itself a meantone (400 = 4·700 − 2400), so it's
-            // consistent either way; leave the lock as the user has it.
+            // 12-TET is itself a meantone (400 = 4·700 − 2400), so the mode
+            // is consistent either way; the auto-detect engages it from the
+            // pair on the next frame, and with the detect off the lock is
+            // left as the user has it.
         }
         // Meantone mode: lock the major third to four perfect fifths.
-        // Toggle switches, not buttons: Meantone and Learn are persistent
-        // modes and must not read like the momentary presets beside them.
-        let meantone = crate::widgets::toggle_switch(ui, &mut state.view.meantone, "Meantone")
-            .on_hover_text(
-                "Lock the major third to four perfect fifths (temper out \
-                 the syntonic comma); note-name labels drop their comma marks",
-            );
-        if meantone.changed() && !state.view.meantone {
-            // Turning off: keep the third where the lock left it so the
-            // now-editable bar doesn't jump.
-            params.set(
-                ParamKey::Five,
-                tuning::meantone_third(params.get(ParamKey::Three)),
-            );
+        // Toggle switches, not buttons: Meantone, Auto and Learn are
+        // persistent modes and must not read like the momentary presets
+        // beside them.
+        //
+        // Live whatever Auto is doing: switching it ON is how a tuning that
+        // is NOT within the tolerance gets snapped to meantone anyway, and
+        // the detect never releases, so that decision stands. Switching it
+        // OFF stands too — the detect judges each tuning once, and this one
+        // has been judged (see `begin_frame`).
+        //
+        // Nothing is written to the third param either way. The lock only
+        // ever DERIVED the third; handing that derived value back on the way
+        // out would rewrite a tuning the user set (a just third comes back as
+        // a tempered one) as a side effect of pressing a mode twice.
+        crate::widgets::toggle_switch(ui, &mut state.view.meantone, "Meantone")
+            .on_hover_text(if state.view.meantone_auto {
+                "Lock the major third to four perfect fifths (temper out the \
+                 syntonic comma); note-name labels drop their comma marks. Auto \
+                 engages it too, and switching it off here holds until the \
+                 tuning changes"
+            } else {
+                "Lock the major third to four perfect fifths (temper out the \
+                 syntonic comma); note-name labels drop their comma marks"
+            });
+        // Auto-detect. Switching it ON re-opens the question on the tuning
+        // already loaded — without clearing the verdict it would engage
+        // nothing until the tuning next moved, since `begin_frame` records
+        // every pair it sees whether the detect is running or not. Switching
+        // it off leaves the mode where it is, with the switch beside it still
+        // live.
+        let auto = crate::widgets::toggle_switch(ui, &mut state.view.meantone_auto, "Auto")
+            .on_hover_text(format!(
+                "Engage meantone by itself whenever the major third lands within \
+                 {}¢ of four perfect fifths — from a preset, a learned chord, or \
+                 a drag of either bar",
+                tuning::MEANTONE_TOLERANCE,
+            ));
+        if auto.changed() && state.view.meantone_auto {
+            state.meantone_judged = None;
         }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
