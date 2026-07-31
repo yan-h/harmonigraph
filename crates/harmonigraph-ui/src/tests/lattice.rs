@@ -381,6 +381,32 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
     assert!(state.view.meantone, "a new meantone tuning should engage again");
 }
 
+/// Switching the detect ON asks it about the tuning already loaded, which
+/// takes clearing the verdict: `begin_frame` records every pair it sees,
+/// running or not, so the pair in front of it has been "judged" by the time
+/// the switch is pressed and would be skipped until the tuning next moved.
+/// A project saved with the detect off is the case that never recovers on
+/// its own.
+#[test]
+fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.meantone_auto = false;
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET,
+    );
+    for frame in 0..3 {
+        begin_frame(&mut state, &params, frame as f64);
+    }
+    assert!(!state.view.meantone, "the detect is off; nothing should engage");
+
+    // The Auto switch, in full: the flag and the cleared verdict.
+    state.view.meantone_auto = true;
+    state.meantone_judged = None;
+    begin_frame(&mut state, &params, 3.0);
+    assert!(state.view.meantone, "switching the detect on left 12-TET unjudged");
+}
+
 /// A tuning write the host has not reported back must not be judged on the
 /// value it is moving away FROM. In the plugin every `set` is queued for the
 /// host, so for a frame or more `get` still answers with the old value —

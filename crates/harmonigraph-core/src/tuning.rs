@@ -62,11 +62,10 @@ pub fn meantone_third(fifth_cents: f32) -> f32 {
 ///
 /// It is also the width of the third bar's magnet (see the UI's
 /// `meantone_third_bar`), so the same number says how far a drag has to pull
-/// to release the mode. Narrow is the right side to err on there too: the bar
-/// is 80¢ end to end, so a wide magnet swallows a real part of the range —
-/// and at this width the magnet is a hair of travel, which makes the mode
-/// easy to leave and effectively unreachable by dragging alone. Reaching it
-/// is what the presets, learn and typing a value are for.
+/// to release the mode. At this width that is a pixel or two of an 80¢ bar,
+/// which makes it a release threshold rather than a snap anyone will feel:
+/// the mode is easy to leave and effectively unreachable by dragging alone.
+/// Reaching it is what the presets, learn and typing a value are for.
 pub const MEANTONE_TOLERANCE: f32 = 0.5;
 
 /// Whether a fifth/third pair is (close to) a meantone temperament: the

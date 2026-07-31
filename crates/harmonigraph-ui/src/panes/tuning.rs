@@ -22,12 +22,29 @@ use harmonigraph_core::tuning;
 /// is not the param's. (Front, because that is the end a narrow column's
 /// elision cannot reach — see `ValueBar::show`.)
 ///
-/// Draggable all the same, and with the auto-detect on this is the only way
-/// out of the mode. Inside [`tuning::MEANTONE_TOLERANCE`] the drag is
-/// swallowed and the bar springs back to the derived value — that magnet is
-/// what "snapping to four fifths" means from the pointer's side. Past the
-/// tolerance the mode drops and the param takes the dragged value, so the
-/// bar carries on from exactly where the pointer left it rather than jumping.
+/// Draggable all the same: dragging it clear of the derived value is how the
+/// mode is let go of. [`tuning::MEANTONE_TOLERANCE`] is the width of that
+/// clearance, held by the bar's own magnet so a value inside it reads back
+/// as the derived one — but at half a cent on an 80¢ bar the magnet is a
+/// pixel or two, so in practice any drag you can see releases. It is a
+/// release threshold rather than a snap you can feel; what actually snaps
+/// TO meantone is a preset, a learned chord, or the switch.
+///
+/// Two things the swap to a plain [`param_bar`] on release rests on. The
+/// widget id is the same either way — both allocate at the same position in
+/// the same loop — so a drag that releases mid-gesture carries on into the
+/// bar that replaces it instead of ending on the spot. And the value it then
+/// draws is whatever the third param reports, which for a frame or more is
+/// the value the release is still writing (see `begin_frame` on the
+/// plugin's queued writes) — while the lock held, that param was inert and
+/// can be anywhere on the bar, so the readout flickers through it on the way.
+///
+/// The derived third can also be off the bar's ends: the fifth's range is
+/// wider than a quarter of the third's, so a fifth outside ~686.6–706.6¢
+/// derives a third the Five range excludes. The readout is still the honest
+/// value (the lattice really is using it), the fill saturates, and no drag
+/// can reach the magnet — so every drag releases, which is the right answer
+/// for a value you cannot get back to anyway.
 fn meantone_third_bar(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     let three = params.get(ParamKey::Three);
     let derived = tuning::meantone_third(three);
@@ -126,17 +143,22 @@ pub(super) fn tuning_pane(
                 "Lock the major third to four perfect fifths (temper out the \
                  syntonic comma); note-name labels drop their comma marks"
             });
-        // Auto-detect. Nothing to do on a change: switched on, the detect
-        // runs in `begin_frame` and engages from the tuning itself; switched
-        // off, the mode simply stays where it is with the switch live again.
-        crate::widgets::toggle_switch(ui, &mut state.view.meantone_auto, "Auto").on_hover_text(
-            format!(
+        // Auto-detect. Switching it ON re-opens the question on the tuning
+        // already loaded — without clearing the verdict it would engage
+        // nothing until the tuning next moved, since `begin_frame` records
+        // every pair it sees whether the detect is running or not. Switching
+        // it off leaves the mode where it is, with the switch beside it still
+        // live.
+        let auto = crate::widgets::toggle_switch(ui, &mut state.view.meantone_auto, "Auto")
+            .on_hover_text(format!(
                 "Engage meantone by itself whenever the major third lands within \
                  {}¢ of four perfect fifths — from a preset, a learned chord, or \
                  a drag of either bar",
                 tuning::MEANTONE_TOLERANCE,
-            ),
-        );
+            ));
+        if auto.changed() && state.view.meantone_auto {
+            state.meantone_judged = None;
+        }
         // v1's tuning-learn mode: while engaged, the tuning re-learns
         // instantly whenever the set of held notes changes (see root_ui).
         let learn = crate::widgets::toggle_switch(ui, &mut state.learn_active, "Learn")
