@@ -101,31 +101,107 @@ pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
 /// is the biggest thing in a label and the one whose stepping would show. The
 /// rest of a label is sized off the same scale, so it lands where the
 /// proportions put it rather than on a pixel of its own.
-pub(crate) fn snap_scale(scale: f32, base: f32, ppp: f32) -> f32 {
+///
+/// A third grain sits on top of those two, and it is about WHEN a size changes
+/// rather than which sizes there are: the rung `id` last drew at is remembered,
+/// and held until the scale has travelled [`RUNG_HOLD`] of a rung away from it.
+///
+/// The ladder alone decides where the boundaries ARE, not what happens at one.
+/// Choosing the nearest rung means a scale sitting within a hair of the
+/// halfway point picks a different one whenever the hair moves, and a hair is
+/// all it takes: the analyzer zooms off `smooth_scroll_delta`, which decays
+/// over several frames after the gesture stops rather than arriving at a rest
+/// value, so the span keeps creeping while the picture looks still. Held, that
+/// creep changes nothing; nearest, it is the label alternating between two
+/// sizes on a picture that has stopped moving — which reads as a fault where
+/// the stepping DURING a zoom reads as a size following a zoom.
+///
+/// `id` must be one per surface, since it holds one rung: the docked pane and
+/// the Render preview draw the same lattice at different sizes, and one slot
+/// between them is two scales fighting over it every frame — the dither this
+/// exists to remove, and worse, because the two are far apart.
+///
+/// Keyed in egui's own per-frame store rather than in [`crate::SharedState`],
+/// because that is where the panes' other cross-frame drawing state already
+/// lives (`panes::lattice`'s mark cache) and because the offline renderer
+/// builds a fresh context per render — so a recorded frame depends on the
+/// history WITHIN its render and not on anything a previous one left behind.
+pub(crate) fn snap_scale_held(
+    ctx: &egui::Context,
+    id: egui::Id,
+    scale: f32,
+    base: f32,
+    ppp: f32,
+) -> f32 {
+    let held = ctx.data(|d| d.get_temp::<f32>(id));
+    let (snapped, rung) = snap_onto(scale, base, ppp, held);
+    // Only when there IS one: the guard paths return before choosing a rung,
+    // and writing nothing there leaves whatever this surface was holding for
+    // when the numbers make sense again.
+    if let Some(rung) = rung {
+        ctx.data_mut(|d| d.insert_temp(id, rung));
+    }
+    snapped
+}
+
+/// The snapped scale, and the rung index it settled on for the next frame to
+/// hold. `held` is the index this surface last drew at.
+fn snap_onto(scale: f32, base: f32, ppp: f32, held: Option<f32>) -> (f32, Option<f32>) {
     // A scale that is not a number cannot be drawn at, and passing it on is
     // the quietest of the failures available: egui rasterizes such a size to
     // an empty glyph, so every label vanishes and nothing says why. The size
     // the base was chosen at is the one value certain to be legible.
     if !scale.is_finite() {
-        return 1.0;
+        return (1.0, None);
     }
     // Physical pixels per unit of scale. A nonsense one (a zero base, a
     // hand-edited ppp) leaves the scale alone rather than dividing by it.
     let per_scale = base * ppp;
     if !per_scale.is_finite() || per_scale <= 0.0 || scale <= 0.0 {
-        return scale;
+        return (scale, None);
     }
-    // The rung of the ladder this scale sits nearest, then the pixel that rung
-    // rounds onto. Anchored at scale 1, so the size a label was dialled at is
-    // reproduced exactly rather than to within a step.
-    let rung = SIZE_STEP.powf((scale.ln() / SIZE_STEP.ln()).round());
-    (rung * per_scale).round().clamp(1.0, MAX_GLYPH_PX) / per_scale
+    // The rung of the ladder this scale sits nearest — or the one already held,
+    // if it is near enough — and then the pixel that rung rounds onto. Anchored
+    // at scale 1, so the size a label was dialled at is reproduced exactly
+    // rather than to within a step.
+    let index = scale.ln() / SIZE_STEP.ln();
+    let index = match held {
+        Some(held) if (index - held).abs() <= RUNG_HOLD => held,
+        // Nearest, NOT a step off the held one: a scale that has jumped —
+        // the window moved to a display of another density, a preset snapped
+        // the camera — must land where it belongs in one frame rather than
+        // walking there a rung at a time.
+        _ => index.round(),
+    };
+    let rung = SIZE_STEP.powf(index);
+    ((rung * per_scale).round().clamp(1.0, MAX_GLYPH_PX) / per_scale, Some(index))
 }
 
 /// One rung of the size ladder, as a ratio. 4% — under what reads as a change
 /// of size while a picture is moving, and coarse enough that a sixfold zoom
 /// asks for some 45 sizes where a pixel grid asked for 300.
 const SIZE_STEP: f32 = 1.04;
+
+/// How far a scale must travel from the rung it is holding, in rungs, before it
+/// gives it up.
+///
+/// The band this opens is `2 * RUNG_HOLD` rungs wide against the one rung a
+/// nearest-rung choice gives, so it is bounded on both sides by what it is
+/// between:
+///
+///   - above 0.5, or there is no hysteresis at all and a scale on a boundary
+///     dithers exactly as it did;
+///   - below 1.0, so that a scale landing ON a rung always takes it. That is
+///     what keeps the ladder's anchor: scale 1 draws at the size it was
+///     dialled at no matter which side it arrived from, where at 1.0 and above
+///     a label could hold a neighbouring rung through it and the dialled size
+///     would depend on the zoom's history.
+///
+/// 0.65 sits clear of both. The cost is drift — type runs up to 0.65 of a rung
+/// from its ideal size rather than 0.5, which is 2.6% against 2% — and the
+/// whole of what that buys is against a grain of 4%, so it is well under the
+/// step it is smoothing.
+const RUNG_HOLD: f32 = 0.65;
 
 /// The largest a label's type is ever rasterized, in physical pixels.
 ///
@@ -146,6 +222,15 @@ pub(crate) const LATTICE_PREVIEW_LABELS: u64 = 1;
 /// The analyzer's, one per surface (docked, then the preview).
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
     2 + surface as u64
+}
+
+/// Where a surface's held rung lives, for [`snap_scale_held`].
+///
+/// Built from the batch id above and the KIND of text, since one surface can
+/// size two kinds independently — the analyzer's markings answer to their own
+/// bar and its names to the pitch zoom, so they hold their rungs apart.
+pub(crate) fn size_ladder(batch: u64, kind: &'static str) -> egui::Id {
+    egui::Id::new(("text-size-ladder", batch, kind))
 }
 
 /// One glyph as the mirror identifies it: its size, its character, and the
@@ -352,7 +437,7 @@ impl TextBatch {
 /// How often this copies is a function of how many distinct sizes the panes
 /// ask for, which is no longer a handful: a label's size follows the camera
 /// and the pitch zoom, so a zoom gesture walks through sizes and each is a
-/// fresh set of glyphs. See [`snap_scale`], which bounds that set, and the
+/// fresh set of glyphs. See [`snap_scale_held`], which bounds that set, and the
 /// note on what a refresh costs in `harmonigraph_render::text`.
 #[derive(Default)]
 pub(crate) struct AtlasMirror {
@@ -436,6 +521,14 @@ fn atlas_if_changed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ladder's answer for a surface with no history — what every call was
+    /// before a rung was held, and still what the first frame of one gets. The
+    /// tests that are about which SIZES exist use this; the ones about when a
+    /// size changes drive [`snap_scale_held`] frame by frame instead.
+    fn unheld(scale: f32, base: f32, ppp: f32) -> f32 {
+        snap_onto(scale, base, ppp, None).0
+    }
 
     /// Lay `text` out at `ppp` and report exactly what a pane drawing it would
     /// hand [`atlas_if_changed`]: the keys of its glyphs, with the atlas
@@ -547,15 +640,15 @@ mod tests {
     #[test]
     fn snapping_bounds_the_sizes_a_zoom_can_ask_for() {
         // 15pt at 2x is 30 physical pixels, so scale 1 is already whole.
-        assert_eq!(snap_scale(1.0, 15.0, 2.0), 1.0, "the dialled size is left alone");
-        assert_eq!(snap_scale(1.0, 9.5, 2.0), 1.0, "19 physical pixels, already whole");
+        assert_eq!(unheld(1.0, 15.0, 2.0), 1.0, "the dialled size is left alone");
+        assert_eq!(unheld(1.0, 9.5, 2.0), 1.0, "19 physical pixels, already whole");
         // A base that isn't whole on the display it is drawn on lands on the
         // grid rather than sitting off it: the roll's name is 24.7 pixels at
         // 2x, and draws at 25.
-        assert!((snap_scale(1.0, 12.35, 2.0) * 12.35 * 2.0 - 25.0).abs() < 1e-4);
+        assert!((unheld(1.0, 12.35, 2.0) * 12.35 * 2.0 - 25.0).abs() < 1e-4);
 
         // A rung is 4%, so everything inside one lands on the same size...
-        let bucket = |scale: f32| snap_scale(scale, 15.0, 2.0);
+        let bucket = |scale: f32| unheld(scale, 15.0, 2.0);
         assert_eq!(bucket(2.0), bucket(2.01));
         assert_eq!(bucket(2.0), bucket(2.03));
         let px = bucket(2.0) * 15.0 * 2.0;
@@ -566,28 +659,115 @@ mod tests {
         // Over a sixfold zoom that is some 45 sizes, where a pixel grid at
         // these sizes let through 300 — the whole point of the ladder.
         let rungs: std::collections::HashSet<u32> =
-            (0..600).map(|i| snap_scale(1.0 + i as f32 / 100.0, 30.0, 2.0).to_bits()).collect();
+            (0..600).map(|i| unheld(1.0 + i as f32 / 100.0, 30.0, 2.0).to_bits()).collect();
         assert!(rungs.len() < 60, "{} distinct sizes across a sixfold zoom", rungs.len());
 
         // A nonsense denominator leaves the scale alone rather than dividing
         // by it: no size this could produce is better than the one asked for.
-        assert_eq!(snap_scale(1.5, 0.0, 2.0), 1.5);
-        assert_eq!(snap_scale(1.5, 15.0, 0.0), 1.5);
-        assert_eq!(snap_scale(1.5, f32::NAN, 2.0), 1.5);
+        assert_eq!(unheld(1.5, 0.0, 2.0), 1.5);
+        assert_eq!(unheld(1.5, 15.0, 0.0), 1.5);
+        assert_eq!(unheld(1.5, f32::NAN, 2.0), 1.5);
         // A scale that is not a number is a different matter: there is no
         // size to snap, and passing it on draws nothing at all.
-        assert_eq!(snap_scale(f32::NAN, 15.0, 2.0), 1.0);
-        assert_eq!(snap_scale(f32::INFINITY, 15.0, 2.0), 1.0);
+        assert_eq!(unheld(f32::NAN, 15.0, 2.0), 1.0);
+        assert_eq!(unheld(f32::INFINITY, 15.0, 2.0), 1.0);
         // And nothing snaps to zero: a floored pixel is still a pixel...
-        assert!(snap_scale(0.001, 15.0, 2.0) * 15.0 * 2.0 >= 1.0);
+        assert!(unheld(0.001, 15.0, 2.0) * 15.0 * 2.0 >= 1.0);
         // ...nor past what a rasterizer will take. Every factor feeding a
         // label's size is bounded on its own, but they multiply, and a glyph
         // wider than the atlas is not a big label: it is the overflow path
         // recycling texels that live glyphs point at.
         for absurd in [50.0, 1e6, f32::INFINITY] {
-            let px = snap_scale(absurd, 30.0, 2.0) * 30.0 * 2.0;
+            let px = unheld(absurd, 30.0, 2.0) * 30.0 * 2.0;
             assert!(px <= MAX_GLYPH_PX, "a scale of {absurd} asked for {px} pixels of type");
         }
+    }
+
+    /// A scale sitting on a rung boundary must not alternate between the two
+    /// sizes either side of it.
+    ///
+    /// This is the failure the ladder alone leaves behind, and it is the one a
+    /// still picture shows: nearest-rung means the halfway point is a knife
+    /// edge, and the analyzer's zoom reads `smooth_scroll_delta`, which decays
+    /// over several frames rather than arriving at a rest value. So a gesture
+    /// that has visibly stopped keeps nudging the scale across that edge, and
+    /// the label flickers between two sizes on a picture that is not moving.
+    ///
+    /// Driven here as the panes drive it — one call per frame against one held
+    /// rung — since a dither is a property of the SEQUENCE and no single call
+    /// can be wrong.
+    #[test]
+    fn a_scale_parked_on_a_boundary_holds_its_rung() {
+        let (base, ppp) = (15.0, 2.0);
+        // The exact scale halfway between two rungs, which is where a
+        // nearest-rung choice has nothing to prefer.
+        let edge = SIZE_STEP.powf(10.5);
+        let held = |scale: f32, held: Option<f32>| snap_onto(scale, base, ppp, held).0;
+
+        // Nearest, the two sides of the edge are two different sizes...
+        let below = held(edge * 0.999, None);
+        let above = held(edge * 1.001, None);
+        assert_ne!(below, above, "the edge must actually be one, or this proves nothing");
+        // ...and a scale creeping back and forth across it alternates between
+        // them, which is the bug.
+        assert_eq!(held(edge * 1.001, None), above);
+        assert_eq!(held(edge * 0.999, None), below);
+
+        // Holding a rung, that same creep changes nothing: whichever side the
+        // scale arrived from, it keeps the size it already had.
+        let rung_below = snap_onto(edge * 0.999, base, ppp, None).1.expect("a real rung");
+        for nudge in [0.999, 1.001, 0.9995, 1.0005] {
+            assert_eq!(
+                held(edge * nudge, Some(rung_below)),
+                below,
+                "a scale on the edge gave up its rung to a nudge of {nudge}",
+            );
+        }
+
+        // A real zoom still moves it. The hold is a band, not a latch: past
+        // RUNG_HOLD the size follows, and it follows to where the scale
+        // actually IS rather than one step along — a preset snapping the
+        // camera must land in one frame.
+        let far = SIZE_STEP.powf(20.0);
+        assert_eq!(held(far, Some(rung_below)), held(far, None), "a jump lands where it belongs");
+        // And the anchor survives the hold: scale 1 is the size the label was
+        // dialled at, from either side, which is what keeps RUNG_HOLD under a
+        // whole rung.
+        for from in [-1.0, 1.0, -3.0, 7.0] {
+            assert_eq!(held(1.0, Some(from)), 1.0, "arriving at the dialled size from rung {from}");
+        }
+    }
+
+    /// Two surfaces drawing the same picture at different sizes must not share
+    /// a held rung: one slot between them is the two scales overwriting each
+    /// other every frame, which is a worse dither than the one hysteresis is
+    /// here to remove — the docked lattice and the Render preview are far
+    /// apart, so each would drag the other clean across the ladder.
+    #[test]
+    fn each_surface_holds_a_rung_of_its_own() {
+        let ctx = egui::Context::default();
+        let (base, ppp) = (15.0, 2.0);
+        let docked = size_ladder(LATTICE_LABELS, "lattice-names");
+        let preview = size_ladder(LATTICE_PREVIEW_LABELS, "lattice-names");
+        assert_ne!(docked, preview, "the two surfaces must key apart");
+        // The analyzer sizes two kinds of text off two different factors, so
+        // they hold apart too, on the one surface.
+        assert_ne!(
+            size_ladder(spectral_labels(0), "spectral-names"),
+            size_ladder(spectral_labels(0), "spectral-markings"),
+        );
+
+        // Drawn alternately, as a frame does, at scales a long way apart.
+        let (big, small) = (SIZE_STEP.powf(12.0), SIZE_STEP.powf(2.0));
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..4 {
+            seen.insert(snap_scale_held(&ctx, docked, big, base, ppp).to_bits());
+            seen.insert(snap_scale_held(&ctx, preview, small, base, ppp).to_bits());
+        }
+        assert_eq!(seen.len(), 2, "two surfaces at two scales must settle on two sizes");
+        // Each on the size it would have reached alone.
+        assert_eq!(snap_scale_held(&ctx, docked, big, base, ppp), unheld(big, base, ppp));
+        assert_eq!(snap_scale_held(&ctx, preview, small, base, ppp), unheld(small, base, ppp));
     }
 
     /// A SCALE change re-rasterizes every glyph and hands out new UVs, and the

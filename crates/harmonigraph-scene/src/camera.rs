@@ -333,7 +333,7 @@ mod tests {
         // both ends, so the factor is too.
         assert_eq!(at(Camera::DEFAULT_DISTANCE * 0.5, Camera::DEFAULT_FOV_Y), 2.0);
         // Finite and positive is the whole of what is owed here: what a label
-        // may finally be SIZED at is bounded downstream, by `text::snap_scale`.
+        // may finally be SIZED at is bounded downstream, by `text::snap_scale_held`.
         let inside = |scale: f32| scale.is_finite() && scale > 0.0 && scale < 100.0;
         for distance in [0.0, -1.0, f32::NAN, f32::INFINITY, 1e30, -1e30] {
             let scale = at(distance, Camera::DEFAULT_FOV_Y);

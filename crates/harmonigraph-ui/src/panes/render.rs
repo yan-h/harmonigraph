@@ -361,7 +361,14 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
         let mut clipped = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         clipped.set_clip_rect(rect);
         let mut batch = crate::text::TextBatch::default();
-        super::lattice::draw_node_labels(&clipped, rect, &scene, &state.view, &mut batch);
+        super::lattice::draw_node_labels(
+            &clipped,
+            rect,
+            &scene,
+            &state.view,
+            &mut batch,
+            crate::text::LATTICE_PREVIEW_LABELS,
+        );
         batch.flush(clipped.painter(), rect, state, crate::text::LATTICE_PREVIEW_LABELS);
     }
 }

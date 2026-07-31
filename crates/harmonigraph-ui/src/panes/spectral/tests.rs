@@ -39,10 +39,13 @@ fn power_at(db: f32) -> f32 {
 fn names_follow_the_pitch_zoom_and_markings_hold_still() {
     let cfg = SpectrumConfig::default();
     let axes = axes(reference_pane(), SpectralOrientation::Left);
-    let at = |span| text_scales(&cfg, &axes, span, 2.0);
+    // A context per call, so each answer is the ladder's alone: a shared one
+    // would carry the previous span's rung into the next, which is the whole
+    // job of `snap_scale_held` and has a test of its own below.
+    let at = |span| text_scales(&egui::Context::default(), 0, &cfg, &axes, span, 2.0);
     // Every size comes out snapped onto a whole physical pixel, and a name
     // is 12.35pt, which is not one at 2x — so the law is met to within half
-    // a pixel of type and no closer. See `text::snap_scale`.
+    // a pixel of type and no closer. See `text::snap_scale_held`.
     let pixel = 0.5 / (names::LABEL_PT * 2.0);
 
     let full = at(FULL_PITCH_SPAN).names;
@@ -68,12 +71,12 @@ fn names_follow_the_pitch_zoom_and_markings_hold_still() {
     // The markings ignore all of it, and answer to their own bar.
     assert_eq!(at(FULL_PITCH_SPAN).markings, at(crate::PITCH_RANGE_MIN_SPAN).markings);
     let bigger = SpectrumConfig { marking_scale: 2.0, ..SpectrumConfig::default() };
-    let doubled = text_scales(&bigger, &axes, 24.0, 2.0).markings;
+    let doubled = text_scales(&egui::Context::default(), 0, &bigger, &axes, 24.0, 2.0).markings;
     // Within a rung of the size ladder, which is what the bar's 2 is
-    // rounded onto — see `text::snap_scale`.
+    // rounded onto — see `text::snap_scale_held`.
     assert!((doubled / 2.0 - 1.0).abs() <= 0.04, "the bar's 2 drew at {doubled}");
     assert_eq!(
-        text_scales(&bigger, &axes, 24.0, 2.0).names,
+        text_scales(&egui::Context::default(), 0, &bigger, &axes, 24.0, 2.0).names,
         at(24.0).names,
         "and the two bars are independent",
     );
@@ -103,8 +106,8 @@ fn text_shrinks_with_the_pane() {
     );
     let full = axes(reference_pane(), SpectralOrientation::Left);
     let small = axes(half, SpectralOrientation::Left);
-    let docked = text_scales(&cfg, &full, 48.0, 2.0);
-    let shrunk = text_scales(&cfg, &small, 48.0, 2.0);
+    let docked = text_scales(&egui::Context::default(), 0, &cfg, &full, 48.0, 2.0);
+    let shrunk = text_scales(&egui::Context::default(), 0, &cfg, &small, 48.0, 2.0);
     assert!((shrunk.names / docked.names - 0.5).abs() < 0.02);
     assert!((shrunk.markings / docked.markings - 0.5).abs() < 0.02);
     // ...and at the reference pane the bars read what they say.

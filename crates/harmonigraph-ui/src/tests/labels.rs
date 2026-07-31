@@ -457,7 +457,16 @@ fn the_cents_readout_sits_right_under_the_note_name() {
     let mut batch = crate::text::TextBatch::default();
     let _ = ctx.run_ui(
         egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
-        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch),
+        |ui| {
+            panes::lattice::draw_node_labels(
+                ui,
+                rect,
+                &scene,
+                &state.view,
+                &mut batch,
+                crate::text::LATTICE_LABELS,
+            )
+        },
     );
 
     // A held note lights every node of its pitch class, so each piece turns

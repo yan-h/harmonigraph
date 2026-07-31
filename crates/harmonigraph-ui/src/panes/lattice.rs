@@ -90,7 +90,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         draw_learn_overlay(&mut batch, ui, rect, now);
     }
     if state.view.show_labels {
-        draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+        draw_node_labels(ui, rect, &scene, &state.view, &mut batch, crate::text::LATTICE_LABELS);
     }
     batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
 }
@@ -176,12 +176,18 @@ fn label_strength(node: &harmonigraph_scene::NodeInstance, trailed: bool, keeps_
 /// callers -- the pane's own size, the camera's zoom and the user's Size bar --
 /// so the docked view, the Render preview and the offline render cannot drift
 /// apart over which of the three each remembered to apply.
+///
+/// `batch_id` is the id the caller will flush under, and identifies the SURFACE
+/// for the size ladder's sake: the docked pane and the Render preview draw this
+/// same lattice at two sizes, and each has to hold its own rung (see
+/// [`crate::text::snap_scale_held`]).
 pub(crate) fn draw_node_labels(
     ui: &egui::Ui,
     rect: egui::Rect,
     scene: &harmonigraph_scene::Scene,
     view: &harmonigraph_scene::ViewConfig,
     batch: &mut crate::text::TextBatch,
+    batch_id: u64,
 ) {
     // The nodes are world-space geometry and their labels are typeset in
     // points, so a label stays ON its node only by following the two things
@@ -199,9 +205,12 @@ pub(crate) fn draw_node_labels(
     // and nothing at all.
     //
     // Snapped, because a size that tracks a continuous zoom is a new entry in
-    // egui's font atlas every frame of a drag otherwise -- see
-    // `crate::text::snap_scale`.
-    let scale = crate::text::snap_scale(
+    // egui's font atlas every frame of a drag otherwise -- and HELD, so that a
+    // camera resting on a rung boundary does not alternate between the two
+    // sizes either side of it. See `crate::text::snap_scale_held`.
+    let scale = crate::text::snap_scale_held(
+        ui.painter().ctx(),
+        crate::text::size_ladder(batch_id, "lattice-names"),
         rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale(),
         NAME_SIZE,
         ui.painter().ctx().pixels_per_point(),
@@ -1305,7 +1314,14 @@ mod tests {
             egui::RawInput { screen_rect: Some(screen), ..Default::default() },
             |ui| {
                 let child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                draw_node_labels(&child, rect, &scene, &state.view, &mut batch);
+                draw_node_labels(
+                    &child,
+                    rect,
+                    &scene,
+                    &state.view,
+                    &mut batch,
+                    crate::text::LATTICE_LABELS,
+                );
             },
         );
         (batch.pieces().to_vec(), scene)
@@ -1424,11 +1440,11 @@ mod tests {
         // Within a rung of the ladder either way. The size follows the camera
         // continuously and is RASTERIZED at the nearest size on offer, which
         // is what keeps a zoom from asking egui for a new one every frame —
-        // see `text::snap_scale`.
+        // see `text::snap_scale_held`.
         let tracks = |distance: f32, want: f32| {
             let got = biggest(distance);
             // Off by at most a rung of the ladder, or half a pixel where that
-            // is coarser — the two grains `snap_scale` quantizes on. A quarter
+            // is coarser — the two grains `snap_scale_held` quantizes on. A quarter
             // of a 30pt name is 7.5 pixels on this 1x context, where half a
             // pixel is a fifteenth of the size and the rung is a thirtieth.
             let slack = (0.04 * want).max(0.5);

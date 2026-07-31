@@ -113,7 +113,8 @@ pub(crate) fn spectral_pane(
     let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
     // Everything this pane sets text at, decided once from the range it just
     // settled on: the markings hold their size, the names follow the zoom.
-    let text = text_scales(&cfg, &axes, scale.span, painter.ctx().pixels_per_point());
+    let ppp = painter.ctx().pixels_per_point();
+    let text = text_scales(painter.ctx(), surface, &cfg, &axes, scale.span, ppp);
     // dB depth mapping: 0 dB (a full-scale sine) tops out at 85% of the
     // spectrum's share; the Analyzer tab's floor sets the bottom. Tilt is
     // the conventional reference slope (negative), so the display

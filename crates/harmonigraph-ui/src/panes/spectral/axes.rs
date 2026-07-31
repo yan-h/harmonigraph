@@ -86,7 +86,7 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 /// [`REFERENCE_PITCH_LEN`], the user's bar for that kind of text, and — for
 /// the note names alone — the pitch zoom. Both come out snapped, since a scale
 /// that follows a continuous zoom otherwise asks egui for a new font size on
-/// every frame of a drag (see [`crate::text::snap_scale`]).
+/// every frame of a drag (see [`crate::text::snap_scale_held`]).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TextScales {
     /// The axis marking labels.
@@ -95,11 +95,33 @@ pub(super) struct TextScales {
     pub(super) names: f32,
 }
 
-pub(super) fn text_scales(cfg: &crate::SpectrumConfig, axes: &Axes, span: f32, ppp: f32) -> TextScales {
+/// `surface` tells the docked pane from the Render preview, which draw this
+/// analyzer at two sizes and so hold their rungs apart — as do the two kinds of
+/// text here, which answer to different factors. See
+/// [`crate::text::snap_scale_held`], and note that `ctx` is where those held
+/// rungs live: a fresh context is a pane with no history, which is what the
+/// tests below rely on and what makes an offline render reproducible.
+pub(super) fn text_scales(
+    ctx: &egui::Context,
+    surface: usize,
+    cfg: &crate::SpectrumConfig,
+    axes: &Axes,
+    span: f32,
+    ppp: f32,
+) -> TextScales {
     let pane = axes.pitch_len() / REFERENCE_PITCH_LEN;
+    let ladder = |kind| crate::text::size_ladder(crate::text::spectral_labels(surface), kind);
     TextScales {
-        markings: crate::text::snap_scale(pane * cfg.marking_scale, MARKING_PT, ppp),
-        names: crate::text::snap_scale(
+        markings: crate::text::snap_scale_held(
+            ctx,
+            ladder("spectral-markings"),
+            pane * cfg.marking_scale,
+            MARKING_PT,
+            ppp,
+        ),
+        names: crate::text::snap_scale_held(
+            ctx,
+            ladder("spectral-names"),
             pane * cfg.note_name_scale * name_zoom(span),
             super::names::LABEL_PT,
             ppp,
