@@ -67,6 +67,74 @@ const MEM_SMOOTH: f64 = 0.3;
 /// Granularity of the memory readout, in MB. See [`memory_readout`].
 const MEM_STEP_MB: u64 = 10;
 
+/// What the SHELL measures about the previous frame, filled in before it
+/// calls [`root_ui`](crate::root_ui).
+///
+/// One struct on [`SharedState`] rather than a field per reading, because
+/// none of it is state the UI acts on: no pane reads a millisecond, and the
+/// only consumer is [`FrameCosts::assemble`] one call later. Kept apart, the
+/// readings were thirteen `pub` fields on the type every pane borrows, which
+/// says they are part of what the UI IS. They are instrumentation passing
+/// through it.
+///
+/// A shell fills in what it can measure and leaves the rest at zero — the
+/// standalone harness's eframe loop is not ours to instrument, so its
+/// readings are the ones the UI takes for itself. Zero therefore means "not
+/// measured here" as much as "free", which is why the overlay is a plugin
+/// tool.
+#[derive(Clone, Copy, Default)]
+pub struct ShellTimings {
+    /// Milliseconds the shell spent tessellating egui's shapes.
+    ///
+    /// Its own reading rather than part of the frame's CPU time because it is
+    /// not the same work: `ui cpu` covers building the UI, which only APPENDS
+    /// shapes, and this covers turning those shapes into triangles afterwards.
+    /// A cost can be entirely in one and invisible in the other.
+    pub tess_ms: f32,
+    /// Milliseconds the GPU spent on egui's own render pass.
+    ///
+    /// Disjoint from the lattice's `gpu_ms`, which brackets only its own
+    /// passes: between them they cover the frame's GPU work, and the two were
+    /// separated because the lattice turned out to be the cheap half.
+    pub egui_gpu_ms: f32,
+    /// Milliseconds the shell spent on its own per-frame work before the UI
+    /// ran — draining the event rings and reconciling the take.
+    ///
+    /// Separate from the frame's CPU time because that starts at the dock
+    /// build: this stretch scales with events ARRIVING rather than with what
+    /// is drawn, and there was no reading it could show up in.
+    pub shell_ms: f32,
+    /// Milliseconds blocked acquiring the surface — the vsync wait. Large
+    /// here with every cost small means the frame is early, not slow.
+    pub acquire_ms: f32,
+    /// Milliseconds the frame callback took end to end.
+    ///
+    /// The other readings are stages of it. This is the total, and against the
+    /// interval between frames it answers what no stage can: whether a long
+    /// frame was SLOW, or just late being asked for.
+    pub tick_ms: f32,
+    /// Milliseconds of that callback spent inside the renderer. `tick_ms`
+    /// minus this is the egui half — the UI closure plus egui's own
+    /// end-of-pass work — so the two bracket the whole frame between them.
+    pub render_ms: f32,
+    /// The renderer's stages. `upload_ms` also covers paint callbacks'
+    /// `prepare`, so the lattice's own buffer writes are inside it.
+    pub upload_ms: f32,
+    /// Of that, `update_buffers` itself. The difference is the command-encoder
+    /// creation, the renderer's write lock and the MSAA resize, which the
+    /// upload reading also spans.
+    pub ubuf_ms: f32,
+    /// Of the uploads, the TEXTURE half — the rest is buffer uploads, and
+    /// with them the paint callbacks' `prepare`.
+    pub texture_ms: f32,
+    /// How many primitives and vertices the frame uploaded — the volume
+    /// behind the upload cost, rather than another duration.
+    pub prims: u32,
+    pub verts: u32,
+    pub encode_ms: f32,
+    pub submit_ms: f32,
+}
+
 /// One frame's measured costs, in milliseconds — every stage of it that
 /// anything can see.
 ///
@@ -348,6 +416,53 @@ impl Default for PerfStats {
             gpu_supported: true,
             have_gpu: false,
             workload: Workload::default(),
+        }
+    }
+}
+
+impl FrameCosts {
+    /// Gather a frame's costs from the three places they are measured: what
+    /// the shell timed before the UI ran, the dock build this pass, and the
+    /// lattice renderer's own atomics.
+    ///
+    /// The renderer publishes into atomics because it runs from a paint
+    /// callback holding a `&SharedState`, so its readings are f32 bit
+    /// patterns until something unpacks them. That something is here rather
+    /// than in [`root_ui`](crate::root_ui): the encoding is the renderer's
+    /// business and the meaning of each field is this module's, and neither
+    /// is the root function's.
+    pub(crate) fn assemble(
+        shell: ShellTimings,
+        cpu_ms: f32,
+        lattice: &harmonigraph_render::LatticeStats,
+        roll_notes: u32,
+        spectrogram_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
+    ) -> FrameCosts {
+        let ms = |bits: &std::sync::atomic::AtomicU32| {
+            f32::from_bits(bits.load(std::sync::atomic::Ordering::Relaxed))
+        };
+        FrameCosts {
+            shell_ms: shell.shell_ms,
+            cpu_ms,
+            tess_ms: shell.tess_ms,
+            egui_gpu_ms: shell.egui_gpu_ms,
+            lattice_gpu_ms: ms(&lattice.gpu_ms),
+            prepare_ms: ms(&lattice.prepare_ms),
+            poll_ms: ms(&lattice.poll_ms),
+            write_ms: ms(&lattice.write_ms),
+            scene_ms: ms(&lattice.scene_ms),
+            acquire_ms: shell.acquire_ms,
+            tick_ms: shell.tick_ms,
+            render_ms: shell.render_ms,
+            upload_ms: shell.upload_ms,
+            ubuf_ms: shell.ubuf_ms,
+            texture_ms: shell.texture_ms,
+            prims: shell.prims,
+            verts: shell.verts,
+            roll_notes,
+            spectrogram_fallbacks,
+            encode_ms: shell.encode_ms,
+            submit_ms: shell.submit_ms,
         }
     }
 }

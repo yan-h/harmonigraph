@@ -9,7 +9,7 @@ use harmonigraph_core::{LatticePos, NoteTracker, PitchClass, Tuning};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
-use crate::perf::PerfStats;
+use crate::perf::{self, PerfStats};
 use crate::{fold, panes, text};
 use crate::{AudioSpectrum, RenderConfig, SpectrumConfig, WholeSong};
 
@@ -228,61 +228,10 @@ pub struct SharedState {
     /// per-frame publishing is behind atomics: labels are drawn from a
     /// `&SharedState`. Taken once per flush, uncontended.
     pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
-    /// Milliseconds the shell spent tessellating egui's shapes last frame,
-    /// or 0 where the shell doesn't measure it (the standalone's eframe loop
-    /// isn't ours to instrument). Set by the shell before `root_ui`.
-    ///
-    /// Its own field rather than part of the frame's CPU time because it is
-    /// not the same work: `ui cpu` covers building the UI, which only APPENDS
-    /// shapes, and this covers turning those shapes into triangles afterwards.
-    /// A cost can be entirely in one and invisible in the other.
-    pub tess_ms: f32,
-    /// Milliseconds the GPU spent on egui's own render pass last frame, or 0
-    /// where the shell doesn't measure it. Set by the shell before `root_ui`.
-    ///
-    /// Disjoint from [`Self::gpu_ms`], which brackets only the lattice's own
-    /// passes: between them they cover the frame's GPU work, and the two were
-    /// separated because the lattice turned out to be the cheap half.
-    pub egui_gpu_ms: f32,
-    /// Milliseconds the shell spent on its own per-frame work before the UI
-    /// ran — draining the event rings and reconciling the take — or 0 where
-    /// the shell doesn't measure it.
-    ///
-    /// Separate from the frame's CPU time because that starts at the dock
-    /// build: this stretch scales with events ARRIVING rather than with what
-    /// is drawn, and there was no reading it could show up in.
-    pub shell_ms: f32,
-    /// Milliseconds the previous frame blocked acquiring the surface — the
-    /// vsync wait. Large here with every cost small means the frame is early,
-    /// not slow.
-    pub acquire_ms: f32,
-    /// Milliseconds the previous frame callback took end to end, or 0 where
-    /// the shell doesn't measure it.
-    ///
-    /// The other readings are stages of it. This is the total, and against the
-    /// interval between frames it answers what no stage can: whether a long
-    /// frame was SLOW, or just late being asked for.
-    pub tick_ms: f32,
-    /// Milliseconds of that callback spent inside the renderer. `tick_ms`
-    /// minus this is the egui half — the UI closure plus egui's own
-    /// end-of-pass work — so the two bracket the whole frame between them.
-    pub render_ms: f32,
-    /// The renderer's stages. `upload_ms` also covers paint callbacks'
-    /// `prepare`, so the lattice's own buffer writes are inside it.
-    pub upload_ms: f32,
-    /// Of that, `update_buffers` itself. The difference is the command-encoder
-    /// creation, the renderer's write lock and the MSAA resize, which the
-    /// upload reading also spans.
-    pub ubuf_ms: f32,
-    /// Of the uploads, the TEXTURE half — the rest is buffer uploads, and
-    /// with them the paint callbacks' `prepare`.
-    pub texture_ms: f32,
-    /// How many primitives and vertices the previous frame uploaded — the
-    /// volume behind the upload cost, rather than another duration.
-    pub prims: u32,
-    pub verts: u32,
-    pub encode_ms: f32,
-    pub submit_ms: f32,
+    /// What the shell measured about the previous frame, for the
+    /// performance overlay. Written by the shell before `root_ui` and read
+    /// once, by [`perf::FrameCosts::assemble`]; no pane touches it.
+    pub timings: perf::ShellTimings,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -455,19 +404,7 @@ impl SharedState {
             },
             roll_notes: std::sync::atomic::AtomicU32::new(0),
             font_atlas: Default::default(),
-            tess_ms: 0.0,
-            egui_gpu_ms: 0.0,
-            shell_ms: 0.0,
-            acquire_ms: 0.0,
-            tick_ms: 0.0,
-            render_ms: 0.0,
-            upload_ms: 0.0,
-            ubuf_ms: 0.0,
-            texture_ms: 0.0,
-            prims: 0,
-            verts: 0,
-            encode_ms: 0.0,
-            submit_ms: 0.0,
+            timings: perf::ShellTimings::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
             perf: PerfStats::default(),
