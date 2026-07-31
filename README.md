@@ -11,6 +11,8 @@ between.
 MIDI lights the lattice up. The audio input drives a spectrum analyzer and
 spectrogram beside it. A piano roll keeps what was already played.
 
+Demonstration: [slipstream (5-limit just intonation)](https://www.youtube.com/watch?v=VuD9JOmi6_o).
+
 Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
 Almost every line here was written by Claude Code sessions, directed and
