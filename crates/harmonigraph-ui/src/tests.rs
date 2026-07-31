@@ -4273,4 +4273,122 @@ fn an_impossible_ui_scale_is_clamped() {
     }
 }
 
+// ---- Pointing at a control does not move it --------------------------------
+
+/// The controls a settings row is built from: egui's own `button` (the
+/// momentary presets — Just, 12-TET, Reset layout), its `selectable_value`
+/// (every [`choice_row`](crate::widgets::choice_row)) and its `checkbox`, then
+/// the two of ours that allocate their own geometry.
+#[derive(Clone, Copy, Debug)]
+enum Control {
+    Button,
+    Selectable,
+    Checkbox,
+    Switch,
+    Record,
+}
+
+/// A row of four `kind` controls at `scale`, as the rects they allocated, with
+/// the pointer parked at `pointer` and optionally held down there.
+///
+/// Several frames because a widget's visual state comes from the PREVIOUS
+/// frame's response: the first frame after the pointer arrives still draws the
+/// resting look, and it is the one after it that has to land in the same place.
+fn control_row(
+    kind: Control,
+    scale: f32,
+    pointer: Option<egui::Pos2>,
+    pressed: bool,
+) -> Vec<egui::Rect> {
+    let ctx = egui::Context::default();
+    crate::theme::apply_theme(&ctx);
+    crate::theme::set_ui_scale(&ctx, scale);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 200.0));
+    let rects = std::cell::RefCell::new(Vec::new());
+    // Live state, so a control that reads its own value (the switch's knob, the
+    // record dot, the selected choice) is drawn in whatever state the pointer
+    // has put it in rather than always in its resting one.
+    let mut selected = 1usize;
+    let mut flag = false;
+    for frame in 0..4 {
+        rects.borrow_mut().clear();
+        let mut events = Vec::new();
+        if let Some(pos) = pointer {
+            events.push(egui::Event::PointerMoved(pos));
+            // Pressed on the first frame only: egui holds the button down
+            // until a release event, and a fresh press every frame would read
+            // as a click per frame.
+            if pressed && frame == 0 {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+        }
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(f64::from(frame)),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            ui.horizontal(|ui| {
+                for i in 0..4 {
+                    let label = format!("Item {i}");
+                    let response = match kind {
+                        Control::Button => ui.button(label),
+                        Control::Selectable => ui.selectable_value(&mut selected, i, label),
+                        Control::Checkbox => ui.checkbox(&mut flag, label),
+                        Control::Switch => crate::widgets::toggle_switch(ui, &mut flag, &label),
+                        Control::Record => {
+                            crate::widgets::record_button(ui, &mut flag, false, &label)
+                        }
+                    };
+                    rects.borrow_mut().push(response.rect);
+                }
+            });
+        });
+    }
+    rects.into_inner()
+}
+
+/// Hovering or pressing a control changes how it looks and not where anything
+/// is: neither the control's own rect nor the rects of the controls after it in
+/// the row.
+///
+/// egui offers this as `WidgetVisuals::expansion`, a hover swell of a point or
+/// two, and it does not hold: the swell is paid back with a negative outer
+/// margin on the button's frame, egui stores frame margins as whole points, and
+/// the [chrome scale](crate::theme::ui_scale) makes the expansion fractional —
+/// so the two round apart and the residue lands in the ALLOCATED size. Measured
+/// at scale 1.25 with a 1pt expansion: the hovered button 2pt wider and every
+/// button right of it 2pt over; at 1.5, 2pt the other way. In a
+/// [`button_row`](crate::widgets::button_row), which wraps, 2pt is also enough
+/// to push the last button onto a second line and back as the pointer passes.
+///
+/// The whole scale range, because which scales drift is exactly the question:
+/// at the design size the numbers happen to cancel and nothing moves.
+#[test]
+fn pointing_at_a_control_leaves_the_row_where_it_is() {
+    for kind in
+        [Control::Button, Control::Selectable, Control::Checkbox, Control::Switch, Control::Record]
+    {
+        for step in 0..=16u8 {
+            let scale = 0.7 + 0.05 * f32::from(step);
+            let resting = control_row(kind, scale, None, false);
+            // The pointer goes to the middle of the FIRST control, so anything
+            // that moves has three neighbours to its right to show it in.
+            let target = resting[0].center();
+            for (state, pressed) in [("hovered", false), ("pressed", true)] {
+                let pointed = control_row(kind, scale, Some(target), pressed);
+                assert_eq!(
+                    resting, pointed,
+                    "a {state} {kind:?} at scale {scale} moved the row",
+                );
+            }
+        }
+    }
+}
 
