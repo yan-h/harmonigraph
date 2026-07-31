@@ -676,9 +676,6 @@ impl Renderer {
         output_frame.present();
         self.last_submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
 
-        #[cfg(target_os = "macos")]
-        self.fold_present.after_present(canvas_width, canvas_height);
-
         true
     }
 }
@@ -796,15 +793,6 @@ mod fold_present {
     /// size back and land its own window resize a frame behind ours.
     const PWT_FRAMES: u32 = 3;
 
-    /// Presented frames of geometry logging per gesture — long enough to
-    /// span the quarter-second implicit ease at the ~5 ms tick a fold shows,
-    /// so if an ease survives it is visible end to end in the log. The
-    /// renderer's size starts at zero, so the first frame of a window's life
-    /// counts as a size change: every editor open logs one window (and takes
-    /// the pwt tail), which doubles as proof the probe is alive without
-    /// folding anything.
-    const PROBE_FRAMES: u32 = 48;
-
     pub(super) struct FoldPresent {
         /// The layer this renderer's surface presents into. `None` only if
         /// the surface is somehow not Metal-backed; every hook degrades to a
@@ -816,9 +804,6 @@ mod fold_present {
         /// What the layer property is currently set to, so steady-state
         /// frames don't re-send it.
         pwt_raised: bool,
-        probe_frames: u32,
-        /// Index within the probe window, for the log line.
-        probe_frame: u32,
     }
 
     impl FoldPresent {
@@ -834,8 +819,6 @@ mod fold_present {
                 layer,
                 pwt_frames: 0,
                 pwt_raised: false,
-                probe_frames: 0,
-                probe_frame: 0,
             }
         }
 
@@ -864,18 +847,10 @@ mod fold_present {
             layer.setActions(Some(&dict));
         }
 
-        /// The render size is about to change: raise pwt for this frame and
-        /// a short tail, and open a probe window if this is the start of a
-        /// gesture — pwt down AND no window still draining. Both terms are
-        /// needed: re-arming while pwt is up would log a fast border drag's
-        /// every step, and re-arming while a window is open would restart it
-        /// whenever a gesture's steps arrive slower than the pwt tail drains,
-        /// so a paused or slow drag would log for as long as it lasts.
+        /// The render size is about to change: raise pwt for this frame and a
+        /// short tail, so the frame that adopts the new size presents into the
+        /// same commit that carries it.
         pub(super) fn size_changed(&mut self) {
-            if self.pwt_frames == 0 && self.probe_frames == 0 {
-                self.probe_frames = PROBE_FRAMES;
-                self.probe_frame = 0;
-            }
             self.pwt_frames = PWT_FRAMES;
         }
 
@@ -890,77 +865,5 @@ mod fold_present {
             }
         }
 
-        /// One stderr line per presented frame while a probe window is open
-        /// (the host collects stderr into its engine log). The transaction
-        /// commits after the frame returns, so the presentation values here
-        /// are where the PREVIOUS commit left the on-screen tree: an
-        /// implicit ease reads as `pres` gliding toward a constant `model`
-        /// across successive lines, which is exactly the signature the
-        /// model-side probes cannot see.
-        ///
-        /// `top` is the TOPMOST ancestor layer — the host window's frame
-        /// view, chrome included, reached by walking `superlayer` — logged
-        /// model and presentation both, because every remaining suspect for
-        /// the fold's ease lives between our layer and the window: a host
-        /// window that animates its resize glides in `top`'s MODEL frame by
-        /// frame, a CA implicit action on a host layer glides in `tpres`
-        /// under a jumping `top`, and a window that commits atomically with
-        /// us clears the host and sends the search elsewhere. All of it is
-        /// in-process and readable, host-owned or not.
-        pub(super) fn after_present(&mut self, width: u32, height: u32) {
-            if self.probe_frames == 0 {
-                return;
-            }
-            self.probe_frames -= 1;
-            let n = self.probe_frame;
-            self.probe_frame += 1;
-            let Some(layer) = &self.layer else { return };
-            let m_pos = layer.position();
-            let m_bounds = layer.bounds().size;
-            // SAFETY (presentationLayer): read-only snapshot of the render
-            // tree, taken on the main thread between commits.
-            let (p_pos, p_bounds) = match unsafe { layer.presentationLayer() } {
-                Some(pres) => (pres.position(), pres.bounds().size),
-                None => (m_pos, m_bounds),
-            };
-            let top = layer.superlayer().map(|mut t| {
-                while let Some(up) = t.superlayer() {
-                    t = up;
-                }
-                t
-            });
-            let top = top.map_or(String::from("top=-"), |t| {
-                let t_pos = t.position();
-                let t_bounds = t.bounds().size;
-                let (tp_pos, tp_bounds) = match unsafe { t.presentationLayer() } {
-                    Some(pres) => (pres.position(), pres.bounds().size),
-                    None => (t_pos, t_bounds),
-                };
-                format!(
-                    "top=({:.1},{:.1}) {:.0}x{:.0} tpres=({:.1},{:.1}) {:.0}x{:.0}",
-                    t_pos.x,
-                    t_pos.y,
-                    t_bounds.width,
-                    t_bounds.height,
-                    tp_pos.x,
-                    tp_pos.y,
-                    tp_bounds.width,
-                    tp_bounds.height,
-                )
-            });
-            eprintln!(
-                "[121] f{n:02} surface={width}x{height} pwt={} \
-                 model=({:.1},{:.1}) {:.0}x{:.0} pres=({:.1},{:.1}) {:.0}x{:.0} {top}",
-                u8::from(self.pwt_raised),
-                m_pos.x,
-                m_pos.y,
-                m_bounds.width,
-                m_bounds.height,
-                p_pos.x,
-                p_pos.y,
-                p_bounds.width,
-                p_bounds.height,
-            );
-        }
     }
 }

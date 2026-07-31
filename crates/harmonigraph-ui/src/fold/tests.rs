@@ -1394,3 +1394,44 @@ fn an_unfold_the_window_refuses_opens_anyway() {
         "a refused resize opens the pane rather than holding it shut"
     );
 }
+
+/// A shell that can only hand back whole points, which is what `editor.rs`
+/// does with the ask (`(width + change).round()`, and nothing under half a
+/// point asked at all).
+#[must_use]
+fn frame_rounded(folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial, width: f32) -> f32 {
+    let change = folds.apply(dock, &style(), width, 0.0, dial);
+    lay_out(dock, width);
+    if change.abs() < 0.5 { width } else { (width + change).round() }
+}
+
+/// Folding a pane must not move the pane beside it, even by the fraction of a
+/// point the window cannot be asked for.
+///
+/// The layout wants a fractional window and can only be given a whole one, so
+/// there is always a remainder; shared out over the panes it lands on every
+/// boundary at once, and the leftmost pane sliding is what the eye actually
+/// reads. Several starting widths because the remainder's SIGN follows the
+/// window: one width alone can be right by luck.
+#[test]
+fn folding_a_pane_does_not_move_its_neighbour_in_a_whole_point_window() {
+    for start in [1000.0_f32, 1001.0, 1237.0, 1400.5] {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let mut window = start;
+        for _ in 0..3 {
+            window = frame_rounded(&mut folds, &mut dock, &mut dial, window);
+        }
+        let before = width(&dock, LATTICE);
+        collapse(&mut dock, Tab::Spectral, true);
+        for _ in 0..4 {
+            window = frame_rounded(&mut folds, &mut dock, &mut dial, window);
+        }
+        let after = width(&dock, LATTICE);
+        assert!(
+            (after - before).abs() < 0.01,
+            "folding the analyzer at {start} moved the lattice from {before} to {after}",
+        );
+    }
+}

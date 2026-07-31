@@ -437,16 +437,6 @@ impl Folds {
                 holds
             };
             let moved = self.reconcile(tree, surface, &holds, points, area) || mine.is_some();
-            // [121] The hold's life: caught, then the frame it opens on. A
-            // `caught` with no `opens` a frame or two later is a pane being
-            // held shut by a window that never came.
-            if unfolded || opens || moved {
-                eprintln!(
-                    "[121o] s{index} area={area:.0} caught={unfolded} opens={opens} \
-                     moved={moved} at={:?}",
-                    opening.as_ref().and_then(|open| open.at),
-                );
-            }
             // The widest this window has been, for a session that was not there
             // to watch it get that wide: the folds came off the persist blob,
             // and each one remembers the window it was taken at.
@@ -1109,8 +1099,27 @@ impl Points {
                 let (fl, fr) = (fixed[left.0], fixed[right.0]);
                 let (sl, sr) = (want[left.0] - fl, want[right.0] - fr);
                 let slack = width - separator - fl - fr;
-                let by = if sl + sr > 0.0 { (slack / (sl + sr)).max(0.0) } else { 0.0 };
-                let before = (fl + sl * by).clamp(0.0, (width - separator).max(0.0));
+                let asked = sl + sr;
+                // A window within a point of the layout IS the layout. Scaling
+                // that last fraction out over both sides moves every boundary
+                // by a share of it, which reads as the whole arrangement
+                // sliding; handing the left child exactly what it asked for
+                // walks the difference rightward instead, split by split, until
+                // the last pane wears it whole. A rounding's worth on one edge
+                // is invisible where the same amount on all of them is not, and
+                // the leftmost pane is the one the eye is anchored to.
+                //
+                // Not an edge case: the shell can only ask for whole points
+                // (`editor.rs` rounds the ask, and drops one under half a
+                // point), so a layout wanting a fractional window is where
+                // every fold lands.
+                let before = if asked > 0.0 && (slack - asked).abs() < 1.0 {
+                    fl + sl
+                } else {
+                    let by = if asked > 0.0 { (slack / asked).max(0.0) } else { 0.0 };
+                    fl + sl * by
+                };
+                let before = before.clamp(0.0, (width - separator).max(0.0));
                 self.drew[left.0] = before;
                 self.drew[right.0] = (width - separator - before).max(0.0);
                 if width > 0.0 {
