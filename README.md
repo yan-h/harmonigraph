@@ -27,6 +27,12 @@ wgpu backend in the plugin, eframe's in the standalone harness).
 tied to either — but no other operating system or host has ever been tried,
 so treat anything else as unknown rather than supported.
 
+Some of the patches under [`vendor/`](vendor) are macOS-only as well: every
+baseview patch is AppKit code, and egui-baseview's fold-present fix drives a
+`CAMetalLayer` directly. All of it is `cfg`-gated, so another platform would
+still build — it would just have the bugs those patches fix. See
+[`PATCHES.md`](PATCHES.md).
+
 ## Setup
 
 The Rust toolchain is pinned by `rust-toolchain.toml` (1.92). rustup
@@ -167,7 +173,8 @@ values in the harness), so every pane runs unmodified in both shells.
 `egui-baseview 0.3` pins egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview
 0.1; `eframe` and `egui_dock` must match the egui version. All of this is
 centralized in the workspace `Cargo.toml` — bump the whole cluster
-together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
+together. `vendor/baseview` and `vendor/egui-baseview` both carry local
+patches (see PATCHES.md).
 
 ## License
 
