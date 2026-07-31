@@ -49,10 +49,22 @@ pub fn meantone_third(fifth_cents: f32) -> f32 {
 }
 
 /// How close (in cents) a fifth/third pair must sit to the meantone
-/// relationship to count as meantone. Well under the syntonic comma
-/// (~21.5¢) so just intonation is correctly rejected, while 12-TET
-/// (400 = 4·700 − 2400) and the meantone family are accepted.
-pub const MEANTONE_TOLERANCE: f32 = 5.0;
+/// relationship to count as meantone.
+///
+/// A cent is a hair either side of "on it", not a family window: the pairs
+/// this is meant to catch — 12-TET (400 = 4·700 − 2400), quarter-comma, any
+/// preset or learned chord that IS a meantone — land on the identity to
+/// within rounding, so the tolerance only has to cover the f32/microcent
+/// slop and a value typed to two decimals. Anything wider starts claiming
+/// tunings that were deliberately set a little off it, and tempering the
+/// comma out of a tuning that keeps 2¢ of it is a change to the picture
+/// nobody asked for.
+///
+/// It is also the width of the third bar's magnet (see the UI's
+/// `meantone_third_bar`), so the same number says how far a drag has to pull
+/// to release the mode. Narrow is the right side to err on there too: the
+/// bar is 80¢ end to end, so a wide magnet swallows a real part of the range.
+pub const MEANTONE_TOLERANCE: f32 = 1.0;
 
 /// Whether a fifth/third pair is (close to) a meantone temperament: the
 /// major third within [`MEANTONE_TOLERANCE`] of four fifths minus two
