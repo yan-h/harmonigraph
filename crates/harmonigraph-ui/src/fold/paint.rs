@@ -201,6 +201,7 @@ pub fn paint(
     // until the window is wide enough to lay the pane out in, and this is the
     // wrong end of the frame to know that (see [`Open`]).
     if let Some((surface, node)) = opened {
+        eprintln!("[121o] rail arrow s{} leaf={}", surface.0, node.0);
         dial.open = Some(Open { surface: surface.0, leaf: node.0, at: None });
     }
     if let Some((surface, node, delta)) = shoved {

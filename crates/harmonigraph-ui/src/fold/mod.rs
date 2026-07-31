@@ -415,6 +415,19 @@ impl Folds {
             let holds =
                 if mine.is_some() || opens { self::holds(tree) } else { holds };
             let moved = self.reconcile(tree, surface, &holds, points, area) || mine.is_some();
+            // [121] Which writer worked the fold. An unfold arriving with no
+            // `Open` pending and no pull is egui_dock's own collapse button
+            // doing it from inside `show` — it draws one for a COLLAPSED leaf
+            // too, and expanding there is its own `set_collapsed` call, which
+            // no interception of our rail arrow can see.
+            if moved || opening.is_some() || opens {
+                eprintln!(
+                    "[121o] s{index} area={area:.0} moved={moved} opens={opens} \
+                     pending={:?} pull={}",
+                    opening.map(|open| (open.leaf, open.at)),
+                    mine.is_some(),
+                );
+            }
             // The widest this window has been, for a session that was not there
             // to watch it get that wide: the folds came off the persist blob,
             // and each one remembers the window it was taken at.
