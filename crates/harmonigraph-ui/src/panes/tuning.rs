@@ -39,7 +39,7 @@ fn meantone_third_bar(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn P
         .show(ui)
         .on_hover_text(format!(
             "Meantone: the major third follows the perfect fifth (four fifths \
-             minus two octaves). Drag it more than {:.0}¢ away to release the mode",
+             minus two octaves). Drag it more than {}¢ away to release the mode",
             tuning::MEANTONE_TOLERANCE,
         ));
     // Bracketed like `param_bar`, so a drag that ends in a release records as
@@ -138,7 +138,7 @@ pub(super) fn tuning_pane(
         crate::widgets::toggle_switch(ui, &mut state.view.meantone_auto, "Auto").on_hover_text(
             format!(
                 "Engage meantone by itself whenever the major third lands within \
-                 {:.0}¢ of four perfect fifths — from a preset, a learned chord, or \
+                 {}¢ of four perfect fifths — from a preset, a learned chord, or \
                  a drag of either bar",
                 tuning::MEANTONE_TOLERANCE,
             ),

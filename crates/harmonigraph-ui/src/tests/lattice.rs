@@ -269,10 +269,13 @@ fn dragging_the_fifth_does_not_drop_an_engaged_meantone() {
 #[test]
 fn a_third_dragged_clear_of_the_magnet_stays_released() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Either side of the window, as a FRACTION of it: the two cases have to
+    // stay just outside and just inside whatever the tolerance is set to,
+    // and fixed offsets stop straddling it the moment it narrows.
     let tolerance = harmonigraph_core::tuning::MEANTONE_TOLERANCE;
     let params = TuningBackend {
         three: harmonigraph_core::tuning::THREE_12TET,
-        five: harmonigraph_core::tuning::FIVE_12TET + tolerance + 0.5,
+        five: harmonigraph_core::tuning::FIVE_12TET + tolerance * 1.5,
     };
     begin_frame(&mut state, &params, 0.0);
     assert!(!state.view.meantone, "past the tolerance nothing pulls it back");
@@ -280,7 +283,7 @@ fn a_third_dragged_clear_of_the_magnet_stays_released() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     let params = TuningBackend {
         three: harmonigraph_core::tuning::THREE_12TET,
-        five: harmonigraph_core::tuning::FIVE_12TET + tolerance - 0.5,
+        five: harmonigraph_core::tuning::FIVE_12TET + tolerance * 0.5,
     };
     begin_frame(&mut state, &params, 0.0);
     assert!(state.view.meantone, "inside the tolerance the mode engages");
