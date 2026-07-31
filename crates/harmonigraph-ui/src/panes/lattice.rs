@@ -320,7 +320,12 @@ pub(crate) const NAME_SIZE: f32 = 30.0;
 const REFERENCE_HEIGHT: f32 = 860.0;
 /// The cents readout under it: subordinate to the name, so smaller, and
 /// tucked right beneath it rather than floating free.
-pub(crate) const CENTS_SIZE: f32 = 16.0;
+///
+/// Under half the letter, which is what makes the pair read as a name with a
+/// number under it rather than as two lines. It is a six-character number
+/// against a one-character name, so at any size close to the letter's the
+/// readout is the wider of the two and wins the eye.
+pub(crate) const CENTS_SIZE: f32 = 14.0;
 /// How far a label can reach from the node it belongs to, in points at
 /// scale 1 — the name, its marks, the gap and the cents line under it, with
 /// room to spare. Scaled with the label like everything else here, so the
@@ -333,7 +338,12 @@ pub(crate) const LABEL_REACH: f32 = 96.0;
 /// Air between the bottom of the name's glyphs and the top of the cents
 /// readout's. Real pixels of gap, since both ends are measured as ink: the
 /// two are one label, sitting together without crowding.
-pub(crate) const CENTS_GAP: f32 = 6.0;
+///
+/// Small against the letter it hangs under — a fifth of the name's size. Ink
+/// to ink is a tighter measure than it sounds: the same gap struck between
+/// galley boxes would carry the leading of both fonts on top of it, which is
+/// the spacing that had the two floating apart.
+pub(crate) const CENTS_GAP: f32 = 3.0;
 /// Accidental and comma marks, relative to the letter. Small enough that the
 /// two of them stacked still fit inside the letter's own height -- the pair
 /// is an annotation on the name, and a label that grows taller than its
@@ -341,6 +351,23 @@ pub(crate) const CENTS_GAP: f32 = 6.0;
 const MARK_SCALE: f32 = 0.55;
 /// The size the marks are actually laid out at.
 pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
+
+/// How far the accidental rises and the comma sign drops, as a fraction of
+/// the offset that would set each flush with the letter's own line box.
+///
+/// Flush is the loosest the pair can sit and still be one name: it spends
+/// every point the letter's leading offers on the space BETWEEN the two
+/// marks, so `♯` over `+` opens about 6pt of clear air at scale 1 and `♭`
+/// over `-` — the thinnest sign against the shortest accidental — nearer
+/// nine. That is more than the marks' own heights in the second case, and
+/// the column stops reading as one stacked annotation.
+///
+/// Pulling both in tightens that air without touching what says which mark
+/// is which, since the cue is the ORDER of the two, not the distance. The
+/// floor is collision: the sharp's ink reaches 7.5pt below its centre and
+/// the plus's 3.2pt above, so the two centres cannot close past about 11pt
+/// of the 17 flush gives them.
+const MARK_RISE: f32 = 0.8;
 
 /// Iosevka Fixed's advance, as a fraction of the em: every cell is half an
 /// em wide. A drawn mark claims exactly this, so it sits in the same column
@@ -905,7 +932,7 @@ pub(crate) fn draw_stacked_name(
     //
     // Centered is the mean of what the font actually renders, and it is
     // exactly where `+` lands.
-    let rise = (letter.y - line.y) / 2.0;
+    let rise = MARK_RISE * (letter.y - line.y) / 2.0;
     let cell = MARK_ADVANCE * mark_size;
 
     let accidental = name.accidental_mark();
@@ -934,7 +961,7 @@ pub(crate) fn draw_stacked_name(
     );
     let mut bottom = ink_below(&letter_text, &name_font, letter);
 
-    // The accidental rides high, flush with the top of the letter.
+    // The accidental rides high, just inside the top of the letter.
     if !accidental.is_empty() {
         batch.text(
             painter,
