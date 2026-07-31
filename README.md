@@ -1,35 +1,64 @@
 # Harmonigraph
 
-A Tonnetz harmony visualizer plugin (CLAP + VST3): pitch classes on a
-three-axis harmonic lattice (perfect fifths / major thirds / harmonic
-sevenths, each with adjustable tuning), lit up by incoming MIDI notes with
-per-octave indicators, alongside a spectrum analyzer and spectrogram driven
-by the audio input, and a piano roll of what was played. Successor to
-[midi_lattice](https://github.com/yan-h/midi_lattice).
+A harmony visualizer that runs as an audio plugin (CLAP + VST3).
+
+It draws what you play on a **Tonnetz**. That is a lattice with three
+directions: a perfect fifth, a major third, and a harmonic seventh. Notes
+close in harmony land close together, so a chord reads as a shape. Each axis
+has its own tuning, so the lattice can be just, equal-tempered, or anywhere
+between.
+
+MIDI lights the lattice up. The audio input drives a spectrum analyzer and
+spectrogram beside it. A piano roll keeps what was already played.
+
+Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
+
+Almost every line here was written by Claude Code sessions, directed and
+reviewed by one human. [`CLAUDE.md`](CLAUDE.md) is the house style they work
+under; `./ci.sh` is the gate every push clears.
 
 Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
 community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
 wgpu backend in the plugin, eframe's in the standalone harness).
 
+## Setup
+
+The Rust toolchain is pinned by `rust-toolchain.toml` (1.92). rustup
+installs it on the first build.
+
+**`sccache` has to be on `PATH`, or nothing builds.** `.cargo/config.toml`
+sets `rustc-wrapper = "sccache"` for the whole workspace. Without it, every
+cargo command here dies with `could not execute process sccache`.
+
+```sh
+brew install sccache
+```
+
+Why it is there: every worktree keeps its own `target/`, so parallel branches
+never wait on a shared build lock. The cost is that each one would otherwise
+recompile all ~465 dependencies from scratch. sccache serves those from a
+single store, so only this repo's own crates recompile. To rule it out while
+debugging a build failure, run `RUSTC_WRAPPER="" cargo build ...`.
+
+`ffmpeg` is only for video export, and only if you want a playable file
+rather than a frame sequence (`brew install ffmpeg`).
+
 ## Everyday commands
 
 ```sh
-# The dev loop: full UI + renderer in a plain window with mock MIDI.
+# The dev loop: the full UI + renderer in a plain window, with a mock chord
+# progression or any connected MIDI port. No DAW needed.
 cargo run -p harmonigraph-standalone
 
-# Unit tests (core + scene logic).
+# The whole test suite; every crate carries tests.
 cargo test
 
-# Run the exact checks CI runs (clippy -D warnings + full test suite),
-# locally. A green run here means a green run in GitHub Actions.
+# The exact checks CI runs: clippy -D warnings, the tests, and the
+# harmonigraph-core dependency guard. Green here means green in GitHub Actions.
 ./ci.sh
 
-# Build the CLAP/VST3 bundles (output in <target-dir>/bundled/).
+# Build the CLAP/VST3 bundles into target/bundled/.
 cargo xtask bundle harmonigraph-plugin --release
-
-# Rebuild + hot-swap the binary into the main checkout's bundles (works
-# from a git worktree; re-signs ad-hoc). Then rescan the plugin in the DAW.
-./update-plugin.sh
 
 # Read the plugin's live settings back out of a saved Bitwig project
 # (--rust prints them as an impl Default body). CLOSE the plugin window
@@ -38,18 +67,39 @@ cargo xtask bundle harmonigraph-plugin --release
 ./read-plugin-state.py
 ```
 
-Bundles land in `target/bundled/`.
-
 To gate every `git push` on `./ci.sh` automatically, enable the tracked hook
 once per clone: `git config core.hooksPath .githooks` (skip a one-off push
 with `git push --no-verify`). This stands in for GitHub Actions when it's off.
 
-> **Testing a branch in the DAW:** the DAW scans the **main checkout's**
-> `target/bundled/`. `cargo xtask bundle` run from a worktree bundles the
-> *main* sources (it walks to the topmost `Cargo.toml`), and each worktree
-> has its own `target/`, so a branch build is otherwise invisible. Use
-> `./update-plugin.sh` — it builds the current branch and swaps the fresh,
-> re-signed binary into the bundles the DAW actually loads.
+## Getting a build into the DAW
+
+The DAW scans exactly one place: the **main checkout's** `target/bundled/`.
+Two things hide a branch build from it.
+
+- Each worktree has its own `target/`. The DAW never looks there.
+- `cargo xtask bundle` run from a worktree bundles the *main* sources, not
+  the branch's. It walks up to the topmost `Cargo.toml`, which for a nested
+  worktree is the main repo. The bundle looks fresh and holds none of your
+  changes.
+
+Two scripts sidestep both. Each copies the binary into the bundles the DAW
+loads, then re-signs it ad-hoc — Apple Silicon requires that. Rescan or
+restart the plugin afterwards.
+
+```sh
+# Build the current checkout — branch or main — and load it. One shot.
+./update-plugin.sh
+
+# Load a build that already exists, without building anything.
+./load-plugin.sh              # menu of every worktree's build
+./load-plugin.sh --list       # print the table, load nothing
+./load-plugin.sh <branch>     # load that branch's build (substring ok)
+```
+
+The two differ in one way: `update-plugin.sh` builds, `load-plugin.sh` only
+copies. That split exists because the bundle slot is shared. With several
+branches in flight, each build stays in its own worktree. You then pick which
+one goes live, rather than having them overwrite each other.
 
 ## Architecture
 
@@ -57,10 +107,13 @@ Dependencies point strictly downward; the fun layers never touch plugin
 plumbing.
 
 ```
-harmonigraph-core        pure logic: PitchClass (integer microcents), Tuning,
-                         LatticePos, NoteTracker, NoteHistory/NoteRoll (what was
-                         played, by pitch and by time), SpectrumAnalyzer (FFT).
-                         No deps. Unit-tested. One module per concern.
+harmonigraph-core        pure logic, no dependencies at all. PitchClass
+                         (integer microcents) and Tuning; lattice coordinates;
+                         NoteTracker (what sounds now); NoteHistory/NoteRoll
+                         (what was played, by pitch and by time); the FFT
+                         spectrum analyzer and its spectrogram history; a
+                         minimal WAV reader; audio<->MIDI onset alignment.
+                         Unit-tested. One module per concern.
 harmonigraph-scene       per-frame view model: derive_scene() turns
                          tracker+tuning into NodeInstances; orbit Camera;
                          envelopes; CPU picking. Split style/view/camera/
@@ -88,7 +141,7 @@ harmonigraph-plugin      nice-plug shell: params, MIDI + audio → two rtrb ring
                          host-native window resizing, CLAP/VST3 exports.
 ```
 
-Data flow in the plugin: audio thread converts host MIDI to `NoteEvent`s
+Data flow in the plugin: the audio thread converts host MIDI to `NoteEvent`s
 and pushes them into a lock-free ring buffer; the GUI thread drains it into
 the `NoteTracker`, derives a `Scene`, and paints it. Parameters flow the
 other way through `ParamBackend` (a `ParamSetter` in the plugin, plain
@@ -108,19 +161,27 @@ values in the harness), so every pane runs unmodified in both shells.
 centralized in the workspace `Cargo.toml` — bump the whole cluster
 together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 
-## Features beyond v1
+## What it does that v1 did not
 
-- Octave indicators (six switchable styles), note-name labels with comma
-  spelling, a spectral pitch-class meter, tuning
-  learn from held chords, per-note tuning (MPE), v1's full channel
-  semantics, host-native window resizing, UI state persistence, and
-  single-gesture parameter automation.
-- The Spectral pane also draws a **piano roll** of incoming MIDI over the
-  same pitch axis (continuous in cents, so bends and microtonal tunings sit
-  between the keys), and **turns to any of four sides**: the now-line — where
-  the spectrum sits and a note arrives — can be the pane's left, right, top
-  or bottom, so it reads as a tall strip beside the lattice or a wide one
-  below it.
+v1 was a MIDI-only lattice. Everything below is new here, or rebuilt.
+
+- **A sounding note is drawn in layers**, each dialed on its own. At the
+  center is a core mark: a radius sizes it, a solidity slider morphs it from
+  a soft glow to a solid orb, and one of four styles paints it (Steady,
+  Vortex, Checker, Spiral). Around that, a radial band shows *which octaves*
+  of the pitch class are sounding. Optional rings mark the highest and lowest
+  held notes, so a chord's top and bottom line read at a glance.
+- **Note names** with correct comma spelling, per-note tuning (MPE), tuning
+  learned from a held chord, and v1's full channel semantics.
+- **The Spectral pane** puts three things on one shared pitch axis: a real
+  FFT of the audio input, the sounding voices, and a piano roll of what was
+  played. The axis is continuous in cents, so bends and microtonal tunings
+  sit between the keys instead of snapping to them. The pane also **turns to
+  any of four sides**. The now-line — where the spectrum sits and a note
+  arrives — can be its left, right, top or bottom. So the pane reads either
+  as a tall strip beside the lattice or a wide one below it.
+- **Host integration**: native window resizing, UI state that persists with
+  the project, and single-gesture parameter automation.
 
 ## Known gaps / next steps
 
@@ -129,12 +190,12 @@ together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
   egui-baseview doesn't expose its wgpu `RenderState`. Correct on
   macOS/Windows in practice; the constant is the knob if a format mismatch
   ever panics on an exotic setup.
-- **Depth sorting**: the lattice now renders through an offscreen
-  color+depth pass, with bloom composited over it. The depth buffer is
-  written but not yet read — nodes are still CPU-sorted back-to-front, so
-  dense scenes can still show overlap artifacts. Enabling real depth
-  testing is the remaining step (needs a two-pass opaque/transparent split;
-  see [`docs/deferred-work.md`](docs/deferred-work.md)).
+- **Depth sorting**: the lattice renders through an offscreen color+depth
+  pass, with bloom composited over it. The depth buffer is written but not
+  yet read — nodes are still CPU-sorted back-to-front, so dense scenes can
+  still show overlap artifacts. Enabling real depth testing is the remaining
+  step (needs a two-pass opaque/transparent split; see
+  [`docs/deferred-work.md`](docs/deferred-work.md)).
 - **Skins**: the mechanism exists (`harmonigraph_scene::skin`); add alternate
   skins, live re-skinning, and shader-side skin uniforms.
 - **Making videos**: done, by offline replay rather than screen capture.
