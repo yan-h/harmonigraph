@@ -226,6 +226,10 @@ pub struct Renderer {
     last_tess_ms: f32,
     width: u32,
     height: u32,
+    /// Keeps a resize from flashing: implicit-action suppression and
+    /// `presentsWithTransaction` on the CAMetalLayer this surface draws into.
+    #[cfg(target_os = "macos")]
+    fold_present: fold_present::FoldPresent,
 }
 
 impl Renderer {
@@ -234,6 +238,9 @@ impl Renderer {
 
         let target = baseview_window_to_surface_target(window);
         let surface = unsafe { instance.create_surface_unsafe(target) }.unwrap();
+
+        #[cfg(target_os = "macos")]
+        let fold_present = fold_present::FoldPresent::new(&surface);
 
         let msaa_samples = config.renderer_options.msaa_samples;
 
@@ -265,6 +272,8 @@ impl Renderer {
             last_tess_ms: 0.0,
             width: 0,
             height: 0,
+            #[cfg(target_os = "macos")]
+            fold_present,
         })
     }
 
@@ -507,6 +516,10 @@ impl Renderer {
         // with it five render passes, appeared to make "uploads" cheap.
         //
         // `width`/`height` start at 0, so the first frame still configures.
+        #[cfg(target_os = "macos")]
+        if self.width != canvas_width || self.height != canvas_height {
+            self.fold_present.size_changed();
+        }
         if self.width != canvas_width
             || self.height != canvas_height
             || (self.msaa_samples > 1 && self.msaa_texture_view.is_none())
@@ -516,6 +529,12 @@ impl Renderer {
 
         let mut recreate_surface = false;
         self.last_upload_ms = upload_start.elapsed().as_secs_f32() * 1000.0;
+
+        // Before the acquire, not after: the layer's `presentsWithTransaction`
+        // is captured when the drawable is acquired, so a value set later in
+        // the frame only reaches the NEXT present.
+        #[cfg(target_os = "macos")]
+        self.fold_present.before_acquire();
 
         // Timed because this is where a vsync-throttled frame WAITS. With a
         // Fifo surface, acquiring blocks until the display frees a slot, and
@@ -563,6 +582,12 @@ impl Renderer {
                 let instance =
                     wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
                 self.surface = unsafe { instance.create_surface_unsafe(target) }.unwrap();
+                // A recreated surface presents into a NEW layer, which comes
+                // with implicit actions live again.
+                #[cfg(target_os = "macos")]
+                {
+                    self.fold_present = fold_present::FoldPresent::new(&self.surface);
+                }
             }
 
             self.configure_surface(self.width, self.height);
@@ -650,6 +675,10 @@ impl Renderer {
 
         output_frame.present();
         self.last_submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
+
+        #[cfg(target_os = "macos")]
+        self.fold_present.after_present(canvas_width, canvas_height);
+
         true
     }
 }
@@ -722,5 +751,216 @@ fn baseview_window_to_surface_target(window: &baseview::Window<'_>) -> wgpu::Sur
             }
             _ => todo!(),
         },
+    }
+}
+
+/// Presenting a window resize without a flash (harmonigraph issue #121).
+///
+/// wgpu presents into a `CAMetalLayer` that raw-window-metal adds as a plain
+/// sublayer of the view's backing layer, kept in sync with it by a KVO
+/// observer on the root layer's bounds. Two properties of that arrangement
+/// each contribute a visible artifact when the window resizes, and both have
+/// to be handled on the layer itself because the mutations arrive from other
+/// people's call stacks:
+///
+/// - The sublayer is not view-backed, so a geometry change reaching it takes
+///   Core Animation's default implicit action: a quarter-second ease of the
+///   PRESENTATION layer, while the model reports the final value on every
+///   frame — a probe that reads bounds/frame sees nothing animating. The
+///   observer runs inside whatever transaction resized the view, which for a
+///   host-driven resize is the HOST's, so a `CATransaction` wrapped around
+///   our own resize calls cannot reach it. A null `actions` dictionary on
+///   the layer ends the `actionForKey:` lookup before the class default, for
+///   every caller.
+///
+/// - A present is normally decoupled from the transaction that carries the
+///   new bounds, so the commit that resizes the layer still shows the OLD
+///   drawable, stretched across the new geometry, until the next present
+///   lands. The frame that adopts a resize does everything in one runloop
+///   turn — request_resize round trip, layout, the child-view resize,
+///   render, present — so raising `presentsWithTransaction` for that frame
+///   makes wgpu present via commit + waitUntilScheduled + present, which
+///   folds the new content into the same commit as the new bounds. It costs
+///   a main-thread wait per present, so it is raised only around resizes
+///   (and held through a border drag, which re-arms it every frame) rather
+///   than left on.
+#[cfg(target_os = "macos")]
+mod fold_present {
+    use objc2::rc::Retained;
+    use objc2::runtime::ProtocolObject;
+    use objc2_foundation::{ns_string, NSDictionary, NSNull};
+    use objc2_quartz_core::{CAAction, CAMetalLayer};
+
+    /// Frames `presentsWithTransaction` stays raised after a size change:
+    /// the adopting frame plus a short tail, because the host may echo the
+    /// size back and land its own window resize a frame behind ours.
+    const PWT_FRAMES: u32 = 3;
+
+    /// Presented frames of geometry logging per gesture — long enough to
+    /// span the quarter-second implicit ease at the ~5 ms tick a fold shows,
+    /// so if an ease survives it is visible end to end in the log. The
+    /// renderer's size starts at zero, so the first frame of a window's life
+    /// counts as a size change: every editor open logs one window (and takes
+    /// the pwt tail), which doubles as proof the probe is alive without
+    /// folding anything.
+    const PROBE_FRAMES: u32 = 48;
+
+    pub(super) struct FoldPresent {
+        /// The layer this renderer's surface presents into. `None` only if
+        /// the surface is somehow not Metal-backed; every hook degrades to a
+        /// no-op then.
+        layer: Option<Retained<CAMetalLayer>>,
+        /// Frames left with `presentsWithTransaction` up. Every size change
+        /// re-arms it, so a drag holds it up for the whole gesture.
+        pwt_frames: u32,
+        /// What the layer property is currently set to, so steady-state
+        /// frames don't re-send it.
+        pwt_raised: bool,
+        probe_frames: u32,
+        /// Index within the probe window, for the log line.
+        probe_frame: u32,
+    }
+
+    impl FoldPresent {
+        pub(super) fn new(surface: &wgpu::Surface) -> Self {
+            // SAFETY (as_hal): the layer is cloned out of the guard and
+            // nothing is destroyed through it; the guard drops here.
+            let layer = unsafe { surface.as_hal::<wgpu::hal::api::Metal>() }
+                .map(|hal| hal.render_layer().lock().clone());
+            if let Some(layer) = &layer {
+                Self::disable_implicit_actions(layer);
+            }
+            Self {
+                layer,
+                pwt_frames: 0,
+                pwt_raised: false,
+                probe_frames: 0,
+                probe_frame: 0,
+            }
+        }
+
+        /// `NSNull` is Core Animation's "no action" sentinel; a key listed
+        /// in `actions` ends the `actionForKey:` lookup before it reaches
+        /// the delegate or the class default that carries the implicit
+        /// animation. Every animatable property a resize touches is listed;
+        /// the drawable swap itself has no action and needs no entry.
+        fn disable_implicit_actions(layer: &CAMetalLayer) {
+            let null = NSNull::null();
+            let no_action: &ProtocolObject<dyn CAAction> = ProtocolObject::from_ref(&*null);
+            let keys = [
+                ns_string!("bounds"),
+                ns_string!("position"),
+                ns_string!("anchorPoint"),
+                ns_string!("transform"),
+                ns_string!("contents"),
+                ns_string!("contentsScale"),
+                ns_string!("opacity"),
+                ns_string!("hidden"),
+                ns_string!("sublayers"),
+                ns_string!("onOrderIn"),
+                ns_string!("onOrderOut"),
+            ];
+            let dict = NSDictionary::from_slices(&keys, &[no_action; 11]);
+            layer.setActions(Some(&dict));
+        }
+
+        /// The render size is about to change: raise pwt for this frame and
+        /// a short tail, and open a probe window if this is the start of a
+        /// gesture — pwt down AND no window still draining. Both terms are
+        /// needed: re-arming while pwt is up would log a fast border drag's
+        /// every step, and re-arming while a window is open would restart it
+        /// whenever a gesture's steps arrive slower than the pwt tail drains,
+        /// so a paused or slow drag would log for as long as it lasts.
+        pub(super) fn size_changed(&mut self) {
+            if self.pwt_frames == 0 && self.probe_frames == 0 {
+                self.probe_frames = PROBE_FRAMES;
+                self.probe_frame = 0;
+            }
+            self.pwt_frames = PWT_FRAMES;
+        }
+
+        pub(super) fn before_acquire(&mut self) {
+            let raise = self.pwt_frames > 0;
+            self.pwt_frames = self.pwt_frames.saturating_sub(1);
+            if raise != self.pwt_raised {
+                if let Some(layer) = &self.layer {
+                    layer.setPresentsWithTransaction(raise);
+                }
+                self.pwt_raised = raise;
+            }
+        }
+
+        /// One stderr line per presented frame while a probe window is open
+        /// (the host collects stderr into its engine log). The transaction
+        /// commits after the frame returns, so the presentation values here
+        /// are where the PREVIOUS commit left the on-screen tree: an
+        /// implicit ease reads as `pres` gliding toward a constant `model`
+        /// across successive lines, which is exactly the signature the
+        /// model-side probes cannot see.
+        ///
+        /// `top` is the TOPMOST ancestor layer — the host window's frame
+        /// view, chrome included, reached by walking `superlayer` — logged
+        /// model and presentation both, because every remaining suspect for
+        /// the fold's ease lives between our layer and the window: a host
+        /// window that animates its resize glides in `top`'s MODEL frame by
+        /// frame, a CA implicit action on a host layer glides in `tpres`
+        /// under a jumping `top`, and a window that commits atomically with
+        /// us clears the host and sends the search elsewhere. All of it is
+        /// in-process and readable, host-owned or not.
+        pub(super) fn after_present(&mut self, width: u32, height: u32) {
+            if self.probe_frames == 0 {
+                return;
+            }
+            self.probe_frames -= 1;
+            let n = self.probe_frame;
+            self.probe_frame += 1;
+            let Some(layer) = &self.layer else { return };
+            let m_pos = layer.position();
+            let m_bounds = layer.bounds().size;
+            // SAFETY (presentationLayer): read-only snapshot of the render
+            // tree, taken on the main thread between commits.
+            let (p_pos, p_bounds) = match unsafe { layer.presentationLayer() } {
+                Some(pres) => (pres.position(), pres.bounds().size),
+                None => (m_pos, m_bounds),
+            };
+            let top = layer.superlayer().map(|mut t| {
+                while let Some(up) = t.superlayer() {
+                    t = up;
+                }
+                t
+            });
+            let top = top.map_or(String::from("top=-"), |t| {
+                let t_pos = t.position();
+                let t_bounds = t.bounds().size;
+                let (tp_pos, tp_bounds) = match unsafe { t.presentationLayer() } {
+                    Some(pres) => (pres.position(), pres.bounds().size),
+                    None => (t_pos, t_bounds),
+                };
+                format!(
+                    "top=({:.1},{:.1}) {:.0}x{:.0} tpres=({:.1},{:.1}) {:.0}x{:.0}",
+                    t_pos.x,
+                    t_pos.y,
+                    t_bounds.width,
+                    t_bounds.height,
+                    tp_pos.x,
+                    tp_pos.y,
+                    tp_bounds.width,
+                    tp_bounds.height,
+                )
+            });
+            eprintln!(
+                "[121] f{n:02} surface={width}x{height} pwt={} \
+                 model=({:.1},{:.1}) {:.0}x{:.0} pres=({:.1},{:.1}) {:.0}x{:.0} {top}",
+                u8::from(self.pwt_raised),
+                m_pos.x,
+                m_pos.y,
+                m_bounds.width,
+                m_bounds.height,
+                p_pos.x,
+                p_pos.y,
+                p_bounds.width,
+                p_bounds.height,
+            );
+        }
     }
 }
