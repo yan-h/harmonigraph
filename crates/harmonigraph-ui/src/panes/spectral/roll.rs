@@ -7,9 +7,9 @@
 //! the keys rather than being quantized onto one. What it keeps from the
 //! DAW idea is the shape: pitch across, time along, one ribbon per note.
 //!
-//! Geometry comes entirely from [`Axes`](super::spectral::Axes), so the
-//! roll turns with the rest of the pane and this file never names a screen
-//! side. Its share of the depth axis runs from `split` (now) to 1 (the
+//! Geometry comes entirely from [`Axes`](super::axes::Axes), so the roll
+//! turns with the rest of the pane and this file never names a screen side.
+//! Its share of the depth axis runs from `split` (now) to 1 (the
 //! oldest note still on screen), so time flows *away* from the spectrum
 //! and a note crossing the split meets the peak it is making.
 
@@ -18,8 +18,8 @@ use harmonigraph_core::RollNote;
 use harmonigraph_render::{RollAxes, RollInstance};
 use harmonigraph_scene::channel_color;
 
-use super::spectral::{Axes, PitchScale, TimeAxis};
-use super::scene_color;
+use super::axes::{Axes, PitchScale, TimeAxis};
+use crate::panes::scene_color;
 use crate::SharedState;
 
 /// Narrowest a note may draw across PITCH, in points. Note width is in
@@ -434,7 +434,7 @@ mod tests {
     const PPP: f32 = 2.0;
 
     /// The roll's geometry for `state`, derived exactly the way
-    /// [`spectral_pane`](super::super::spectral::spectral_pane) derives it
+    /// [`spectral_pane`](super::super::axes::spectral_pane) derives it
     /// before handing over — same axes, same pitch scale, same split.
     fn instances(state: &SharedState, now: f64) -> Vec<RollInstance> {
         let cfg = &state.spectrum_config;
@@ -442,7 +442,7 @@ mod tests {
         let min_midi = cfg.low_midi;
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
-        let split = super::super::spectral::spectrum_share(cfg);
+        let split = super::super::axes::spectrum_share(cfg);
         note_instances(&axes, &scale, state, split, now, PPP)
     }
 
@@ -640,7 +640,7 @@ mod tests {
             let notes = instances(&state, 5.0);
             let note = *one(&notes);
             let axes = Axes::new(PANE, &state.spectrum_config);
-            let split = super::super::spectral::spectrum_share(&state.spectrum_config);
+            let split = super::super::axes::spectrum_share(&state.spectrum_config);
             // What the segment would have measured unfloored: its true seconds
             // over the roll's own share of the depth axis.
             let per_point = f64::from(state.spectrum_config.roll_seconds)
@@ -674,8 +674,8 @@ mod tests {
         state.spectrum_config.low_midi = 48.0;
         state.spectrum_config.high_midi = 84.0;
         let axes = Axes::new(PANE, &state.spectrum_config);
-        let split = super::super::spectral::spectrum_share(&state.spectrum_config);
-        let time = super::super::spectral::TimeAxis::new(&state, split, 5.0);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let time = super::super::axes::TimeAxis::new(&state, split, 5.0);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
         let want = axes.at(scale.t_of(60.0), time.depth_of_unclamped(2.01));
         assert!(
@@ -709,7 +709,7 @@ mod tests {
         let cfg = &state.spectrum_config;
         let axes = Axes::new(PANE, cfg);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        let split = super::super::spectral::spectrum_share(cfg);
+        let split = super::super::axes::spectrum_share(cfg);
         let at = |ppp| {
             let notes = note_instances(&axes, &scale, &state, split, 5.0, ppp);
             one(&notes).half_extent[1]

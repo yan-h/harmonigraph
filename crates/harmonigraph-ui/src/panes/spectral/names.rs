@@ -24,7 +24,7 @@
 //! thing it names is already drawn underneath it.
 //!
 //! The name is the LATTICE's: the same [`NoteName`] the node carries, drawn by
-//! the same [`draw_stacked_name`](super::lattice::draw_stacked_name) — letter
+//! the same [`draw_stacked_name`](crate::panes::lattice::draw_stacked_name) — letter
 //! at full size, accidental riding high, syntonic-comma mark low, septimal
 //! mark in a column of its own past them, all counted rather than repeated. Not a resemblance but the same function, so the two
 //! cannot drift apart. That is the errand: a name here is read against the
@@ -33,7 +33,7 @@
 //! when what is wanted is which node it IS — and for a just third, `E-` says
 //! it where "E +14\u{a2}" does not.
 //!
-//! Geometry comes from [`Axes`](super::spectral::Axes) like everything else in
+//! Geometry comes from [`Axes`](super::axes::Axes) like everything else in
 //! the pane, so names turn and flip with it and nothing here names a screen
 //! side.
 
@@ -42,12 +42,12 @@ use std::collections::HashMap;
 use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tuning};
 use harmonigraph_scene::ViewConfig;
 
-use super::lattice;
-use super::spectral::{Axes, PitchScale, TimeAxis};
+use crate::panes::lattice;
+use super::axes::{Axes, PitchScale, TimeAxis};
 use crate::{theme, SharedState};
 
 /// Point size of a name's letter. Well under the axis labels'
-/// ([`MARKING_PT`](super::spectral::MARKING_PT)): there are many more of
+/// ([`MARKING_PT`](super::axes::MARKING_PT)): there are many more of
 /// these, and they sit inside the picture rather than along its edge.
 ///
 /// The size at the pitch zoom it is dialled for, that is — the pane hands
@@ -580,7 +580,7 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 /// out; this comment exists so the spill reads as a known price rather than as a
 /// bug nobody noticed.
 ///
-/// [`draw_stacked_name`]: super::lattice::draw_stacked_name
+/// [`draw_stacked_name`]: crate::panes::lattice::draw_stacked_name
 fn label_rect(
     axes: &Axes,
     p: f32,
@@ -655,7 +655,7 @@ fn note_name(view: &ViewConfig, tuning: &Tuning, midi: f32) -> NoteName {
     // the pane's hover makes before asking the same question.
     let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
     match naming_node(view, tuning, pc) {
-        Some(pos) => super::display_note_name(pos, view.meantone),
+        Some(pos) => crate::panes::display_note_name(pos, view.meantone),
         None => equal_tempered_name(midi),
     }
 }
@@ -664,7 +664,7 @@ fn note_name(view: &ViewConfig, tuning: &Tuning, midi: f32) -> NoteName {
 /// equally close the one that spells most plainly.
 ///
 /// Its own function rather than
-/// [`nearest_visible_node`](super::nearest_visible_node), which it otherwise
+/// [`nearest_visible_node`](crate::panes::nearest_visible_node), which it otherwise
 /// mirrors exactly, because of the tiebreak — and the tiebreak matters only
 /// where that function has nothing to go on.
 ///
@@ -689,7 +689,7 @@ fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<Lat
         .min_by_key(|&pos| {
             (
                 pc.distance_to(tuning.pitch_class(pos)),
-                spelling_cost(super::display_note_name(pos, view.meantone), pos),
+                spelling_cost(crate::panes::display_note_name(pos, view.meantone), pos),
             )
         })
 }
@@ -730,7 +730,7 @@ fn spelling_cost(name: NoteName, pos: LatticePos) -> (i32, i32, i32, i32) {
     )
 }
 
-/// The nearest piano key, spelled with sharps — [`KEY_NAMES`](super::KEY_NAMES)
+/// The nearest piano key, spelled with sharps — [`KEY_NAMES`](crate::panes::KEY_NAMES)
 /// as a [`NoteName`] rather than as text, so it reaches the same drawing code.
 fn equal_tempered_name(midi: f32) -> NoteName {
     const SPELLINGS: [(char, i32); 12] = [
@@ -808,7 +808,7 @@ mod tests {
     /// with room to draw them apart, or it is asking about the test fixture.
     const BIG: egui::Rect = egui::Rect {
         min: egui::pos2(10.0, 20.0),
-        max: egui::pos2(310.0, 20.0 + super::super::spectral::REFERENCE_PITCH_LEN),
+        max: egui::pos2(310.0, 20.0 + super::super::axes::REFERENCE_PITCH_LEN),
     };
 
     fn on(time: f64, note: u8) -> NoteEvent {
@@ -844,7 +844,7 @@ mod tests {
     }
 
     /// The names `state` would draw at `now`, placed exactly the way
-    /// [`spectral_pane`](super::super::spectral::spectral_pane) places them.
+    /// [`spectral_pane`](super::super::axes::spectral_pane) places them.
     fn labels(state: &SharedState, now: f64) -> Vec<NoteLabel> {
         labels_in(state, now, PANE)
     }
@@ -855,7 +855,7 @@ mod tests {
         let min_midi = cfg.low_midi;
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
-        let split = super::super::spectral::spectrum_share(cfg);
+        let split = super::super::axes::spectrum_share(cfg);
         plan(state, &axes, &scale, split, now, 1.0)
     }
 
@@ -889,7 +889,7 @@ mod tests {
             let now = 14.0 + frame as f64 / 60.0;
             let state = state_at(now);
             let cfg = state.spectrum_config;
-            let split = super::super::spectral::spectrum_share(&cfg);
+            let split = super::super::axes::spectrum_share(&cfg);
             let labels =
                 plan(&state, &Axes::new(BIG, &cfg), &scale_of(&state), split, now, label_scale);
             for label in labels {
@@ -934,7 +934,7 @@ mod tests {
 
         let cfg = state.spectrum_config;
         let axes = Axes::new(BIG, &cfg);
-        let split = super::super::spectral::spectrum_share(&cfg);
+        let split = super::super::axes::spectrum_share(&cfg);
         let mut seen: HashMap<(String, i64), Vec<usize>> = HashMap::new();
         for frame in 0..480 {
             let now = start + frame as f64 / 60.0;
@@ -973,7 +973,7 @@ mod tests {
         // blinked" is a statement about a pane with nothing to thin.
         let state = phrase(f64::NEG_INFINITY);
         let cfg = state.spectrum_config;
-        let split = super::super::spectral::spectrum_share(&cfg);
+        let split = super::super::axes::spectrum_share(&cfg);
         let placed = plan(&state, &Axes::new(BIG, &cfg), &scale_of(&state), split, 20.0, ZOOMED);
         let on_pane = state
             .tracker
@@ -1061,7 +1061,7 @@ mod tests {
     /// [`a_name_sits_on_its_ribbon_at_the_leading_edge`]), so that is what has
     /// to agree between a plain letter and one carrying a mark.
     ///
-    /// [`draw_stacked_name`]: super::lattice::draw_stacked_name
+    /// [`draw_stacked_name`]: crate::panes::lattice::draw_stacked_name
     #[test]
     fn the_letter_lines_up_with_or_without_an_accidental() {
         let plain = NoteName { letter: 'C', sharps: 0, syntonic_commas: 0, septimal_commas: 0 };
@@ -1143,7 +1143,7 @@ mod tests {
         state.tracker.handle_event(on(2.0, 60));
         state.tracker.handle_event(off(6.0, 60));
 
-        let split = super::super::spectral::spectrum_share(&state.spectrum_config);
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
         let axes = Axes::new(PANE, &state.spectrum_config);
         let ribbon =
             super::super::roll::note_instances(&axes, &scale_of(&state), &state, split, 10.0, 2.0);
@@ -1639,7 +1639,7 @@ mod tests {
         assert_eq!(name(60.0), "C");
         // And the cost is symmetric: the mark counts whichever way it points.
         for pos in [LatticePos::new(2, 0, -1), LatticePos::new(-2, 0, 1)] {
-            let spelled = super::super::display_note_name(pos, view.meantone);
+            let spelled = crate::panes::display_note_name(pos, view.meantone);
             assert!(
                 spelling_cost(spelled, pos).0 > 0,
                 "a septimal mark should cost like a comma, {spelled} did not"

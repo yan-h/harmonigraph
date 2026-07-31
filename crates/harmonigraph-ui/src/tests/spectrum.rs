@@ -73,7 +73,7 @@ fn a_chord_fills_most_of_the_analyzers_height() {
         .map(|(i, &power)| {
             let midi = harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
                 + i as f32 / harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32;
-            crate::panes::spectral::loudness(&cfg, power, midi)
+            crate::panes::spectral::axes::loudness(&cfg, power, midi)
         })
         .fold(0.0_f32, f32::max);
 
@@ -165,7 +165,7 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
 /// `MIN_BUCKET` means no slab is ever empty, at any frame rate or cap.
 #[test]
 fn columns_are_evenly_spaced_however_the_shell_batches_them() {
-    use crate::panes::spectrogram::MIN_BUCKET;
+    use crate::panes::spectral::spectrogram::MIN_BUCKET;
     let sr = 48_000.0f32;
     let config = SpectrumConfig::default();
     let mut spectrum = AudioSpectrum::default();
@@ -360,7 +360,7 @@ fn spectrum_history_reaches_the_retention_cap() {
 /// one, so it is still worth stating against the real function.
 #[test]
 fn stored_columns_stay_finer_than_the_slabs_they_are_drawn_into() {
-    use crate::panes::spectrogram::{live_slab, LIVE_SLAB_CAP};
+    use crate::panes::spectral::spectrogram::{live_slab, LIVE_SLAB_CAP};
     let mut age = 0.0f64; // youngest age the tier holds
     let mut spacing = AudioSpectrum::FFT_INTERVAL;
     for tier in 0..SpectrumHistory::TIERS {
@@ -448,14 +448,14 @@ fn whole_song_precompute_lays_the_take_out_deterministically() {
 /// itself is held.
 #[test]
 fn the_heatmap_reads_the_curve_s_own_level_scale() {
-    use crate::panes::spectral::loudness;
+    use crate::panes::spectral::axes::loudness;
     let mut cfg = SpectrumConfig::default();
     let midi = 60.0;
     let check = |cfg: &SpectrumConfig, power: f32| {
         let tolerance =
             0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
         let curve = loudness(cfg, power, midi);
-        let heatmap = crate::panes::spectrogram::bin_level_for_test(
+        let heatmap = crate::panes::spectral::spectrogram::bin_level_for_test(
             cfg,
             harmonigraph_core::spectrogram::quantize(power),
             midi,
@@ -483,7 +483,7 @@ fn the_heatmap_reads_the_curve_s_own_level_scale() {
         let tolerance =
             0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
         let curve = loudness(&cfg, 1e-5, midi);
-        let heatmap = crate::panes::spectrogram::bin_level_for_test(
+        let heatmap = crate::panes::spectral::spectrogram::bin_level_for_test(
             &cfg,
             harmonigraph_core::spectrogram::quantize(1e-5),
             midi,

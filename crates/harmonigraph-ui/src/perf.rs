@@ -70,12 +70,12 @@ const MEM_STEP_MB: u64 = 10;
 /// What the SHELL measures about the previous frame, filled in before it
 /// calls [`root_ui`](crate::root_ui).
 ///
-/// One struct on [`SharedState`] rather than a field per reading, because
-/// none of it is state the UI acts on: no pane reads a millisecond, and the
-/// only consumer is [`FrameCosts::assemble`] one call later. Kept apart, the
-/// readings were thirteen `pub` fields on the type every pane borrows, which
-/// says they are part of what the UI IS. They are instrumentation passing
-/// through it.
+/// One struct on [`SharedState`](crate::SharedState) rather than a field per
+/// reading, because none of it is state the UI acts on: no pane reads a
+/// millisecond, and the only consumer is `FrameCosts::assemble` one call
+/// later. Kept apart, the readings were thirteen `pub` fields on the type
+/// every pane borrows, which says they are part of what the UI IS. They are
+/// instrumentation passing through it.
 ///
 /// A shell fills in what it can measure and leaves the rest at zero — the
 /// standalone harness's eframe loop is not ours to instrument, so its
@@ -183,9 +183,9 @@ pub struct FrameCosts {
     pub roll_notes: u32,
     /// The spectrogram's cache fallbacks since the plugin opened: full
     /// re-aggregations of the window, and ring restarts BY REASON (see
-    /// `panes::spectrogram::Restart`). CUMULATIVE, so the readout below can
+    /// `panes::spectral::spectrogram::Restart`). CUMULATIVE, so the readout below can
     /// difference them into a rate without a dropped frame losing an event.
-    pub spectrogram_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
+    pub spectrogram_fallbacks: (u32, [u32; crate::panes::spectral::spectrogram::Restart::COUNT]),
     /// The lattice callback's own `prepare`, which egui-wgpu runs from inside
     /// `update_buffers` — so it is billed to the buffer uploads.
     pub prepare_ms: f32,
@@ -349,7 +349,7 @@ pub struct PerfStats {
     /// none.
     spec_restart_reason: &'static str,
     /// The totals the rates were last differenced from.
-    last_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
+    last_fallbacks: (u32, [u32; crate::panes::spectral::spectrogram::Restart::COUNT]),
     /// Smoothed resident set size in bytes, refreshed about once a second (0
     /// when the platform can't report it).
     ///
@@ -408,7 +408,7 @@ impl Default for PerfStats {
             roll_notes: 0,
             spec_fallbacks: (0.0, 0.0),
             spec_restart_reason: "",
-            last_fallbacks: (0, [0; crate::panes::spectrogram::Restart::COUNT]),
+            last_fallbacks: (0, [0; crate::panes::spectral::spectrogram::Restart::COUNT]),
             rss_bytes: 0,
             last_mem_read: f64::NEG_INFINITY,
             last_frame: None,
@@ -436,7 +436,7 @@ impl FrameCosts {
         cpu_ms: f32,
         lattice: &harmonigraph_render::LatticeStats,
         roll_notes: u32,
-        spectrogram_fallbacks: (u32, [u32; crate::panes::spectrogram::Restart::COUNT]),
+        spectrogram_fallbacks: (u32, [u32; crate::panes::spectral::spectrogram::Restart::COUNT]),
     ) -> FrameCosts {
         let ms = |bits: &std::sync::atomic::AtomicU32| {
             f32::from_bits(bits.load(std::sync::atomic::Ordering::Relaxed))
@@ -585,7 +585,7 @@ impl PerfStats {
                     .enumerate()
                     .max_by_key(|(_, n)| **n)
                     .filter(|(_, n)| **n > 0)
-                    .map_or("", |(i, _)| crate::panes::spectrogram::Restart::LABELS[i]);
+                    .map_or("", |(i, _)| crate::panes::spectral::spectrogram::Restart::LABELS[i]);
             }
             self.last_fallbacks = spectrogram_fallbacks;
             self.last_readout = now;
@@ -1194,7 +1194,7 @@ mod tests {
         // And it names WHERE to look: the reason that accounted for most of the
         // restarts in the interval, which is the difference between "the image
         // changed", "the pane changed" and "the window jumped".
-        assert_eq!(perf.spec_restart_reason, crate::panes::spectrogram::Restart::LABELS[0]);
+        assert_eq!(perf.spec_restart_reason, crate::panes::spectral::spectrogram::Restart::LABELS[0]);
         let mut heavier = (totals.0, [totals.1, totals.1 + 200, 0, 0, 0, 0]);
         for _ in 0..120 {
             heavier = (heavier.0, [heavier.1[0], heavier.1[1] + 1, 0, 0, 0, 0]);
@@ -1207,7 +1207,7 @@ mod tests {
         }
         assert_eq!(
             perf.spec_restart_reason,
-            crate::panes::spectrogram::Restart::LABELS[1],
+            crate::panes::spectral::spectrogram::Restart::LABELS[1],
             "the dominant reason must follow the counts",
         );
     }
@@ -1482,7 +1482,7 @@ mod tests {
             FrameCosts {
                 // Enough of both to lay out at their widest: the row carries
                 // two rates, so a build falling back hard is the long case.
-                spectrogram_fallbacks: (900, [150; crate::panes::spectrogram::Restart::COUNT]),
+                spectrogram_fallbacks: (900, [150; crate::panes::spectral::spectrogram::Restart::COUNT]),
                 shell_ms: 1.0,
                 cpu_ms: 2.0,
                 tess_ms: 3.0,

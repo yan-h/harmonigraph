@@ -230,7 +230,7 @@ pub struct SharedState {
     pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
     /// What the shell measured about the previous frame, for the
     /// performance overlay. Written by the shell before `root_ui` and read
-    /// once, by [`perf::FrameCosts::assemble`]; no pane touches it.
+    /// once, by `perf::FrameCosts::assemble`; no pane touches it.
     pub timings: perf::ShellTimings,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).

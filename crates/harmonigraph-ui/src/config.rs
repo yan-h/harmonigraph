@@ -572,7 +572,7 @@ pub struct SpectrumConfig {
     ///
     /// A saved view loads at 1 and so draws its markings TWICE the size it was
     /// saved at, the built-in size having been rebased by 2 (see
-    /// `panes::spectral::MARKING_PT`). Deliberate, and the same call as the
+    /// `panes::spectral::axes::MARKING_PT`). Deliberate, and the same call as the
     /// lattice's: 10pt was the wrong number rather than one of several, and a
     /// blob that kept it would be preserving a mistake.
     #[serde(default = "default_one")]
@@ -580,7 +580,7 @@ pub struct SpectrumConfig {
     /// Strength of the light edge drawn along the spectrum's profile and
     /// around each note ribbon, 0 = none. On a roll note it is the whole of
     /// the rim — how bright the keyline is, and whether it is drawn at all.
-    /// See `panes::roll::keyline`.
+    /// See `panes::spectral::roll::keyline`.
     #[serde(default = "default_keyline")]
     pub keyline: f32,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
@@ -619,7 +619,7 @@ pub struct SpectrumConfig {
     /// Share of the pane's depth given to the roll (the rest is the
     /// spectrum). 0 hides it; 1 gives the whole pane to the roll. Set by
     /// dragging the divider in the Spectral pane itself
-    /// (`panes::spectral::drag_split`) — there is no bar for it.
+    /// (`panes::spectral::gestures::drag_split`) — there is no bar for it.
     #[serde(default = "default_roll_fraction")]
     pub roll_fraction: f32,
     /// Seconds of history the roll's depth spans.
@@ -631,7 +631,7 @@ pub struct SpectrumConfig {
     #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
     /// Write each note's name over its ribbon, at the moment it was struck —
-    /// see [`panes::names`](crate::panes::names). `default_true`, not `default`, or a state blob
+    /// see [`panes::spectral::names`](crate::panes::spectral::names). `default_true`, not `default`, or a state blob
     /// saved before this field existed would load with them off, contradicting
     /// the struct's own default, which is what a fresh install gets.
     #[serde(default = "default_true")]
@@ -640,7 +640,7 @@ pub struct SpectrumConfig {
     ///
     /// Rides on top of the pitch zoom, which already grows a name as the range
     /// narrows so that it keeps its footing on the ribbon it is written on —
-    /// see `panes::spectral::name_zoom`. This says how big it is at the zoom
+    /// see `panes::spectral::axes::name_zoom`. This says how big it is at the zoom
     /// you are at.
     ///
     /// A saved view loads at 1 and so draws its names 1.3 times the size it
@@ -743,7 +743,7 @@ impl SpectrumConfig {
 /// Closest the two ends of the ANALYZER's pitch range may come.
 ///
 /// Two octaves, and it is the note names that set it. They scale in
-/// proportion to the zoom (see `panes::spectral::name_zoom`), so how far the
+/// proportion to the zoom (see `panes::spectral::axes::name_zoom`), so how far the
 /// range may be closed IS how large a name can get: the whole axis is ten
 /// octaves, so a two-octave floor puts a name at five times its dialled size
 /// and no more. It was one octave, from when the range was a pair of octave

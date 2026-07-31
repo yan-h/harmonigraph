@@ -17,25 +17,17 @@ use crate::SharedState;
 
 pub mod frame;
 pub mod lattice;
-/// The names written over the Spectral pane's note ribbons. Like [`roll`] and
-/// [`spectrogram`], a layer of [`spectral`]'s far depth region rather than a
-/// pane of its own.
-pub mod names;
 pub mod nodes;
 pub mod notes;
 pub mod panel;
 /// The offline video frame, composed live so you can preview and adjust it
 /// before rendering. The "Video" tab.
 pub mod render;
-/// The Spectral pane's piano roll. Not a pane of its own — it draws into
-/// the far share of [`spectral`]'s depth axis, and is only split out
-/// because it is the biggest single thing that pane draws.
-pub mod roll;
 pub mod scene;
+/// The Spectral display. A directory rather than a file: its piano roll,
+/// heatmap and note names are layers over one shared plane rather than panes
+/// of their own, and they live with the plane they read.
 pub mod spectral;
-/// The Spectral pane's spectrogram heatmap. Like [`roll`], a layer of
-/// [`spectral`]'s far depth region rather than a pane of its own.
-pub mod spectrogram;
 pub mod tuning;
 
 use lattice::lattice_pane;
