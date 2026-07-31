@@ -161,63 +161,6 @@ values in the harness), so every pane runs unmodified in both shells.
 centralized in the workspace `Cargo.toml` — bump the whole cluster
 together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
 
-## What it does that v1 did not
-
-v1 was a MIDI-only lattice. Everything below is new here, or rebuilt.
-
-- **A sounding note is drawn in layers**, each dialed on its own. At the
-  center is a core mark: a radius sizes it, a solidity slider morphs it from
-  a soft glow to a solid orb, and one of four styles paints it (Steady,
-  Vortex, Checker, Spiral). Around that, a radial band shows *which octaves*
-  of the pitch class are sounding. Optional rings mark the highest and lowest
-  held notes, so a chord's top and bottom line read at a glance.
-- **Note names** with correct comma spelling, per-note tuning (MPE), tuning
-  learned from a held chord, and v1's full channel semantics.
-- **The Spectral pane** puts three things on one shared pitch axis: a real
-  FFT of the audio input, the sounding voices, and a piano roll of what was
-  played. The axis is continuous in cents, so bends and microtonal tunings
-  sit between the keys instead of snapping to them. The pane also **turns to
-  any of four sides**. The now-line — where the spectrum sits and a note
-  arrives — can be its left, right, top or bottom. So the pane reads either
-  as a tall strip beside the lattice or a wide one below it.
-- **Host integration**: native window resizing, UI state that persists with
-  the project, and single-gesture parameter automation.
-
-## Known gaps / next steps
-
-- **Surface format assumption**: the plugin editor assumes a `Bgra8Unorm`
-  swapchain (see `ASSUMED_SURFACE_FORMAT` in `editor.rs`) because
-  egui-baseview doesn't expose its wgpu `RenderState`. Correct on
-  macOS/Windows in practice; the constant is the knob if a format mismatch
-  ever panics on an exotic setup.
-- **Depth sorting**: the lattice renders through an offscreen color+depth
-  pass, with bloom composited over it. The depth buffer is written but not
-  yet read — nodes are still CPU-sorted back-to-front, so dense scenes can
-  still show overlap artifacts. Enabling real depth testing is the remaining
-  step (needs a two-pass opaque/transparent split; see
-  [`docs/deferred-work.md`](docs/deferred-work.md)).
-- **Skins**: the mechanism exists (`harmonigraph_scene::skin`); add alternate
-  skins, live re-skinning, and shader-side skin uniforms.
-- **Making videos**: done, by offline replay rather than screen capture.
-  Arm "Record take" in the Video pane and play the piece; the plugin writes
-  a *take* (every note event and parameter change, stamped on the host
-  transport so it lines up with a bounce). `harmonigraph-offline` replays it
-  headless into an exact-CFR video at any resolution, with its own pane
-  layout and the bounced audio muxed in. See
-  [`docs/offline-rendering.md`](docs/offline-rendering.md). Live capture of
-  the plugin window itself was investigated and rejected as the more
-  expensive, lower-quality route —
-  [`docs/window-recording.md`](docs/window-recording.md) has the analysis.
-- **Spectral audio FFT**: done — the Spectral pane analyzes a real FFT of
-  the plugin's audio input (mono mixdown of the input bus), no longer
-  MIDI-only, and unconditionally rather than behind a setting. Remaining
-  work is analysis polish, not wiring.
-- **Render styles**: the experimental set has been trimmed (NodeStyle 15→4,
-  OuterStyle removed outright, CoreStyle folded into a solidity slider); a
-  final aesthetic trim of the 4 surviving node styles is the remaining call.
-  See
-  [`docs/deferred-work.md`](docs/deferred-work.md).
-
 ## License
 
 Copyright (C) 2026 Yan Han.
