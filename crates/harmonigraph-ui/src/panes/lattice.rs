@@ -373,6 +373,20 @@ const MARK_RISE: f32 = 0.8;
 /// em wide. A drawn mark claims exactly this, so it sits in the same column
 /// grid as the typeset accidental above it.
 const MARK_ADVANCE: f32 = 0.5;
+/// How far a mark's COUNT is pulled back toward its sign, as a fraction of
+/// the mark size — `♯2` and `+2` set tighter than one monospace cell each.
+///
+/// A count is not a second character of a word, it is a multiplier on the
+/// sign beside it, and monospace advance sets the two as far apart as it
+/// sets `♯` from the letter's own column. Iosevka leaves 0.11em of ink-to-ink
+/// air there (0.13 after `♭`, which has the deeper side bearing), against
+/// glyphs about 0.4em wide.
+///
+/// One constant covers both halves of the column because the drawn signs are
+/// already cut to the typeface's own ink width (see [`MARK_INK_W`]): `+2`
+/// and `♯2` open within 0.001em of each other, so tracking them by the same
+/// amount keeps them matched rather than merely both tighter.
+pub(crate) const MARK_TRACK: f32 = 0.06;
 /// Iosevka's own stroke weight, measured off its outlines: 70/1000 em, as a
 /// fraction of the mark's font size.
 ///
@@ -936,14 +950,31 @@ pub(crate) fn draw_stacked_name(
     let cell = MARK_ADVANCE * mark_size;
 
     let accidental = name.accidental_mark();
+    // Core hands the accidental over as one string, sign then count (see
+    // NoteName::accidental_mark). Split rather than respelled, so the choice
+    // of `♯` or `♭` stays core's: the count is laid out as its own piece
+    // only so it can be tracked in toward the sign.
+    let mut accidental_chars = accidental.chars();
+    let accidental_sign: String = accidental_chars.by_ref().take(1).collect();
+    let accidental_count: String = accidental_chars.collect();
     let syntonic = count_text(name.syntonic_commas);
     let septimal = count_text(name.septimal_commas);
+    let track = MARK_TRACK * mark_size;
+    // A sign and its count read as ONE mark, so the count follows its sign's
+    // cell tracked in rather than a clear cell away -- see MARK_TRACK.
+    let tracked_width = |sign: f32, count: &str| {
+        if count.is_empty() { sign } else { sign + measure(count, &mark_font).x - track }
+    };
     // A drawn sign claims one cell; its count follows in the same column.
     let signed_width =
-        |count: &str, present: bool| if present { cell + measure(count, &mark_font).x } else { 0.0 };
-    let column = measure(&accidental, &mark_font)
-        .x
-        .max(signed_width(&syntonic, name.syntonic_commas != 0));
+        |count: &str, present: bool| if present { tracked_width(cell, count) } else { 0.0 };
+    let accidental_advance = measure(&accidental_sign, &mark_font).x;
+    let accidental_width = if accidental_sign.is_empty() {
+        0.0
+    } else {
+        tracked_width(accidental_advance, &accidental_count)
+    };
+    let column = accidental_width.max(signed_width(&syntonic, name.syntonic_commas != 0));
     let septimal_column = signed_width(&septimal, name.septimal_commas != 0);
     // Air between the accidental column and the septimal mark, so the mark
     // reads as its own thing rather than as a third row of the stack.
@@ -962,16 +993,30 @@ pub(crate) fn draw_stacked_name(
     let mut bottom = ink_below(&letter_text, &name_font, letter);
 
     // The accidental rides high, just inside the top of the letter.
-    if !accidental.is_empty() {
+    if !accidental_sign.is_empty() {
+        let sign_x = left + letter.x;
         batch.text(
             painter,
-            egui::pos2(left + letter.x, anchor.y - rise),
+            egui::pos2(sign_x, anchor.y - rise),
             egui::Align2::LEFT_CENTER,
-            accidental.clone(),
+            accidental_sign.clone(),
             mark_font.clone(),
             color,
             outline,
         );
+        if !accidental_count.is_empty() {
+            batch.text(
+                painter,
+                egui::pos2(sign_x + accidental_advance - track, anchor.y - rise),
+                egui::Align2::LEFT_CENTER,
+                accidental_count.clone(),
+                mark_font.clone(),
+                color,
+                outline,
+            );
+        }
+        // Whole-string ink: tracking moves the count sideways, and how far
+        // the pair reaches DOWN is the same either way.
         bottom = bottom.max(-rise + ink_below(&accidental, &mark_font, line));
     }
 
@@ -988,7 +1033,7 @@ pub(crate) fn draw_stacked_name(
         if !count.is_empty() {
             batch.text(
                 painter,
-                egui::pos2(x + cell, anchor.y + direction * rise),
+                egui::pos2(x + cell - track, anchor.y + direction * rise),
                 egui::Align2::LEFT_CENTER,
                 count.to_owned(),
                 mark_font.clone(),

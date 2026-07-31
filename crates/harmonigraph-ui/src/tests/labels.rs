@@ -68,9 +68,12 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     let (texts, shapes) = drawn_label(name, anchor);
 
     // Counted marks, not five sharps and four pluses spelled out. The `+`
-    // itself is drawn, so only its COUNT is text.
+    // itself is drawn, so only its COUNT is text -- and each count is its own
+    // piece, so it can be set closer to its sign than an advance apart.
     let letter = text_box(&texts, "C");
-    let accidental = text_box(&texts, "\u{266F}5");
+    let accidental_sign = text_box(&texts, "\u{266F}");
+    let accidental_count = text_box(&texts, "5");
+    let accidental = accidental_sign.union(accidental_count);
     let count = text_box(&texts, "4");
     let sign = shapes
         .iter()
@@ -90,7 +93,20 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
         (accidental.left() - sign.left()).abs() <= 2.0 * BEARING,
         "the drawn sign shares the accidental's column ({sign:?} vs {accidental:?})"
     );
-    assert!(sign.right() <= count.left() + BEARING, "the count follows its sign");
+    // A count multiplies the sign beside it rather than continuing a word, so
+    // it is tracked in by MARK_TRACK instead of taking a clear cell after it.
+    // Both halves of the column pin against the same number: a typeset sign's
+    // box IS one cell, which is what the drawn sign claims too.
+    let track = panes::lattice::MARK_TRACK * panes::lattice::MARK_SIZE;
+    for (which, c) in [("accidental", accidental_count), ("comma", count)] {
+        assert!(
+            (accidental_sign.right() - track - c.left()).abs() < 0.01,
+            "the {which}'s count should track in by {track} ({accidental_sign:?} then {c:?})"
+        );
+    }
+    // ...but never so far that it climbs onto the sign. The drawn box carries
+    // its halo, so it overlaps the count by that much before any ink does.
+    assert!(sign.right() <= count.left() + BEARING + track, "the count follows its sign");
     // Superscript over subscript, straddling the letter's own line.
     assert!(accidental.center().y < letter.center().y, "the accidental rides high");
     assert!(sign.center().y > letter.center().y, "the comma sits low");
