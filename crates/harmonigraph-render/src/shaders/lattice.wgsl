@@ -28,9 +28,8 @@ struct Uniforms {
     misc2: vec4<f32>,
     // x: core radius in quad UV units (0 turns the core off). y/z: the
     // outer layer's inner/outer band radii (same units; the scene
-    // guarantees z > y). w: outer backdrop opacity 0..1 (ghost the silent
-    // octaves to complete the ring; independent of the core). 0 draws no
-    // backdrop; 1 is the full built-in ghost strength.
+    // guarantees z > y). w: unused — it carried the backdrop opacity, which
+    // is fixed on below.
     misc3: vec4<f32>,
     // Pitch->color lookup for the octave glyphs, matching the node disc
     // gradient (length mirrors harmonigraph_scene::PITCH_LUT_N).
@@ -40,9 +39,9 @@ struct Uniforms {
     // (not the note hue) and never snaps color when the voice is pruned.
     node_idle: vec4<f32>,
     // x: core solidity (0 = soft glow, 1 = solid orb) — the single axis the
-    // core layer runs on. y: outer solidity (0 = soft glowy glyphs, 1 =
-    // crisp octave shapes). z: idle marker radius. w: idle marker style
-    // (0 none, 1 dot, 2 circle).
+    // core layer runs on. y: unused — it carried the octave glyphs'
+    // solidity, which is fixed crisp below. z: idle marker radius.
+    // w: idle marker style (0 none, 1 dot, 2 circle).
     misc4: vec4<f32>,
     // x: grid line thickness, a multiple of the built-in grid width.
     // y: unused.
@@ -69,14 +68,16 @@ const TAU: f32 = 6.2831853;
 // Billboard headroom past the octave band's outer edge (uv 1.0): the quad
 // and its uv are both scaled by this, so the uv->world mapping is
 // unchanged (disc, band, glyphs, glow all render identically) but there is
-// margin out to this radius for things that live OUTSIDE the band -- a
-// low-solidity glyph's soft edge, and the melody ring, which at the default
-// band (outer 1.0) sits entirely out here. Costs a bit of fill (bigger
-// quads, which alpha-blend and discard where empty).
+// margin out to this radius for things that live OUTSIDE the band -- the
+// mark rings, which at the default band (outer 1.0) sit entirely out here.
+// Costs a bit of fill (bigger quads, which alpha-blend and discard where
+// empty).
 const QUAD_MARGIN: f32 = 1.6;
-// Where a soft glyph's overflow finishes easing off. Pinned to what
-// QUAD_MARGIN was when this fade was tuned, so widening the billboard for
-// the mark rings doesn't quietly restyle every low-solidity glyph.
+// Where the octave layer's overflow past uv 1.0 -- the aa fringe of a band
+// dialed right out to the edge -- finishes easing off, rather than being
+// cut flat by the quad boundary. Pinned to what QUAD_MARGIN was when this
+// fade was tuned, so widening the billboard for the mark rings doesn't
+// quietly restyle the glyph edges.
 const GLYPH_FADE_LIMIT: f32 = 1.3;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -135,7 +136,8 @@ const EARLY_OUT: bool = true;
 // smoothstep has reached zero, so the bound is exact rather than generous:
 //
 //   - the glow's `window` closes at 0.95, inside GLYPH_FADE_LIMIT;
-//   - the octave glyphs (and their soft overflow) end at GLYPH_FADE_LIMIT;
+//   - the octave glyphs (and their eased-off fringe) end at
+//     GLYPH_FADE_LIMIT;
 //   - the core disc — and channel 14's ring — end at their radius plus the
 //     widest edge softness the solidity axis can ask for;
 //   - the idle marker ends at its own radius, or the trail ring's;
@@ -333,10 +335,13 @@ const RAD_PER_OCTAVE: f32 = 0.7853982;
 // size. The glyphs are drawn identically whatever the core does — the
 // layers are independent.
 //
-// The backdrop flag (u.misc3.w, its own outer-layer setting) adds a
-// cohesion device so a note reads as ONE whole shape even when a single
-// octave sounds: the SILENT slots draw as faint ghosts in the note's own
-// color, completing the circle silhouette around the bright sector.
+// The backdrop is always on: it is the cohesion device that makes a note
+// read as ONE whole shape even when a single octave sounds, so the SILENT
+// slots draw as faint ghosts in the note's own color, completing the circle
+// silhouette around the bright sector.
+//
+// The glyphs are always crisp, too: `aa` alone is their edge width, which
+// is what makes it screen-constant at every zoom.
 
 // Neighboring sectors (slots are 0.785 rad apart) are separated by a
 // CONSTANT-thickness gap: the slice edges are radial lines offset half the
@@ -351,14 +356,9 @@ const RAD_PER_OCTAVE: f32 = 0.7853982;
 fn slice_gap_half() -> f32 {
     return max(u.misc5.z, 0.0) * 0.5;
 }
-// Ghost coverage of a silent slot when the backdrop is on, scaled
-// by the note's activation so ghosts fade out with the pitch class.
+// Ghost coverage of a silent slot, scaled by the note's activation so the
+// backdrop fades out with the pitch class.
 const GHOST_LEVEL: f32 = 0.16;
-// How far the outer glyphs' soft edge spreads at outer solidity 0, as a
-// fraction of the band width (added to the screen-constant aa). ~1 band
-// width makes the sectors melt into diffuse glows; smaller keeps them
-// tighter. Tunes the soft end of the octave solidity slider.
-const OUTER_GLOW_SOFT: f32 = 1.0;
 // The classic disc-edge radius: normalizes the field paint to the sized
 // orb, and stands in for the core radius where a coreless node still needs
 // one (channel 14's outline ring).
@@ -399,12 +399,11 @@ fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
-    // Ownership softened over `aa`: at crisp aa this is a ~1px step buried
-    // in the gap below (invisible, as before), but when the glyph is
-    // softened (low outer solidity) the gap no longer reaches zero at the
-    // wedge boundary, so a hard step here would show as a straight cut on
-    // the slice's sides. Soft ownership lets adjacent slices cross-fade
-    // (the loop keeps the max), so the sector edges stay soft.
+    // Ownership softened over `aa`: a hard step would show as a straight
+    // cut down the slice's sides wherever the gap doesn't reach zero at the
+    // wedge boundary — a Gap of 0, which closes the sectors into a solid
+    // annulus, is exactly that case. Soft ownership lets adjacent slices
+    // cross-fade (the loop keeps the max), so the sector edges stay clean.
     let own = smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2);
     let gap_half = slice_gap_half();
     let g = (1.0 - aa_inside(gap_half, abs(c1), aa))
@@ -982,22 +981,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var glyph = 0.0;
     var glyph_rgb = node_glyph_rgb;
 
-    // Backdrop opacity 0..1, scaling the built-in ghost level: 0
-    // draws no backdrop at all, 1 is the full strength this always had.
-    let backdrop = u.misc3.w;
-    let has_backdrop = backdrop > 0.0;
-    // Outer solidity (u.misc4.y, 0..1) is the octave layer's own
-    // crisp/soft knob: it widens every glyph's soft edge (proportional to
-    // the band width so narrow bands soften proportionally), so at 1 the
-    // shapes are crisp (the classic look) and toward 0 they melt into soft
-    // glowy marks. It only feeds the edge width, so shapes and angles stay
-    // put. Mirrors the core's solidity.
-    let outer_aa = aa + (1.0 - u.misc4.y) * OUTER_GLOW_SOFT * (u.misc3.z - u.misc3.y);
     // Melody/bass ring geometry.
     let band_in = u.misc3.y;
     let band_out = u.misc3.z;
     let ring_thick = u.misc5.w;
-    let ring_w = select(max(ring_thick, outer_aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
+    let ring_w = select(max(ring_thick, aa * MARK_RING_MIN_AA), 0.0, ring_thick <= 0.0);
     let ring_gap = slice_gap_half() * 2.0;
     // Headroom: the band's outer radius can be dialed to 1.0, so the outer
     // ring lives in the QUAD_MARGIN margin. Cap it inside the billboard (a
@@ -1007,20 +995,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let outer_in = min(band_out + ring_gap, lim);
     let inner_out = band_in - ring_gap;
     // Sounding slots draw bright, tinted by their own pitch, each fading on
-    // its own envelope. The backdrop opacity (its own outer-layer setting,
-    // independent of the core) fades in the layer's cohesion device: the
-    // silent slots drawn as ghosts in the loop below.
-    let ghosted = has_backdrop;
+    // its own envelope; the silent ones draw as the backdrop's ghosts in the
+    // loop below, riding the note's own presence so the whole ring fades
+    // with the pitch class rather than outliving it.
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let level = octave_level(in.octaves, i);
-        if level <= 0.0 && !(ghosted && presence > 0.0) {
+        if level <= 0.0 && presence <= 0.0 {
             continue;
         }
-        let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, outer_aa);
+        let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, aa);
         // Ghosts complete the circle silhouette in the note's own color; a
         // sounding slot never dips below its ghost, so a fading octave hands
         // off to it instead of leaving a hole.
-        var cov = shape * GHOST_LEVEL * backdrop * presence * f32(ghosted);
+        var cov = shape * GHOST_LEVEL * presence;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
             // Straight off the octave's own envelope, so the glyph eases in
@@ -1043,11 +1030,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             glyph_rgb = slot_rgb;
         }
     }
-    // Fade a soft (low-solidity) glyph out across the billboard's margin
-    // instead of letting the quad boundary clip it flat. The fade starts at
-    // uv 1.0 — the outer band's own limit — so a crisp glyph (which never
-    // reaches past its band, all within uv 1.0) is untouched; only the soft
-    // overflow into the headroom is eased to zero by GLYPH_FADE_LIMIT.
+    // Ease the glyph layer off across the billboard's margin instead of
+    // letting the quad boundary clip it flat. The fade starts at uv 1.0 —
+    // the outer band's own limit — so it touches nothing but what reaches
+    // past the band: the aa fringe of a band dialed right out to the edge,
+    // eased to zero by GLYPH_FADE_LIMIT.
     glyph = glyph * (1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d));
 
     // Melody/bass rings, bracketing the octave band: melody inside, bass
@@ -1058,12 +1045,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let melody_cov = mark_ring(
         in.marks.x, in.cents, in.uv,
         inner_out - ring_w, inner_out,
-        outer_aa,
+        aa,
     ) * in.params.y;
     let bass_cov = mark_ring(
         in.marks.y, in.cents, in.uv,
         outer_in, min(outer_in + ring_w, lim),
-        outer_aa,
+        aa,
     ) * in.params.z;
     // Disjoint radii, so at most one of the two covers any given pixel.
     var mark = max(melody_cov, bass_cov);

@@ -220,8 +220,6 @@ fn parity_scene() -> Scene {
         core_solidity: 1.0,
         outer_inner: 0.545,
         outer_outer: 0.795,
-        outer_backdrop: 0.0,
-        outer_solidity: 1.0,
         outer_gap: 0.12,
         idle_marker: harmonigraph_scene::IdleMarker::None,
         idle_radius: 0.0,

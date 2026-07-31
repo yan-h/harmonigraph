@@ -139,9 +139,9 @@ struct Uniforms {
     misc2: [f32; 4],
     /// x: core radius in quad UV units (0 turns the core off); y/z: the
     /// outer octave layer's inner/outer band radii (same units, pre-
-    /// sanitized by the scene so z > y); w: outer backdrop opacity 0..1
-    /// (ghost the silent octaves to complete the ring, independent of the
-    /// core; 0 = no backdrop, 1 = the full built-in ghost level).
+    /// sanitized by the scene so z > y); w unused (it carried the outer
+    /// backdrop opacity, now fixed on in the shader — a retired slot rather
+    /// than a repack, which would renumber the ones around it for nothing).
     misc3: [f32; 4],
     /// Pitch->color lookup for the dots octave style (see harmonigraph_scene's
     /// `pitch_ramp_lut`), matching the node disc gradient.
@@ -153,10 +153,11 @@ struct Uniforms {
     /// color when the voice is pruned.
     node_idle: [f32; 4],
     /// x: core solidity (0 = soft glow, 1 = solid orb), the single axis the
-    /// core layer runs on; y: outer solidity (0 = soft glowy glyphs, 1 =
-    /// crisp octave shapes); z: idle marker radius; w: idle marker style
-    /// (0 none, 1 dot, 2 circle). (The blit pipeline binds only the head of
-    /// this buffer, so trailing fields are safe to add here.)
+    /// core layer runs on; y unused (it carried the outer solidity, now
+    /// fixed crisp in the shader — retired in place, like `misc3.w`);
+    /// z: idle marker radius; w: idle marker style (0 none, 1 dot, 2
+    /// circle). (The blit pipeline binds only the head of this buffer, so
+    /// trailing fields are safe to add here.)
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
     /// width; y: draw the melody/bass mark on the core (pitch class
@@ -490,17 +491,12 @@ impl LatticeCallback {
                     render_scale,
                     scene.bloom_strength.clamp(0.0, 4.0),
                 ],
-                misc3: [
-                    scene.core_radius,
-                    scene.outer_inner,
-                    scene.outer_outer,
-                    scene.outer_backdrop,
-                ],
+                misc3: [scene.core_radius, scene.outer_inner, scene.outer_outer, 0.0],
                 pitch_lut: std::array::from_fn(|k| scene.pitch_lut[k].to_array()),
                 node_idle: scene.node_idle.to_array(),
                 misc4: [
                     scene.core_solidity,
-                    scene.outer_solidity,
+                    0.0,
                     scene.idle_radius,
                     scene.idle_marker.shader_index() as f32,
                 ],

@@ -236,13 +236,6 @@ pub struct Scene {
     /// sanitized: outer is always ahead of inner.
     pub outer_inner: f32,
     pub outer_outer: f32,
-    /// Outer-layer cohesion device (see [`ViewConfig::outer_backdrop`]):
-    /// ghost the silent octaves faintly to complete the ring. Independent
-    /// of the core. Already clamped to 0..1; 0 draws no backdrop at all.
-    pub outer_backdrop: f32,
-    /// The outer glyphs' solidity 0..1 (see [`ViewConfig::outer_solidity`]):
-    /// 1 crisp, toward 0 the glyph edges spread into soft glows.
-    pub outer_solidity: f32,
     /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
     /// sector-to-sector and band-to-mark-ring alike. Already clamped.
     pub outer_gap: f32,
