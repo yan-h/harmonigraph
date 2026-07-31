@@ -630,7 +630,7 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // 1.5 points across pitch: what `panes::roll` floors a ribbon too thin
+        // 1.5 points across pitch: what `panes::spectral::roll` floors a ribbon too thin
         // to see to (MIN_RIBBON_PX). Narrower than a pixel is wide, so no
         // sample here is purely one thing — what matters is that the middle
         // still reads as the NOTE rather than as the keyline having flooded
@@ -647,7 +647,7 @@ mod tests {
 
     /// A note two pixels along the depth axis holds its brightness as it
     /// scrolls sub-pixel; one pixel does not. That threshold is what
-    /// `panes::roll::MIN_LENGTH_DEVICE_PX` floors a brief note's length to, and
+    /// `panes::spectral::roll::MIN_LENGTH_DEVICE_PX` floors a brief note's length to, and
     /// this is the measurement it is quoted from.
     ///
     /// The `band`/`inside` box filter is one pixel wide, so a shape's coverage

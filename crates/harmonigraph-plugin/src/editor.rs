@@ -362,19 +362,19 @@ fn frame(
     };
     // Last frame's costs that the shell measures and the UI cannot: they
     // happen after `root_ui` returns.
-    shared.ui.tess_ms = queue.tess_ms();
-    shared.ui.egui_gpu_ms = queue.egui_gpu_ms();
-    shared.ui.acquire_ms = queue.acquire_ms();
-    shared.ui.tick_ms = queue.tick_ms();
-    shared.ui.render_ms = queue.render_ms();
-    shared.ui.upload_ms = queue.upload_ms();
-    shared.ui.ubuf_ms = queue.ubuf_ms();
-    shared.ui.texture_ms = queue.texture_ms();
-    shared.ui.prims = queue.prims();
-    shared.ui.verts = queue.verts();
-    shared.ui.encode_ms = queue.encode_ms();
-    shared.ui.submit_ms = queue.submit_ms();
-    shared.ui.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
+    shared.ui.timings.tess_ms = queue.tess_ms();
+    shared.ui.timings.egui_gpu_ms = queue.egui_gpu_ms();
+    shared.ui.timings.acquire_ms = queue.acquire_ms();
+    shared.ui.timings.tick_ms = queue.tick_ms();
+    shared.ui.timings.render_ms = queue.render_ms();
+    shared.ui.timings.upload_ms = queue.upload_ms();
+    shared.ui.timings.ubuf_ms = queue.ubuf_ms();
+    shared.ui.timings.texture_ms = queue.texture_ms();
+    shared.ui.timings.prims = queue.prims();
+    shared.ui.timings.verts = queue.verts();
+    shared.ui.timings.encode_ms = queue.encode_ms();
+    shared.ui.timings.submit_ms = queue.submit_ms();
+    shared.ui.timings.shell_ms = shell_start.elapsed().as_secs_f32() * 1000.0;
     harmonigraph_ui::root_ui(ui, &mut shared.ui, &backend, now);
 
     // A pane folded sideways (or came back) leaves every other pane its width

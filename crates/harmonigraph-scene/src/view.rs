@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    CoreStyle, HighlightExtremes, IdleMarker, LegacyNodeBody, NodeStyle, SevensLabel,
+    HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
 };
 use crate::trail::TrailMark;
 use harmonigraph_core::{coords, LatticePos};
@@ -130,11 +130,6 @@ pub struct ViewConfig {
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
-    /// Legacy load-only core mode (see [`CoreStyle`]); folded into
-    /// `core_radius`/`core_solidity` by [`migrate_legacy`](Self::migrate_legacy)
-    /// and never written back.
-    #[serde(default, skip_serializing)]
-    pub core_style: CoreStyle,
     /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
     /// to the classic solid orb at 1 (the disc fades in over its glow
     /// skirt and its edge crisps). Inert while the core is off.
@@ -151,9 +146,9 @@ pub struct ViewConfig {
     /// the previous build's slice_inner/slice_outer blobs loading;
     /// derive_scene keeps outer ahead of inner, so any dragged
     /// combination still renders a visible band.
-    #[serde(default = "default_outer_inner", alias = "slice_inner")]
+    #[serde(default = "default_outer_inner")]
     pub outer_inner: f32,
-    #[serde(default = "default_outer_outer", alias = "slice_outer")]
+    #[serde(default = "default_outer_outer")]
     pub outer_outer: f32,
     // The octave layer's backdrop and solidity are fixed at 1 in the shader
     // and have no fields here. The backdrop — the silent octaves ghosted
@@ -188,11 +183,6 @@ pub struct ViewConfig {
     /// Independent of the active `core_radius`.
     #[serde(default = "default_idle_radius")]
     pub idle_radius: f32,
-    /// Load-only shim: the short-lived NodeBody build's blobs set this,
-    /// and [`ViewConfig::migrate_legacy`] folds it into core/outer. Never
-    /// saved.
-    #[serde(default, skip_serializing)]
-    pub node_body: LegacyNodeBody,
     // ---- Melody / bass highlight -----------------------------------------
     // Mark the outer held notes, so the melody and/or bass line reads at a
     // glance out of a chord. "Outer" is by sounding pitch (`Voice::pitch`,
@@ -512,20 +502,12 @@ impl ViewConfig {
         LatticePos::new(self.center_threes, self.center_fives, self.center_sevens)
     }
 
-    /// Fold fields from older blob layouts into the current ones; call
-    /// after deserializing a persisted view.
+    /// Fit a deserialized view to what its controls can actually produce, and
+    /// fold the one field a loadable blob may still spell the old way.
     ///
-    /// The pre-radius-off core modes collapse onto today's `core_radius`
-    /// (0 = off) plus `core_solidity`: the old `None` becomes radius 0
-    /// (off), the old solid `Orb` becomes solidity 1, and the old glow-only
-    /// mode (`Glow`, also the bare `"None"` token) becomes solidity 0. The
-    /// one-build NodeBody experiment's octave-only bodies map onto that glow
-    /// (solidity 0), the outer layer carrying the note alone. Each of those
-    /// bodies once had its own matching glyph shape; only slices survives,
-    /// so all three now land there. (Their band radii rode the
-    /// slice_inner/slice_outer fields, absorbed by the
-    /// outer_inner/outer_outer aliases.)
-    pub fn migrate_legacy(&mut self) {
+    /// The clamping is not about old blobs: a bar cannot produce a nonsense
+    /// value but a hand-edited RON can, and these feed a rasterizer.
+    pub fn sanitize(&mut self) {
         // Fit the label scale to what its bar offers. It multiplies a FONT
         // SIZE, and the bar cannot produce a nonsense value where a
         // hand-edited blob can: a non-finite one reaches egui as a glyph with
@@ -543,19 +525,6 @@ impl ViewConfig {
             self.mark_melody = which.marks_melody();
             self.mark_bass = which.marks_bass();
         }
-
-        match std::mem::replace(&mut self.core_style, CoreStyle::On) {
-            CoreStyle::None => self.core_radius = 0.0,
-            CoreStyle::Orb => self.core_solidity = 1.0,
-            CoreStyle::Glow => self.core_solidity = 0.0,
-            CoreStyle::On => {}
-        }
-
-        match std::mem::take(&mut self.node_body) {
-            LegacyNodeBody::Disc => return,
-            LegacyNodeBody::Slices | LegacyNodeBody::Rings | LegacyNodeBody::Beads => {}
-        }
-        self.core_solidity = 0.0;
     }
 }
 
@@ -601,7 +570,6 @@ impl Default for ViewConfig {
             label_scale: default_label_scale(),
             show_cents: true,
             node_style: NodeStyle::Steady,
-            core_style: CoreStyle::default(),
             // A small, soft core inside the octave band, with the band's
             // silent slots ghosted in: the pitch class reads as a compact
             // center and the octaves carry the node's outline. (The band's
@@ -623,7 +591,6 @@ impl Default for ViewConfig {
             // matches the core.)
             idle_marker: IdleMarker::None,
             idle_radius: 0.1,
-            node_body: LegacyNodeBody::Disc,
             // Both ends marked: the rings are subtle enough to live with
             // always on, and a chord's outer voices are worth seeing without
             // having to go turn something on first.

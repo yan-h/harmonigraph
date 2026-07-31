@@ -151,7 +151,7 @@ impl SpectrumHistory {
     /// trade logarithmic — a longer span costs a tier, not a proportion.
     ///
     /// Must be at least the display's slab cap
-    /// (`harmonigraph_ui::panes::spectrogram::LIVE_SLAB_CAP`). Every tier doubles its
+    /// (`harmonigraph_ui::panes::spectral::spectrogram::LIVE_SLAB_CAP`). Every tier doubles its
     /// spacing but only ages the store forward by `COARSE_COLUMNS` of that
     /// spacing, so a tier narrower than the cap falls behind what the finest
     /// window reaching it can resolve — one tier per doubling only keeps up

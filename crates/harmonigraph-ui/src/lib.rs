@@ -43,6 +43,7 @@ pub(crate) use config::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
+pub use perf::ShellTimings;
 pub use state::{
     render_config_from_persist, CameraPreset, Console, RenderProgress, SharedState,
 };
@@ -267,39 +268,13 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
     state.perf.record(
-        perf::FrameCosts {
-            shell_ms: state.shell_ms,
+        perf::FrameCosts::assemble(
+            state.timings,
             cpu_ms,
-            tess_ms: state.tess_ms,
-            egui_gpu_ms: state.egui_gpu_ms,
-            lattice_gpu_ms: f32::from_bits(
-                state.lattice_stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            prepare_ms: f32::from_bits(
-                state.lattice_stats.prepare_ms.load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            poll_ms: f32::from_bits(
-                state.lattice_stats.poll_ms.load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            write_ms: f32::from_bits(
-                state.lattice_stats.write_ms.load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            scene_ms: f32::from_bits(
-                state.lattice_stats.scene_ms.load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            acquire_ms: state.acquire_ms,
-            tick_ms: state.tick_ms,
-            render_ms: state.render_ms,
-            upload_ms: state.upload_ms,
-            ubuf_ms: state.ubuf_ms,
-            texture_ms: state.texture_ms,
-            prims: state.prims,
-            verts: state.verts,
-            roll_notes: state.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
-            spectrogram_fallbacks: state.spectrum.spectrogram_fallbacks(),
-            encode_ms: state.encode_ms,
-            submit_ms: state.submit_ms,
-        },
+            &state.lattice_stats,
+            state.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
+            state.spectrum.spectrogram_fallbacks(),
+        ),
         now,
         perf::Workload {
             active_voices: state.tracker.voices().count(),

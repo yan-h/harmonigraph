@@ -1,0 +1,275 @@
+//! The Spectral pane's gestures: the divider between spectrum and roll,
+//! and the drags and wheel that pan and zoom its two axes.
+
+use crate::*;
+use harmonigraph_render::wgpu::TextureFormat;
+use super::harness::*;
+
+/// Drag the Spectral pane's spectrum/spectrogram divider through the REAL
+/// dock — `root_ui`, egui_dock, the tab body's ScrollArea and all.
+///
+/// The pane's own tests drive `spectral_pane` into a bare child Ui, which
+/// skips every layer the dock puts between the pointer and the handle. Any
+/// of those could swallow the drag (the ScrollArea registers a drag-sensing
+/// background widget of its own), and the failure would look exactly like
+/// "dragging doesn't work" — silent, with the handle still lighting up on
+/// hover. So the assertion is that the split actually MOVED.
+#[test]
+fn the_spectral_divider_drags_through_the_dock() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t));
+    };
+    // Two warm-ups: egui resolves the top widget at the pointer from the
+    // previous pass, so the handle has to exist before the press.
+    frame(&mut state, vec![]);
+    frame(&mut state, vec![]);
+
+    // Ask egui where the handle actually landed rather than deriving the
+    // dock's arithmetic here, which would just re-encode the layout.
+    let handle = egui::Id::new(("spectral-split", 0usize));
+    let band = ctx.read_response(handle).expect("the split handle never registered").rect;
+    let grab = band.center();
+    let before = state.spectrum_config.roll_fraction;
+
+    // Left (the default orientation) puts the divider upright, so the drag
+    // that moves it runs along x — pushing it away from the spectrum.
+    let press = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    frame(&mut state, vec![egui::Event::PointerMoved(grab)]);
+    assert!(
+        ctx.read_response(handle).is_some_and(|r| r.hovered()),
+        "the handle should light up under the pointer",
+    );
+    frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    let target = grab + egui::vec2(40.0, 0.0);
+    frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    assert!(ctx.read_response(handle).is_some_and(|r| r.dragged()), "the handle should be dragged");
+    frame(&mut state, vec![press(target, false)]);
+
+    let after = state.spectrum_config.roll_fraction;
+    assert!(
+        after < before - 0.1,
+        "the split should have moved with the pointer ({before} -> {after})",
+    );
+}
+
+/// Dragging the Spectral pane's picture pans the pitch range, through the real
+/// dock. Panning DOWN the axis (dragging toward higher pitch) has to bring
+/// lower pitches into view, the way grabbing any picture does.
+#[test]
+fn dragging_the_spectral_picture_pans_the_pitch_range() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Start zoomed in, so there is room to pan in both directions.
+    state.spectrum_config.low_midi = 48.0;
+    state.spectrum_config.high_midi = 84.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    let grab = h.spectral_grab(&state);
+    let before = state.spectrum_config;
+    // Left (the default orientation) climbs in pitch UP the screen, so a
+    // drag toward higher pitch is a drag toward smaller y.
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    let target = grab + egui::vec2(0.0, -60.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+
+    let after = state.spectrum_config;
+    assert!(
+        after.low_midi < before.low_midi - 1.0,
+        "the range should have followed the pointer down the axis ({} -> {})",
+        before.low_midi,
+        after.low_midi,
+    );
+    assert!(
+        ((after.high_midi - after.low_midi) - (before.high_midi - before.low_midi)).abs() < 1e-3,
+        "a pan moves the range without resizing it",
+    );
+    assert_eq!(
+        after.roll_seconds, before.roll_seconds,
+        "a drag across the pitch axis is the range's; the Span must not breathe with it",
+    );
+}
+
+/// Dragging along the time axis zooms the roll's Span instead — the picture is
+/// anchored at the now-line, so pulling it toward the past spreads it out and
+/// the seconds it spans shrink. The pitch range stays where it was: one drag
+/// moves one axis.
+#[test]
+fn dragging_the_spectral_picture_along_time_zooms_the_span() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    let grab = h.spectral_grab(&state);
+    let before = state.spectrum_config;
+    // Left runs time rightward (now at the left), so dragging right is
+    // dragging toward the past.
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    let target = grab + egui::vec2(120.0, 0.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+
+    let zoomed = state.spectrum_config;
+    assert!(
+        zoomed.roll_seconds < before.roll_seconds * 0.75,
+        "dragging toward the past should have zoomed in ({} -> {})",
+        before.roll_seconds,
+        zoomed.roll_seconds,
+    );
+    assert_eq!(
+        (zoomed.low_midi, zoomed.high_midi),
+        (before.low_midi, before.high_midi),
+        "the Span's drag is not the pitch range's",
+    );
+
+    // And back: the mapping is exponential in the drag, so the same distance
+    // the other way returns the span it started on. Grabbed from the same spot
+    // (the far end of a rightward drag can land outside the pane, where a press
+    // is nobody's drag).
+    let back = grab - egui::vec2(120.0, 0.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(back)]);
+    h.frame(&mut state, vec![press(back, false)]);
+    let restored = state.spectrum_config.roll_seconds;
+    assert!(
+        (restored - before.roll_seconds).abs() < 0.1,
+        "dragging back should restore the span ({} -> {restored})",
+        before.roll_seconds,
+    );
+}
+
+/// Only a drag that starts in the far region — where the time axis actually is
+/// — zooms the Span. Over the spectrum's own share the depth axis is dB, and a
+/// drag along it would be moving something that isn't under the hand.
+#[test]
+fn a_drag_over_the_spectrum_leaves_the_span_alone() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Zoomed in, so the pan the drag DOES do has room to show — otherwise this
+    // would pass just as well on a drag that never reached the pane.
+    state.spectrum_config.low_midi = 48.0;
+    state.spectrum_config.high_midi = 84.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    // The spectrum owns 0..0.45 of the depth axis by default.
+    let grab = h.spectral_grab_at(&state, 0.2);
+    let before = state.spectrum_config;
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    // Leaning along time, which in the far region would be a Span zoom.
+    let target = grab + egui::vec2(120.0, -20.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+
+    let after = state.spectrum_config;
+    assert_eq!(
+        after.roll_seconds, before.roll_seconds,
+        "a drag begun over the spectrum has no time axis under it",
+    );
+    assert!(
+        after.low_midi < before.low_midi - 0.1,
+        "and is still a pitch pan, so the drag did reach the pane ({} -> {})",
+        before.low_midi,
+        after.low_midi,
+    );
+}
+
+/// The wheel zooms the pitch range, and touches NOTHING else — in particular
+/// not the roll's time Span, which is the other thing a wheel over this pane
+/// could plausibly have meant.
+#[test]
+fn the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.spectrum_config.low_midi = 36.0;
+    state.spectrum_config.high_midi = 96.0;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    let over = h.spectral_grab(&state);
+    let before = state.spectrum_config;
+    h.frame(&mut state, vec![egui::Event::PointerMoved(over)]);
+    // Several notches, so the assertion isn't riding on egui's scroll smoothing
+    // having fully caught up in one frame.
+    for _ in 0..4 {
+        h.frame(
+            &mut state,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 40.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+    }
+
+    let after = state.spectrum_config;
+    let (was, now) = (before.high_midi - before.low_midi, after.high_midi - after.low_midi);
+    assert!(now < was - 1.0, "scrolling up should have zoomed in ({was} -> {now})");
+    assert_eq!(
+        after.roll_seconds, before.roll_seconds,
+        "the wheel is the pitch range's, not the time axis's",
+    );
+    // Zoom is anchored on the pointer, which is the middle of the pane here,
+    // so the pitch under it should not have moved.
+    let mid = |c: &crate::SpectrumConfig| 0.5 * (c.low_midi + c.high_midi);
+    assert!(
+        (mid(&after) - mid(&before)).abs() < 1.0,
+        "the pitch under the pointer should stay put ({} -> {})",
+        mid(&before),
+        mid(&after),
+    );
+}
+
+/// The pane now senses drags over its whole surface, which is exactly what
+/// could have swallowed the divider's. It must not: the divider registers
+/// after the pane, so egui leaves it on top, and a drag that starts on the
+/// handle still resizes the split and does NOT pan the pitch.
+#[test]
+fn the_divider_still_wins_the_drag_over_the_pane_behind_it() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+
+    let handle = egui::Id::new(("spectral-split", 0usize));
+    let band = h.ctx.read_response(handle).expect("the split handle never registered").rect;
+    let grab = band.center();
+    let before = state.spectrum_config;
+
+    h.frame(&mut state, vec![egui::Event::PointerMoved(grab), press(grab, true)]);
+    // A drag with a pitch-axis component, so a pane that stole it would show
+    // up as a moved range rather than as nothing happening.
+    let target = grab + egui::vec2(40.0, -30.0);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(target)]);
+    h.frame(&mut state, vec![press(target, false)]);
+
+    let after = state.spectrum_config;
+    assert!(
+        (after.roll_fraction - before.roll_fraction).abs() > 0.01,
+        "the divider should still have moved",
+    );
+    assert_eq!(
+        (after.low_midi, after.high_midi),
+        (before.low_midi, before.high_midi),
+        "dragging the divider must not pan the pitch range as well",
+    );
+    assert_eq!(
+        after.roll_seconds, before.roll_seconds,
+        "nor zoom the Span — the drag leans along time, which is the Span's gesture",
+    );
+}

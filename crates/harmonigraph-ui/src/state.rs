@@ -9,7 +9,7 @@ use harmonigraph_core::{LatticePos, NoteTracker, PitchClass, Tuning};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
-use crate::perf::PerfStats;
+use crate::perf::{self, PerfStats};
 use crate::{fold, panes, text};
 use crate::{AudioSpectrum, RenderConfig, SpectrumConfig, WholeSong};
 
@@ -228,61 +228,10 @@ pub struct SharedState {
     /// per-frame publishing is behind atomics: labels are drawn from a
     /// `&SharedState`. Taken once per flush, uncontended.
     pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
-    /// Milliseconds the shell spent tessellating egui's shapes last frame,
-    /// or 0 where the shell doesn't measure it (the standalone's eframe loop
-    /// isn't ours to instrument). Set by the shell before `root_ui`.
-    ///
-    /// Its own field rather than part of the frame's CPU time because it is
-    /// not the same work: `ui cpu` covers building the UI, which only APPENDS
-    /// shapes, and this covers turning those shapes into triangles afterwards.
-    /// A cost can be entirely in one and invisible in the other.
-    pub tess_ms: f32,
-    /// Milliseconds the GPU spent on egui's own render pass last frame, or 0
-    /// where the shell doesn't measure it. Set by the shell before `root_ui`.
-    ///
-    /// Disjoint from [`Self::gpu_ms`], which brackets only the lattice's own
-    /// passes: between them they cover the frame's GPU work, and the two were
-    /// separated because the lattice turned out to be the cheap half.
-    pub egui_gpu_ms: f32,
-    /// Milliseconds the shell spent on its own per-frame work before the UI
-    /// ran — draining the event rings and reconciling the take — or 0 where
-    /// the shell doesn't measure it.
-    ///
-    /// Separate from the frame's CPU time because that starts at the dock
-    /// build: this stretch scales with events ARRIVING rather than with what
-    /// is drawn, and there was no reading it could show up in.
-    pub shell_ms: f32,
-    /// Milliseconds the previous frame blocked acquiring the surface — the
-    /// vsync wait. Large here with every cost small means the frame is early,
-    /// not slow.
-    pub acquire_ms: f32,
-    /// Milliseconds the previous frame callback took end to end, or 0 where
-    /// the shell doesn't measure it.
-    ///
-    /// The other readings are stages of it. This is the total, and against the
-    /// interval between frames it answers what no stage can: whether a long
-    /// frame was SLOW, or just late being asked for.
-    pub tick_ms: f32,
-    /// Milliseconds of that callback spent inside the renderer. `tick_ms`
-    /// minus this is the egui half — the UI closure plus egui's own
-    /// end-of-pass work — so the two bracket the whole frame between them.
-    pub render_ms: f32,
-    /// The renderer's stages. `upload_ms` also covers paint callbacks'
-    /// `prepare`, so the lattice's own buffer writes are inside it.
-    pub upload_ms: f32,
-    /// Of that, `update_buffers` itself. The difference is the command-encoder
-    /// creation, the renderer's write lock and the MSAA resize, which the
-    /// upload reading also spans.
-    pub ubuf_ms: f32,
-    /// Of the uploads, the TEXTURE half — the rest is buffer uploads, and
-    /// with them the paint callbacks' `prepare`.
-    pub texture_ms: f32,
-    /// How many primitives and vertices the previous frame uploaded — the
-    /// volume behind the upload cost, rather than another duration.
-    pub prims: u32,
-    pub verts: u32,
-    pub encode_ms: f32,
-    pub submit_ms: f32,
+    /// What the shell measured about the previous frame, for the
+    /// performance overlay. Written by the shell before `root_ui` and read
+    /// once, by `perf::FrameCosts::assemble`; no pane touches it.
+    pub timings: perf::ShellTimings,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -455,19 +404,7 @@ impl SharedState {
             },
             roll_notes: std::sync::atomic::AtomicU32::new(0),
             font_atlas: Default::default(),
-            tess_ms: 0.0,
-            egui_gpu_ms: 0.0,
-            shell_ms: 0.0,
-            acquire_ms: 0.0,
-            tick_ms: 0.0,
-            render_ms: 0.0,
-            upload_ms: 0.0,
-            ubuf_ms: 0.0,
-            texture_ms: 0.0,
-            prims: 0,
-            verts: 0,
-            encode_ms: 0.0,
-            submit_ms: 0.0,
+            timings: perf::ShellTimings::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
             perf: PerfStats::default(),
@@ -541,53 +478,47 @@ impl SharedState {
     }
 
     /// Restore state saved by [`save_persist`](Self::save_persist). Unknown or
-    /// corrupt input is ignored (fresh defaults win over a broken restore).
+    /// corrupt input is ignored (fresh defaults win over a broken restore), and
+    /// so is anything older than [`UI_PERSIST_VERSION`].
+    ///
+    /// Refusing an older blob rather than migrating it is safe because no
+    /// older blob can reach this build. The version reached 2 on 2026-07-23;
+    /// the plugin's `CLAP_ID` and `VST3_CLASS_ID` changed on 2026-07-26, three
+    /// days later. A project saved before the version bump therefore names a
+    /// plugin identity this binary does not claim, so the host never loads us
+    /// into that slot and its state never arrives here. Versions 0 and 1 are
+    /// unreachable by construction, not merely unlikely.
+    ///
+    /// That is what the identity change bought and what a future one would
+    /// buy again: a clean floor under the format. A bump WITHOUT one is a
+    /// different matter — it would strand real projects — so raising this
+    /// constant means either writing the migration or changing the ids.
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
-            // A pre-reorg (version 0) layout names the old tabs and is missing
-            // the split-out Scene and new Panel tabs, so those controls would
-            // be unreachable. The old tab names still deserialize (Tab's serde
-            // aliases), which is what lets the settings below survive — but the
-            // arrangement itself is stale, so refresh it to the new default.
-            // Everything else the user dialed in is kept.
-            // The folds go with the dock they were measured against: they name
-            // splits by index, so a fresh arrangement has to start with none
-            // rather than with fractions pointing into a tree that is gone.
-            // Same reason "Reset layout" clears them.
-            // Either way the dock being installed is not the one the dial's
-            // points were measured against, and its node count cannot say so
-            // (see [`fold::Dial::forget`]) — so the load has to. What the
-            // incoming layout is dialled to is the fractions in the blob's own
-            // dock, plus the widths its folds carry.
+            if persist.version < UI_PERSIST_VERSION {
+                return;
+            }
+            // The dock being installed is not the one the dial's points were
+            // measured against, and its node count cannot say so (see
+            // [`fold::Dial::forget`]) — so the load has to. What the incoming
+            // layout is dialled to is the fractions in the blob's own dock,
+            // plus the widths its folds carry.
             self.dial.forget();
-            self.dock = if persist.version < UI_PERSIST_VERSION {
-                // The width those folds took is NOT handed back, unlike "Reset
-                // layout", which this otherwise resembles: a load brings its
-                // own window size along with its layout, and the folds being
-                // dropped were measured against the window the editor is
-                // leaving rather than the one it is arriving in. Paying them
-                // back here would widen a freshly restored window by whatever
-                // the last project had folded.
-                self.folds.forget();
-                default_dock()
-            } else {
-                self.folds = persist.folds;
-                persist.dock
-            };
+            self.folds = persist.folds;
+            self.dock = persist.dock;
             self.camera = persist.camera;
             self.view = persist.view;
-            // Fold fields from older blob layouts (the NodeBody
-            // experiment) into the current core/outer split.
-            self.view.migrate_legacy();
+            // Not a migration: both fit a deserialized blob to what its
+            // controls can produce, which a hand-edited RON need not have.
+            self.view.sanitize();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
-            // Same job for the pitch range, which used to be a pair of
-            // octave numbers.
-            self.spectrum_config.migrate_legacy();
+            self.spectrum_config.sanitize();
             self.render_config = persist.render;
-            // And for the render frame, whose two-way `stacked` flag became a
-            // named side — plus the `--size` that used to sit in the Options
-            // text, now the Resolution control.
+            // The render frame's two-way `stacked` flag became a named side,
+            // and the `--size` that used to sit in the Options text became the
+            // Resolution control. Both changed AFTER the version last moved,
+            // so a blob this function accepts can still carry either.
             self.render_config.migrate_legacy();
             self.fps_cap = persist.fps_cap;
             // Clamped here rather than only where it is drawn, so the control

@@ -9,15 +9,15 @@
 //! sampled with bilinear filtering, so it reads as one smooth, filled image
 //! rather than a mesh of flat cells (which looked blocky) or interpolated
 //! triangles (which floated and creased). Geometry still comes from
-//! [`Axes`](super::spectral::Axes), so it turns and flips with the pane, and
+//! [`Axes`](super::axes::Axes), so it turns and flips with the pane, and
 //! its dB intensity scale is shared with the spectrum curve via
-//! [`loudness`](super::spectral::loudness) so "loud" means the same in both.
+//! [`loudness`](super::axes::loudness) so "loud" means the same in both.
 
 use egui::Color32;
 use harmonigraph_core::spectrogram::{db_of, BucketDb};
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 
-use super::spectral::{loudness_db, Axes, PitchScale, TimeAxis};
+use super::axes::{loudness_db, Axes, PitchScale, TimeAxis};
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
 /// Most time slabs a live window is ever cut into, whatever the pane's size —
@@ -1751,7 +1751,7 @@ mod tests {
     /// and found invisible; this is what keeps it from drifting after.)
     #[test]
     fn quantizing_a_bucket_does_not_move_its_colour() {
-        use super::super::spectral::{loudness_db, power_db};
+        use super::super::axes::{loudness_db, power_db};
         let mut cfg = SpectrumConfig::default();
         let tolerance =
             0.5 * harmonigraph_core::spectrogram::DB_STEP / (cfg.ceiling_db - cfg.floor_db) + 1e-6;
