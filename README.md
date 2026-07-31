@@ -13,6 +13,10 @@ spectrogram beside it. A piano roll keeps what was already played.
 
 Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
+Almost every line here was written by Claude Code sessions, directed and
+reviewed by one human. [`CLAUDE.md`](CLAUDE.md) is the house style they work
+under; `./ci.sh` is the gate every push clears.
+
 Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
 community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
 wgpu backend in the plugin, eframe's in the standalone harness).
