@@ -23,15 +23,10 @@ Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
 community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
 wgpu backend in the plugin, eframe's in the standalone harness).
 
-**Tested only on macOS, in Bitwig Studio.** Nothing here is deliberately
-tied to either — but no other operating system or host has ever been tried,
-so treat anything else as unknown rather than supported.
-
-Some of the patches under [`vendor/`](vendor) are macOS-only as well: every
-baseview patch is AppKit code, and egui-baseview's fold-present fix drives a
-`CAMetalLayer` directly. All of it is `cfg`-gated, so another platform would
-still build — it would just have the bugs those patches fix. See
-[`PATCHES.md`](PATCHES.md).
+**Tested only on macOS, in Bitwig Studio.** No other OS or host has been
+tried. Several [`vendor/`](vendor) patches are macOS-only too — `cfg`-gated,
+so elsewhere it still builds, just without those fixes
+([`PATCHES.md`](PATCHES.md)).
 
 ## Setup
 
