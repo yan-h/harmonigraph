@@ -23,6 +23,11 @@ Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
 community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
 wgpu backend in the plugin, eframe's in the standalone harness).
 
+**Tested only on macOS, in Bitwig Studio.** No other OS or host has been
+tried. Several [`vendor/`](vendor) patches are macOS-only too — `cfg`-gated,
+so elsewhere it still builds, just without those fixes
+([`PATCHES.md`](PATCHES.md)).
+
 ## Setup
 
 The Rust toolchain is pinned by `rust-toolchain.toml` (1.92). rustup
@@ -163,7 +168,8 @@ values in the harness), so every pane runs unmodified in both shells.
 `egui-baseview 0.3` pins egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview
 0.1; `eframe` and `egui_dock` must match the egui version. All of this is
 centralized in the workspace `Cargo.toml` — bump the whole cluster
-together. `vendor/baseview` carries a small macOS fix (see PATCHES.md).
+together. `vendor/baseview` and `vendor/egui-baseview` both carry local
+patches (see PATCHES.md).
 
 ## License
 
