@@ -218,8 +218,8 @@ fn clear_everything(ui: &mut egui::Ui, state: &mut SharedState) {
 /// the ONLY thing that decides this. The renderer turns the playhead on for
 /// `--playhead` or this setting, whichever says yes, so a plugin that also
 /// passed the flag would be answering a question the row is supposed to own —
-/// and passing it unconditionally, which the plugin did, made "Live"
-/// unreachable. `RenderRequest::playhead` is why it no longer does.
+/// and passing it unconditionally would make "Live" unreachable.
+/// `RenderRequest::playhead` is what keeps the row deciding.
 fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     section(ui, "Spectrogram");
     choice_row(
@@ -428,8 +428,8 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     // render already opens where the take was CAPTURED, so the run-up actually
     // played is in the video without asking for it. (Take times are the host's
     // transport position, so a passage played from a minute in was captured
-    // from 60-odd seconds; rendering from song zero opened on a minute of
-    // nothing, which is the bug this row's default no longer needs to paper
+    // from 60-odd seconds; rendering from song zero would open on a minute of
+    // nothing, which is what this row's default would otherwise have to paper
     // over.) What the bar adds is stillness BEFORE the recording, which is
     // empty frame by construction.
     ValueBar::new(&mut state.render_config.lead_in, 0.0..=5.0, "Lead-in").show(ui).on_hover_text(

@@ -16,7 +16,7 @@
 /// width.
 ///
 /// Deliberately NOT whole octaves from a C. MIDI 12..132 — ten octaves C to
-/// C — would land the C gridlines on the axis ends, which is tidy, but it
+/// C — would land the C labels on the axis ends, which is tidy, but it
 /// stops at 16.7 kHz and leaves the top third of an octave of the audible
 /// band unanalyzed. There is no C anywhere near 20 kHz (the next one is
 /// 44 kHz), so covering the band means giving that tidiness up.

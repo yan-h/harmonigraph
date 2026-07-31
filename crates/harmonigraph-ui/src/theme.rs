@@ -565,18 +565,21 @@ pub fn dock_style(egui_style: &egui::Style, scale: f32) -> egui_dock::Style {
     // it is a reach, not a drawn thing, and a narrower band is if anything the
     // case for keeping the reach where it was.
     style.separator.extra_interact_width = 6.0;
-    // The narrowest a pane may be dragged, which is its own tab bar: the width
-    // a fold leaves behind, so a pane can be dragged down to the rail it would
-    // fold to and no further.
+    // The narrowest a pane may be dragged: four tab bars, which is where a pane
+    // still has room to be one (see `min_pane`). NOT the width a fold leaves
+    // behind — that is one tab bar, and folding is the way to get a pane out of
+    // the way entirely.
     //
     // egui_dock's own default is 175pt, and it applies this as a clamp on EVERY
     // separator's fraction on EVERY frame, dragged or not — so in a window
     // narrow enough for 175 to bite (the plugin's floor is 400) it does not
     // merely refuse a drag, it walks the layout toward 50/50 by itself, and it
     // mangles any fraction dialled for a window that has not arrived yet: the
-    // fractions a fold hands back on the way out are exactly that. A tab bar
-    // clears every fold's own fractions with a couple of points to spare, a
-    // rail being one tab bar wide by construction.
+    // fractions a fold hands back on the way out are exactly that. Four tab bars
+    // is well under 175 and so leaves that walk no room in any window the plugin
+    // opens at — but it does NOT clear a folded split's own fraction, a rail
+    // being one tab bar wide: those are clamped every frame, which is the
+    // condition `fold::drags` reads a gesture against rather than a fraction.
     style.separator.extra = min_pane(scale);
     style.separator.color_idle = well();
     style.separator.color_hovered = accent_edge();

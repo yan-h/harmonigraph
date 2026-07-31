@@ -2818,7 +2818,8 @@ fn loading_a_saved_layout_brings_its_pane_widths_with_it() {
 }
 
 /// The panes the default dock lays out side by side, left to right.
-const LAID_OUT_TABS: [panes::Tab; 3] = [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
+const LAID_OUT_TABS: [panes::Tab; 3] =
+    [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
 
 fn pane_rect(state: &SharedState, tab: panes::Tab) -> egui::Rect {
     let path = state.dock.find_tab(&tab).expect("the tab is docked");

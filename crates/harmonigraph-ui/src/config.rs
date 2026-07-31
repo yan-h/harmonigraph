@@ -32,7 +32,7 @@ impl SpectrumWindow {
 /// pane, and pitch across.
 ///
 /// The pane is written once against an abstract (pitch, depth) plane and
-/// mapped onto the screen at draw time, so every element — gridlines,
+/// mapped onto the screen at draw time, so every element — axis markings,
 /// spectrum curve, piano roll — turns together.
 ///
 /// Pitch reads the conventional way in each pair rather than mirroring with
@@ -562,9 +562,9 @@ pub struct SpectrumConfig {
     /// raw-power 0 a bare f32 default would hand it.
     #[serde(default = "default_tilt")]
     pub tilt: f32,
-    /// Overall size of the pane's own markings — the gridline labels above and
-    /// the pitch readout that follows the pointer — as a multiple of their
-    /// built-in sizes.
+    /// Overall size of the pane's own markings — the frequency labels along the
+    /// axis and the pitch readout that follows the pointer — as a multiple of
+    /// their built-in sizes.
     ///
     /// Fixed against the zoom, unlike the note names: a marking says what the
     /// axis is, and the axis is the one thing on the pane that does not change

@@ -112,7 +112,7 @@ pub struct Viewer<'a> {
 /// time a bar asks: egui's `Region::expand_to_include_rect` unions it when a
 /// control overruns, so it may already have grown past the pane. Nor is the
 /// clip rect, which is the tab BODY — egui_dock clips to the whole body and
-/// only then insets it by [`crate::theme::PANE_INNER_MARGIN`] via a `Frame`,
+/// only then insets it by [`crate::theme::pane_inner_margin`] via a `Frame`,
 /// which does not clip — so a bar clamped to it comes out a margin longer than
 /// its neighbours and sits flush on the pane border.
 ///

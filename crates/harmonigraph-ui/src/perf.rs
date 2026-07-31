@@ -737,10 +737,9 @@ pub(crate) fn draw_overlay(
     // out of `layer_id_at` — but every `ui.label` inside it still registered a
     // widget rect, and those win the pointer regardless. The result was a dead
     // zone the size of the HUD in the corner of the lattice: no scroll-to-zoom
-    // and no drag-to-orbit under it, whenever the overlay was on, which is by
-    // default. A readout that changes the thing it is measuring is worse than
-    // no readout. Nothing below allocates a widget, so nothing can take the
-    // pointer.
+    // and no drag-to-orbit under it, for as long as the overlay was up. A
+    // readout that changes the thing it is measuring is worse than no readout.
+    // Nothing below allocates a widget, so nothing can take the pointer.
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("perf_overlay"),
