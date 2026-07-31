@@ -621,6 +621,14 @@ fn label_rect(
 /// [`lattice::draw_stacked_name`] — so its width is the letter plus the wider
 /// mark, and its height is the letter's line box, which the marks are sized to
 /// stay inside.
+///
+/// A counted mark is measured here at two full cells, which the draw path no
+/// longer spends: `lattice::MARK_TRACK` sets a count into its sign's cell, so
+/// this reads `0.06 · mark_size` wide per counted column. Deliberately not
+/// mirrored. This estimate drives the thinning and the label boxes, where too
+/// wide only spaces labels further apart than their ink needs and too narrow
+/// lets them overlap — so the error belongs on this side, and chasing a
+/// sub-point refinement would move roll layout for nothing.
 fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
     let marks = name
         .accidental_mark()
