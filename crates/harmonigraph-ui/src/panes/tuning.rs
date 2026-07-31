@@ -60,26 +60,6 @@ fn meantone_third_bar(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn P
     }
 }
 
-/// Switching the mode off by hand: hand the derived third to the param, so
-/// the bar that becomes editable holds the value the lattice was using and
-/// doesn't jump — and record the pair that leaves behind.
-///
-/// The recording is what gives the switch a working OFF direction under the
-/// auto-detect. The value just written IS four fifths minus two octaves, so
-/// the pair is a meantone by construction and the detect would take it
-/// straight back on the next frame. Naming the refused pair suppresses
-/// exactly that one tuning (see `SharedState::meantone_declined`); any other
-/// the tuning becomes is a fresh question for the detect.
-///
-/// Recorded whether or not the detect is on, so switching it on later cannot
-/// resurrect a mode that was switched off under it.
-pub(crate) fn release_meantone(state: &mut SharedState, params: &dyn ParamBackend) {
-    let three = params.get(ParamKey::Three);
-    let derived = tuning::meantone_third(three);
-    params.set(ParamKey::Five, derived);
-    state.meantone_declined = Some((tuning::microcents(three), tuning::microcents(derived)));
-}
-
 pub(super) fn tuning_pane(
     ui: &mut egui::Ui,
     state: &mut SharedState,
@@ -128,8 +108,15 @@ pub(super) fn tuning_pane(
         //
         // Live whatever Auto is doing: switching it ON is how a tuning that
         // is NOT within the tolerance gets snapped to meantone anyway, and
-        // the detect never releases, so that decision stands.
-        let meantone = crate::widgets::toggle_switch(ui, &mut state.view.meantone, "Meantone")
+        // the detect never releases, so that decision stands. Switching it
+        // OFF stands too — the detect judges each tuning once, and this one
+        // has been judged (see `begin_frame`).
+        //
+        // Nothing is written to the third param either way. The lock only
+        // ever DERIVED the third; handing that derived value back on the way
+        // out would rewrite a tuning the user set (a just third comes back as
+        // a tempered one) as a side effect of pressing a mode twice.
+        crate::widgets::toggle_switch(ui, &mut state.view.meantone, "Meantone")
             .on_hover_text(if state.view.meantone_auto {
                 "Lock the major third to four perfect fifths (temper out the \
                  syntonic comma); note-name labels drop their comma marks. Auto \
@@ -139,9 +126,6 @@ pub(super) fn tuning_pane(
                 "Lock the major third to four perfect fifths (temper out the \
                  syntonic comma); note-name labels drop their comma marks"
             });
-        if meantone.changed() && !state.view.meantone {
-            release_meantone(state, params);
-        }
         // Auto-detect. Nothing to do on a change: switched on, the detect
         // runs in `begin_frame` and engages from the tuning itself; switched
         // off, the mode simply stays where it is with the switch live again.

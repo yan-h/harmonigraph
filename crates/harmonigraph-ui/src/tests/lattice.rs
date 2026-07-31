@@ -176,18 +176,40 @@ fn learn_leaves_meantone_alone_when_the_auto_detect_is_off() {
     assert!(state.view.meantone, "with the detect off, learn only retunes the axes");
 }
 
-/// A backend that answers with a real tuning and remembers what is written
-/// to it, neither of which [`RecordingBackend`] does: it reports 0.0 for
-/// every key, and a 0¢ fifth is not a tuning any detection could sensibly
-/// fire on.
+/// A backend that answers with a real tuning, which [`RecordingBackend`]
+/// does not: it reports 0.0 for every key, and a 0¢ fifth is not a tuning any
+/// detection could sensibly fire on.
+///
+/// Writes land only on [`flush`](Self::flush), which is the plugin's own
+/// behaviour rather than a convenience for the tests: nih-plug queues a `set`
+/// for the host and the parameter "will only be changed when the output event
+/// is written", so `get` reports the value being written away FROM for a
+/// frame or more afterwards. A backend that applied writes instantly would
+/// pass whatever the shell does with the frames in between.
 struct TuningBackend {
     three: std::cell::Cell<f32>,
     five: std::cell::Cell<f32>,
+    queued: std::cell::RefCell<Vec<(params::ParamKey, f32)>>,
 }
 
 impl TuningBackend {
     fn new(three: f32, five: f32) -> Self {
-        TuningBackend { three: std::cell::Cell::new(three), five: std::cell::Cell::new(five) }
+        TuningBackend {
+            three: std::cell::Cell::new(three),
+            five: std::cell::Cell::new(five),
+            queued: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Let the host catch up: every queued write takes effect.
+    fn flush(&self) {
+        for (key, value) in self.queued.borrow_mut().drain(..) {
+            match key {
+                params::ParamKey::Three => self.three.set(value),
+                params::ParamKey::Five => self.five.set(value),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -203,11 +225,7 @@ impl ParamBackend for TuningBackend {
         }
     }
     fn set(&self, key: params::ParamKey, value: f32) {
-        match key {
-            params::ParamKey::Three => self.three.set(value),
-            params::ParamKey::Five => self.five.set(value),
-            _ => {}
-        }
+        self.queued.borrow_mut().push((key, value));
     }
 }
 
@@ -331,10 +349,10 @@ fn the_switch_snaps_a_non_meantone_tuning_with_the_detect_on() {
     );
 }
 
-/// And the OFF direction, which is the one the detect could undo. Switching
-/// the mode off hands the derived third to the param, leaving a pair that IS
-/// a meantone — so without the declined-pair memory the detect takes it
-/// straight back and the press does nothing you can see.
+/// And the OFF direction, which is the one the detect could undo — the
+/// reported "sometimes I have to press it twice". The mode was engaged from
+/// this very tuning, so a detect that judged it again would re-engage it on
+/// the next frame, and the press would do nothing you could see.
 #[test]
 fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -345,18 +363,50 @@ fn the_switch_releases_under_the_detect_until_the_tuning_changes() {
     begin_frame(&mut state, &params, 0.0);
     assert!(state.view.meantone, "12-TET engages by itself");
 
-    // The switch: the flag, then what the pane does with it.
+    // The switch, in full: it writes nothing but the flag.
     state.view.meantone = false;
-    crate::panes::tuning::release_meantone(&mut state, &params);
     for frame in 1..4 {
         begin_frame(&mut state, &params, frame as f64);
-        assert!(!state.view.meantone, "frame {frame} re-engaged a refused tuning");
+        assert!(!state.view.meantone, "frame {frame} re-engaged a tuning already judged");
     }
 
-    // A different tuning is a fresh question — even one that is still a
-    // meantone, since the refusal was about the pair, not about the mode.
-    params.set(params::ParamKey::Three, 696.0);
-    params.set(params::ParamKey::Five, harmonigraph_core::tuning::meantone_third(696.0));
+    // A tuning that has moved is a fresh question, and this one is still a
+    // meantone: quarter-comma, both axes written together.
+    let three = harmonigraph_core::tuning::THREE_JUST
+        - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
+    params.set(params::ParamKey::Three, three);
+    params.set(params::ParamKey::Five, harmonigraph_core::tuning::meantone_third(three));
+    params.flush();
     begin_frame(&mut state, &params, 4.0);
     assert!(state.view.meantone, "a new meantone tuning should engage again");
+}
+
+/// A tuning write the host has not reported back must not be judged on the
+/// value it is moving away FROM. In the plugin every `set` is queued for the
+/// host, so for a frame or more `get` still answers with the old value —
+/// and the two edits that MEAN "this is not meantone" both write while the
+/// mode is being switched off: dragging the third clear of the magnet (here)
+/// and the Just preset. Judged afresh, that stale pair re-locks the mode the
+/// edit was undoing.
+#[test]
+fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET,
+    );
+    begin_frame(&mut state, &params, 0.0);
+    assert!(state.view.meantone, "12-TET engages by itself");
+
+    // What the third bar does when a drag escapes the magnet: drop the mode
+    // and write the dragged value. The host has not heard about it yet.
+    state.view.meantone = false;
+    params.set(params::ParamKey::Five, harmonigraph_core::tuning::FIVE_12TET + 2.0);
+    begin_frame(&mut state, &params, 1.0);
+    assert!(!state.view.meantone, "the stale pair re-locked the mode mid-write");
+
+    // And once it lands, the pair it lands on is judged on its own terms.
+    params.flush();
+    begin_frame(&mut state, &params, 2.0);
+    assert!(!state.view.meantone, "a third 2¢ off four fifths is not a meantone");
 }

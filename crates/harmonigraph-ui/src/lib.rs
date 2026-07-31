@@ -356,19 +356,29 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     // along. Releasing is an explicit edit of the third instead (see
     // `panes::tuning`), which is the one gesture that can mean nothing else.
     //
-    // Or the switch, which is why the declined pair exists: the ONE tuning
-    // the user has just said no to at is skipped, and any other answers to
-    // the detect as usual. An engaged mode has nothing to decline, so the
-    // memory is dropped as soon as it is on again by any route.
-    if state.view.meantone {
-        state.meantone_declined = None;
-    } else if state.view.meantone_auto
-        && state.meantone_declined != Some((state.tuning.three, state.tuning.five))
-    {
+    // And it judges each pair ONCE, which is what gives the switch a working
+    // OFF direction: nothing about an unchanged tuning can have changed the
+    // answer, so a mode switched off stays off until the tuning itself moves.
+    //
+    // Once is also the only reading that survives the plugin's parameters.
+    // A `set` there is queued for the host — nih-plug: "the parameter's
+    // actual value will only be changed when the output event is written" —
+    // so for a frame or more after ANY tuning write, `get` still reports the
+    // value being written away FROM. Judging that stale pair afresh undoes
+    // the edit that is in flight: the mode the user just switched off comes
+    // back for a frame (press twice to disengage), and a Just preset re-locks
+    // on the tuning it is leaving. Judging it once means the stale frames say
+    // nothing, and the pair gets its verdict when it arrives.
+    let pair = (state.tuning.three, state.tuning.five);
+    if state.view.meantone_auto && !state.view.meantone && state.meantone_judged != Some(pair) {
         let tuning = &state.tuning;
         state.view.meantone =
             harmonigraph_core::tuning::is_meantone(tuning.three_cents(), tuning.five_cents());
     }
+    // Every frame, engaged or not: an engaged mode that is switched off must
+    // find its own tuning already judged, or the frame after the switch reads
+    // as a tuning nobody has looked at.
+    state.meantone_judged = Some(pair);
     // Meantone mode locks the major third to four perfect fifths: derive it
     // from the fifth here, so the whole pipeline (scene pitch classes,
     // matching, readouts) sees the locked value without any meantone
