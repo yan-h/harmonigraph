@@ -53,37 +53,31 @@ pub(super) const KEY_NAMES: [&str; 12] = [
     "F\u{266F}", "G", "G\u{266F}", "A", "A\u{266F}", "B",
 ];
 
-/// The serde `alias`es carry pre-reorg persisted layouts across the rename:
-/// an old blob names `View`/`Appearance`/`Spectrum`/`Render`, and without the
-/// aliases that unknown variant would fail the whole `UiPersist` parse and
-/// take the dialed-in camera/view/spectrum/render settings down with it. The
-/// dock arrangement itself is refreshed separately (see `UiPersist` version).
+/// The variant names are a persistence contract: a saved layout names its
+/// tabs by these spellings, so renaming one orphans the dock in every project
+/// that has it open. Retiring a tab is the same problem from the other side —
+/// an unknown variant fails the whole `UiPersist` parse and takes the
+/// dialed-in camera, view and analyzer settings down with it, not just the
+/// arrangement. Either change needs a `UI_PERSIST_VERSION` bump behind it
+/// (see [`load_persist`](crate::SharedState::load_persist)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Lattice,
     /// The lattice itself: how it is tuned, and how it is framed. The framing
-    /// half was a tab of its own — "Frame", and "View" before that — until the
-    /// two short panes were merged; both spellings alias here so an older
-    /// layout still parses (the dock arrangement itself is refreshed by the
-    /// `UiPersist` version bump that came with the merge).
-    #[serde(alias = "Frame", alias = "View")]
+    /// half was a tab of its own until the two short panes were merged.
     Tuning,
-    /// How a sounding note is drawn (was the first half of "Appearance").
-    #[serde(alias = "Appearance")]
+    /// How a sounding note is drawn.
     Nodes,
-    /// The structure and overlays around the notes (second half of the old
-    /// "Appearance").
+    /// The structure and overlays around the notes.
     Scene,
     Console,
     /// The Spectral display: FFT curve, voices, and piano roll.
     Spectral,
-    /// Settings for the Spectral display. Titled "Analyzer"; was "Spectrum".
-    #[serde(alias = "Spectrum")]
+    /// Settings for the Spectral display. Titled "Analyzer".
     Analyzer,
     Notes,
     /// A live preview of the offline video frame, composed and adjusted here.
-    /// Titled "Video"; was "Render".
-    #[serde(alias = "Render")]
+    /// Titled "Video".
     Video,
     /// The plugin's own render-quality and pane-layout knobs.
     Panel,

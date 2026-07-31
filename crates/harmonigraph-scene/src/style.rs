@@ -66,30 +66,6 @@ impl NodeStyle {
     }
 }
 
-/// Legacy load-only core mode, from before the core became a plain radius
-/// (`core_radius`, with 0 = off) plus a `core_solidity` slider. Persisted
-/// blobs still carry a `core_style` token; [`ViewConfig::migrate_legacy`]
-/// folds each value into today's radius/solidity and then this is ignored
-/// (the field is `skip_serializing`). Kept as a distinct type only so those
-/// tokens keep deserializing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum CoreStyle {
-    /// The pre-radius-off "nothing" mode (serialized `"Empty"`). Folds to
-    /// `core_radius = 0` (off). The bare `"None"` token is the older
-    /// glow-only mode instead, aliased onto [`Glow`](CoreStyle::Glow).
-    #[serde(rename = "Empty")]
-    None,
-    /// The core is present with radius + solidity already in their own
-    /// fields; nothing to fold. The default (and what recent blobs wrote).
-    #[default]
-    On,
-    /// The pre-solidity solid orb. Folds to solidity 1.
-    Orb,
-    /// The pre-solidity glow-only mode (also the bare `"None"` token
-    /// pre-split blobs wrote). Folds to solidity 0.
-    #[serde(alias = "None")]
-    Glow,
-}
 
 /// The idle-node marker: a minimal grey mark shown at each home-sheet node
 /// at all times, independent of the active appearance and of whether a note
@@ -150,23 +126,6 @@ impl HighlightExtremes {
     }
 }
 
-/// The short-lived NodeBody experiment's variants (one working-tree
-/// build, 2026-07-18, octave-only note bodies): parsed load-only via
-/// `ViewConfig::node_body` and folded into the core/outer split by
-/// [`ViewConfig::migrate_legacy`], so blobs saved by that build keep
-/// loading instead of dropping the whole persist.
-/// (Not an Option: the legacy blobs wrote the variant bare, which RON
-/// would refuse to parse into an Option's `Some`; the `Disc` default
-/// doubles as the "nothing to migrate" state.)
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum LegacyNodeBody {
-    #[default]
-    Disc,
-    #[serde(alias = "Pie")]
-    Slices,
-    Rings,
-    Beads,
-}
 
 /// What text an OFF-SHEET node's label carries — a node on any sevens sheet
 /// but the center one.

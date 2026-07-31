@@ -1,5 +1,5 @@
-//! What survives a session: round-trips through [`UiPersist`], and the
-//! migrations that keep blobs written by older builds loadable.
+//! What survives a session: round-trips through [`UiPersist`], the version
+//! floor under it, and the migrations for changes made since that floor.
 
 use crate::*;
 use crate::state::UI_PERSIST_VERSION;
@@ -58,48 +58,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.camera_presets.len(), 1);
     assert_eq!(restored.camera_presets[0].name, "reading");
     assert_eq!(restored.camera_presets[0].yaw, 0.7);
-}
-
-#[test]
-fn removed_node_styles_in_old_persist_blobs_load_as_steady() {
-    // Breathe/Sparks and the later-trimmed Wire/Corona/… set no longer
-    // exist; serde aliases must absorb them so an old blob still restores
-    // (a failed parse would silently drop the WHOLE persist — layout,
-    // camera, everything). "Wire" is one of the removed names.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.camera.yaw = 1.23;
-    state.view.node_style = harmonigraph_scene::NodeStyle::Vortex;
-    let saved = state.save_persist().replace("node_style:Vortex", "node_style:Wire");
-    assert_ne!(saved, state.save_persist(), "replacement must have hit");
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&saved);
-    assert_eq!(restored.view.node_style, harmonigraph_scene::NodeStyle::Steady);
-    assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
-}
-
-#[test]
-fn an_old_blobs_octave_style_key_is_ignored_rather_than_fatal() {
-    // The octave layer had a style setting (Off, and the Dots/Rings/Petals/
-    // Flares/Bumps glyph shapes trimmed before it) until the layer became
-    // unconditional. Every one of those tokens still sits in saved blobs, and
-    // an unknown key must be SKIPPED — a failed parse drops the whole persist,
-    // camera and layout with it, which is a far worse trade than losing a
-    // setting that no longer exists.
-    for removed in ["Off", "Slices", "Dots", "Rings", "Petals", "Flares", "Bumps"] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        state.camera.yaw = 1.23;
-        state.view.outer_inner = 0.25;
-        let saved = state
-            .save_persist()
-            .replace("outer_inner:", &format!("outer_style:{removed},outer_inner:"));
-        assert_ne!(saved, state.save_persist(), "injection must have hit for {removed}");
-
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(restored.camera.yaw, 1.23, "{removed} took the persist down");
-        assert_eq!(restored.view.outer_inner, 0.25, "{removed}");
-    }
 }
 
 #[test]
@@ -253,229 +211,6 @@ fn a_loaded_blob_has_its_options_size_lifted() {
 }
 
 #[test]
-fn pre_rename_octave_style_and_slice_band_fields_still_load() {
-    // The outer layer's band fields were renamed (slice_inner/outer ->
-    // outer_inner/outer); aliases must keep blobs with the old names
-    // loading, alongside the octave_style key that era also wrote.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.view.outer_inner = 0.25;
-    state.view.outer_outer = 0.85;
-    let saved = state
-        .save_persist()
-        .replace("outer_inner:", "octave_style:Slices,slice_inner:")
-        .replace("outer_outer:", "slice_outer:");
-    assert_ne!(saved, state.save_persist(), "replacements must have hit");
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&saved);
-    assert_eq!(restored.view.outer_inner, 0.25);
-    assert_eq!(restored.view.outer_outer, 0.85);
-}
-
-#[test]
-fn pre_reorg_layout_keeps_its_settings_and_refreshes_the_dock() {
-    // The settings tabs were renamed and split (View -> Frame, Appearance ->
-    // Nodes + Scene, Spectrum -> Analyzer, Render -> Video, plus a new Panel),
-    // Frame was later merged back into Tuning, and the persist blob gained a
-    // version. An old blob names the old tabs and has no version. Two things
-    // must hold: the `Tab` aliases keep it PARSING (a failed parse silently
-    // drops camera/view/spectrum with it), and the absent version refreshes
-    // the stale dock so no tab is stranded off-layout or listed twice.
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.camera.yaw = 1.23;
-    state.view.extent_sevens = 3;
-    // Rewrite a current blob into a pre-reorg one: drop the version field
-    // (serde reads it back as 0) and rename the tabs to their old spellings,
-    // which only the aliases can still resolve. The capitalized tab tokens
-    // don't occur elsewhere in the blob, so these replacements are surgical.
-    // The version is spelled from the constant so the next bump doesn't
-    // quietly turn the strip into a no-op and leave this testing nothing.
-    let saved = state
-        .save_persist()
-        .replacen(&format!("version:{UI_PERSIST_VERSION},"), "", 1)
-        // Tuning is where the old View/Frame tab ended up, so its old name is
-        // the one that exercises those aliases.
-        .replace("Tuning", "View")
-        .replace("Nodes", "Appearance")
-        .replace("Analyzer", "Spectrum")
-        .replace("Video", "Render");
-    assert!(!saved.contains("version:"), "the version strip missed");
-    assert_ne!(saved, state.save_persist(), "the rewrite must have hit");
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&saved);
-    // Parsed despite the old tab names, so the dialed-in settings survive.
-    assert_eq!(restored.camera.yaw, 1.23, "settings survive the old tab names");
-    assert_eq!(restored.view.extent_sevens, 3);
-    // The stale arrangement is refreshed to the current default, which has
-    // every tab (including the ones an old blob couldn't name).
-    assert_eq!(
-        ron::to_string(&restored.dock).unwrap(),
-        ron::to_string(&default_dock()).unwrap(),
-        "a pre-versioning layout resets to the current default dock"
-    );
-}
-
-/// A version-1 layout lists Tuning AND Frame, and the merge made both spell
-/// the same variant. Loaded as-is that dock opens with the merged pane in it
-/// twice — two tabs, same name, same contents — so the version bump has to
-/// refresh it. The settings in the blob must still survive that.
-#[test]
-fn a_pre_merge_layout_does_not_open_the_merged_tab_twice() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.camera.yaw = 0.77;
-    state.spectrum_config.floor_db = -42.0;
-    // Synthesize the version-1 blob: same layout, but with the Frame tab still
-    // sitting next to Tuning where it used to be.
-    let saved = state
-        .save_persist()
-        .replacen(&format!("version:{UI_PERSIST_VERSION},"), "version:1,", 1)
-        .replacen("Tuning,", "Tuning,Frame,", 1);
-    assert!(saved.contains("Frame"), "the synthetic v1 layout must name Frame");
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&saved);
-    // Parsed: `Frame` still resolves (onto Tuning), so nothing was dropped.
-    assert_eq!(restored.camera.yaw, 0.77, "settings survive the pre-merge layout");
-    assert_eq!(restored.spectrum_config.floor_db, -42.0);
-    // And the duplicate is gone rather than carried into the dock.
-    let dock = ron::to_string(&restored.dock).unwrap();
-    assert_eq!(
-        dock,
-        ron::to_string(&default_dock()).unwrap(),
-        "a pre-merge layout resets to the current default dock",
-    );
-    assert_eq!(dock.matches("Tuning").count(), 1, "the merged tab is docked twice");
-}
-
-/// A refreshed dock has to take the folds with it.
-///
-/// `Folds` remembers a split by INDEX — surface and node into the dock tree —
-/// plus the fraction to give back on unfold. Those indices mean nothing once
-/// the tree is replaced, which is why "Reset layout" calls `Folds::clear`. The
-/// version bump in `load_persist` replaces the tree just as wholesale, and its
-/// own comment says so ("the remembered fractions would name splits in a tree
-/// that is gone") — but it sits on the branch that KEEPS the dock, so the
-/// branch that throws it away never cleared anything.
-///
-/// The shared UI state outlives the editor window (`editor.rs`: "This is a NEW
-/// context; the shared UI state is not"), so a fold recorded while the window
-/// was open is still in memory when an older blob arrives on the same device —
-/// load a pre-merge project or preset onto it, and the default layout comes
-/// back with one split sitting at a fraction measured against a tree that no
-/// longer exists.
-#[test]
-fn a_refreshed_dock_forgets_the_folds_measured_against_the_old_one() {
-    let state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let saved = state.save_persist();
-    // A fold on the node the default dock does NOT have folded, so a fraction
-    // left behind is visible as a layout that is not the default.
-    let folded = saved.replacen("folds:([])", "folds:([(surface:0,node:1,fraction:0.9)])", 1);
-    assert_ne!(folded, saved, "the folds field must have been there to splice onto");
-
-    // It loads at the current version, which is how it gets into memory at all.
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&folded);
-    assert!(!restored.folds.is_empty(), "the spliced fold must have loaded");
-
-    // Now the same instance is handed an older blob: the dock is refreshed to
-    // the current default, so what the folds named is gone.
-    let old = folded.replacen(&format!("version:{UI_PERSIST_VERSION},"), "version:1,", 1);
-    assert_ne!(old, folded, "the version rewrite missed");
-    restored.load_persist(&old);
-    assert_eq!(
-        ron::to_string(&restored.dock).unwrap(),
-        ron::to_string(&default_dock()).unwrap(),
-        "the premise: an old version refreshes the dock",
-    );
-    assert!(
-        restored.folds.is_empty(),
-        "folds kept indices into a dock that was just thrown away",
-    );
-}
-
-#[test]
-fn pre_radius_off_core_modes_fold_onto_radius_and_solidity() {
-    // Pre-radius-off blobs wrote a `core_style` token the current layout
-    // no longer serializes; loading one must fold it into radius (0 =
-    // off) + solidity so the look is preserved. Inject the dead token
-    // ahead of `core_solidity` (the enum still deserializes it).
-    for (token, off, solidity) in
-        [("Orb", false, 1.0), ("Glow", false, 0.0), ("None", false, 0.0), ("Empty", true, 1.0)]
-    {
-        let state = SharedState::new(TextureFormat::Bgra8Unorm);
-        let saved = state
-            .save_persist()
-            .replace("core_solidity:", &format!("core_style:{token},core_solidity:"));
-        assert_ne!(saved, state.save_persist(), "injection must have hit for {token}");
-
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        if off {
-            assert_eq!(restored.view.core_radius, 0.0, "{token} folds to off");
-        } else {
-            assert!(restored.view.core_radius > 0.0, "{token} stays on");
-            assert_eq!(restored.view.core_solidity, solidity, "{token}");
-        }
-    }
-}
-
-#[test]
-fn node_body_experiment_blobs_fold_into_the_core() {
-    // Blobs saved by the one-build NodeBody experiment carry a
-    // node_body field the current layout no longer writes; loading one
-    // must both parse and fold the body into the core/outer split
-    // (Beads = the core glow, solidity 0, the octave layer carrying the
-    // note). They wrote the legacy core_style:Orb.
-    let state = SharedState::new(TextureFormat::Bgra8Unorm);
-    let saved = state
-        .save_persist()
-        .replace("core_solidity:", "core_style:Orb,node_body:Beads,core_solidity:");
-    assert_ne!(saved, state.save_persist(), "injection must have hit");
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&saved);
-    assert_eq!(restored.view.core_solidity, 0.0, "octave-only body is the glow end");
-    assert!(restored.view.core_radius > 0.0, "still on");
-    assert_eq!(
-        restored.view.node_body,
-        harmonigraph_scene::LegacyNodeBody::Disc,
-        "shim consumed on load"
-    );
-}
-
-#[test]
-fn retired_octave_backdrop_and_solidity_keys_do_not_sink_a_blob() {
-    // The backdrop and the octave glyphs' solidity were settings before
-    // both were fixed at 1, and saved blobs still carry the keys they rode
-    // on — the backdrop as a bare bool, then as an opacity under
-    // `outer_backdrop_alpha`. Their fields are gone, so serde skips them as
-    // unknown; what must not happen is a parse error, because load_persist
-    // drops the WHOLE blob on one and the user would silently lose their
-    // layout, camera and every other view setting along with it.
-    for keys in [
-        "outer_backdrop:true,",
-        "outer_backdrop:false,",
-        "outer_backdrop_alpha:0.5,",
-        "outer_solidity:0.3,",
-        "outer_backdrop_alpha:0.5,outer_solidity:0.3,",
-    ] {
-        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-        // Something non-default elsewhere in the blob, so surviving the
-        // load means more than landing back on the defaults.
-        state.view.extent_threes = 7;
-        let saved = state
-            .save_persist()
-            .replace("core_solidity:", &format!("{keys}core_solidity:"));
-        assert_ne!(saved, state.save_persist(), "injection must have hit for {keys}");
-
-        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-        restored.load_persist(&saved);
-        assert_eq!(restored.view.extent_threes, 7, "blob survived {keys}");
-    }
-}
-
-#[test]
 fn corrupt_persist_is_ignored() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     let default_distance = state.camera.distance;
@@ -504,28 +239,6 @@ fn spectrum_config_round_trips_through_persist() {
     assert_eq!(restored.spectrum_config.low_midi, 40.5);
     assert!(restored.spectrum_config.show_spectrogram);
     assert_eq!(restored.spectrum_config.spectrogram_color, crate::SpectrogramColor::Aurora);
-}
-
-/// The pitch range used to be a pair of Bitwig octave numbers. A blob from
-/// then carries `low_octave`/`high_octave` and no `low_midi`, so without the
-/// fold serde hands it the full-axis default and the zoom the user set is
-/// silently gone.
-#[test]
-fn an_octave_numbered_pitch_range_migrates_to_midi() {
-    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.spectrum_config.low_midi = 40.5;
-    state.spectrum_config.high_midi = 100.0;
-    // C1..C5 in Bitwig numbering — MIDI 36..84.
-    let old = state
-        .save_persist()
-        .replace("low_midi:40.5", "low_octave:1")
-        .replace("high_midi:100.0", "high_octave:5");
-    assert!(old.contains("low_octave:1"), "the replacement must have hit");
-
-    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
-    restored.load_persist(&old);
-    assert_eq!(restored.spectrum_config.low_midi, 36.0);
-    assert_eq!(restored.spectrum_config.high_midi, 84.0);
 }
 
 /// A range saved while the axis ran MIDI 12..132 (16 Hz to 16.7 kHz) starts
@@ -777,4 +490,38 @@ fn an_impossible_ui_scale_is_clamped() {
             "a scale of {asked} was taken at face value",
         );
     }
+}
+
+#[test]
+fn a_blob_older_than_the_version_floor_is_refused_whole() {
+    // Versions below UI_PERSIST_VERSION cannot reach a real editor: the
+    // plugin's CLAP/VST3 ids changed three days after the version last moved,
+    // so a project old enough to carry one names an identity this binary does
+    // not claim. Refusing it here is what lets the migrations for those
+    // formats be deleted rather than carried forever.
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+    assert!(saved.contains(&format!("version:{UI_PERSIST_VERSION}")), "saves at the floor");
+
+    let stale = saved.replacen(
+        &format!("version:{UI_PERSIST_VERSION}"),
+        &format!("version:{}", UI_PERSIST_VERSION - 1),
+        1,
+    );
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&stale);
+    // Untouched, not partially applied: a refused blob must not leave the
+    // camera from one era beside a dock from another.
+    let fresh = SharedState::new(TextureFormat::Bgra8Unorm);
+    assert_eq!(restored.camera.yaw, fresh.camera.yaw);
+    assert_eq!(restored.view.extent_sevens, fresh.view.extent_sevens);
+
+    // And the same blob at the floor still loads, so the test above is
+    // measuring the version rather than a blob that was broken anyway.
+    let mut current = SharedState::new(TextureFormat::Bgra8Unorm);
+    current.load_persist(&saved);
+    assert_eq!(current.camera.yaw, 1.23);
+    assert_eq!(current.view.extent_sevens, 3);
 }

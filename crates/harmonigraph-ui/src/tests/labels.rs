@@ -368,7 +368,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
 fn the_lattice_label_bar_persists_through_the_range_it_offers() {
     let through_view = |scale: f32| {
         let mut view = harmonigraph_scene::ViewConfig { label_scale: scale, ..Default::default() };
-        view.migrate_legacy();
+        view.sanitize();
         view.label_scale
     };
     let (low, high) = (*SCALE_BAR_RANGE.start(), *SCALE_BAR_RANGE.end());

@@ -478,53 +478,47 @@ impl SharedState {
     }
 
     /// Restore state saved by [`save_persist`](Self::save_persist). Unknown or
-    /// corrupt input is ignored (fresh defaults win over a broken restore).
+    /// corrupt input is ignored (fresh defaults win over a broken restore), and
+    /// so is anything older than [`UI_PERSIST_VERSION`].
+    ///
+    /// Refusing an older blob rather than migrating it is safe because no
+    /// older blob can reach this build. The version reached 2 on 2026-07-23;
+    /// the plugin's `CLAP_ID` and `VST3_CLASS_ID` changed on 2026-07-26, three
+    /// days later. A project saved before the version bump therefore names a
+    /// plugin identity this binary does not claim, so the host never loads us
+    /// into that slot and its state never arrives here. Versions 0 and 1 are
+    /// unreachable by construction, not merely unlikely.
+    ///
+    /// That is what the identity change bought and what a future one would
+    /// buy again: a clean floor under the format. A bump WITHOUT one is a
+    /// different matter — it would strand real projects — so raising this
+    /// constant means either writing the migration or changing the ids.
     pub fn load_persist(&mut self, serialized: &str) {
         if let Ok(persist) = ron::from_str::<UiPersist>(serialized) {
-            // A pre-reorg (version 0) layout names the old tabs and is missing
-            // the split-out Scene and new Panel tabs, so those controls would
-            // be unreachable. The old tab names still deserialize (Tab's serde
-            // aliases), which is what lets the settings below survive — but the
-            // arrangement itself is stale, so refresh it to the new default.
-            // Everything else the user dialed in is kept.
-            // The folds go with the dock they were measured against: they name
-            // splits by index, so a fresh arrangement has to start with none
-            // rather than with fractions pointing into a tree that is gone.
-            // Same reason "Reset layout" clears them.
-            // Either way the dock being installed is not the one the dial's
-            // points were measured against, and its node count cannot say so
-            // (see [`fold::Dial::forget`]) — so the load has to. What the
-            // incoming layout is dialled to is the fractions in the blob's own
-            // dock, plus the widths its folds carry.
+            if persist.version < UI_PERSIST_VERSION {
+                return;
+            }
+            // The dock being installed is not the one the dial's points were
+            // measured against, and its node count cannot say so (see
+            // [`fold::Dial::forget`]) — so the load has to. What the incoming
+            // layout is dialled to is the fractions in the blob's own dock,
+            // plus the widths its folds carry.
             self.dial.forget();
-            self.dock = if persist.version < UI_PERSIST_VERSION {
-                // The width those folds took is NOT handed back, unlike "Reset
-                // layout", which this otherwise resembles: a load brings its
-                // own window size along with its layout, and the folds being
-                // dropped were measured against the window the editor is
-                // leaving rather than the one it is arriving in. Paying them
-                // back here would widen a freshly restored window by whatever
-                // the last project had folded.
-                self.folds.forget();
-                default_dock()
-            } else {
-                self.folds = persist.folds;
-                persist.dock
-            };
+            self.folds = persist.folds;
+            self.dock = persist.dock;
             self.camera = persist.camera;
             self.view = persist.view;
-            // Fold fields from older blob layouts (the NodeBody
-            // experiment) into the current core/outer split.
-            self.view.migrate_legacy();
+            // Not a migration: both fit a deserialized blob to what its
+            // controls can produce, which a hand-edited RON need not have.
+            self.view.sanitize();
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
-            // Same job for the pitch range, which used to be a pair of
-            // octave numbers.
-            self.spectrum_config.migrate_legacy();
+            self.spectrum_config.sanitize();
             self.render_config = persist.render;
-            // And for the render frame, whose two-way `stacked` flag became a
-            // named side — plus the `--size` that used to sit in the Options
-            // text, now the Resolution control.
+            // The render frame's two-way `stacked` flag became a named side,
+            // and the `--size` that used to sit in the Options text became the
+            // Resolution control. Both changed AFTER the version last moved,
+            // so a blob this function accepts can still carry either.
             self.render_config.migrate_legacy();
             self.fps_cap = persist.fps_cap;
             // Clamped here rather than only where it is drawn, so the control

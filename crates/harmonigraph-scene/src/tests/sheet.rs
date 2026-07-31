@@ -201,45 +201,6 @@ fn core_and_outer_geometry_are_sanitized_into_the_scene() {
 }
 
 #[test]
-fn legacy_core_modes_fold_onto_radius_and_solidity() {
-    // The pre-radius-off modes collapse onto core_radius (0 = off) +
-    // solidity: None -> radius 0, the solid Orb -> solidity 1, the
-    // glow-only mode -> solidity 0.
-    let mut none = ViewConfig { core_style: CoreStyle::None, ..ViewConfig::default() };
-    none.migrate_legacy();
-    assert_eq!(none.core_radius, 0.0, "None folds to radius 0 (off)");
-
-    let mut orb = ViewConfig { core_style: CoreStyle::Orb, ..ViewConfig::default() };
-    orb.migrate_legacy();
-    assert_eq!(orb.core_solidity, 1.0);
-    assert!(orb.core_radius > 0.0, "orb stays on");
-
-    let mut glow = ViewConfig { core_style: CoreStyle::Glow, ..ViewConfig::default() };
-    glow.migrate_legacy();
-    assert_eq!(glow.core_solidity, 0.0);
-    assert!(glow.core_radius > 0.0, "glow stays on");
-}
-
-#[test]
-fn legacy_node_body_folds_into_core_and_outer() {
-    // Blobs from the one-build NodeBody experiment: an octave-only body
-    // becomes the core glow (solidity 0, the old core-off under-glow), the
-    // outer layer carrying the note. What has to hold is that the blob
-    // PARSES and the core drops to the glow end. Disc leaves defaults alone.
-    for body in [LegacyNodeBody::Slices, LegacyNodeBody::Rings, LegacyNodeBody::Beads] {
-        let mut view = ViewConfig { node_body: body, ..ViewConfig::default() };
-        view.migrate_legacy();
-        assert_eq!(view.core_solidity, 0.0, "{body:?}");
-        assert!(view.core_radius > 0.0, "{body:?} still on");
-        assert_eq!(view.node_body, LegacyNodeBody::Disc, "shim consumed");
-    }
-
-    let mut view = ViewConfig { node_body: LegacyNodeBody::Disc, ..ViewConfig::default() };
-    view.migrate_legacy();
-    assert_eq!(view.core_solidity, ViewConfig::default().core_solidity);
-}
-
-#[test]
 fn off_sheet_nodes_shrink_away_from_the_home_sheet_both_ways() {
     // Size says DISTANCE from the home sheet, not depth toward the eye: a
     // sheet in front shrinks exactly as much as one behind. The home sheet

@@ -595,18 +595,6 @@ pub struct SpectrumConfig {
     pub low_midi: f32,
     #[serde(default = "default_high_midi")]
     pub high_midi: f32,
-    /// Migration only. The range used to be a pair of Bitwig octave numbers,
-    /// so it could only land on C boundaries; `migrate_legacy` folds an older
-    /// blob's pair into `low_midi`/`high_midi` and nothing writes them again.
-    ///
-    /// A sentinel rather than `Option`, because the old blobs wrote a bare
-    /// `low_octave: 1` and RON only reads that into an `Option` if it is
-    /// spelled `Some(1)` — the field would never populate, and the failed
-    /// parse would take the whole persist down with it.
-    #[serde(default = "no_legacy_octave", skip_serializing, alias = "low_octave")]
-    pub(crate) legacy_low_octave: i32,
-    #[serde(default = "no_legacy_octave", skip_serializing, alias = "high_octave")]
-    pub(crate) legacy_high_octave: i32,
 
     // ---- Piano roll -------------------------------------------------
     // The played-note timeline (harmonigraph-core's NoteRoll) drawn over the
@@ -700,31 +688,16 @@ pub(crate) fn default_high_midi() -> f32 {
     harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI
 }
 
-/// "This blob had no octave-numbered range", out of the domain the old
-/// control could produce (-1..=9).
-pub(crate) fn no_legacy_octave() -> i32 {
-    i32::MIN
-}
-
 impl SpectrumConfig {
-    /// Fold an older blob's octave-numbered pitch range into the continuous
-    /// one. A pre-Hz blob carries no `low_midi`, so serde would hand it the
-    /// full-axis default and silently throw away the zoom the user had set.
-    pub(crate) fn migrate_legacy(&mut self) {
-        let (low, high) = (self.legacy_low_octave, self.legacy_high_octave);
-        (self.legacy_low_octave, self.legacy_high_octave) =
-            (no_legacy_octave(), no_legacy_octave());
-        if low != no_legacy_octave() && high != no_legacy_octave() {
-            let midi = |octave: i32| harmonigraph_core::notes::octave_start_midi(octave) as f32;
-            self.low_midi = midi(low);
-            self.high_midi = midi(high);
-        }
-        // Then fit whatever came out to the axis the analyzer actually covers.
-        // Every source of this pair can be off it: an octave pair reaches C-1
-        // and C9, a blob written while the axis ran 16 Hz to 16.7 kHz carries
-        // its old ends, and a hand-edited one can say anything. A range past
-        // the axis draws a band with no buckets behind it; an inverted one
-        // divides by zero in PitchScale.
+    /// Fit a deserialized config to the axes and ranges its controls can
+    /// actually produce.
+    ///
+    /// The pitch pair can be off the axis from more than one direction: a blob
+    /// written while the axis ran 16 Hz to 16.7 kHz carries its old ends, and
+    /// a hand-edited one can say anything. A range past the axis draws a band
+    /// with no buckets behind it; an inverted one divides by zero in
+    /// PitchScale.
+    pub(crate) fn sanitize(&mut self) {
         let (floor, ceil) = (default_low_midi(), default_high_midi());
         self.low_midi = self.low_midi.clamp(floor, ceil - PITCH_RANGE_MIN_SPAN);
         self.high_midi = self.high_midi.clamp(self.low_midi + PITCH_RANGE_MIN_SPAN, ceil);
@@ -867,8 +840,6 @@ impl Default for SpectrumConfig {
             keyline: default_keyline(),
             low_midi: default_low_midi(),
             high_midi: default_high_midi(),
-            legacy_low_octave: no_legacy_octave(),
-            legacy_high_octave: no_legacy_octave(),
             show_roll: true,
             roll_fraction: default_roll_fraction(),
             roll_seconds: default_roll_seconds(),
