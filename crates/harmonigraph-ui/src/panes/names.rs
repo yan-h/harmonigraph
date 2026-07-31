@@ -548,7 +548,9 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 /// against whatever colour the ribbon is (see [`draw`]).
 ///
 /// Along the time axis it grows from the leading edge INTO the note, so a name
-/// lies over its own ribbon rather than over the picture in front of it.
+/// lies over its own ribbon rather than over the picture in front of it —
+/// except where the growth runs backward and the name carries marks, which is
+/// the trade named at the bottom of this comment and measured in issue #151.
 ///
 /// The LETTER's own position inside that box has to be independent of the
 /// growth direction, or `C` and `C♯` disagree about where the letter goes and
@@ -561,8 +563,22 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 /// the leading edge, not its near one, so centring on the FULL name drags the
 /// letter along with however wide its marks happen to be. Measuring the pure
 /// letter's reach instead of the whole name's is what keeps it still; the
-/// marks are what absorb the difference, at the cost of a name with marks
-/// reaching a little closer to the leading edge than a bare letter would.
+/// marks are what absorb the difference.
+///
+/// What that costs is worth stating at its real size, because it is not a
+/// rounding error: the box's near edge lands at `inset + letter - along`, so a
+/// name whose marks are wider than [`LABEL_INSET`] — which is every marked name
+/// — puts its mark column PAST the leading edge, over the picture in front of
+/// the note. Measured on a 300pt pane at `LABEL_PT`: a bare `C` clears it by
+/// 0.65pt, `C♯` crosses by 3.4pt, `B♭↓` by 9.0pt, the widest spelling by 17.2pt,
+/// and it scales with the pitch zoom.
+///
+/// The two constraints cannot both hold while [`draw_stacked_name`] typesets the
+/// marks after the letter: pinning the letter fixes the box's near edge and lets
+/// its far edge travel, and containing the box puts the letter back on however
+/// wide the marks are. Issue #151 holds the measurements and the candidate ways
+/// out; this comment exists so the spill reads as a known price rather than as a
+/// bug nobody noticed.
 ///
 /// [`draw_stacked_name`]: super::lattice::draw_stacked_name
 fn label_rect(

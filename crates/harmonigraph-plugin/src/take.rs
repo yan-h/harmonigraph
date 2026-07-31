@@ -835,36 +835,95 @@ struct Progress {
 /// with a setting changed since.
 #[derive(Default)]
 struct RenderControl {
-    /// Bumped by every request. A render whose generation is no longer the
-    /// current one has been superseded, and stands down without touching the
-    /// status line or the output.
+    /// Bumped by every request, so no two runs share a number — which is what
+    /// keeps each run's partial output under a name of its own.
     generation: AtomicU64,
-    /// The renderer process now running, for a later request to kill.
+    /// The newest generation claimed for each take.
+    ///
+    /// Keyed by take, not global, because "superseded" is a claim about ONE
+    /// video. Every finished take renders and every take is its own file, so
+    /// consecutive recordings are two requests that want two different videos,
+    /// and a global newest-wins would have the second silently discard the
+    /// first (see
+    /// [`a_render_of_another_take_waits_rather_than_replacing_this_one`]).
+    /// Only a second request naming the SAME take is the same video twice,
+    /// which is the case "Re-render take" makes.
+    ///
+    /// An entry is dropped when its run finishes, so this holds one key per
+    /// take being rendered rather than one per take of the session.
+    claims: Mutex<std::collections::HashMap<std::path::PathBuf, u64>>,
+    /// The renderer process now running and the take it is rendering, for a
+    /// later request to kill if it is about the same video.
     ///
     /// The child lives here rather than on its own thread's stack precisely so
     /// another thread can reach it; the render thread borrows it back to reap
     /// it once its stderr has closed.
-    child: Mutex<Option<std::process::Child>>,
-    /// Held for the length of a render. A replacement waits on it, which is
-    /// what makes the cancelled run's process reaped before the new one runs
-    /// rather than merely asked to stop.
+    child: Mutex<Option<InFlight>>,
+    /// Held for the length of a render, so renders run one at a time — a
+    /// replacement waits for the cancelled run's process to be reaped rather
+    /// than merely asked to stop, and a render of another take waits its turn
+    /// instead of putting a second ffmpeg beside the first.
     running: Mutex<()>,
 }
 
+/// The renderer process now running, and which take's video it is producing.
+struct InFlight {
+    take: std::path::PathBuf,
+    child: std::process::Child,
+}
+
+/// Hands a take's claim back when its run ends, by whichever of the render
+/// thread's several exits it takes — including the two that stand down before
+/// spawning anything. A claim left behind would make the next request for that
+/// take look superseded before it started.
+struct Claim<'a> {
+    control: &'a RenderControl,
+    take: &'a std::path::Path,
+    generation: u64,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        self.control.release(self.take, self.generation);
+    }
+}
+
 impl RenderControl {
-    /// Kill whatever is rendering, if anything. Returns having *asked*: the
-    /// process is reaped by its own thread, which the replacement waits for
-    /// through [`running`](Self::running).
-    fn cancel_in_flight(&self) {
-        if let Some(child) = self.child.lock().as_mut() {
-            let _ = child.kill();
+    /// Claim the flight for `take`, superseding any earlier claim on it.
+    fn claim(&self, take: &std::path::Path) -> u64 {
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.claims.lock().insert(take.to_path_buf(), generation);
+        generation
+    }
+
+    /// Give up `generation`'s claim on `take`, if it is still the standing one.
+    /// A newer request has already replaced it otherwise, and dropping that
+    /// would tell the newer run it had been superseded by nobody.
+    fn release(&self, take: &std::path::Path, generation: u64) {
+        let mut claims = self.claims.lock();
+        if claims.get(take) == Some(&generation) {
+            claims.remove(take);
         }
     }
 
-    /// Whether a newer request has arrived since `generation` claimed the
-    /// flight.
-    fn superseded(&self, generation: u64) -> bool {
-        self.generation.load(Ordering::SeqCst) != generation
+    /// Kill the render in flight if it is rendering `take`. Returns having
+    /// *asked*: the process is reaped by its own thread, which the replacement
+    /// waits for through [`running`](Self::running).
+    ///
+    /// A render of some other take is left alone — it is producing a different
+    /// video, and nothing about this request says that one is unwanted.
+    fn cancel_in_flight(&self, take: &std::path::Path) {
+        if let Some(flight) = self.child.lock().as_mut() {
+            if flight.take == take {
+                let _ = flight.child.kill();
+            }
+        }
+    }
+
+    /// Whether a newer request for the SAME take has arrived since
+    /// `generation` claimed it.
+    fn superseded(&self, take: &std::path::Path, generation: u64) -> bool {
+        self.claims.lock().get(take) != Some(&generation)
     }
 }
 
@@ -995,23 +1054,28 @@ fn spawn_render(
     progress: Arc<Progress>,
     control: Arc<RenderControl>,
 ) {
-    // Claim the flight before spawning anything: a request that arrives while
-    // a render is running cancels it rather than joining it. Two renders of
-    // one take write one video, and the newer request is always the wanted
-    // one — it is the same take with settings changed since.
-    let generation = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    // Claim the flight before spawning anything: a second request for THIS
+    // take cancels the one running rather than joining it. Two renders of one
+    // take write one video, and the newer request is always the wanted one —
+    // it is the same take with settings changed since.
+    //
+    // A request for another take makes no such claim. It queues on `running`
+    // instead and renders when its turn comes.
+    let generation = control.claim(&take_path);
     // On the CALLER's thread, so the cancellation lands before the replacement
     // starts queueing behind a run that now has no reason to finish.
-    control.cancel_in_flight();
+    control.cancel_in_flight(&take_path);
 
     let _ = std::thread::Builder::new()
         .name("harmonigraph-take-render".into())
         .spawn(move || {
+            let _claim = Claim { control: &control, take: &take_path, generation };
             // Wait out the run being cancelled, so its process is reaped
             // before this one starts. Held for the whole render, which is what
-            // makes "one render at a time" true rather than hoped for.
+            // makes "one render at a time" true rather than hoped for — and
+            // what a render of ANOTHER take queues on instead of cancelling.
             let _flight = control.running.lock();
-            if control.superseded(generation) {
+            if control.superseded(&take_path, generation) {
                 // Another request arrived while this one queued. It is already
                 // waiting on the same lock, and rendering here would only be
                 // work to throw away.
@@ -1095,15 +1159,15 @@ fn spawn_render(
             // instead of running to completion unnoticed.
             {
                 let mut in_flight = control.child.lock();
-                if control.superseded(generation) {
+                if control.superseded(&take_path, generation) {
                     let _ = child.kill();
                 }
-                *in_flight = Some(child);
+                *in_flight = Some(InFlight { take: take_path.clone(), child });
             }
             // Ends at EOF on the pipe, which a kill brings about immediately.
             let last = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
             let result = match control.child.lock().take() {
-                Some(mut child) => child.wait(),
+                Some(mut flight) => flight.child.wait(),
                 // Unreachable in practice: nothing else takes the child, only
                 // kills it. Reported rather than unwrapped, since a render
                 // thread panicking in a DAW is not worth the tidier code.
@@ -1115,7 +1179,7 @@ fn spawn_render(
             // already running and the failure is one we caused on purpose.
             // Its partial output goes, and the status line stays the new
             // render's.
-            if control.superseded(generation) {
+            if control.superseded(&take_path, generation) {
                 cleanup();
                 return;
             }
@@ -1207,24 +1271,39 @@ mod tests {
         }
     }
 
-    /// A second request supersedes the first, which is what makes "Render
-    /// now" during a render mean restart rather than a second render writing
-    /// the same video.
+    /// A second request for the same take supersedes the first, which is what
+    /// makes "Render now" during a render mean restart rather than a second
+    /// render writing the same video — and a request for a DIFFERENT take
+    /// supersedes nothing, because it is not about that video at all.
     #[test]
     fn a_later_request_supersedes_the_one_in_flight() {
         let control = RenderControl::default();
-        let first = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        assert!(!control.superseded(first), "the only request in flight is current");
+        let take = std::path::Path::new("/takes/take-1.take");
+        let other = std::path::Path::new("/takes/take-2.take");
+        let first = control.claim(take);
+        assert!(!control.superseded(take, first), "the only request in flight is current");
 
-        let second = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        assert!(control.superseded(first), "the first must stand down");
-        assert!(!control.superseded(second), "the second is now the live one");
+        let second = control.claim(take);
+        assert!(control.superseded(take, first), "the first must stand down");
+        assert!(!control.superseded(take, second), "the second is now the live one");
+
+        // Another take's request stands beside it rather than over it.
+        let elsewhere = control.claim(other);
+        assert!(!control.superseded(take, second), "take-2's request is not about take-1");
+        assert!(!control.superseded(other, elsewhere));
 
         // Generations are not reused, so a render cannot be revived by a
         // later one happening to land on its number.
-        let third = control.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        assert!(third > second && second > first);
-        assert!(control.superseded(first) && control.superseded(second));
+        let third = control.claim(take);
+        assert!(third > elsewhere && elsewhere > second && second > first);
+        assert!(control.superseded(take, first) && control.superseded(take, second));
+
+        // A finished run gives its claim back, and a stale one cannot take
+        // away the claim that replaced it.
+        control.release(take, second);
+        assert!(!control.superseded(take, third), "a stale release must not unseat the live run");
+        control.release(take, third);
+        assert!(control.claims.lock().get(take).is_none(), "the finished take is not kept");
     }
 
     /// Cancelling with nothing running is a no-op rather than a panic: the
@@ -1233,7 +1312,7 @@ mod tests {
     #[test]
     fn cancelling_an_idle_render_control_does_nothing() {
         let control = RenderControl::default();
-        control.cancel_in_flight();
+        control.cancel_in_flight(std::path::Path::new("/nowhere/take-1.take"));
         assert!(control.child.lock().is_none());
     }
 
@@ -1294,14 +1373,14 @@ mod tests {
 
         start();
         wait_until("the first render to start", || control.child.lock().is_some());
-        let first = control.child.lock().as_ref().map(|c| c.id()).expect("a first child");
+        let first = control.child.lock().as_ref().map(|f| f.child.id()).expect("a first child");
 
         start();
         // The second cannot run until the first has been reaped, so seeing a
         // different process here is the cancellation having completed rather
         // than merely been asked for.
         wait_until("the second render to replace the first", || {
-            control.child.lock().as_ref().is_some_and(|c| c.id() != first)
+            control.child.lock().as_ref().is_some_and(|f| f.child.id() != first)
         });
 
         // The cancelled render must not have reported anything: its failure
@@ -1314,7 +1393,78 @@ mod tests {
         // And exactly one render is in flight, not two.
         assert!(progress.read().is_some(), "the bar still shows a render");
 
-        control.cancel_in_flight();
+        control.cancel_in_flight(&take);
+        wait_until("the last render to be reaped", || control.child.lock().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A render of ANOTHER take queues behind the one in flight rather than
+    /// killing it.
+    ///
+    /// Auto-render fires for every finished take (see
+    /// [`a_finished_take_always_renders`]) and each take is a new file, so
+    /// recording twice in a row is two requests naming two different videos.
+    /// Cancelling on that would drop the first take's video on the floor
+    /// silently — a superseded run cleans up its partial and returns without
+    /// touching the status line, so there is nothing on screen to say the
+    /// video is never coming, and `last_take` has already moved on so
+    /// "Re-render take" cannot reach it either.
+    #[cfg(unix)]
+    #[test]
+    fn a_render_of_another_take_waits_rather_than_replacing_this_one() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("harmonigraph-queue-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let fake = dir.join("slow-renderer");
+        std::fs::write(&fake, "#!/bin/sh\nexec sleep 300\n").expect("write fake renderer");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        let control = Arc::new(RenderControl::default());
+        let status = Arc::new(Mutex::new(String::new()));
+        let progress = Arc::new(Progress::default());
+        let start = |take: std::path::PathBuf| {
+            spawn_render(
+                RenderRequest {
+                    program: fake.clone(),
+                    audio: None,
+                    align: None,
+                    ui_state: None,
+                    size: [16, 16],
+                    playhead: None,
+                },
+                take,
+                status.clone(),
+                progress.clone(),
+                control.clone(),
+            )
+        };
+
+        start(dir.join("take-1.take"));
+        wait_until("the first take's render to start", || control.child.lock().is_some());
+        let first = control.child.lock().as_ref().map(|f| f.child.id()).expect("a first child");
+
+        // A second take finishes while the first is still rendering.
+        start(dir.join("take-2.take"));
+        // Long enough that a cancellation would have landed: the existing
+        // same-take test sees the replacement inside this window.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(
+            control.child.lock().as_ref().map(|f| f.child.id()),
+            Some(first),
+            "take-1's render was killed by take-2's, so take-1.mp4 is never produced"
+        );
+        assert!(
+            !status.lock().contains("failed"),
+            "the surviving render reported failure: {}",
+            status.lock()
+        );
+
+        control.cancel_in_flight(&dir.join("take-1.take"));
+        wait_until("the queued render to take over", || {
+            control.child.lock().as_ref().is_some_and(|f| f.child.id() != first)
+        });
+        control.cancel_in_flight(&dir.join("take-2.take"));
         wait_until("the last render to be reaped", || control.child.lock().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
