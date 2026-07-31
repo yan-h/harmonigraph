@@ -373,7 +373,17 @@ fn style_at(scale: f32) -> egui::Style {
     visuals.menu_corner_radius = CornerRadius::same(6);
 
     // Widget states: flat fills, rounded corners, strokes only where they
-    // carry information (hover/focus), slight hover growth.
+    // carry information (hover/focus). Every state is the same SIZE — hover
+    // and press are read off the fill and the border, which cost no space.
+    //
+    // egui's `expansion` is the alternative, a hover swell of a point or two,
+    // and it is not free here: it is paid back through a negative outer margin
+    // on the button's frame, and egui stores frame margins as whole points. At
+    // any [chrome scale](ui_scale) that leaves the expansion fractional the two
+    // round apart, so the swell lands in the widget's ALLOCATED size — the row
+    // after it slides sideways under the pointer, and a `button_row` wide
+    // enough to wrap re-wraps. (Measured at scale 1.25: a hovered button 2pt
+    // wider and everything right of it 2pt over; at 1.5, 2pt the other way.)
     let w = &mut visuals.widgets;
 
     w.noninteractive.bg_fill = panel();
@@ -392,14 +402,12 @@ fn style_at(scale: f32) -> egui::Style {
     w.hovered.bg_stroke = Stroke::new(1.0, accent_edge());
     w.hovered.fg_stroke = Stroke::new(1.2, text());
     w.hovered.corner_radius = WIDGET_RADIUS;
-    w.hovered.expansion = 1.0;
 
     w.active.bg_fill = accent_active();
     w.active.weak_bg_fill = accent_active();
     w.active.bg_stroke = Stroke::new(1.0, accent());
     w.active.fg_stroke = Stroke::new(1.2, Color32::WHITE);
     w.active.corner_radius = WIDGET_RADIUS;
-    w.active.expansion = 1.0;
 
     w.open.bg_fill = widget();
     w.open.weak_bg_fill = widget();
@@ -488,10 +496,9 @@ fn scale_chrome(style: &mut egui::Style, scale: f32) {
         &mut v.widgets.open,
     ] {
         w.corner_radius = scale_corner_radius(w.corner_radius, scale);
-        // How far a hovered widget grows, which is a length in points and
-        // reads as a jump rather than a swell if it stays put while the
-        // widget around it shrinks.
-        w.expansion *= scale;
+        // `expansion` is deliberately not here: no widget state has any (see
+        // `style_at`), and a scaled one is exactly the fractional expansion
+        // that moves a hovered widget's neighbours.
     }
 }
 
