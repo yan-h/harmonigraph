@@ -1323,7 +1323,7 @@ mod tests {
     /// that announces the frame count, and the counter it rewrites as it goes.
     #[test]
     fn the_renderers_own_output_is_what_puts_numbers_on_the_bar() {
-        let header = "/Users/yan/Music/Harmonigraph Takes/take-1.take: 16.5s of events \
+        let header = "/music/Harmonigraph Takes/take-1.take: 16.5s of events \
                       -> 990 frames at 60 fps, 1920x1080 @ 1.50x -> take-1.mp4";
         assert!(matches!(parse_report(header), Some(Report::Total(990))));
         assert!(matches!(
@@ -1336,7 +1336,7 @@ mod tests {
         // one that could be mistaken for a done/total pair.
         assert!(parse_report("harmonigraph-offline: no take file given").is_none());
         assert!(parse_report("note: no scratch recording, assuming take zero").is_none());
-        assert!(parse_report("/Users/yan/odd frames/take.take: could not be read").is_none());
+        assert!(parse_report("/music/odd frames/take.take: could not be read").is_none());
         assert!(parse_report("").is_none());
     }
 

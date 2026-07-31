@@ -224,7 +224,11 @@ impl Plugin for Harmonigraph {
     const NAME: &'static str = "Harmonigraph";
     const VENDOR: &'static str = "Yan Han";
     const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
-    const EMAIL: &'static str = "yanhan13@gmail.com";
+    // Empty because a personal address in a public tree is an address in a
+    // scraper's index. VST3's factory info is the only thing that reads this —
+    // CLAP has no email field — and it takes a blank one; contact goes through
+    // the issue tracker that CLAP_SUPPORT_URL points hosts at.
+    const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
     // Audio passes through untouched, but is tapped (mono mixdown) for the
@@ -410,7 +414,8 @@ impl ClapPlugin for Harmonigraph {
     const CLAP_DESCRIPTION: Option<&'static str> =
         Some("Tonnetz harmony and spectrum visualizer");
     const CLAP_MANUAL_URL: Option<&'static str> = None;
-    const CLAP_SUPPORT_URL: Option<&'static str> = None;
+    const CLAP_SUPPORT_URL: Option<&'static str> =
+        Some("https://github.com/yan-h/harmonigraph/issues");
     const CLAP_FEATURES: &'static [ClapFeature] = &[
         ClapFeature::NoteEffect,
         ClapFeature::Analyzer,
