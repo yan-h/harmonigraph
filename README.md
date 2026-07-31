@@ -23,6 +23,10 @@ Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
 community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
 wgpu backend in the plugin, eframe's in the standalone harness).
 
+**Tested only on macOS, in Bitwig Studio.** Nothing here is deliberately
+tied to either — but no other operating system or host has ever been tried,
+so treat anything else as unknown rather than supported.
+
 ## Setup
 
 The Rust toolchain is pinned by `rust-toolchain.toml` (1.92). rustup
