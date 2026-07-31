@@ -347,6 +347,19 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     learn_step(state, params);
 
     state.tuning = params::tuning_from_params(params);
+    // Auto-detect: a tuning that IS a meantone engages the mode, whatever put
+    // it there — the 12-TET preset, a learned chord, a drag of either bar.
+    // Engage only. Once the lock holds, the third param stops being read at
+    // all and the derived third follows the fifth, so a released mode would
+    // have to be re-detected from a pair that no longer describes the
+    // lattice — dragging the fifth would drop the lock it is meant to carry
+    // along. Releasing is an explicit edit of the third instead (see
+    // `panes::tuning`), which is the one gesture that can mean nothing else.
+    if state.view.meantone_auto && !state.view.meantone {
+        let tuning = &state.tuning;
+        state.view.meantone =
+            harmonigraph_core::tuning::is_meantone(tuning.three_cents(), tuning.five_cents());
+    }
     // Meantone mode locks the major third to four perfect fifths: derive it
     // from the fifth here, so the whole pipeline (scene pitch classes,
     // matching, readouts) sees the locked value without any meantone
@@ -466,8 +479,16 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
         // when the chord pins down both a fifth and a third, turn meantone
         // on iff they sit in the meantone relationship. Chords that fix
         // only one of the two leave the mode as the user left it.
-        if let (Some(three), Some(five)) = (learned.three, learned.five) {
-            state.view.meantone = harmonigraph_core::tuning::is_meantone(three, five);
+        //
+        // The one place the auto-detect also RELEASES, and it can: a chord
+        // fixing both intervals states the whole relationship in one
+        // gesture, so a learned just third is as explicit as dragging one.
+        // With the auto-detect off, learn retunes the axes and leaves the
+        // mode alone — one switch governs every automatic meantone decision.
+        if state.view.meantone_auto {
+            if let (Some(three), Some(five)) = (learned.three, learned.five) {
+                state.view.meantone = harmonigraph_core::tuning::is_meantone(three, five);
+            }
         }
         state
             .console

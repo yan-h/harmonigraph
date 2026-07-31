@@ -56,7 +56,9 @@ pub const MEANTONE_TOLERANCE: f32 = 5.0;
 
 /// Whether a fifth/third pair is (close to) a meantone temperament: the
 /// major third within [`MEANTONE_TOLERANCE`] of four fifths minus two
-/// octaves. Used to auto-engage meantone mode when learning a chord.
+/// octaves. Both halves of the UI's auto-detect are this one question —
+/// a tuning that answers yes engages the mode, and an edit of the third
+/// that answers no releases it.
 pub fn is_meantone(fifth_cents: f32, third_cents: f32) -> bool {
     (third_cents - meantone_third(fifth_cents)).abs() <= MEANTONE_TOLERANCE
 }

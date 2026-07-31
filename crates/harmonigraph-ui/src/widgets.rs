@@ -27,22 +27,53 @@ const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
 /// boolean control, default to a checkbox unless it's a mode that keeps
 /// acting after the click.
 pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    switch(ui, on, label, true)
+}
+
+/// A [`toggle_switch`] reporting a state that something ELSE decides: same
+/// pill, dimmed, and it swallows the press. The Meantone switch wears this
+/// while the auto-detect drives it — an indicator that keeps its place in
+/// the row, rather than a control that disappears when it stops being one.
+///
+/// Dimmed by hand rather than by `add_enabled_ui`, and the reason is not
+/// cosmetic: a nested `Ui` inside a wrapped row takes the whole remaining
+/// width as its `max_rect`, and `Region::expand_to_include_rect` unions that
+/// into the pane — so every full-width thing BELOW it (the next section rule)
+/// then draws past the pane edge. Same trap [`bar_width`] documents.
+pub fn driven_switch(ui: &mut Ui, on: bool, label: &str) -> Response {
+    // By value, not by reference: nothing here can write back, and taking the
+    // flag as `&mut` would say at the call site that it might.
+    let mut on = on;
+    switch(ui, &mut on, label, false)
+}
+
+/// The switch both public forms are: `live` says whether the press does
+/// anything, and everything else is identical so the two read as one control
+/// in two states.
+fn switch(ui: &mut Ui, on: &mut bool, label: &str, live: bool) -> Response {
+    // The label's color is baked into its galley, so a dimmed switch has to
+    // be dimmed at layout rather than at paint.
+    let dim = if live { 1.0 } else { 0.45 };
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
         TextStyle::Button.resolve(ui.style()),
-        theme::text(),
+        theme::text().gamma_multiply(dim),
     );
     let scale = theme::ui_scale(ui.ctx());
     let switch = SWITCH_SIZE * scale;
     let gap = 6.0 * scale;
     let desired = Vec2::new(switch.x + gap + galley.size().x, switch.y.max(galley.size().y));
-    let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
+    // Hover only when it isn't live: the press is swallowed at the sense, so
+    // there is no click to ignore later — and the tooltip still works, which
+    // a disabled widget's would not.
+    let sense = if live { Sense::click() } else { Sense::hover() };
+    let (rect, mut response) = ui.allocate_exact_size(desired, sense);
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label)
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, live, *on, label)
     });
 
     if ui.is_rect_visible(rect) {
@@ -58,7 +89,11 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             egui::lerp(egui::Rgba::from(a)..=egui::Rgba::from(b), t).into()
         };
         let painter = ui.painter();
-        painter.rect_filled(track, radius, mix(theme::well(), theme::accent_active()));
+        painter.rect_filled(
+            track,
+            radius,
+            mix(theme::well(), theme::accent_active()).gamma_multiply(dim),
+        );
         if response.hovered() || response.dragged() {
             painter.rect_stroke(
                 track,
@@ -74,12 +109,12 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         painter.circle_filled(
             egui::pos2(knob_x, track.center().y),
             radius - 2.5 * scale,
-            theme::text(),
+            theme::text().gamma_multiply(dim),
         );
         painter.galley(
             egui::pos2(track.right() + gap, rect.center().y - galley.size().y / 2.0),
             galley,
-            theme::text(),
+            theme::text().gamma_multiply(dim),
         );
     }
     response
@@ -215,9 +250,14 @@ pub struct ValueBar<'a> {
     eased: bool,
     decimals: usize,
     integer: bool,
-    /// Read-only: shows the value but takes no drag/type input and paints
-    /// dimmed. Used for the major-third bar while meantone mode drives it.
-    locked: bool,
+    /// A word saying what is DRIVING the value, drawn at full brightness
+    /// ahead of the bar's name. Used by the major-third bar while meantone
+    /// mode derives the third from the fifth: the number in the bar is then
+    /// not the one the param holds, and the badge is what says so.
+    badge: Option<&'a str>,
+    /// `(target, tolerance)`: a value the bar is pulled to while an edit
+    /// lands within `tolerance` of it (see [`ValueBar::magnet`]).
+    magnet: Option<(f32, f32)>,
     /// How the value READS OUT, when plain decimals won't say it (see
     /// [`ValueBar::display`]). Never how it is typed in.
     display: Option<fn(f32) -> String>,
@@ -232,7 +272,8 @@ impl<'a> ValueBar<'a> {
             eased: false,
             decimals: 2,
             integer: false,
-            locked: false,
+            badge: None,
+            magnet: None,
             display: None,
         }
     }
@@ -242,10 +283,38 @@ impl<'a> ValueBar<'a> {
         self
     }
 
-    /// Render the bar read-only (dimmed, non-interactive).
-    pub fn locked(mut self, on: bool) -> Self {
-        self.locked = on;
+    /// Mark the bar as driven from elsewhere, with `word` at the front of
+    /// its name. The bar stays draggable: what drives it is a MODE, and the
+    /// bar is where that mode is let go of.
+    pub fn badge(mut self, word: &'a str) -> Self {
+        self.badge = Some(word);
         self
+    }
+
+    /// Pull edits to `target` while they land within `tolerance` of it, so
+    /// the bar holds the target exactly until a drag pulls clear of the
+    /// window — the meantone third, held to four perfect fifths until it is
+    /// dragged off them.
+    ///
+    /// Applied where the value is DECIDED, ahead of the paint, which is the
+    /// whole point: a caller correcting the value afterwards would have to
+    /// let the bar draw one frame at the pointer first, and a bar that
+    /// follows the pointer for a frame and snaps back on the next is a bar
+    /// that visibly does not snap while you drag it slowly.
+    ///
+    /// The value the caller gets back is snapped too, so "did this edit
+    /// escape the magnet" is the same question as "did the value change".
+    pub fn magnet(mut self, target: f32, tolerance: f32) -> Self {
+        self.magnet = Some((target, tolerance));
+        self
+    }
+
+    /// `v`, pulled to the magnet's target if it is inside the window.
+    fn snapped(&self, v: f32) -> f32 {
+        match self.magnet {
+            Some((target, tolerance)) if (v - target).abs() <= tolerance => target,
+            _ => v,
+        }
     }
 
     pub fn decimals(mut self, n: usize) -> Self {
@@ -323,75 +392,68 @@ impl<'a> ValueBar<'a> {
     pub fn show(self, ui: &mut Ui) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let width = bar_width(ui);
-        // Locked bars are read-only: sense hover (so a tooltip still works)
-        // but not clicks/drags.
-        let sense = if self.locked { Sense::hover() } else { Sense::click_and_drag() };
         let (rect, mut response) =
-            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), sense);
+            ui.allocate_exact_size(Vec2::new(width, BAR_HEIGHT * scale), Sense::click_and_drag());
 
-        // Skip all editing (text-entry + drag) while locked; the value is
-        // driven from elsewhere (meantone derives the third from the fifth).
-        if !self.locked {
-            let edit_id = response.id.with("edit");
-            let focus_id = edit_id.with("focus_pending");
+        let edit_id = response.id.with("edit");
+        let focus_id = edit_id.with("focus_pending");
 
-            // ---- Text-entry mode (double-click) --------------------------
-            if let Some(mut text) = ui.data(|d| d.get_temp::<String>(edit_id)) {
-                let output = ui.put(
-                    rect,
-                    TextEdit::singleline(&mut text)
-                        .font(TextStyle::Monospace)
-                        .horizontal_align(egui::Align::Center),
-                );
-                // TextEdit never takes focus by itself; grab it on the first
-                // edit-mode frame so typing (and focus-loss commit) works at
-                // all.
-                if ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false) {
-                    output.request_focus();
-                    ui.data_mut(|d| d.remove_temp::<bool>(focus_id));
-                }
-                // Escape cancels; everything that drops focus (Enter included
-                // — egui surrenders TextEdit focus on both) commits. Enter is
-                // NOT checked globally: that would commit every bar in edit
-                // mode at once, focused or not.
-                let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
-                if cancelled || output.lost_focus() {
-                    if !cancelled {
-                        if let Ok(v) = text.trim().parse::<f32>() {
-                            // Reject NaN/inf: NaN survives clamp() and would
-                            // poison the param (and the host's automation lane
-                            // in the plugin) in a state the bar can't display
-                            // or drag back out of.
-                            if v.is_finite() {
-                                let v = v.clamp(self.min(), self.max());
-                                *self.value = if self.integer { v.round() } else { v };
-                                response.mark_changed();
-                            }
+        // ---- Text-entry mode (double-click) ---------------------------------
+        if let Some(mut text) = ui.data(|d| d.get_temp::<String>(edit_id)) {
+            let output = ui.put(
+                rect,
+                TextEdit::singleline(&mut text)
+                    .font(TextStyle::Monospace)
+                    .horizontal_align(egui::Align::Center),
+            );
+            // TextEdit never takes focus by itself; grab it on the first
+            // edit-mode frame so typing (and focus-loss commit) works at
+            // all.
+            if ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false) {
+                output.request_focus();
+                ui.data_mut(|d| d.remove_temp::<bool>(focus_id));
+            }
+            // Escape cancels; everything that drops focus (Enter included
+            // — egui surrenders TextEdit focus on both) commits. Enter is
+            // NOT checked globally: that would commit every bar in edit
+            // mode at once, focused or not.
+            let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
+            if cancelled || output.lost_focus() {
+                if !cancelled {
+                    if let Ok(v) = text.trim().parse::<f32>() {
+                        // Reject NaN/inf: NaN survives clamp() and would
+                        // poison the param (and the host's automation lane
+                        // in the plugin) in a state the bar can't display
+                        // or drag back out of.
+                        if v.is_finite() {
+                            let v = self.snapped(v.clamp(self.min(), self.max()));
+                            *self.value = if self.integer { v.round() } else { v };
+                            response.mark_changed();
                         }
                     }
-                    ui.data_mut(|d| d.remove_temp::<String>(edit_id));
-                } else {
-                    ui.data_mut(|d| d.insert_temp(edit_id, text));
                 }
-                return response;
+                ui.data_mut(|d| d.remove_temp::<String>(edit_id));
+            } else {
+                ui.data_mut(|d| d.insert_temp(edit_id, text));
             }
+            return response;
+        }
 
-            // ---- Interaction ---------------------------------------------
-            if response.double_clicked() {
-                ui.data_mut(|d| d.insert_temp(edit_id, self.format(*self.value)));
-                ui.data_mut(|d| d.insert_temp(focus_id, true));
-                return response;
-            }
-            // Drag-to-set only (no click-jump): a stray click can't yank a
-            // carefully tuned parameter, and it can't fight the double-click.
-            if response.dragged() {
-                if let Some(pointer) = response.interact_pointer_pos() {
-                    let t = (pointer.x - rect.left()) / rect.width().max(1.0);
-                    let new_value = self.value_at(t);
-                    if new_value != *self.value {
-                        *self.value = new_value;
-                        response.mark_changed();
-                    }
+        // ---- Interaction ----------------------------------------------------
+        if response.double_clicked() {
+            ui.data_mut(|d| d.insert_temp(edit_id, self.format(*self.value)));
+            ui.data_mut(|d| d.insert_temp(focus_id, true));
+            return response;
+        }
+        // Drag-to-set only (no click-jump): a stray click can't yank a
+        // carefully tuned parameter, and it can't fight the double-click.
+        if response.dragged() {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                let t = (pointer.x - rect.left()) / rect.width().max(1.0);
+                let new_value = self.snapped(self.value_at(t));
+                if new_value != *self.value {
+                    *self.value = new_value;
+                    response.mark_changed();
                 }
             }
         }
@@ -402,10 +464,7 @@ impl<'a> ValueBar<'a> {
         painter.rect_filled(rect, radius, theme::well());
 
         let t = self.to_t(*self.value);
-        let fill_color = if self.locked {
-            // Dimmed fill: reads as inactive/derived, not something to drag.
-            theme::accent_fill().gamma_multiply(0.4)
-        } else if response.dragged() {
+        let fill_color = if response.dragged() {
             theme::accent_fill_drag()
         } else if response.hovered() {
             theme::accent_fill_hover()
@@ -416,7 +475,7 @@ impl<'a> ValueBar<'a> {
         fill.set_width(rect.width() * t);
         painter.rect_filled(fill, radius, fill_color);
 
-        let text_color = if !self.locked && (response.hovered() || response.dragged()) {
+        let text_color = if response.hovered() || response.dragged() {
             theme::text()
         } else {
             theme::text_dim()
@@ -425,13 +484,9 @@ impl<'a> ValueBar<'a> {
         // The number is what the bar is FOR — a name that runs over it, or out
         // past the pane edge, costs the reading the control exists to give.
         // Values in monospace: digits align and don't wiggle as they
-        // change. Dimmed too while locked, to match the fill.
+        // change.
         let mono = TextStyle::Monospace.resolve(ui.style());
-        let value = painter.layout_no_wrap(
-            self.shown(*self.value),
-            mono.clone(),
-            if self.locked { theme::text_dim() } else { theme::text() },
-        );
+        let value = painter.layout_no_wrap(self.shown(*self.value), mono.clone(), theme::text());
         // Room kept clear for the readout, measured from the widest one the
         // bar's RANGE can produce rather than from the number currently in it.
         // Taking it from the current number makes the name re-elide the moment
@@ -444,24 +499,22 @@ impl<'a> ValueBar<'a> {
             .into_iter()
             .map(|text| painter.layout_no_wrap(text, mono.clone(), theme::text()).size().x)
             .fold(0.0f32, f32::max);
-        // A locked bar wears the word at the FRONT of its name, because that is
+        // A badged bar wears the word at the FRONT of its name, because that is
         // the end elision cannot reach. Spelled into the tail it is the first
         // thing dropped in a narrow column — and the bar then reads as an
         // ordinary one that ran out of room, which is worse than saying
-        // nothing, since the unlocked name is the shorter of the two and draws
+        // nothing, since the unbadged name is the shorter of the two and draws
         // in full at the same width. Here rather than in the caller's label so
-        // every locked bar gets it, and so the name is the same string locked
-        // or not.
-        let name = if self.locked {
-            format!("Locked · {}", self.label)
-        } else {
-            self.label.to_owned()
-        };
-        let mut job = egui::text::LayoutJob::simple_singleline(
-            name,
-            TextStyle::Body.resolve(ui.style()),
-            text_color,
-        );
+        // every badged bar gets it, and so the name is the same string badged
+        // or not. Full brightness while the name beside it is dim: the badge
+        // is state, not more label.
+        let body = TextStyle::Body.resolve(ui.style());
+        let mut job = egui::text::LayoutJob::default();
+        if let Some(word) = self.badge {
+            let format = egui::TextFormat::simple(body.clone(), theme::text());
+            job.append(&format!("{word} · "), 0.0, format);
+        }
+        job.append(self.label, 0.0, egui::TextFormat::simple(body, text_color));
         let text_pad = BAR_TEXT_PAD * scale;
         job.wrap.max_width =
             (rect.width() - 2.0 * text_pad - BAR_LABEL_GAP * scale - reserve).max(0.0);
@@ -478,11 +531,7 @@ impl<'a> ValueBar<'a> {
             theme::text(),
         );
 
-        if self.locked {
-            response
-        } else {
-            response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
-        }
+        response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
 }
 
@@ -1145,6 +1194,26 @@ mod tests {
         round_trips(0.0..=100.0, true);
     }
 
+    /// The magnet holds the bar at its target until an edit pulls clear of
+    /// the window, and hands back an escaped value untouched. Both halves
+    /// matter to the caller: inside the window the value it gets back is the
+    /// target, which is what makes "did this edit escape" the same question
+    /// as "did the value change".
+    #[test]
+    fn a_magnet_holds_the_bar_until_an_edit_pulls_clear() {
+        let mut value = 400.0;
+        let bar = ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)").magnet(400.0, 5.0);
+        for v in [400.0f32, 396.0, 404.5, 395.0, 405.0] {
+            assert_eq!(bar.snapped(v), 400.0, "{v} is inside the window");
+        }
+        for v in [394.9f32, 405.1, 380.0, 420.0] {
+            assert_eq!(bar.snapped(v), v, "{v} is past the window");
+        }
+        let mut value = 400.0;
+        let plain = ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)");
+        assert_eq!(plain.snapped(396.0), 396.0, "no magnet, no pull");
+    }
+
     #[test]
     fn integer_bars_snap() {
         let mut value = 0.0;
@@ -1274,18 +1343,18 @@ mod tests {
         galley.rows.iter().flat_map(|row| row.glyphs.iter()).map(|g| g.chr).collect()
     }
 
-    /// A locked bar still says it is locked when its name has to be elided.
+    /// A badged bar still says what drives it when its name has to be elided.
     ///
-    /// Elision eats the tail, so a lock spelled into the END of a name is the
-    /// first thing to go — and worse than merely lost: the UNLOCKED name is the
-    /// shorter of the two and draws in full at the same width, so the locked
+    /// Elision eats the tail, so a badge spelled into the END of a name is the
+    /// first thing to go — and worse than merely lost: the UNBADGED name is the
+    /// shorter of the two and draws in full at the same width, so the badged
     /// bar is the one that looks like it ran out of room. State has to sit
     /// where elision cannot reach it, which is the front.
     ///
     /// 157pt is the bar a 173pt column gives, and 173 is where the column
     /// floors — one separator drag from the default window, no resize needed.
     #[test]
-    fn a_locked_bar_says_so_even_when_its_name_is_elided() {
+    fn a_badged_bar_says_so_even_when_its_name_is_elided() {
         for width in [157.0f32, 180.0, 200.0, 400.0] {
             let ctx = egui::Context::default();
             crate::theme::apply_theme(&ctx);
@@ -1295,7 +1364,7 @@ mod tests {
                 egui::RawInput { screen_rect: Some(screen), ..Default::default() },
                 |ui| {
                     ValueBar::new(&mut value, 380.0..=420.0, "Major third (¢)")
-                        .locked(true)
+                        .badge("Meantone")
                         .show(ui);
                 },
             );
@@ -1310,8 +1379,8 @@ mod tests {
                 .expect("the bar painted no text")
                 .1;
             assert!(
-                name.to_lowercase().contains("lock"),
-                "a {width}pt locked bar painted its name as {name:?}, which does not say so"
+                name.to_lowercase().contains("meantone"),
+                "a {width}pt badged bar painted its name as {name:?}, which does not say so"
             );
         }
     }
