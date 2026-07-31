@@ -1435,3 +1435,77 @@ fn folding_a_pane_does_not_move_its_neighbour_in_a_whole_point_window() {
         );
     }
 }
+
+/// A fold worked inside a floating dock window must not cost the main surface
+/// its hold.
+///
+/// A floating window has no window of its own to ask for, so a hold there could
+/// never be released — and the hold is one slot, so an unreleasable one would
+/// sit in it forever and every later unfold on the main surface would go
+/// through unheld. That is #121's flicker, handed back by the fix for it.
+#[test]
+fn a_fold_in_a_floating_window_does_not_cost_the_main_surface_its_hold() {
+    let mut dock = dock();
+    let floating = dock.add_window(vec![Tab::Notes]);
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    // A dock window is laid out in its own window, which the fold pass reads
+    // off the root's rect; without one it is skipped before it reaches any of
+    // this (`mod.rs`, the non-main `area`).
+    let float_frame = |folds: &mut Folds, dock: &mut DockState<Tab>, dial: &mut Dial| {
+        lay_out_surface(dock, floating, 300.0);
+        let _ = frame(folds, dock, dial, 1000.0);
+        lay_out_surface(dock, floating, 300.0);
+    };
+    float_frame(&mut folds, &mut dock, &mut dial);
+
+    // Something folds and unfolds out in the floating window.
+    let leaf = dock[floating].find_tab(&Tab::Notes).expect("tab is in the window").0;
+    dock[floating][leaf].set_collapsed(true);
+    float_frame(&mut folds, &mut dock, &mut dial);
+    dock[floating][leaf].set_collapsed(false);
+    float_frame(&mut folds, &mut dock, &mut dial);
+
+    // The main surface's own unfold still waits for its window.
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Lattice, false);
+    let asked = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(
+        collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "the main surface's unfold is still held for the frame that has its window"
+    );
+    let _ = frame(&mut folds, &mut dock, &mut dial, asked);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "and still opens on it"
+    );
+}
+
+/// Resetting the layout while a pane is folded must not fold it again.
+///
+/// The reset swaps the whole dock, and folding never changes the tree's SHAPE,
+/// so the flags left over from the old one fit the new one exactly and read as
+/// an unfold nobody did — putting the pane the reset just opened straight back
+/// for a frame.
+#[test]
+fn resetting_the_layout_does_not_re_fold_the_pane_it_just_opened() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+    // The reset, as `root_ui` does it: a fresh dock, the folds given up, and
+    // the dial told the tree it was reading is gone.
+    let mut dock = super::tests::dock();
+    folds = Folds::default();
+    dial.forget();
+    let _ = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "the reset layout has every pane open, on the first frame and not the second"
+    );
+}
+

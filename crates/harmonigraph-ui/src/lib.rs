@@ -229,6 +229,8 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         // The default layout has every pane open, so the window gets back
         // whatever the folds being thrown away were holding.
         state.window_width_change += state.folds.clear(&state.dial, area);
+        // The flags describe the tree being thrown away (see [`fold::Dial::forget`]).
+        state.dial.forget();
     }
 
     // Render continuously only while something is animating (sounding or

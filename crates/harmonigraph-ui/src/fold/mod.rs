@@ -296,6 +296,7 @@ impl Folds {
         let (gesturing, pointer) = (dial.gesturing, dial.pointer);
         dial.panes.resize(dock.surfaces_count(), Points::default());
         dial.flags.resize(dock.surfaces_count(), Vec::new());
+        dial.areas.resize(dock.surfaces_count(), 0.0);
         for index in 0..dock.surfaces_count() {
             let surface = SurfaceIndex(index);
             let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) else {
@@ -400,7 +401,12 @@ impl Folds {
             // to intercept (see [`Open`]). The pull's own uncollapse is right
             // above and is excluded for exactly that reason — it is a wait
             // nobody wants.
-            let unfolded = mine.is_none()
+            // Only the main surface. A floating dock window has no window of
+            // its own to ask for, so a hold there would never be released —
+            // and `dial.open` is one slot, so it would take the main surface's
+            // holds down with it and hand #121's flicker straight back.
+            let unfolded = main
+                && mine.is_none()
                 && dial.open.is_none()
                 && dial.flags.get(index).is_some_and(|was| {
                     was.len() == tree.len()
@@ -421,7 +427,7 @@ impl Folds {
             // itself, laid out in a window already wide enough for it.
             let opens = opening.as_ref().is_some_and(|open| {
                 open.at
-                    .is_some_and(|at| area >= at - 0.01 || (area - dial.area).abs() < 0.01)
+                    .is_some_and(|at| area >= at - 0.01 || (area - dial.areas[index]).abs() < 0.01)
             });
             if opens {
                 if let Some(open) = &opening {
@@ -448,7 +454,7 @@ impl Folds {
                     .fold(0.0_f32, |widest, fold| widest.max(fold.window));
             }
             let (want, fixed) = wants(tree, &holds, &points.at, rail, separator);
-            let settled = (area - dial.area).abs() < 0.01;
+            let settled = (area - dial.areas[index]).abs() < 0.01;
             // The window moved without this pass asking it to — the user
             // dragged it, or the host resized us — so the layout follows, over
             // the panes that are on screen to wear it.
@@ -462,7 +468,7 @@ impl Folds {
             // way out.
             let refused = settled && dial.asked && !moved;
             let mut want = want;
-            if (follow || refused) && area > floor + 1.0 && dial.area > 0.0 {
+            if (follow || refused) && area > floor + 1.0 && dial.areas[index] > 0.0 {
                 points.refit(&want, &fixed, area);
                 (want, _) = wants(tree, &holds, &points.at, rail, separator);
             }
@@ -473,7 +479,7 @@ impl Folds {
                 let (open, _) = wants(tree, &[], &points.at, rail, separator);
                 dial.wants = open[0];
             }
-            dial.area = area;
+            dial.areas[index] = area;
             // Only a fold or an unfold moves the window. Any other gap between
             // the layout and the window is one the window is not answering for
             // — a host that refused, or a floor it will not go under — and
@@ -504,8 +510,14 @@ impl Folds {
                     let (wide, _) =
                         wants(tree, &self::holds(&opened), &points.at, rail, separator);
                     dial.widest = dial.widest.max(area);
-                    asking = (wide[0] - area).min((dial.widest - area).max(0.0)).max(0.0);
-                    dial.open = Some(Open { at: Some(area + asking), ..open.clone() });
+                    // `wide` is the whole layout the window has to reach, a
+                    // fold landing on this same frame included, so this
+                    // REPLACES the ask above rather than adding to it. Not
+                    // floored at zero: fold one pane while another is held and
+                    // the net is a shrink, and flooring would swallow it.
+                    asking = (wide[0] - area).min((dial.widest - area).max(0.0));
+                    let at = area + asking.max(0.0);
+                    dial.open = Some(Open { at: Some(at), ..open.clone() });
                 }
             }
             ask += asking;
@@ -594,6 +606,8 @@ impl Folds {
     /// Forget every fold without handing anything back, for a load that brings
     /// its own window along with its layout. The entries name splits by index,
     /// so a tree they were not measured against has to start with none.
+    ///
+    /// [`Dial::forget`] goes with it wherever the dock itself is replaced.
     pub fn forget(&mut self) {
         self.0.clear();
     }
@@ -645,9 +659,14 @@ pub struct Dial {
     /// The window the main surface's layout wants, for the reset button, which
     /// undoes folds without a frame to derive anything in.
     wants: f32,
-    /// The area the last pass laid out in, so a window that moved on its own
-    /// can be told from one that is answering an ask of this pass's.
-    area: f32,
+    /// The area each surface's last pass laid out in, so a window that moved on
+    /// its own can be told from one that is answering an ask of this pass's.
+    ///
+    /// One per surface, alongside [`Dial::panes`]. A single field would be the
+    /// LAST surface's width by the time the main surface reads it next pass,
+    /// which decides whether a resize was refused — and, with a hold
+    /// outstanding, whether a pane ever opens again.
+    areas: Vec<f32>,
     /// Whether the last frame asked the window to change. If the window has not
     /// moved by the next one, the ask was refused and the layout takes what it
     /// has.
@@ -753,6 +772,23 @@ fn restore(tree: &mut Tree<Tab>, flags: &[Flags]) {
         if node.is_parent() {
             node.set_collapsed_leaf_count(leaves);
         }
+    }
+}
+
+impl Dial {
+    /// Drop everything that names the tree by index, for a dock being replaced
+    /// wholesale — a reset, or a load that brings its own layout.
+    ///
+    /// The flags especially. Folding never changes the tree's SHAPE, so a fresh
+    /// default dock has the same node count as the one it replaces and the
+    /// length guard on a snapshot cannot tell them apart: the stale flags read
+    /// as an unfold the user did, and the pane the reset just opened is put
+    /// straight back for a frame. That is the artifact this hold exists to
+    /// remove, arriving by the door it came in through.
+    pub fn forget(&mut self) {
+        self.flags.clear();
+        self.areas.clear();
+        self.open = None;
     }
 }
 

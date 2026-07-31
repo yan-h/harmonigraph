@@ -563,6 +563,7 @@ impl SharedState {
                 // back here would widen a freshly restored window by whatever
                 // the last project had folded.
                 self.folds.forget();
+                self.dial.forget();
                 default_dock()
             } else {
                 self.folds = persist.folds;

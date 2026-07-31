@@ -583,10 +583,15 @@ impl Renderer {
                     wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
                 self.surface = unsafe { instance.create_surface_unsafe(target) }.unwrap();
                 // A recreated surface presents into a NEW layer, which comes
-                // with implicit actions live again.
+                // with implicit actions live again. The armed frames carry
+                // over: a surface is lost most readily during a display change
+                // or a GPU reset, which is exactly when a resize is in flight,
+                // and starting the count from zero would let the frame that
+                // adopts the new size present outside the transaction — the
+                // stretched-drawable artifact this exists to remove.
                 #[cfg(target_os = "macos")]
                 {
-                    self.fold_present = fold_present::FoldPresent::new(&self.surface);
+                    self.fold_present.renew(&self.surface);
                 }
             }
 
@@ -807,6 +812,15 @@ mod fold_present {
     }
 
     impl FoldPresent {
+        /// Take the layer of a surface that has just replaced this one, keeping
+        /// the frames already armed. `pwt_raised` goes back to false because
+        /// the new layer's property is: it is a different layer.
+        pub(super) fn renew(&mut self, surface: &wgpu::Surface) {
+            let armed = self.pwt_frames;
+            *self = Self::new(surface);
+            self.pwt_frames = armed;
+        }
+
         pub(super) fn new(surface: &wgpu::Surface) -> Self {
             // SAFETY (as_hal): the layer is cloned out of the guard and
             // nothing is destroyed through it; the guard drops here.
