@@ -947,6 +947,14 @@ fn aggregate_rows<'a>(
 struct SlabGrid {
     centers: Vec<f64>,
     power: Vec<BucketDb>,
+    /// `held[i]` marks slab `i` as a COPY of slab `i - 1` — an empty slab the
+    /// jitter hold filled — rather than a slab of its own columns. It is what
+    /// lets [`SpectrogramAgg::view`] carry its pruning of the window's first
+    /// slab into the copies behind it; without it a held slab keeps energy from
+    /// columns that have since left the window. A held slab is never MAXed
+    /// afterwards (columns arrive in time order, so it is already behind the
+    /// front when it is created), so the mark stays true for its whole life.
+    held: Vec<bool>,
     cur_key: Option<i64>,
 }
 
@@ -983,9 +991,11 @@ impl SlabGrid {
                     } else {
                         self.power.resize(self.power.len() + nb, 0);
                     }
+                    self.held.push(empty <= JITTER_SLABS);
                 }
                 self.centers.push((key as f64 + 0.5) * bucket);
                 self.power.resize(self.power.len() + nb, 0);
+                self.held.push(false);
                 self.cur_key = Some(key);
                 true
             }
@@ -996,6 +1006,7 @@ impl SlabGrid {
                 self.cur_key = Some(key);
                 self.centers.push((key as f64 + 0.5) * bucket);
                 self.power.resize(self.power.len() + nb, 0);
+                self.held.push(false);
                 other.is_none()
             }
         };
@@ -1170,7 +1181,8 @@ impl SpectrogramAgg {
 
     /// The window as the display reads it, taken from the kept grid: every slab
     /// from the window's first on, with that one — the only PARTIAL slab —
-    /// recomputed from the in-window columns alone.
+    /// recomputed from the in-window columns alone, and any HELD copies of it
+    /// carrying that recompute forward.
     ///
     /// The recompute is what keeps this equal to batch at the far edge. Batch
     /// folds only columns from `first` onward, so an earlier column sharing that
@@ -1219,6 +1231,7 @@ impl SpectrogramAgg {
         if drop > 0 {
             self.grid.centers.drain(0..drop);
             self.grid.power.drain(0..drop * nb);
+            self.grid.held.drain(0..drop);
         }
 
         let kept = self.grid.centers.len().saturating_sub(1) as i64;
@@ -1238,6 +1251,18 @@ impl SpectrogramAgg {
                     power[k] = v;
                 }
             }
+        }
+        // A HELD slab is a copy of the one before it, so pruning the first slab
+        // has to reach the run of copies standing behind it — they were filled
+        // with what the grid held, columns now out of window included, and only
+        // this copy is pruned, not the grid. Batch, folding in-window columns
+        // alone, holds forward the pruned value; without this the empty slab
+        // right after the window's edge reads brighter than the audio was.
+        for j in 1..centers.len() {
+            if !self.grid.held[start + j] {
+                break;
+            }
+            power.copy_within((j - 1) * nb..j * nb, j * nb);
         }
         (centers, power)
     }
@@ -1854,6 +1879,52 @@ mod tests {
         let inc = agg.window(&history, first, 0.4, &reads, KEEP);
         let bat = aggregate_rows(history.iter_from(first), &reads, 0.4);
         assert_eq!(inc, bat, "incremental != batch after a bucket change");
+    }
+
+    /// A HELD empty slab must scroll out of the window with the slab it copied,
+    /// not keep a peak the window no longer reaches.
+    ///
+    /// `fold` fills a one-slab gap by copying the previous slab as the GRID
+    /// holds it — every column that landed there, in-window or not — while
+    /// `view` prunes the window's first slab to its in-window columns. Prune
+    /// only the first and the copy behind it still reads the louder value: one
+    /// heatmap column brighter than the audio ever was.
+    ///
+    /// The step-for-step test above cannot reach this. Its one-slab-gap case
+    /// (`0.80 → 1.60`) is really a TWO-slab gap, which takes the zero branch,
+    /// and no step in its fixture has both two pre-window columns in slab `t`
+    /// and slab `t + 1` empty.
+    #[test]
+    fn a_held_empty_slab_leaves_the_window_with_the_slab_it_copied() {
+        let reads = [RowRead::Max { from: 4, to: 6 }];
+        let bucket = 0.25;
+        // Slab 0 holds three columns, slab 1 is EMPTY (a one-slab gap, so `fold`
+        // holds the previous), slab 2 holds one.
+        let times = [0.00, 0.05, 0.10, 0.60];
+        let energy = [1.0f32, 0.9, 0.2, 0.5];
+        let mut history = crate::SpectrumHistory::default();
+        let mut agg = SpectrogramAgg::new();
+        // Fold with the whole run IN window, so the held slab is filled while
+        // nothing has scrolled out of it yet.
+        for (&t, &e) in times.iter().zip(&energy) {
+            history.push(col(t, &[(4, e)]));
+            let _ = agg.window(&history, 0, bucket, &reads, KEEP);
+        }
+        let rebuilds = agg.rebuilds();
+
+        // Now the window starts at the column at 0.10 — index 2 — so the two
+        // louder columns sharing its slab have fallen out of it.
+        let inc = agg.window(&history, 2, bucket, &reads, KEEP);
+        let bat = aggregate_rows(history.iter_from(2), &reads, bucket);
+        assert_eq!(agg.rebuilds(), rebuilds, "a rebuild would explain it away");
+        assert_eq!(inc, bat, "slab 1 holds the out-of-window column at 0.00");
+
+        // The same numbers through the REBUILD path: a fresh aggregator whose
+        // first call already starts at index 2. Running only this one would let
+        // you conclude the fast path was to blame; it is the pair that settles
+        // that the bug is in the hold itself.
+        let mut fresh = SpectrogramAgg::new();
+        assert_eq!(fresh.window(&history, 2, bucket, &reads, KEEP), bat, "and after a rebuild");
     }
 
     /// Reaching back past a TIER MERGE — which the step-for-step test above
