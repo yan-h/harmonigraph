@@ -422,7 +422,7 @@ const MARK_WEIGHT: f32 = 0.07;
 /// The ink width Iosevka gives `+` and `-` within that cell (372/1000 em).
 /// Matching it is what keeps a drawn sign from reading as a different size
 /// of mark than the `♯` stacked over it.
-const MARK_INK_W: f32 = 0.372;
+pub(crate) const MARK_INK_W: f32 = 0.372;
 /// And the height of `+`'s upright (386/1000 em).
 const PLUS_INK_H: f32 = 0.386;
 /// Air between the accidental/comma column and the septimal mark, as a

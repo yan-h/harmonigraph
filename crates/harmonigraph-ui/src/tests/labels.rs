@@ -43,6 +43,42 @@ fn drawn_label_ink(
     label_pieces(name, anchor).0.into_iter().map(|(_, ink, text)| (ink, text)).collect()
 }
 
+/// A label's ink, drawn at an arbitrary `scale` and pixels-per-point.
+///
+/// Both matter and only together: `draw_stacked_name` is called at 1 nowhere
+/// in the app — the lattice pane scales by its own height, the camera and the
+/// node's own size, and the spectral roll by `LABEL_PT / NAME_SIZE` of its
+/// label setting, about 0.41 at the default. Down there a point of clearance
+/// is a fraction of a device pixel, and what a glyph's quad rounds to decides
+/// the last of it.
+fn label_ink_at(
+    name: harmonigraph_core::NoteName,
+    anchor: egui::Pos2,
+    scale: f32,
+    ppp: f32,
+) -> Vec<(egui::Rect, String)> {
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx);
+    ctx.set_pixels_per_point(ppp);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
+    let mut batch = crate::text::TextBatch::default();
+    let _ = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+        |ui| {
+            panes::lattice::draw_stacked_name(
+                &mut batch,
+                ui.painter(),
+                anchor,
+                name,
+                egui::Color32::WHITE,
+                egui::Color32::BLACK,
+                scale,
+            );
+        },
+    );
+    batch.pieces().iter().map(|p| (p.ink, p.text.clone())).collect()
+}
+
 /// Every text piece of a label as (galley box, ink box, text), and the boxes
 /// of its drawn marks.
 fn label_pieces(
@@ -119,11 +155,12 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     );
     // A count multiplies the sign beside it rather than continuing a word, so
     // it is tracked in by MARK_TRACK instead of taking a clear cell after it.
-    // Both rows pin against the same number, off the same cell: the
-    // accidental sets smaller than the marks below it but still claims that
-    // cell, centered in it, so the grid is shared -- see ACCIDENTAL_SCALE.
-    let cell = panes::lattice::MARK_ADVANCE * panes::lattice::MARK_SIZE;
-    let track = panes::lattice::MARK_TRACK * panes::lattice::MARK_SIZE;
+    // Both rows pin against the same number off the same cell, because both
+    // set at MARK_SIZE and the typeset sign's box IS one cell -- which is
+    // what the drawn sign under it claims too.
+    let mark_size = panes::lattice::MARK_SIZE;
+    let cell = panes::lattice::MARK_ADVANCE * mark_size;
+    let track = panes::lattice::MARK_TRACK * mark_size;
     assert!(
         (accidental_count.left() - count.left()).abs() < 0.01,
         "the two counts should share a left edge ({accidental_count:?} vs {count:?})"
@@ -133,9 +170,22 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
         (count.left() - (cell_left + cell - track)).abs() < 0.01,
         "a count should track {track} into its cell (count {count:?}, cell at {cell_left})"
     );
-    // ...but never so far that it climbs onto the sign. The drawn box carries
-    // its halo, so it overlaps the count by that much before any ink does.
-    assert!(sign.right() <= count.left() + BEARING + track, "the count follows its sign");
+    // ...but never so far that it climbs onto the sign.
+    //
+    // Bounded against the drawn sign's INK -- MARK_INK_W wide, centered in
+    // its cell -- on both counts. `sign` here is the shape box, which carries
+    // a halo wide enough to swallow the overlap this is looking for; and a
+    // tolerance that includes `track` cannot be failed by tracking at all,
+    // which is what this assertion did before: MARK_TRACK could be taken to
+    // 0.35, sitting the digit squarely on the `+` bar, with every label test
+    // still green.
+    let sign_ink_right = cell_left + cell / 2.0 + panes::lattice::MARK_INK_W * mark_size / 2.0;
+    let count_ink = text_box(&drawn_label_ink(name, anchor), "4");
+    assert!(
+        count_ink.left() >= sign_ink_right,
+        "the count should not climb onto its sign (count ink {count_ink:?}, \
+         sign ink ends at {sign_ink_right})"
+    );
     // Superscript over subscript, straddling the letter's own line.
     assert!(accidental.center().y < letter.center().y, "the accidental rides high");
     assert!(sign.center().y > letter.center().y, "the comma sits low");
@@ -208,6 +258,32 @@ fn the_two_mark_rows_set_alike_and_clear_each_other() {
         "the accidental should sit entirely above the comma row \
          ({sharp:?} over {comma_count:?})"
     );
+
+    // And it has to hold at the scales the label is actually DRAWN at, on a
+    // Retina pixel grid as much as a plain one -- a rise tuned at 1 says
+    // nothing about 0.4, where the roll draws.
+    //
+    // The floor is 0.35 because below it quantization decides the outcome
+    // rather than the rise does: a glyph's quad rounds to whole device
+    // pixels, so the clearance stops shrinking smoothly and starts jittering
+    // by half a point either way. Sampling every 0.005 down to 0.08, the
+    // quads of these two digits touch at a handful of scales under 0.24 --
+    // and they do so at MARK_RISE = 1.0, the loosest the rows can sit, as
+    // well. That is the rasterizer's floor, not this constant's, and no
+    // value here buys past it.
+    for ppp in [1.0, 2.0] {
+        for step in 0..=25 {
+            let scale = 0.35 + step as f32 * 0.05;
+            let ink = label_ink_at(name, anchor, scale, ppp);
+            let over = text_box(&ink, "3");
+            let under = text_box(&ink, "2");
+            assert!(
+                over.bottom() < under.top(),
+                "counts collide at scale {scale} on a {ppp}x grid \
+                 ({over:?} over {under:?})"
+            );
+        }
+    }
 }
 
 /// The septimal mark sits ACROSS the divide between the accidental and the
