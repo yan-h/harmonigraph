@@ -305,10 +305,33 @@ pub struct ViewConfig {
 
     /// Meantone mode: lock the major-third tuning to four perfect fifths
     /// (temper out the syntonic comma). While on, the third-tuning value is
-    /// derived from the fifth (in `root_ui`) and note-name labels drop
-    /// their comma marks; Learn mode toggles this from the held chord.
+    /// derived from the fifth (in `begin_frame`) and note-name labels drop
+    /// their comma marks.
+    ///
+    /// Whether this engages by itself is [`Self::meantone_auto`]'s business;
+    /// releasing it is always an edit of the major third (or this switch,
+    /// while the auto-detect is off).
     #[serde(default)]
     pub meantone: bool,
+    /// Auto-detect meantone: engage [`Self::meantone`] whenever the tuning
+    /// params land within `MEANTONE_TOLERANCE` of the meantone identity —
+    /// however they got there (a learned chord, the 12-TET preset, a drag
+    /// of either bar). The major third then snaps to four perfect fifths
+    /// and the comma marks go.
+    ///
+    /// Engage-only, deliberately: the lock has to survive dragging the
+    /// FIFTH, which moves the derived third out from under a third param
+    /// that is inert while the lock holds. So the release is the one edit
+    /// that can mean nothing else — pulling the major third itself more
+    /// than the tolerance away from the derived value.
+    ///
+    /// On by default, and `default_true` so a blob written before it
+    /// existed opts in too: a project saved at 12-TET (400 = 4·700 − 2400)
+    /// is meantone whether or not anyone said so, and its E and E- name one
+    /// pitch. Switching this off leaves the mode wherever it is and hands
+    /// the switch back.
+    #[serde(default = "default_true")]
+    pub meantone_auto: bool,
     /// Hide every tab bar so adjacent panes — lattice above spectrum, in the
     /// default layout — record as one seamless surface. Tab toggles it.
     ///
@@ -612,6 +635,7 @@ impl Default for ViewConfig {
             trail_memory: 0.0,
             trail_labels: true,
             meantone: false,
+            meantone_auto: true,
             frameless: false,
             show_perf: false,
             show_perf_detail: false,
