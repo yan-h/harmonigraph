@@ -197,10 +197,11 @@ pub fn paint(
             }
         }
     }
+    // Handed to [`Folds::apply`] rather than done here: the flag has to stay on
+    // until the window is wide enough to lay the pane out in, and this is the
+    // wrong end of the frame to know that (see [`Open`]).
     if let Some((surface, node)) = opened {
-        if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {
-            uncollapse(tree, node);
-        }
+        dial.open = Some(Open { surface: surface.0, leaf: node.0, at: None });
     }
     if let Some((surface, node, delta)) = shoved {
         if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {

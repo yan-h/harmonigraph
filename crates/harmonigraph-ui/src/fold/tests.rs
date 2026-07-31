@@ -1332,3 +1332,61 @@ fn an_unfold_never_asks_past_the_widest_the_window_has_been() {
     );
 }
 
+/// The arrow's unfold waits for its window, because egui_dock re-derives its
+/// own fractions inside `show` the moment the flag comes off: a pane opened
+/// against the window it is LEAVING is laid out in that window, and every
+/// boundary on screen jumps inward for the frame (see [`Open`]).
+#[test]
+fn an_arrow_unfold_stays_shut_until_the_window_can_hold_the_pane() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    let open_at = width(&dock, LATTICE);
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+    // The arrow clicked, as `paint` hands it over.
+    dial.open = Some(Open { surface: 0, leaf: LATTICE.0, at: None });
+    let asked = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(asked > narrow + 0.01, "the click asks the window for the pane's width");
+    assert!(
+        collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "and the pane is still a rail, so the dock lays this frame out without it"
+    );
+
+    // The frame that has the window the ask bought.
+    let _ = frame(&mut folds, &mut dock, &mut dial, asked);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "the flag comes off on the frame wide enough to hold the pane"
+    );
+    assert!(
+        (width(&dock, LATTICE) - open_at).abs() < 1.0,
+        "and the pane is back at the width it folded from, in one step",
+    );
+}
+
+/// A window that will not grow must not leave the pane shut forever. The wait
+/// is for a resize that was asked for, so a resize that never comes ends it
+/// just as arriving would — the pane opens into whatever width there is, which
+/// is what the rest of the pass already does with a refusal.
+#[test]
+fn an_arrow_unfold_the_window_refuses_opens_anyway() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Lattice, true);
+    let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+
+    dial.open = Some(Open { surface: 0, leaf: LATTICE.0, at: None });
+    let _ = frame(&mut folds, &mut dock, &mut dial, narrow);
+    // The host holds the window where it is, so the next frame is laid out at
+    // the width the last one was.
+    let _ = frame(&mut folds, &mut dock, &mut dial, narrow);
+    assert!(
+        !collapsed(&dock[SurfaceIndex::main()], LATTICE),
+        "a refused resize opens the pane rather than holding it shut"
+    );
+}
