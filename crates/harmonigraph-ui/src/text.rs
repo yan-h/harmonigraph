@@ -121,11 +121,17 @@ pub(crate) fn ring_radius(radius: f32, ppp: f32) -> f32 {
 /// between them is two scales fighting over it every frame — the dither this
 /// exists to remove, and worse, because the two are far apart.
 ///
-/// Keyed in egui's own per-frame store rather than in [`crate::SharedState`],
-/// because that is where the panes' other cross-frame drawing state already
-/// lives (`panes::lattice`'s mark cache) and because the offline renderer
-/// builds a fresh context per render — so a recorded frame depends on the
-/// history WITHIN its render and not on anything a previous one left behind.
+/// Keyed in egui's own memory rather than in [`crate::SharedState`], because
+/// that is where the panes' other cross-frame drawing state already lives
+/// (`panes::lattice`'s mark cache) and because the offline renderer builds a
+/// fresh context per render — so a recorded frame depends on the history WITHIN
+/// its render and not on anything a previous one left behind.
+///
+/// `Memory::data` survives between frames and is never serialized, which is the
+/// whole of what this needs and is worth saying because the hold depends on it
+/// entirely: a store that cleared per frame would hand back `None` every time
+/// and quietly leave this as plain nearest-rung, with no symptom but the
+/// dither it was meant to remove.
 pub(crate) fn snap_scale_held(
     ctx: &egui::Context,
     id: egui::Id,
@@ -185,22 +191,35 @@ const SIZE_STEP: f32 = 1.04;
 /// How far a scale must travel from the rung it is holding, in rungs, before it
 /// gives it up.
 ///
-/// The band this opens is `2 * RUNG_HOLD` rungs wide against the one rung a
-/// nearest-rung choice gives, so it is bounded on both sides by what it is
-/// between:
+/// This is the HOLD, and it is not the hysteresis — the number that decides
+/// whether a dither is absorbed is `2 * RUNG_HOLD - 1`, which at 0.65 is 0.3 of
+/// a rung, or about 1.2% of scale. Releasing upward at `held + RUNG_HOLD` lands
+/// on the rung above, which the scale is then `1 - RUNG_HOLD` away from — so
+/// coming back down costs the difference between those two, not `RUNG_HOLD`
+/// twice. Anything creeping less than that across a boundary holds still.
 ///
-///   - above 0.5, or there is no hysteresis at all and a scale on a boundary
-///     dithers exactly as it did;
+/// The gap between the two is what makes this worth spelling out: the hold
+/// window is 1.3 rungs wide and the hysteresis is 0.3, so reading the wide
+/// number as the margin overstates it more than fourfold. Tuning against it
+/// goes badly in a way nothing here would catch — 0.55 reads like most of the
+/// effect and is `2(0.55) - 1` = 0.1 of a rung, a fifth of what it looks like
+/// and enough for the dither to come back.
+///
+/// Bounded on both sides, and both bounds are load-bearing:
+///
+///   - above 0.5, or the hysteresis is zero or negative and a scale on a
+///     boundary dithers exactly as it did;
 ///   - below 1.0, so that a scale landing ON a rung always takes it. That is
 ///     what keeps the ladder's anchor: scale 1 draws at the size it was
 ///     dialled at no matter which side it arrived from, where at 1.0 and above
 ///     a label could hold a neighbouring rung through it and the dialled size
 ///     would depend on the zoom's history.
 ///
-/// 0.65 sits clear of both. The cost is drift — type runs up to 0.65 of a rung
-/// from its ideal size rather than 0.5, which is 2.6% against 2% — and the
-/// whole of what that buys is against a grain of 4%, so it is well under the
-/// step it is smoothing.
+/// 0.65 sits clear of both, and `the_hysteresis_is_twice_the_hold_less_one`
+/// pins the relationship so a later tuning has to face the real number. The
+/// cost is drift — type runs up to 0.65 of a rung from its ideal size rather
+/// than 0.5, which is 2.6% against 2% — and that is against a grain of 4%, so
+/// it stays well under the step it is smoothing.
 const RUNG_HOLD: f32 = 0.65;
 
 /// The largest a label's type is ever rasterized, in physical pixels.
@@ -736,6 +755,59 @@ mod tests {
         for from in [-1.0, 1.0, -3.0, 7.0] {
             assert_eq!(held(1.0, Some(from)), 1.0, "arriving at the dialled size from rung {from}");
         }
+    }
+
+    /// The hysteresis is `2 * RUNG_HOLD - 1`, not `RUNG_HOLD` and not twice it.
+    ///
+    /// Releasing upward at `held + RUNG_HOLD` lands on the rung above, which the
+    /// scale is then `1 - RUNG_HOLD` away from — so what a reversal costs is the
+    /// difference between those two. That is the number that decides whether a
+    /// creeping scale dithers, and it is the one nothing else here would catch a
+    /// mistake in: every other assertion in this file is satisfied by any
+    /// `RUNG_HOLD` in `(0.5, 1.0)`, including a 0.55 that reads like most of the
+    /// effect and delivers a fifth of it.
+    ///
+    /// Measured by walking a scale up until the size gives way and then back
+    /// down until it gives way again, which is the gesture itself.
+    #[test]
+    fn the_hysteresis_is_twice_the_hold_less_one() {
+        let (base, ppp) = (15.0, 2.0);
+        // A rung far enough up the ladder that neighbouring rungs are more than
+        // a pixel apart, or the pixel grid — the coarser grain down there —
+        // would be what the sizes are really answering to.
+        let start = 20.0;
+        let at = |index: f32, held: f32| snap_onto(SIZE_STEP.powf(index), base, ppp, Some(held)).0;
+        let held = start;
+        let size = at(start, held);
+
+        let step = 0.0005;
+        let mut up = start;
+        while at(up, held) == size && up < start + 2.0 {
+            up += step;
+        }
+        assert!(up < start + 2.0, "the size never gave way climbing");
+        // It has moved on to the rung above, and now holds THAT.
+        let above = snap_onto(SIZE_STEP.powf(up), base, ppp, Some(held)).1.expect("a real rung");
+        let mut down = up;
+        while at(down, above) != size && down > start - 2.0 {
+            down -= step;
+        }
+        assert!(down > start - 2.0, "the size never came back descending");
+
+        let hysteresis = up - down;
+        let expected = 2.0 * RUNG_HOLD - 1.0;
+        assert!(
+            (hysteresis - expected).abs() < 0.01,
+            "a reversal took {hysteresis} rungs, not the 2*RUNG_HOLD-1 = {expected} it is",
+        );
+        // And that it is worth having: a margin under a quarter of a rung is
+        // under 1% of scale, which the creep this absorbs would walk straight
+        // through. The bound is the point — RUNG_HOLD is free to be tuned, but
+        // not to be tuned into doing nothing.
+        assert!(
+            hysteresis >= 0.25,
+            "RUNG_HOLD = {RUNG_HOLD} leaves only {hysteresis} of a rung of hysteresis",
+        );
     }
 
     /// Two surfaces drawing the same picture at different sizes must not share
