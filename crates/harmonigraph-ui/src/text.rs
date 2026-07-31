@@ -143,9 +143,12 @@ const MAX_GLYPH_PX: f32 = 512.0;
 /// Render-preview copies.
 pub(crate) const LATTICE_LABELS: u64 = 0;
 pub(crate) const LATTICE_PREVIEW_LABELS: u64 = 1;
+/// The Lattice pane's second flush: the learn badge, which goes on top of the
+/// node names and so cannot share their buffer.
+pub(crate) const LATTICE_LEARN: u64 = 2;
 /// The analyzer's, one per surface (docked, then the preview).
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
-    2 + surface as u64
+    3 + surface as u64
 }
 
 /// One glyph as the mirror identifies it: its size, its character, and the
@@ -481,6 +484,26 @@ mod tests {
             );
         });
         batch.drawn
+    }
+
+    /// Every batch drawn in one frame keeps its own instance buffer, keyed on
+    /// its id, so two batches sharing one id draw each other's glyphs — the
+    /// second flush overwrites the first's buffer and the first pane's text
+    /// lands wherever the second's was. The ids are hand-numbered and the
+    /// analyzer's run from a base, which is what makes adding one a renumber
+    /// rather than an append.
+    #[test]
+    fn every_batch_drawn_in_a_frame_has_an_id_of_its_own() {
+        let ids = [
+            LATTICE_LABELS,
+            LATTICE_PREVIEW_LABELS,
+            LATTICE_LEARN,
+            // The docked analyzer, then the Video pane's preview copy.
+            spectral_labels(0),
+            spectral_labels(1),
+        ];
+        let distinct: std::collections::HashSet<u64> = ids.iter().copied().collect();
+        assert_eq!(distinct.len(), ids.len(), "two batches share an id: {ids:?}");
     }
 
     /// A character the atlas has never rasterized THERE is a glyph the mirror

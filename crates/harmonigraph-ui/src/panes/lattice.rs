@@ -83,16 +83,17 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     ui.painter()
         .add(lattice_paint_callback(rect, &scene, state.target_format, 0, Some(state.lattice_stats.clone())));
 
-    // One batch for everything this pane writes, flushed at the end: nothing
-    // is drawn over the text, so collecting it keeps the order it had.
+    // One batch for the node labels, flushed before the overlay: a batch draws
+    // in the order it collected, so anything meant to sit ON TOP of the names
+    // has to be a second flush rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
-    if state.learn_active {
-        draw_learn_overlay(&mut batch, ui, rect, now);
-    }
     if state.view.show_labels {
         draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
     }
     batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
+    if state.learn_active {
+        draw_learn_overlay(ui, rect, state, now);
+    }
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
@@ -102,7 +103,12 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
 /// names a mode rather than a node — pinned to the corner, sized like the rest
 /// of the UI's chrome — and a badge that grew as you zoomed in would be saying
 /// something about the lattice, which is exactly what it is not about.
-fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: egui::Rect, now: f64) {
+///
+/// Which is also why it draws OVER the node labels, in a batch and a border
+/// stroke of its own: it is chrome about the pane, not a thing in the picture,
+/// and a name that happens to land in the corner crossing the word or the
+/// border reads as the badge being part of the lattice.
+fn draw_learn_overlay(ui: &egui::Ui, rect: egui::Rect, state: &SharedState, now: f64) {
     let color = theme::armed().gamma_multiply(learn_pulse(now));
     let painter = ui.painter_at(rect);
     painter.rect_stroke(
@@ -111,6 +117,7 @@ fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: e
         egui::Stroke::new(2.0, color),
         egui::StrokeKind::Inside,
     );
+    let mut batch = crate::text::TextBatch::default();
     batch.text(
         &painter,
         rect.left_top() + egui::vec2(10.0, 8.0),
@@ -120,6 +127,7 @@ fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: e
         color,
         theme::well().gamma_multiply(learn_pulse(now)),
     );
+    batch.flush(&painter, rect, state, crate::text::LATTICE_LEARN);
 }
 
 /// How readable a label on a visited node is next to a sounding one. Well
