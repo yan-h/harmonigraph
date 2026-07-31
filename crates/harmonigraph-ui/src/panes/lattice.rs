@@ -344,46 +344,44 @@ pub(crate) const LABEL_REACH: f32 = 96.0;
 /// galley boxes would carry the leading of both fonts on top of it, which is
 /// the spacing that had the two floating apart.
 pub(crate) const CENTS_GAP: f32 = 3.0;
-/// The comma marks, relative to the letter -- and the size the accidental is
-/// measured off in turn, see [`ACCIDENTAL_SCALE`]. Small enough that the two
-/// rows stacked still fit inside the letter's own height: the pair is an
-/// annotation on the name, and a label that grows taller than its letter
-/// reads as two lines rather than one name.
+/// Every mark in the column, relative to the letter -- accidental and comma
+/// alike, which is what keeps the two rows reading as one annotation rather
+/// than as one row set smaller than the other. Small enough that the two
+/// stacked still fit inside the letter's own height: a label that grows
+/// taller than its letter reads as two lines rather than one name.
 const MARK_SCALE: f32 = 0.55;
 /// The size the marks are actually laid out at.
 pub(crate) const MARK_SIZE: f32 = NAME_SIZE * MARK_SCALE;
-/// The accidental, relative to the marks below it.
-///
-/// `♯` and `♭` carry the tallest ink of anything in the column — 0.878 and
-/// 0.818 em against the 0.739 of a count digit and the 0.386 of a `+` — so
-/// the accidental row is what closes on the comma row, and setting it a
-/// little smaller is what opens that air back up. It buys the gap twice
-/// over: the glyph reaches less far down, AND a shorter line box lets the
-/// row ride higher under the same [`MARK_RISE`] rule.
-///
-/// Only the GLYPH shrinks. The column grid is still [`MARK_ADVANCE`], with
-/// the smaller sign centred in the cell the drawn sign claims, so the two
-/// signs keep one axis and the two counts one left edge.
-const ACCIDENTAL_SCALE: f32 = 0.9;
-/// The size the accidental is actually laid out at.
-pub(crate) const ACCIDENTAL_SIZE: f32 = MARK_SIZE * ACCIDENTAL_SCALE;
 
 /// How far the accidental rises and the comma sign drops, as a fraction of
 /// the offset that would set each flush with the letter's own line box.
 ///
-/// Flush is the loosest the pair can sit and still be one name: it spends
-/// every point the letter's leading offers on the space BETWEEN the two
-/// marks, so `♯` over `+` opens about 6pt of clear air at scale 1 and `♭`
-/// over `-` — the thinnest sign against the shortest accidental — nearer
-/// nine. That is more than the marks' own heights in the second case, and
-/// the column stops reading as one stacked annotation.
+/// This is the ONLY lever on the air between the two rows, and it has to be
+/// the only one: every mark in the column sets at [`MARK_SIZE`], so anything
+/// that opens the gap by shrinking one row makes that row visibly the
+/// smaller of the two. `♯`'s ink is the tallest in the column, but the pair
+/// that gives the mismatch away is the two count digits — one directly over
+/// the other, in the same column, where 10% off one of them reads as a
+/// typo rather than as air.
 ///
-/// Pulling both in tightens that air without touching what says which mark
-/// is which, since the cue is the ORDER of the two, not the distance. The
-/// floor is collision: the sharp's ink reaches 7.5pt below its centre and
-/// the plus's 3.2pt above, so the two centres cannot close past about 11pt
-/// of the 17 flush gives them.
-const MARK_RISE: f32 = 0.8;
+/// Flush (1.0) is the loosest the rows can sit and still be one name: it
+/// spends every point the letter's leading offers on the space between them,
+/// about 6pt of clear air under `♯` at scale 1 and nearer nine under `♭`,
+/// which is more than the marks' own heights and stops the column reading as
+/// one stacked annotation. Pulling in tightens that without touching what
+/// says which mark is which, since the cue is the ORDER of the two.
+///
+/// Measured as ink at scale 1, the two clearances that bind — a count over
+/// the count below it, and `♯` over the whole row under it:
+///
+/// | rise | count over count | `♯` over the row |
+/// |------|------------------|------------------|
+/// | 0.8  | 0.6pt            | −1.4pt (they interleave) |
+/// | 0.9  | 2.3pt            | 0.3pt            |
+/// | 1.0  | 4.0pt            | 2.0pt            |
+///
+/// 0.9 is the tightest that keeps the rows from interleaving at all.
+const MARK_RISE: f32 = 0.9;
 
 /// Iosevka Fixed's advance, as a fraction of the em: every cell is half an
 /// em wide. A drawn mark claims exactly this, so it sits in the same column
@@ -927,7 +925,6 @@ pub(crate) fn draw_stacked_name(
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
-    let accidental_font = egui::FontId::monospace(ACCIDENTAL_SIZE * scale);
     let mark_size = MARK_SIZE * scale;
     let ppp = painter.ctx().pixels_per_point();
     let measure = |text: &str, font: &egui::FontId| {
@@ -944,12 +941,9 @@ pub(crate) fn draw_stacked_name(
 
     let letter_text = name.letter.to_string();
     let letter = measure(&letter_text, &name_font);
-    // Each ROW rises off its own line box, so the accidental -- set smaller
-    // than the marks under it, see ACCIDENTAL_SCALE -- rides a little higher
-    // than they drop. The drawn marks have no galley to ask and take the
-    // mark font's line, which is the row they sit in.
+    // Every mark sits on one line of the mark font, so both rows rise by the
+    // same amount -- including the drawn ones, which have no galley to ask.
     let line = measure("0", &mark_font);
-    let accidental_line = measure("0", &accidental_font);
     // A drawn mark is centered on its line box, with NO correction toward
     // the font's own bar axis, and that is a measured decision rather than
     // an omission.
@@ -967,7 +961,6 @@ pub(crate) fn draw_stacked_name(
     // Centered is the mean of what the font actually renders, and it is
     // exactly where `+` lands.
     let rise = MARK_RISE * (letter.y - line.y) / 2.0;
-    let accidental_rise = MARK_RISE * (letter.y - accidental_line.y) / 2.0;
     let cell = MARK_ADVANCE * mark_size;
 
     let accidental = name.accidental_mark();
@@ -989,17 +982,10 @@ pub(crate) fn draw_stacked_name(
     // A drawn sign claims one cell; its count follows in the same column.
     let signed_width =
         |count: &str, present: bool| if present { tracked_width(cell, count) } else { 0.0 };
-    // The accidental claims the same cell as the drawn sign under it, wider
-    // than its own smaller glyph, so both rows sit on one column grid.
-    let accidental_advance = measure(&accidental_sign, &accidental_font).x;
-    let accidental_indent = (cell - accidental_advance) / 2.0;
-    let accidental_width = if accidental_sign.is_empty() {
-        0.0
-    } else if accidental_count.is_empty() {
-        cell
-    } else {
-        cell + measure(&accidental_count, &accidental_font).x - track
-    };
+    // The accidental claims the same cell as the drawn sign under it -- one
+    // column grid for both rows.
+    let accidental_width =
+        if accidental_sign.is_empty() { 0.0 } else { tracked_width(cell, &accidental_count) };
     let column = accidental_width.max(signed_width(&syntonic, name.syntonic_commas != 0));
     let septimal_column = signed_width(&septimal, name.septimal_commas != 0);
     // Air between the accidental column and the septimal mark, so the mark
@@ -1023,30 +1009,29 @@ pub(crate) fn draw_stacked_name(
         let sign_x = left + letter.x;
         batch.text(
             painter,
-            egui::pos2(sign_x + accidental_indent, anchor.y - accidental_rise),
+            egui::pos2(sign_x, anchor.y - rise),
             egui::Align2::LEFT_CENTER,
             accidental_sign.clone(),
-            accidental_font.clone(),
+            mark_font.clone(),
             color,
             outline,
         );
         if !accidental_count.is_empty() {
-            // Off the CELL, not off the smaller glyph inside it, so this
-            // count and the comma's below share a left edge.
+            // Off the CELL, so this count and the comma's below share a
+            // left edge.
             batch.text(
                 painter,
-                egui::pos2(sign_x + cell - track, anchor.y - accidental_rise),
+                egui::pos2(sign_x + cell - track, anchor.y - rise),
                 egui::Align2::LEFT_CENTER,
                 accidental_count.clone(),
-                accidental_font.clone(),
+                mark_font.clone(),
                 color,
                 outline,
             );
         }
         // Whole-string ink: tracking moves the count sideways, and how far
         // the pair reaches DOWN is the same either way.
-        let reach = ink_below(&accidental, &accidental_font, accidental_line);
-        bottom = bottom.max(-accidental_rise + reach);
+        bottom = bottom.max(-rise + ink_below(&accidental, &mark_font, line));
     }
 
     // Drawn sign, then its count: same column, same line, so the pair reads

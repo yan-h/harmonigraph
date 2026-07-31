@@ -164,15 +164,20 @@ fn note_label_stacks_the_marks_and_stays_centered_on_the_node() {
     );
 }
 
-/// The accidental row has to clear the comma row under it, as INK.
+/// The two rows of the mark column set at ONE size, and clear each other as
+/// INK.
 ///
-/// `♯` carries the tallest ink in the column, so the accidental is what
-/// closes on the marks below it, and it is set smaller than them to buy that
-/// air back — see `ACCIDENTAL_SCALE`. Counted on both rows
-/// is the tightest the column ever gets: a count digit reaches further down,
-/// and further up, than the `+` it stands beside.
+/// Both halves matter and they pull against each other: the air between the
+/// rows is bought with `MARK_RISE` alone, because the other
+/// way to buy it — setting the accidental smaller, since `♯` carries the
+/// tallest ink in the column — makes the row visibly the smaller of the two.
+/// The count digits are where that shows: one directly over the other, same
+/// column, nothing between them to excuse a size difference.
+///
+/// Counted on both rows is also the tightest the column ever gets, since a
+/// count digit reaches further down, and further up, than the `+` beside it.
 #[test]
-fn the_accidental_sets_smaller_than_the_marks_it_stacks_over() {
+fn the_two_mark_rows_set_alike_and_clear_each_other() {
     let anchor = egui::pos2(200.0, 200.0);
     let name = harmonigraph_core::NoteName {
         letter: 'C',
@@ -185,12 +190,10 @@ fn the_accidental_sets_smaller_than_the_marks_it_stacks_over() {
     let sharp_count = text_box(&ink, "3");
     let comma_count = text_box(&ink, "2");
 
-    // Two digits, one per row, so this compares the rows themselves rather
-    // than a `♯` against a `+`.
+    // Two digits, one per row: the pair that gives a size mismatch away.
     assert!(
-        sharp_count.height() < comma_count.height(),
-        "the accidental row should set smaller than the comma row \
-         ({sharp_count:?} vs {comma_count:?})"
+        (sharp_count.height() - comma_count.height()).abs() < 0.01,
+        "the two rows should set at one size ({sharp_count:?} vs {comma_count:?})"
     );
     // Same column, and the tightest pair in the label.
     assert!(
