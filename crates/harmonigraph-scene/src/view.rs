@@ -332,10 +332,14 @@ pub struct ViewConfig {
     /// [`Self::show_perf_detail`]). Interactive shells only — the offline
     /// renderer never draws it, keeping its frames deterministic.
     ///
-    /// `default_true`, matching the struct default, so a fresh install and a
-    /// pre-`show_perf` blob both open with it on. A project that explicitly
-    /// turned it off carries `false` and still round-trips.
-    #[serde(default = "default_true")]
+    /// Off by default: the HUD is a development instrument, and it sits over
+    /// the picture the plugin exists to draw. The Panel pane's Performance
+    /// section is where it gets switched on.
+    ///
+    /// Plain `default`, matching the struct default, so a fresh install and a
+    /// pre-`show_perf` blob both open with it off. A project that explicitly
+    /// turned it on carries `true` and still round-trips.
+    #[serde(default)]
     pub show_perf: bool,
     /// Expand the overlay from the headline numbers into the full per-stage
     /// breakdown of where a frame goes.
@@ -642,7 +646,7 @@ impl Default for ViewConfig {
             trail_labels: true,
             meantone: false,
             frameless: false,
-            show_perf: true,
+            show_perf: false,
             show_perf_detail: false,
             render_scale: default_render_scale(),
             // A halo just under unit strength: the small soft core and the
