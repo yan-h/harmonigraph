@@ -1332,12 +1332,16 @@ fn an_unfold_never_asks_past_the_widest_the_window_has_been() {
     );
 }
 
-/// The arrow's unfold waits for its window, because egui_dock re-derives its
-/// own fractions inside `show` the moment the flag comes off: a pane opened
-/// against the window it is LEAVING is laid out in that window, and every
+/// An unfold waits for its window, whoever did it. egui_dock re-derives its
+/// own fractions inside `show` the moment the flag comes off, so a pane opened
+/// against the window it is LEAVING is laid out in that window and every
 /// boundary on screen jumps inward for the frame (see [`Open`]).
+///
+/// Driven through `collapse`, which is egui_dock's own expand: that is the
+/// writer the hold has to catch, and the rail arrow is only the other door
+/// into the same place.
 #[test]
-fn an_arrow_unfold_stays_shut_until_the_window_can_hold_the_pane() {
+fn an_unfold_stays_shut_until_the_window_can_hold_the_pane() {
     let mut dock = dock();
     let mut folds = Folds::default();
     let mut dial = Dial::default();
@@ -1346,8 +1350,8 @@ fn an_arrow_unfold_stays_shut_until_the_window_can_hold_the_pane() {
     collapse(&mut dock, Tab::Lattice, true);
     let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
 
-    // The arrow clicked, as `paint` hands it over.
-    dial.open = Some(Open { surface: 0, leaf: LATTICE.0, at: None });
+    // The unfold, as egui_dock does it from inside `show`.
+    collapse(&mut dock, Tab::Lattice, false);
     let asked = frame(&mut folds, &mut dock, &mut dial, narrow);
     assert!(asked > narrow + 0.01, "the click asks the window for the pane's width");
     assert!(
@@ -1372,7 +1376,7 @@ fn an_arrow_unfold_stays_shut_until_the_window_can_hold_the_pane() {
 /// just as arriving would — the pane opens into whatever width there is, which
 /// is what the rest of the pass already does with a refusal.
 #[test]
-fn an_arrow_unfold_the_window_refuses_opens_anyway() {
+fn an_unfold_the_window_refuses_opens_anyway() {
     let mut dock = dock();
     let mut folds = Folds::default();
     let mut dial = Dial::default();
@@ -1380,7 +1384,7 @@ fn an_arrow_unfold_the_window_refuses_opens_anyway() {
     collapse(&mut dock, Tab::Lattice, true);
     let narrow = settle(&mut folds, &mut dock, &mut dial, 1000.0);
 
-    dial.open = Some(Open { surface: 0, leaf: LATTICE.0, at: None });
+    collapse(&mut dock, Tab::Lattice, false);
     let _ = frame(&mut folds, &mut dock, &mut dial, narrow);
     // The host holds the window where it is, so the next frame is laid out at
     // the width the last one was.

@@ -197,12 +197,16 @@ pub fn paint(
             }
         }
     }
-    // Handed to [`Folds::apply`] rather than done here: the flag has to stay on
-    // until the window is wide enough to lay the pane out in, and this is the
-    // wrong end of the frame to know that (see [`Open`]).
+    // Opened here, and held shut again by [`Folds::apply`] on the next frame
+    // until the window can hold the pane (see [`Open`]). Nothing is handed
+    // over: the hold watches the collapsed flags themselves, so it does not
+    // care which arrow moved them — and egui_dock's own collapse button, which
+    // it draws for a folded leaf too, moves them from inside `show` where
+    // nothing of ours can intercept it.
     if let Some((surface, node)) = opened {
-        eprintln!("[121o] rail arrow s{} leaf={}", surface.0, node.0);
-        dial.open = Some(Open { surface: surface.0, leaf: node.0, at: None });
+        if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {
+            uncollapse(tree, node);
+        }
     }
     if let Some((surface, node, delta)) = shoved {
         if let Some(tree) = dock.get_surface_mut(surface).and_then(Surface::node_tree_mut) {
