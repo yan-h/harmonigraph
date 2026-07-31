@@ -53,8 +53,8 @@ Takes are written to `~/Music/Harmonigraph Takes/take-<unixtime>.take`
 (`LATTICE_TAKE_DIR` overrides the directory). The status line under the
 toggle tells you where the file is going and how many events have landed.
 
-Tick **"Record audio too"** and the plugin writes a WAV beside the take,
-so the render gets its spectrum and its soundtrack with no separate
+The plugin also writes a WAV beside the take — always, with nothing to
+tick — so the render gets its spectrum and its soundtrack with no separate
 bounce and nothing to point at. The catch is placement: the device has to
 be somewhere audio actually reaches it — after the instrument, or on a
 bus. On a pure note track there is nothing to record, and the take is
@@ -104,15 +104,12 @@ export.
 
 #### Rendering automatically when the take ends
 
-Tick **"Render video when done"** under the toggle and the plugin runs
-`harmonigraph-offline` itself the moment you disarm, writing the video next to
-the take. Three fields appear:
-
-| field | meaning |
-|---|---|
-| Renderer | path to the `harmonigraph-offline` binary — leave empty to use the copy `update-plugin.sh` installs |
-| Audio | bounced WAV to mux in and feed the spectrum; empty renders silent, with no spectrum curve |
-| When | what counts as "done" — see below |
+A finished take always renders: the plugin runs `harmonigraph-offline`
+itself and writes the video next to the take. There is nothing to enable,
+and no field for the renderer's path — it uses the copy `update-plugin.sh`
+installs, and the audio it muxes and analyzes is the take's own recording.
+What you do choose is **when** a take counts as finished, in the **Finish**
+row below.
 
 The video's size comes from **Aspect** and **Resolution** in the Frame
 section, which the plugin passes as `--size`. There is no field for raw
@@ -122,12 +119,16 @@ every Aspect but 16:9 — a 9:16 frame previewed tall and rendered wide. The
 flags it could reach are all reachable by running the renderer on the take
 by hand, which has completion, `--help`, and real error messages.
 
-**When** is either *Switched off* (render when you turn Record take off —
-predictable, and the only choice that survives a looping transport) or
-*Transport stops* (render the moment the transport stops after capturing
-something; recording switches itself off too). The second is what makes
-**exporting audio produce a video with nothing further to click**: arm
-Record take, export, and both files land together.
+**Finish** has three settings:
+
+| setting | what ends the take |
+|---|---|
+| On disarm | you switch Record take off — predictable, and it works however the transport behaves |
+| On stop | the transport stops after something was recorded; recording disarms at the same moment |
+| At loop end | one arranger-loop pass, ending the moment the loop wraps. Needs looping ON; with looping off it waits for a disarm |
+
+*On stop* is what makes **exporting audio produce a video with nothing
+further to click**: arm Record take, export, and both files land together.
 
 ffmpeg is found automatically — on `PATH`, then in the usual install
 locations. This matters more than it sounds: a macOS app launched from
@@ -228,8 +229,8 @@ the whole take is laid out at once — the entire spectrogram across the frame �
 and a playhead sweeps through it, so the finished shape of the piece is visible
 the whole way rather than arriving and scrolling off. It needs audio (the
 spectrogram is audio-derived) and uses whatever spectrogram and roll look the
-take already carries. The roll's notes still fill in as the playhead reaches
-them; only the spectrogram is laid out ahead.
+take already carries. The roll is laid out ahead too — the whole piece is
+on screen from the first frame, not only the spectrogram.
 
 Rendering is faster than realtime on an M-series Mac (roughly 19 s of
 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.
@@ -265,9 +266,10 @@ not be the same performance, and `--align <seconds>` sets the start by
 hand. `--align off` skips correlation and assumes the bounce starts at
 take zero.
 
-This needs the take to have recorded its own audio ("Record audio too").
-Without a reference there is nothing to correlate against, and the bounce
-is assumed to start at take zero unless you say otherwise.
+This needs the take to have recorded its own audio, which it does unless
+the device sat somewhere no audio reached it. Without a reference there is
+nothing to correlate against, and the bounce is assumed to start at take
+zero unless you say otherwise.
 
 ## Layouts
 
@@ -275,8 +277,9 @@ Offline rendering does **not** reproduce the plugin's dock. It composes
 its own picture — no tab bars, no settings columns, and whatever
 proportions suit the piece.
 
-Four presets: `side-by-side` (lattice left, Spectral pane right),
-`stacked` (the plugin's default arrangement), `lattice`, `spectral`.
+Four presets: `side-by-side` (lattice left, Spectral pane right — the
+arrangement the plugin's own default dock uses), `stacked`, `lattice`,
+`spectral`.
 
 A preset places the panes and nothing else: the Spectral pane renders at
 whichever orientation the take's own UI state carries, so a `side-by-side`
@@ -316,8 +319,8 @@ inset over a full-bleed lattice.
 actually started), per-note tuning and MPE bends, all eight automatable
 parameters over time, and the view/camera/spectrum settings.
 
-**Captured with "Record audio too":** the input bus as 32-bit float,
-aligned to the notes.
+**Captured alongside the notes:** the input bus as 32-bit float, aligned
+to them.
 
 **Not captured:** camera *movement* (the camera is a UI control, not an
 automatable parameter, so a take holds one fixed angle), anything you

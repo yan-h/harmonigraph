@@ -30,7 +30,13 @@ LIB="${PKG//-/_}"
 # Current checkout (where the build output lands) and the main working tree
 # (first entry of `git worktree list`, whose target/bundled/ Bitwig scans).
 HERE="$(git rev-parse --show-toplevel)"
-MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+# `substr($0, 10)` rather than `$2`: awk splits on whitespace, so a checkout
+# under a path with a space in it ("~/My Drive/projects/...", which this repo
+# has lived under) would come back truncated at the space — and a truncated
+# MAIN makes BUNDLED a path that simply is not there, so the copy below goes
+# quiet instead of failing. `.claude/reclaim-worktrees.sh` reads the same
+# record the same way.
+MAIN="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 BUNDLED="$MAIN/target/bundled"
 DYLIB="$HERE/target/release/lib${LIB}.dylib"
 

@@ -30,7 +30,13 @@ NAME="Harmonigraph"
 # want $PKG itself, so the two spellings have to be kept apart.
 LIB="${PKG//-/_}"
 
-MAIN="$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')"
+# `substr($0, 10)` rather than `$2`: awk splits on whitespace, so a checkout
+# under a path with a space in it ("~/My Drive/projects/...", which this repo
+# has lived under) would come back truncated at the space — and a truncated
+# MAIN makes BUNDLED a path that simply is not there, so the copy below goes
+# quiet instead of failing. `.claude/reclaim-worktrees.sh` reads the same
+# record the same way.
+MAIN="$(git worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')"
 BUNDLED="$MAIN/target/bundled"
 LOADED="$BUNDLED/.loaded"   # records which worktree build is currently in the slot
 

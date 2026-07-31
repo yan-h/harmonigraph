@@ -240,7 +240,7 @@ impl TextBatch {
         // batch carries sits on something that moves — lattice names ride a
         // camera, roll names ride a scrolling picture, and the render pane
         // draws the lattice again. The few that hold still, chiefly the
-        // spectral pitch gridlines, pay a constant softening so that there
+        // spectral pane's axis labels, pay a constant softening so that there
         // is ONE text path rather than two: a mode here would mean the same
         // label rendered differently depending on which pane drew it, and
         // this module's worth is that it has no modes.

@@ -23,7 +23,9 @@ struct Uniforms {
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     // (offscreen pixels per screen pixel — converts the screen-pixel
-    // softness knob to render pixels); w unused. An octave glyph maps its
+    // softness knob to render pixels); w: bloom strength, which blit.wgsl
+    // reads off this same buffer — NOT a free slot, whatever the fact that
+    // nothing in this file touches it suggests. An octave glyph maps its
     // pitch through x/y to index pitch_lut.
     misc2: vec4<f32>,
     // x: core radius in quad UV units (0 turns the core off). y/z: the
@@ -51,7 +53,8 @@ struct Uniforms {
     misc5: vec4<f32>,
     // x: trail mark style — how a node the music has already visited is
     //    marked (0 off, 1 lift, 2 ring, 3 tint; see TrailMark). y: trail
-    //    strength 0..1. z/w unused.
+    //    strength 0..1. z: the sevens knockout's fade width, read below by
+    //    the vertex stage. w unused.
     // Read ONLY by idle_marker: a memory must never be mistakable for a
     // sounding note, and confining it to the idle layer is what guarantees
     // that rather than merely intending it.

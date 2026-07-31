@@ -32,9 +32,14 @@ loadable. After a swap, rescan/restart the plugin in Bitwig to pick it up.
 The performance overlay's bottom line reads `build  <branch> @<sha>` — the
 branch with its `worktree-` prefix stripped, so it is exactly the argument
 `./load-plugin.sh <branch>` takes. It is stamped at compile time by
-`crates/harmonigraph-ui/build.rs` and is on by default, so it needs nothing from
-Yan but a look at the corner of the Analyzer pane — or of the Lattice, which is
-where the overlay goes when the Analyzer is folded or off screen.
+`crates/harmonigraph-ui/build.rs`. The overlay carrying it ships OFF, so reading
+the tag takes one tick first: **Panel pane → Performance → Performance overlay**.
+Then it is in the corner of the Analyzer pane — or of the Lattice, which is where
+the overlay goes when the Analyzer is folded or off screen.
+
+A session handing over a build should say so rather than say "look at the
+corner", because an empty corner is exactly what a swap that did not happen also
+looks like.
 
 This exists because a swap can silently not have happened: no rescan, a build
 that landed in a different worktree, the wrong branch named, or a build that

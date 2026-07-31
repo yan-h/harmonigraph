@@ -195,7 +195,7 @@ const BAR_LABEL_GAP: f32 = 6.0;
 ///
 /// The limit comes from [`crate::panes::pane_content_right`], which the pane
 /// records on the way in. Deliberately not the clip rect: that is the tab BODY,
-/// a [`theme::PANE_INNER_MARGIN`] wider than the content box on each side, so a
+/// a [`theme::pane_inner_margin`] wider than the content box on each side, so a
 /// bar clamped to it comes out a margin longer than its neighbours and flush on
 /// the pane border. Outside a pane — the widget's own tests — there is nothing
 /// to hand a value over, and the clip is then the honest fallback.

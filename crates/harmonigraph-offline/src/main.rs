@@ -42,7 +42,7 @@ OPTIONS:
     -s, --size <WxH>       Output pixels. At an aspect other than the one the
                            take was framed at, the picture is recomposed to
                            fit rather than letterboxed, and it says so.
-                           [default: the take's own aspect, short edge 1080]
+                           [default: the take's own aspect and Resolution]
         --scale <F>        Pixels per point — the UI's zoom. Bigger means
                            chunkier text relative to the frame.
                            [default: sized so the UI reads like the plugin]
@@ -245,14 +245,23 @@ fn default_scale(size: [u32; 2]) -> f32 {
     (size[0] as f32 / REFERENCE_POINTS_ACROSS).clamp(1.0, 4.0)
 }
 
-/// Short edge for a take's frame aspect when `--size` isn't given, so 16:9
-/// lands on 1920x1080 and 9:16 on 1080x1920. The pixels themselves come from
-/// [`RenderFrame::pixels`], which the Video pane's Resolution control also
-/// sizes by — one definition, so the preview and the render cannot drift.
+/// The pixels a render lands on: `--size` if it was given, otherwise the take's
+/// own frame at the resolution it was composed for.
 ///
-/// A render launched from the plugin passes an explicit `--size` and never
-/// reaches this; it is the default for running the renderer by hand.
-const DEFAULT_SHORT_EDGE: u32 = 1080;
+/// BOTH halves come out of the take, and that is the point — the frame decides
+/// the shape and `short_edge` decides how big, and they are the same two things
+/// the Video pane's Aspect and Resolution rows set. A plain
+/// `harmonigraph-offline take.take` therefore reproduces what was previewed,
+/// which is what makes re-rendering a take by hand to change one unrelated flag
+/// safe: `--layout stacked` on its own must not also take a 4K take back down to
+/// 1080.
+///
+/// The fallback for a take carrying no blob at all is `RenderConfig::default()`,
+/// so the resolution and the aspect fall back together rather than to a constant
+/// here that a second definition could drift from.
+fn output_size(size: Option<[u32; 2]>, config: &harmonigraph_ui::RenderConfig) -> [u32; 2] {
+    size.unwrap_or_else(|| config.frame.pixels(config.short_edge))
+}
 
 /// Where the video starts, in take time.
 ///
@@ -401,7 +410,7 @@ fn run() -> Result<(), String> {
         Some(spec) => Layout::load(spec)?,
         None => Layout::split(frame.lattice, frame.split),
     };
-    let size = args.size.unwrap_or_else(|| frame.pixels(DEFAULT_SHORT_EDGE));
+    let size = output_size(args.size, &render_config);
     // An explicit --size at a different aspect renders a DIFFERENT picture
     // from the one the take was framed in — nothing letterboxes or crops to
     // reconcile them, the layout simply recomposes at the pixels it is given.
@@ -639,7 +648,9 @@ mod tests {
 
     #[test]
     fn the_default_size_puts_the_short_edge_at_1080_with_even_dimensions() {
-        let sz = |w, h| frame(w, h).pixels(DEFAULT_SHORT_EDGE);
+        let default_short_edge = harmonigraph_ui::RenderConfig::default().short_edge;
+        assert_eq!(default_short_edge, 1080, "the Resolution control's own default");
+        let sz = |w, h| frame(w, h).pixels(default_short_edge);
         assert_eq!(sz(16, 9), [1920, 1080]);
         assert_eq!(sz(9, 16), [1080, 1920]);
         assert_eq!(sz(1, 1), [1080, 1080]);
@@ -647,6 +658,32 @@ mod tests {
         let [w, h] = sz(21, 9);
         assert_eq!(h, 1080);
         assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h} not even");
+    }
+
+    /// Re-rendering a take by hand honours the Resolution it was composed at.
+    ///
+    /// The take carries `short_edge` (the Video pane's Resolution row) exactly
+    /// as it carries the frame, and the plugin's own auto-render passes it
+    /// through as `--size`. A plain command line has only the blob to read it
+    /// from — and a renderer that reads the frame but defaults the resolution
+    /// takes a 4K take back down to 1080 with no flag saying so.
+    #[test]
+    fn a_plain_command_line_renders_at_the_resolution_the_take_was_composed_at() {
+        let config = harmonigraph_ui::RenderConfig {
+            frame: frame(9, 16),
+            short_edge: 2160,
+            ..Default::default()
+        };
+        assert_eq!(output_size(None, &config), [2160, 3840]);
+
+        // An explicit --size still wins: it is the override, and the warning
+        // about an aspect it does not match is aimed at exactly that case.
+        assert_eq!(output_size(Some([1280, 720]), &config), [1280, 720]);
+
+        // A take with no blob at all falls back to the config's own defaults,
+        // both halves together.
+        let bare = harmonigraph_ui::RenderConfig::default();
+        assert_eq!(output_size(None, &bare), [1920, 1080]);
     }
 
     /// A repeated flag keeps the last, the way every CLI a person types at

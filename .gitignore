@@ -5,3 +5,10 @@
 # read-plugin-state.py leaves these behind; the rule belongs here rather than
 # in .git/info/exclude, which is per-clone and so protects nobody else.
 __pycache__/
+
+# The overnight retry harness (retry-overnight.sh, itself per-clone) touches
+# this when a run finishes. The rule belongs here rather than in
+# .git/info/exclude for the same reason as the one above — and because the
+# file has been committed by accident once already, into what is now a public
+# repo.
+.task-complete

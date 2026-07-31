@@ -2745,6 +2745,82 @@ fn a_row_of(tabs: &[panes::Tab]) -> egui_dock::DockState<panes::Tab> {
     dock
 }
 
+/// "Reset layout" puts the pane WIDTHS back, not only the arrangement.
+///
+/// The dialled widths live in `fold::Dial::panes`, and the only thing that
+/// re-seeds them from the dock is a change in the tree's node COUNT. Folding
+/// never changes the tree's shape and a fresh `default_dock` has the count of
+/// the dock it replaces, so a reset that does not say so leaves the widths
+/// exactly where the user dragged them — the arrangement resets around them
+/// and nothing moves.
+#[test]
+fn reset_layout_puts_the_dialled_pane_widths_back() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    let mut h = DockHarness::new();
+    h.settle_folds(&mut state);
+    let fresh: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+
+    let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
+    h.frame(&mut state, vec![press(target, false)]);
+    h.settle_folds(&mut state);
+    let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    assert!(
+        (dragged[0] - fresh[0]).abs() > 10.0,
+        "the drag has to actually move a boundary for the reset to have something to undo: \
+         {fresh:?} -> {dragged:?}"
+    );
+
+    state.reset_layout = true;
+    h.settle_folds(&mut state);
+    let reset: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    for (index, tab) in LAID_OUT_TABS.iter().enumerate() {
+        assert!(
+            (reset[index] - fresh[index]).abs() < 1.0,
+            "{tab:?} should be back at the width a fresh dock draws it at: \
+             fresh {fresh:?}, dragged {dragged:?}, after the reset {reset:?}"
+        );
+    }
+}
+
+/// Loading a saved layout over a dialled one brings the SAVED widths, not the
+/// ones the window is currently dragged to.
+///
+/// The plugin re-reads its chunk into the same long-lived `SharedState` every
+/// time the editor opens, so this is the path a project reload takes — and the
+/// saved dock has the node count of the one on screen, which is exactly what
+/// the seed guard cannot see (see [`fold::Dial::forget`]).
+#[test]
+fn loading_a_saved_layout_brings_its_pane_widths_with_it() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let style = theme::dock_style(&egui::Style::default(), 1.0);
+    let mut h = DockHarness::new();
+    h.settle_folds(&mut state);
+    let saved = state.save_persist();
+    let fresh: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+
+    let target = start_dragging_the_settings_boundary(&mut h, &mut state, &style);
+    h.frame(&mut state, vec![press(target, false)]);
+    h.settle_folds(&mut state);
+    let dragged: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    assert!((dragged[0] - fresh[0]).abs() > 10.0, "the drag has to move a boundary: {dragged:?}");
+
+    state.load_persist(&saved);
+    h.settle_folds(&mut state);
+    let loaded: Vec<f32> = LAID_OUT_TABS.iter().map(|tab| pane_width(&state, *tab)).collect();
+    for (index, tab) in LAID_OUT_TABS.iter().enumerate() {
+        assert!(
+            (loaded[index] - fresh[index]).abs() < 1.0,
+            "{tab:?} should be back at the width it was saved at: \
+             saved {fresh:?}, dragged {dragged:?}, loaded {loaded:?}"
+        );
+    }
+}
+
+/// The panes the default dock lays out side by side, left to right.
+const LAID_OUT_TABS: [panes::Tab; 3] =
+    [panes::Tab::Lattice, panes::Tab::Spectral, panes::Tab::Tuning];
+
 fn pane_rect(state: &SharedState, tab: panes::Tab) -> egui::Rect {
     let path = state.dock.find_tab(&tab).expect("the tab is docked");
     state.dock[path.surface][path.node].rect().expect("the pane is laid out")

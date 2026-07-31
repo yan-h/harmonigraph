@@ -649,9 +649,11 @@ impl Fold {
 /// What the shell carries between frames: the layout in points, and what the
 /// window is doing to it.
 ///
-/// Runtime-only. A layout loaded into a window it was not saved at is seeded
-/// from the fractions it finds there, which is the same thing that happens when
-/// the dock is re-docked.
+/// Runtime-only, and seeded from the fractions it finds in a tree it has no
+/// points for — a re-dock, or a dock handed over by [`Dial::forget`]. A tree of
+/// unchanged shape is NOT that: folding leaves the node count alone, so a
+/// layout arriving over one already dialled has to say so rather than be
+/// noticed.
 #[derive(Default)]
 pub struct Dial {
     /// One per surface of the dock.
@@ -779,15 +781,31 @@ impl Dial {
     /// Drop everything that names the tree by index, for a dock being replaced
     /// wholesale — a reset, or a load that brings its own layout.
     ///
-    /// The flags especially. Folding never changes the tree's SHAPE, so a fresh
-    /// default dock has the same node count as the one it replaces and the
-    /// length guard on a snapshot cannot tell them apart: the stale flags read
-    /// as an unfold the user did, and the pane the reset just opened is put
-    /// straight back for a frame. That is the artifact this hold exists to
-    /// remove, arriving by the door it came in through.
+    /// Folding never changes the tree's SHAPE, so a fresh default dock has the
+    /// same node count as the one it replaces and neither length guard here can
+    /// tell them apart. Both of the things keyed by that count have to be said
+    /// out loud, then:
+    ///
+    /// - the FLAGS, or the stale ones read as an unfold the user did, and the
+    ///   pane the reset just opened is put straight back for a frame;
+    /// - the PANES, or the widths survive the layout that was dialled to them.
+    ///   The fractions in the incoming dock are the only record of what the new
+    ///   layout wants, and [`Folds::apply`] reads them only when it finds a tree
+    ///   it has no points for — so a reset that keeps its points resets the
+    ///   arrangement around widths the user dragged, and nothing moves.
+    ///
+    /// The grip goes with the panes: it names a split by index in a layout that
+    /// is being thrown away.
+    ///
+    /// What does NOT go is [`Dial::widest`], which is the widest this window has
+    /// been rather than anything about this layout. An unfold may not ask the
+    /// host for a window wider than one it has already granted, and a reset that
+    /// forgot that ceiling would have to learn it again from a resize.
     pub fn forget(&mut self) {
         self.flags.clear();
         self.areas.clear();
+        self.panes.clear();
+        self.grip = None;
         self.open = None;
     }
 }

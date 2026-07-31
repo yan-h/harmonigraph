@@ -554,6 +554,12 @@ impl SharedState {
             // splits by index, so a fresh arrangement has to start with none
             // rather than with fractions pointing into a tree that is gone.
             // Same reason "Reset layout" clears them.
+            // Either way the dock being installed is not the one the dial's
+            // points were measured against, and its node count cannot say so
+            // (see [`fold::Dial::forget`]) — so the load has to. What the
+            // incoming layout is dialled to is the fractions in the blob's own
+            // dock, plus the widths its folds carry.
+            self.dial.forget();
             self.dock = if persist.version < UI_PERSIST_VERSION {
                 // The width those folds took is NOT handed back, unlike "Reset
                 // layout", which this otherwise resembles: a load brings its
@@ -563,7 +569,6 @@ impl SharedState {
                 // back here would widen a freshly restored window by whatever
                 // the last project had folded.
                 self.folds.forget();
-                self.dial.forget();
                 default_dock()
             } else {
                 self.folds = persist.folds;
