@@ -34,6 +34,10 @@ pub(crate) struct BaseviewView {
     /// Events that will be triggered at the end of `window_handler`'s borrow.
     deferred_events: RefCell<VecDeque<Event>>,
 
+    /// A `CursorLeft` held back because the pointer left with a button down
+    /// (see `mouse_exited`), owed to the handler once the button comes up.
+    exit_withheld: Cell<bool>,
+
     frame_timer: Cell<Option<TimerHandle>>,
     notification_center_observer: Cell<Option<NotificationCenterObserver>>,
     occlusion_observer: Cell<Option<NotificationCenterObserver>>,
@@ -60,6 +64,7 @@ impl BaseviewView {
             state: state.clone(),
 
             deferred_events: RefCell::default(),
+            exit_withheld: false.into(),
             keyboard_state: KeyboardState::new(),
             frame_timer: None.into(),
             window_handler: None.into(),
@@ -215,11 +220,32 @@ impl BaseviewView {
     }
 
     fn trigger_frame(this: ViewRef<Self>) {
+        // Before the frame, so a pointer that has quietly stopped being ours is
+        // gone by the time anything is drawn from where it was.
+        Self::settle_pointer_exit(this);
+
         let mut handler = this.window_handler.borrow_mut();
         let Some(handler) = handler.as_mut() else { return };
 
         handler.on_frame(&mut this.into());
         Self::send_deferred_events(this, handler.as_mut());
+    }
+
+    /// Pay an exit `mouse_exited` held back, once no button is down.
+    ///
+    /// Called from every mouse-up, which is the ordinary way a drag off the
+    /// window ends, and from the frame tick, which is the only way the ones
+    /// that never reach us do. A release goes missing whenever the press was
+    /// not ours to begin with — the pointer crossing the view mid-drag gets
+    /// enter and exit from the tracking area but no buttons at all — and
+    /// whenever the host takes the release out of our hands. Either way the
+    /// button is up and the OS says so, so the tick catches it within a frame.
+    fn settle_pointer_exit(this: ViewRef<Self>) {
+        if !this.exit_withheld.get() || NSEvent::pressedMouseButtons() != 0 {
+            return;
+        }
+        this.exit_withheld.set(false);
+        Self::trigger_deferrable_event(this, Event::Mouse(MouseEvent::CursorLeft));
     }
 
     fn send_deferred_events(this: ViewRef<Self>, window_handler: &mut dyn WindowHandler) {
@@ -592,6 +618,9 @@ impl ViewImpl for BaseviewView {
                 modifiers: make_modifiers(event.modifierFlags()),
             }),
         );
+        // After the release, never before it: the gesture ends where the
+        // pointer still is, and only then is the pointer gone.
+        Self::settle_pointer_exit(this);
     }
 
     fn right_mouse_down(this: ViewRef<Self>, event: &NSEvent) {
@@ -612,6 +641,7 @@ impl ViewImpl for BaseviewView {
                 modifiers: make_modifiers(event.modifierFlags()),
             }),
         );
+        Self::settle_pointer_exit(this);
     }
 
     fn other_mouse_down(this: ViewRef<Self>, event: &NSEvent) {
@@ -632,15 +662,41 @@ impl ViewImpl for BaseviewView {
                 modifiers: make_modifiers(event.modifierFlags()),
             }),
         );
+        Self::settle_pointer_exit(this);
     }
 
     fn mouse_entered(this: ViewRef<Self>) {
         this.state.mouse_inside.set(true);
+        // Back inside before the exit was ever reported: as far as the handler
+        // knows the pointer never left, so there is no entry to announce
+        // either. The pair stays balanced (see `mouse_exited`).
+        if this.exit_withheld.replace(false) {
+            return;
+        }
         Self::trigger_event(this, Event::Mouse(MouseEvent::CursorEntered));
     }
 
     fn mouse_exited(this: ViewRef<Self>) {
         this.state.mouse_inside.set(false);
+        // A button down means the drag is still ours, so the exit waits.
+        //
+        // The tracking area is `EnabledDuringMouseDrag`, so `mouseExited:`
+        // arrives mid-drag — while AppKit goes on sending every `mouseDragged:`
+        // and the closing `mouseUp:` to the view the press landed in, wherever
+        // the pointer has got to. Reporting the exit is what breaks the drag:
+        // a consumer told the pointer is gone stops following it (egui's
+        // `PointerGone`), and a slider dragged a pixel past the window edge
+        // lets go under the hand still holding it.
+        //
+        // Held back rather than dropped, because the exit is real once the
+        // button is up — `settle_pointer_exit` is where it is paid, and it
+        // reads the button state from the OS rather than from a count of the
+        // presses this view has seen, which a release delivered elsewhere
+        // would leave wrong forever.
+        if NSEvent::pressedMouseButtons() != 0 {
+            this.exit_withheld.set(true);
+            return;
+        }
         Self::trigger_event(this, Event::Mouse(MouseEvent::CursorLeft));
     }
 

@@ -70,16 +70,19 @@ use egui_dock::{DockArea, DockState};
 /// leaves the viewport ("when dragging a slider and the mouse leaves the
 /// viewport, we still want the drag to work" — `input_state`, which is why
 /// `PointerGone` does not clear the pressed button either). But a plugin
-/// editor is a guest inside a host window: let go outside it, or let the host
-/// take focus mid-drag, and the release is delivered somewhere that is not us.
-/// egui then believes the button is still down forever.
+/// editor is a guest inside a host window: let the host take focus mid-drag,
+/// or drag over the editor from a press that was never ours, and the release
+/// is delivered somewhere that is not us. egui then believes the button is
+/// still down forever.
 ///
-/// So: no pointer, or no focus, means no drag. The gesture it costs is
-/// resuming a drag that wandered out of the window and came back, which is
-/// what egui's rule buys; the gesture it saves is scrolling any settings pane,
-/// which is otherwise dead until the next click. Only drags started INSIDE the
-/// window and released inside it survive, and those are all of them in
-/// practice.
+/// So: no pointer, or no focus, means no drag. Neither is the ordinary end of
+/// a gesture, and a gesture no longer reaches either by going out of the
+/// window: the plugin shell holds the pointer's exit back for as long as a
+/// button is down (`mouse_exited` in the vendored baseview), so a slider
+/// dragged past the window edge keeps tracking, and the exit arrives here only
+/// once the button is up. What is left for this to catch is a release that
+/// never comes at all, where the alternative is every settings pane's wheel
+/// dead until the next click.
 ///
 /// Not a `Sense::drag` problem in any one pane — a ValueBar strands the wheel
 /// exactly as well as the Analyzer's pan does, which is why this sits once at
