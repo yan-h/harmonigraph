@@ -386,3 +386,45 @@ fn the_views_taper_reaches_the_wheel() {
         "and a taper is not the even division"
     );
 }
+
+#[test]
+fn a_degenerate_color_range_lands_where_the_shader_lands() {
+    // The two ends of the gradient are independent params over 0..120 (the
+    // 12-semitone ordering is the range bar's, not the param's), so a host
+    // reaches ranges the UI cannot draw: inverted, and collapsed to a point.
+    // The shader takes both without complaint — it clamps the RATIO
+    // (`pitch_lut_color`, lattice.wgsl) — so the CPU has to land where it
+    // lands, or a mark is painted one end of the ramp while the very glyph it
+    // brackets is painted the other.
+    let shader_t = |pitch: f32, dark: f32, bright: f32| {
+        ((pitch - dark) / (bright - dark).max(0.01)).clamp(0.0, 1.0)
+    };
+    for (dark, bright) in [(24.0f32, 108.0f32), (60.0, 60.0), (110.0, 108.0), (108.0, 24.0)] {
+        for pitch in [0.0f32, 36.0, 60.0, 72.0, 108.0, 120.0] {
+            let lut = pitch_ramp_lut();
+            let f = shader_t(pitch, dark, bright) * (PITCH_LUT_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            let want = lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor());
+            assert_eq!(
+                pitch_lut_color(pitch, dark, bright),
+                want,
+                "pitch {pitch} over range {dark}..{bright}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_inverted_color_range_still_derives_a_scene() {
+    // The mark color runs the ramp for EVERY channel, so a fixed-color
+    // channel now reaches gradient math that only channels 9-13 used to —
+    // and Darkest above Brightest is one drag of a host's parameter list
+    // away (raise Darkest before lowering Brightest and it is the state in
+    // between). Deriving must not panic there.
+    let frame =
+        FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
+    let view = ViewConfig { mark_melody: true, mark_bass: true, ..ViewConfig::default() };
+    let scene = scene_of(&held(60), &Tuning::default(), &view, &frame, 0.0);
+    let origin = origin_node(&scene);
+    assert!(origin.melody_color.is_finite(), "a mark color must be a color");
+}

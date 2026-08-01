@@ -21,10 +21,25 @@ fn lch(l: f64, c: f64, h: f64) -> Vec4 {
 
 /// Normalized pitch height in 0..1 across the gradient range: 0 at
 /// `darkest_pitch`, 1 at `brightest_pitch` (both MIDI note numbers).
+///
+/// The RATIO is what gets clamped, which is the shader's own form
+/// (`pitch_lut_color` in `lattice.wgsl`) and the reason anything can be
+/// colored to match what the shader draws. Clamping the PITCH into
+/// `darkest..brightest` instead reads the same over every range the Nodes
+/// pane can dial, and comes apart at the two the pane cannot: the ends are
+/// independent params over 0..120, ordered only by the range bar's min span,
+/// so a host reaches an inverted pair — where `f32::clamp` panics on
+/// `min > max` — and a collapsed one, where clamping the pitch first pins
+/// every note to the dark end while the shader takes the bright one.
+///
+/// Non-finite ends yield the darkest color rather than a NaN that would ride
+/// into the instance buffer unnoticed.
 fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
+    if !darkest_pitch.is_finite() || !brightest_pitch.is_finite() {
+        return 0.0;
+    }
     f64::from(
-        (pitch.clamp(darkest_pitch, brightest_pitch) - darkest_pitch)
-            / (brightest_pitch - darkest_pitch).max(0.01),
+        ((pitch - darkest_pitch) / (brightest_pitch - darkest_pitch).max(0.01)).clamp(0.0, 1.0),
     )
 }
 
@@ -59,6 +74,26 @@ pub fn pitch_ramp_lut() -> [Vec4; PITCH_LUT_N] {
     *LUT.get_or_init(|| {
         std::array::from_fn(|k| pitch_ramp_lch(k as f64 / (PITCH_LUT_N - 1) as f64))
     })
+}
+
+/// The shader's `pitch_lut_color` on the CPU: [`pitch_ramp_lut`] sampled at
+/// `pitch`, interpolated between entries exactly as the shader does.
+///
+/// This is what the octave layer draws a LIT pitch — a sounding glyph stands
+/// for a position on the pitch axis rather than for the voice that lit it, and
+/// so do the glow's lobes once two octaves sound. (The band's ghosts and a solo
+/// voice's glow keep the node's own color instead, deliberately.) Which is why
+/// anything the CPU has to color to match a lit glyph comes through this table
+/// too, rather than off the ramp direct: [`PITCH_LUT_N`] entries across a
+/// 190-degree hue sweep reproduce the ramp only to within about 15/255 on a
+/// channel, which is a visible step between two shapes that share an edge.
+pub fn pitch_lut_color(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
+    let lut = pitch_ramp_lut();
+    let f = pitch_ramp_t(pitch, darkest_pitch, brightest_pitch) as f32 * (PITCH_LUT_N - 1) as f32;
+    // `pitch_ramp_t` clamps into 0..1, so the floor lands inside the table and
+    // the last entry pairs with itself at a lerp weight of 0.
+    let i0 = f.floor() as usize;
+    lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
 }
 
 /// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself

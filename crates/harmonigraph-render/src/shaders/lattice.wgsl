@@ -201,9 +201,9 @@ struct Instance {
     // mark_ring); the ring itself is per node, and its fade level rides
     // params.y/params.z.
     @location(7) marks: vec2<u32>,
-    // Each mark's own color: the marked note's, lightened a little (see
-    // NodeInstance::melody_color), so a ring reads as belonging to the note
-    // it marks rather than as a fixed livery.
+    // Each mark's own color: its own sector's pitch off the ramp, already
+    // lightened (see NodeInstance::melody_color), so a ring reads as belonging
+    // to the indicator it points at rather than as a fixed livery.
     @location(8) melody_color: vec4<f32>,
     @location(9) bass_color: vec4<f32>,
     // How strongly the music is remembered at this node, 0..1 (see
@@ -880,7 +880,7 @@ fn idle_marker(d: f32, home: f32, visited: f32, tint: vec3<f32>, aa: f32) -> vec
 // ---- Melody / bass marks ---------------------------------------------------
 // Two full rings concentric with the octave band: the melody just INSIDE
 // it, the bass just OUTSIDE. Radius is what tells them apart -- each ring is
-// drawn in its own note's color, not a fixed livery -- and because they
+// drawn in its own sector's color, not a fixed livery -- and because they
 // never share one, both draw at full weight even when ONE note is both ends
 // of the chord (a lone held note, or a chord whose top and bottom share a
 // pitch class). Earlier passes had to split a rim between two colors to say

@@ -3,7 +3,7 @@
 //! *policy* lives here.
 
 use crate::camera::Camera;
-use crate::color::{channel_color, idle_color, pitch_ramp_lut};
+use crate::color::{channel_color, idle_color, pitch_lut_color, pitch_ramp_lut};
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
@@ -186,10 +186,8 @@ pub fn derive_scene(
     // LCH->sRGB conversion on every node the voice matches. It depends only on
     // the voice and the frame's gradient range — never on the node — so this
     // lifts the transcendental color math out of the O(nodes × voices) loop
-    // below. The melody/bass ring reuses this SAME color: the pitch ramp
-    // already bakes in the lightening the disc, roll, and octave glyphs share
-    // (see `color::NOTE_LIGHTEN`), so a ring must not lift it a second time or
-    // it sits a shade whiter than the very note it marks.
+    // below. The melody/bass rings do NOT reuse it — they belong to the octave
+    // layer, which is colored by axis position (see the mark color below).
     let voices: Vec<(&harmonigraph_core::Voice, Vec4)> = tracker
         .voices()
         .map(|voice| {
@@ -205,13 +203,14 @@ pub fn derive_scene(
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
+        let node_cents = node_pc.to_cents();
         // The octaves of THIS pitch class that land in the window, which is
         // what its indicators are. Per node rather than per frame: a window
         // that is not a whole number of octaves holds one more of some pitch
         // classes than of others, and the ring only closes if each node draws
         // its own.
         let (low_slot, high_slot) = {
-            let (low, high) = octave_layout.slot_range(node_pc.to_cents());
+            let (low, high) = octave_layout.slot_range(node_cents);
             (low as i8, high as i8)
         };
         let mut activation = 0.0f32;
@@ -253,22 +252,40 @@ pub fn derive_scene(
                 // outlives the key, even as the disc keeps fading.
                 let (is_melody, is_bass) = marks(voice, live_extremes);
                 if is_melody || is_bass {
-                    // The mark takes the marked note's OWN color — the very one
-                    // its disc and octave glyph use, so the ring reads as that
-                    // exact note. The ramp is already lightened, so there is no
-                    // extra lift here. Strongest marking voice wins the color;
-                    // the slots still collect every one of them, since a
-                    // release crossfades two.
+                    // The mark takes the color of the SECTOR it links back to
+                    // — the pitch of that slot on this node, through the very
+                    // table the shader tints the lit glyph from — so the ring
+                    // is never a shade off the one indicator it is pointing
+                    // at. The voice's own color is the wrong one to reuse
+                    // here: a note past either end of the window folds onto
+                    // the outermost slot, so its ring would carry a pitch
+                    // that is nowhere on the axis it is drawn around.
                     //
-                    // The ring eases in on the SAME ramp as the octave
-                    // sector it links back to — from when the note took
-                    // the end, which is not always its note-on (see
-                    // `end_taken_at`).
+                    // Off the pitch ramp whatever the channel, because a LIT
+                    // glyph is: the shader tints one by its own pitch and
+                    // asks nothing about the voice, so a fixed-color or
+                    // outline channel that keeps its hue on the disc still
+                    // brackets a ramp-colored sector. Only the lit glyph —
+                    // the band's ghosts wear the whitened node color, and a
+                    // solo voice's glow keeps the channel hue, both of them
+                    // on purpose. The ramp is already lightened, so there is
+                    // no extra lift here.
+                    //
+                    // Strongest marking voice wins the color; the slots still
+                    // collect every one of them, since a release crossfades
+                    // two. The ring eases in on the SAME ramp as that sector
+                    // — from when the note took the end, which is not always
+                    // its note-on (see `end_taken_at`).
+                    let mark_color = pitch_lut_color(
+                        octave_layout.slot_pitch(slot as u32, node_cents),
+                        frame.darkest_pitch,
+                        frame.brightest_pitch,
+                    );
                     if is_melody {
-                        melody.add(slot, envelope * melody_attack, voice_color);
+                        melody.add(slot, envelope * melody_attack, mark_color);
                     }
                     if is_bass {
-                        bass.add(slot, envelope * bass_attack, voice_color);
+                        bass.add(slot, envelope * bass_attack, mark_color);
                     }
                 }
             }
@@ -346,7 +363,7 @@ pub fn derive_scene(
             scale,
             gutter,
             comma,
-            cents: node_pc.to_cents(),
+            cents: node_cents,
             melody_slots: melody.slots,
             bass_slots: bass.slots,
             melody_level: melody.level,
