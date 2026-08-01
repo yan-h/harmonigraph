@@ -780,7 +780,16 @@ pub(super) fn draw(
 ) {
     // `draw_stacked_name` sizes everything off the lattice's own letter size,
     // so ask it for the roll's smaller one as a fraction of that.
-    let scale = LABEL_PT * label_scale / lattice::NAME_SIZE;
+    //
+    // `want` is what the pitch zoom asks for and is continuous; `scale` is the
+    // rung of the ladder it is rasterized on, and `magnify` the rest. Splitting
+    // them here rather than in `text_scales` is deliberate: everything ABOVE
+    // this -- which names fit, how far apart they sit (`plan`) -- is laid out
+    // against the size the names are really drawn at, so the spacing follows a
+    // zoom as smoothly as the ribbons do.
+    let want = LABEL_PT * label_scale / lattice::NAME_SIZE;
+    let scale = crate::text::snap_scale(want, lattice::NAME_SIZE, painter.ctx().pixels_per_point());
+    let magnify = want / scale;
     for label in labels {
         lattice::draw_stacked_name(
             batch,
@@ -790,6 +799,7 @@ pub(super) fn draw(
             theme::text(),
             theme::well(),
             scale,
+            magnify,
         );
     }
 }

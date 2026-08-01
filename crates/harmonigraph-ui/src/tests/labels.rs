@@ -73,6 +73,7 @@ fn label_ink_at(
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
                 scale,
+                1.0,
             );
         },
     );
@@ -99,6 +100,7 @@ fn label_pieces(
                 name,
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
+                1.0,
                 1.0,
             );
         },
@@ -567,6 +569,7 @@ fn mark_cache_pass(ctx: &egui::Context) -> (std::collections::HashSet<egui::Text
                     egui::Color32::WHITE,
                     egui::Color32::BLACK,
                     size_px as f32 / MARK_SIZE,
+                    1.0,
                 );
             }
         },

@@ -230,14 +230,14 @@ pub(crate) fn draw_node_labels(
     // they were three: a factor threaded from the Video pane, a scale factor,
     // and nothing at all.
     //
-    // Snapped, because a size that tracks a continuous zoom is a new entry in
-    // egui's font atlas every frame of a drag otherwise -- see
-    // `crate::text::snap_scale`.
-    let scale = crate::text::snap_scale(
-        rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale(),
-        NAME_SIZE,
-        ui.painter().ctx().pixels_per_point(),
-    );
+    // The size the labels are actually DRAWN at, and it is continuous: the
+    // nodes are shader geometry that scales smoothly with the camera, so type
+    // that moved from rung to rung of the size ladder stepped against its own
+    // subject every few frames of a zoom. What each node is rasterized at is
+    // snapped off this below -- see `crate::text::TextBatch::magnified`, which
+    // is where the two part company and why.
+    let want = rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale();
+    let ppp = ui.painter().ctx().pixels_per_point();
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
     // "Keep note names" retains a name only while the trail marks that
     // populate `node.trail` are on; with the marks Off the field never fills,
@@ -266,7 +266,7 @@ pub(crate) fn draw_node_labels(
         // out and stamping it 33 times per piece, which is most of the
         // label work in the frame the further in the camera is: zoomed
         // right in, almost every node is off the pane.
-        if !rect.expand(LABEL_REACH * scale).contains(center) {
+        if !rect.expand(LABEL_REACH * want).contains(center) {
             continue;
         }
         let outline = theme::well().gamma_multiply(strength);
@@ -274,7 +274,14 @@ pub(crate) fn draw_node_labels(
         // and their text goes with them — a full-size label on a half-size
         // node reads as a label with a node attached. Floored so the
         // smallest sheet is still legible rather than merely present.
-        let scale = scale * node.scale.max(0.6);
+        // Per NODE, because an off-sheet node draws at its own size and so
+        // does its label: the rasterized size has to be snapped for the size
+        // it will really be set at, not for the pane's. `magnify` is the
+        // little that is left over, and it is what the ladder would otherwise
+        // have thrown away.
+        let want = want * node.scale.max(0.6);
+        let scale = crate::text::snap_scale(want, NAME_SIZE, ppp);
+        let magnify = want / scale;
         // What an off-sheet node says, and whether it says anything: its
         // name shares a LETTER and an accidental with the node two fifths
         // down, but not the whole string — the septimal mark is the column
@@ -292,6 +299,7 @@ pub(crate) fn draw_node_labels(
                 theme::text().gamma_multiply(strength),
                 outline,
                 scale,
+                magnify,
             ),
             SevensLabel::Name => {
                 let name = display_note_name(node.lattice_pos, view.meantone);
@@ -303,6 +311,7 @@ pub(crate) fn draw_node_labels(
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
+                    magnify,
                 )
             }
         };
@@ -316,15 +325,20 @@ pub(crate) fn draw_node_labels(
             // monospace box carries enough leading above and below the glyphs
             // that box-to-box spacing left the two floating far apart.
             let top = painter_ink(ui.painter(), &text, &font).min.y;
-            batch.text(
-                ui.painter(),
-                center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
-                egui::Align2::CENTER_TOP,
-                text,
-                font,
-                theme::text_dim().gamma_multiply(strength),
-                outline,
-            );
+            // Magnified about the node with the name above it -- `name_bottom`
+            // and the gap are both measured at the rasterized size, so the
+            // readout hangs off the name by the same proportion at any zoom.
+            batch.magnified(center, magnify, |batch| {
+                batch.text(
+                    ui.painter(),
+                    center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
+                    egui::Align2::CENTER_TOP,
+                    text,
+                    font,
+                    theme::text_dim().gamma_multiply(strength),
+                    outline,
+                );
+            });
         }
     }
 }
@@ -878,14 +892,23 @@ fn paint_mark(
     center: egui::Pos2,
     color: egui::Color32,
     outline: egui::Color32,
+    // The magnification the name beside it is drawn under: a factor, and the
+    // node center it is taken about. See `crate::text::TextBatch::magnified`.
+    magnify: (egui::Pos2, f32),
 ) -> f32 {
     let (texture, rim) = mark_texture(painter.ctx(), key);
     let [w, h] = texture.size();
-    // One texel per physical pixel: the bitmap was rasterized at this size,
-    // so it is placed at it and never scaled.
+    // The bitmap is rasterized on the same grid the type is (see `mark_key`),
+    // and DRAWN at whatever size the label is actually at -- the two are the
+    // same split, for the same reason, and they have to be the same split or a
+    // name would glide while the `+` beside it stepped. The textures are
+    // LINEAR, so a quad off its bitmap's size resamples exactly as a glyph off
+    // its atlas cell does.
+    let (origin, k) = magnify;
+    let at = |p: egui::Pos2| origin + (p - origin) * k;
     let rect = egui::Rect::from_center_size(
-        center,
-        egui::vec2(w as f32 / ppp, h as f32 / ppp),
+        at(center),
+        egui::vec2(w as f32 / ppp, h as f32 / ppp) * k,
     );
     let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
     // The rim's bitmap is the mark's, padded by the widest ring on every
@@ -893,14 +916,19 @@ fn paint_mark(
     // rather than by an offset from the fill.
     let [rw, rh] = rim.size();
     let rim_rect = egui::Rect::from_center_size(
-        center,
-        egui::vec2(rw as f32 / ppp, rh as f32 / ppp),
+        at(center),
+        egui::vec2(rw as f32 / ppp, rh as f32 / ppp) * k,
     );
     painter.image(rim.id(), rim_rect, uv, outline);
     painter.image(texture.id(), rect, uv, color);
     // The FILL's half height, not the rim's: this is what the cents readout
     // has to clear, and the rim is a halo the text already overlaps.
-    rect.height() / 2.0
+    //
+    // UNmagnified, because the caller is still laying out at the rasterized
+    // size and this is one of its measurements — the magnification is applied
+    // once, to the finished label, and a measurement that had it applied
+    // already would carry it twice.
+    h as f32 / ppp / 2.0
 }
 
 /// The key for one mark at the size a label is drawing at.
@@ -946,6 +974,12 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
 #[allow(clippy::too_many_arguments)]
+///
+/// `scale` is the size the label is LAID OUT and rasterized at; `magnify` is
+/// how much bigger it is finally drawn, which is what lets the size follow a
+/// zoom continuously while the atlas still sees one size per rung. See
+/// [`crate::text::TextBatch::magnified`]; 1.0 is a label drawn at exactly the
+/// size it was rasterized at.
 pub(crate) fn draw_stacked_name(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
@@ -954,6 +988,26 @@ pub(crate) fn draw_stacked_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
+    magnify: f32,
+) -> f32 {
+    batch.magnified(anchor, magnify, |batch| {
+        stacked_name(batch, painter, anchor, name, color, outline, scale, magnify)
+    })
+}
+
+/// [`draw_stacked_name`]'s layout, all of it at the rasterized size. The one
+/// thing that has to know about `magnify` down here is the drawn marks, which
+/// are painted straight onto the painter rather than collected in the batch.
+#[allow(clippy::too_many_arguments)]
+fn stacked_name(
+    batch: &mut crate::text::TextBatch,
+    painter: &egui::Painter,
+    anchor: egui::Pos2,
+    name: harmonigraph_core::NoteName,
+    color: egui::Color32,
+    outline: egui::Color32,
+    scale: f32,
+    magnify: f32,
 ) -> f32 {
     let name_font = egui::FontId::monospace(NAME_SIZE * scale);
     let mark_font = egui::FontId::monospace(MARK_SIZE * scale);
@@ -1075,7 +1129,8 @@ pub(crate) fn draw_stacked_name(
      -> f32 {
         let key = mark_key(kind, mark_size, MARK_WEIGHT, ppp);
         let center = egui::pos2(x + cell / 2.0, anchor.y + direction * rise);
-        let half_height = paint_mark(painter, ppp, key, center, color, outline);
+        let half_height =
+            paint_mark(painter, ppp, key, center, color, outline, (anchor, magnify));
         if !count.is_empty() {
             batch.text(
                 painter,
@@ -1121,6 +1176,7 @@ pub(crate) fn draw_stacked_name(
 /// below `anchor.y`. Used for the label lines that are numbers rather than
 /// note names — an off-sheet node's cents, and its comma (see
 /// [`SevensLabel`](harmonigraph_scene::SevensLabel)).
+#[allow(clippy::too_many_arguments)]
 fn draw_plain_name(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
@@ -1129,20 +1185,23 @@ fn draw_plain_name(
     color: egui::Color32,
     outline: egui::Color32,
     scale: f32,
+    magnify: f32,
 ) -> f32 {
     let font = egui::FontId::monospace(NAME_SIZE * scale);
     let size = painter
         .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
         .size();
-    batch.text(
-        painter,
-        anchor,
-        egui::Align2::CENTER_CENTER,
-        text.to_owned(),
-        font.clone(),
-        color,
-        outline,
-    );
+    batch.magnified(anchor, magnify, |batch| {
+        batch.text(
+            painter,
+            anchor,
+            egui::Align2::CENTER_CENTER,
+            text.to_owned(),
+            font.clone(),
+            color,
+            outline,
+        );
+    });
     painter_ink(painter, text, &font).max.y - size.y / 2.0
 }
 

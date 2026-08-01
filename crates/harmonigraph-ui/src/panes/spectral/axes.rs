@@ -84,9 +84,13 @@ pub(super) const REFERENCE_PITCH_LEN: f32 = 860.0;
 ///
 /// Three factors go into each: the pane's own size against
 /// [`REFERENCE_PITCH_LEN`], the user's bar for that kind of text, and — for
-/// the note names alone — the pitch zoom. Both come out snapped, since a scale
-/// that follows a continuous zoom otherwise asks egui for a new font size on
-/// every frame of a drag (see [`crate::text::snap_scale`]).
+/// the note names alone — the pitch zoom.
+///
+/// The markings come out snapped onto the size ladder, since they change only
+/// with the pane and a snapped size is one fewer entry in egui's font atlas.
+/// The names do not: they follow the pitch zoom, and quantizing a size that
+/// follows a zoom is what makes type step against the ribbons it is written
+/// over. They are snapped for rasterizing alone, where they are drawn.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TextScales {
     /// The axis marking labels.
@@ -99,11 +103,12 @@ pub(super) fn text_scales(cfg: &crate::SpectrumConfig, axes: &Axes, span: f32, p
     let pane = axes.pitch_len() / REFERENCE_PITCH_LEN;
     TextScales {
         markings: crate::text::snap_scale(pane * cfg.marking_scale, MARKING_PT, ppp),
-        names: crate::text::snap_scale(
-            pane * cfg.note_name_scale * name_zoom(span),
-            super::names::LABEL_PT,
-            ppp,
-        ),
+        // NOT snapped, unlike the markings above: this is the one size here
+        // that follows a zoom, and a zoom is continuous. It is snapped for
+        // RASTERIZING where it is drawn (`names::draw`), which is what keeps
+        // the atlas bounded without quantizing the picture -- see
+        // `crate::text::TextBatch::magnified`.
+        names: pane * cfg.note_name_scale * name_zoom(span),
     }
 }
 
