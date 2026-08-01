@@ -302,7 +302,7 @@ pub(crate) fn draw_node_labels(
                 magnify,
             ),
             SevensLabel::Name => {
-                let name = display_note_name(node.lattice_pos, view.meantone);
+                let name = display_note_name(node.lattice_pos, view.tempered());
                 draw_stacked_name(
                     batch,
                     ui.painter(),

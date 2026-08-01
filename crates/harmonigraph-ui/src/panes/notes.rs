@@ -52,7 +52,7 @@ pub(super) fn notes_pane(ui: &mut egui::Ui, state: &mut SharedState) {
         .show(ui, |ui| {
             for voice in voices {
                 let node = nearest_visible_node(&state.view, &state.tuning, voice.pitch_class)
-                    .map(|pos| display_note_name(pos, state.view.meantone).to_string());
+                    .map(|pos| display_note_name(pos, state.view.tempered()).to_string());
                 let line = format!(
                     "{name:<4} {oct:>4} {cents:>8.2}\u{a2}  {node:<7} {ch:>2}",
                     name = KEY_NAMES[usize::from(voice.note % 12)],

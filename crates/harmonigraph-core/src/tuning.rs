@@ -40,6 +40,11 @@ fn cents(microcents: impl Into<i64>) -> f32 {
 /// and a just major third. Meantone temperaments temper it out.
 pub const SYNTONIC_COMMA: f32 = 4.0 * THREE_JUST - 2.0 * 1200.0 - FIVE_JUST;
 
+/// The septimal kleisma (225/224, ~7.712¢): the gap between two just fifths
+/// plus two just thirds (less an octave) and a just harmonic seventh. Marvel
+/// temperaments temper it out.
+pub const SEPTIMAL_KLEISMA: f32 = 2.0 * THREE_JUST + 2.0 * FIVE_JUST - 1200.0 - SEVEN_JUST;
+
 /// The meantone major third implied by a given fifth: four fifths stacked,
 /// dropped two octaves. In any meantone temperament the major third equals
 /// this exactly, so the prime-5 (thirds) axis stops being independent of
@@ -48,33 +53,194 @@ pub fn meantone_third(fifth_cents: f32) -> f32 {
     4.0 * fifth_cents - 2.0 * 1200.0
 }
 
-/// How close (in cents) a fifth/third pair must sit to the meantone
-/// relationship to count as meantone.
+/// The marvel harmonic seventh implied by a given fifth and third: two of
+/// each, dropped an octave. In any marvel temperament the harmonic seventh
+/// equals this exactly, so the prime-7 axis stops being independent of the
+/// two below it — the same shape as meantone one prime up, and the reason
+/// the two modes are one mechanism.
+pub fn marvel_seventh(fifth_cents: f32, third_cents: f32) -> f32 {
+    2.0 * fifth_cents + 2.0 * third_cents - 1200.0
+}
+
+/// How close (in cents) the tuning axes must sit to a comma's identity for
+/// that comma to count as tempered out.
 ///
-/// Half a cent is "on it", not a family window: the pairs this is meant to
-/// catch — 12-TET (400 = 4·700 − 2400), quarter-comma, any preset or learned
-/// chord that IS a meantone — land on the identity to within rounding, so the
-/// tolerance only has to cover the f32/microcent slop and a value typed to
-/// two decimals (which this still admits, either side). Anything wider starts
-/// claiming tunings that were deliberately set a little off it, and tempering
-/// the comma out of a tuning that keeps a cent of it is a change to the
-/// picture nobody asked for.
+/// Half a cent is "on it", not a family window: the tunings this is meant to
+/// catch — 12-TET (400 = 4·700 − 2400, 1000 = 2·700 + 2·400 − 1200),
+/// quarter-comma, any preset or learned chord that IS one of these
+/// temperaments — land on the identity to within rounding, so the tolerance
+/// only has to cover the f32/microcent slop and a value typed to two decimals
+/// (which this still admits, either side). Anything wider starts claiming
+/// tunings that were deliberately set a little off it, and tempering a comma
+/// out of a tuning that keeps a cent of it is a change to the picture nobody
+/// asked for.
 ///
-/// It is also the width of the third bar's magnet (see the UI's
-/// `meantone_third_bar`), so the same number says how far a drag has to pull
-/// to release the mode. At this width that is a pixel or two of an 80¢ bar,
-/// which makes it a release threshold rather than a snap anyone will feel:
-/// the mode is easy to leave and effectively unreachable by dragging alone.
-/// Reaching it is what the presets, learn and typing a value are for.
-pub const MEANTONE_TOLERANCE: f32 = 0.5;
+/// It is also the width of the derived bar's magnet (see the UI's
+/// `tempered_bar`), so the same number says how far a drag has to pull to
+/// release a mode. At this width that is a pixel or two of an 80¢ bar, which
+/// makes it a release threshold rather than a snap anyone will feel: a mode is
+/// easy to leave and effectively unreachable by dragging alone. Reaching one
+/// is what the presets, learn and typing a value are for.
+pub const TEMPER_TOLERANCE: f32 = 0.5;
 
 /// Whether a fifth/third pair is (close to) a meantone temperament: the
-/// major third within [`MEANTONE_TOLERANCE`] of four fifths minus two
+/// major third within [`TEMPER_TOLERANCE`] of four fifths minus two
 /// octaves. Both halves of the UI's auto-detect are this one question —
 /// a tuning that answers yes engages the mode, and an edit of the third
 /// that answers no releases it.
 pub fn is_meantone(fifth_cents: f32, third_cents: f32) -> bool {
-    (third_cents - meantone_third(fifth_cents)).abs() <= MEANTONE_TOLERANCE
+    (third_cents - meantone_third(fifth_cents)).abs() <= TEMPER_TOLERANCE
+}
+
+/// Whether a fifth/third/seventh triple is (close to) a marvel temperament:
+/// the harmonic seventh within [`TEMPER_TOLERANCE`] of two fifths plus two
+/// thirds minus an octave.
+///
+/// The THIRD it reads is the one the lattice is using, so when meantone holds
+/// as well this asks about the derived third rather than the inert param —
+/// the two identities compose, and tempering both makes the seventh ten
+/// fifths up (septimal meantone).
+pub fn is_marvel(fifth_cents: f32, third_cents: f32, seventh_cents: f32) -> bool {
+    (seventh_cents - marvel_seventh(fifth_cents, third_cents)).abs() <= TEMPER_TOLERANCE
+}
+
+/// A comma the lattice can temper out.
+///
+/// Each one names an identity between the tuning axes: while it holds, one
+/// axis is DERIVED from the ones below it rather than set, and lattice
+/// positions a comma apart become one pitch — so they must also become one
+/// name (see [`LatticePos::respell`](crate::coords::LatticePos::respell)).
+/// Everything else about a comma — its ratio, the temperament it defines, the
+/// axis it pins — hangs off this enum, so the UI's tempering section is a loop
+/// over [`Comma::ALL`] rather than a switch per comma.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Comma {
+    /// 81/80. Tempering it out is meantone: the major third is four fifths.
+    Syntonic,
+    /// 225/224. Tempering it out is marvel: the harmonic seventh is two
+    /// fifths plus two thirds.
+    SeptimalKleisma,
+}
+
+impl Comma {
+    /// Every comma the tempering section offers, in the order it lists them:
+    /// up the primes, which is also the order they must be applied in — the
+    /// septimal identity reads the third, so a tempered third has to be
+    /// derived before the seventh is derived from it.
+    pub const ALL: [Comma; 2] = [Comma::Syntonic, Comma::SeptimalKleisma];
+    /// How many there are, for per-comma arrays indexed by [`Self::index`].
+    pub const COUNT: usize = Comma::ALL.len();
+
+    /// Position in [`Self::ALL`], for indexing per-comma state.
+    pub fn index(self) -> usize {
+        match self {
+            Comma::Syntonic => 0,
+            Comma::SeptimalKleisma => 1,
+        }
+    }
+
+    /// The ratio, written the way it is said.
+    pub fn ratio(self) -> &'static str {
+        match self {
+            Comma::Syntonic => "81/80",
+            Comma::SeptimalKleisma => "225/224",
+        }
+    }
+
+    /// The comma's own name.
+    pub fn comma_name(self) -> &'static str {
+        match self {
+            Comma::Syntonic => "syntonic comma",
+            Comma::SeptimalKleisma => "septimal kleisma",
+        }
+    }
+
+    /// The temperament that tempers it out — what the mode is called.
+    pub fn temperament(self) -> &'static str {
+        match self {
+            Comma::Syntonic => "Meantone",
+            Comma::SeptimalKleisma => "Marvel",
+        }
+    }
+
+    /// Its size in cents, at just tuning.
+    pub fn size_cents(self) -> f32 {
+        match self {
+            Comma::Syntonic => SYNTONIC_COMMA,
+            Comma::SeptimalKleisma => SEPTIMAL_KLEISMA,
+        }
+    }
+
+    /// The axis the identity derives — the one that stops being independent,
+    /// and whose bar is where the mode is let go of.
+    pub fn derived_axis_name(self) -> &'static str {
+        match self {
+            Comma::Syntonic => "major third",
+            Comma::SeptimalKleisma => "harmonic seventh",
+        }
+    }
+
+    /// What it derives that axis from, in words. With
+    /// [`Self::derived_axis_name`] this is the identity as a hover can say it:
+    /// "the major third follows four perfect fifths (minus two octaves)".
+    pub fn derived_from(self) -> &'static str {
+        match self {
+            Comma::Syntonic => "four perfect fifths (minus two octaves)",
+            Comma::SeptimalKleisma => "two fifths plus two thirds (minus an octave)",
+        }
+    }
+
+    /// The value the derived axis takes while this comma is tempered out.
+    /// Both take the axes BELOW the one they derive, so the third passed here
+    /// is the one in use — derived itself, if meantone holds too.
+    pub fn derived(self, fifth_cents: f32, third_cents: f32) -> f32 {
+        match self {
+            Comma::Syntonic => meantone_third(fifth_cents),
+            Comma::SeptimalKleisma => marvel_seventh(fifth_cents, third_cents),
+        }
+    }
+
+    /// Whether the tuning sits within [`TEMPER_TOLERANCE`] of this comma's
+    /// identity — the whole of the UI's auto-detect, one comma at a time.
+    pub fn is_tempered(self, fifth_cents: f32, third_cents: f32, seventh_cents: f32) -> bool {
+        match self {
+            Comma::Syntonic => is_meantone(fifth_cents, third_cents),
+            Comma::SeptimalKleisma => is_marvel(fifth_cents, third_cents, seventh_cents),
+        }
+    }
+}
+
+/// Which commas are being tempered out, as a set — the display's whole view
+/// of the tempering modes, and what a note name is spelled against.
+///
+/// A set rather than one comma at a time because the spellings COMPOSE: with
+/// both tempered the seventh is ten fifths up and every name on the lattice
+/// is a plain letter (septimal meantone), which neither comma gives alone.
+///
+/// The default is the empty set — the just reading, where every axis is
+/// independent and every comma is a real distance.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Tempered {
+    pub syntonic: bool,
+    pub septimal_kleisma: bool,
+}
+
+impl Tempered {
+    pub fn has(self, comma: Comma) -> bool {
+        match comma {
+            Comma::Syntonic => self.syntonic,
+            Comma::SeptimalKleisma => self.septimal_kleisma,
+        }
+    }
+
+    /// The same set with one comma set either way, for building one up.
+    pub fn with(mut self, comma: Comma, on: bool) -> Self {
+        match comma {
+            Comma::Syntonic => self.syntonic = on,
+            Comma::SeptimalKleisma => self.septimal_kleisma = on,
+        }
+        self
+    }
 }
 
 /// A pitch class in microcents, always in `[0, OCTAVE_MICROCENTS)`.
@@ -216,13 +382,28 @@ impl Tuning {
         played.distance_to(node) <= PitchClassDistance(self.tolerance.max(0) as u32)
     }
 
-    /// Lock the major third to four perfect fifths minus two octaves — the
-    /// defining meantone identity — exactly, in integer microcents. Because
-    /// `4 * three` is exact, every syntonic-comma-equivalent pair (four
-    /// fifths vs. one third) then collapses to a single pitch class.
-    pub fn lock_meantone(&mut self) {
-        let five = 4 * i64::from(self.three) - 2 * i64::from(OCTAVE_MICROCENTS);
-        self.five = five as i32;
+    /// Temper one comma out: pin the axis its identity derives to the value
+    /// the identity gives, exactly, in integer microcents. Because the
+    /// multiples are exact, every pair of positions a comma apart then
+    /// collapses to a single pitch class — four fifths vs. one third for the
+    /// syntonic, two fifths plus two thirds vs. one seventh for the kleisma.
+    ///
+    /// Apply commas in [`Comma::ALL`] order: the septimal identity reads the
+    /// third, so tempering the syntonic first is what makes the two compose
+    /// into septimal meantone (a seventh of ten fifths) rather than leaving
+    /// the seventh derived from a third the lattice is not using.
+    pub fn temper(&mut self, comma: Comma) {
+        match comma {
+            Comma::Syntonic => {
+                let five = 4 * i64::from(self.three) - 2 * i64::from(OCTAVE_MICROCENTS);
+                self.five = five as i32;
+            }
+            Comma::SeptimalKleisma => {
+                let seven = 2 * i64::from(self.three) + 2 * i64::from(self.five)
+                    - i64::from(OCTAVE_MICROCENTS);
+                self.seven = seven as i32;
+            }
+        }
     }
 
     /// Step sizes back in cents, for the display / host-param boundary.
@@ -401,8 +582,63 @@ mod tests {
         // third sits a full syntonic comma below four just fifths.
         assert!(!is_meantone(THREE_JUST, FIVE_JUST));
         // A third a hair (< tolerance) off still counts.
-        assert!(is_meantone(THREE_12TET, FIVE_12TET + MEANTONE_TOLERANCE - 0.1));
-        assert!(!is_meantone(THREE_12TET, FIVE_12TET + MEANTONE_TOLERANCE + 0.1));
+        assert!(is_meantone(THREE_12TET, FIVE_12TET + TEMPER_TOLERANCE - 0.1));
+        assert!(!is_meantone(THREE_12TET, FIVE_12TET + TEMPER_TOLERANCE + 0.1));
+    }
+
+    #[test]
+    fn the_septimal_kleisma_is_the_gap_it_says_it_is() {
+        // 225/224 in cents, from the ratio rather than from the axis sizes
+        // the constant is built out of.
+        let ratio = 1200.0 * (225.0f32 / 224.0).log2();
+        assert!((SEPTIMAL_KLEISMA - ratio).abs() < 0.001, "{SEPTIMAL_KLEISMA} vs {ratio}");
+        // Small: about a third of the syntonic comma, which is why a tuning
+        // can sit on it without looking obviously tempered.
+        assert!((SYNTONIC_COMMA / SEPTIMAL_KLEISMA - 2.79).abs() < 0.01);
+    }
+
+    #[test]
+    fn is_marvel_accepts_12tet_rejects_just() {
+        // 12-TET tempers it out too (1000 = 2·700 + 2·400 − 1200).
+        assert!(is_marvel(THREE_12TET, FIVE_12TET, SEVEN_12TET));
+        // Just intonation keeps the kleisma: the just seventh sits one below
+        // two just fifths plus two just thirds.
+        assert!(!is_marvel(THREE_JUST, FIVE_JUST, SEVEN_JUST));
+        // Septimal meantone: with the syntonic tempered out first, the marvel
+        // seventh is ten fifths minus five octaves. Quarter-comma, so the
+        // third fed in is the derived one, not the just third it sits on.
+        let quarter = THREE_JUST - SYNTONIC_COMMA / 4.0;
+        let third = meantone_third(quarter);
+        let seventh = marvel_seventh(quarter, third);
+        assert!((seventh - (10.0 * quarter - 6000.0)).abs() < 0.001);
+        assert!(is_marvel(quarter, third, seventh));
+        // And that seventh is NOT the just one — 3¢ of septimal meantone.
+        assert!((seventh - SEVEN_JUST).abs() > 2.0);
+        // A seventh a hair (< tolerance) off still counts.
+        assert!(is_marvel(THREE_12TET, FIVE_12TET, SEVEN_12TET + TEMPER_TOLERANCE - 0.1));
+        assert!(!is_marvel(THREE_12TET, FIVE_12TET, SEVEN_12TET + TEMPER_TOLERANCE + 0.1));
+    }
+
+    #[test]
+    fn every_comma_answers_for_itself() {
+        // The enum is what the UI loops over, so each variant has to carry
+        // the whole of its own identity: the detect, the derived value, and
+        // the size it would leave in the tuning if it were not tempered.
+        for comma in Comma::ALL {
+            assert_eq!(Comma::ALL[comma.index()], comma);
+            assert!(comma.size_cents() > 0.0);
+            // 12-TET tempers out both, and the derived axis is what 12-TET
+            // already has.
+            assert!(comma.is_tempered(THREE_12TET, FIVE_12TET, SEVEN_12TET));
+            let derived = comma.derived(THREE_12TET, FIVE_12TET);
+            let expected = match comma {
+                Comma::Syntonic => FIVE_12TET,
+                Comma::SeptimalKleisma => SEVEN_12TET,
+            };
+            assert!((derived - expected).abs() < 0.001, "{comma:?}: {derived} vs {expected}");
+            // Just intonation keeps every one of them.
+            assert!(!comma.is_tempered(THREE_JUST, FIVE_JUST, SEVEN_JUST));
+        }
     }
 
     #[test]
@@ -422,7 +658,7 @@ mod tests {
         // non-power-of-two coordinates, which is what motivated this.
         for &three in &[700.0f32, 701.955, 696.5784, 700.0371, 703.4] {
             let mut tuning = Tuning::from_cents(0.0, three, 0.0, SEVEN_12TET, 0.5);
-            tuning.lock_meantone();
+            tuning.temper(Comma::Syntonic);
             for t in -12..=12 {
                 for f in -6..=6 {
                     let a = tuning.pitch_class(LatticePos::new(t, f, 0));
@@ -434,15 +670,45 @@ mod tests {
     }
 
     #[test]
-    fn lock_meantone_sets_the_exact_derived_third() {
-        // The locked third is 4·fifth − 2 octaves, computed in integers.
-        let mut tuning = Tuning::from_cents(0.0, 700.0, 386.0 /*ignored*/, SEVEN_12TET, 0.5);
-        tuning.lock_meantone();
+    fn kleisma_comma_equivalents_are_bit_identical() {
+        // Two fifths plus two thirds equal one harmonic seventh plus an
+        // octave in any marvel temperament, so (t, f, s) and (t+2, f+2, s-1)
+        // are the same pitch — the same exactness the meantone lock has, one
+        // prime up, and what lets the sevens sheet be respelled onto the
+        // home sheet without naming two pitches alike.
+        for &(three, five) in &[(700.0f32, 400.0f32), (701.955, 386.3137), (696.5784, 386.3137)] {
+            let mut tuning = Tuning::from_cents(0.0, three, five, 0.0, 0.5);
+            tuning.temper(Comma::SeptimalKleisma);
+            for t in -8..=8 {
+                for f in -4..=4 {
+                    for s in -3..=3 {
+                        let a = tuning.pitch_class(LatticePos::new(t, f, s));
+                        let b = tuning.pitch_class(LatticePos::new(t + 2, f + 2, s - 1));
+                        assert_eq!(a, b, "({three},{five}) ({t},{f},{s})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tempering_sets_the_exact_derived_axis() {
+        // The derived third is 4·fifth − 2 octaves, computed in integers.
+        let mut tuning = Tuning::from_cents(0.0, 700.0, 386.0 /*ignored*/, 968.0, 0.5);
+        tuning.temper(Comma::Syntonic);
         // 12-TET: 4·700 − 2400 = 400¢.
         assert_eq!(tuning.five, microcents(400.0));
         // The general identity, evaluated in i64 (4·three overflows i32).
         let expected = 4 * i64::from(tuning.three) - 2 * i64::from(OCTAVE_MICROCENTS);
         assert_eq!(i64::from(tuning.five), expected);
+        // The seventh follows the third the lattice is USING, so tempering in
+        // ALL order lands on septimal meantone: 10·fifth − 5 octaves.
+        tuning.temper(Comma::SeptimalKleisma);
+        assert_eq!(tuning.seven, microcents(1000.0));
+        assert_eq!(
+            i64::from(tuning.seven),
+            10 * i64::from(tuning.three) - 5 * i64::from(OCTAVE_MICROCENTS)
+        );
     }
 
     #[test]

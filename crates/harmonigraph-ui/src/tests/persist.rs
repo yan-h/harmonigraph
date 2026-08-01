@@ -38,6 +38,11 @@ fn persist_round_trips_camera_and_view() {
     // Off is the non-default here, and the one a project has to keep: the
     // detect would otherwise re-engage the mode the user switched it off for.
     state.view.meantone_auto = false;
+    // The septimal comma's pair of switches carries the same way, and set the
+    // other way round from the syntonic one's so a blob that crossed them
+    // could not pass.
+    state.view.marvel = false;
+    state.view.marvel_auto = true;
     state.camera_presets.push(CameraPreset {
         name: "reading".into(),
         yaw: 0.7,
@@ -65,6 +70,8 @@ fn persist_round_trips_camera_and_view() {
     assert!(restored.view.grid_dashed);
     assert!(restored.view.meantone);
     assert!(!restored.view.meantone_auto, "a switched-off auto-detect round-trips");
+    assert!(!restored.view.marvel, "each comma keeps its own mode");
+    assert!(restored.view.marvel_auto, "and its own detect");
     assert_eq!(restored.camera_presets.len(), 1);
     assert_eq!(restored.camera_presets[0].name, "reading");
     assert_eq!(restored.camera_presets[0].yaw, 0.7);
@@ -80,12 +87,26 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     // feature never reaches.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.camera.yaw = 1.23;
-    let saved = state.save_persist().replace("meantone_auto:true,", "");
-    assert_ne!(saved, state.save_persist(), "removal must have hit");
+    // One key at a time, each checked to have HIT: with three replacements
+    // over one blob, a single `assert_ne!` at the end is satisfied by any one
+    // of them, and a key that quietly stopped matching (a rename, a space
+    // after the colon) would leave its default untested.
+    let mut saved = state.save_persist();
+    for key in ["meantone_auto:true,", "marvel_auto:true,", "marvel:false,"] {
+        let stripped = saved.replace(key, "");
+        assert_ne!(stripped, saved, "{key:?} is not in the blob to remove");
+        saved = stripped;
+    }
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
     assert!(restored.view.meantone_auto, "a missing key means on");
+    // And the septimal comma's keys are newer still, so EVERY project
+    // predates them: 12-TET tempers 225/224 out as well (1000 = 2·700 + 2·400
+    // − 1200), so the same argument opts them in — off would leave the mode
+    // unreachable for every project that already exists.
+    assert!(restored.view.marvel_auto, "a missing detect key means on");
+    assert!(!restored.view.marvel, "a missing mode key means off, and the detect decides");
     assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 }
 
@@ -592,4 +613,33 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     current.load_persist(&saved);
     assert_eq!(current.camera.yaw, 1.23);
     assert_eq!(current.view.extent_sevens, 3);
+}
+
+/// Loading a project asks the detects afresh, even at a tuning this session
+/// has already judged.
+///
+/// A host can push state into a LIVE editor — Bitwig's undo, a preset change
+/// — and the modes that arrive are the incoming project's, so the verdicts
+/// reached about the tuning on screen a moment ago say nothing about them. It
+/// matters most for the case the serde defaults exist for: a blob written
+/// before a comma existed carries that mode off, and only a fresh look turns
+/// it on.
+#[test]
+fn loading_a_project_re_opens_the_comma_verdicts() {
+    use harmonigraph_core::Comma;
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // A blob from before the septimal comma existed: its keys are stripped,
+    // so `marvel` defaults off and `marvel_auto` on.
+    let saved = state.save_persist().replace("marvel:false,", "").replace("marvel_auto:true,", "");
+    assert_ne!(saved, state.save_persist(), "removal must have hit");
+
+    // This session has already judged the tuning it is sitting at.
+    state.temper_judged = [Some((0, 0, 0)); Comma::COUNT];
+    state.load_persist(&saved);
+    assert_eq!(
+        state.temper_judged,
+        [None; Comma::COUNT],
+        "a loaded project must be judged on its own terms",
+    );
+    assert!(state.view.marvel_auto, "and the missing detect key still opts in");
 }
