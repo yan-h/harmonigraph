@@ -76,8 +76,10 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// product peaks shortly after the key comes up.
 const ATTACK_TIME: f64 = 0.15;
 
-/// Samples in the pitch->color lookup the octave glyphs use to tint each
-/// slot by its own octave's pitch. The shader mirrors this length.
+/// Samples in the pitch->color lookup a lit octave glyph is tinted from, by
+/// its own octave's pitch — and with it the melody/bass rings, which take the
+/// color of the sector they bracket. The shader mirrors this length, and
+/// `harmonigraph-render` asserts that it does.
 pub const PITCH_LUT_N: usize = 16;
 
 /// One lattice node, ready for instanced rendering.
@@ -176,7 +178,7 @@ pub struct NodeInstance {
     /// fixed livery. Taken from the strongest marking voice (they can differ
     /// mid-crossfade). The ramp already bakes in the lift the disc/roll/glyphs
     /// carry (see `color::NOTE_LIGHTEN`), so the ring inherits it and adds
-    /// nothing — an extra lift once left the ring a shade whiter than the band.
+    /// nothing; a second one would leave the ring a shade whiter than the band.
     ///
     /// The slot's pitch rather than the marking VOICE's: a note past either end
     /// of the octave window folds onto the outermost slot, and a ring carrying

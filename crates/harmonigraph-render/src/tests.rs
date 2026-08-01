@@ -498,7 +498,7 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         melody_level: f32::from(melody_slots != 0),
         bass_level: f32::from(bass_slots != 0),
         // Distinct hues so the both-ends check below can tell the two
-        // rings apart; in the app these are the marked notes' own colors.
+        // rings apart; in the app these are the marked SECTORS' colors.
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
         trail: 0.0,
