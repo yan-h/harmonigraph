@@ -183,9 +183,9 @@ struct Uniforms {
     /// its low end, which is the seam, and at its high end; w: the pitch the
     /// cell boundaries are counted from (`OctaveLayout::cell_origin`).
     ///
-    /// No slot range, unlike the count this replaced: which octaves a node
-    /// draws depends on the node's own pitch class now that the window is a
-    /// pitch range, so the shader derives it per node from these.
+    /// No slot range: which octaves a node draws depends on the node's own
+    /// pitch class, because the window IS a pitch range rather than a count
+    /// of octaves, so the shader derives it per node from these.
     misc7: [f32; 4],
     /// `OctaveLayout::bounds` — the angle of each cell boundary of the
     /// window — four to a row, which is how a uniform array is laid out

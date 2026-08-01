@@ -462,7 +462,7 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
 #[test]
 fn an_inverted_color_range_still_derives_a_scene() {
     // The mark color runs the ramp for EVERY channel, so a fixed-color
-    // channel now reaches gradient math that only channels 9-13 used to —
+    // channel reaches the same gradient math a pitch-gradient one does —
     // and Darkest above Brightest is one drag of a host's parameter list
     // away (raise Darkest before lowering Brightest and it is the state in
     // between). Deriving must not panic there.

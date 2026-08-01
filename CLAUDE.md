@@ -65,8 +65,8 @@ break either, and both are easy to break by reflex.
 
 **Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
 never been through rustfmt, so rustfmt's idea of this code and the code
-have drifted a long way apart: `cargo fmt --check` currently wants 1097
-changes across 56 of the 62 files in `crates/`. Running it once would bury
+have drifted a long way apart: `cargo fmt --check` currently wants 1268
+changes across 80 of the 85 files in `crates/`. Running it once would bury
 whatever you actually changed under a whole-tree reformat that no reviewer
 can read past, which is why this is a ban rather than a preference. Match
 the surrounding style by hand, and wrap only the lines you write — about
@@ -90,11 +90,14 @@ filter".
 
 The exception is where the past tense is load-bearing, and it is a real
 category rather than an escape hatch. Comments about **blobs still sitting
-in saved projects** must stay historical — the `default_*` block and
-`migrate_legacy` in `view.rs`, the serde aliases for deleted palettes and
-node styles, the `low_octave` sentinel, the version-0 dock refresh — and so
-must the fade param's pre-merge id, where the id is a persistence contract
-that outlives the rename. There the history *is* the current constraint,
+in saved projects** must stay historical — the `default_*` block and what
+`sanitize` folds in `view.rs`, the serde aliases for deleted palettes and
+node styles, `legacy_stacked` and `legacy_extra_args` in `config.rs`, and
+the `legacy_*` fields read through `bare_as_some` (`legacy_octave_span`,
+`legacy_highlight_extremes`), where the bare token a previous build wrote
+is the whole reason the shim is shaped that way — and so must the fade
+param's pre-merge id, where the id is a persistence contract that outlives
+the rename. There the history *is* the current constraint,
 and flattening it destroys real information. `DISPLAY_OVERSAMPLE` in
 `editor.rs` carries an explicit `HISTORICAL NOTE` on the same grounds: it
 exists to stop someone tightening the constant on reasoning that no longer

@@ -142,8 +142,9 @@ pub struct ViewConfig {
     #[serde(default = "default_core_radius")]
     pub core_radius: f32,
     /// The outer octave layer's radial band (same UV units): every outer
-    /// style fits its glyphs' radial footprint to this. The aliases keep
-    /// the previous build's slice_inner/slice_outer blobs loading;
+    /// style fits its glyphs' radial footprint to this. The `slice_inner` /
+    /// `slice_outer` spellings these replaced were pre-floor, so no blob
+    /// this build accepts carries them and no alias is kept for them;
     /// derive_scene keeps outer ahead of inner, so any dragged
     /// combination still renders a visible band.
     #[serde(default = "default_outer_inner")]
