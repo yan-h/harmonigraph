@@ -19,7 +19,7 @@
 //! widths per pixel per sector, which is the same arithmetic done a few
 //! million times a frame for a value that changes when a setting does.
 
-use std::f32::consts::{FRAC_PI_2, PI, TAU};
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 /// Octave indicator slots: MIDI octaves -1..=9, so `slot = octave + 1` and
 /// middle C (octave 4, MIDI 60) is slot 5. Eleven is what the widest span —
@@ -38,6 +38,15 @@ pub const MIN_OCTAVE_SPAN: u32 = 2;
 /// Widest span: 5 octaves either side, 11 indicators — every MIDI octave.
 pub const MAX_OCTAVE_SPAN: u32 = 5;
 
+// The widest span has to fit the fixed-size table AND leave middle C room
+// below it, because `octave_layout` indexes `weights`/`bounds` by sector and
+// subtracts the span from `MIDDLE_C_SLOT` on unsigned integers. Raising
+// MAX_OCTAVE_SPAN alone would turn both into a runtime panic in the render
+// path; the renderer's own ceiling on OCTAVE_SLOTS is a build error, and this
+// makes the pair of them fail the same way.
+const _: () = assert!(2 * (MAX_OCTAVE_SPAN as usize) < OCTAVE_SLOTS);
+const _: () = assert!(MAX_OCTAVE_SPAN as usize <= MIDDLE_C_SLOT);
+
 /// Ceiling on the taper amount. At 1 the outermost indicator would have no
 /// width at all, which is a range that claims to show an octave and doesn't;
 /// 0.9 leaves it a tenth of the middle one, which is still a sliver but a
@@ -47,17 +56,20 @@ pub const MAX_TAPER_AMOUNT: f32 = 0.9;
 /// How an indicator's width falls off with its distance from middle C, so
 /// the middle of the range carries more visual weight than its extremes.
 ///
-/// Every formula is a function of ONE normalized distance (0 at middle C, 1
-/// at the outermost octave shown) and ONE amount, and every one of them
-/// agrees at both ends: width 1 at middle C, `1 - amount` at the extremes.
-/// So the amount always means the same thing — how much of its width the
-/// outermost octave gives up — and the formulas differ only in how that loss
-/// is distributed across the octaves in between. That is what makes them
-/// comparable by flipping between them at a fixed amount.
+/// Each TAPERING formula is a function of ONE normalized distance (0 at
+/// middle C, 1 at the outermost octave shown) and ONE amount, and all three
+/// agree at both ends: width 1 at middle C, `1 - amount` at the extremes. So
+/// the amount always means the same thing — how much of its width the
+/// outermost octave gives up — and the three differ only in how that loss is
+/// distributed across the octaves in between, which is what makes flipping
+/// between them at a fixed amount a comparison of shapes. [`Uniform`] is the
+/// baseline they depart from and is outside that: it ignores the amount.
+///
+/// [`Uniform`]: OctaveTaper::Uniform
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum OctaveTaper {
-    /// Equal widths; the amount is inert. The plain circular division, and
-    /// what the indicators were before they could be resized.
+    /// Equal widths; the amount is inert. The plain circular division —
+    /// every octave the same size, whatever its distance from middle C.
     #[default]
     Uniform,
     /// Straight ramp: each octave out is the same absolute amount narrower
@@ -68,10 +80,18 @@ pub enum OctaveTaper {
     /// toward the edges, so the outer octaves stay legible while the middle
     /// two or three take most of the circle.
     Geometric,
-    /// Cosine ease: flat across the middle of the range and steepest at the
-    /// halfway point. Reads as a group of full-size middle octaves rather
-    /// than as a gradient, which is the difference from Linear.
-    Smooth,
+    /// Quadratic: barely narrows the octaves either side of middle C and
+    /// takes almost all of the loss at the extremes. Reads as a PLATEAU of
+    /// full-size middle octaves with the ends falling away, rather than as a
+    /// gradient, which is the difference from Linear.
+    ///
+    /// A cosine ease is the obvious shape for this and is the wrong one: any
+    /// curve antisymmetric about its own midpoint gives exactly `1 - a/2`
+    /// halfway out, which is what Linear gives there too — so at the
+    /// narrowest span, where halfway out is the ONLY intermediate octave,
+    /// the two formulas would be identical and one of the four choices would
+    /// do nothing.
+    Plateau,
 }
 
 impl OctaveTaper {
@@ -86,7 +106,7 @@ impl OctaveTaper {
             OctaveTaper::Uniform => 1.0,
             OctaveTaper::Linear => 1.0 - amount * x,
             OctaveTaper::Geometric => (1.0 - amount).powf(x),
-            OctaveTaper::Smooth => 1.0 - amount * 0.5 * (1.0 - (PI * x).cos()),
+            OctaveTaper::Plateau => 1.0 - amount * x * x,
         }
     }
 }
@@ -122,8 +142,10 @@ impl Default for OctaveLayout {
     }
 }
 
-/// Span the view starts at: 4 octaves either side of middle C (C0..B8),
-/// which reaches past both ends of any keyboard part while keeping the
+/// Span the view starts at: 4 octaves either side of middle C — C0..B8 in
+/// this crate's numbering, where middle C is C4, and the same span spelled
+/// C-1..B7 by the UI, which uses Bitwig's (see `Voice::display_octave`).
+/// It reaches past both ends of any keyboard part while keeping the
 /// indicators wide enough to read at a glance.
 pub const DEFAULT_OCTAVE_SPAN: u32 = 4;
 
@@ -170,12 +192,13 @@ pub fn octave_layout(span: u32, taper: OctaveTaper, amount: f32) -> OctaveLayout
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::PI;
 
     const TAPERS: [OctaveTaper; 4] = [
         OctaveTaper::Uniform,
         OctaveTaper::Linear,
         OctaveTaper::Geometric,
-        OctaveTaper::Smooth,
+        OctaveTaper::Plateau,
     ];
 
     /// The one invariant the whole module exists to hold: whatever the span,

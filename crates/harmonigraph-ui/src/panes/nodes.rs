@@ -101,10 +101,11 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  falls away fastest near the middle, flattening at the edges",
             ),
             (
-                OctaveTaper::Smooth,
-                "Smooth",
-                "Flat across the middle of the range, steepest halfway out — \
-                 a group of full-size middle octaves rather than a gradient",
+                OctaveTaper::Plateau,
+                "Plateau",
+                "Barely narrows the octaves either side of middle C and takes \
+                 almost all of the loss at the extremes: a plateau of \
+                 full-size middle octaves rather than a gradient",
             ),
         ],
     );
