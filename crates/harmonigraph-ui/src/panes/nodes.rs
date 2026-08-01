@@ -6,7 +6,7 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{choice_row, RangeBar, ValueBar};
+use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
     NodeStyle, ViewConfig, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIN_OCTAVE_SPAN,
@@ -76,40 +76,43 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // them — the same octave numbers whatever the node's pitch class, which
     // is only what decides where round the turn they land.
     //
-    // The buttons ARE the supported range, written out one octave list at a
-    // time because each names its own; nothing derives them from the layout's
-    // bounds. So widening those bounds without adding a row would leave the
-    // extra Range unreachable, and narrowing them would leave a button that
-    // sets a span the layout clamps away — a control disagreeing with the
-    // wheel it draws. Fail the build on either instead.
-    const _: () = assert!(MIN_OCTAVE_SPAN == 2 && MAX_OCTAVE_SPAN == 5);
-    choice_row(
-        ui,
-        "Range",
-        &mut view.octave_span,
-        &[
-            (2, "±2", "C1..C5 around middle C — five octaves to the turn"),
-            (3, "±3", "C0..C6"),
-            (4, "±4", "C-1..C7"),
-            (5, "±5", "C-2..C8 — every octave MIDI has, so one is 33 degrees"),
-        ],
-    );
-    // The taper is two bars rather than a list of named curves: Amount is the
-    // only thing that moves the ends, Shape says where in between the loss
-    // falls, and an even axis is Amount 0 rather than a mode beside them.
-    ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Amount")
+    // A bar over the layout's own bounds, rather than a button per octave
+    // list: the ends come from MIN/MAX_OCTAVE_SPAN, so widening what the
+    // shader's tables hold widens the control with them, and a Range the
+    // layout would clamp away is unreachable by construction. Held to whole
+    // octaves — an indicator is one octave, so half of one is not a setting.
+    let mut span = view.octave_span as f32;
+    if ValueBar::new(&mut span, MIN_OCTAVE_SPAN as f32..=MAX_OCTAVE_SPAN as f32, "Range")
+        .integer()
+        .display(|v| format!("±{v:.0}"))
+        .show(ui)
+        .on_hover_text(
+            "How many octaves either side of middle C's every node draws, \
+             which is also how many are on the turn: ±2 is five indicators, \
+             C1..C5 in the DAW's numbering, and ±5 is eleven — every octave \
+             MIDI has, so one of them is 33 degrees. Wider reaches more of the \
+             keyboard and gives each octave less of the ring",
+        )
+        .changed()
+    {
+        view.octave_span = span.round() as u32;
+    }
+    // The taper is two bars rather than a list of named curves: the amount is
+    // the only thing that moves the ends, the shape says where in between the
+    // loss falls, and an even axis is amount 0 rather than a mode beside them.
+    ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Taper amount")
         .show(ui)
         .on_hover_text(
             "How much of its width the octave at the EDGE of the range gives \
              up, which the ones inside it take: 0 is an even axis — no taper \
              at all — and 0.9 leaves those outermost slices a tenth of the \
-             width an even octave would have. This alone sets them; the Shape \
-             below never moves them",
+             width an even octave would have. This alone sets them; the Taper \
+             shape below never moves them",
         );
-    // Inert at Amount 0, where there is no loss to place: the Shape bar can
+    // Inert at amount 0, where there is no loss to place: the shape bar can
     // only say where a taper falls, not whether there is one.
     ui.add_enabled_ui(view.octave_taper_amount > 0.0, |ui| {
-        ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Shape")
+        ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Taper shape")
             .show(ui)
             .on_hover_text(
                 "WHERE that width is given up. Left of the middle it goes at \
@@ -162,10 +165,18 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // told apart by radius rather than by hue, and a note that is at once
     // the highest and the lowest -- a lone held note, or a chord whose top
     // and bottom share a pitch class -- simply gets both.
-    ui.checkbox(&mut view.mark_melody, "Melody")
-        .on_hover_text("Ring the highest held note, just inside the octave band");
-    ui.checkbox(&mut view.mark_bass, "Bass")
-        .on_hover_text("Ring the lowest held note, just outside the octave band");
+    //
+    // Side by side, because they are that pair: two ends of one idea, both
+    // named in the heading above them, and short enough that a column of two
+    // spends a row on saying nothing. A `button_row` rather than a bare
+    // `horizontal` so a narrow pane wraps them instead of running Bass off
+    // the edge.
+    button_row(ui, |ui| {
+        ui.checkbox(&mut view.mark_melody, "Melody")
+            .on_hover_text("Ring the highest held note, just inside the octave band");
+        ui.checkbox(&mut view.mark_bass, "Bass")
+            .on_hover_text("Ring the lowest held note, just outside the octave band");
+    });
     // The marks are full rings bracketing the octave band (melody
     // inside, bass outside), each slit either side of the octave
     // responsible so that stretch reads as its own piece.

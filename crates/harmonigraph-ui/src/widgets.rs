@@ -884,12 +884,43 @@ pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     .inner
 }
 
+/// A selectable option's label, set in MONOSPACE when the label is a bare
+/// number ("1080", "16:9", "-1.5") and left alone when it is a word.
+///
+/// Numbers are monospace everywhere else in this UI — every bar readout, the
+/// perf HUD, the lattice text — for the reason digits always want it: one
+/// width per glyph, so a column of them lines up and none of them wiggles as
+/// it changes. A row of number buttons is the same picture sideways. Set in
+/// the proportional face, "1080" and "1440" come out different widths and the
+/// row reads as four unrelated words rather than as a scale.
+///
+/// The FAMILY only, not [`TextStyle::Monospace`], which would also drop the
+/// label to the monospace size and leave a number sitting smaller than the
+/// words beside it.
+///
+/// Decided per label rather than per row, because rows mix: the frame-rate row
+/// is "Uncapped" beside four numbers, and only the numbers want this.
+pub fn option_label(label: &str) -> egui::RichText {
+    let text = egui::RichText::new(label);
+    // A digit, and nothing but digits and the punctuation numbers wear.
+    let numeric = label.chars().any(|c| c.is_ascii_digit())
+        && label.chars().all(|c| c.is_ascii_digit() || "+-±.,:/× ".contains(c));
+    if numeric {
+        text.family(egui::FontFamily::Monospace)
+    } else {
+        text
+    }
+}
+
 /// A labelled row of mutually-exclusive choices for `value`: the standard
 /// shape of every enum setting in the settings panes.
 ///
 /// Each option is `(value, label, hover hint)`; an empty hint means no
 /// tooltip. Adding a variant to a style enum is then one line here rather
 /// than another copy of the label/loop/`selectable_value` scaffolding.
+///
+/// Number labels come out monospace — see [`option_label`], which the rows
+/// built by hand out of `selectable_value` call for themselves.
 pub fn choice_row<T: Copy + PartialEq>(
     ui: &mut Ui,
     name: &str,
@@ -899,7 +930,7 @@ pub fn choice_row<T: Copy + PartialEq>(
     button_row(ui, |ui| {
         ui.label(name);
         for (option, label, hint) in options {
-            let response = ui.selectable_value(value, *option, *label);
+            let response = ui.selectable_value(value, *option, option_label(label));
             if !hint.is_empty() {
                 response.on_hover_text(*hint);
             }
@@ -1185,6 +1216,64 @@ mod tests {
         let bar = ValueBar::new(&mut value, 1.0..=8.0, "test").integer();
         let v = bar.value_at(0.37);
         assert_eq!(v, v.round());
+    }
+
+    /// Every text run a `choice_row` of these options paints, as
+    /// `text -> (family, size)`.
+    fn choice_row_fonts(options: &[(u32, &str, &str)]) -> Vec<(String, egui::FontId)> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 100.0));
+        let mut value = 0u32;
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| choice_row(ui, "Row", &mut value, options),
+        );
+        out.shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) => Some((
+                    t.galley.text().to_owned(),
+                    t.galley.job.sections[0].format.font_id.clone(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// An option label that is a bare number is set in the monospace face, and
+    /// one that is a word is not — decided per label, since a row can hold
+    /// both. The size is the row's own either way: taking the whole monospace
+    /// TEXT STYLE would shrink the numbers, leaving "30" visibly smaller than
+    /// the "Uncapped" beside it.
+    #[test]
+    fn number_option_labels_are_monospace_at_the_rows_own_size() {
+        let painted = choice_row_fonts(&[
+            (0, "Uncapped", ""),
+            (1, "30", ""),
+            (2, "144", ""),
+            (3, "16:9", ""),
+            (4, "-1.5", ""),
+            (5, "12-TET", ""),
+        ]);
+        let numbers = ["30", "144", "16:9", "-1.5"];
+        let words = ["Row", "Uncapped", "12-TET"];
+        let row_size = painted
+            .iter()
+            .find(|(text, _)| text == "Uncapped")
+            .map(|(_, font)| font.size)
+            .expect("the row painted no 'Uncapped'");
+        for (text, font) in &painted {
+            let wanted = if numbers.contains(&text.as_str()) {
+                egui::FontFamily::Monospace
+            } else {
+                assert!(words.contains(&text.as_str()), "unexpected run {text:?}");
+                egui::FontFamily::Proportional
+            };
+            assert_eq!(font.family, wanted, "{text:?} was painted in {:?}", font.family);
+            assert_eq!(font.size, row_size, "{text:?} was painted at {}pt", font.size);
+        }
+        assert_eq!(painted.len(), numbers.len() + words.len(), "a label went unpainted");
     }
 
     /// A row-builder: lays out a control row, calling back to add its label

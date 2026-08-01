@@ -1,7 +1,7 @@
 //! The Analyzer tab: every setting the Spectral display carries, and the
 //! readouts its bars are dragged against.
 
-use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
+use crate::widgets::{button_row, choice_row, option_label, RangeBar, ValueBar};
 use crate::SharedState;
 use crate::panes::section;
 
@@ -183,13 +183,12 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
             "Reference slope (dB/oct) that displays flat: 0 = raw power, \
              -3 flattens pink noise, -4.5 flattens typical material",
         );
-        // Monospace: five signed numbers side by side, where a
-        // proportional face gives "0.0" and "-1.5" different widths and
-        // leaves the row of buttons visibly uneven. Digits of one width
+        // Five signed numbers side by side, so `option_label` sets them in
+        // monospace: a proportional face gives "0.0" and "-1.5" different
+        // widths and leaves the row visibly uneven, where digits of one width
         // make it a scale.
         for step in crate::TILT_STEPS {
-            let label = egui::RichText::new(format!("{step:.1}")).monospace();
-            ui.selectable_value(&mut cfg.tilt, step, label);
+            ui.selectable_value(&mut cfg.tilt, step, option_label(&format!("{step:.1}")));
         }
     });
 
