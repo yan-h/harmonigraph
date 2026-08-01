@@ -12,5 +12,21 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cargo --version)",
+      "Bash(cargo check *)",
+      "Bash(cargo test *)",
+      "Bash(cargo xtask *)",
+      "Bash(gh pr view *)",
+      "Bash(git add *)",
+      "Bash(git checkout *)",
+      "Bash(git commit *)",
+      "Bash(git fetch *)",
+      "Bash(rustc --version)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
+    ]
   }
 }
