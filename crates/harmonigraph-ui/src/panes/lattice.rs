@@ -83,16 +83,26 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     ui.painter()
         .add(lattice_paint_callback(rect, &scene, state.target_format, 0, Some(state.lattice_stats.clone())));
 
-    // One batch for everything this pane writes, flushed at the end: nothing
-    // is drawn over the text, so collecting it keeps the order it had.
+    // One batch for the node labels, flushed before the overlay: a batch draws
+    // in the order it collected, so anything meant to sit ON TOP of the names
+    // has to be a second flush rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
-    if state.learn_active {
-        draw_learn_overlay(&mut batch, ui, rect, now);
-    }
     if state.view.show_labels {
         draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
     }
+    // The badge is laid out here, before the names are flushed, though it is
+    // DRAWN after them. Laying text out is what rasterizes glyphs into egui's
+    // font atlas, and an atlas that changes size between two flushes of one
+    // frame recreates the shared texture, which drops the bind group of every
+    // pane — including the one whose `prepare` has already run, whose text then
+    // draws nothing at all that frame. Growing the atlas before the first flush
+    // makes that first flush the one carrying the new size, so the second is a
+    // texture write and nothing more.
+    let badge = state.learn_active.then(|| learn_badge(ui, rect, now));
     batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
+    if let Some(mut badge) = badge {
+        draw_learn_overlay(ui, rect, state, now, &mut badge);
+    }
 }
 
 /// Learn mode is armed: show it ON the lattice too, so the mode is obvious
@@ -102,24 +112,46 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
 /// names a mode rather than a node — pinned to the corner, sized like the rest
 /// of the UI's chrome — and a badge that grew as you zoomed in would be saying
 /// something about the lattice, which is exactly what it is not about.
-fn draw_learn_overlay(batch: &mut crate::text::TextBatch, ui: &egui::Ui, rect: egui::Rect, now: f64) {
-    let color = theme::armed().gamma_multiply(learn_pulse(now));
+///
+/// Which is also why it draws OVER the node labels, in a batch and a border
+/// stroke of its own: it is chrome about the pane, not a thing in the picture,
+/// and a name that happens to land in the corner crossing the word or the
+/// border reads as the badge being part of the lattice.
+///
+/// The word itself is laid out by [`learn_badge`] one step earlier — see the
+/// call site for why the layout and the drawing are on opposite sides of the
+/// names' flush.
+fn draw_learn_overlay(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    state: &SharedState,
+    now: f64,
+    badge: &mut crate::text::TextBatch,
+) {
     let painter = ui.painter_at(rect);
     painter.rect_stroke(
         rect.shrink(1.5),
         0,
-        egui::Stroke::new(2.0, color),
+        egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
         egui::StrokeKind::Inside,
     );
-    batch.text(
-        &painter,
+    badge.flush(&painter, rect, state, crate::text::LATTICE_LEARN);
+}
+
+/// The badge's word, laid out into a batch of its own and drawn by
+/// [`draw_learn_overlay`].
+fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBatch {
+    let mut badge = crate::text::TextBatch::default();
+    badge.text(
+        &ui.painter_at(rect),
         rect.left_top() + egui::vec2(10.0, 8.0),
         egui::Align2::LEFT_TOP,
         "LEARN".to_string(),
         egui::FontId::monospace(12.0),
-        color,
+        theme::armed().gamma_multiply(learn_pulse(now)),
         theme::well().gamma_multiply(learn_pulse(now)),
     );
+    badge
 }
 
 /// How readable a label on a visited node is next to a sounding one. Well
