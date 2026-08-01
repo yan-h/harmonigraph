@@ -76,11 +76,29 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 /// product peaks shortly after the key comes up.
 const ATTACK_TIME: f64 = 0.15;
 
-/// Samples in the pitch->color lookup a lit octave glyph is tinted from, by
-/// its own octave's pitch — and with it the melody/bass rings, which take the
-/// color of the sector they bracket. The shader mirrors this length, and
-/// `harmonigraph-render` asserts that it does.
-pub const PITCH_LUT_N: usize = 16;
+/// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
+/// disc, the trail and the piano roll on the CPU, the octave glyphs and their
+/// glow in the shader. The shader mirrors this length, and `harmonigraph-render`
+/// asserts that it does.
+///
+/// Because all of them read this one table, its size is not what makes two
+/// shapes agree — that is structural (see `color::pitch_lut_color`). It buys
+/// only the table's own fidelity to the designed curve, and it buys that
+/// badly: the ramp's dark end rides the sRGB gamut boundary, where the LCh the
+/// curve asks for is unrepresentable and the red channel sits pinned at 0
+/// until t is about 0.2205 and then leaves it with a jump in slope. Linear
+/// interpolation across a corner like that converges linearly at best, and
+/// erratically in practice, since what dominates is whether a sample happens
+/// to land near the corner rather than how many samples there are. Sweeping
+/// the whole gradient range in 0.01-semitone steps, worst channel error is
+/// 14.9/255 at 16 entries, 9.6 at 32, 3.6 at 64, 1.5 at 128 — but 4.9 at 130,
+/// and still 2.4 at 256, four kilobytes in. So 64 is the knee: past it the
+/// spend stops buying anything reliable, and the curve is already tracked far
+/// closer than a viewer can see.
+///
+/// Do NOT read that error as a mismatch between shapes. It is the difference
+/// between the table and an ideal nothing draws.
+pub const PITCH_LUT_N: usize = 64;
 
 /// One lattice node, ready for instanced rendering.
 #[derive(Clone, Copy, Debug)]
