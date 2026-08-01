@@ -351,7 +351,14 @@ the DAW.
 - `harmonigraph-offline` — the renderer. Headless wgpu device, egui driven by
   synthesized input, frames read back and piped to ffmpeg.
 
-Determinism is a tested property, not an aspiration: `render.rs` renders
-the same take twice and asserts the frames are byte-identical. If that
-test ever fails, something time- or machine-dependent has entered the
-draw path and renders have quietly stopped being reproducible.
+Determinism is tested, but the test is narrower than the property:
+`render.rs` renders the same take twice and asserts the frames are
+byte-identical, at 320x200, `side-by-side`, ten frames of one second. If it
+ever fails, something time- or machine-dependent has entered the draw path.
+
+It does not currently hold at full size. **Issue #135** is open: two
+identical invocations at 1920x1080 with `--layout lattice` differ, on every
+pair of frames tried. So treat the test as a tripwire on the pipeline rather
+than a guarantee about a real export, and read the claim above as what this
+is meant to be — the take format and the replay are deterministic by
+construction; the lattice pass is where the property is currently broken.
