@@ -208,7 +208,7 @@ const _: () = assert!(harmonigraph_scene::MAX_CELLS + 1 == 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
-const _: () = assert!(harmonigraph_scene::PITCH_LUT_N == 16);
+const _: () = assert!(harmonigraph_scene::PITCH_LUT_N == 64);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

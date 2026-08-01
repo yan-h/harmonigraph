@@ -50,9 +50,11 @@ fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
 /// all three instead of the indicators sitting a shade lighter.
 const NOTE_LIGHTEN: f32 = 0.30;
 
-/// The pitch-gradient LCH ramp as a function of normalized height `t`
-/// (0..1). Shared by the node disc color and the octave glyphs'
-/// per-dot tint, so a dot is the same color as the disc that pitch lights.
+/// The DESIGNED pitch-gradient curve as a function of normalized height `t`
+/// (0..1). Nothing draws this directly: it is the curve [`pitch_ramp_lut`]
+/// samples, and that table is what every consumer reads (see
+/// [`pitch_lut_color`]). Keeping one caller means the table and the curve can
+/// never drift into two different answers for one pitch.
 ///
 /// The ramp is defined already lightened (see [`NOTE_LIGHTEN`]); everything
 /// that samples it inherits the lift, so nothing downstream has to add its own.
@@ -61,10 +63,23 @@ fn pitch_ramp_lch(t: f64) -> Vec4 {
     base.lerp(Vec4::new(1.0, 1.0, 1.0, base.w), NOTE_LIGHTEN)
 }
 
+/// The designed curve, for the test that pins how closely [`pitch_ramp_lut`]
+/// tracks it. Nothing in the draw path may call this — going off the curve
+/// direct is precisely the mismatch the shared table exists to prevent.
+#[cfg(test)]
+pub(crate) fn designed_pitch_ramp(t: f64) -> Vec4 {
+    pitch_ramp_lch(t)
+}
+
 /// The pitch ramp sampled into [`PITCH_LUT_N`] colors evenly spaced over the
-/// full `t` range, for the shader's per-dot color lookup (the shader maps a
-/// dot's pitch to a `t` and indexes this). Endpoints of the disc gradient
-/// are applied shader-side, so this LUT itself is range-independent.
+/// full `t` range. Both sides read it: the renderer uploads it for the shader
+/// to index, and [`pitch_lut_color`] walks it on the CPU.
+///
+/// Each side maps a pitch to a `t` FIRST and indexes with that, so the
+/// gradient's endpoints never reach the table and it stays range-independent —
+/// which is what lets the memo below hold one array for the whole session
+/// without a key. A change that folded `darkest_pitch`/`brightest_pitch` into
+/// the entries would make this cache wrong, not just stale.
 pub fn pitch_ramp_lut() -> [Vec4; PITCH_LUT_N] {
     // Constant (range-independent, per the doc above) but each entry costs
     // several transcendentals through the LCH->sRGB conversion, and it's read
@@ -76,17 +91,37 @@ pub fn pitch_ramp_lut() -> [Vec4; PITCH_LUT_N] {
     })
 }
 
-/// The shader's `pitch_lut_color` on the CPU: [`pitch_ramp_lut`] sampled at
-/// `pitch`, interpolated between entries exactly as the shader does.
+/// The pitch gradient, evaluated: [`pitch_ramp_lut`] sampled at `pitch` and
+/// interpolated between entries exactly as `pitch_lut_color` in `lattice.wgsl`
+/// does. Every pitch-colored shape reaches the ramp through this one walk —
+/// the disc, the trail, the piano roll and the melody/bass rings on the CPU,
+/// the lit octave glyphs on the GPU.
 ///
-/// This is what the octave layer draws a LIT pitch — a sounding glyph stands
-/// for a position on the pitch axis rather than for the voice that lit it, and
-/// so do the glow's lobes once two octaves sound. (The band's ghosts and a solo
-/// voice's glow keep the node's own color instead, deliberately.) Which is why
-/// anything the CPU has to color to match a lit glyph comes through this table
-/// too, rather than off the ramp direct: [`PITCH_LUT_N`] entries across a
-/// 190-degree hue sweep reproduce the ramp only to within about 15/255 on a
-/// channel, which is a visible step between two shapes that share an edge.
+/// It is a LIT pitch that this draws: a sounding glyph stands for a position
+/// on the pitch axis rather than for the voice that lit it, and so do the
+/// glow's lobes once two octaves sound. The band's ghosts and a solo voice's
+/// glow keep the node's own color instead, deliberately — a lone voice keeps
+/// its exact color, fixed channel hues included, which the ramp could not
+/// reproduce. Do not simplify `octave_glow_color`'s `count < 2u` fallback away
+/// on the strength of this function's name.
+///
+/// One table for all of them is what puts a note's disc and its own lit octave
+/// indicator on the same color EXACTLY, rather than to within a tolerance, for
+/// a given pitch. (Which pitch each is fed is a separate question: a voice
+/// outside the wheel's Range lights the outermost slot on its side, so the
+/// disc takes the voice's pitch while the glyph takes the clamped slot's — see
+/// `derive`. They differ there because they are naming different pitches, not
+/// because two definitions of one pitch's color disagree.)
+///
+/// The shader can only afford a lookup — an LCh->sRGB conversion per fragment
+/// is out of reach, and the glow loops call this several times over — so the
+/// choice is not "table vs. exact curve" but "one table vs. a table and a
+/// curve that disagree". Two shapes sharing an edge is the harshest test of a
+/// color match there is, and structural agreement passes it at any table size.
+///
+/// What the table's size buys is therefore fidelity to the DESIGNED curve
+/// ([`pitch_ramp_lch`]), never agreement between shapes — see [`PITCH_LUT_N`]
+/// for why that fidelity is worth far less per entry than it looks.
 pub fn pitch_lut_color(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
     let lut = pitch_ramp_lut();
     let f = pitch_ramp_t(pitch, darkest_pitch, brightest_pitch) as f32 * (PITCH_LUT_N - 1) as f32;
@@ -113,9 +148,10 @@ pub fn channel_color(channel: u8, pitch: f32, darkest_pitch: f32, brightest_pitc
             7 => lch(80.0, 0.0, 0.0),    // white
             _ => lch(0.0, 0.0, 0.0),     // 8: black
         },
-        ChannelRole::PitchGradient => {
-            pitch_ramp_lch(pitch_ramp_t(pitch, darkest_pitch, brightest_pitch))
-        }
+        // Through the table, not off the curve direct: the shader has only the
+        // table, so this is what puts a disc and the octave glyph drawn on top
+        // of it in the same color exactly (see [`pitch_lut_color`]).
+        ChannelRole::PitchGradient => pitch_lut_color(pitch, darkest_pitch, brightest_pitch),
         // Outline voices get a bright neutral (the ring shape is the
         // signal). Ignored never reaches here — the tracker drops it.
         ChannelRole::Outline | ChannelRole::Ignored => Vec4::new(0.85, 0.85, 0.88, 1.0),

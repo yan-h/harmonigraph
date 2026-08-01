@@ -16,26 +16,71 @@ fn pitch_colored_channels_vary_with_pitch() {
 }
 
 #[test]
-fn pitch_lut_lut_reproduces_the_pitch_gradient() {
-    // The octave glyphs tint each slot by sampling `pitch_ramp_lut`
-    // the way the shader does (linear interp across PITCH_LUT_N entries).
-    // Reconstructing that here must land on the disc's gradient color for
-    // the same pitch, so a dot is the color of the disc its pitch lights.
+fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
+    // The shader tints an octave glyph by walking `pitch_ramp_lut`; the disc
+    // beneath it is colored on the CPU. They share an edge, which is the
+    // harshest test of a color match there is, so the two walks have to agree
+    // EXACTLY — a tolerance here is a step someone can see. Reproducing the
+    // shader's walk by hand and comparing against the disc path (channel 9 is
+    // pitch-gradient) is what pins that.
+    //
+    // Scoped to ONE pitch down both sides, which is the property the shared
+    // table can deliver. What a disc and a glyph are each FED can still differ
+    // — derive clamps a voice outside the wheel's Range onto the outermost
+    // slot — and that is a different pitch, not a disagreement about a color.
     let lut = pitch_ramp_lut();
     let (dark, bright) = (24.0f32, 108.0f32);
-    for pitch in [24.0f32, 36.0, 54.0, 60.0, 72.0, 96.0, 108.0] {
+    // The sweep is insurance rather than coverage: both sides reduce to the
+    // same arithmetic today, so it can only fail once someone changes one
+    // walk's interpolation form and not the other's — which is precisely the
+    // edit that would put the gamut corner back between two shapes.
+    let mut pitch = dark;
+    while pitch <= bright {
         let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
         let f = t * (PITCH_LUT_N - 1) as f32;
         let i0 = f.floor() as usize;
         let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
-        let lut_color = lut[i0].lerp(lut[i1], f - f.floor());
-        // Same pitch through the disc path (channel 9 is pitch-gradient).
+        let glyph = lut[i0].lerp(lut[i1], f - f.floor());
         let disc = channel_color(9, pitch, dark, bright);
-        assert!(
-            (lut_color - disc).truncate().length() < 0.05,
-            "pitch {pitch}: lut {lut_color:?} vs disc {disc:?}"
-        );
+        assert_eq!(glyph, disc, "pitch {pitch}: glyph {glyph:?} vs disc {disc:?}");
+        pitch += 0.01;
     }
+}
+
+#[test]
+fn the_table_tracks_the_curve_it_samples() {
+    // Agreement between shapes is structural (the test above); what
+    // PITCH_LUT_N buys is how closely the table follows the designed curve.
+    // Pin that separately so a future cut to the constant shows up as the
+    // gradient drifting off its design rather than as nothing at all.
+    //
+    // 4.5/255 against the 3.6 the constant currently measures. The slack is
+    // there because the worst case is governed by where a sample lands
+    // relative to the gamut corner near MIDI 43, so a tweak to the ramp's own
+    // constants moves that corner and swings the number without anything being
+    // wrong — but it is drawn tight enough to fail every cut a person would
+    // actually make: 48 measures 9.0/255, 32 measures 9.6, 24 measures 6.2,
+    // and 16 — where this started — measures 14.9.
+    let (dark, bright) = (24.0f32, 108.0f32);
+    let mut worst = 0.0f32;
+    let mut worst_pitch = 0.0f32;
+    let mut pitch = dark;
+    while pitch <= bright {
+        let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
+        let table = pitch_lut_color(pitch, dark, bright);
+        let curve = crate::color::designed_pitch_ramp(f64::from(t));
+        let e = (table - curve).truncate().abs().max_element();
+        if e > worst {
+            worst = e;
+            worst_pitch = pitch;
+        }
+        pitch += 0.01;
+    }
+    assert!(
+        worst * 255.0 < 4.5,
+        "table strays {:.1}/255 from the designed curve at MIDI {worst_pitch:.2}",
+        worst * 255.0
+    );
 }
 
 #[test]

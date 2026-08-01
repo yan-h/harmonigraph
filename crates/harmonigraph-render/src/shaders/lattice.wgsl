@@ -33,9 +33,11 @@ struct Uniforms {
     // guarantees z > y). w: unused — it carried the backdrop opacity, which
     // is fixed on below.
     misc3: vec4<f32>,
-    // Pitch->color lookup for the octave glyphs, matching the node disc
-    // gradient (length mirrors harmonigraph_scene::PITCH_LUT_N).
-    pitch_lut: array<vec4<f32>, 16>,
+    // Pitch->color lookup for the octave glyphs. The disc is colored through
+    // this same table on the CPU, so a glyph and the disc under it match
+    // exactly rather than closely (length mirrors
+    // harmonigraph_scene::PITCH_LUT_N).
+    pitch_lut: array<vec4<f32>, 64>,
     // Idle node color (the view's grid color): the home-sheet placeholder ring is
     // drawn in this constant grey, so a releasing note's ring stays grey
     // (not the note hue) and never snaps color when the voice is pruned.
@@ -310,7 +312,7 @@ const MAX_CELLS: u32 = 11u;
 
 // Length of the pitch->color LUT (mirrors harmonigraph_scene::PITCH_LUT_N
 // and the `pitch_lut` array in Uniforms).
-const PITCH_LUT_N: u32 = 16u;
+const PITCH_LUT_N: u32 = 64u;
 
 // Coverage of `x` inside the threshold `edge`, with a screen-constant
 // soft band: `w` is ~a pixel expressed in `x`'s units (from fwidth at

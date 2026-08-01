@@ -9,6 +9,31 @@ fn baked_shader_validates() {
         .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
 }
 
+/// The `const _: () = assert!(PITCH_LUT_N == 64)` in `lib.rs` ties one Rust
+/// literal to another; the two that decide what the GPU actually reads are in
+/// WGSL, where no compiler is checking them against the scene's constant. This
+/// is the half that catches a one-sided bump.
+///
+/// Both slips are silent otherwise. Raise the array but not the const and the
+/// shader walks 63 entries of a longer table, painting a top-of-range glyph the
+/// color of a pitch halfway down the ramp while the disc under it takes the
+/// top — the mismatch #165 closed, reopened at several times the width. Raise
+/// the const but not the array and the surplus indices clamp at runtime, which
+/// is not a validation error either. naga sees a well-formed shader both ways,
+/// `min_binding_size: None` means an over-long buffer never complains, and the
+/// scene tests read PITCH_LUT_N symbolically, so they pass at any value.
+#[test]
+fn the_shaders_pitch_lut_is_the_length_the_scene_says() {
+    let n = harmonigraph_scene::PITCH_LUT_N;
+    for needle in [format!("array<vec4<f32>, {n}>"), format!("const PITCH_LUT_N: u32 = {n}u;")] {
+        assert!(
+            SHADER_SRC.contains(&needle),
+            "lattice.wgsl must declare `{needle}` to match harmonigraph_scene::PITCH_LUT_N \
+             ({n}); the CPU uploads that many entries and the GPU would index a different table",
+        );
+    }
+}
+
 /// blit.wgsl has no hot-reload path, so a broken edit would otherwise
 /// first surface as a pipeline panic inside a DAW.
 #[test]
@@ -247,8 +272,15 @@ fn parity_scene() -> Scene {
         trail_mark: Default::default(),
         trail_strength: 0.0,
         node_idle: Vec4::new(0.27, 0.29, 0.34, 1.0),
+        // A blue->red sweep across the whole table, so a glyph's color is a
+        // reading of which entry it landed on. Spanned off PITCH_LUT_N rather
+        // than a literal: `from_fn` sizes itself from the field, so a literal
+        // divisor would silently stop covering the table when the constant
+        // grows, leaving every entry past it out of gamut and clamping to one
+        // color — the fixture would still render, and would still be green.
         pitch_lut: std::array::from_fn(|k| {
-            Vec4::new(k as f32 / 15.0, 0.4, 1.0 - k as f32 / 15.0, 1.0)
+            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+            Vec4::new(t, 0.4, 1.0 - t, 1.0)
         }),
         darkest_pitch: 24.0,
         brightest_pitch: 108.0,
