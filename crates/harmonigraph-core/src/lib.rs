@@ -34,4 +34,6 @@ pub use history::{NoteHistory, Visit};
 pub use notes::{ChannelRole, NoteEvent, NoteEventKind, NoteTracker, Time, Voice, VoiceState};
 pub use roll::{NoteRoll, RollNote};
 pub use spectrogram::{SpectrogramColumn, SpectrumHistory};
-pub use tuning::{learn_tuning, LearnedTuning, PitchClass, PitchClassDistance, Tuning};
+pub use tuning::{
+    learn_tuning, Comma, LearnedTuning, PitchClass, PitchClassDistance, Tempered, Tuning,
+};

@@ -70,14 +70,17 @@ pub fn render(
     // picture: no armed-mode pulse, no hover highlight.
     state.learn_active = false;
     state.hovered = None;
-    // The meantone auto-detect is interactive too, in the sense that matters
-    // here: it answers a tuning EDIT, and a replay has no editor. Left on, it
-    // judges the take's tuning afresh on frame 0 — and a session that switched
-    // the mode off at a tuning that IS a meantone (12-TET, say) would export
-    // with it on, dropping the comma marks and collapsing comma-equivalent
-    // nodes the recorded session showed. The blob carries what was on screen;
-    // the render's job is to reproduce it, not to re-decide it.
-    state.view.meantone_auto = false;
+    // The comma auto-detects are interactive too, in the sense that matters
+    // here: they answer a tuning EDIT, and a replay has no editor. Left on,
+    // they judge the take's tuning afresh on frame 0 — and a session that
+    // switched one off at a tuning that IS that temperament (12-TET, which is
+    // both of them) would export with it on, respelling names and collapsing
+    // comma-equivalent nodes the recorded session showed. The blob carries
+    // what was on screen; the render's job is to reproduce it, not to
+    // re-decide it.
+    for comma in harmonigraph_core::Comma::ALL {
+        *state.view.temper_auto_mut(comma) = false;
+    }
 
     // Playhead mode: precompute the whole take's spectrogram from the full
     // audio, once, up front. It's a pure function of (audio, config, span), so

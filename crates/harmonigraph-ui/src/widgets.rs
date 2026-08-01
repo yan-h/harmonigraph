@@ -216,9 +216,10 @@ pub struct ValueBar<'a> {
     decimals: usize,
     integer: bool,
     /// A word saying what is DRIVING the value, drawn at full brightness
-    /// ahead of the bar's name. Used by the major-third bar while meantone
-    /// mode derives the third from the fifth: the number in the bar is then
-    /// not the one the param holds, and the badge is what says so.
+    /// ahead of the bar's name. Used by the bar of an axis a tempered-out
+    /// comma derives (the major third under meantone, the harmonic seventh
+    /// under marvel): the number in the bar is then not the one the param
+    /// holds, and the badge is what says so.
     badge: Option<&'a str>,
     /// `(target, tolerance)`: a value the bar is pulled to while an edit
     /// lands within `tolerance` of it (see [`ValueBar::magnet`]).

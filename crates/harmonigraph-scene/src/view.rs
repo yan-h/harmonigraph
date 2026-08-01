@@ -7,7 +7,7 @@ use crate::style::{
     HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
 };
 use crate::trail::TrailMark;
-use harmonigraph_core::{coords, LatticePos};
+use harmonigraph_core::{coords, Comma, LatticePos, Tempered};
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
@@ -348,9 +348,14 @@ pub struct ViewConfig {
     pub trail_labels: bool,
 
     /// Meantone mode: lock the major-third tuning to four perfect fifths
-    /// (temper out the syntonic comma). While on, the third-tuning value is
-    /// derived from the fifth (in `begin_frame`) and note-name labels drop
-    /// their comma marks.
+    /// (temper out the syntonic comma, 81/80). While on, the third-tuning
+    /// value is derived from the fifth (in `begin_frame`) and note names are
+    /// respelled without their comma marks.
+    ///
+    /// One of two comma switches, and the pattern for both: the flag is named
+    /// after the temperament that tempers its comma out, [`Self::marvel`] is
+    /// the same switch for 225/224, and [`ViewConfig::tempers`] is how the UI
+    /// reaches either by [`Comma`] rather than by name.
     ///
     /// Whether this engages by itself is [`Self::meantone_auto`]'s business;
     /// releasing it is always an edit of the major third (or this switch,
@@ -358,7 +363,7 @@ pub struct ViewConfig {
     #[serde(default)]
     pub meantone: bool,
     /// Auto-detect meantone: engage [`Self::meantone`] whenever the tuning
-    /// params land within `MEANTONE_TOLERANCE` of the meantone identity —
+    /// params land within `TEMPER_TOLERANCE` of the meantone identity —
     /// however they got there (a learned chord, the 12-TET preset, a drag
     /// of either bar). The major third then snaps to four perfect fifths
     /// and the comma marks go.
@@ -376,6 +381,32 @@ pub struct ViewConfig {
     /// the switch back.
     #[serde(default = "default_true")]
     pub meantone_auto: bool,
+    /// Marvel mode: lock the harmonic-seventh tuning to two fifths plus two
+    /// thirds (temper out the septimal kleisma, 225/224). The same switch as
+    /// [`Self::meantone`] one prime up — while on, the seventh-tuning value
+    /// is derived in `begin_frame` and the sevens sheet is respelled onto the
+    /// home sheet, where a harmonic seventh reads `A♯-2` (two fifths plus two
+    /// thirds) instead of `B♭↓`.
+    ///
+    /// The third it derives from is the one in USE, so with meantone on too
+    /// the pair composes into septimal meantone (a seventh of ten fifths) and
+    /// every name on the lattice comes out a plain letter.
+    #[serde(default)]
+    pub marvel: bool,
+    /// Auto-detect marvel: [`Self::meantone_auto`]'s twin, engage-only for
+    /// the same reason — the lock has to survive dragging the fifth or the
+    /// third, either of which moves the derived seventh out from under a
+    /// seventh param that is inert while the lock holds.
+    ///
+    /// On by default, and `default_true` on the same grounds as the meantone
+    /// detect: 12-TET tempers 225/224 out as well (1000 = 2·700 + 2·400 −
+    /// 1200), so a project saved there has one pitch under `B♭↓` and `A♯`
+    /// whether or not anyone said "marvel". A blob written before this
+    /// existed therefore opts in, and reopening it respells the sevens sheet
+    /// — which is the tuning's own arithmetic finally showing up in the
+    /// names, not a change of mind about the project.
+    #[serde(default = "default_true")]
+    pub marvel_auto: bool,
     /// Hide every tab bar so adjacent panes — lattice above spectrum, in the
     /// default layout — record as one seamless surface. Tab toggles it.
     ///
@@ -600,6 +631,54 @@ impl ViewConfig {
         LatticePos::new(self.center_threes, self.center_fives, self.center_sevens)
     }
 
+    /// The commas being tempered out, as the set a name is spelled against
+    /// ([`LatticePos::respell`]). The flags are stored one per comma so a
+    /// saved project keeps reading, and this is where they become the one
+    /// value every naming path takes.
+    pub fn tempered(&self) -> Tempered {
+        Tempered { syntonic: self.meantone, septimal_kleisma: self.marvel }
+    }
+
+    /// Whether one comma is being tempered out.
+    pub fn tempers(&self, comma: Comma) -> bool {
+        match comma {
+            Comma::Syntonic => self.meantone,
+            Comma::SeptimalKleisma => self.marvel,
+        }
+    }
+
+    /// Whether one comma's auto-detect is running.
+    pub fn temper_auto(&self, comma: Comma) -> bool {
+        match comma {
+            Comma::Syntonic => self.meantone_auto,
+            Comma::SeptimalKleisma => self.marvel_auto,
+        }
+    }
+
+    /// The switch for one comma's tempering, to read or set. Together with
+    /// [`Self::temper_auto_mut`] this is what lets the tempering section be a
+    /// loop over [`Comma::ALL`] instead of a block per comma.
+    ///
+    /// A third comma is then additive rather than another special case, but
+    /// it is not free: the variant and its arms on [`Comma`], two fields and
+    /// four arms here, one in `LatticePos::respell`, one in the UI's
+    /// `judged_axes`, and one in its `derived_key` — which lives there
+    /// because a `ParamKey` is the UI's to name, not core's.
+    pub fn temper_mut(&mut self, comma: Comma) -> &mut bool {
+        match comma {
+            Comma::Syntonic => &mut self.meantone,
+            Comma::SeptimalKleisma => &mut self.marvel,
+        }
+    }
+
+    /// The auto-detect switch for one comma.
+    pub fn temper_auto_mut(&mut self, comma: Comma) -> &mut bool {
+        match comma {
+            Comma::Syntonic => &mut self.meantone_auto,
+            Comma::SeptimalKleisma => &mut self.marvel_auto,
+        }
+    }
+
     /// Fit a deserialized view to what its controls can actually produce, and
     /// fold the fields a loadable blob may still spell an older way.
     ///
@@ -754,6 +833,8 @@ impl Default for ViewConfig {
             trail_labels: true,
             meantone: false,
             meantone_auto: true,
+            marvel: false,
+            marvel_auto: true,
             frameless: false,
             show_perf: false,
             show_perf_detail: false,
