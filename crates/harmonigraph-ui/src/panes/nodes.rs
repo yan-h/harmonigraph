@@ -101,9 +101,10 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .show(ui)
         .on_hover_text(
             "How much of its width the octave at the EDGE of the range gives \
-             up, which the middle ones take: 0 is an even axis — no taper at \
-             all — and 0.9 leaves the edge a tenth of the middle. Whatever \
-             the Shape, the two ends are this",
+             up, which the ones inside it take: 0 is an even axis — no taper \
+             at all — and 0.9 leaves those outermost slices a tenth of the \
+             width an even octave would have. This alone sets them; the Shape \
+             below never moves them",
         );
     // Inert at Amount 0, where there is no loss to place: the Shape bar can
     // only say where a taper falls, not whether there is one.

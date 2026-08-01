@@ -35,8 +35,8 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use octaves::{
-    octave_layout, shape_exponent, taper_weight, OctaveLayout, DEFAULT_TAPER_SHAPE,
-    MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIDDLE_C_SLOT, MIN_OCTAVE_SPAN, OCTAVE_SLOTS,
+    octave_layout, OctaveLayout, DEFAULT_TAPER_SHAPE, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT,
+    MIDDLE_C_SLOT, MIN_OCTAVE_SPAN, OCTAVE_SLOTS,
 };
 pub use style::{
     HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,

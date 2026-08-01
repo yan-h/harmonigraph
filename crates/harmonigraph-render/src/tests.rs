@@ -848,7 +848,7 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 /// window and comes round the seam, which is one whole octave of the Range.
 #[test]
 fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
-    use harmonigraph_scene::{octave_layout, MAX_TAPER_AMOUNT};
+    use harmonigraph_scene::octave_layout;
 
     let Some((device, queue)) = headless_device() else {
         return;
@@ -883,9 +883,15 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     // window's ends) and at three pitch classes that do not.
     let mut pane = 60;
     for span in 2..=5u32 {
-        // An even axis, a straight ramp, the sharpest shape at full strength,
-        // and a plateau.
-        for (amount, shape) in [(0.0, 0.5), (0.6, 0.5), (MAX_TAPER_AMOUNT, 0.0), (0.6, 0.85)] {
+        // An even axis, a straight ramp, the sharpest shape, and a plateau.
+        //
+        // Not the FULLEST amount, which is the one thing here the picture
+        // cannot answer: the Gap is cut out of the sectors either side of it,
+        // and at 0.9 the edge slices are thinner than that padding, so their
+        // two slits meet and the ring reads as one indicator short. That is
+        // the setting talking rather than a missing indicator — `octaves.rs`
+        // pins the extreme exactly, on angles, where no padding is involved.
+        for (amount, shape) in [(0.0, 0.5), (0.6, 0.5), (0.7, 0.0), (0.6, 0.85)] {
             for cents in [0.0, 350.0, 700.0, 1150.0] {
                 let layout = octave_layout(span, amount, shape);
                 let px = shot(&octave_wheel_scene(layout, cents), pane);

@@ -178,11 +178,11 @@ pub struct ViewConfig {
     /// outermost indicator on their side.
     #[serde(default = "default_octave_span")]
     pub octave_span: u32,
-    /// How much of its width the octave at the EDGE of the Range gives up to
-    /// the middle ones, 0..0.9 (see [`taper_weight`]). 0 is an even axis, so
-    /// this alone says whether there is a taper at all; the middle octaves
-    /// take the degrees the outer ones give up, which is where the visual
-    /// weight of the wheel sits rather than how big the ring is.
+    /// How much of its width the octave at the EDGE of the Range gives up
+    /// to the ones inside it, 0..0.9. It is the ONLY thing that sets those
+    /// outermost slices: they come out `1 - this` of an even slice at every
+    /// shape, so 0 is an even axis and 0.9 leaves them a tenth. Where the
+    /// width they give up lands is the shape below.
     #[serde(default = "default_octave_taper_amount")]
     pub octave_taper_amount: f32,
     /// WHERE that loss falls between middle C and the edge, 0..1: under half
