@@ -62,19 +62,10 @@ ago() {  # $1 = epoch seconds -> compact "3m ago"
   fi
 }
 
-# This script scans EVERY worktree, not just the one it lives in, so at the
-# rename boundary it has to read both vocabularies: a branch cut before
-# Harmonigraph still builds libmidi_lattice_3d.dylib, and would otherwise
-# read as "- not built -" and refuse to load. Delete LIB_LEGACY and this
-# fallback once no pre-rename worktree is left.
-LIB_LEGACY="midi_lattice_3d"
-
-# Echo the release dylib worktree $1 built under either name, or nothing.
+# Echo the release dylib worktree $1 built, or nothing.
 find_dylib() {
-  local rel="$1/target/release" cand
-  for cand in "$rel/lib${LIB}.dylib" "$rel/lib${LIB_LEGACY}.dylib"; do
-    [[ -f "$cand" ]] && { echo "$cand"; return 0; }
-  done
+  local cand="$1/target/release/lib${LIB}.dylib"
+  [[ -f "$cand" ]] && { echo "$cand"; return 0; }
   return 1
 }
 
@@ -111,8 +102,7 @@ load_build() {  # $1 = worktree index
   local path="${WT_PATH[$1]}" branch="${WT_BRANCH[$1]}"
   local dylib
   dylib="$(find_dylib "$path")" || {
-    echo "ERROR: no build in $path/target/release (looked for lib${LIB}.dylib" >&2
-    echo "       and the pre-rename lib${LIB_LEGACY}.dylib)" >&2
+    echo "ERROR: no build in $path/target/release (looked for lib${LIB}.dylib)" >&2
     echo "       build it first:  (cd \"$path\" && cargo build --release -p $PKG)" >&2
     exit 1
   }
