@@ -25,6 +25,11 @@ fn persist_round_trips_camera_and_view() {
     // matching the defaults by luck.
     state.view.mark_melody = true;
     state.view.mark_bass = false;
+    // A window that is neither the default nor a whole number of octaves, so
+    // the pair proves it round-trips as two continuous ends rather than
+    // landing back on something the layout would have produced anyway.
+    state.view.octave_low = 27.5;
+    state.view.octave_high = 101.25;
     state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
@@ -53,6 +58,7 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.view.idle_radius, 0.31);
     assert!(restored.view.mark_melody);
     assert!(!restored.view.mark_bass, "bass off round-trips");
+    assert_eq!((restored.view.octave_low, restored.view.octave_high), (27.5, 101.25));
     assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
@@ -81,6 +87,45 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     restored.load_persist(&saved);
     assert!(restored.view.meantone_auto, "a missing key means on");
     assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
+}
+
+/// The octave wheel was a COUNT of octaves either side of middle C's before it
+/// was a pitch window, and a project saved against it has to open on the same
+/// picture: `2 * span + 1` octaves, centered on middle C.
+///
+/// ±5 is the one that cannot be reproduced exactly — it reached half an octave
+/// under MIDI 0, which is under the lowest pitch the window can name — so it
+/// lands at the floor with the same eleven octaves in it, the bottom one cut
+/// off at the seam rather than centered on it. That is a whole octave of the
+/// wheel either way, which is why it is worth pinning rather than leaving to
+/// whatever the clamp happens to do.
+#[test]
+fn a_blob_written_against_the_octave_count_opens_on_the_window_it_named() {
+    for (span, low, high) in
+        [(2u32, 30.0f32, 90.0f32), (3, 18.0, 102.0), (4, 6.0, 114.0), (5, 0.0, 126.0)]
+    {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        state.camera.yaw = 1.23;
+        // The window keys are what a blob written against the count does NOT
+        // carry, so swapping the pair for `octave_span` is exactly that blob.
+        let saved = state.save_persist().replace(
+            &format!(
+                "octave_low:{:?},octave_high:{:?}",
+                state.view.octave_low, state.view.octave_high
+            ),
+            &format!("octave_span:{span}"),
+        );
+        assert_ne!(saved, state.save_persist(), "replacement must have hit for ±{span}");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&saved);
+        assert_eq!(
+            (restored.view.octave_low, restored.view.octave_high),
+            (low, high),
+            "±{span} names {low}..{high}"
+        );
+        assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores (±{span})");
+    }
 }
 
 #[test]

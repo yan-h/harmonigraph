@@ -170,14 +170,35 @@ pub struct ViewConfig {
     /// the rings right against it.
     #[serde(default = "default_outer_gap")]
     pub outer_gap: f32,
-    /// How many octaves either side of middle C's the wheel shows, 2..=5
-    /// (see [`octaves`](crate::octaves)). That is `2 * span + 1` indicators,
-    /// the same octave NUMBERS on every node whatever its pitch class, and
-    /// one turn of the node holds all of them — so this also says how many
-    /// degrees an octave is worth. Notes outside the range light the
-    /// outermost indicator on their side.
-    #[serde(default = "default_octave_span")]
-    pub octave_span: u32,
+    /// The pitch window one turn of a node covers, in MIDI note numbers (see
+    /// [`octaves`](crate::octaves)). Continuous at both ends: octaves are what
+    /// the wheel is divided BY, not what the range is measured in, so this says
+    /// which register the ring is about and how many degrees an octave of it is
+    /// worth. A node draws the octaves of itself that land inside; notes
+    /// outside light the outermost indicator on their side.
+    #[serde(default = "default_octave_low")]
+    pub octave_low: f32,
+    /// The high end of that window. See [`octave_low`](Self::octave_low);
+    /// [`sanitize`](Self::sanitize) holds the pair to the settable limits.
+    #[serde(default = "default_octave_high")]
+    pub octave_high: f32,
+    /// The pre-window octave COUNT: how many octaves either side of middle C's
+    /// the wheel showed, 2..=5. Folded into the window by
+    /// [`sanitize`](Self::sanitize) and never written back, so a project saved
+    /// against the count opens on the window it named — `2 * span + 1` octaves
+    /// centered on middle C, which is the same picture.
+    ///
+    /// Reads through `bare_as_some` for the reason the melody/bass shim above
+    /// does: the old blobs write the count BARE, which RON will not read into
+    /// an `Option`'s `Some`, and a failed parse drops the whole persist rather
+    /// than just this field.
+    #[serde(
+        default,
+        skip_serializing,
+        rename = "octave_span",
+        deserialize_with = "bare_as_some"
+    )]
+    pub legacy_octave_span: Option<u32>,
     /// How much of its width the octave at the EDGE of the Range gives up
     /// to the ones inside it, 0..0.9. It is the ONLY thing that sets those
     /// outermost slices: they come out `1 - this` of an even slice at every
@@ -185,9 +206,10 @@ pub struct ViewConfig {
     /// width they give up lands is the shape below.
     #[serde(default = "default_octave_taper_amount")]
     pub octave_taper_amount: f32,
-    /// WHERE that loss falls between middle C and the edge, 0..1: under half
-    /// it lands at once and the outer octaves flatten out, over half the
-    /// middle several are held near full width and the last ones fall away.
+    /// WHERE that loss falls between the middle of the window and its edge,
+    /// 0..1: under half it lands at once and the outer octaves flatten out,
+    /// over half the middle several are held near full width and the last
+    /// ones fall away.
     /// The ends are pinned by the amount whatever this is, so it is a shape
     /// rather than a second strength — and it is inert at amount 0.
     #[serde(default = "default_octave_taper_shape")]
@@ -477,13 +499,19 @@ fn default_outer_gap() -> f32 {
 /// Indicators C0..C8 in this crate's numbering (middle C = C4; the UI
 /// spells the same nine C-1..C7, in Bitwig's): past both ends of any
 /// keyboard part, and at 9 octaves to the turn an octave is worth 40
-/// degrees, which reads at a glance. A blob written before the span was a
-/// setting was drawn with ten fixed 45-degree sectors covering MIDI octaves
-/// 0..9 — nine of them at 40 degrees is the nearest honest reading of that,
-/// and unlike the ten it divides the circle evenly instead of wrapping the
-/// top two octaves back over the bottom two.
-fn default_octave_span() -> u32 {
-    crate::octaves::DEFAULT_OCTAVE_SPAN
+/// degrees, which reads at a glance. A blob written before the wheel was a
+/// setting at all was drawn with ten fixed 45-degree sectors covering MIDI
+/// octaves 0..9 — nine of them at 40 degrees is the nearest honest reading of
+/// that, and unlike the ten it divides the circle evenly instead of wrapping
+/// the top two octaves back over the bottom two. One written against the
+/// octave COUNT carries `octave_span` instead, which `sanitize` folds in.
+fn default_octave_low() -> f32 {
+    crate::octaves::DEFAULT_WINDOW_LOW
+}
+
+/// See [`default_octave_low`].
+fn default_octave_high() -> f32 {
+    crate::octaves::DEFAULT_WINDOW_HIGH
 }
 
 /// No taper: the amount is the whole of whether there is one, so a fresh
@@ -595,6 +623,19 @@ impl ViewConfig {
             self.mark_melody = which.marks_melody();
             self.mark_bass = which.marks_bass();
         }
+
+        // The octave wheel's pre-window count, which named the window
+        // `2 * span + 1` octaves wide and centered on middle C. Ahead of the
+        // clamp below, so the ±5 window — which reached half an octave under
+        // MIDI 0, where the settable range now stops — comes back inside it
+        // rather than being dropped.
+        if let Some(span) = self.legacy_octave_span.take() {
+            let half = 6.0 * (2 * span.clamp(1, 5) + 1) as f32;
+            self.octave_low = 60.0 - half;
+            self.octave_high = 60.0 + half;
+        }
+        (self.octave_low, self.octave_high) =
+            crate::octaves::clamp_window(self.octave_low, self.octave_high);
     }
 }
 
@@ -654,10 +695,13 @@ impl Default for ViewConfig {
             outer_inner: 0.641_313_55,
             outer_outer: 0.851_483_05,
             outer_gap: 0.051_732_67,
-            // Nine octaves to the turn, evenly: the taper is off, so the
-            // axis a fresh view starts from is an even one, and any
-            // weighting of the middle octaves is a choice made from there.
-            octave_span: default_octave_span(),
+            // Nine octaves to the turn, centered on middle C, evenly: the
+            // taper is off, so the axis a fresh view starts from is an even
+            // one, and any weighting of the middle octaves is a choice made
+            // from there.
+            octave_low: default_octave_low(),
+            octave_high: default_octave_high(),
+            legacy_octave_span: None,
             octave_taper_amount: default_octave_taper_amount(),
             octave_taper_shape: default_octave_taper_shape(),
             // No idle marker: the grid lines alone carry the lattice's

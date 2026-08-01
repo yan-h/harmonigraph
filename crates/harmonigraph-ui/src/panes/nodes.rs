@@ -9,7 +9,7 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    NodeStyle, ViewConfig, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIN_OCTAVE_SPAN,
+    NodeStyle, ViewConfig, MAX_TAPER_AMOUNT, MIN_WINDOW, PITCH_CEIL, PITCH_FLOOR,
 };
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
@@ -72,31 +72,30 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
     // Range and Taper are the axis; Band and Gap below are where it is drawn.
-    // Range counts octaves out from middle C's and every node draws all of
-    // them — the same octave numbers whatever the node's pitch class, which
-    // is only what decides where round the turn they land.
     //
-    // A bar over the layout's own bounds, rather than a button per octave
-    // list: the ends come from MIN/MAX_OCTAVE_SPAN, so widening what the
-    // shader's tables hold widens the control with them, and a Range the
-    // layout would clamp away is unreachable by construction. Held to whole
-    // octaves — an indicator is one octave, so half of one is not a setting.
-    let mut span = view.octave_span as f32;
-    if ValueBar::new(&mut span, MIN_OCTAVE_SPAN as f32..=MAX_OCTAVE_SPAN as f32, "Range")
-        .integer()
-        .display(|v| format!("±{v:.0}"))
+    // A PITCH RANGE, dragged like the color range and the analyzer's axis, not
+    // a count of octaves: the wheel is a window onto the keyboard, and which
+    // register it is about is the question worth asking of it. The octaves are
+    // what the window is divided BY — a node draws the ones it has inside,
+    // wherever the ends fall between them.
+    //
+    // Both ends over the whole of MIDI, so any register can be framed; the
+    // minimum span is five octaves, which is where the taper's arithmetic
+    // stops being able to keep an indicator under a whole turn (see
+    // `harmonigraph_scene::MIN_WINDOW`).
+    ui.label("Range");
+    RangeBar::new(&mut view.octave_low, &mut view.octave_high, PITCH_FLOOR..=PITCH_CEIL)
+        .min_span(MIN_WINDOW)
+        .display(pitch_readout)
         .show(ui)
         .on_hover_text(
-            "How many octaves either side of middle C's every node draws, \
-             which is also how many are on the turn: ±2 is five indicators, \
-             C1..C5 in the DAW's numbering, and ±5 is eleven — every octave \
-             MIDI has, so one of them is 33 degrees. Wider reaches more of the \
-             keyboard and gives each octave less of the ring",
-        )
-        .changed()
-    {
-        view.octave_span = span.round() as u32;
-    }
+            "The pitch window one turn of a node covers. Each node draws the \
+             octaves of itself that land inside it, so a narrow window gives \
+             each of them more of the ring and a wide one reaches more of the \
+             keyboard. Drag either end, or drag between them to move the whole \
+             window; notes outside it light the outermost indicator on their \
+             side rather than vanishing.",
+        );
     // The taper is two bars rather than a list of named curves: the amount is
     // the only thing that moves the ends, the shape says where in between the
     // loss falls, and an even axis is amount 0 rather than a mode beside them.
@@ -116,11 +115,11 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .show(ui)
             .on_hover_text(
                 "WHERE that width is given up. Left of the middle it goes at \
-                 once — the octave next to middle C gives up most of what the \
-                 edge one does and the outer ones flatten off, a spotlight on \
-                 the middle. Right of it the middle several octaves stay near \
-                 full width and the outermost fall away, a plateau. The \
-                 middle of the bar is a straight ramp",
+                 once — the octave next to the middle of the range gives up \
+                 most of what the edge one does and the outer ones flatten \
+                 off, a spotlight on the middle. Right of it the middle \
+                 several octaves stay near full width and the outermost fall \
+                 away, a plateau. The middle of the bar is a straight ramp",
             );
     });
     // No on/off: the layer is what says which octaves are sounding, which

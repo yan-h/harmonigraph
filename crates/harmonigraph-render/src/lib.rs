@@ -178,29 +178,33 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
-    /// x: octaves the pitch window spans (`OctaveLayout::octaves`); y: the
-    /// MIDI pitch at its low end, which is the seam. Together they are the
-    /// domain of the wheel's pitch axis. z, w: the lowest and highest octave
-    /// slot every node draws (`OctaveLayout::slot_range`), so the shader is
-    /// told which octaves the Range names rather than re-deriving them.
+    /// The wheel's pitch axis, as its domain and the cuts in it. x: cells the
+    /// window is divided into (`OctaveLayout::cells`); y, z: the MIDI pitch at
+    /// its low end, which is the seam, and at its high end; w: the pitch the
+    /// cell boundaries are counted from (`OctaveLayout::cell_origin`).
+    ///
+    /// No slot range, unlike the count this replaced: which octaves a node
+    /// draws depends on the node's own pitch class now that the window is a
+    /// pitch range, so the shader derives it per node from these.
     misc7: [f32; 4],
-    /// `OctaveLayout::bounds` — the angle of each octave boundary of the
+    /// `OctaveLayout::bounds` — the angle of each cell boundary of the
     /// window — four to a row, which is how a uniform array is laid out
     /// anyway.
     oct_bounds: [[f32; 4]; 3],
 }
 
-// Two fixed-size GPU homes for the slots, and the tighter one is what this
-// asserts: 3 u32 words hold 12 packed levels, but `oct_bounds`'s 3 vec4s
-// hold 12 boundary angles and the layout needs SLOTS + 1 of them — so 11
-// slots is the ceiling, not 12. Growing the constant in harmonigraph-scene
-// past it would index out of bounds at runtime here, so fail the build.
+// Two fixed-size GPU homes, one per table, and both are exact rather than
+// one-sided ceilings — the uploads below fill every entry unconditionally, so
+// a SMALLER constant in harmonigraph-scene reads off the end of a shorter
+// array and panics on the first frame, which a ceiling would wave through.
 //
-// An EQUALITY, because the `oct_bounds` upload below fills all 12 angles
-// unconditionally: a SMALLER OCTAVE_SLOTS reads off the end of a shorter
-// `bounds` instead, which a one-sided ceiling would wave through into a
-// panic on the first frame.
-const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS + 1 == 12);
+// 3 u32 words hold 12 packed levels, one byte per octave slot.
+const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS == 11);
+// `oct_bounds`'s 3 vec4s hold 12 boundary angles, and the layout needs one per
+// cell plus the closing one — so 11 cells is the ceiling. Widening the pitch
+// limits in harmonigraph-scene past what 11 cells can cover is what would
+// break this; `the_widest_window_fits_the_table` there is the other half.
+const _: () = assert!(harmonigraph_scene::MAX_CELLS + 1 == 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
@@ -528,15 +532,12 @@ impl LatticeCallback {
                     0.0,
                 ],
                 background: scene.background.to_array(),
-                misc7: {
-                    let (low_slot, high_slot) = scene.octave_layout.slot_range();
-                    [
-                        scene.octave_layout.octaves as f32,
-                        scene.octave_layout.low_pitch,
-                        low_slot as f32,
-                        high_slot as f32,
-                    ]
-                },
+                misc7: [
+                    scene.octave_layout.cells as f32,
+                    scene.octave_layout.low_pitch,
+                    scene.octave_layout.high_pitch,
+                    scene.octave_layout.cell_origin,
+                ],
                 // Straight indexing: the table is exactly as long as the
                 // rows are wide (the const assert above is what keeps it so),
                 // and a fallback here would quietly ship a wheel with a wrong

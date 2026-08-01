@@ -171,16 +171,16 @@ pub fn derive_scene(
     // in uv, and the gutter has to finish inside it or it would be clipped
     // square instead of ending as a circle.
     let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
-    // The octave wheel is a pitch axis, so it is a property of the VIEW and
-    // is built once: every node reads the same axis, and draws the same
-    // octaves of it. A node's pitch class only says where round the turn its
-    // own octaves land, so the fold below is one lookup for the frame.
-    let octave_layout =
-        octave_layout(view.octave_span, view.octave_taper_amount, view.octave_taper_shape);
-    let (low_slot, high_slot) = {
-        let (low, high) = octave_layout.slot_range();
-        (low as i8, high as i8)
-    };
+    // The octave wheel is a pitch axis, so it is a property of the VIEW and is
+    // built once: every node reads the same axis. Which octaves OF it a node
+    // draws is per node, since the window is a pitch range rather than a count
+    // of octaves — see the fold below.
+    let octave_layout = octave_layout(
+        view.octave_low,
+        view.octave_high,
+        view.octave_taper_amount,
+        view.octave_taper_shape,
+    );
 
     // Each voice's color, computed once here rather than re-running the
     // LCH->sRGB conversion on every node the voice matches. It depends only on
@@ -205,6 +205,15 @@ pub fn derive_scene(
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
+        // The octaves of THIS pitch class that land in the window, which is
+        // what its indicators are. Per node rather than per frame: a window
+        // that is not a whole number of octaves holds one more of some pitch
+        // classes than of others, and the ring only closes if each node draws
+        // its own.
+        let (low_slot, high_slot) = {
+            let (low, high) = octave_layout.slot_range(node_pc.to_cents());
+            (low as i8, high as i8)
+        };
         let mut activation = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
