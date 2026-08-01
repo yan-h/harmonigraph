@@ -146,3 +146,11 @@ instead, and `/audit-merges` is what pays for them afterwards. Overlapping
 work is better run in sequence, and variants of a single decision (three
 takes on one fade) are better as one session producing several builds to
 compare than as three branches to reconcile.
+
+## Permissions a worktree session needs go in `.claude/settings.json`
+
+`.claude/settings.local.json` is gitignored, so a fresh worktree never gets a
+copy and every rule in it is inert exactly where most sessions run — a grant
+that works in the main checkout still prompts on the branch. Rules that hold
+everywhere, the `cargo`/`git`/`gh` workflow, live in the checked-in
+`.claude/settings.json`; per-machine paths and one-off grants stay local.
