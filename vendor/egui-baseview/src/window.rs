@@ -340,6 +340,10 @@ where
     viewport_id: egui::ViewportId,
     start_time: Instant,
     egui_input: egui::RawInput,
+    /// Where the pointer was last seen, which is where a button event happens:
+    /// baseview reports a press and a release without one. `None` only before
+    /// the first move — and it is not cleared when the pointer leaves, because
+    /// a release still lands where the pointer was (see `CursorLeft`).
     pointer_pos_in_points: Option<egui::Pos2>,
     current_cursor_icon: baseview::MouseCursor,
 
@@ -920,7 +924,14 @@ where
                     });
                 }
                 baseview::MouseEvent::CursorLeft => {
-                    self.pointer_pos_in_points = None;
+                    // `PointerGone` is egui's business; the last position is
+                    // ours, and forgetting it here is how a release goes
+                    // missing. A button event is only ever sent with a
+                    // position, so one that arrives after the exit — the
+                    // release of a drag let go outside the window — would be
+                    // dropped, and egui would believe the button is held
+                    // forever: every ScrollArea in the editor refuses the
+                    // wheel while anything at all is being dragged.
                     self.egui_input.events.push(egui::Event::PointerGone);
                 }
                 _ => {}

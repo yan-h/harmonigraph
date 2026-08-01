@@ -600,6 +600,99 @@ fn scroll_settings_after_lost_drag(from: egui::Pos2, lose: Lose) -> f32 {
     deltas[deltas.len() / 2]
 }
 
+/// A bar dragged off the window keeps the bar, and the release outside gives
+/// it back.
+///
+/// The other side of [`a_drag_that_loses_its_release_does_not_strand_the_wheel`]:
+/// what ends a drag there is the shell SAYING the pointer is gone, and a
+/// pointer merely standing outside the window says nothing of the kind. The
+/// plugin shell holds that claim back for as long as a button is down
+/// (`mouse_exited` in the vendored baseview), because AppKit goes on delivering
+/// the drag to the view the press landed in — so the value must go on
+/// following the pointer past the edge, and pin at the end of its range rather
+/// than letting go of a bar the hand is still holding.
+///
+/// A rule written against the POSITION instead — "outside the screen rect, so
+/// stop dragging" — passes every stranded-wheel test and fails this one, which
+/// is the only reason it is here.
+#[test]
+fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    unfold_the_readout_panes(&mut state);
+    let path = state.dock.find_tab(&panes::Tab::Analyzer).expect("the Analyzer settings tab");
+    state.dock.set_active_tab(path).expect("selecting the tab");
+    let backend = RecordingBackend::default();
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 500.0));
+    // The settings leaf, whose bars run the width of the column at x ~700..1000.
+    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, 277.0));
+    // Where a named bar was drawn, so the gesture takes hold of a bar this test
+    // can name rather than of whatever a fixed coordinate lands on. A bar draws
+    // its name inside its own rectangle, at the left end.
+    let bar_named = |out: &egui::FullOutput, name: &str| {
+        out.shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t)
+                if body.contains(cs.clip_rect.min) && t.galley.text().starts_with(name) =>
+            {
+                Some(t.pos)
+            }
+            _ => None,
+        })
+    };
+    let mut t = 0.0;
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        ctx.run_ui(raw, |ui| root_ui(ui, state, &backend, t))
+    };
+    let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // Smoothing: a plain 0..=0.9 bar, so where the pointer is says what the
+    // value should be, and the far end of the range is what an off-window drag
+    // to the right must arrive at.
+    let out = frame(&mut state, vec![]);
+    let name =
+        bar_named(&out, "Smoothing").expect("the Smoothing bar is drawn in the Analyzer tab");
+    let on_the_bar = name + egui::vec2(2.0, 4.0);
+    let before = state.spectrum_config.smoothing;
+    frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
+    frame(&mut state, vec![press(on_the_bar, true)]);
+    frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
+    assert!(ctx.dragged_id().is_some(), "the press on the Smoothing bar started no drag");
+    let inside = state.spectrum_config.smoothing;
+    assert!(inside != before, "the bar did not follow the pointer inside the window");
+
+    // Out past the right edge of the window, with the button still down: the
+    // shell reports the move and nothing else.
+    frame(&mut state, vec![egui::Event::PointerMoved(egui::pos2(1400.0, 200.0))]);
+    assert!(
+        ctx.dragged_id().is_some(),
+        "the bar let go of the drag when the pointer left the window",
+    );
+    assert_eq!(
+        state.spectrum_config.smoothing, 0.9,
+        "the bar stopped following the pointer at the window edge (it reads {inside} still)",
+    );
+
+    // And the release, delivered outside the window, ends it — the case the
+    // shell used to drop on the floor (egui-baseview sent a button event only
+    // when it had a pointer position, and the exit had cleared it).
+    frame(&mut state, vec![press(egui::pos2(1400.0, 200.0), false)]);
+    assert!(
+        ctx.dragged_id().is_none(),
+        "a release outside the window left the drag standing, which strands every pane's wheel",
+    );
+}
+
 /// The Video pane scrolls at a workable size, rather than swallowing the slack
 /// with its preview.
 ///

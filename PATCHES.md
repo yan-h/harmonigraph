@@ -56,9 +56,25 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   ..=`MAX_FRAME_INTERVAL` so a bad value can neither spin the run loop nor
   stall the window. macOS only; `set_frame_interval` is a no-op elsewhere and
   `display_max_fps` returns `None`.
+- **Patch 5** (`src/platform/macos/view.rs`): hold the pointer's exit back
+  while a mouse button is down. The tracking area carries
+  `EnabledDuringMouseDrag`, so `mouseExited:` arrives mid-drag — while AppKit
+  goes on sending every `mouseDragged:` and the closing `mouseUp:` to the view
+  the press landed in, wherever the pointer has got to. Reporting the exit
+  there is what breaks the drag: a consumer told the pointer is gone stops
+  following it (egui turns `CursorLeft` into `PointerGone`), so a slider
+  dragged a pixel past the window edge let go under the hand still holding it.
+  The `CursorLeft` is now withheld rather than dropped — paid from the
+  matching mouse-up, and from the frame tick for the releases that never
+  arrive at all (a press that was never ours, a host that took the release),
+  both gated on `NSEvent::pressedMouseButtons` rather than on a count of the
+  presses this view has seen, which a release delivered elsewhere would leave
+  wrong forever. `mouseEntered:` clears it and stays silent, so enter and exit
+  remain paired. macOS only; the other backends have no drag-time exit.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
   re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the
-  occlusion-event patch, and the configurable frame timer.
+  occlusion-event patch, the configurable frame timer, and the withheld
+  pointer exit.
 - **Upstreaming**: good candidate; uncontroversial fix, helps every
   baseview-based plugin. baseview and nice-plug are both RustAudio projects,
   so the fix would land in exactly the stack this plugin uses.
@@ -192,13 +208,25 @@ in the workspace `Cargo.toml`. Keep this file current when bumping either.
   frame from the frame that arms it; set before the acquire — the flag is
   captured there), folds new content and new bounds into one commit. Costs a
   main-thread wait per present, so it is not left on.
+- **Patch 11** (1 line, `src/window.rs`): keep the last pointer position when
+  the pointer leaves. A press and a release are the two baseview events that
+  carry no position of their own, so both are sent at
+  `pointer_pos_in_points` — and both are DROPPED when it is `None`, which
+  `CursorLeft` set. The release of a drag let go outside the window was
+  therefore thrown away here, and egui, which deliberately keeps a drag alive
+  across `PointerGone`, believed the button was held forever: every
+  `ScrollArea` in the editor refuses the wheel while anything at all is being
+  dragged (`end_stranded_drag` in `harmonigraph-ui` is the shell-side
+  backstop for it). The position is the pointer's last known one, which is
+  where a release lands; `None` now means only that the pointer has never been
+  seen, which is the case the guard is for.
 - **Upgrade**: download the new crates.io tarball into
   `vendor/egui-baseview`, re-apply the two conversions, the
   texture-delta forced render, the occlusion/skipped-present patch, the
   staged-upload flush, the repaint-deadline fix, the frame-timer
   plumbing, the `WgpuSetup` re-export, the tessellation/egui-GPU timers,
-  the upload split with its per-frame-reconfigure fix, and the
-  fold-present module with its hooks and objc2 deps.
+  the upload split with its per-frame-reconfigure fix, the fold-present
+  module with its hooks and objc2 deps, and the kept pointer position.
 - **Upstreaming**: clear-cut bug fix; affects their own `ResizableWindow`
   helper on any HiDPI display. PR to the RustAudio repo.
 
