@@ -65,23 +65,23 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Octaves: which octaves of the pitch class are sounding, shown as sectors of
-/// a ring divided between the octaves in range. Independent of the Core.
+/// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
+/// pitch axis that runs once round the node. Independent of the Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
-    // Range and Taper together are how the circle is divided; Band and Gap
-    // below are where that division is drawn. The shown octaves always fill
-    // the whole ring, so Range is not "how much of the circle" — it is how
-    // many pieces, and therefore how wide each one is.
+    // Range and Taper are the axis; Band and Gap below are where it is drawn.
+    // Range is a PITCH WINDOW, not a count of indicators: it says which
+    // stretch of the keyboard one turn covers, and how many of a node's
+    // octaves fit inside that follows from where the node's pitch class sits.
     choice_row(
         ui,
         "Range",
         &mut view.octave_span,
         &[
-            (2, "±2", "C1..B5 — five wide indicators"),
-            (3, "±3", "C0..B6"),
-            (4, "±4", "C-1..B7"),
-            (5, "±5", "C-2..B8 — the whole MIDI range, in eleven narrow indicators"),
+            (2, "±2", "C1..C5 around middle C — one turn per four octaves"),
+            (3, "±3", "C0..C6"),
+            (4, "±4", "C-1..C7"),
+            (5, "±5", "C-2..C8 — the whole MIDI range, so an octave is 36 degrees"),
         ],
     );
     // Uniform is the plain circular division and ignores the amount, so the
@@ -92,7 +92,12 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Taper",
         &mut view.octave_taper,
         &[
-            (OctaveTaper::Uniform, "Even", "Equal indicators; the amount below is inert"),
+            (
+                OctaveTaper::Uniform,
+                "Even",
+                "An even pitch axis: equal intervals subtend equal angles \
+                 anywhere in the window. The amount below is inert",
+            ),
             (OctaveTaper::Linear, "Linear", "A straight ramp out from middle C"),
             (
                 OctaveTaper::Geometric,
@@ -113,10 +118,11 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Amount")
             .show(ui)
             .on_hover_text(
-                "How much of its width the OUTERMOST octave gives up, which \
-                 the middle ones take: 0 is even, 0.9 leaves the extremes a \
-                 tenth of middle C's. Every formula is expressed in the same \
-                 amount, so switching between them compares their shapes",
+                "How much of its width the octave at the EDGE of the window \
+                 gives up, which the middle ones take: 0 is an even axis, 0.9 \
+                 leaves the edge a tenth of the middle. Every formula is \
+                 expressed in the same amount, so switching between them \
+                 compares their shapes",
             );
     });
     // No on/off: the layer is what says which octaves are sounding, which

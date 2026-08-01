@@ -178,12 +178,13 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
-    /// x: how many octave indicators are shown; y: the slot of the lowest of
-    /// them (`OctaveLayout::first_slot`, which the shader subtracts to turn a
-    /// slot into a sector index); z, w unused.
+    /// x: octaves the pitch window spans (`OctaveLayout::octaves`); y: the
+    /// MIDI pitch at its low end, which is the seam. Together they are the
+    /// domain of the wheel's pitch axis. z, w unused.
     misc7: [f32; 4],
-    /// `OctaveLayout::bounds` — the angles dividing the octave indicators —
-    /// four to a row, which is how a uniform array is laid out anyway.
+    /// `OctaveLayout::bounds` — the angle of each octave boundary of the
+    /// window — four to a row, which is how a uniform array is laid out
+    /// anyway.
     oct_bounds: [[f32; 4]; 3],
 }
 
@@ -213,10 +214,11 @@ struct GpuInstance {
     octaves: [u32; 3],
     /// Per-note animation seed (small constant, not a timestamp).
     seed: f32,
-    /// The node's pitch class in cents (0..1200). It COLORS the octave
-    /// indicators — each is tinted by its own octave's true pitch, that
-    /// octave's C plus this — and does not place them; the wheel has the
-    /// same orientation on every node (see `harmonigraph_scene::octaves`).
+    /// The node's pitch class in cents (0..1200). It both PLACES the octave
+    /// indicators and COLORS them, off the one quantity: an indicator's
+    /// octave has a pitch, that octave's C plus this, and the indicator sits
+    /// at that pitch's angle on the shared axis and in that pitch's color
+    /// (see `harmonigraph_scene::octaves`).
     cents: f32,
     /// 1 when the node is on the home (center sevens) sheet: idle home
     /// nodes draw a blank placeholder ring.
@@ -520,8 +522,8 @@ impl LatticeCallback {
                 ],
                 background: scene.background.to_array(),
                 misc7: [
-                    scene.octave_layout.count as f32,
-                    scene.octave_layout.first_slot as f32,
+                    scene.octave_layout.octaves as f32,
+                    scene.octave_layout.low_pitch,
                     0.0,
                     0.0,
                 ],

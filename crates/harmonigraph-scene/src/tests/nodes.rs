@@ -263,14 +263,16 @@ fn held_note_lights_matching_nodes() {
 }
 
 #[test]
-fn a_note_past_the_shown_span_lights_the_outermost_indicator() {
-    // A narrow span is a way of READING the music, not a filter over it: an
+fn a_note_outside_the_window_lights_the_outermost_indicator() {
+    // A narrow window is a way of READING the music, not a filter over it: an
     // octave the wheel has no indicator for folds into the nearest one it
     // does, so the note is still there to see and only its exact octave is
     // given up. Dropping it instead would make a node go dark for notes that
     // are audibly sounding on it.
     let view = ViewConfig { octave_span: 2, ..ViewConfig::default() };
-    // Span 2 shows middle C's octave either side twice: slots 3..=7.
+    // A window of C2..C6 (MIDI 36..84). On a C node the octaves that fit
+    // whole inside it are middle C's and one either side — the outermost
+    // half-octaves at each end of the window have no whole octave to hold.
     let lit = |note: u8| {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent {
@@ -286,9 +288,9 @@ fn a_note_past_the_shown_span_lights_the_outermost_indicator() {
         slots[0]
     };
     assert_eq!(lit(60), MIDDLE_C_SLOT, "middle C sounds in its own indicator");
-    assert_eq!(lit(96), MIDDLE_C_SLOT + 2, "C7 folds into the highest shown");
-    assert_eq!(lit(12), MIDDLE_C_SLOT - 2, "C0 folds into the lowest shown");
-    // The widest span reaches those octaves for real, so the fold is the
+    assert_eq!(lit(96), MIDDLE_C_SLOT + 1, "C7 folds into the highest drawn");
+    assert_eq!(lit(12), MIDDLE_C_SLOT - 1, "C0 folds into the lowest drawn");
+    // The widest window reaches those octaves for real, so the fold is the
     // setting talking and not a ceiling in the packing.
     let wide = ViewConfig { octave_span: 5, ..ViewConfig::default() };
     let mut tracker = NoteTracker::new();
@@ -302,7 +304,30 @@ fn a_note_past_the_shown_span_lights_the_outermost_indicator() {
     assert_eq!(
         origin_node(&scene).octaves[MIDDLE_C_SLOT + 3],
         1.0,
-        "at the widest span C7 has an indicator of its own"
+        "at the widest window C7 has an indicator of its own"
+    );
+}
+
+#[test]
+fn which_octaves_a_node_draws_depends_on_its_pitch_class() {
+    // The seam is a PITCH boundary, so where it falls between a node's own
+    // octaves is a property of the node: a C node's octaves land flush on the
+    // window's ends and lose the half-octave either side, while a node half an
+    // octave up sits clear of both and fits one more in. Folding a note
+    // therefore has to ask the layout per node — asking it once for the frame
+    // would fold notes on some nodes into an octave those nodes do not draw.
+    let layout = octave_layout(2, OctaveTaper::Uniform, 0.0);
+    let (c_low, c_high) = layout.slot_range(0.0);
+    let (f_low, f_high) = layout.slot_range(600.0);
+    assert_eq!(
+        (c_low, c_high),
+        (MIDDLE_C_SLOT as u32 - 1, MIDDLE_C_SLOT as u32 + 1),
+        "a C node draws the three octaves that fit inside C2..C6"
+    );
+    assert_eq!(
+        (f_low, f_high),
+        (MIDDLE_C_SLOT as u32 - 2, MIDDLE_C_SLOT as u32 + 1),
+        "an F# node is clear of both ends and fits a fourth"
     );
 }
 

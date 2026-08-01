@@ -246,10 +246,12 @@ pub struct Scene {
     /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
     /// sector-to-sector and band-to-mark-ring alike. Already clamped.
     pub outer_gap: f32,
-    /// Which octaves the indicators show and how the circle is divided
-    /// between them (see [`octaves`]). ONE layout for the whole frame, and
-    /// the same wheel on every node: an indicator says which octave, and
-    /// which pitch class is already said by which node it is drawn on.
+    /// The pitch axis the octave indicators are drawn on (see [`octaves`]):
+    /// which pitches one turn of a node covers, and how the circle is shared
+    /// out between their octaves. ONE axis for the whole frame — every node
+    /// reads the same one, which is what makes an indicator's ANGLE mean an
+    /// absolute pitch. Which of a node's octaves fit whole inside it is per
+    /// node, since that depends on the node's own pitch class.
     pub octave_layout: OctaveLayout,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and
