@@ -4,6 +4,7 @@
 
 use crate::camera::Camera;
 use crate::color::{channel_color, idle_color, pitch_ramp_lut};
+use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
@@ -170,6 +171,16 @@ pub fn derive_scene(
     // in uv, and the gutter has to finish inside it or it would be clipped
     // square instead of ending as a circle.
     let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
+    // The octave wheel is a property of the VIEW, so it is built once and
+    // every node draws the same division of the circle; only the shown span
+    // reaches the node loop, to fold out-of-range notes into the outermost
+    // indicator on their side.
+    let octave_layout =
+        octave_layout(view.octave_span, view.octave_taper, view.octave_taper_amount);
+    let (low_slot, high_slot) = (
+        octave_layout.first_slot as i8,
+        (octave_layout.first_slot + octave_layout.count - 1) as i8,
+    );
 
     // Each voice's color, computed once here rather than re-running the
     // LCH->sRGB conversion on every node the voice matches. It depends only on
@@ -214,7 +225,12 @@ pub fn derive_scene(
                     outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
                     seed = (voice.on_time % 256.0) as f32;
                 }
-                let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
+                // Slot = MIDI octave + 1 (so middle C's octave 4 is slot 5),
+                // clamped into the shown span: a note past either end lights
+                // the outermost indicator on its side rather than vanishing,
+                // which is what keeps a narrow span a way of READING the
+                // music rather than a filter over it.
+                let slot = (voice.octave + 1).clamp(low_slot, high_slot) as usize;
                 // Eases in from note-on; release still fades on the octave
                 // envelope.
                 octaves[slot] = octaves[slot].max(envelope * attack(now, voice.on_time));
@@ -366,6 +382,7 @@ pub fn derive_scene(
         outer_inner,
         outer_outer,
         outer_gap,
+        octave_layout,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,

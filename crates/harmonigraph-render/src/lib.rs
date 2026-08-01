@@ -178,12 +178,22 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
+    /// x: how many octave indicators are shown; y: the slot of the lowest of
+    /// them (`OctaveLayout::first_slot`, which the shader subtracts to turn a
+    /// slot into a sector index); z, w unused.
+    misc7: [f32; 4],
+    /// `OctaveLayout::bounds` — the angles dividing the octave indicators —
+    /// four to a row, which is how a uniform array is laid out anyway.
+    oct_bounds: [[f32; 4]; 3],
 }
 
-// The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
-// growing the constant in harmonigraph-scene past 12 would index out of bounds
-// at runtime here, so fail the build instead.
-const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS <= 12);
+// The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words, and
+// `oct_bounds` fits the boundaries either side of every one of those slots
+// into 3 vec4s — one value MORE than the packing holds, which is what makes
+// 12 slots the tighter of the two limits. Growing the constant in
+// harmonigraph-scene past what they hold would index out of bounds at
+// runtime here, so fail the build instead.
+const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS < 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
@@ -508,6 +518,25 @@ impl LatticeCallback {
                     0.0,
                 ],
                 background: scene.background.to_array(),
+                misc7: [
+                    scene.octave_layout.count as f32,
+                    scene.octave_layout.first_slot as f32,
+                    0.0,
+                    0.0,
+                ],
+                oct_bounds: std::array::from_fn(|row| {
+                    std::array::from_fn(|col| {
+                        // The layout carries one boundary per sector plus the
+                        // closing one; the tail of the last row is past it and
+                        // is never read.
+                        scene
+                            .octave_layout
+                            .bounds
+                            .get(row * 4 + col)
+                            .copied()
+                            .unwrap_or(0.0)
+                    })
+                }),
             },
             target_format,
             pane_id,

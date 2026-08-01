@@ -8,7 +8,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
-use harmonigraph_scene::{NodeStyle, ViewConfig};
+use harmonigraph_scene::{NodeStyle, OctaveTaper, ViewConfig, MAX_TAPER_AMOUNT};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -65,11 +65,59 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// Octaves: which octaves of the pitch class are sounding, shown as glyphs at
-/// each note's absolute-pitch angle within a radial band. Independent of the
-/// Core.
+/// Octaves: which octaves of the pitch class are sounding, shown as sectors of
+/// a ring divided between the octaves in range. Independent of the Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
+    // Range and Taper together are how the circle is divided; Band and Gap
+    // below are where that division is drawn. The shown octaves always fill
+    // the whole ring, so Range is not "how much of the circle" — it is how
+    // many pieces, and therefore how wide each one is.
+    choice_row(
+        ui,
+        "Range",
+        &mut view.octave_span,
+        &[
+            (2, "±2", "C1..B5 — five wide indicators"),
+            (3, "±3", "C0..B6"),
+            (4, "±4", "C-1..B7"),
+            (5, "±5", "C-2..B8 — the whole MIDI range, in eleven narrow indicators"),
+        ],
+    );
+    // Uniform is the plain circular division and ignores the amount, so the
+    // formulas read as three departures from one baseline rather than four
+    // unrelated shapes.
+    choice_row(
+        ui,
+        "Taper",
+        &mut view.octave_taper,
+        &[
+            (OctaveTaper::Uniform, "Even", "Equal indicators; the amount below is inert"),
+            (OctaveTaper::Linear, "Linear", "A straight ramp out from middle C"),
+            (
+                OctaveTaper::Geometric,
+                "Ratio",
+                "Each octave out is the same FRACTION of the one inside it: \
+                 falls away fastest near the middle, flattening at the edges",
+            ),
+            (
+                OctaveTaper::Smooth,
+                "Smooth",
+                "Flat across the middle of the range, steepest halfway out — \
+                 a group of full-size middle octaves rather than a gradient",
+            ),
+        ],
+    );
+    ui.add_enabled_ui(view.octave_taper != OctaveTaper::Uniform, |ui| {
+        ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Amount")
+            .show(ui)
+            .on_hover_text(
+                "How much of its width the OUTERMOST octave gives up, which \
+                 the middle ones take: 0 is even, 0.9 leaves the extremes a \
+                 tenth of middle C's. Every formula is expressed in the same \
+                 amount, so switching between them compares their shapes",
+            );
+    });
     // No on/off: the layer is what says which octaves are sounding, which
     // is the node's whole outer half, and Band already reaches every size
     // from a hairline to the quad edge.

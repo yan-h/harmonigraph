@@ -40,7 +40,7 @@ fn pitch_lut_lut_reproduces_the_pitch_gradient() {
 
 #[test]
 fn octaves_fade_independently() {
-    // Hold C4, tap-and-release C5: the octave-5 indicator must decay on
+    // Hold C4, tap-and-release C5: the C5 indicator must decay on
     // its own envelope even though the node stays fully active.
     let mut tracker = NoteTracker::new();
     for (note, kind) in [
@@ -62,11 +62,11 @@ fn octaves_fade_independently() {
         scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 0.6);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
-    assert_eq!(origin.octaves[4], 1.0, "held octave at full");
+    assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "held octave at full");
     assert!(
-        origin.octaves[5] > 0.0 && origin.octaves[5] < 0.75,
+        origin.octaves[MIDDLE_C_SLOT + 1] > 0.0 && origin.octaves[MIDDLE_C_SLOT + 1] < 0.75,
         "released octave mid-fade, got {}",
-        origin.octaves[5]
+        origin.octaves[MIDDLE_C_SLOT + 1]
     );
 }
 
@@ -103,7 +103,7 @@ fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
     // C4 sits on the origin node; its body is half-faded...
     let origin = origin_node(&scene);
     half("the core", origin.activation);
-    half("the octave glyph", origin.octaves[4]);
+    half("the octave glyph", origin.octaves[MIDDLE_C_SLOT]);
     // ...but no ring survives the release, on any node.
     assert!(
         scene.nodes.iter().all(|n| n.melody_slots == 0 && n.bass_slots == 0),
@@ -259,5 +259,49 @@ fn held_note_lights_matching_nodes() {
     );
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0);
-    assert_eq!(origin.octaves[4], 1.0);
+    assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0);
+}
+
+#[test]
+fn a_note_past_the_shown_span_lights_the_outermost_indicator() {
+    // A narrow span is a way of READING the music, not a filter over it: an
+    // octave the wheel has no indicator for folds into the nearest one it
+    // does, so the note is still there to see and only its exact octave is
+    // given up. Dropping it instead would make a node go dark for notes that
+    // are audibly sounding on it.
+    let view = ViewConfig { octave_span: 2, ..ViewConfig::default() };
+    // Span 2 shows middle C's octave either side twice: slots 3..=7.
+    let lit = |note: u8| {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.5);
+        let octaves = origin_node(&scene).octaves;
+        let slots: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| octaves[s] > 0.0).collect();
+        assert_eq!(slots.len(), 1, "one octave sounds, got slots {slots:?}");
+        slots[0]
+    };
+    assert_eq!(lit(60), MIDDLE_C_SLOT, "middle C sounds in its own indicator");
+    assert_eq!(lit(96), MIDDLE_C_SLOT + 2, "C7 folds into the highest shown");
+    assert_eq!(lit(12), MIDDLE_C_SLOT - 2, "C0 folds into the lowest shown");
+    // The widest span reaches those octaves for real, so the fold is the
+    // setting talking and not a ceiling in the packing.
+    let wide = ViewConfig { octave_span: 5, ..ViewConfig::default() };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 96,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    let scene = scene_of(&tracker, &Tuning::default(), &wide, &FrameParams::default(), 0.5);
+    assert_eq!(
+        origin_node(&scene).octaves[MIDDLE_C_SLOT + 3],
+        1.0,
+        "at the widest span C7 has an indicator of its own"
+    );
 }

@@ -11,6 +11,8 @@
 //! - [`view`] — [`ViewConfig`] (persisted visual settings, serde defaults,
 //!   legacy-blob migration) and [`FrameParams`].
 //! - [`style`] — the visual-style enums and their shader indices.
+//! - [`octaves`] — where the octave indicators sit around a node: how many,
+//!   how wide, and the boundary angles the shader draws them between.
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
 //!   for label placement and picking.
 //! - [`color`] — the LCh pitch ramp and channel/idle colors.
@@ -23,6 +25,7 @@
 pub mod camera;
 pub mod color;
 pub mod derive;
+pub mod octaves;
 pub mod skin;
 pub mod style;
 pub mod trail;
@@ -31,6 +34,10 @@ pub mod view;
 pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
+pub use octaves::{
+    octave_layout, OctaveLayout, OctaveTaper, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIDDLE_C_SLOT,
+    MIN_OCTAVE_SPAN, OCTAVE_SLOTS,
+};
 pub use style::{
     HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
 };
@@ -52,9 +59,6 @@ fn lattice_to_world(pos: LatticePos, spacing: f32) -> Vec3 {
 
 /// Node radius as a fraction of the lattice spacing.
 const NODE_RADIUS_FACTOR: f32 = 0.25;
-
-/// Octave indicator slots (MIDI octaves 0..=9).
-pub const OCTAVE_SLOTS: usize = 10;
 
 /// Seconds an indicator on the outer layer eases in — the octave sectors
 /// and the melody/bass rings alike. Keeps a fresh octave's color GROWING
@@ -84,9 +88,12 @@ pub struct NodeInstance {
     pub color: Vec4,
     /// 0 = idle, 1 = fully lit. Held notes are 1; released notes decay.
     pub activation: f32,
-    /// Per-octave activation (slot = MIDI octave 0..=9, clamped): each
-    /// octave's indicator fades on its own voice's envelope, independent of
-    /// the node's overall activation.
+    /// Per-octave activation (slot = MIDI octave + 1, clamped into the span
+    /// the view shows — see [`octaves`]): each octave's indicator fades on
+    /// its own voice's envelope, independent of the node's overall
+    /// activation. Slots outside the shown span stay 0, so a note beyond the
+    /// range lights the outermost indicator on its side rather than
+    /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
     /// Small constant seeding animation variety. NOT a timestamp — only
     /// ever used as a seed. A stable per-node hash for the field styles
@@ -239,6 +246,10 @@ pub struct Scene {
     /// Padding inside the octave layer (see [`ViewConfig::outer_gap`]):
     /// sector-to-sector and band-to-mark-ring alike. Already clamped.
     pub outer_gap: f32,
+    /// Which octaves the indicators show and how the circle is divided
+    /// between them (see [`octaves`]). One layout for the whole frame: a
+    /// node's pitch class rotates the wheel, it doesn't reshape it.
+    pub octave_layout: OctaveLayout,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and
     /// composited under any active note. See [`ViewConfig::idle_marker`].

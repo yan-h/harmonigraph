@@ -2,6 +2,7 @@
 //! serde defaults and legacy-blob migration, plus the per-frame
 //! [`FrameParams`] mirror of the host-automatable appearance parameters.
 
+use crate::octaves::OctaveTaper;
 use crate::skin;
 use crate::style::{
     HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
@@ -170,6 +171,26 @@ pub struct ViewConfig {
     /// the rings right against it.
     #[serde(default = "default_outer_gap")]
     pub outer_gap: f32,
+    /// How many octaves either side of middle C the indicators show, 2..=5
+    /// (see [`octaves`](crate::octaves)). The shown octaves always divide
+    /// the WHOLE circle between them, so a narrow span is not a shorter arc
+    /// — it is the same ring cut into fewer, wider indicators, each one
+    /// easier to read and covering less of the keyboard. Notes outside the
+    /// span light the outermost indicator on their side.
+    #[serde(default = "default_octave_span")]
+    pub octave_span: u32,
+    /// Which formula narrows the indicators as they get further from middle
+    /// C (see [`OctaveTaper`]). The middle octaves take the width the outer
+    /// ones give up, so this is where the visual weight of the range sits,
+    /// not how big the ring is.
+    #[serde(default)]
+    pub octave_taper: OctaveTaper,
+    /// How much of its width the OUTERMOST indicator gives up, 0..0.9 — the
+    /// one amount every formula is expressed in terms of, so switching
+    /// formulas at a fixed amount compares their shapes rather than their
+    /// strengths. Inert under [`OctaveTaper::Uniform`].
+    #[serde(default = "default_octave_taper_amount")]
+    pub octave_taper_amount: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -452,6 +473,23 @@ fn default_outer_gap() -> f32 {
     0.12
 }
 
+/// C0..B8: past both ends of any keyboard part, and still wide enough per
+/// indicator to read at a glance. A blob written before the span was a
+/// setting was drawn with ten fixed 45-degree sectors covering MIDI octaves
+/// 0..9 — nine of them at 40 degrees is the nearest honest reading of that,
+/// and unlike the ten it divides the circle evenly instead of wrapping the
+/// top two octaves back over the bottom two.
+fn default_octave_span() -> u32 {
+    crate::octaves::DEFAULT_OCTAVE_SPAN
+}
+
+/// Half the width given up at the extremes: enough that the taper reads as
+/// a deliberate shape at any formula, and it only takes effect once one is
+/// chosen (the default formula is Uniform, which ignores it).
+fn default_octave_taper_amount() -> f32 {
+    0.5
+}
+
 /// Idle marker at the classic disc radius, so a pre-field blob (whose
 /// marker is a Circle) reproduces the old placeholder ring — now
 /// independent of the core and of the playing state.
@@ -607,6 +645,12 @@ impl Default for ViewConfig {
             outer_inner: 0.641_313_55,
             outer_outer: 0.851_483_05,
             outer_gap: 0.051_732_67,
+            // Nine octaves, evenly divided: the taper is off, so the ring a
+            // fresh view starts from is the plain circular division and any
+            // weighting of the middle octaves is a choice made from there.
+            octave_span: default_octave_span(),
+            octave_taper: OctaveTaper::Uniform,
+            octave_taper_amount: default_octave_taper_amount(),
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so

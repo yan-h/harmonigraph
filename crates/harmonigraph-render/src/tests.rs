@@ -221,6 +221,10 @@ fn parity_scene() -> Scene {
         outer_inner: 0.545,
         outer_outer: 0.795,
         outer_gap: 0.12,
+        // The plain circular division: this scene is about how the draw
+        // paths composite, so the indicators are the ones every other
+        // setting is a departure from.
+        octave_layout: harmonigraph_scene::OctaveLayout::default(),
         idle_marker: harmonigraph_scene::IdleMarker::None,
         idle_radius: 0.0,
         grid,
@@ -448,12 +452,18 @@ fn offscreen_composite_matches_direct_draw() {
 /// backdrop for measuring how much of the picture a mark actually
 /// covers. parity_scene deliberately overlaps its nodes, which hides
 /// most of a mark behind whatever draws in front of it.
+/// The slot mask naming middle C's octave — the one the node below sounds
+/// in, and so the one a mark can link back to.
+const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
+
 fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     use glam::{Vec3, Vec4};
     use harmonigraph_core::LatticePos;
 
     let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
-    octaves[0] = 1.0;
+    // Middle C's slot: the marks link back to a sector, so the note has to
+    // sound in one the view actually shows.
+    octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
     let mut scene = parity_scene();
     scene.nodes = vec![harmonigraph_scene::NodeInstance {
         lattice_pos: LatticePos::ORIGIN,
@@ -543,7 +553,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     // count: what matters is that the mark claims a real share of the
     // thing it is marking, at whatever size it happens to be drawn.
     let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
-    let melody = shot(&single_marked_node(1, 0), 41);
+    let melody = shot(&single_marked_node(MIDDLE_C, 0), 41);
     let both_px = changed_px(&melody);
     eprintln!("node {node_px} px; mark {both_px}");
     // A floor, not a target, measured against the node's whole lit
@@ -566,7 +576,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     // the mark exactly when two things are true at once. The two ends are
     // rings at DIFFERENT radii, so both simply draw: the result must cover
     // at least as much as one end alone. This guards that.
-    let split = shot(&single_marked_node(1, 1), 45);
+    let split = shot(&single_marked_node(MIDDLE_C, MIDDLE_C), 45);
     let split_px = changed_px(&split);
     eprintln!("split mark {split_px} px of {node_px}");
     assert!(
@@ -577,7 +587,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
 
     // ...and it really is BOTH rings, not one end quietly winning: the
     // melody-only and bass-only pictures must each differ from it.
-    let bass_only = shot(&single_marked_node(0, 1), 46);
+    let bass_only = shot(&single_marked_node(0, MIDDLE_C), 46);
     let differs = |a: &[u8], b: &[u8]| {
         a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
     };
@@ -694,6 +704,175 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         "turning the marks on barely changed a real chord: \
          {changed} px of {lit} lit"
     );
+}
+
+/// A node showing every octave it can, for reading the wheel's geometry off
+/// the picture: no core and no mark rings, so the only thing drawn is the
+/// band, and a wide gap so the seams between indicators are several pixels
+/// across at the size this renders at.
+fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> Scene {
+    let mut scene = single_marked_node(0, 0);
+    scene.octave_layout = layout;
+    scene.core_radius = 0.0;
+    scene.outer_inner = 0.30;
+    scene.outer_outer = 0.95;
+    scene.outer_gap = 0.10;
+    scene.mark_thickness = 0.0;
+    let node = &mut scene.nodes[0];
+    node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
+    node.cents = cents;
+    scene
+}
+
+/// Where the seams between octave indicators fall, in degrees measured
+/// counter-clockwise from screen right, read off a rendered node: the
+/// midpoint of each dark run around the band. Self-calibrating — it finds
+/// the node's center and the band's radius from the image rather than
+/// reproducing the camera's arithmetic, which would only re-assert it.
+fn seam_angles(px: &[u8], size: u32) -> Vec<f32> {
+    let w = size as usize;
+    let lit = |x: f32, y: f32| -> bool {
+        if x < 0.0 || y < 0.0 || x >= size as f32 || y >= size as f32 {
+            return false;
+        }
+        let i = (y as usize * w + x as usize) * 4;
+        px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 > 24
+    };
+    // The node is the only thing drawn and its band is a full annulus, so
+    // the lit pixels' centroid is its center.
+    let (mut sx, mut sy, mut n) = (0f64, 0f64, 0f64);
+    for y in 0..size {
+        for x in 0..size {
+            if lit(x as f32, y as f32) {
+                sx += x as f64;
+                sy += y as f64;
+                n += 1.0;
+            }
+        }
+    }
+    assert!(n > 100.0, "nothing drawn to measure ({n} lit px)");
+    let (cx, cy) = ((sx / n) as f32, (sy / n) as f32);
+
+    // Sample at whichever radius has the most band on it: picking one by
+    // arithmetic would land in a seam or off the band as the settings move.
+    const STEPS: usize = 720;
+    // Screen y grows downward, so the sample angle is negated: `a` is the
+    // ordinary counter-clockwise angle from screen right.
+    let ring = |r: f32| -> Vec<bool> {
+        (0..STEPS)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / STEPS as f32;
+                lit(cx + r * a.cos(), cy - r * a.sin())
+            })
+            .collect()
+    };
+    let best = (4..size / 2)
+        .map(|r| (ring(r as f32).iter().filter(|b| **b).count(), r))
+        .max()
+        .expect("a band to sample")
+        .1;
+    let on = ring(best as f32);
+
+    // Each unlit run is one seam; its midpoint is the seam's angle. Walking
+    // from a lit sample keeps a run that straddles 0 in one piece.
+    let start = on.iter().position(|b| *b).expect("a lit sample");
+    let mut seams = Vec::new();
+    let mut run: Option<usize> = None;
+    for k in 0..=STEPS {
+        let i = (start + k) % STEPS;
+        match (on[i], run) {
+            (false, None) => run = Some(k),
+            (true, Some(from)) => {
+                let mid = (from + k - 1) as f32 * 0.5;
+                seams.push(360.0 * (start as f32 + mid) / STEPS as f32 % 360.0);
+                run = None;
+            }
+            _ => {}
+        }
+    }
+    seams
+}
+
+/// The invariant the octave wheel is built around, checked on the picture
+/// rather than on the layout that feeds it: whatever the span, the taper and
+/// the node, the lowest and highest indicators are split at the very BOTTOM
+/// of the node, and middle C's indicator is centered straight up.
+///
+/// Reading it off rendered pixels is the point. The layout's own tests pin
+/// the angles down; this one is what says the shader draws the sectors the
+/// table describes, in the right direction, with the right one anchored.
+#[test]
+fn the_octave_wheel_splits_at_the_bottom_whatever_the_settings() {
+    use harmonigraph_scene::{octave_layout, OctaveTaper};
+
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [512, 512];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+
+    // Every span, each taper, and a node that is NOT a C: the wheel has one
+    // orientation, so a node's pitch class must not turn it.
+    let mut pane = 60;
+    for span in 2..=5u32 {
+        for (taper, amount) in [
+            (OctaveTaper::Uniform, 0.0),
+            (OctaveTaper::Linear, 0.6),
+            (OctaveTaper::Geometric, 0.6),
+            (OctaveTaper::Smooth, 0.6),
+        ] {
+            for cents in [0.0, 700.0] {
+                let layout = octave_layout(span, taper, amount);
+                let px = shot(&octave_wheel_scene(layout, cents), pane);
+                pane += 1;
+                let seams = seam_angles(&px, SIZE[0]);
+                let case = format!("span {span}, {taper:?} {amount}, {cents} cents");
+                assert_eq!(
+                    seams.len(),
+                    2 * span as usize + 1,
+                    "{case}: one seam per indicator, got {seams:?}"
+                );
+                // 270 degrees is straight down. A seam is a few degrees
+                // wide, so its midpoint lands within a degree or two of the
+                // boundary it is drawn around.
+                let bottom = seams
+                    .iter()
+                    .map(|a| (a - 270.0).abs())
+                    .fold(f32::INFINITY, f32::min);
+                assert!(bottom < 2.0, "{case}: no seam at the bottom, seams {seams:?}");
+                // ...and the top is inside middle C's indicator, not on a
+                // seam: an odd number of them straddles the vertical.
+                let top = seams
+                    .iter()
+                    .map(|a| (a - 90.0).abs())
+                    .fold(f32::INFINITY, f32::min);
+                assert!(top > 5.0, "{case}: middle C is split by the top, seams {seams:?}");
+            }
+        }
+    }
 }
 
 #[test]
