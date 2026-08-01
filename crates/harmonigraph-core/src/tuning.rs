@@ -216,6 +216,9 @@ impl Comma {
 /// A set rather than one comma at a time because the spellings COMPOSE: with
 /// both tempered the seventh is ten fifths up and every name on the lattice
 /// is a plain letter (septimal meantone), which neither comma gives alone.
+///
+/// The default is the empty set — the just reading, where every axis is
+/// independent and every comma is a real distance.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Tempered {
     pub syntonic: bool,
@@ -223,10 +226,6 @@ pub struct Tempered {
 }
 
 impl Tempered {
-    /// Nothing tempered: the just reading, where every axis is independent
-    /// and every comma is a real distance.
-    pub const NONE: Tempered = Tempered { syntonic: false, septimal_kleisma: false };
-
     pub fn has(self, comma: Comma) -> bool {
         match comma {
             Comma::Syntonic => self.syntonic,

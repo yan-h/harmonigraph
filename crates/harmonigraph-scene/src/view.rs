@@ -385,7 +385,8 @@ pub struct ViewConfig {
     /// thirds (temper out the septimal kleisma, 225/224). The same switch as
     /// [`Self::meantone`] one prime up — while on, the seventh-tuning value
     /// is derived in `begin_frame` and the sevens sheet is respelled onto the
-    /// home sheet, so `B♭↓` reads as the `A♯` it has become.
+    /// home sheet, where a harmonic seventh reads `A♯-2` (two fifths plus two
+    /// thirds) instead of `B♭↓`.
     ///
     /// The third it derives from is the one in USE, so with meantone on too
     /// the pair composes into septimal meantone (a seventh of ten fifths) and
@@ -640,7 +641,10 @@ impl ViewConfig {
 
     /// Whether one comma is being tempered out.
     pub fn tempers(&self, comma: Comma) -> bool {
-        self.tempered().has(comma)
+        match comma {
+            Comma::Syntonic => self.meantone,
+            Comma::SeptimalKleisma => self.marvel,
+        }
     }
 
     /// Whether one comma's auto-detect is running.
@@ -653,8 +657,13 @@ impl ViewConfig {
 
     /// The switch for one comma's tempering, to read or set. Together with
     /// [`Self::temper_auto_mut`] this is what lets the tempering section be a
-    /// loop over [`Comma::ALL`] instead of a block per comma — adding a third
-    /// comma is a variant, two fields, and two arms here.
+    /// loop over [`Comma::ALL`] instead of a block per comma.
+    ///
+    /// A third comma is then additive rather than another special case, but
+    /// it is not free: the variant and its arms on [`Comma`], two fields and
+    /// four arms here, one in `LatticePos::respell`, one in the UI's
+    /// `judged_axes`, and one in its `derived_key` — which lives there
+    /// because a `ParamKey` is the UI's to name, not core's.
     pub fn temper_mut(&mut self, comma: Comma) -> &mut bool {
         match comma {
             Comma::Syntonic => &mut self.meantone,

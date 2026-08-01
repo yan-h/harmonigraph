@@ -606,3 +606,71 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
     assert!(state.view.marvel, "a triad shouldn't change the septimal flag");
     assert!(!state.view.meantone, "the just third still releases meantone");
 }
+
+/// One comma's mode switch is not a tuning edit, so it must not re-open
+/// another comma's verdict. Meantone DERIVES the third the septimal identity
+/// reads, so releasing it moves that third — and a marvel the user has just
+/// switched off would come straight back, which is the "press it twice" bug
+/// wearing the other comma's clothes.
+#[test]
+fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // A third a tenth of a cent off four fifths: inside the tolerance, so
+    // meantone engages — and far enough that the raw third and the derived
+    // one are different numbers, which is what the verdict must not read.
+    let params = TuningBackend::new(700.0, 400.1).with_seven(1000.0);
+    begin_frame(&mut state, &params, 0.0);
+    assert!(state.view.meantone, "a third inside the tolerance engages meantone");
+    assert!(state.view.marvel, "and 1000 = 2·700 + 2·400 − 1200 engages marvel");
+
+    // Both switches, in full: two flags, no tuning write.
+    state.view.marvel = false;
+    state.view.meantone = false;
+    for frame in 1..4 {
+        begin_frame(&mut state, &params, frame as f64);
+        assert!(!state.view.marvel, "frame {frame}: a released meantone re-locked marvel");
+        assert!(!state.view.meantone, "frame {frame}: meantone came back too");
+    }
+}
+
+/// Learn settles the septimal question against the third the LATTICE will
+/// use, which is the derived one whenever the syntonic lock holds — including
+/// one the same chord just engaged. Measured against the third that was
+/// played instead, a chord that is not a marvel at all engages the mode, and
+/// `begin_frame`'s detect never releases it.
+#[test]
+fn learn_measures_the_septimal_comma_against_the_derived_third() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    state.learn_active = true;
+    // A 700¢ fifth, a third 0.4¢ sharp, a seventh 0.6¢ sharp. The third is
+    // inside the meantone tolerance, so the lattice's third becomes 400.0 and
+    // the marvel seventh 1000.0 — which the played 1000.6 misses by 0.6¢.
+    hold_chord(&mut state, &[(60, 0.0), (64, 0.4), (67, 0.0), (70, 0.6)]);
+    learn_step(&mut state, &backend);
+    assert!(state.view.meantone, "a third 0.4¢ off four fifths is still a meantone");
+    assert!(
+        !state.view.marvel,
+        "the seventh is 0.6¢ off the derived third's marvel seventh, not 0.2¢ off the played one",
+    );
+}
+
+/// The septimal lock is released the same way the syntonic one is: by
+/// dragging its own bar clear of the derived value, which writes the dragged
+/// seventh and drops the mode. The detect must then leave it released.
+#[test]
+fn a_seventh_dragged_clear_of_the_magnet_stays_released() {
+    let tolerance = harmonigraph_core::tuning::TEMPER_TOLERANCE;
+    // Either side of the window as a FRACTION of it, so the pair keeps
+    // straddling the tolerance whatever it is set to.
+    for (offset, engaged) in [(tolerance * 1.5, false), (tolerance * 0.5, true)] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        let params = TuningBackend::new(
+            harmonigraph_core::tuning::THREE_12TET,
+            harmonigraph_core::tuning::FIVE_12TET,
+        )
+        .with_seven(harmonigraph_core::tuning::SEVEN_12TET + offset);
+        begin_frame(&mut state, &params, 0.0);
+        assert_eq!(state.view.marvel, engaged, "a seventh {offset}¢ off the derived one");
+    }
+}

@@ -378,8 +378,14 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
     // back for a frame (press twice to disengage), and a Just preset re-locks
     // on the tuning it is leaving. Judging once means the stale frames say
     // nothing, and a tuning gets its verdict when it arrives.
+    // Judged against the PARAMS, before any lock derives an axis from them:
+    // what a verdict is about is the tuning someone set, and a mode switch is
+    // not a tuning edit. Keyed on the derived values instead, releasing
+    // meantone would move the third the septimal identity reads and re-open a
+    // marvel verdict the user had just switched off.
+    let params_tuning = state.tuning;
     for comma in Comma::ALL {
-        let axes = judged_axes(comma, &state.tuning);
+        let axes = judged_axes(comma, &params_tuning);
         if state.view.temper_auto(comma)
             && !state.view.tempers(comma)
             && state.temper_judged[comma.index()] != Some(axes)
@@ -415,20 +421,50 @@ pub fn begin_frame(state: &mut SharedState, params: &dyn ParamBackend, now: f64)
 }
 
 /// The tuning axes one comma's identity reads, in microcents — the key its
-/// auto-detect judges a tuning by.
+/// auto-detect judges a tuning by. Always the PARAM values, never a locked
+/// axis derived from them (see `begin_frame`).
 ///
 /// Only the axes it reads, and that is the point: a seventh that moved says
 /// nothing about the syntonic comma, so re-opening that question would
 /// re-engage a meantone the user had just switched off. The unread axis is
 /// zeroed rather than left out so both keys are one type.
-///
-/// The septimal key reads the third the LATTICE is using, which is why this
-/// takes the tuning rather than the params: by the time the septimal comma
-/// is asked, `begin_frame` has already derived the third if meantone holds.
 fn judged_axes(comma: Comma, tuning: &Tuning) -> (i32, i32, i32) {
     match comma {
         Comma::Syntonic => (tuning.three, tuning.five, 0),
         Comma::SeptimalKleisma => (tuning.three, tuning.five, tuning.seven),
+    }
+}
+
+/// The axes one comma's identity reads, as a learned chord states them, or
+/// `None` when the chord did not pin all of them down — a bare fifth settles
+/// nothing about the syntonic comma, and a triad nothing about the septimal.
+/// This is the only place a learn decides what a chord is evidence FOR.
+///
+/// The septimal identity reads the third the LATTICE will use, which is the
+/// derived one whenever the syntonic lock holds — including one this same
+/// chord has just engaged, an arm earlier in `Comma::ALL` order. Read the
+/// played third instead and a chord that is not a marvel against the tuning
+/// in force engages the mode anyway, which the engage-only detect can then
+/// never release.
+///
+/// The syntonic comma reads no seventh at all, so it gets none: the 0 stands
+/// for an axis its identity does not look at, and `is_meantone` does not.
+fn learned_axes(
+    comma: Comma,
+    learned: &harmonigraph_core::LearnedTuning,
+    view: &harmonigraph_scene::ViewConfig,
+) -> Option<(f32, f32, f32)> {
+    let (three, five) = (learned.three?, learned.five?);
+    match comma {
+        Comma::Syntonic => Some((three, five, 0.0)),
+        Comma::SeptimalKleisma => {
+            let five = if view.tempers(Comma::Syntonic) {
+                harmonigraph_core::tuning::meantone_third(three)
+            } else {
+                five
+            };
+            Some((three, five, learned.seven?))
+        }
     }
 }
 
@@ -543,17 +579,7 @@ fn learn_step(state: &mut SharedState, params: &dyn ParamBackend) {
             if !state.view.temper_auto(comma) {
                 continue;
             }
-            let (Some(three), Some(five)) = (learned.three, learned.five) else {
-                continue;
-            };
-            // The septimal identity reads all three axes; the syntonic one
-            // does not read the seventh at all, so a chord with no seventh in
-            // it still settles the meantone question.
-            let seven = match comma {
-                Comma::Syntonic => Some(0.0),
-                Comma::SeptimalKleisma => learned.seven,
-            };
-            if let Some(seven) = seven {
+            if let Some((three, five, seven)) = learned_axes(comma, &learned, &state.view) {
                 *state.view.temper_mut(comma) = comma.is_tempered(three, five, seven);
             }
         }

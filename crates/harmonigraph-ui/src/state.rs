@@ -527,6 +527,15 @@ impl SharedState {
             self.dock = persist.dock;
             self.camera = persist.camera;
             self.view = persist.view;
+            // The incoming project's comma modes are its own, so the verdicts
+            // this session reached about the tuning it was showing say nothing
+            // about them — and a blob that predates a comma arrives with that
+            // mode off, waiting for the detect its serde default just switched
+            // on. Held back, an editor that loads a project at the tuning it
+            // already had would never look (see `temper_judged`); a host
+            // pushing state into a live editor, on undo or a preset change, is
+            // exactly that case.
+            self.temper_judged = [None; Comma::COUNT];
             // Not a migration: both fit a deserialized blob to what its
             // controls can produce, which a hand-edited RON need not have.
             self.view.sanitize();

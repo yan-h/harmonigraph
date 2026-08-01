@@ -26,11 +26,10 @@ use harmonigraph_core::tuning;
 /// param's. (Front, because that is the end a narrow column's elision cannot
 /// reach — see `ValueBar::show`.)
 ///
-/// The axes it derives FROM are read off the frame's tuning rather than the
-/// params, so a derived value stacks on a derived value: with both commas
-/// tempered the seventh follows the third that meantone is deriving, which is
-/// what makes the pair read as septimal meantone rather than as two locks
-/// disagreeing about the third.
+/// The axes it derives FROM come from [`live_tuning`], so a derived value
+/// stacks on a derived value: with both commas tempered the seventh follows
+/// the third that meantone is deriving, which is what makes the pair read as
+/// septimal meantone rather than as two locks disagreeing about the third.
 ///
 /// Draggable all the same: dragging it clear of the derived value is how the
 /// mode is let go of. [`tuning::TEMPER_TOLERANCE`] is the width of that
@@ -62,7 +61,8 @@ fn tempered_bar(
     comma: tuning::Comma,
 ) {
     let key = derived_key(comma);
-    let derived = comma.derived(state.tuning.three_cents(), state.tuning.five_cents());
+    let tuning = live_tuning(state, params);
+    let derived = comma.derived(tuning.three_cents(), tuning.five_cents());
     let mut value = derived;
     let response = ValueBar::new(&mut value, key.range(), key.label())
         .decimals(2)
@@ -93,6 +93,25 @@ fn tempered_bar(
     if response.drag_stopped() {
         params.end_set(key);
     }
+}
+
+/// The tuning as the lattice will use it, from the params as they stand right
+/// now: `begin_frame`'s derivation, re-run on live values.
+///
+/// The live read is what keeps a derived bar current with the bar it follows.
+/// `ParamKey::TUNING` draws the fifth before the third and the third before
+/// the seventh, and in a shell whose `set` lands immediately (the standalone)
+/// a drag of the fifth is already in the params by the time the bars below it
+/// draw — reading the frame's snapshot instead would leave every derived
+/// readout a frame behind for the whole gesture.
+fn live_tuning(state: &SharedState, params: &dyn ParamBackend) -> harmonigraph_core::Tuning {
+    let mut tuning = crate::params::tuning_from_params(params);
+    for comma in tuning::Comma::ALL {
+        if state.view.tempers(comma) {
+            tuning.temper(comma);
+        }
+    }
+    tuning
 }
 
 /// The tuning param a comma derives — where its identity lands, and so which

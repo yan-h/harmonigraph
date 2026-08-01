@@ -325,7 +325,7 @@ mod tests {
             Comma::SeptimalKleisma => LatticePos::new(2, 2, -1),
         };
         for comma in Comma::ALL {
-            let tempered = Tempered::NONE.with(comma, true);
+            let tempered = Tempered::default().with(comma, true);
             let mut tuning = Tuning::just();
             tuning.temper(comma);
             let step = step(comma);
