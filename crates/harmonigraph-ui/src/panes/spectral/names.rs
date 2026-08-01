@@ -787,9 +787,19 @@ pub(super) fn draw(
     // this -- which names fit, how far apart they sit (`plan`) -- is laid out
     // against the size the names are really drawn at, so the spacing follows a
     // zoom as smoothly as the ribbons do.
-    let want = LABEL_PT * label_scale / lattice::NAME_SIZE;
-    let scale = crate::text::snap_scale(want, lattice::NAME_SIZE, painter.ctx().pixels_per_point());
-    let magnify = want / scale;
+    // Quoted against LABEL_PT rather than against the lattice's letter, which
+    // is what puts the ladder's anchor ON the size these names are dialled at:
+    // scale 1 IS 12.35pt, so a pane sitting at its default zoom is one rung
+    // exactly and the only residual left is the pixel grain -- 24.7 physical
+    // pixels at 2x, which no raster can be, so it draws at 24.7 off a 25-pixel
+    // cell. Anchored at the lattice's 30pt instead, 12.35 falls BETWEEN two
+    // rungs and a pane that is not zooming at all pays several times that for a
+    // continuity it is not using.
+    let ppp = painter.ctx().pixels_per_point();
+    let (raster, magnify) = crate::text::ladder(label_scale, LABEL_PT, ppp);
+    // `draw_stacked_name` sizes everything off the lattice's letter, so the
+    // rung crosses back into its terms here — a conversion, not a second snap.
+    let scale = LABEL_PT * raster / lattice::NAME_SIZE;
     for label in labels {
         lattice::draw_stacked_name(
             batch,

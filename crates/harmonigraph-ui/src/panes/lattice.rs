@@ -973,13 +973,14 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
 ///
 /// Monospace for in-lattice text: labels align across nodes and match the
 /// technical feel of the readouts.
-#[allow(clippy::too_many_arguments)]
 ///
 /// `scale` is the size the label is LAID OUT and rasterized at; `magnify` is
 /// how much bigger it is finally drawn, which is what lets the size follow a
 /// zoom continuously while the atlas still sees one size per rung. See
+/// [`crate::text::ladder`], which hands the pair out together, and
 /// [`crate::text::TextBatch::magnified`]; 1.0 is a label drawn at exactly the
 /// size it was rasterized at.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_stacked_name(
     batch: &mut crate::text::TextBatch,
     painter: &egui::Painter,
