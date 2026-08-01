@@ -343,6 +343,11 @@ the DAW.
 - `harmonigraph-take` — the take format. Line-oriented RON, appendable,
   flushed per record so an interrupted export still renders everything up
   to the cut. Deliberately tiny: it is linked into the plugin.
+- `harmonigraph-record` — the recording end. The audio thread's ring
+  producers, the writer thread that turns them into a take, and the
+  subprocess driver that runs `harmonigraph-offline` on a finished one.
+  Depends on the format crate rather than living in it, because naming an
+  automation record and reporting a render both need `harmonigraph-ui`.
 - `harmonigraph-offline` — the renderer. Headless wgpu device, egui driven by
   synthesized input, frames read back and piped to ffmpeg.
 

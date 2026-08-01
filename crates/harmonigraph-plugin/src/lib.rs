@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind};
+use harmonigraph_record::{interleaved_reservation, TAKE_CHANNELS};
 use harmonigraph_ui::params::{ParamBackend, ParamKey};
 use nice_plug::prelude::*;
 use parking_lot::Mutex;
 
 mod editor;
-mod take;
 
 /// Capacity of the audio→GUI note event ring buffer. Events are dropped
 /// (silently) if the GUI stalls long enough to fill it.
@@ -50,9 +50,9 @@ pub struct Harmonigraph {
     editor_shared: Arc<Mutex<editor::EditorShared>>,
     sample_rate: f64,
     samples_processed: u64,
-    /// Take recording (see `take`). The recorder is always present; it
-    /// only writes while the user has armed it from the Video pane.
-    take: take::Recorder,
+    /// Take recording (see `harmonigraph_record`). The recorder is always
+    /// present; it only writes while the user has armed it from the Video pane.
+    take: harmonigraph_record::Recorder,
     /// Count of events recorded in the current take, for the UI's status
     /// line. Reset when recording starts.
     take_events: Arc<AtomicU64>,
@@ -285,28 +285,6 @@ fn mapped_note(event: NoteEvent<()>) -> Option<MappedNote> {
     }
 }
 
-/// How much of this block fits in the audio ring, in SAMPLES, rounded DOWN to
-/// whole frames.
-///
-/// The rounding is the one thing here that must not be wrong. A tail dropped
-/// mid-frame leaves the ring one sample out of phase, and every later frame
-/// hands the left channel's data to the right for as long as the plugin runs —
-/// silently, because nothing downstream can tell a phase slip from the signal.
-/// Bounding by free space is what makes a near-full ring (GUI stalled, or
-/// closed) drop the block's tail rather than stall the audio thread.
-///
-/// The zero-channel arm is not a live path — both callers gate on a positive
-/// channel count. It is handled so the function carries no precondition a
-/// caller can violate, which is what makes it safe to reuse; it does not move
-/// the division off the audio thread, and does not pretend to.
-fn interleaved_reservation(free_slots: usize, samples: usize, channels: usize) -> usize {
-    if channels == 0 {
-        return 0;
-    }
-    let free = free_slots / channels * channels;
-    (samples * channels).min(free)
-}
-
 /// Which input plane the take's right channel reads from. A take's WAV is
 /// always stereo, matching AUDIO_IO_LAYOUTS, so a mono input is duplicated
 /// rather than written as half a frame — which would desync every frame after
@@ -324,7 +302,7 @@ impl Default for Harmonigraph {
         // stereo ring as mono only halves the pitch of what it draws for one
         // block, while reading mono as stereo would de-interleave silence.
         let audio_channels = Arc::new(AtomicU32::new(1));
-        let (take, take_control) = take::channel();
+        let (take, take_control) = harmonigraph_record::channel();
         let take_events = Arc::new(AtomicU64::new(0));
         Harmonigraph {
             params: Arc::new(HarmonigraphParams::default()),
@@ -500,7 +478,7 @@ impl Plugin for Harmonigraph {
             if self.take.wants_audio() && channels > 0 {
                 self.take.mark_audio_start(origin);
                 let right = take_right_channel(channels);
-                let wanted = buffer.samples() * take::TAKE_CHANNELS;
+                let wanted = buffer.samples() * TAKE_CHANNELS;
                 let mut interleaved = buffer.iter_samples().flat_map(|mut frame| {
                     let l = frame.get_mut(0).map_or(0.0, |s| *s);
                     let r = frame.get_mut(right).map_or(0.0, |s| *s);
@@ -692,62 +670,6 @@ mod tests {
         assert_eq!(ring_time(48_000, 0, rate), 1.0);
         // and only the take's counts the song position it hangs off.
         assert_eq!(take_time(90.0, 0, rate), 90.0);
-    }
-
-    /// The phase-slip guard, exhaustively. A reservation that is not a whole
-    /// number of frames leaves the ring one sample out of alignment, and every
-    /// frame after it hands the left channel's samples to the right — for as
-    /// long as the plugin runs, with nothing downstream able to tell that from
-    /// the signal itself.
-    #[test]
-    fn a_reservation_is_always_a_whole_number_of_frames() {
-        for channels in 1..=8usize {
-            for free_slots in 0..96usize {
-                for samples in 0..24usize {
-                    let want = interleaved_reservation(free_slots, samples, channels);
-                    assert_eq!(
-                        want % channels,
-                        0,
-                        "{want} samples is a partial frame at {channels} channels \
-                         (free_slots={free_slots}, samples={samples})"
-                    );
-                    assert!(want <= free_slots, "reserved {want} of {free_slots} free slots");
-                    assert!(
-                        want <= samples * channels,
-                        "reserved {want}, more than the {} this block holds",
-                        samples * channels
-                    );
-                }
-            }
-        }
-    }
-
-    /// What the reservation does at each end: a ring with room takes the whole
-    /// block, a full one drops it rather than stalling the audio thread, and a
-    /// nearly-full one takes whole frames and drops the tail.
-    #[test]
-    fn a_full_ring_drops_the_block_rather_than_stalling() {
-        // Room to spare: the whole block, interleaved.
-        assert_eq!(interleaved_reservation(4096, 512, 2), 1024);
-        // Exactly enough.
-        assert_eq!(interleaved_reservation(1024, 512, 2), 1024);
-        // Full: nothing, and the caller skips the write entirely.
-        assert_eq!(interleaved_reservation(0, 512, 2), 0);
-        // Nearly full, with the free space a PARTIAL frame: round down, so the
-        // tail is dropped on a frame boundary rather than mid-frame.
-        assert_eq!(interleaved_reservation(7, 512, 2), 6);
-        assert_eq!(interleaved_reservation(7, 512, 4), 4);
-        // Less free space than a single frame: nothing at all.
-        assert_eq!(interleaved_reservation(3, 512, 4), 0);
-    }
-
-    /// Both callers gate on a positive channel count, so no live path reaches
-    /// this. It is pinned because it is what lets the function be called
-    /// without checking first — a total function is reusable, and reuse is how
-    /// `Recorder::audio` came to share the guard.
-    #[test]
-    fn a_zero_channel_bus_reserves_nothing() {
-        assert_eq!(interleaved_reservation(4096, 512, 0), 0);
     }
 
     /// A take's WAV is always stereo. A mono host input is DUPLICATED into both

@@ -1,0 +1,21 @@
+[package]
+name = "harmonigraph-record"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+# Half of this crate runs on the audio thread, so nothing on the record path
+# may allocate or block: rtrb for the rings, parking_lot for the one mutex the
+# GUI and writer threads share. harmonigraph-ui is here for `ParamKey` (what a
+# recorded automation record is named by) and `RenderConfig`/`RenderProgress`
+# (what the Video pane asks for and reads back) — it is a GUI stack, which is
+# why this lives beside harmonigraph-take rather than inside it.
+[dependencies]
+harmonigraph-core = { workspace = true }
+harmonigraph-take = { workspace = true }
+harmonigraph-ui = { workspace = true }
+
+rtrb = { workspace = true }
+parking_lot = { workspace = true }
