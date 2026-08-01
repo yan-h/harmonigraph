@@ -642,6 +642,19 @@ impl SpectrumConfig {
     pub(crate) fn sanitize(&mut self) {
         use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
         let (floor, ceil) = (SPECTRUM_MIN_MIDI, SPECTRUM_MAX_MIDI);
+        // The clamps below do not catch a non-finite end: NaN is its own
+        // answer to every comparison, so it survives its own clamp and then
+        // becomes the MIN of the next one, where `f32::clamp`'s
+        // `assert!(min <= max)` takes the editor down as the project opens.
+        // A NaN at the other end does not panic — it is the `self` of its
+        // clamp rather than the bound — and is worse for it: the range stays
+        // NaN into `PitchScale` and the analyzer draws nothing, silently.
+        // The design range is the pair certain to be drawable, which is the
+        // answer `sane_scale` gives the text scales below against the same
+        // threat, from the same place: a hand-edited blob, or a float that
+        // came back corrupt.
+        self.low_midi = if self.low_midi.is_finite() { self.low_midi } else { floor };
+        self.high_midi = if self.high_midi.is_finite() { self.high_midi } else { ceil };
         self.low_midi = self.low_midi.clamp(floor, ceil - PITCH_RANGE_MIN_SPAN);
         self.high_midi = self.high_midi.clamp(self.low_midi + PITCH_RANGE_MIN_SPAN, ceil);
         // And the same treatment for the two text scales, for the same reason
