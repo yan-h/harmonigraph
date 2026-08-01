@@ -38,6 +38,11 @@ fn persist_round_trips_camera_and_view() {
     // Off is the non-default here, and the one a project has to keep: the
     // detect would otherwise re-engage the mode the user switched it off for.
     state.view.meantone_auto = false;
+    // The septimal comma's pair of switches carries the same way, and set the
+    // other way round from the syntonic one's so a blob that crossed them
+    // could not pass.
+    state.view.marvel = false;
+    state.view.marvel_auto = true;
     state.camera_presets.push(CameraPreset {
         name: "reading".into(),
         yaw: 0.7,
@@ -65,6 +70,8 @@ fn persist_round_trips_camera_and_view() {
     assert!(restored.view.grid_dashed);
     assert!(restored.view.meantone);
     assert!(!restored.view.meantone_auto, "a switched-off auto-detect round-trips");
+    assert!(!restored.view.marvel, "each comma keeps its own mode");
+    assert!(restored.view.marvel_auto, "and its own detect");
     assert_eq!(restored.camera_presets.len(), 1);
     assert_eq!(restored.camera_presets[0].name, "reading");
     assert_eq!(restored.camera_presets[0].yaw, 0.7);
@@ -80,12 +87,22 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     // feature never reaches.
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     state.camera.yaw = 1.23;
-    let saved = state.save_persist().replace("meantone_auto:true,", "");
+    let saved = state
+        .save_persist()
+        .replace("meantone_auto:true,", "")
+        .replace("marvel_auto:true,", "")
+        .replace("marvel:false,", "");
     assert_ne!(saved, state.save_persist(), "removal must have hit");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
     assert!(restored.view.meantone_auto, "a missing key means on");
+    // And the septimal comma's keys are newer still, so EVERY project
+    // predates them: 12-TET tempers 225/224 out as well (1000 = 2·700 + 2·400
+    // − 1200), so the same argument opts them in — off would leave the mode
+    // unreachable for every project that already exists.
+    assert!(restored.view.marvel_auto, "a missing detect key means on");
+    assert!(!restored.view.marvel, "a missing mode key means off, and the detect decides");
     assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 }
 

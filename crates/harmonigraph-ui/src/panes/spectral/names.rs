@@ -663,7 +663,7 @@ fn note_name(view: &ViewConfig, tuning: &Tuning, midi: f32) -> NoteName {
     // the pane's hover makes before asking the same question.
     let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
     match naming_node(view, tuning, pc) {
-        Some(pos) => crate::panes::display_note_name(pos, view.meantone),
+        Some(pos) => crate::panes::display_note_name(pos, view.tempered()),
         None => equal_tempered_name(midi),
     }
 }
@@ -697,7 +697,7 @@ fn naming_node(view: &ViewConfig, tuning: &Tuning, pc: PitchClass) -> Option<Lat
         .min_by_key(|&pos| {
             (
                 pc.distance_to(tuning.pitch_class(pos)),
-                spelling_cost(crate::panes::display_note_name(pos, view.meantone), pos),
+                spelling_cost(crate::panes::display_note_name(pos, view.tempered()), pos),
             )
         })
 }
@@ -1667,7 +1667,7 @@ mod tests {
         assert_eq!(name(60.0), "C");
         // And the cost is symmetric: the mark counts whichever way it points.
         for pos in [LatticePos::new(2, 0, -1), LatticePos::new(-2, 0, 1)] {
-            let spelled = crate::panes::display_note_name(pos, view.meantone);
+            let spelled = crate::panes::display_note_name(pos, view.tempered());
             assert!(
                 spelling_cost(spelled, pos).0 > 0,
                 "a septimal mark should cost like a comma, {spelled} did not"

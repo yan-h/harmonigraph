@@ -48,6 +48,41 @@ impl LatticePos {
         }
     }
 
+    /// Where this position sits once `tempered`'s commas are tempered out:
+    /// the same pitch, spelled on the axes those commas leave independent.
+    /// Every name the UI draws goes through here, so two positions a
+    /// temperament has made into one pitch also get one name.
+    ///
+    /// A collapse, not a mark dropped. Under meantone one prime-5 step IS
+    /// four fifths, so `(t, f, s)` spells as `(t + 4f, 0, s)`, and `E-` and
+    /// `E` both come out `E`. The septimal mark survives that, and has to:
+    /// meantone is 5-limit and leaves 64/63 alone, so dropping the mark would
+    /// name two pitches it keeps apart alike.
+    ///
+    /// Under marvel one prime-7 step is two fifths plus two thirds, so
+    /// `(t, f, s)` spells as `(t + 2s, f + 2s, 0)`: the septimal mark goes and
+    /// a harmonic seventh comes back as `A♯-2`, which is what 7/4 is once
+    /// 225/224 is gone. Alone that is more marks rather than fewer — honest,
+    /// and rare, since a tuning has to sit ON 225/224 to get here without
+    /// meantone. With both tempered the two collapses compose into
+    /// `(t + 4f + 10s, 0, 0)`, every name is a plain letter, and the seventh
+    /// is the augmented sixth `A♯` — septimal meantone's own spelling.
+    ///
+    /// Down the primes, which is [`Comma::ALL`](crate::tuning::Comma::ALL)
+    /// reversed: the kleisma folds the sevens onto the fives and threes, and
+    /// the syntonic then folds those fives away too. The other order leaves
+    /// fives behind.
+    pub fn respell(self, tempered: crate::tuning::Tempered) -> LatticePos {
+        let mut pos = self;
+        if tempered.septimal_kleisma {
+            pos = LatticePos::new(pos.threes + 2 * pos.sevens, pos.fives + 2 * pos.sevens, 0);
+        }
+        if tempered.syntonic {
+            pos = LatticePos::new(pos.threes + 4 * pos.fives, 0, pos.sevens);
+        }
+        pos
+    }
+
     /// Whether two positions are exactly one unit step apart along exactly
     /// one prime axis — i.e. separated by one interval. Chord edges connect
     /// such pairs.
@@ -106,20 +141,6 @@ pub struct NoteName {
 }
 
 impl NoteName {
-    /// The same spelling with the syntonic-comma marks dropped. In a
-    /// meantone temperament the syntonic comma is tempered out, so `E-`
-    /// (one just third up) and `E` (four fifths up) name the same pitch;
-    /// meantone mode spells both without the comma.
-    ///
-    /// The SEPTIMAL mark survives this: meantone is a 5-limit temperament
-    /// and does not temper out 64/63, so dropping the septimal mark here
-    /// would collapse two pitches meantone keeps apart. (12-ET does temper
-    /// it out, but that is a different temperament and would be a
-    /// different switch.)
-    pub fn without_syntonic_commas(self) -> NoteName {
-        NoteName { syntonic_commas: 0, ..self }
-    }
-
     /// The accidental mark alone: `♯`, `♯2`, `♭3`, or empty for a natural.
     /// Empty when there is no accidental.
     pub fn accidental_mark(&self) -> String {
@@ -236,30 +257,91 @@ mod tests {
         assert_eq!(natural.septimal_mark(), "");
     }
 
+    /// The spelling under a set of tempered commas, as a string.
+    fn spelled(pos: LatticePos, tempered: crate::tuning::Tempered) -> String {
+        pos.respell(tempered).note_name().to_string()
+    }
+
     #[test]
     fn meantone_spelling_drops_commas() {
+        let meantone = crate::tuning::Tempered { syntonic: true, septimal_kleisma: false };
         // One just third up is E- in just spelling, plain E in meantone.
-        assert_eq!(
-            LatticePos::new(0, 1, 0).note_name().without_syntonic_commas().to_string(),
-            "E"
-        );
+        assert_eq!(spelled(LatticePos::new(0, 1, 0), meantone), "E");
         // Two just thirds up: G♯-2 becomes plain G♯.
-        assert_eq!(
-            LatticePos::new(0, 2, 0).note_name().without_syntonic_commas().to_string(),
-            "G\u{266F}"
-        );
+        assert_eq!(spelled(LatticePos::new(0, 2, 0), meantone), "G\u{266F}");
         // A name with no comma is unchanged (four fifths up is already E).
-        assert_eq!(
-            LatticePos::new(4, 0, 0).note_name().without_syntonic_commas().to_string(),
-            "E"
-        );
-        // Sharps/flats survive; only the comma is removed.
-        assert_eq!(on_home('B', -2, 2).without_syntonic_commas().to_string(), "B\u{266D}2");
-        // The septimal mark survives too: meantone is 5-limit and leaves
-        // 64/63 alone, so dropping it would merge pitches meantone keeps
-        // distinct.
-        let name = NoteName { letter: 'B', sharps: -1, syntonic_commas: 1, septimal_commas: -1 };
-        assert_eq!(name.without_syntonic_commas().to_string(), "B\u{266D}\u{2193}");
+        assert_eq!(spelled(LatticePos::new(4, 0, 0), meantone), "E");
+        // Sharps/flats survive; only the comma is folded away. Two just
+        // thirds down from two fifths down is E♭2+2, and plain E♭2 once the
+        // comma is gone.
+        assert_eq!(LatticePos::new(-2, -2, 0).note_name().to_string(), "E\u{266D}2+2");
+        assert_eq!(spelled(LatticePos::new(-2, -2, 0), meantone), "E\u{266D}2");
+        // The septimal mark survives: meantone is 5-limit and leaves 64/63
+        // alone, so dropping it would merge pitches meantone keeps distinct.
+        assert_eq!(LatticePos::new(-2, 1, -1).note_name().to_string(), "E-\u{2191}");
+        assert_eq!(spelled(LatticePos::new(-2, 1, -1), meantone), "E\u{2191}");
+    }
+
+    #[test]
+    fn marvel_spelling_folds_the_sevens_axis_onto_the_home_sheet() {
+        let marvel = crate::tuning::Tempered { syntonic: false, septimal_kleisma: true };
+        // 7/4 is B♭↓ in just spelling. Temper 225/224 out and it is two
+        // fifths plus two thirds instead: A♯-2, which carries no septimal
+        // mark because there is no septimal comma left to mark.
+        assert_eq!(spelled(LatticePos::new(0, 0, 1), marvel), "A\u{266F}-2");
+        // The home sheet is untouched — nothing on it has a sevens step to
+        // fold, so marvel alone leaves every 5-limit name exactly as it was.
+        for pos in [LatticePos::new(0, 1, 0), LatticePos::new(4, 0, 0), LatticePos::new(-3, 2, 0)] {
+            assert_eq!(spelled(pos, marvel), pos.note_name().to_string());
+        }
+    }
+
+    #[test]
+    fn both_commas_compose_into_septimal_meantone() {
+        let both = crate::tuning::Tempered { syntonic: true, septimal_kleisma: true };
+        // Ten fifths up, which is what the harmonic seventh becomes when both
+        // commas go: the augmented sixth, and not a mark on it.
+        assert_eq!(spelled(LatticePos::new(0, 0, 1), both), "A\u{266F}");
+        assert_eq!(LatticePos::new(10, 0, 0).note_name().to_string(), "A\u{266F}");
+        // Every name is a plain letter and accidental — the whole point of
+        // the pair, and what makes a septimal-meantone lattice readable.
+        for pos in positions_within(-4..=4, -2..=2, -1..=1) {
+            let name = pos.respell(both).note_name();
+            assert_eq!((name.syntonic_commas, name.septimal_commas), (0, 0), "{pos:?}");
+        }
+    }
+
+    #[test]
+    fn a_tempered_comma_apart_is_one_pitch_and_one_name() {
+        // The contract the whole collapse rests on. Each comma's step is a
+        // step to the same pitch once it is tempered out — checked against
+        // the tuning, so the spelling claim is anchored to real pitch classes
+        // rather than to another statement of the same arithmetic.
+        use crate::tuning::{Comma, Tempered, Tuning};
+        let step = |comma| match comma {
+            // Four fifths minus a third, and two fifths plus two thirds
+            // minus a seventh: an octave each, once tempered.
+            Comma::Syntonic => LatticePos::new(4, -1, 0),
+            Comma::SeptimalKleisma => LatticePos::new(2, 2, -1),
+        };
+        for comma in Comma::ALL {
+            let tempered = Tempered::NONE.with(comma, true);
+            let mut tuning = Tuning::just();
+            tuning.temper(comma);
+            let step = step(comma);
+            for pos in positions_within(-4..=4, -2..=2, -1..=1) {
+                let moved = LatticePos::new(
+                    pos.threes + step.threes,
+                    pos.fives + step.fives,
+                    pos.sevens + step.sevens,
+                );
+                assert_eq!(tuning.pitch_class(pos), tuning.pitch_class(moved), "{pos:?}");
+                assert_eq!(spelled(pos, tempered), spelled(moved, tempered), "{pos:?} {comma:?}");
+                // Untempered they are two pitches with two names, which is
+                // what makes this a temperament rather than a bug.
+                assert_ne!(pos.note_name().to_string(), moved.note_name().to_string(), "{pos:?}");
+            }
+        }
     }
 
     #[test]

@@ -189,6 +189,7 @@ fn learn_leaves_meantone_alone_when_the_auto_detect_is_off() {
 struct TuningBackend {
     three: std::cell::Cell<f32>,
     five: std::cell::Cell<f32>,
+    seven: std::cell::Cell<f32>,
     queued: std::cell::RefCell<Vec<(params::ParamKey, f32)>>,
 }
 
@@ -197,8 +198,19 @@ impl TuningBackend {
         TuningBackend {
             three: std::cell::Cell::new(three),
             five: std::cell::Cell::new(five),
+            // 0¢ until a test says otherwise: no comma identity can fire on
+            // it, so the tests about the syntonic comma are undisturbed by
+            // the septimal one running beside them.
+            seven: std::cell::Cell::new(0.0),
             queued: std::cell::RefCell::new(Vec::new()),
         }
+    }
+
+    /// The same backend with a harmonic seventh, for the tests that ask
+    /// about the septimal kleisma.
+    fn with_seven(self, seven: f32) -> Self {
+        self.seven.set(seven);
+        self
     }
 
     /// Let the host catch up: every queued write takes effect.
@@ -207,6 +219,7 @@ impl TuningBackend {
             match key {
                 params::ParamKey::Three => self.three.set(value),
                 params::ParamKey::Five => self.five.set(value),
+                params::ParamKey::Seven => self.seven.set(value),
                 _ => {}
             }
         }
@@ -218,6 +231,7 @@ impl ParamBackend for TuningBackend {
         match key {
             params::ParamKey::Three => self.three.get(),
             params::ParamKey::Five => self.five.get(),
+            params::ParamKey::Seven => self.seven.get(),
             // A workable matching window; the rest are irrelevant here and
             // 0 is a legal value for each.
             params::ParamKey::Tolerance => 0.5,
@@ -296,14 +310,14 @@ fn dragging_the_fifth_does_not_drop_an_engaged_meantone() {
 
 /// Releasing by dragging the third writes the dragged value into the param
 /// (see `panes::tuning`), and the detect must then leave it released — the
-/// magnet only reaches `MEANTONE_TOLERANCE`.
+/// magnet only reaches `TEMPER_TOLERANCE`.
 #[test]
 fn a_third_dragged_clear_of_the_magnet_stays_released() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     // Either side of the window, as a FRACTION of it: the two cases have to
     // stay just outside and just inside whatever the tolerance is set to,
     // and fixed offsets stop straddling it the moment it narrows.
-    let tolerance = harmonigraph_core::tuning::MEANTONE_TOLERANCE;
+    let tolerance = harmonigraph_core::tuning::TEMPER_TOLERANCE;
     let params = TuningBackend::new(
         harmonigraph_core::tuning::THREE_12TET,
         harmonigraph_core::tuning::FIVE_12TET + tolerance * 1.5,
@@ -402,7 +416,7 @@ fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
 
     // The Auto switch, in full: the flag and the cleared verdict.
     state.view.meantone_auto = true;
-    state.meantone_judged = None;
+    state.temper_judged[harmonigraph_core::Comma::Syntonic.index()] = None;
     begin_frame(&mut state, &params, 3.0);
     assert!(state.view.meantone, "switching the detect on left 12-TET unjudged");
 }
@@ -435,4 +449,160 @@ fn an_in_flight_tuning_write_is_not_judged_before_it_lands() {
     params.flush();
     begin_frame(&mut state, &params, 2.0);
     assert!(!state.view.meantone, "a third 2¢ off four fifths is not a meantone");
+}
+
+/// The septimal comma's detect, on the tuning every project opens at: 12-TET
+/// tempers 225/224 out (1000 = 2·700 + 2·400 − 1200) exactly as it tempers
+/// 81/80 out, so both modes engage from the same tuning without either being
+/// asked for.
+#[test]
+fn a_marvel_tuning_engages_the_mode_by_itself() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    assert!(state.view.marvel_auto, "the septimal detect is on out of the box");
+    assert!(!state.view.marvel, "and the mode starts off");
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET,
+    )
+    .with_seven(harmonigraph_core::tuning::SEVEN_12TET);
+    begin_frame(&mut state, &params, 0.0);
+    assert!(state.view.marvel, "12-TET tempers out the septimal kleisma too");
+    // Engaging it is only half the job: the lattice has to be using the
+    // derived seventh, exactly, or the sevens sheet stays a separate set of
+    // pitches from the home sheet it now spells as.
+    let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
+    assert_eq!(
+        i64::from(state.tuning.seven),
+        2 * i64::from(state.tuning.three) + 2 * i64::from(state.tuning.five) - octave,
+    );
+    // Which is the whole point: 7/4 and ten fifths are one pitch class.
+    let seventh = state.tuning.pitch_class(harmonigraph_core::LatticePos::new(0, 0, 1));
+    let tenth_fifth = state.tuning.pitch_class(harmonigraph_core::LatticePos::new(10, 0, 0));
+    assert_eq!(seventh, tenth_fifth);
+}
+
+/// Just intonation keeps every comma, the septimal kleisma included: the just
+/// seventh sits 7.7¢ under two fifths plus two thirds, which is a lot more
+/// than the tolerance.
+#[test]
+fn just_intonation_does_not_engage_marvel() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_JUST,
+        harmonigraph_core::tuning::FIVE_JUST,
+    )
+    .with_seven(harmonigraph_core::tuning::SEVEN_JUST);
+    begin_frame(&mut state, &params, 0.0);
+    assert!(!state.view.marvel, "a just seventh is a kleisma away");
+    assert!(!state.view.meantone, "and a just third a syntonic comma away");
+}
+
+/// The two locks compose, and the order is what makes them: the septimal
+/// identity reads the third, so with both engaged it must read the third
+/// MEANTONE is deriving rather than the inert param under it. That is what
+/// turns the pair into septimal meantone — a seventh of ten fifths.
+#[test]
+fn the_two_locks_compose_into_septimal_meantone() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Quarter-comma meantone, whose derived third is the just one — and a
+    // seventh param nowhere near anything, to prove it is not being read.
+    let three = harmonigraph_core::tuning::THREE_JUST
+        - harmonigraph_core::tuning::SYNTONIC_COMMA / 4.0;
+    let params = TuningBackend::new(three, harmonigraph_core::tuning::FIVE_JUST).with_seven(940.0);
+    state.view.marvel = true;
+    begin_frame(&mut state, &params, 0.0);
+    assert!(state.view.meantone, "quarter-comma engages the syntonic lock");
+    let octave = i64::from(harmonigraph_core::tuning::OCTAVE_MICROCENTS);
+    assert_eq!(
+        i64::from(state.tuning.seven),
+        10 * i64::from(state.tuning.three) - 5 * octave,
+        "the seventh follows the DERIVED third, not the param",
+    );
+    // 965.78¢, three cents under the just seventh: septimal meantone's own
+    // seventh, which is what makes it spell as the augmented sixth.
+    assert!((state.tuning.seven_cents() - 965.784).abs() < 0.01);
+}
+
+/// Each comma's detect judges only the axes its own identity reads. A seventh
+/// that moves says nothing about the syntonic comma, so it must not re-open
+/// that verdict — otherwise dragging the seventh would re-engage a meantone
+/// the user had just switched off, which is the same "press it twice" bug the
+/// judged-once rule exists to prevent, one axis over.
+#[test]
+fn a_seventh_that_moves_does_not_re_open_the_meantone_question() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // The septimal mode is not what this is about; leave it out of the way.
+    state.view.marvel_auto = false;
+    let params = TuningBackend::new(
+        harmonigraph_core::tuning::THREE_12TET,
+        harmonigraph_core::tuning::FIVE_12TET,
+    )
+    .with_seven(harmonigraph_core::tuning::SEVEN_12TET);
+    begin_frame(&mut state, &params, 0.0);
+    assert!(state.view.meantone, "12-TET engages by itself");
+
+    state.view.meantone = false;
+    for (frame, seven) in [(1.0, 900.0), (2.0, 1010.0)] {
+        params.set(params::ParamKey::Seven, seven);
+        params.flush();
+        begin_frame(&mut state, &params, frame);
+        assert!(!state.view.meantone, "a seventh at {seven}¢ re-locked the meantone");
+    }
+    // The fifth or the third moving IS a fresh question, and this one is
+    // still a meantone.
+    params.set(params::ParamKey::Three, 700.5);
+    params.set(params::ParamKey::Five, 402.0);
+    params.flush();
+    begin_frame(&mut state, &params, 3.0);
+    assert!(state.view.meantone, "402 = 4·700.5 − 2400 is a meantone again");
+}
+
+/// The septimal lock survives its own axes moving, for the reason the
+/// syntonic one does: with the mode on, the seventh param is inert and the
+/// derived seventh follows the fifth and third, so a detect that also
+/// released would drop the lock the moment either moved.
+#[test]
+fn dragging_the_fifth_does_not_drop_an_engaged_marvel() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.marvel = true;
+    // 2·690 + 2·400 − 1200 = 980¢: the stale seventh param is 20¢ away and
+    // irrelevant while the lock holds.
+    let params = TuningBackend::new(690.0, 400.0).with_seven(1000.0);
+    begin_frame(&mut state, &params, 0.0);
+    assert!(state.view.marvel, "the mode must survive a fifth that moved");
+    assert!(
+        (state.tuning.seven_cents() - 980.0).abs() < 0.001,
+        "the seventh follows the fifth and third",
+    );
+}
+
+/// Learn settles the septimal question the same way it settles the syntonic
+/// one — from a chord that pins down every axis the identity reads.
+#[test]
+fn learn_enables_marvel_from_a_12tet_seventh() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    state.learn_active = true;
+    // C-E-G-B♭ in plain 12-TET: a 700¢ fifth, a 400¢ third and a 1000¢
+    // seventh, which is 2·700 + 2·400 − 1200 exactly.
+    hold_chord(&mut state, &[(60, 0.0), (64, 0.0), (67, 0.0), (70, 0.0)]);
+    learn_step(&mut state, &backend);
+    assert!(state.view.marvel, "a 12-TET seventh chord tempers out 225/224");
+    assert!(state.view.meantone, "and 81/80 with it");
+}
+
+/// A chord with no seventh in it fixes nothing about the septimal comma, so
+/// that mode is left exactly as it was — while the syntonic one, whose
+/// identity the chord does state in full, is still settled.
+#[test]
+fn learn_leaves_marvel_unchanged_without_a_seventh() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    let backend = RecordingBackend::default();
+    state.learn_active = true;
+    state.view.marvel = true;
+    let just_offset = harmonigraph_core::tuning::FIVE_JUST - 400.0;
+    hold_chord(&mut state, &[(60, 0.0), (64, just_offset), (67, 0.0)]);
+    learn_step(&mut state, &backend);
+    assert!(state.view.marvel, "a triad shouldn't change the septimal flag");
+    assert!(!state.view.meantone, "the just third still releases meantone");
 }

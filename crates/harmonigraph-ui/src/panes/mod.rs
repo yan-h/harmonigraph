@@ -218,19 +218,16 @@ pub(super) fn scene_color(c: glam::Vec4, alpha: f32) -> egui::Color32 {
 }
 
 
-/// A lattice node's note name for display, honoring meantone mode: meantone
-/// tempers out the syntonic comma, so the comma marks are dropped (E- and E
-/// name the same pitch). Shared so every pane that labels a node agrees.
+/// A lattice node's note name for display, spelled against whatever commas
+/// are being tempered out: a tempered comma makes two positions one pitch, so
+/// the name is the one its collapsed position carries (meantone names E- and
+/// E alike; marvel names the harmonic seventh as the augmented sixth it has
+/// become). Shared so every pane that labels a node agrees.
 pub(super) fn display_note_name(
     pos: harmonigraph_core::LatticePos,
-    meantone: bool,
+    tempered: harmonigraph_core::Tempered,
 ) -> harmonigraph_core::NoteName {
-    let name = pos.note_name();
-    if meantone {
-        name.without_syntonic_commas()
-    } else {
-        name
-    }
+    pos.respell(tempered).note_name()
 }
 
 /// The visible lattice node whose pitch class most closely matches `pc`

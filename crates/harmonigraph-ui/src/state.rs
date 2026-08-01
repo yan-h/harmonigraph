@@ -5,7 +5,7 @@
 use std::collections::VecDeque;
 
 use egui_dock::{DockState, NodeIndex};
-use harmonigraph_core::{LatticePos, NoteTracker, PitchClass, Tuning};
+use harmonigraph_core::{Comma, LatticePos, NoteTracker, PitchClass, Tuning};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
@@ -109,18 +109,24 @@ pub struct SharedState {
     pub learn_active: bool,
     /// Held pitch classes the last learn ran against (change detection).
     pub(crate) last_learned_classes: Option<Vec<PitchClass>>,
-    /// The fifth/third pair (microcents) the meantone auto-detect last saw,
-    /// so it judges each tuning exactly once.
+    /// Per comma (indexed by [`Comma::index`]): the tuning axes (microcents)
+    /// that comma's auto-detect last saw, so it judges each tuning exactly
+    /// once.
     ///
-    /// This is what lets the meantone switch be switched OFF: an unchanged
-    /// tuning gets no second verdict, so the mode stays where it was put
-    /// until the tuning itself moves. It also keeps the detect off the
-    /// plugin's in-flight parameter writes, which report the value being
-    /// written away from for a frame or more (see `begin_frame`).
+    /// This is what lets a comma switch be switched OFF: an unchanged tuning
+    /// gets no second verdict, so the mode stays where it was put until the
+    /// tuning itself moves. It also keeps the detect off the plugin's
+    /// in-flight parameter writes, which report the value being written away
+    /// from for a frame or more (see `begin_frame`).
     ///
-    /// Runtime-only. A saved project carries the mode itself, and reopening
-    /// one is exactly when the detect should look at the tuning afresh.
-    pub(crate) meantone_judged: Option<(i32, i32)>,
+    /// One entry per comma, and each holds only the axes ITS identity reads
+    /// (see `judged_axes`) — a seventh that moved must not re-open the
+    /// syntonic question, or dragging the seventh would re-engage a meantone
+    /// that was just switched off.
+    ///
+    /// Runtime-only. A saved project carries the modes themselves, and
+    /// reopening one is exactly when the detects should look afresh.
+    pub(crate) temper_judged: [Option<(i32, i32, i32)>; Comma::COUNT],
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see the Frame pane).
     pub camera_presets: Vec<CameraPreset>,
@@ -387,7 +393,7 @@ impl SharedState {
             background: harmonigraph_scene::skin::panel_color(),
             learn_active: false,
             last_learned_classes: None,
-            meantone_judged: None,
+            temper_judged: [None; Comma::COUNT],
             camera_presets: Vec::new(),
             preset_name: String::new(),
             take_supported: false,
