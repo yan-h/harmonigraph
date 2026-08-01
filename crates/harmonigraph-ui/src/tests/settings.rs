@@ -706,3 +706,51 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
     let moved = wheel_over_settings_pane(panes::Tab::Video, 600.0);
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
+
+/// The Commas section reads as a table: one row per comma, and the same two
+/// columns in the same order down every row — the temperament switch and its
+/// auto-detect.
+///
+/// Positions rather than presence, because a table whose cells do not line up
+/// is exactly the failure a "does it draw the word Marvel" test would pass.
+/// The Auto column is located by its heading: its switches are bare (the
+/// heading is their label), so there is no text in the cells to find.
+///
+/// The comma each row tempers out is deliberately NOT drawn — it lives in the
+/// switch's hover, where a ratio is read once rather than kept in a column
+/// that every row has to make room for.
+#[test]
+fn the_commas_section_lays_its_rows_out_as_a_table() {
+    let shapes = settings_pane_at_width(
+        panes::Tab::Tuning,
+        423.0,
+        projections_for(panes::Tab::Tuning)[0],
+    );
+    let find = |needle: &str| {
+        shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == needle => Some(t.pos),
+            _ => None,
+        })
+    };
+    let at = |needle: &str| {
+        find(needle).unwrap_or_else(|| panic!("the Tuning pane drew no {needle:?}"))
+    };
+    let (meantone, marvel) = (at("Meantone"), at("Marvel"));
+    let (temper_head, auto_head) = (at("Temper"), at("Auto"));
+
+    // Rows: the commas run down the table in `Comma::ALL` order.
+    assert!(marvel.y > meantone.y, "the rows are out of order");
+    // Columns: the two rows' switches share a left edge, and Auto is right of
+    // the names rather than under them.
+    assert!((meantone.x - marvel.x).abs() < 1.0, "the name column is ragged");
+    assert!(meantone.x < auto_head.x, "the name column is not leftmost");
+    // Headings sit above the first row, one over each column.
+    for head in [temper_head, auto_head] {
+        assert!(head.y < meantone.y, "a heading is not above the rows");
+    }
+    assert!(temper_head.x < auto_head.x);
+    // And the ratios are on the hover, not in the table.
+    for ratio in ["81/80", "225/224"] {
+        assert!(find(ratio).is_none(), "{ratio} is drawn in the table");
+    }
+}

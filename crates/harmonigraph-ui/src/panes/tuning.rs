@@ -120,64 +120,87 @@ fn comma_deriving(key: ParamKey, view: &harmonigraph_scene::ViewConfig) -> Optio
 /// Toggle switches, not buttons, for the same reason Learn is one: these are
 /// persistent modes and must not read like the presets above them.
 fn comma_controls(ui: &mut egui::Ui, state: &mut SharedState) {
-    for comma in tuning::Comma::ALL {
-        // button_row: the switches are shorter than a padded button, and a
-        // plain horizontal row would seat them a few pixels high.
-        button_row(ui, |ui| {
-            // Nothing is written to the derived param either way. A lock only
-            // ever DERIVED that axis; handing the derived value back on the
-            // way out would rewrite a tuning the user set (a just third comes
-            // back as a tempered one) as a side effect of pressing a mode
-            // twice.
-            //
-            // Live whatever Auto is doing: switching this ON is how a tuning
-            // that is NOT within the tolerance gets tempered anyway, and the
-            // detect never releases, so that decision stands. Switching it
-            // OFF stands too — the detect judges each tuning once, and this
-            // one has been judged (see `begin_frame`).
-            //
-            // Labelled by RATIO, which is the thing a row of these has to
-            // tell apart, and short enough to survive a narrow column (see
-            // `no_settings_pane_overruns_a_narrow_column`). The temperament
-            // it names leads the hover, and is the badge on the bar the lock
-            // drives, so the two are never more than a hover apart.
-            let auto_on = state.view.temper_auto(comma);
-            crate::widgets::toggle_switch(ui, state.view.temper_mut(comma), comma.ratio())
-                .on_hover_text(format!(
-                    "{}: lock the {} to {}, tempering out the {} ({:.2}¢). Note names \
-                     are respelled to match{}",
-                    comma.temperament(),
-                    comma.derived_axis_name(),
-                    comma.derived_from(),
-                    comma.comma_name(),
-                    comma.size_cents(),
-                    if auto_on {
-                        ". Auto engages it too, and switching it off here holds until the \
-                         tuning changes"
-                    } else {
-                        ""
-                    },
-                ));
-            // Auto-detect. Switching it ON re-opens the question on the tuning
-            // already loaded — without clearing the verdict it would engage
-            // nothing until the tuning next moved, since `begin_frame` records
-            // every tuning it sees whether the detect is running or not.
-            // Switching it off leaves the mode where it is, with the switch
-            // beside it still live.
-            let auto = crate::widgets::toggle_switch(ui, state.view.temper_auto_mut(comma), "Auto")
-                .on_hover_text(format!(
-                    "Engage {} by itself whenever the {} lands within {}¢ of {} — from a \
-                     preset, a learned chord, or a drag of any bar",
-                    comma.temperament(),
-                    comma.derived_axis_name(),
-                    tuning::TEMPER_TOLERANCE,
-                    comma.derived_from(),
-                ));
-            if auto.changed() && state.view.temper_auto(comma) {
-                state.temper_judged[comma.index()] = None;
+    // A table, because the rows answer the same two questions in the same
+    // order and a reader compares DOWN the columns: which temperament, and is
+    // it engaging by itself. The comma each one tempers out is in the hover
+    // rather than a column of its own — a ratio is what the temperament MEANS
+    // rather than something to pick a row by, and every column here has to
+    // survive a settings column dragged narrow.
+    //
+    // The Auto heading is its switches' label, which is what lets them stay
+    // bare; a labelled switch in every cell would not fit.
+    //
+    // A table cannot wrap, and even two columns of it need about 135pt — more
+    // than a settings column dragged to its narrowest holds, where every other
+    // control here either wraps or elides. So it scrolls sideways inside its
+    // own clip rather than widening the pane around it, which is also what
+    // keeps the section rule under it at the pane's width
+    // (`Region::expand_to_include_rect` unions `max_rect`, so an over-wide
+    // child moves everything below it out too). It shrinks to the table at any
+    // width that fits one, which is every width the column actually opens at.
+    egui::ScrollArea::horizontal().show(ui, |ui| {
+        egui::Grid::new("commas").num_columns(2).show(ui, |ui| {
+            for heading in ["Temper", "Auto"] {
+                ui.label(egui::RichText::new(heading).color(theme::text_dim()));
+            }
+            ui.end_row();
+
+            for comma in tuning::Comma::ALL {
+                // Nothing is written to the derived param either way. A lock only
+                // ever DERIVED that axis; handing the derived value back on the
+                // way out would rewrite a tuning the user set (a just third comes
+                // back as a tempered one) as a side effect of pressing a mode
+                // twice.
+                //
+                // Live whatever Auto is doing: switching this ON is how a tuning
+                // that is NOT within the tolerance gets tempered anyway, and the
+                // detect never releases, so that decision stands. Switching it
+                // OFF stands too — the detect judges each tuning once, and this
+                // one has been judged (see `begin_frame`).
+                //
+                // The hover is where the comma itself is named, so it leads with
+                // the ratio: it is the thing a reader came to this section for,
+                // and the switch beside it says only which temperament drops it.
+                let auto_on = state.view.temper_auto(comma);
+                crate::widgets::toggle_switch(ui, state.view.temper_mut(comma), comma.temperament())
+                    .on_hover_text(format!(
+                        "{} — the {} ({:.2}¢). {} locks the {} to {}, and note names are \
+                         respelled to match{}",
+                        comma.ratio(),
+                        comma.comma_name(),
+                        comma.size_cents(),
+                        comma.temperament(),
+                        comma.derived_axis_name(),
+                        comma.derived_from(),
+                        if auto_on {
+                            ". Auto engages it too, and switching it off here holds until the \
+                             tuning changes"
+                        } else {
+                            ""
+                        },
+                    ));
+                // Auto-detect. Switching it ON re-opens the question on the tuning
+                // already loaded — without clearing the verdict it would engage
+                // nothing until the tuning next moved, since `begin_frame` records
+                // every tuning it sees whether the detect is running or not.
+                // Switching it off leaves the mode where it is, with the switch
+                // beside it still live.
+                let auto = crate::widgets::toggle_switch(ui, state.view.temper_auto_mut(comma), "")
+                    .on_hover_text(format!(
+                        "Engage {} by itself whenever the {} lands within {}¢ of {} — from a \
+                         preset, a learned chord, or a drag of any bar",
+                        comma.temperament(),
+                        comma.derived_axis_name(),
+                        tuning::TEMPER_TOLERANCE,
+                        comma.derived_from(),
+                    ));
+                if auto.changed() && state.view.temper_auto(comma) {
+                    state.temper_judged[comma.index()] = None;
+                }
+                ui.end_row();
             }
         });
-    }
+    });
 }
 
 pub(super) fn tuning_pane(
