@@ -247,8 +247,9 @@ pub struct Scene {
     /// sector-to-sector and band-to-mark-ring alike. Already clamped.
     pub outer_gap: f32,
     /// Which octaves the indicators show and how the circle is divided
-    /// between them (see [`octaves`]). One layout for the whole frame: a
-    /// node's pitch class rotates the wheel, it doesn't reshape it.
+    /// between them (see [`octaves`]). ONE layout for the whole frame, and
+    /// the same wheel on every node: an indicator says which octave, and
+    /// which pitch class is already said by which node it is drawn on.
     pub octave_layout: OctaveLayout,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and

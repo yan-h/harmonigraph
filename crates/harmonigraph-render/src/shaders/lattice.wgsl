@@ -65,7 +65,7 @@ struct Uniforms {
     // reads as a plate sitting ON the picture rather than a hole THROUGH it.
     background: vec4<f32>,
     // x: how many octave indicators are shown; y: the slot of the lowest of
-    // them (see oct_angle). z, w unused.
+    // them (see oct_count / oct_first). z, w unused.
     misc7: vec4<f32>,
     // The angles dividing the octave indicators, four to a row and read
     // through oct_bound(): boundary j of the shown range, walking clockwise
@@ -395,12 +395,13 @@ fn oct_mid(s: u32) -> f32 {
 // The glyphs are always crisp, too: `aa` alone is their edge width, which
 // is what makes it screen-constant at every zoom.
 
-// Neighboring sectors (slots are 0.785 rad apart) are separated by a
-// CONSTANT-thickness gap: the slice edges are radial lines offset half the
-// gap from the sector bisectors, not constant-angle edges (those read as a V
-// that widens outward). At band inner 0 the sectors become full pie wedges;
+// Neighboring sectors are separated by a CONSTANT-thickness gap: the slice
+// edges are radial lines offset half the gap from the boundary the two
+// sectors share, not constant-angle edges (those read as a V that widens
+// outward). That matters more the more indicators there are, and their
+// number is a setting. At band inner 0 the sectors become full pie wedges;
 // near the center every wedge falls inside the gap band, leaving a small
-// clear hub instead of a ten-way mush point.
+// clear hub instead of an N-way mush point.
 //
 // The gap's full width is u.misc5.z (the view's Gap bar), in quad UV units.
 // The SAME value separates the mark rings from the band, so one number is
@@ -462,9 +463,9 @@ fn outer_glyph(s: u32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
     let own = select(s1 * s2, max(s1, s2), edges.x - edges.y > TAU * 0.5);
     // Each edge's gap is cut only on the side the edge actually runs to. The
     // boundary LINE passes just as close on the far side of the node, which
-    // is outside a narrow wedge and so used not to matter, but falls inside
-    // a wide one — where it would read as a slit across an indicator that
-    // has no boundary there.
+    // falls outside a narrow wedge and so does not matter there, but lands
+    // inside a wide one — where it would read as a slit across an indicator
+    // that has no boundary at all in that direction.
     let gap_half = slice_gap_half();
     let g = (1.0 - aa_inside(gap_half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)))
         * (1.0 - aa_inside(gap_half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)));

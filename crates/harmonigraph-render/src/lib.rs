@@ -187,12 +187,11 @@ struct Uniforms {
     oct_bounds: [[f32; 4]; 3],
 }
 
-// The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words, and
-// `oct_bounds` fits the boundaries either side of every one of those slots
-// into 3 vec4s — one value MORE than the packing holds, which is what makes
-// 12 slots the tighter of the two limits. Growing the constant in
-// harmonigraph-scene past what they hold would index out of bounds at
-// runtime here, so fail the build instead.
+// Two fixed-size GPU homes for the slots, and the tighter one is what this
+// asserts: 3 u32 words hold 12 packed levels, but `oct_bounds`'s 3 vec4s
+// hold 12 boundary angles and the layout needs SLOTS + 1 of them — so 11
+// slots is the ceiling, not 12. Growing the constant in harmonigraph-scene
+// past it would index out of bounds at runtime here, so fail the build.
 const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS < 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
@@ -214,8 +213,10 @@ struct GpuInstance {
     octaves: [u32; 3],
     /// Per-note animation seed (small constant, not a timestamp).
     seed: f32,
-    /// The node's pitch class in cents (0..1200); dots mode uses it to place
-    /// each octave dot at the note's absolute-pitch angle.
+    /// The node's pitch class in cents (0..1200). It COLORS the octave
+    /// indicators — each is tinted by its own octave's true pitch, that
+    /// octave's C plus this — and does not place them; the wheel has the
+    /// same orientation on every node (see `harmonigraph_scene::octaves`).
     cents: f32,
     /// 1 when the node is on the home (center sevens) sheet: idle home
     /// nodes draw a blank placeholder ring.
@@ -524,18 +525,12 @@ impl LatticeCallback {
                     0.0,
                     0.0,
                 ],
+                // Straight indexing: the table is exactly as long as the
+                // rows are wide (the const assert above is what keeps it so),
+                // and a fallback here would quietly ship a wheel with a wrong
+                // angle in it rather than failing the build.
                 oct_bounds: std::array::from_fn(|row| {
-                    std::array::from_fn(|col| {
-                        // The layout carries one boundary per sector plus the
-                        // closing one; the tail of the last row is past it and
-                        // is never read.
-                        scene
-                            .octave_layout
-                            .bounds
-                            .get(row * 4 + col)
-                            .copied()
-                            .unwrap_or(0.0)
-                    })
+                    std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col])
                 }),
             },
             target_format,
