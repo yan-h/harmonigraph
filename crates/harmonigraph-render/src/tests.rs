@@ -848,7 +848,7 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 /// window and comes round the seam, which is one whole octave of the Range.
 #[test]
 fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
-    use harmonigraph_scene::{octave_layout, OctaveTaper, MAX_TAPER_AMOUNT};
+    use harmonigraph_scene::{octave_layout, MAX_TAPER_AMOUNT};
 
     let Some((device, queue)) = headless_device() else {
         return;
@@ -883,18 +883,15 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     // window's ends) and at three pitch classes that do not.
     let mut pane = 60;
     for span in 2..=5u32 {
-        for (taper, amount) in [
-            (OctaveTaper::Uniform, 0.0),
-            (OctaveTaper::Linear, 0.6),
-            (OctaveTaper::Geometric, MAX_TAPER_AMOUNT),
-            (OctaveTaper::Plateau, 0.6),
-        ] {
+        // An even axis, a straight ramp, the sharpest shape at full strength,
+        // and a plateau.
+        for (amount, shape) in [(0.0, 0.5), (0.6, 0.5), (MAX_TAPER_AMOUNT, 0.0), (0.6, 0.85)] {
             for cents in [0.0, 350.0, 700.0, 1150.0] {
-                let layout = octave_layout(span, taper, amount);
+                let layout = octave_layout(span, amount, shape);
                 let px = shot(&octave_wheel_scene(layout, cents), pane);
                 pane += 1;
                 let profile = band_profile(&px, SIZE[0]);
-                let case = format!("span {span}, {taper:?} {amount}, {cents}c");
+                let case = format!("span {span}, amount {amount} shape {shape}, {cents}c");
 
                 // One indicator per octave of the Range, closing the ring:
                 // that is one slit per boundary and no other break. A missing
@@ -920,7 +917,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                 // seam) and the 1150c case (one half a semitone off it,
                 // inside the slit the Gap cuts). Read on the even axis, where
                 // those two are the only exceptions at every span.
-                if taper == OctaveTaper::Uniform {
+                if amount == 0.0 {
                     let bottom = gap_at(&profile, 270.0);
                     if cents == 0.0 {
                         assert!(bottom > 0.0, "{case}: a C node's octaves meet at the seam");
@@ -939,7 +936,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
 /// a node's pitch class has to move it.
 #[test]
 fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
-    use harmonigraph_scene::{octave_layout, OctaveTaper};
+    use harmonigraph_scene::octave_layout;
 
     let Some((device, queue)) = headless_device() else {
         return;
@@ -952,7 +949,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
 
     let mut pane = 100;
-    for (span, taper) in [(2u32, OctaveTaper::Uniform), (5, OctaveTaper::Geometric)] {
+    for (span, amount, shape) in [(2u32, 0.0, 0.5), (5, 0.7, 0.25)] {
         // A C node and a node a fifth up: same slot, pitches 7 semitones
         // apart, so the bright arc must move by exactly that much of the axis.
         // Middle C's octave, and the top of the Range — the one that runs off
@@ -964,7 +961,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             (0.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
             (700.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
         ] {
-            let layout = octave_layout(span, taper, 0.7);
+            let layout = octave_layout(span, amount, shape);
             let mut scene = octave_wheel_scene(layout, cents);
             // One octave sounding. The silent slots still ghost in behind it
             // at GHOST_LEVEL, which the brightness threshold below sorts out.

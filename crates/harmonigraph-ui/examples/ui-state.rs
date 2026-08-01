@@ -65,11 +65,8 @@ fn main() -> Result<(), String> {
             // The octave wheel: how many indicators, and how the circle is
             // divided between them.
             "octave_span" => view.octave_span = int()?.max(0) as u32,
-            "octave_taper" => {
-                view.octave_taper =
-                    ron::from_str(value).map_err(|e| format!("`octave_taper`: {e}"))?
-            }
             "octave_taper_amount" => view.octave_taper_amount = num()?,
+            "octave_taper_shape" => view.octave_taper_shape = num()?,
             "bloom_strength" => view.bloom_strength = num()?,
             "show_labels" => view.show_labels = flag()?,
             "show_cents" => view.show_cents = flag()?,

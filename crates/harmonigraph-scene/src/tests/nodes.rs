@@ -320,7 +320,7 @@ fn every_node_draws_the_octaves_the_range_names() {
     // a tritone off it. A node's pitch class only says where round the turn
     // its octaves land, never which ones there are, so the fold a note takes
     // is one lookup for the whole frame.
-    let layout = octave_layout(2, OctaveTaper::Uniform, 0.0);
+    let layout = octave_layout(2, 0.0, DEFAULT_TAPER_SHAPE);
     assert_eq!(
         layout.slot_range(),
         (MIDDLE_C_SLOT as u32 - 2, MIDDLE_C_SLOT as u32 + 2),
@@ -342,8 +342,8 @@ fn the_views_taper_reaches_the_wheel() {
     // every ring on screen came out evenly divided.
     let view = ViewConfig {
         octave_span: 3,
-        octave_taper: OctaveTaper::Geometric,
         octave_taper_amount: 0.6,
+        octave_taper_shape: 0.25,
         ..ViewConfig::default()
     };
     let scene = scene_of(
@@ -355,12 +355,12 @@ fn the_views_taper_reaches_the_wheel() {
     );
     assert_eq!(
         scene.octave_layout,
-        octave_layout(3, OctaveTaper::Geometric, 0.6),
+        octave_layout(3, 0.6, 0.25),
         "the frame's wheel is the one the view asked for"
     );
     assert_ne!(
         scene.octave_layout,
-        octave_layout(3, OctaveTaper::Uniform, 0.0),
+        octave_layout(3, 0.0, DEFAULT_TAPER_SHAPE),
         "and a taper is not the even division"
     );
 }

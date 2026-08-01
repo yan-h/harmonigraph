@@ -81,9 +81,26 @@ pub const MAX_TAPER_AMOUNT: f32 = 0.9;
 /// and the conversions read better named.
 const SEMIS: f32 = 12.0;
 
-/// How much of the circle an octave of the axis gets, as a function of its
-/// distance from middle C, so the middle of the window carries more visual
-/// weight than its extremes.
+/// How far the Shape setting can bend the taper either way, as an exponent:
+/// the ends of the bar are `x^(1/4)` and `x^4`, and its middle is the
+/// straight ramp `x`. Four is where more travel stops buying a different
+/// picture — at the sharp end the octave next to middle C has already given
+/// up 70% of what the edge one does, and at the flat end everything inside
+/// the outermost two is within a few percent of full width.
+const SHAPE_EXTREME: f32 = 4.0;
+
+/// The exponent [`taper_weight`] raises the distance to, from a Shape
+/// setting of 0..1. Logarithmic, so the bar's middle is the straight ramp
+/// (exponent 1) and the two halves are mirror images of each other rather
+/// than one being a squashed version of the other.
+pub fn shape_exponent(shape: f32) -> f32 {
+    SHAPE_EXTREME.powf(2.0 * shape.clamp(0.0, 1.0) - 1.0)
+}
+
+/// Relative width of an octave `x` of the way from middle C's (0) to the
+/// edge of the Range (1). Only the RATIOS between the returned weights
+/// matter — [`octave_layout`] normalizes them onto the circle — so this is a
+/// shape, not a size.
 ///
 /// A taper bends the pitch axis without breaking it: the map stays monotone
 /// and stays linear WITHIN each octave, so an indicator still sits on its
@@ -91,60 +108,28 @@ const SEMIS: f32 = 12.0;
 /// many degrees an octave is worth, which is a statement about emphasis
 /// rather than about pitch.
 ///
-/// Each TAPERING formula is a function of ONE normalized distance (0 at
-/// middle C, 1 at the edge of the window) and ONE amount, and all three
-/// agree at both ends: full width at middle C, `1 - amount` at the edge. So
-/// the amount always means the same thing — how much of its width the
-/// outermost octave gives up — and the three differ only in how that loss is
-/// distributed in between, which is what makes flipping between them at a
-/// fixed amount a comparison of shapes. [`Uniform`] is the baseline they
-/// depart from and is outside that: it ignores the amount.
+/// `1 - amount * x^p` — two knobs that mean two different things, which is
+/// the whole reason it is this and not a list of named curves:
 ///
-/// [`Uniform`]: OctaveTaper::Uniform
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum OctaveTaper {
-    /// Equal octaves; the amount is inert. The plain circular division — a
-    /// pitch axis of constant scale, where equal intervals anywhere in the
-    /// window subtend equal angles.
-    #[default]
-    Uniform,
-    /// Straight ramp: each octave out is the same absolute amount narrower
-    /// than the one inside it.
-    Linear,
-    /// Constant RATIO per octave: each octave out is the same fraction of
-    /// its inner neighbour. Falls away fastest near the middle and flattens
-    /// toward the edges, so the outer octaves stay legible while the middle
-    /// two or three take most of the circle.
-    Geometric,
-    /// Quadratic: barely narrows the octaves either side of middle C and
-    /// takes almost all of the loss at the extremes. Reads as a PLATEAU of
-    /// full-size middle octaves with the ends falling away, rather than as a
-    /// gradient, which is the difference from Linear.
-    ///
-    /// A cosine ease is the obvious shape for this and is the wrong one: any
-    /// curve antisymmetric about its own midpoint gives exactly `1 - a/2`
-    /// halfway out, which is what Linear gives there too — so at the
-    /// narrowest window, where halfway out is most of what there is, the two
-    /// would be all but identical and one of the four choices would do
-    /// nothing.
-    Plateau,
-}
-
-impl OctaveTaper {
-    /// Relative width of an octave `x` of the way from middle C (0) to the
-    /// edge of the window (1). Only the RATIOS between the returned weights
-    /// matter — [`octave_layout`] normalizes them onto the circle — so this
-    /// is a shape, not a size.
-    pub fn weight(self, x: f32, amount: f32) -> f32 {
-        let x = x.clamp(0.0, 1.0);
-        let amount = amount.clamp(0.0, MAX_TAPER_AMOUNT);
-        match self {
-            OctaveTaper::Uniform => 1.0,
-            OctaveTaper::Linear => 1.0 - amount * x,
-            OctaveTaper::Geometric => (1.0 - amount).powf(x),
-            OctaveTaper::Plateau => 1.0 - amount * x * x,
-        }
-    }
+/// - The AMOUNT is the only thing that moves the ends. Whatever the shape,
+///   an octave at middle C is at full width and one at the edge of the Range
+///   is at `1 - amount`, so the amount always means the same thing and the
+///   shape is a comparison at a fixed strength rather than another strength.
+/// - The SHAPE says where in between the loss falls, through the exponent
+///   `p` (see [`shape_exponent`]). Left of the bar's middle, `p` is under 1
+///   and the loss lands at once: the octave next to middle C gives up most
+///   of what the edge one does, and the outer ones flatten out — a spotlight
+///   on the middle. Right of it `p` is over 1 and the loss is held back to
+///   the extremes: the middle several octaves stay near full width and the
+///   last one or two fall away, a plateau rather than a gradient.
+///
+/// An even axis is `amount` 0, so it is where the bar starts rather than a
+/// mode beside it — and the shape is inert there, which is exactly what "no
+/// taper" should mean.
+pub fn taper_weight(x: f32, amount: f32, shape: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    let amount = amount.clamp(0.0, MAX_TAPER_AMOUNT);
+    1.0 - amount * x.powf(shape_exponent(shape))
 }
 
 /// The pitch axis the octave indicators are drawn on, ready for the shader.
@@ -173,9 +158,14 @@ pub struct OctaveLayout {
 
 impl Default for OctaveLayout {
     fn default() -> Self {
-        octave_layout(DEFAULT_OCTAVE_SPAN, OctaveTaper::Uniform, 0.0)
+        octave_layout(DEFAULT_OCTAVE_SPAN, 0.0, DEFAULT_TAPER_SHAPE)
     }
 }
+
+/// Shape the view starts at: the straight ramp, which is the middle of the
+/// bar and the one shape that is neither a spotlight nor a plateau. It shows
+/// nothing until the Amount leaves 0.
+pub const DEFAULT_TAPER_SHAPE: f32 = 0.5;
 
 /// Range the view starts at: 4 octaves either side of middle C's, so 9
 /// indicators — C0..C8 in this crate's numbering (middle C = C4; the UI
@@ -185,7 +175,7 @@ impl Default for OctaveLayout {
 pub const DEFAULT_OCTAVE_SPAN: u32 = 4;
 
 /// The pitch axis for a Range of `span` octaves either side of middle C's,
-/// tapered by `taper` at strength `amount`.
+/// tapered by `amount` in the shape `shape` (see [`taper_weight`]).
 ///
 /// The seam is where the walk STARTS and a full turn is what it covers,
 /// which is the whole of why the window's two ends meet at the bottom under
@@ -193,7 +183,7 @@ pub const DEFAULT_OCTAVE_SPAN: u32 = 4;
 /// widths that a new formula could break. Middle C lands straight up because
 /// the widths depend only on the distance from it and are therefore
 /// symmetric about it — half the circle either side.
-pub fn octave_layout(span: u32, taper: OctaveTaper, amount: f32) -> OctaveLayout {
+pub fn octave_layout(span: u32, amount: f32, shape: f32) -> OctaveLayout {
     let span = span.clamp(MIN_OCTAVE_SPAN, MAX_OCTAVE_SPAN);
     let octaves = 2 * span + 1;
     let n = span as f32;
@@ -207,7 +197,7 @@ pub fn octave_layout(span: u32, taper: OctaveTaper, amount: f32) -> OctaveLayout
     let mut weights = [0f32; OCTAVE_SLOTS];
     let mut total = 0.0;
     for (j, w) in weights.iter_mut().take(octaves as usize).enumerate() {
-        *w = taper.weight((j as f32 - n).abs() / n, amount);
+        *w = taper_weight((j as f32 - n).abs() / n, amount, shape);
         total += *w;
     }
 
@@ -286,25 +276,22 @@ mod tests {
     use super::*;
     use std::f32::consts::PI;
 
-    const TAPERS: [OctaveTaper; 4] = [
-        OctaveTaper::Uniform,
-        OctaveTaper::Linear,
-        OctaveTaper::Geometric,
-        OctaveTaper::Plateau,
-    ];
+    /// The Shape bar at both ends, at its middle, and either side of it: the
+    /// sharpest spotlight, the straight ramp, and the flattest plateau.
+    const SHAPES: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 
     /// Every span, formula and amount, against pitch classes that put an
     /// indicator's edge exactly on the seam (C), well clear of it, and just
     /// short of it — the grid the invariants below all run over.
     fn every_case() -> impl Iterator<Item = (OctaveLayout, f32, String)> {
         (MIN_OCTAVE_SPAN..=MAX_OCTAVE_SPAN).flat_map(|span| {
-            TAPERS.iter().flat_map(move |&taper| {
+            SHAPES.iter().flat_map(move |&shape| {
                 [0.0f32, 0.35, 0.9].iter().flat_map(move |&amount| {
                     [0.0f32, 350.0, 700.0, 1150.0].iter().map(move |&cents| {
                         (
-                            octave_layout(span, taper, amount),
+                            octave_layout(span, amount, shape),
                             cents,
-                            format!("span {span}, {taper:?} {amount}, {cents}c"),
+                            format!("span {span}, amount {amount} shape {shape}, {cents}c"),
                         )
                     })
                 })
@@ -378,7 +365,7 @@ mod tests {
     #[test]
     fn every_node_draws_the_octaves_the_range_names() {
         for span in MIN_OCTAVE_SPAN..=MAX_OCTAVE_SPAN {
-            let l = octave_layout(span, OctaveTaper::Uniform, 0.0);
+            let l = octave_layout(span, 0.0, DEFAULT_TAPER_SHAPE);
             for cents in [0.0f32, 350.0, 700.0, 1150.0] {
                 let (low, high) = l.slot_range();
                 assert_eq!(
@@ -453,38 +440,51 @@ mod tests {
         }
     }
 
-    /// Octaves shrink outward, symmetrically, and only when a taper is asked
-    /// for: the middle of the window is what carries the extra weight.
+    /// Octaves shrink outward, symmetrically, at every shape — and only when
+    /// an amount is asked for: the middle of the window is what carries the
+    /// extra weight.
     #[test]
     fn octaves_shrink_away_from_middle_c() {
-        for taper in TAPERS {
-            let l = octave_layout(5, taper, 0.6);
-            let width = |j: usize| l.bounds[j] - l.bounds[j + 1];
-            // Eleven octaves, so middle C's own is the middle one, index 5,
-            // and the walk outward from it either way is what shrinks.
-            for j in 0..5 {
-                let (inner, outer) = (width(j + 1), width(j));
-                if taper == OctaveTaper::Uniform {
-                    assert!((inner - outer).abs() < 1e-6, "{taper:?} at {j}");
-                } else {
-                    assert!(outer < inner, "{taper:?} at {j}: {outer} !< {inner}");
+        for shape in SHAPES {
+            for amount in [0.0f32, 0.6] {
+                let l = octave_layout(5, amount, shape);
+                let width = |j: usize| l.bounds[j] - l.bounds[j + 1];
+                // Eleven octaves, so middle C's own is the middle one, index
+                // 5, and the walk outward from it either way is what shrinks.
+                for j in 0..5 {
+                    let (inner, outer) = (width(j + 1), width(j));
+                    let case = format!("shape {shape}, amount {amount}, octave {j}");
+                    if amount == 0.0 {
+                        assert!((inner - outer).abs() < 1e-6, "{case}: an even axis moved");
+                    } else {
+                        assert!(outer < inner, "{case}: {outer} !< {inner}");
+                    }
+                    // Symmetric about middle C's octave.
+                    assert!((width(j) - width(10 - j)).abs() < 1e-6, "{case}: lopsided");
                 }
-                // Symmetric about middle C's octave.
-                assert!((width(j) - width(10 - j)).abs() < 1e-6, "{taper:?} at {j}");
             }
         }
     }
 
-    /// Every formula means the same thing by its amount, which is what makes
-    /// flipping between them at a fixed amount a fair comparison.
+    /// Every shape means the same thing by the amount — full width at middle
+    /// C and `1 - amount` at the edge, whatever the exponent — which is what
+    /// makes the Shape bar a comparison at a fixed strength rather than
+    /// another way to set the strength. And the middle of the bar is the
+    /// straight ramp, the one shape that is neither.
     #[test]
-    fn tapers_agree_at_both_ends() {
-        for taper in TAPERS {
-            assert!((taper.weight(0.0, 0.5) - 1.0).abs() < 1e-6, "{taper:?}");
-            if taper != OctaveTaper::Uniform {
-                assert!((taper.weight(1.0, 0.5) - 0.5).abs() < 1e-6, "{taper:?}");
-            }
+    fn every_shape_agrees_at_both_ends() {
+        for shape in SHAPES {
+            let (middle, edge) = (taper_weight(0.0, 0.5, shape), taper_weight(1.0, 0.5, shape));
+            assert!((middle - 1.0).abs() < 1e-6, "shape {shape}: middle C is {middle}");
+            assert!((edge - 0.5).abs() < 1e-6, "shape {shape}: the edge is {edge}");
         }
+        assert!((shape_exponent(0.5) - 1.0).abs() < 1e-6, "the bar's middle is not the ramp");
+        assert!((taper_weight(0.5, 0.6, 0.5) - 0.7).abs() < 1e-6, "the ramp is not straight");
+        // Under the ramp the loss lands at once and then flattens; over it,
+        // the middle is held near full width and the fall is at the extremes.
+        // Halfway out is where the two part company the furthest.
+        let (sharp, flat) = (taper_weight(0.5, 0.6, 0.0), taper_weight(0.5, 0.6, 1.0));
+        assert!(sharp < 0.7 && flat > 0.7, "the bar's two halves do not bracket the ramp");
     }
 
     /// An indicator can pass a half turn but never a whole one, which is
@@ -492,8 +492,9 @@ mod tests {
     /// half turn a wedge is the UNION of its two half-planes rather than
     /// their intersection, and at a whole turn neither reading means
     /// anything. The widest there is is middle C's own octave at the
-    /// narrowest Range under the steepest Ratio taper — five octaves to the
-    /// turn with the middle one taking ten times the width of the ends.
+    /// narrowest Range, the fullest amount and the sharpest shape — five
+    /// octaves to the turn with the middle one taking ten times the width of
+    /// the ends.
     #[test]
     fn an_indicator_can_pass_a_half_turn_but_never_a_whole_one() {
         let mut widest: f32 = 0.0;
@@ -506,7 +507,7 @@ mod tests {
             }
         }
         assert!(widest > PI, "nothing passes a half turn: widest {widest} rad");
-        let steepest = octave_layout(MIN_OCTAVE_SPAN, OctaveTaper::Geometric, MAX_TAPER_AMOUNT);
+        let steepest = octave_layout(MIN_OCTAVE_SPAN, MAX_TAPER_AMOUNT, 0.0);
         let (e0, e1) = steepest.sector(MIDDLE_C_SLOT as u32, 0.0);
         assert!((widest - (e0 - e1)).abs() < 1e-5, "the widest is somewhere else: {widest}");
     }
@@ -516,8 +517,8 @@ mod tests {
     /// every octave MIDI has, so nothing folds there.
     #[test]
     fn span_is_clamped_to_the_tables() {
-        assert_eq!(octave_layout(0, OctaveTaper::Uniform, 0.0).octaves, 2 * MIN_OCTAVE_SPAN + 1);
-        let widest = octave_layout(99, OctaveTaper::Uniform, 0.0);
+        assert_eq!(octave_layout(0, 0.0, 0.5).octaves, 2 * MIN_OCTAVE_SPAN + 1);
+        let widest = octave_layout(99, 0.0, 0.5);
         assert_eq!(widest.octaves, 2 * MAX_OCTAVE_SPAN + 1);
         assert_eq!(widest.octaves as usize, OCTAVE_SLOTS);
         assert_eq!(widest.slot_range(), (0, OCTAVE_SLOTS as u32 - 1));

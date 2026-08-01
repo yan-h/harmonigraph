@@ -176,7 +176,7 @@ pub fn derive_scene(
     // octaves of it. A node's pitch class only says where round the turn its
     // own octaves land, so the fold below is one lookup for the frame.
     let octave_layout =
-        octave_layout(view.octave_span, view.octave_taper, view.octave_taper_amount);
+        octave_layout(view.octave_span, view.octave_taper_amount, view.octave_taper_shape);
     let (low_slot, high_slot) = {
         let (low, high) = octave_layout.slot_range();
         (low as i8, high as i8)

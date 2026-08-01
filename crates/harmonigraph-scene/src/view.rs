@@ -2,7 +2,6 @@
 //! serde defaults and legacy-blob migration, plus the per-frame
 //! [`FrameParams`] mirror of the host-automatable appearance parameters.
 
-use crate::octaves::OctaveTaper;
 use crate::skin;
 use crate::style::{
     HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
@@ -179,18 +178,20 @@ pub struct ViewConfig {
     /// outermost indicator on their side.
     #[serde(default = "default_octave_span")]
     pub octave_span: u32,
-    /// Which formula narrows an octave of the axis as it gets further from
-    /// middle C (see [`OctaveTaper`]). The middle octaves take the degrees
-    /// the outer ones give up, so this is where the visual weight of the
-    /// window sits, not how big the ring is.
-    #[serde(default)]
-    pub octave_taper: OctaveTaper,
-    /// How much of its width the octave at the EDGE of the window gives up,
-    /// 0..0.9 — the one amount every formula is expressed in terms of, so
-    /// switching formulas at a fixed amount compares their shapes rather
-    /// than their strengths. Inert under [`OctaveTaper::Uniform`].
+    /// How much of its width the octave at the EDGE of the Range gives up to
+    /// the middle ones, 0..0.9 (see [`taper_weight`]). 0 is an even axis, so
+    /// this alone says whether there is a taper at all; the middle octaves
+    /// take the degrees the outer ones give up, which is where the visual
+    /// weight of the wheel sits rather than how big the ring is.
     #[serde(default = "default_octave_taper_amount")]
     pub octave_taper_amount: f32,
+    /// WHERE that loss falls between middle C and the edge, 0..1: under half
+    /// it lands at once and the outer octaves flatten out, over half the
+    /// middle several are held near full width and the last ones fall away.
+    /// The ends are pinned by the amount whatever this is, so it is a shape
+    /// rather than a second strength — and it is inert at amount 0.
+    #[serde(default = "default_octave_taper_shape")]
+    pub octave_taper_shape: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -485,11 +486,17 @@ fn default_octave_span() -> u32 {
     crate::octaves::DEFAULT_OCTAVE_SPAN
 }
 
-/// Half the width given up at the extremes: enough that the taper reads as
-/// a deliberate shape at any formula, and it only takes effect once one is
-/// chosen (the default formula is Uniform, which ignores it).
+/// No taper: the amount is the whole of whether there is one, so a fresh
+/// view starts on an even axis and any weighting of the middle octaves is a
+/// choice made from there.
 fn default_octave_taper_amount() -> f32 {
-    0.5
+    0.0
+}
+
+/// The straight ramp — the middle of the Shape bar, and inert until the
+/// amount leaves 0.
+fn default_octave_taper_shape() -> f32 {
+    crate::octaves::DEFAULT_TAPER_SHAPE
 }
 
 /// Idle marker at the classic disc radius, so a pre-field blob (whose
@@ -651,8 +658,8 @@ impl Default for ViewConfig {
             // axis a fresh view starts from is an even one, and any
             // weighting of the middle octaves is a choice made from there.
             octave_span: default_octave_span(),
-            octave_taper: OctaveTaper::Uniform,
             octave_taper_amount: default_octave_taper_amount(),
+            octave_taper_shape: default_octave_taper_shape(),
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so

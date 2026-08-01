@@ -9,7 +9,7 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    NodeStyle, OctaveTaper, ViewConfig, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIN_OCTAVE_SPAN,
+    NodeStyle, ViewConfig, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIN_OCTAVE_SPAN,
 };
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
@@ -94,45 +94,29 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             (5, "±5", "C-2..C8 — every octave MIDI has, so one is 33 degrees"),
         ],
     );
-    // Uniform is the plain circular division and ignores the amount, so the
-    // formulas read as three departures from one baseline rather than four
-    // unrelated shapes.
-    choice_row(
-        ui,
-        "Taper",
-        &mut view.octave_taper,
-        &[
-            (
-                OctaveTaper::Uniform,
-                "Even",
-                "An even pitch axis: equal intervals subtend equal angles \
-                 anywhere in the window. The amount below is inert",
-            ),
-            (OctaveTaper::Linear, "Linear", "A straight ramp out from middle C"),
-            (
-                OctaveTaper::Geometric,
-                "Ratio",
-                "Each octave out is the same FRACTION of the one inside it: \
-                 falls away fastest near the middle, flattening at the edges",
-            ),
-            (
-                OctaveTaper::Plateau,
-                "Plateau",
-                "Barely narrows the octaves either side of middle C and takes \
-                 almost all of the loss at the extremes: a plateau of \
-                 full-size middle octaves rather than a gradient",
-            ),
-        ],
-    );
-    ui.add_enabled_ui(view.octave_taper != OctaveTaper::Uniform, |ui| {
-        ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Amount")
+    // The taper is two bars rather than a list of named curves: Amount is the
+    // only thing that moves the ends, Shape says where in between the loss
+    // falls, and an even axis is Amount 0 rather than a mode beside them.
+    ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Amount")
+        .show(ui)
+        .on_hover_text(
+            "How much of its width the octave at the EDGE of the range gives \
+             up, which the middle ones take: 0 is an even axis — no taper at \
+             all — and 0.9 leaves the edge a tenth of the middle. Whatever \
+             the Shape, the two ends are this",
+        );
+    // Inert at Amount 0, where there is no loss to place: the Shape bar can
+    // only say where a taper falls, not whether there is one.
+    ui.add_enabled_ui(view.octave_taper_amount > 0.0, |ui| {
+        ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Shape")
             .show(ui)
             .on_hover_text(
-                "How much of its width the octave at the EDGE of the window \
-                 gives up, which the middle ones take: 0 is an even axis, 0.9 \
-                 leaves the edge a tenth of the middle. Every formula is \
-                 expressed in the same amount, so switching between them \
-                 compares their shapes",
+                "WHERE that width is given up. Left of the middle it goes at \
+                 once — the octave next to middle C gives up most of what the \
+                 edge one does and the outer ones flatten off, a spotlight on \
+                 the middle. Right of it the middle several octaves stay near \
+                 full width and the outermost fall away, a plateau. The \
+                 middle of the bar is a straight ramp",
             );
     });
     // No on/off: the layer is what says which octaves are sounding, which

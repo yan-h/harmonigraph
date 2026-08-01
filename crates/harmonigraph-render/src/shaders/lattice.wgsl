@@ -503,8 +503,8 @@ fn outer_glyph(s: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     // one PAST a half turn is their union, and reading it as an intersection
     // would empty the sector instead of filling it. Both cases are real here:
     // an indicator is one octave of a window that is only five of them wide
-    // at the narrowest Range, so the steepest taper takes middle C's own out
-    // to about 196 degrees, which is what
+    // at the narrowest Range, so the fullest amount at the sharpest shape
+    // takes middle C's own out to about 213 degrees, which is what
     // `an_indicator_can_pass_a_half_turn_but_never_a_whole_one` in
     // harmonigraph-scene pins.
     let s1 = smoothstep(-aa, aa, c1);
