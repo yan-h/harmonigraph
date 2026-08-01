@@ -473,3 +473,55 @@ fn an_inverted_color_range_still_derives_a_scene() {
     let origin = origin_node(&scene);
     assert!(origin.melody_color.is_finite(), "a mark color must be a color");
 }
+
+/// The octave indicator lit by a note stands for the pitch that note has ON
+/// THIS NODE, across the octave wrap.
+///
+/// The slot is chosen from the pitch a node will DRAW the indicator at —
+/// `slot_pitch(slot, node_cents)` — and a node's pitch class only has to agree
+/// with the voice's to within `Tuning::tolerance`, a comparison that WRAPS at
+/// the octave. Taking the slot from the voice's own MIDI octave instead is
+/// right only while the two sit on the same side of that wrap; when they
+/// straddle it the lit sector is a whole octave-slice away from the note that
+/// lit it.
+///
+/// A C offset a shade below zero is the ordinary way in: it puts the origin's
+/// pitch class just UNDER 1200 while a played C is at 0, which the wrap still
+/// matches. The offset is a host parameter over -600..600, and Learn writes it
+/// straight through, so a fraction of a cent flat is a setting rather than a
+/// hand-edit.
+#[test]
+fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
+    // 12-TET, the origin 0.4c flat, matched within the default 0.5c tolerance.
+    let tuning = Tuning::from_cents(-0.4, 700.0, 400.0, 1000.0, 0.5);
+    let view = ViewConfig::default();
+    let scene = scene_of(&held(60), &tuning, &view, &FrameParams::default(), 0.5);
+    let origin = origin_node(&scene);
+
+    let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
+    assert!(node_cents > 1199.0, "the origin must sit just under the wrap, got {node_cents}");
+
+    let lit: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| origin.octaves[s] > 0.0).collect();
+    assert_eq!(lit.len(), 1, "one octave sounds, got {lit:?}");
+
+    // The indicator a C4 lights must be the one whose own pitch is a C4 on
+    // this node -- 59.996, not the 71.996 that the slot above stands for.
+    let drawn = scene.octave_layout.slot_pitch(lit[0] as u32, node_cents);
+    assert!(
+        (drawn - 60.0).abs() < 0.5,
+        "a C4 lit the indicator for pitch {drawn}, an octave off the note that lit it",
+    );
+
+    // And the ring takes the colour of the sector it brackets, so a slot an
+    // octave out is also a ring a seventh of the ramp away from the disc it
+    // sits on -- the mismatch the one colour table exists to have ruled out.
+    let marked: Vec<usize> =
+        (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
+    assert_eq!(marked, lit, "the melody ring marks the octave that sounds");
+    let frame = FrameParams::default();
+    let want = pitch_lut_color(drawn, frame.darkest_pitch, frame.brightest_pitch);
+    assert!(
+        (origin.melody_color - want).length() < 1e-5,
+        "the ring is coloured for a slot the indicator is not drawn at",
+    );
+}
