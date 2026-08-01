@@ -32,7 +32,7 @@ pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector};
-pub use color::{channel_color, pitch_ramp_lut};
+pub use color::{channel_color, pitch_lut_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use octaves::{
     clamp_window, octave_layout, OctaveLayout, DEFAULT_TAPER_SHAPE, DEFAULT_WINDOW_HIGH,
@@ -170,13 +170,17 @@ pub struct NodeInstance {
     /// whole node; the slots above only say which sector it links back to.
     pub melody_level: f32,
     pub bass_level: f32,
-    /// Each mark's color: the marked note's OWN color, identical to the one
-    /// its disc and octave glyph use, so a ring reads as belonging to the note
-    /// it marks rather than as a fixed livery. Taken from the strongest marking
-    /// voice (they can differ mid-crossfade). The shared pitch ramp already
-    /// bakes in the lift the disc/roll/glyphs carry (see `color::NOTE_LIGHTEN`),
-    /// so the ring inherits it and adds nothing — an extra lift once left the
-    /// ring a shade whiter than the very note it marks.
+    /// Each mark's color: the color of the SECTOR it links back to — the pitch
+    /// of that slot on this node, through [`color::pitch_lut_color`] — so a
+    /// ring reads as belonging to the indicator it points at rather than as a
+    /// fixed livery. Taken from the strongest marking voice (they can differ
+    /// mid-crossfade). The ramp already bakes in the lift the disc/roll/glyphs
+    /// carry (see `color::NOTE_LIGHTEN`), so the ring inherits it and adds
+    /// nothing — an extra lift once left the ring a shade whiter than the band.
+    ///
+    /// The slot's pitch rather than the marking VOICE's: a note past either end
+    /// of the octave window folds onto the outermost slot, and a ring carrying
+    /// the unfolded pitch would then sit a register off the sector it brackets.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
     /// How strongly the music is remembered here (see [`trail`]): 0 where

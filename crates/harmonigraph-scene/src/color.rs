@@ -61,6 +61,25 @@ pub fn pitch_ramp_lut() -> [Vec4; PITCH_LUT_N] {
     })
 }
 
+/// The shader's `pitch_lut_color` on the CPU: [`pitch_ramp_lut`] sampled at
+/// `pitch`, interpolated between entries exactly as the shader does.
+///
+/// This is what the octave layer DRAWS a pitch — every part of that layer
+/// stands for a position on the pitch axis rather than for a voice, so the lit
+/// glyphs and the glow's per-octave lobes both come through this table. Which
+/// is why anything the CPU has to color to match one of them comes through it
+/// too, rather than off the ramp direct: [`PITCH_LUT_N`] entries across a
+/// 190-degree hue sweep reproduce the ramp only to within about 15/255 on a
+/// channel, which is a visible step between two shapes that share an edge.
+pub fn pitch_lut_color(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> Vec4 {
+    let lut = pitch_ramp_lut();
+    let f = pitch_ramp_t(pitch, darkest_pitch, brightest_pitch) as f32 * (PITCH_LUT_N - 1) as f32;
+    // `pitch_ramp_t` clamps into 0..1, so the floor lands inside the table and
+    // the last entry pairs with itself at a lerp weight of 0.
+    let i0 = f.floor() as usize;
+    lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
+}
+
 /// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
 /// lives in [`ChannelRole`]. Gradient channels are colored by pitch height
 /// on an LCH ramp between `darkest_pitch` and `brightest_pitch` (MIDI note

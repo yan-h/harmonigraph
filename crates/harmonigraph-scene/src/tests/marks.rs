@@ -1,5 +1,6 @@
-//! The melody and bass marks: which held notes carry them, how they ease
-//! in, and what happens when the note under one is released.
+//! The melody and bass marks: which held notes carry them, what color they
+//! take, how they ease in, and what happens when the note under one is
+//! released.
 
 use crate::*;
 use crate::derive::held_extremes;
@@ -255,3 +256,79 @@ fn held_extremes_never_names_a_released_voice() {
     });
     assert_eq!(held_extremes(&tracker, true, true), (None, None));
 }
+
+/// A lone held note on `channel` — its own melody and bass — with the octave
+/// window set to `low..high`, and the marked node it lights.
+fn lone_mark(channel: u8, note: u8, low: f32, high: f32) -> (NodeInstance, FrameParams) {
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel,
+        note,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    let view = ViewConfig {
+        octave_low: low,
+        octave_high: high,
+        mark_melody: true,
+        mark_bass: true,
+        ..ViewConfig::default()
+    };
+    let frame = FrameParams::default();
+    let scene = scene_of(&tracker, &Tuning::default(), &view, &frame, 0.0);
+    (*origin_node(&scene), frame)
+}
+
+/// What the octave layer paints slot `slot` on this node. Built the shader's
+/// way rather than through the scene's own helper — the pitch of the slot on
+/// this pitch class, then `pitch_lut_color`'s walk across `pitch_ramp_lut` —
+/// so this pins the arithmetic in `lattice.wgsl` and not merely the fact that
+/// two call sites agree.
+fn sector_color(node: &NodeInstance, slot: u32, frame: &FrameParams) -> Vec4 {
+    let pitch = slot as f32 * 12.0 + node.cents / 100.0;
+    let lut = pitch_ramp_lut();
+    let t = ((pitch - frame.darkest_pitch) / (frame.brightest_pitch - frame.darkest_pitch))
+        .clamp(0.0, 1.0);
+    let f = t * (PITCH_LUT_N - 1) as f32;
+    let i0 = f.floor() as usize;
+    lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
+}
+
+#[test]
+fn a_mark_is_the_color_of_the_sector_it_brackets() {
+    // The reported bug: move the octave window off the register being played
+    // and the melody/bass rings stop matching the note they mark. A note past
+    // either end folds onto the outermost slot, so a ring carrying the VOICE's
+    // color paints C7 around the C6 indicator it is bracketing. The ring is
+    // part of the octave layer, so it takes the color of the slot it links
+    // back to — whatever the window, and whether or not the note folded.
+    let mut folded = false;
+    for (low, high) in [(6.0, 114.0), (48.0, 100.0), (36.0, 84.0), (24.0, 72.0)] {
+        // Channel 9 is pitch-colored, so the note's own color is on the ramp
+        // too and the fold is the only thing under test here.
+        let (node, frame) = lone_mark(9, 96, low, high); // C7
+        assert_eq!(node.melody_slots.count_ones(), 1, "one note, one marked sector");
+        assert_eq!(node.melody_slots, node.bass_slots, "a lone note is both ends");
+
+        let slot = node.melody_slots.trailing_zeros();
+        folded |= slot != 8; // C7's own slot, when the window reaches it
+        let sector = sector_color(&node, slot, &frame);
+        assert_eq!(node.melody_color, sector, "melody ring in window {low}..{high}");
+        assert_eq!(node.bass_color, sector, "bass ring in window {low}..{high}");
+    }
+    assert!(folded, "one of these windows has to fold C7, or nothing is being tested");
+}
+
+#[test]
+fn a_fixed_color_channel_paints_its_disc_and_leaves_the_band_on_the_ramp() {
+    // A fixed-color channel colors the note itself, and nothing in the octave
+    // layer: the lit glyphs are the pitch ramp whatever the channel (the
+    // shader's `pitch_lut_color`), so the ring that brackets them is too.
+    // Otherwise a red voice wears a red ring around a ramp-colored indicator.
+    let (node, frame) = lone_mark(0, 60, 36.0, 84.0); // channel 0 is red
+    let slot = node.melody_slots.trailing_zeros();
+    assert_eq!(node.melody_color, sector_color(&node, slot, &frame));
+    assert_eq!(node.color, channel_color(0, 60.0, frame.darkest_pitch, frame.brightest_pitch));
+    assert_ne!(node.color, node.melody_color, "the disc keeps the channel's own color");
+}
+

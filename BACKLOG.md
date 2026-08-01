@@ -58,6 +58,8 @@ both sides. Never resolve one by dropping an item you did not finish.
 [settings] I don't like having the scrollbar on the top list of settings. Any solutions you can think of?
   — at 1512x886 there is now no scrollbar of either kind in the settings column: the tab bar clears its six names by 76pt, and folding Notes/Console gave the panes the height they were short of (Tuning/Nodes/Analyzer scrolled by 20/63/120pt before it, zero after). Pinned by `the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`. Widening the column was tried and withdrawn: it takes 8pt off the Spectral pane, which is already within a few points of being narrower than the perf HUD it has to hold. Reopen with the window size you saw it at if it is still there.
 
+[color] The 16-entry pitch LUT the shader tints octave glyphs from reproduces the ramp the DISC is colored off to within only about 15/255 on a channel (worst around MIDI 42, measured by sweeping every pitch in the default 24..108 range) — so a note's disc and its own octave indicator can sit a visible step apart. Bumping PITCH_LUT_N (scene `lib.rs`, the `pitch_lut` uniform, and the shader's own const, which must stay in step) is the one-line-ish fix; the error falls with the square of the spacing.
+
 > Work through BACKLOG.md. First triage: restate each item as you understand
 > it and flag anything ambiguous — ask me about those before touching them.
 > Then fix the clear ones, one commit per item. Remove completed items from

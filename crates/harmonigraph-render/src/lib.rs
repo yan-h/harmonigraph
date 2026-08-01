@@ -239,9 +239,9 @@ struct GpuInstance {
     /// than folded into the dead `params.y`/`params.z` floats because the
     /// shader masks them bitwise, which needs a flat-interpolated `u32`.
     marks: [u32; 2],
-    /// Each mark's own color (see `NodeInstance::melody_color`): the marked
-    /// note's, not a fixed livery, so a ring reads as belonging to the note
-    /// it marks.
+    /// Each mark's own color (see `NodeInstance::melody_color`): the sector it
+    /// links back to, not a fixed livery, so a ring reads as belonging to the
+    /// indicator it points at.
     melody_color: [f32; 4],
     bass_color: [f32; 4],
     /// How strongly the music is remembered at this node, 0..1 (see
