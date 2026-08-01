@@ -12,7 +12,9 @@
 //! **The Range is a count of indicators, and the window is what holds them.**
 //! At ±`span` a node draws the `2 * span + 1` octaves from `span` below
 //! middle C's to `span` above — the same octave NUMBERS on every node
-//! whatever its pitch class, so ±2 is C1..C5 everywhere. Each is one whole
+//! whatever its pitch class, so ±2 is C2..C6 in this crate's numbering
+//! (middle C = C4; the UI and the DAW spell the same five C1..C5, in
+//! Bitwig's, which is what the Range row reads). Each is one whole
 //! octave of the axis, centered on its own pitch, so the window has to be
 //! `2 * span + 1` octaves wide to hold them: half an octave past the
 //! outermost indicators' own pitches on either side. They then tile the turn
@@ -62,6 +64,13 @@ const MAX_INDICATORS: usize = 2 * MAX_OCTAVE_SPAN as usize + 1;
 // own ceiling on OCTAVE_SLOTS is a build error, and this makes the pair fail
 // the same way.
 const _: () = assert!(MAX_INDICATORS <= OCTAVE_SLOTS);
+// Fitting is not enough: the indicators are CENTERED on middle C's slot, so
+// the widest Range has to reach both ends from there. Counting down off slot
+// 0 is a u32 underflow in `slot_range` — a panic in that same render path,
+// and one the count check above passes straight over, since a wider table
+// would leave room for the indicators without moving where they start.
+const _: () = assert!(MAX_OCTAVE_SPAN as usize <= MIDDLE_C_SLOT);
+const _: () = assert!(MIDDLE_C_SLOT + MAX_OCTAVE_SPAN as usize <= OCTAVE_SLOTS - 1);
 
 /// Ceiling on the taper amount. At 1 the outermost octave would have no
 /// width at all, which is a window that claims to show a pitch and doesn't;
@@ -365,7 +374,7 @@ mod tests {
 
     /// The Range names octave NUMBERS, and every node draws all of them: the
     /// set is `span` slots either side of middle C's whatever the node's
-    /// pitch class, so ±2 is C1..C5 on a C node and on every other.
+    /// pitch class, so ±2 is slots 3..7 on a C node and on every other.
     #[test]
     fn every_node_draws_the_octaves_the_range_names() {
         for span in MIN_OCTAVE_SPAN..=MAX_OCTAVE_SPAN {

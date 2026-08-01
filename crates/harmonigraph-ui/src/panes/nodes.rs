@@ -8,7 +8,9 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, RangeBar, ValueBar};
 use crate::SharedState;
-use harmonigraph_scene::{NodeStyle, OctaveTaper, ViewConfig, MAX_TAPER_AMOUNT};
+use harmonigraph_scene::{
+    NodeStyle, OctaveTaper, ViewConfig, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIN_OCTAVE_SPAN,
+};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -73,6 +75,14 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Range counts octaves out from middle C's and every node draws all of
     // them — the same octave numbers whatever the node's pitch class, which
     // is only what decides where round the turn they land.
+    //
+    // The buttons ARE the supported range, written out one octave list at a
+    // time because each names its own; nothing derives them from the layout's
+    // bounds. So widening those bounds without adding a row would leave the
+    // extra Range unreachable, and narrowing them would leave a button that
+    // sets a span the layout clamps away — a control disagreeing with the
+    // wheel it draws. Fail the build on either instead.
+    const _: () = assert!(MIN_OCTAVE_SPAN == 2 && MAX_OCTAVE_SPAN == 5);
     choice_row(
         ui,
         "Range",

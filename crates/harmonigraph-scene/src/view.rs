@@ -473,9 +473,9 @@ fn default_outer_gap() -> f32 {
     0.12
 }
 
-/// A window of C0..C8 in this crate's numbering (middle C = C4; the UI
-/// spells the same window C-1..C7, in Bitwig's): past both ends of any
-/// keyboard part, and at 8 octaves to the turn an octave is worth 45
+/// Indicators C0..C8 in this crate's numbering (middle C = C4; the UI
+/// spells the same nine C-1..C7, in Bitwig's): past both ends of any
+/// keyboard part, and at 9 octaves to the turn an octave is worth 40
 /// degrees, which reads at a glance. A blob written before the span was a
 /// setting was drawn with ten fixed 45-degree sectors covering MIDI octaves
 /// 0..9 — nine of them at 40 degrees is the nearest honest reading of that,
@@ -647,7 +647,7 @@ impl Default for ViewConfig {
             outer_inner: 0.641_313_55,
             outer_outer: 0.851_483_05,
             outer_gap: 0.051_732_67,
-            // Eight octaves to the turn, evenly: the taper is off, so the
+            // Nine octaves to the turn, evenly: the taper is off, so the
             // axis a fresh view starts from is an even one, and any
             // weighting of the middle octaves is a choice made from there.
             octave_span: default_octave_span(),

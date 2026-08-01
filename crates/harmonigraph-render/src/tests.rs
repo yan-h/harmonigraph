@@ -156,10 +156,14 @@ fn parity_scene() -> Scene {
     let mut nodes = Vec::new();
     for i in 0..6u32 {
         let f = i as f32;
-        // Slots walked inside the DEFAULT span (1..=9): a level on a slot the
-        // view doesn't show is drawn by no sector, so a scene claiming to
-        // exercise every draw path has to sound in the range it renders.
-        let slot = |k: usize| 1 + k % (harmonigraph_scene::OCTAVE_SLOTS - 2);
+        // Slots walked inside the DEFAULT Range: a level on a slot the view
+        // doesn't show is drawn by no sector, so a scene claiming to exercise
+        // every draw path has to sound in the range it renders. Asked of the
+        // same layout the scene carries below rather than re-derived from the
+        // slot count, which would part company with it the first time the
+        // default span moved.
+        let (low, high) = harmonigraph_scene::OctaveLayout::default().slot_range();
+        let slot = |k: usize| (low as usize) + k % (high - low + 1) as usize;
         let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
         octaves[slot(i as usize)] = 1.0 - f * 0.1;
         octaves[slot(i as usize + 5)] = 0.4;
@@ -450,16 +454,16 @@ fn offscreen_composite_matches_direct_draw() {
     );
 }
 
+/// The slot mask naming middle C's octave — the one the node below sounds
+/// in, and so the one a mark can link back to.
+const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
+
 /// Bloom must add light (halo energy over the bloom-off output) —
 /// and only when asked: strength 0 keeps the parity test above valid.
 /// One big centered node, sounding, with one octave slot lit: a clean
 /// backdrop for measuring how much of the picture a mark actually
 /// covers. parity_scene deliberately overlaps its nodes, which hides
 /// most of a mark behind whatever draws in front of it.
-/// The slot mask naming middle C's octave — the one the node below sounds
-/// in, and so the one a mark can link back to.
-const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
-
 fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     use glam::{Vec3, Vec4};
     use harmonigraph_core::LatticePos;
@@ -722,8 +726,15 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.outer_outer = 0.95;
     scene.outer_gap = 0.10;
     scene.mark_thickness = 0.0;
+    // Every octave the Range draws, and only those: a level on a slot no
+    // sector draws is a state `derive_scene` cannot reach, and the swirl and
+    // the glow would still take a color from it.
+    let (low, high) = layout.slot_range();
     let node = &mut scene.nodes[0];
-    node.octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
+    node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    for slot in low..=high {
+        node.octaves[slot as usize] = 1.0;
+    }
     node.cents = cents;
     scene
 }

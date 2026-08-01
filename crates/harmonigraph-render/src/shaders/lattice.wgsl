@@ -369,15 +369,15 @@ fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
 // The angles themselves are computed on the CPU (harmonigraph_scene's
 // `octave_layout`) and read out of `oct_bounds` here.
 
-// Octaves the window spans, and the MIDI pitch at its low end.
+// Octaves the window spans, and the MIDI pitch at its low end. The count is
+// held inside the boundary table it indexes (oct_angle reads bound(count)),
+// so a stale or oversized uniform draws a wrong sector rather than reading
+// past the last row.
 fn oct_count() -> u32 {
-    return max(u32(u.misc7.x), 1u);
+    return clamp(u32(u.misc7.x), 1u, OCTAVE_SLOTS);
 }
 fn oct_low_pitch() -> f32 {
     return u.misc7.y;
-}
-fn oct_high_pitch() -> f32 {
-    return oct_low_pitch() + 12.0 * f32(oct_count());
 }
 // The octave slots every node draws, inclusive (harmonigraph_scene's
 // `slot_range`): `span` either side of middle C's, the same octave NUMBERS

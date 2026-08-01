@@ -195,7 +195,12 @@ struct Uniforms {
 // hold 12 boundary angles and the layout needs SLOTS + 1 of them — so 11
 // slots is the ceiling, not 12. Growing the constant in harmonigraph-scene
 // past it would index out of bounds at runtime here, so fail the build.
-const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS < 12);
+//
+// An EQUALITY, because the `oct_bounds` upload below fills all 12 angles
+// unconditionally: a SMALLER OCTAVE_SLOTS reads off the end of a shorter
+// `bounds` instead, which a one-sided ceiling would wave through into a
+// panic on the first frame.
+const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS + 1 == 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
