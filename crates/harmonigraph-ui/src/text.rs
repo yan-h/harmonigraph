@@ -122,6 +122,41 @@ pub(crate) fn snap_scale(scale: f32, base: f32, ppp: f32) -> f32 {
     (rung * per_scale).round().clamp(1.0, MAX_GLYPH_PX) / per_scale
 }
 
+/// The scale to RASTERIZE at, and how much bigger than that to DRAW — the two
+/// halves of following a zoom without asking egui for a size per frame.
+///
+/// The pair belongs together, and this exists so that no caller holds one
+/// without the other. A caller that snapped and forgot to magnify would step
+/// exactly as it did before any of this; one that magnified without snapping
+/// would draw the right size off an atlas entry per frame; and the ceiling
+/// below only holds if whoever divides also clamps.
+///
+/// That ceiling is the whole reason this is not two lines at each call site.
+/// [`snap_scale`] clamps what is RASTERIZED to [`MAX_GLYPH_PX`], and a
+/// magnification computed against the raw request absorbs everything past it —
+/// so a camera zoomed fully in with the Size bar at 3 would ask for type twice
+/// the size of the cell behind it, which is not a big label but a blurred one,
+/// and a hand-edited camera makes it far worse. Clamping the request the same
+/// way keeps the ceiling meaning what `harmonigraph_scene::Camera` says it
+/// means: what a label may finally be sized at is bounded here.
+pub(crate) fn ladder(want: f32, base: f32, ppp: f32) -> (f32, f32) {
+    let raster = snap_scale(want, base, ppp);
+    let per_scale = base * ppp;
+    // The guard paths of `snap_scale`, which return something usable without
+    // choosing a rung. There is no residual to take against those.
+    if !(want.is_finite() && want > 0.0 && per_scale.is_finite() && per_scale > 0.0) {
+        return (raster, 1.0);
+    }
+    if !(raster.is_finite() && raster > 0.0) {
+        return (raster, 1.0);
+    }
+    // Bounded in PIXELS, exactly as the rasterized size is and for the same
+    // reasons — a floor because type under a pixel is nothing, a ceiling
+    // because past it the size is no longer one anybody asked for.
+    let want = want.clamp(1.0 / per_scale, MAX_GLYPH_PX / per_scale);
+    (raster, want / raster)
+}
+
 /// One rung of the size ladder, as a ratio. 4% — under what reads as a change
 /// of size while a picture is moving, and coarse enough that a sixfold zoom
 /// asks for some 45 sizes where a pixel grid asked for 300.
@@ -172,6 +207,47 @@ pub(crate) fn spectral_labels(surface: usize) -> u64 {
 /// back a frame later.
 type GlyphKey = (u32, char, [u16; 2]);
 
+/// A uniform magnification applied to every quad a batch emits: a factor, and
+/// the point it is taken about.
+///
+/// This is what lets type be RASTERIZED on the ladder and DRAWN at any size in
+/// between. A glyph's screen rect and its atlas rect reach the shader as
+/// independent inputs, so a quad drawn larger than the cell behind it simply
+/// resamples that cell — the sampler is already `Linear`, because a glyph
+/// already lands at a fractional position (see [`TextBatch::text`]).
+///
+/// Which is what keeps type from stepping as a camera zooms. The ladder exists
+/// so that a continuous zoom cannot ask egui for a continuous set of font sizes
+/// (see [`snap_scale`]); a size quantized WITH its raster steps from rung to
+/// rung while the nodes under it scale continuously, and the nodes are shader
+/// geometry at continuous positions. Splitting the two settles it: the atlas
+/// sees one size per rung, and the picture gets a size that moves as smoothly
+/// as the geometry it is written over.
+///
+/// How far off its raster a glyph can be drawn is bounded by the COARSER of the
+/// ladder's two grains, not by the rung alone: half a rung is about 2%, but the
+/// rungs are also rounded onto whole physical pixels, and down where a pixel is
+/// worth more than a rung that rounding is what the residual answers to. The
+/// analyzer's names run to about 3% at their dialled size for exactly that
+/// reason. [`ladder`] bounds it in the one direction that is not a grain at
+/// all — the ceiling, where the raster stops rising and a magnification
+/// computed against the raw request would not.
+///
+/// All of which sits well inside what the same bilinear tap already does for a
+/// glyph's fractional position, which is not bounded by anything.
+#[derive(Clone, Copy)]
+struct Magnify {
+    origin: egui::Pos2,
+    factor: f32,
+}
+
+impl Magnify {
+    /// Where `p` lands, and how much longer a length at it becomes.
+    fn point(self, p: egui::Pos2) -> egui::Pos2 {
+        self.origin + (p - self.origin) * self.factor
+    }
+}
+
 /// The glyphs a pane has drawn so far, waiting to be handed to the GPU.
 #[derive(Default)]
 pub(crate) struct TextBatch {
@@ -180,6 +256,8 @@ pub(crate) struct TextBatch {
     /// rasterized something our mirror of its atlas has not seen. See
     /// [`GlyphKey`] and [`AtlasMirror`].
     drawn: Vec<GlyphKey>,
+    /// In force for the piece being drawn, if any. See [`Magnify`].
+    magnify: Option<Magnify>,
     /// Test-only: which glyphs came from which piece of text. The glyphs
     /// alone carry no text — they are rects and atlas coordinates — so without
     /// this a test could see WHERE a label was drawn but not WHAT, and the
@@ -204,6 +282,34 @@ pub(crate) struct TextPiece {
 }
 
 impl TextBatch {
+    /// Draw everything `f` emits magnified by `factor` about `origin` — the
+    /// label's own anchor, so the whole piece grows about the thing it names
+    /// rather than sliding off it.
+    ///
+    /// Scoped rather than a pair of set/clear calls, since a magnification left
+    /// switched on is every later label on the pane drawn at the wrong size
+    /// about the wrong point, and nothing would say so.
+    ///
+    /// `f` lays out at the RASTERIZED size throughout — it measures galleys,
+    /// stacks rows and places marks exactly as it would have — and this scales
+    /// the finished result. That is what keeps the split from reaching the
+    /// layout: a caller cannot measure at one size and draw at another, because
+    /// it never learns that the two differ.
+    pub(crate) fn magnified<R>(
+        &mut self,
+        origin: egui::Pos2,
+        factor: f32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        // A nonsense factor draws nothing anyone can read, and the size the
+        // ladder already chose is right to within a rung.
+        let factor = if factor.is_finite() && factor > 0.0 { factor } else { 1.0 };
+        let previous = self.magnify.replace(Magnify { origin, factor });
+        let out = f(self);
+        self.magnify = previous;
+        out
+    }
+
     /// Add one piece of text, haloed. `outline` should be the skin's
     /// recessed surface (`theme::well`), which contrasts with any text color
     /// by construction; a transparent one draws the glyphs bare.
@@ -256,6 +362,10 @@ impl TextBatch {
         // intermittent stepping reads as a bug.
         let pos = align.anchor_size(anchor, galley.size()).min;
 
+        // The size the quad is drawn at, against the size the atlas holds. One
+        // everywhere the caller wants the rasterized size; see [`Magnify`] for
+        // why a label that follows a zoom does not.
+        let k = self.magnify.map_or(1.0, |m| m.factor);
         for row in &galley.rows {
             for glyph in &row.glyphs {
                 if glyph.uv_rect.is_nothing() {
@@ -263,9 +373,10 @@ impl TextBatch {
                 }
                 let left_top = glyph.pos + glyph.uv_rect.offset;
                 let min = pos + row.pos.to_vec2() + left_top.to_vec2();
+                let min = self.magnify.map_or(min, |m| m.point(min));
                 self.drawn.push((font_size_bits, glyph.chr, glyph.uv_rect.min));
                 self.glyphs.push(GlyphInstance {
-                    rect: [min.x, min.y, glyph.uv_rect.size.x, glyph.uv_rect.size.y],
+                    rect: [min.x, min.y, glyph.uv_rect.size.x * k, glyph.uv_rect.size.y * k],
                     uv: [
                         f32::from(glyph.uv_rect.min[0]),
                         f32::from(glyph.uv_rect.min[1]),
@@ -289,7 +400,10 @@ impl TextBatch {
                 })
                 .reduce(|a, b| a.union(b));
             if let Some(ink) = ink {
-                let galley = egui::Rect::from_min_size(pos, galley.size());
+                // Magnified alongside the ink, or a test comparing the two
+                // would be comparing two different spaces.
+                let min = self.magnify.map_or(pos, |m| m.point(pos));
+                let galley = egui::Rect::from_min_size(min, galley.size() * k);
                 self.pieces.push(TextPiece { text: said, font_size, ink, galley });
             }
         }
@@ -614,6 +728,148 @@ mod tests {
             let px = snap_scale(absurd, 30.0, 2.0) * 30.0 * 2.0;
             assert!(px <= MAX_GLYPH_PX, "a scale of {absurd} asked for {px} pixels of type");
         }
+    }
+
+    /// Type follows a zoom CONTINUOUSLY, while the atlas still sees only the
+    /// ladder's rungs. Those are the two halves of the split, and each is
+    /// worthless without the other: quantized drawing is the stepping this
+    /// removes, and unquantized rasterizing is the atlas churn the ladder
+    /// exists to prevent.
+    ///
+    /// Walked as a zoom walks — a scale creeping up by a fraction of a rung at
+    /// a time — and measured on the drawn INK, which is what the eye reads.
+    #[test]
+    fn a_zoom_moves_the_drawn_size_smoothly_and_the_atlas_by_rungs() {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let (base, ppp) = (15.0, 2.0);
+        ctx.set_pixels_per_point(ppp);
+
+        // One frame of a zoom, with the split either applied or not: lay a piece
+        // out at the rung `want` falls on, draw it magnified by the rest (or
+        // not), and report its drawn ink and the size it was rasterized at.
+        let frame = |want: f32, split: bool| -> (f32, u32) {
+            let (raster, magnify) = ladder(want, base, ppp);
+            let magnify = if split { magnify } else { 1.0 };
+            let font = egui::FontId::monospace(base * raster);
+            let mut batch = TextBatch::default();
+            let anchor = egui::pos2(100.0, 100.0);
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                batch.magnified(anchor, magnify, |batch| {
+                    batch.text(
+                        ui.painter(),
+                        anchor,
+                        egui::Align2::CENTER_CENTER,
+                        "Ag".to_owned(),
+                        font.clone(),
+                        egui::Color32::WHITE,
+                        egui::Color32::BLACK,
+                    );
+                });
+            });
+            (batch.pieces()[0].ink.width(), font.size.to_bits())
+        };
+        let walk = |split: bool| -> Vec<(f32, u32)> {
+            (0..=120).map(|i| frame(1.0 + i as f32 * 0.02, split)).collect()
+        };
+        // The worst single frame of a walk, and how far it grew overall.
+        let worst = |steps: &[(f32, u32)]| -> f32 {
+            steps.windows(2).map(|w| w[1].0 - w[0].0).fold(f32::MIN, f32::max)
+        };
+
+        let split = walk(true);
+        let quantized = walk(false);
+
+        // The atlas sees rungs either way: a 3.4x zoom asks for a couple of
+        // dozen sizes, not one per frame. That is the half the ladder is for,
+        // and the half the split must not cost.
+        let sizes: std::collections::HashSet<u32> = split.iter().map(|(_, f)| *f).collect();
+        assert_eq!(
+            sizes,
+            quantized.iter().map(|(_, f)| *f).collect::<std::collections::HashSet<u32>>(),
+            "the split must not change WHAT is rasterized, only what is drawn",
+        );
+        assert!(sizes.len() * 2 < split.len(), "{} sizes over {} frames", sizes.len(), split.len());
+        assert!(sizes.len() > 5, "the rasterized size must still FOLLOW the zoom");
+
+        // The picture does not step with them. Measured against the same walk
+        // drawn at the rung — a self-calibrating comparison, since what is left
+        // over is epaint's own per-size metric rounding, which no amount of
+        // magnification undoes and which a fixed threshold here would either
+        // forgive entirely or trip over on a font change.
+        let (a, b) = (worst(&split), worst(&quantized));
+        assert!(
+            a * 3.0 < b,
+            "worst frame {a} against {b} at the rung — the drawn size is still stepping",
+        );
+        assert!(
+            split[split.len() - 1].0 > split[0].0 * 3.0,
+            "the label has to actually grow with the zoom",
+        );
+    }
+
+    /// The pair reconstructs the size that was asked for — and stops doing so
+    /// exactly where the rasterized size stops rising.
+    ///
+    /// The ceiling is the point. [`snap_scale`] clamps what is rasterized at
+    /// [`MAX_GLYPH_PX`], so a magnification taken against the raw request
+    /// absorbs everything past it and the DRAWN size is bounded by nothing: a
+    /// camera zoomed fully in with the Size bar at its top asks for type half
+    /// again the size of the cell behind it, and a hand-edited camera for many
+    /// times that — a blurred label rather than the bounded one the ceiling is
+    /// there to promise. `harmonigraph_scene::Camera` says in as many words
+    /// that what a label may finally be sized at is bounded downstream of it,
+    /// and this is the downstream.
+    #[test]
+    fn the_ladder_reconstructs_a_size_and_bounds_it_at_the_ceiling() {
+        let (base, ppp) = (30.0, 2.0);
+        let drawn = |want: f32| {
+            let (raster, magnify) = ladder(want, base, ppp);
+            (raster * magnify * base * ppp, magnify)
+        };
+
+        // In the ordinary range the two halves put back exactly what was asked
+        // for, which is the whole claim: the ladder is invisible in the
+        // picture and visible only in the atlas.
+        for want in [0.5, 1.0, 1.37, 2.0, 5.5, 8.0] {
+            let (px, _) = drawn(want);
+            assert!(
+                (px - want * base * ppp).abs() < 1e-2,
+                "a scale of {want} drew {px} pixels, not {}",
+                want * base * ppp,
+            );
+        }
+
+        // Past the ceiling it stops, rather than growing softer without bound.
+        for want in [8.6, 12.0, 18.0, 60.0, 1e6] {
+            let (px, magnify) = drawn(want);
+            assert!(px <= MAX_GLYPH_PX + 1e-2, "a scale of {want} drew {px} pixels of type");
+            assert!(magnify <= 1.05, "a scale of {want} magnified by {magnify}");
+        }
+
+        // The analyzer's names are quoted against their own dialled size, so
+        // scale 1 is a RUNG and the residual at the default view is the pixel
+        // grain alone — 12.35pt is 24.7 pixels at 2x, which no raster can be,
+        // so half a pixel is the whole of what is left. Anchored against the
+        // lattice's 30pt instead, 12.35 falls between two rungs and a static
+        // pane pays several times that for a continuity it is not using. See
+        // `panes::spectral::names::draw`.
+        let (raster, magnify) = ladder(1.0, 12.35, 2.0);
+        assert!((raster * 12.35 * 2.0 - 25.0).abs() < 1e-3, "the rung lands on the pixel above");
+        assert!(
+            (magnify * 25.0 - 24.7).abs() < 1e-3,
+            "the dialled size must be DRAWN at 24.7 pixels, off a 25-pixel raster",
+        );
+        assert!((magnify - 1.0).abs() < 0.5 / 24.7, "within half a pixel: {magnify}");
+
+        // Nonsense in, something drawable out — and never a magnification that
+        // would make a label vanish or fill the pane.
+        for want in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let (_, magnify) = ladder(want, base, ppp);
+            assert!(magnify.is_finite() && magnify > 0.0, "{want} magnified by {magnify}");
+        }
+        assert!(ladder(1.0, 0.0, ppp).1.is_finite(), "a zero base");
+        assert!(ladder(1.0, base, 0.0).1.is_finite(), "a zero scale factor");
     }
 
     /// A SCALE change re-rasterizes every glyph and hands out new UVs, and the

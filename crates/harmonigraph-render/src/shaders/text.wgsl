@@ -87,8 +87,20 @@ fn vs_glyph(
         0.0,
         1.0,
     );
-    // Points map to texels at the device scale, and the glyph's atlas patch
-    // is exactly its ink: the same corner, in the other space.
+    // Points map to texels at the device scale, and the glyph's atlas patch is
+    // exactly its ink: the same corner, in the other space.
+    //
+    // Exactly so only while `rect` carries the size its atlas patch was
+    // rasterized at. A caller may draw a glyph off that size — the UI does, to
+    // follow a zoom without asking for an atlas entry per frame — and then the
+    // two spans across this quad are in a ratio of `k` rather than 1, while the
+    // margin below is still added in the raster's texels. The ink lands about
+    // `(k - 1) * reach / (glyph + reach)` narrow of the quad, which is under
+    // half a percent at the couple of percent of magnification the UI's size
+    // ladder can leave over, and the rim likewise. Sub-pixel, and the reason
+    // the caller bounds `k` rather than this shader taking it per instance:
+    // one more vertex attribute on every glyph in the frame, to correct
+    // something below the grid it is drawn on.
     let texel_reach = reach * locals.pixels_per_point;
     out.texel = uv.xy - vec2<f32>(texel_reach)
         + corner * ((uv.zw - uv.xy) + 2.0 * texel_reach);
