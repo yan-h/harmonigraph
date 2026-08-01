@@ -1279,6 +1279,107 @@ mod tests {
     use super::*;
     use harmonigraph_ui::RenderConfig;
 
+    /// A [`Recorder`] whose rings the test keeps the far end of.
+    ///
+    /// [`channel`] hands both consumers to the writer thread, which drains them
+    /// within `DRAIN_IDLE` — so a test that asked what the audio thread had
+    /// actually PUSHED would be racing that thread for the answer, and would
+    /// usually lose. Holding the consumers here is what makes the take's
+    /// CONTENTS assertable rather than only the counters beside them, and those
+    /// are different claims: `audio` can reserve correctly, count nothing
+    /// dropped, and write not one sample.
+    struct Bench {
+        rec: Recorder,
+        entries: rtrb::Consumer<Entry>,
+        samples: rtrb::Consumer<f32>,
+        armed: Arc<AtomicBool>,
+        stop_at_loop_end: Arc<AtomicBool>,
+        hit_loop_end: Arc<AtomicBool>,
+        dropped: Arc<AtomicU64>,
+    }
+
+    impl Bench {
+        fn new() -> Bench {
+            let (producer, entries) = rtrb::RingBuffer::new(1024);
+            let (audio, samples) = rtrb::RingBuffer::new(1024);
+            let armed = Arc::new(AtomicBool::new(false));
+            let stop_at_loop_end = Arc::new(AtomicBool::new(false));
+            let hit_loop_end = Arc::new(AtomicBool::new(false));
+            let dropped = Arc::new(AtomicU64::new(0));
+            Bench {
+                rec: Recorder {
+                    producer,
+                    audio,
+                    with_audio: Arc::new(AtomicBool::new(false)),
+                    armed: armed.clone(),
+                    dropped: dropped.clone(),
+                    last_params: [f32::NAN; ParamKey::ALL.len()],
+                    was_armed: false,
+                    last_position: None,
+                    rolling: Arc::new(AtomicBool::new(false)),
+                    audio_started: false,
+                    stop_at_loop_end: stop_at_loop_end.clone(),
+                    hit_loop_end: hit_loop_end.clone(),
+                    finished: false,
+                    advanced: false,
+                },
+                entries,
+                samples,
+                armed,
+                stop_at_loop_end,
+                hit_loop_end,
+                dropped,
+            }
+        }
+
+        /// Take the arming edge, as `process` does on a take's first block.
+        fn arm(&mut self) {
+            self.armed.store(true, Ordering::Relaxed);
+            assert!(self.rec.is_armed(), "the arming edge");
+        }
+
+        fn stop_at_loop_end(&self) {
+            self.stop_at_loop_end.store(true, Ordering::Relaxed);
+        }
+
+        fn hit_loop_end(&self) -> bool {
+            self.hit_loop_end.load(Ordering::Relaxed)
+        }
+
+        /// Everything pushed since the last call, rendered as comparable
+        /// strings — [`Entry`] is a `Copy` payload for the audio thread and
+        /// carries no `Debug` of its own.
+        fn pushed(&mut self) -> Vec<String> {
+            let mut out = Vec::new();
+            while let Ok(entry) = self.entries.pop() {
+                out.push(match entry {
+                    Entry::Note { t, channel, note, kind } => {
+                        let kind = match kind {
+                            NoteEventKind::On { .. } => "on",
+                            NoteEventKind::Off => "off",
+                            NoteEventKind::Tuning { .. } => "tuning",
+                            NoteEventKind::AllOff => "alloff",
+                        };
+                        format!("note {note} ch{channel} {kind} @{t}")
+                    }
+                    Entry::Param { t, key, value } => format!("param {key}={value} @{t}"),
+                    Entry::AudioStart(t) => format!("audio-start @{t}"),
+                    Entry::NewPass => "new-pass".to_owned(),
+                });
+            }
+            out
+        }
+
+        /// Every sample written to the audio ring since the last call.
+        fn written(&mut self) -> Vec<f32> {
+            let mut out = Vec::new();
+            while let Ok(sample) = self.samples.pop() {
+                out.push(sample);
+            }
+            out
+        }
+    }
+
     /// `audio` reserves in whole FRAMES, not samples. This ring is
     /// stereo-interleaved and lands in a WAV, so half a frame written here
     /// swaps that file's channels from there on — permanently, and the writer
@@ -1811,5 +1912,469 @@ mod tests {
         // ...and THIS wrap, after real forward motion, is the loop end.
         assert!(!rec.observe_transport(0.0, true), "the real wrap ends the take");
         assert!(ctrl.hit_loop_end());
+    }
+
+    /// Rolling is the UNION of "the position advanced" and "the host says
+    /// playing", so a position that moves records the block whatever the flag
+    /// says.
+    ///
+    /// During an offline export some hosts report `playing = false` — nothing
+    /// is being played, after all. Reading the flag alone would record nothing
+    /// for the whole export and leave a take that replays as an empty lattice,
+    /// with nothing anywhere to say why.
+    #[test]
+    fn a_position_that_advances_rolls_even_when_the_host_says_it_is_not_playing() {
+        let mut b = Bench::new();
+        b.arm();
+        // Nothing to compare against on the first block, so the flag IS all
+        // there is, and it says no.
+        assert!(!b.rec.observe_transport(0.0, false));
+        assert!(
+            b.rec.observe_transport(1.0, false),
+            "the position advanced, so the block belongs in the take"
+        );
+        assert!(b.rec.observe_transport(2.0, false));
+    }
+
+    /// The other half of the union, and its floor: a host that reports
+    /// `playing` before its position has moved still gets its first block
+    /// captured, and only a block where BOTH say no is skipped — which is
+    /// exactly a parked transport.
+    #[test]
+    fn only_a_parked_transport_stops_a_block_being_recorded() {
+        let mut b = Bench::new();
+        b.arm();
+        assert!(!b.rec.observe_transport(4.0, false));
+        assert!(
+            !b.rec.observe_transport(4.0, false),
+            "neither the position nor the flag: this is a parked transport"
+        );
+        assert!(b.rec.observe_transport(4.0, true), "the flag alone still counts");
+    }
+
+    /// AtLoopEnd has to survive the playhead being parked for MORE THAN ONE
+    /// block before playback starts.
+    ///
+    /// `advanced` is what separates the transport snapping back to the loop
+    /// start from a loop actually wrapping, and only real forward motion may
+    /// set it. A transport standing still republishes the same position every
+    /// block — which is what a parked playhead does for as long as it is parked
+    /// — and counting that as motion would arm the latch before anything was
+    /// recorded, so the jump to the loop start would end the take: an empty
+    /// file, and a render of nothing.
+    #[test]
+    fn a_playhead_parked_for_several_blocks_has_not_advanced() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_loop_end();
+
+        // Parked past the loop start, transport stopped, for several blocks.
+        for _ in 0..4 {
+            assert!(!b.rec.observe_transport(5.0, false), "parked");
+        }
+
+        // Hit play: the transport snaps back to the loop start. Nothing has
+        // been recorded yet, so this begins the pass rather than ending it.
+        assert!(b.rec.observe_transport(0.0, true), "the jump-to-start begins the pass");
+        assert!(!b.hit_loop_end(), "a parked playhead has not advanced");
+        // Beginning the pass is not splitting it: AtLoopEnd only ever wants one
+        // file, and a `NewPass` here would leave the take's notes in the second
+        // one while the first — the one that renders — stayed empty.
+        let begun = b.pushed();
+        assert!(begun.is_empty(), "the jump-to-start must not split the take: {begun:?}");
+
+        // Real forward motion, and only then does a wrap mean the loop end.
+        assert!(b.rec.observe_transport(1.0, true));
+        assert!(!b.rec.observe_transport(0.0, true), "the real wrap ends the take");
+        assert!(b.hit_loop_end());
+    }
+
+    /// The backward-jump threshold is there to ignore a host's own jitter
+    /// around a loop point, so a step back smaller than it is not a wrap.
+    ///
+    /// Splitting on jitter would cut the take into a second file mid-phrase,
+    /// and under AtLoopEnd it would end the take outright — both at a position
+    /// the user asked nothing of. The same threshold is what keeps a transport
+    /// standing still from reading as a wrap.
+    #[test]
+    fn a_step_back_smaller_than_the_threshold_is_jitter_rather_than_a_wrap() {
+        let mut b = Bench::new();
+        b.arm();
+        assert!(b.rec.observe_transport(1.00, true));
+        assert!(b.rec.observe_transport(1.04, true));
+        // 0.02 back, under BACKWARD_JUMP: the host is jittering, not looping.
+        assert!(b.rec.observe_transport(1.02, true));
+        let jitter = b.pushed();
+        assert!(jitter.is_empty(), "jitter must not split the take, but pushed {jitter:?}");
+
+        // A real wrap is far larger, and does split it.
+        assert!(b.rec.observe_transport(0.0, true));
+        assert_eq!(b.pushed(), ["new-pass"]);
+    }
+
+    /// A plain wrap splits the take into a second file; an AtLoopEnd wrap does
+    /// not.
+    ///
+    /// The writer opens the next pass eagerly, so a `NewPass` pushed at the
+    /// moment the take ends would leave the empty second file as the one that
+    /// renders. The two wraps are identical from the transport's side and only
+    /// the mode tells them apart, so each is held to pushing what it should and
+    /// nothing besides.
+    #[test]
+    fn a_plain_wrap_splits_the_file_and_a_loop_end_wrap_does_not() {
+        let mut b = Bench::new();
+        b.arm();
+        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(2.0, true));
+        assert!(b.rec.observe_transport(0.0, true), "a plain wrap keeps recording");
+        assert_eq!(b.pushed(), ["new-pass"], "the plain wrap opens the next pass");
+
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_loop_end();
+        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(2.0, true));
+        assert!(!b.rec.observe_transport(0.0, true), "the loop end ends the take");
+        let split = b.pushed();
+        assert!(
+            split.is_empty(),
+            "a split here leaves the empty second file as the one that renders: {split:?}"
+        );
+    }
+
+    /// The notes are what the take is FOR, and they reach the ring with the
+    /// time, channel, and kind they were given.
+    #[test]
+    fn notes_reach_the_ring_with_their_time_and_channel() {
+        let mut b = Bench::new();
+        b.arm();
+        b.rec.note(0.5, 3, 60, NoteEventKind::On { velocity: 0.8 });
+        b.rec.note(1.5, 3, 60, NoteEventKind::Off);
+        b.rec.note(2.0, 0, 0, NoteEventKind::AllOff);
+        assert_eq!(
+            b.pushed(),
+            ["note 60 ch3 on @0.5", "note 60 ch3 off @1.5", "note 0 ch0 alloff @2"]
+        );
+    }
+
+    /// `mark_audio_start` is idempotent per PASS: the first call fixes where
+    /// the WAV sits against the notes, and that pass's header cannot be revised
+    /// afterwards. A wrap begins a new pass, whose audio starts somewhere else.
+    #[test]
+    fn the_audio_start_is_declared_once_per_pass() {
+        let mut b = Bench::new();
+        b.arm();
+        b.rec.mark_audio_start(0.25);
+        b.rec.mark_audio_start(0.30);
+        b.rec.mark_audio_start(9.0);
+        assert_eq!(b.pushed(), ["audio-start @0.25"], "the first call is the one that counts");
+
+        // The wrap re-arms it, because the next pass's audio starts elsewhere.
+        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(2.0, true));
+        assert!(b.rec.observe_transport(0.0, true));
+        b.rec.mark_audio_start(7.5);
+        assert_eq!(b.pushed(), ["new-pass", "audio-start @7.5"]);
+    }
+
+    /// Only parameters that MOVED are recorded — a full set every block would
+    /// bury the take — and a wrap rewrites all of them, because the new pass's
+    /// file starts empty and would otherwise replay with whatever the previous
+    /// pass happened to end on.
+    #[test]
+    fn params_record_only_changes_and_a_wrap_rewrites_every_one() {
+        let mut b = Bench::new();
+        b.arm();
+        let mut values = [0.0f32; ParamKey::ALL.len()];
+        b.rec.params(0.0, values);
+        assert_eq!(
+            b.pushed().len(),
+            ParamKey::ALL.len(),
+            "arming resets to NaN, so a take's first block writes a full set"
+        );
+
+        b.rec.params(1.0, values);
+        let unmoved = b.pushed();
+        assert!(unmoved.is_empty(), "an unmoved parameter is not re-recorded: {unmoved:?}");
+
+        values[0] = 0.5;
+        b.rec.params(2.0, values);
+        assert_eq!(b.pushed(), ["param 0=0.5 @2"], "only the one that moved");
+
+        // The wrap opens an empty file, so every parameter is written again
+        // even though none of them changed.
+        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.observe_transport(2.0, true));
+        assert!(b.rec.observe_transport(0.0, true));
+        b.rec.params(3.0, values);
+        let after = b.pushed();
+        assert_eq!(
+            after.len(),
+            ParamKey::ALL.len() + 1,
+            "the new pass, then a full set for it: {after:?}"
+        );
+        assert_eq!(after[0], "new-pass");
+    }
+
+    /// The reserved samples actually reach the ring.
+    ///
+    /// The counter beside them is a different claim: `audio` could reserve the
+    /// right amount, count nothing dropped, and write nothing at all, and every
+    /// assertion about `dropped` would still hold while the WAV came out empty.
+    #[test]
+    fn reserved_audio_is_actually_written() {
+        let mut b = Bench::new();
+        b.arm();
+        b.rec.audio(&mut [0.25f32, -0.25, 0.5, -0.5].into_iter(), 4);
+        assert_eq!(b.written(), [0.25, -0.25, 0.5, -0.5]);
+        assert_eq!(b.dropped.load(Ordering::Relaxed), 0);
+
+        // An odd block still writes its whole frames; only the half frame on
+        // the end is dropped.
+        b.rec.audio(&mut [1.0f32, -1.0, 0.75].into_iter(), 3);
+        assert_eq!(b.written(), [1.0, -1.0], "the whole frame lands, the half frame does not");
+        assert_eq!(b.dropped.load(Ordering::Relaxed), 1);
+    }
+
+    /// The take's state resets on the arming EDGE, not on the armed LEVEL.
+    ///
+    /// `process` calls `is_armed` every block, so a reset keyed off "armed"
+    /// rather than "newly armed" would fire on every block of the take:
+    /// `last_position` would forget the previous block, so no wrap could ever
+    /// be detected, and the loop-end latch would clear as fast as it was set.
+    #[test]
+    fn re_checking_armed_mid_take_does_not_reset_the_take() {
+        let mut b = Bench::new();
+        b.arm();
+        b.stop_at_loop_end();
+        assert!(b.rec.observe_transport(0.0, true));
+        assert!(b.rec.is_armed(), "still armed, one block later");
+        assert!(b.rec.observe_transport(2.0, true));
+        assert!(b.rec.is_armed());
+
+        // The wrap is still seen as one, and still ends the take.
+        assert!(!b.rec.observe_transport(0.0, true), "the wrap ends the take");
+        assert!(b.hit_loop_end());
+        assert!(b.rec.is_armed());
+        assert!(b.hit_loop_end(), "the latch survives the next block's arm check");
+        assert!(!b.rec.observe_transport(1.0, true), "and the take stays finished");
+    }
+
+    /// The status line separates a take that is capturing from one that is
+    /// waiting, and from one that captured something and then stopped.
+    ///
+    /// It is the only feedback there is that arming while the transport is
+    /// parked records nothing — "paused (0 events)" and "armed — waiting" look
+    /// alike but mean opposite things about whether the take has anything in
+    /// it.
+    #[test]
+    fn the_status_line_separates_waiting_from_paused_from_recording() {
+        let (_rec, ctrl) = channel();
+        ctrl.recording.store(true, Ordering::Relaxed);
+
+        ctrl.tick(false, 0);
+        assert_eq!(ctrl.status(), "armed — waiting for the transport to roll");
+
+        ctrl.tick(true, 12);
+        assert_eq!(ctrl.status(), "recording — 12 events");
+
+        // Rolled, then stopped: what it caught is worth saying, and it is not
+        // the same as never having started.
+        ctrl.tick(false, 12);
+        assert_eq!(ctrl.status(), "paused (12 events) — transport stopped");
+    }
+
+    /// `stop` is only for a take that is running, and it stops the audio
+    /// capture along with the notes.
+    ///
+    /// The Video pane reaches it from more than one place — the toggle, and the
+    /// loop-end handler that fires when the audio thread latches `hit_loop_end`
+    /// — so it has to be safe to call twice. Disarming twice is harmless, but
+    /// sending a second `Stop` is not: the writer would close a file it had
+    /// already closed and launch a second render of the take the first `Stop`
+    /// is still finishing.
+    #[test]
+    fn stopping_a_take_that_is_not_running_does_nothing() {
+        let (rec, ctrl) = channel();
+        ctrl.armed.store(true, Ordering::Relaxed);
+        ctrl.with_audio.store(true, Ordering::Relaxed);
+        ctrl.stop(None);
+        assert!(ctrl.armed.load(Ordering::Relaxed), "not recording, so there is nothing to stop");
+        assert!(rec.wants_audio(), "and nothing to stop reading the input bus for");
+
+        ctrl.recording.store(true, Ordering::Relaxed);
+        ctrl.stop(None);
+        assert!(!ctrl.armed.load(Ordering::Relaxed), "a running take disarms");
+        assert!(!ctrl.is_recording());
+        assert!(!rec.wants_audio(), "and the audio thread stops reading the input bus");
+    }
+
+    /// The rings the plugin ships with have room in them.
+    ///
+    /// A record that does not fit IS counted and surfaced — but the surfacing
+    /// is a status line the user has to be looking at, and a ring sized to
+    /// nothing would drop every record of every take while the pane went on
+    /// saying it was recording. The capacities are the only thing between that
+    /// and a silently empty video, and nothing else here reads them.
+    #[test]
+    fn the_shipped_rings_have_room_for_what_the_audio_thread_pushes() {
+        let (mut rec, ctrl) = channel();
+        ctrl.recording.store(true, Ordering::Relaxed);
+        rec.note(0.0, 0, 60, NoteEventKind::On { velocity: 1.0 });
+        rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512);
+        ctrl.tick(true, 1);
+        assert!(!ctrl.status().contains("DROPPED"), "a shipped ring dropped: {}", ctrl.status());
+    }
+
+    /// What the audio thread saw is what the GUI reads back.
+    ///
+    /// `rolling` is published by `observe_transport` and reached only through
+    /// `Control` — it is the GUI's one honest view of whether the transport is
+    /// moving, and both the status line and the "waiting for the transport"
+    /// message hang off it. A getter wired to the wrong atomic would leave the
+    /// pane confidently describing a take that is not being recorded.
+    #[test]
+    fn the_gui_reads_back_the_rolling_the_audio_thread_published() {
+        let (mut rec, ctrl) = channel();
+        ctrl.armed.store(true, Ordering::Relaxed);
+        assert!(rec.is_armed());
+
+        assert!(!rec.observe_transport(3.0, false));
+        assert!(!ctrl.is_rolling(), "parked");
+
+        assert!(rec.observe_transport(4.0, false));
+        assert!(ctrl.is_rolling(), "the position advanced");
+
+        assert!(!rec.observe_transport(4.0, false));
+        assert!(!ctrl.is_rolling(), "parked again");
+    }
+
+    /// "Re-render take" with nothing recorded yet says so, rather than
+    /// appearing to work.
+    #[test]
+    fn re_rendering_with_no_take_yet_explains_itself() {
+        let (_rec, ctrl) = channel();
+        assert_eq!(ctrl.last_take(), None, "nothing recorded this session");
+        ctrl.render_now(RenderRequest::render_now(&RenderConfig::default(), "(dummy)".into()));
+        assert_eq!(ctrl.status(), "no take recorded yet to render");
+
+        // And the finished take the writer thread reports is the one the button
+        // reaches for.
+        let path = std::path::PathBuf::from("/takes/take-1.take");
+        *ctrl.last_take.lock() = Some(path.clone());
+        assert_eq!(ctrl.last_take(), Some(path));
+    }
+
+    /// The Video pane's bar reads the counter the render thread writes.
+    #[test]
+    fn the_panes_bar_reads_the_render_threads_progress() {
+        let (_rec, ctrl) = channel();
+        assert_eq!(ctrl.render_progress(), None, "no bar while nothing is rendering");
+        ctrl.progress.begin();
+        ctrl.progress.done.store(7, Ordering::Relaxed);
+        ctrl.progress.total.store(9, Ordering::Relaxed);
+        assert_eq!(
+            ctrl.render_progress(),
+            Some(harmonigraph_ui::RenderProgress { done: 7, total: 9 })
+        );
+        ctrl.progress.end();
+        assert_eq!(ctrl.render_progress(), None);
+    }
+
+    /// The first pass keeps the take's own name; later passes are suffixed.
+    ///
+    /// `path_for` belongs to the writer thread but is pure, so unlike the rest
+    /// of that half it is reachable from here — and worth reaching, because
+    /// getting the boundary backwards would have pass 1 write `-1` beside the
+    /// name its header advertises, and pass 2 write over the file pass 1 had
+    /// just finished.
+    #[test]
+    fn the_first_pass_keeps_the_takes_name_and_later_passes_are_suffixed() {
+        let base = std::path::Path::new("/takes/take-1700000000.take");
+        assert_eq!(Open::path_for(base, 1), base);
+        assert_eq!(Open::path_for(base, 2), std::path::Path::new("/takes/take-1700000000-2.take"));
+        assert_eq!(Open::path_for(base, 3), std::path::Path::new("/takes/take-1700000000-3.take"));
+    }
+
+    /// A signal arriving mid-read is not the end of the render, and a real
+    /// error is.
+    ///
+    /// `Interrupted` means a signal landed — and one does, every time
+    /// `cancel_in_flight` kills a child — not that the renderer stopped
+    /// talking. Treating it as the end would freeze the bar partway and leave
+    /// the status line holding whatever had arrived before the signal, for a
+    /// render still going perfectly well. Treating a REAL error as a signal is
+    /// the opposite mistake: the loop would go round again on a pipe that has
+    /// nothing more to give.
+    #[test]
+    fn a_signal_mid_read_is_not_the_end_of_the_render() {
+        /// A stderr pipe handing back a scripted sequence of chunks and the
+        /// errors that arrive between them.
+        struct Scripted {
+            steps: std::vec::IntoIter<Result<&'static [u8], std::io::ErrorKind>>,
+        }
+        impl std::io::Read for Scripted {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                match self.steps.next() {
+                    Some(Ok(chunk)) => {
+                        out[..chunk.len()].copy_from_slice(chunk);
+                        Ok(chunk.len())
+                    }
+                    Some(Err(kind)) => Err(std::io::Error::from(kind)),
+                    None => Ok(0),
+                }
+            }
+        }
+
+        let progress = Progress::default();
+        progress.begin();
+        let signalled = Scripted {
+            steps: vec![
+                Ok(&b"x.take: -> 300 frames at 60 fps\n"[..]),
+                Err(std::io::ErrorKind::Interrupted),
+                Ok(&b"\r  240/300 frames (80%)\nharmonigraph-offline: ffmpeg died\n"[..]),
+            ]
+            .into_iter(),
+        };
+        assert_eq!(
+            follow(signalled, &progress),
+            "harmonigraph-offline: ffmpeg died",
+            "everything after the signal still belongs to this render"
+        );
+        assert_eq!(
+            progress.read(),
+            Some(harmonigraph_ui::RenderProgress { done: 240, total: 300 })
+        );
+
+        // A real error ends the read, so nothing past it is consumed.
+        let broken = Scripted {
+            steps: vec![
+                Ok(&b"harmonigraph-offline: writing frames\n"[..]),
+                Err(std::io::ErrorKind::BrokenPipe),
+                Ok(&b"harmonigraph-offline: never read\n"[..]),
+            ]
+            .into_iter(),
+        };
+        assert_eq!(
+            follow(broken, &progress),
+            "harmonigraph-offline: writing frames",
+            "a broken pipe is the end, not something to read past"
+        );
+    }
+
+    /// The default renderer path is ABSOLUTE.
+    ///
+    /// A relative one is resolved against the DAW's working directory, which is
+    /// the thing a fixed location exists to avoid: a host can start the plugin
+    /// from anywhere, so the same relative path finds the renderer on one
+    /// machine and nothing at all on the next.
+    #[test]
+    fn the_default_renderer_path_is_absolute() {
+        // The absoluteness comes from `HOME`; with it unset there is nothing to
+        // be absolute against and `.` is the documented fallback.
+        let Ok(home) = std::env::var("HOME") else { return };
+        let path = default_renderer_path();
+        assert!(path.is_absolute(), "resolved against the host's cwd: {path:?}");
+        assert!(path.starts_with(&home), "{path:?} is not under {home}");
     }
 }
