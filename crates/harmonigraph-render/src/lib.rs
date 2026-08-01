@@ -180,7 +180,9 @@ struct Uniforms {
     background: [f32; 4],
     /// x: octaves the pitch window spans (`OctaveLayout::octaves`); y: the
     /// MIDI pitch at its low end, which is the seam. Together they are the
-    /// domain of the wheel's pitch axis. z, w unused.
+    /// domain of the wheel's pitch axis. z, w: the lowest and highest octave
+    /// slot every node draws (`OctaveLayout::slot_range`), so the shader is
+    /// told which octaves the Range names rather than re-deriving them.
     misc7: [f32; 4],
     /// `OctaveLayout::bounds` — the angle of each octave boundary of the
     /// window — four to a row, which is how a uniform array is laid out
@@ -521,12 +523,15 @@ impl LatticeCallback {
                     0.0,
                 ],
                 background: scene.background.to_array(),
-                misc7: [
-                    scene.octave_layout.octaves as f32,
-                    scene.octave_layout.low_pitch,
-                    0.0,
-                    0.0,
-                ],
+                misc7: {
+                    let (low_slot, high_slot) = scene.octave_layout.slot_range();
+                    [
+                        scene.octave_layout.octaves as f32,
+                        scene.octave_layout.low_pitch,
+                        low_slot as f32,
+                        high_slot as f32,
+                    ]
+                },
                 // Straight indexing: the table is exactly as long as the
                 // rows are wide (the const assert above is what keeps it so),
                 // and a fallback here would quietly ship a wheel with a wrong

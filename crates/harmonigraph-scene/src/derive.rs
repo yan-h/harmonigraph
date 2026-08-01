@@ -172,12 +172,15 @@ pub fn derive_scene(
     // square instead of ending as a circle.
     let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
     // The octave wheel is a pitch axis, so it is a property of the VIEW and
-    // is built once: every node reads the same axis. WHICH of a node's
-    // octaves land whole inside the window is per node, though, because the
-    // node's pitch class is where its octaves sit on that axis — so the fold
-    // below asks the layout per node rather than once here.
+    // is built once: every node reads the same axis, and draws the same
+    // octaves of it. A node's pitch class only says where round the turn its
+    // own octaves land, so the fold below is one lookup for the frame.
     let octave_layout =
         octave_layout(view.octave_span, view.octave_taper, view.octave_taper_amount);
+    let (low_slot, high_slot) = {
+        let (low, high) = octave_layout.slot_range();
+        (low as i8, high as i8)
+    };
 
     // Each voice's color, computed once here rather than re-running the
     // LCH->sRGB conversion on every node the voice matches. It depends only on
@@ -202,14 +205,6 @@ pub fn derive_scene(
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
-        // The octaves of THIS node that fit whole inside the window; the
-        // seam is a pitch boundary, so where it falls between a node's
-        // octaves depends on the node's pitch class.
-        let (low_slot, high_slot) = {
-            let (low, high) = octave_layout.slot_range(node_pc.to_cents());
-            (low as i8, high as i8)
-        };
-
         let mut activation = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
@@ -230,9 +225,9 @@ pub fn derive_scene(
                     seed = (voice.on_time % 256.0) as f32;
                 }
                 // Slot = MIDI octave + 1 (so middle C's octave 4 is slot 5),
-                // clamped into the octaves this node draws: a note past
+                // clamped into the octaves the Range names: a note past
                 // either end lights the outermost indicator on its side
-                // rather than vanishing, which is what keeps a narrow window
+                // rather than vanishing, which is what keeps a narrow Range
                 // a way of READING the music rather than a filter over it.
                 let slot = (voice.octave + 1).clamp(low_slot, high_slot) as usize;
                 // Eases in from note-on; release still fades on the octave

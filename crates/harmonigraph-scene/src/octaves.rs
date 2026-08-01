@@ -1,5 +1,5 @@
 //! Where each octave indicator sits around a node: the pitch axis the wheel
-//! is, how wide each octave of it is, and which of a node's octaves fit.
+//! is, how wide each octave of it is, and which octaves a node draws.
 //!
 //! **The wheel is a pitch axis, and it is the same axis on every node.** One
 //! monotone map takes an absolute MIDI pitch to an angle: middle C straight
@@ -9,19 +9,24 @@
 //! ARE, and two nodes' indicators for the same octave sit at different
 //! angles exactly as their pitches differ.
 //!
-//! **The bottom is both ends of the window at once.** The map's two ends —
-//! the lowest pitch shown and the highest — land on the same point, straight
-//! down. That is the seam, and it is at the bottom on every node whatever
-//! the node's pitch class, which is the thing a per-node rotation of the
-//! wheel cannot give.
+//! **The Range is a count of indicators, and the window is what holds them.**
+//! At ±`span` a node draws the `2 * span + 1` octaves from `span` below
+//! middle C's to `span` above — the same octave NUMBERS on every node
+//! whatever its pitch class, so ±2 is C1..C5 everywhere. Each is one whole
+//! octave of the axis, centered on its own pitch, so the window has to be
+//! `2 * span + 1` octaves wide to hold them: half an octave past the
+//! outermost indicators' own pitches on either side. They then tile the turn
+//! exactly, each meeting its neighbours at the boundary they share.
 //!
-//! **An indicator that would cross the seam is not drawn.** Only whole
-//! octaves are: each is exactly one octave of the axis wide, centered
-//! exactly on its own pitch. A node whose pitch class is not C has its
-//! octaves sitting off the window's boundaries, so up to one octave's worth
-//! of the circle — split either side of the bottom — is simply empty.
-//! Nothing is stretched or turned to close it, which is the whole point: the
-//! price of filling the ring is a mapping that lies about where a pitch is.
+//! **The bottom is both ends of the window at once, and the axis runs
+//! THROUGH it.** The lowest pitch the window shows and the highest land on
+//! the same point, straight down, on every node whatever its pitch class —
+//! which is the thing a per-node rotation of the wheel cannot give. On a
+//! node whose pitch class is not C the highest indicator runs past the high
+//! end and comes round to the low one, since that is the same point of the
+//! circle. The axis's first and last octaves are the same distance from
+//! middle C and so exactly the same width, which is what makes continuing
+//! past the seam and wrapping round it the same angle.
 //!
 //! The map is computed here, on the CPU, and handed to the shader as a table
 //! of boundary angles — the alternative is accumulating the same widths per
@@ -36,21 +41,27 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 /// byte per slot into 3 words and asserts the count fits.
 pub const OCTAVE_SLOTS: usize = 11;
 
-/// Slot of middle C's octave. The window is centered on middle C itself
-/// (MIDI 60), which is this slot's C.
+/// Slot of middle C's octave, and the middle of every window: the Range
+/// setting counts octaves out from here, so this slot's indicator is drawn on
+/// every node at every setting.
 pub const MIDDLE_C_SLOT: usize = 5;
 
-/// Narrowest window: 2 octaves either side of middle C.
+/// Narrowest Range: 2 octaves either side of middle C's, so 5 indicators.
 pub const MIN_OCTAVE_SPAN: u32 = 2;
-/// Widest window: 5 octaves either side — MIDI 0..120.
+/// Widest Range: 5 either side, so 11 indicators — every octave MIDI has.
 pub const MAX_OCTAVE_SPAN: u32 = 5;
 
-// The widest window has to fit the fixed-size table it is written into: one
-// boundary angle per octave of the window, plus the closing one. Raising
-// MAX_OCTAVE_SPAN alone would run `octave_layout` off the end of `bounds`, a
-// runtime panic in the render path; the renderer's own ceiling on
-// OCTAVE_SLOTS is a build error, and this makes the pair fail the same way.
-const _: () = assert!(2 * (MAX_OCTAVE_SPAN as usize) <= OCTAVE_SLOTS);
+/// Indicators the widest Range draws, which is also the octaves its window
+/// spans — they are one to one.
+const MAX_INDICATORS: usize = 2 * MAX_OCTAVE_SPAN as usize + 1;
+
+// The widest Range has to fit the fixed-size tables it is written into: one
+// slot per indicator, and one boundary angle per octave of the window plus
+// the closing one. Raising MAX_OCTAVE_SPAN alone would run `octave_layout`
+// off the end of `bounds`, a runtime panic in the render path; the renderer's
+// own ceiling on OCTAVE_SLOTS is a build error, and this makes the pair fail
+// the same way.
+const _: () = assert!(MAX_INDICATORS <= OCTAVE_SLOTS);
 
 /// Ceiling on the taper amount. At 1 the outermost octave would have no
 /// width at all, which is a window that claims to show a pitch and doesn't;
@@ -138,8 +149,10 @@ pub struct OctaveLayout {
     /// the window shows. [`high_pitch`](Self::high_pitch) is the same point
     /// on the circle, come round the other way.
     pub low_pitch: f32,
-    /// Octaves the window spans: `2 * span`, so both its ends are Cs and
-    /// middle C is the boundary in the middle.
+    /// Octaves the window spans: `2 * span + 1`, one per indicator. Its ends
+    /// are the F♯s half an octave outside the outermost indicators' Cs, so
+    /// each of its octaves is CENTERED on a C and the axis's own octaves are
+    /// exactly a C node's indicators.
     pub octaves: u32,
     /// Angle of each octave boundary, in radians, walking CLOCKWISE (the
     /// direction pitch rises) from the seam: `bounds[0]` is the bottom at
@@ -155,14 +168,14 @@ impl Default for OctaveLayout {
     }
 }
 
-/// Window the view starts at: 4 octaves either side of middle C — C0..C8 in
-/// this crate's numbering (middle C = C4; the UI spells the same window
-/// C-1..C7, in Bitwig's). It reaches past both ends of any keyboard part,
-/// and at 8 octaves to the turn an octave is worth 45 degrees, which is wide
-/// enough to read at a glance.
+/// Range the view starts at: 4 octaves either side of middle C's, so 9
+/// indicators — C0..C8 in this crate's numbering (middle C = C4; the UI
+/// spells the same nine C-1..C7, in Bitwig's). They reach past both ends of
+/// any keyboard part, and at 9 octaves to the turn an octave is worth 40
+/// degrees, which is wide enough to read at a glance.
 pub const DEFAULT_OCTAVE_SPAN: u32 = 4;
 
-/// The pitch axis for a window of `span` octaves either side of middle C,
+/// The pitch axis for a Range of `span` octaves either side of middle C's,
 /// tapered by `taper` at strength `amount`.
 ///
 /// The seam is where the walk STARTS and a full turn is what it covers,
@@ -173,18 +186,19 @@ pub const DEFAULT_OCTAVE_SPAN: u32 = 4;
 /// symmetric about it — half the circle either side.
 pub fn octave_layout(span: u32, taper: OctaveTaper, amount: f32) -> OctaveLayout {
     let span = span.clamp(MIN_OCTAVE_SPAN, MAX_OCTAVE_SPAN);
-    let octaves = 2 * span;
+    let octaves = 2 * span + 1;
     let n = span as f32;
 
-    // Each octave's share of the circle, from the distance of its MIDDLE to
-    // middle C. Normalized by the outermost octave's distance rather than by
-    // the span, so the taper's shape is the same picture at every window
-    // size and only its resolution changes.
-    let max_distance = n - 0.5;
+    // Each octave's share of the circle, from how far its own C is from
+    // middle C. Normalized by the span, so the taper's shape is the same
+    // picture at every Range and only its resolution changes. The middle
+    // octave is at distance 0 and the two end ones at 1, which is what makes
+    // them equal — and that equality is what lets the highest indicator run
+    // off the top of the axis and come round the seam at the right width.
     let mut weights = [0f32; OCTAVE_SLOTS];
     let mut total = 0.0;
     for (j, w) in weights.iter_mut().take(octaves as usize).enumerate() {
-        *w = taper.weight((j as f32 + 0.5 - n).abs() / max_distance, amount);
+        *w = taper.weight((j as f32 - n).abs() / n, amount);
         total += *w;
     }
 
@@ -201,7 +215,7 @@ pub fn octave_layout(span: u32, taper: OctaveTaper, amount: f32) -> OctaveLayout
     }
 
     OctaveLayout {
-        low_pitch: 60.0 - SEMIS * n,
+        low_pitch: 60.0 - SEMIS * (n + 0.5),
         octaves,
         bounds,
     }
@@ -216,9 +230,16 @@ impl OctaveLayout {
 
     /// Where MIDI pitch `pitch` sits on the wheel, in radians. Linear within
     /// each octave and monotone across them, so an interval reads as an
-    /// angle; pitches outside the window clamp to the seam.
+    /// angle.
+    ///
+    /// Past the window's high end it CONTINUES rather than clamping, at the
+    /// last octave's scale: the highest indicator on a node whose pitch class
+    /// is not C runs up to an octave past that end, and continuing is the
+    /// same angle as wrapping round the seam into the window's first octave,
+    /// which is the same width. Below the low end there is nothing to
+    /// continue for — no indicator reaches under it — so that side clamps.
     pub fn angle(&self, pitch: f32) -> f32 {
-        let x = ((pitch - self.low_pitch) / SEMIS).clamp(0.0, self.octaves as f32);
+        let x = ((pitch - self.low_pitch) / SEMIS).max(0.0);
         let j = (x as usize).min(self.octaves as usize - 1);
         self.bounds[j] + (self.bounds[j + 1] - self.bounds[j]) * (x - j as f32)
     }
@@ -230,35 +251,24 @@ impl OctaveLayout {
         slot as f32 * SEMIS + cents / 100.0
     }
 
-    /// Whether slot `slot`'s whole octave fits inside the window on a node
-    /// whose pitch class is `cents`. An indicator spans half an octave either
-    /// side of its own pitch, and one that would cross the seam is not drawn
-    /// at all rather than cut short or moved — cutting it would misstate the
-    /// octave's width, and moving it would misstate its pitch.
-    ///
-    /// The tolerance is for the C case, where an indicator's edge lands
-    /// exactly on the window's boundary and float error alone should not
-    /// decide whether it is shown.
-    pub fn slot_fits(&self, slot: u32, cents: f32) -> bool {
+    /// The two edge angles of slot `slot`'s indicator on a node whose pitch
+    /// class is `cents` — its octave's two ends, read off the axis, the
+    /// counter-clockwise one first. The shader's `oct_sector` is this.
+    pub fn sector(&self, slot: u32, cents: f32) -> (f32, f32) {
         let pitch = self.slot_pitch(slot, cents);
-        pitch - 6.0 >= self.low_pitch - 1e-3 && pitch + 6.0 <= self.high_pitch() + 1e-3
+        (self.angle(pitch - 6.0), self.angle(pitch + 6.0))
     }
 
-    /// The slots drawn on a node whose pitch class is `cents`, inclusive.
+    /// The slots every node draws, inclusive: `span` either side of middle
+    /// C's. The same octaves on every node whatever its pitch class — a
+    /// slot is a MIDI octave, so the Range names octave NUMBERS and each
+    /// node's pitch class only says where in the turn its own land.
     ///
-    /// Never empty: the narrowest window is 4 octaves, and at least three
-    /// whole ones fit inside it wherever the pitch class falls. Notes
-    /// outside it fold onto the nearest end (see `derive_scene`), so the
-    /// range is also what a voice's octave is clamped into.
-    pub fn slot_range(&self, cents: f32) -> (u32, u32) {
-        let c = cents / 100.0;
-        // The lowest indicator whose bottom edge clears the window's low end,
-        // and the highest whose top edge clears its high end. Solved rather
-        // than searched, and nudged by the same tolerance `slot_fits` uses so
-        // the two cannot disagree about a C node's exactly-flush edges.
-        let low = ((self.low_pitch + 6.0 - c) / SEMIS - 1e-4).ceil().max(0.0);
-        let high = ((self.high_pitch() - 6.0 - c) / SEMIS + 1e-4).floor();
-        (low as u32, high.clamp(low, OCTAVE_SLOTS as f32 - 1.0) as u32)
+    /// Notes outside it fold onto the nearest end (see `derive_scene`), so
+    /// this is also what a voice's octave is clamped into.
+    pub fn slot_range(&self) -> (u32, u32) {
+        let span = (self.octaves - 1) / 2;
+        (MIDDLE_C_SLOT as u32 - span, MIDDLE_C_SLOT as u32 + span)
     }
 }
 
@@ -335,27 +345,68 @@ mod tests {
         }
     }
 
-    /// A drawn indicator is a WHOLE octave, centered on its own pitch, clear
-    /// of the seam. The first half keeps the seam readable, the second is
-    /// what keeps the mapping honest.
+    /// Past the window's high end the axis keeps going, and where it goes is
+    /// exactly where wrapping round the seam would put it — the octave up
+    /// there and the one at the bottom are equally far from middle C, so
+    /// they are equally wide. That is what carries the highest indicator on
+    /// a node that is not a C across the bottom in one piece.
+    #[test]
+    fn the_axis_continues_past_the_seam_where_wrapping_would_land() {
+        for (l, _, case) in every_case() {
+            for semitones in 0..=12 {
+                let d = semitones as f32;
+                let past = l.angle(l.high_pitch() + d);
+                let round = l.angle(l.low_pitch + d) - TAU;
+                let off = (past - round).abs();
+                assert!(off < 1e-4, "{case}: {d} past the seam: {past} vs {round}");
+            }
+        }
+    }
+
+    /// The Range names octave NUMBERS, and every node draws all of them: the
+    /// set is `span` slots either side of middle C's whatever the node's
+    /// pitch class, so ±2 is C1..C5 on a C node and on every other.
+    #[test]
+    fn every_node_draws_the_octaves_the_range_names() {
+        for span in MIN_OCTAVE_SPAN..=MAX_OCTAVE_SPAN {
+            let l = octave_layout(span, OctaveTaper::Uniform, 0.0);
+            for cents in [0.0f32, 350.0, 700.0, 1150.0] {
+                let (low, high) = l.slot_range();
+                assert_eq!(
+                    (low, high),
+                    (MIDDLE_C_SLOT as u32 - span, MIDDLE_C_SLOT as u32 + span),
+                    "span {span}, {cents}c"
+                );
+                assert_eq!(high - low + 1, 2 * span + 1, "span {span}: indicator count");
+                // Room for all of them, with the outermost pair's own pitches
+                // half an octave inside the window's ends.
+                assert!(l.slot_pitch(low, cents) - 6.0 >= l.low_pitch - 1e-3);
+                assert!(l.slot_pitch(high, cents) - 6.0 < l.high_pitch());
+            }
+        }
+    }
+
+    /// A drawn indicator is a WHOLE octave, centered on its own pitch. That
+    /// is what keeps the mapping honest: an indicator cut short would
+    /// misstate its octave's width, and one moved to fit would misstate its
+    /// pitch.
     #[test]
     fn drawn_indicators_are_whole_octaves_on_their_own_pitch() {
         for (l, cents, case) in every_case() {
-            let (low, high) = l.slot_range(cents);
+            let (low, high) = l.slot_range();
             assert!(low <= high, "{case}: nothing drawn");
             for slot in low..=high {
-                assert!(l.slot_fits(slot, cents), "{case}: slot {slot} drawn but doesn't fit");
                 let pitch = l.slot_pitch(slot, cents);
                 // Its edges are its octave's ends, read off the axis: half an
                 // octave either side of its own pitch, and nothing else.
-                let (e0, e1) = (l.angle(pitch - 6.0), l.angle(pitch + 6.0));
+                let (e0, e1) = l.sector(slot, cents);
                 assert!(e0 > e1, "{case}: slot {slot} runs backwards");
                 let inside = l.angle(pitch);
                 assert!(e0 > inside && inside > e1, "{case}: slot {slot} misses its own pitch");
                 // Under an even axis that also puts the pitch at the
                 // indicator's angular MIDDLE. A taper legitimately breaks
-                // that and only that: the scale changes at each C, so an
-                // indicator straddling one has its two halves at different
+                // that and only that: the scale changes at each boundary, so
+                // an indicator straddling one has its two halves at different
                 // scales. Its edges are still exactly its octave's ends,
                 // which is what "positioned by pitch" means here.
                 if l.bounds[0] - l.bounds[1] == l.bounds[1] - l.bounds[2] {
@@ -365,31 +416,31 @@ mod tests {
                     );
                 }
             }
-            // The range IS what is drawn: nothing outside it fits.
-            for slot in 0..OCTAVE_SLOTS as u32 {
-                if slot < low || slot > high {
-                    assert!(!l.slot_fits(slot, cents), "{case}: slot {slot} fits but isn't drawn");
-                }
-            }
         }
     }
 
-    /// The gap that buys the faithful mapping: under one octave in total,
-    /// and split evenly for a C node, whose octaves line up with the window.
+    /// The indicators tile the turn: each one's clockwise edge is the next
+    /// one's counter-clockwise edge, and the highest one's far edge is the
+    /// lowest one's near edge come round the seam. So the ring closes on
+    /// every node whatever its pitch class — which is the whole point of
+    /// giving the window an octave per indicator and half an octave over.
     #[test]
-    fn the_seam_gap_is_under_an_octave_and_is_even_on_c() {
+    fn the_indicators_tile_the_turn() {
         for (l, cents, case) in every_case() {
-            let (low, high) = l.slot_range(cents);
-            let below = l.slot_pitch(low, cents) - 6.0 - l.low_pitch;
-            let above = l.high_pitch() - (l.slot_pitch(high, cents) + 6.0);
-            assert!(below >= -1e-3 && above >= -1e-3, "{case}: an indicator crosses the seam");
-            assert!(below + above < SEMIS + 1e-3, "{case}: {below} + {above} semitones unfilled");
-            if cents == 0.0 {
-                // A C node's octaves ARE the window's octaves, so all that is
-                // left over is the half either side that would cross.
-                assert!((below - 6.0).abs() < 1e-3, "{case}: {below}");
-                assert!((above - 6.0).abs() < 1e-3, "{case}: {above}");
+            let (low, high) = l.slot_range();
+            let mut total = 0.0;
+            for slot in low..=high {
+                let (e0, e1) = l.sector(slot, cents);
+                total += e0 - e1;
+                let next = if slot == high {
+                    // Round the seam: the same point, one turn on.
+                    l.sector(low, cents).0 - TAU
+                } else {
+                    l.sector(slot + 1, cents).0
+                };
+                assert!((e1 - next).abs() < 1e-4, "{case}: slot {slot} leaves {} rad", e1 - next);
             }
+            assert!((total - TAU).abs() < 1e-4, "{case}: the ring covers {total} rad");
         }
     }
 
@@ -400,20 +451,17 @@ mod tests {
         for taper in TAPERS {
             let l = octave_layout(5, taper, 0.6);
             let width = |j: usize| l.bounds[j] - l.bounds[j + 1];
-            // Ten octaves, so the window's middle is the boundary BETWEEN
-            // octaves 4 and 5 rather than inside one: those two are equally
-            // near middle C and come out equal, and the walk outward from
-            // there is what shrinks.
-            assert!((width(4) - width(5)).abs() < 1e-5, "{taper:?}: middle pair uneven");
-            for j in 0..4 {
+            // Eleven octaves, so middle C's own is the middle one, index 5,
+            // and the walk outward from it either way is what shrinks.
+            for j in 0..5 {
                 let (inner, outer) = (width(j + 1), width(j));
                 if taper == OctaveTaper::Uniform {
                     assert!((inner - outer).abs() < 1e-6, "{taper:?} at {j}");
                 } else {
                     assert!(outer < inner, "{taper:?} at {j}: {outer} !< {inner}");
                 }
-                // Symmetric about middle C.
-                assert!((width(j) - width(9 - j)).abs() < 1e-6, "{taper:?} at {j}");
+                // Symmetric about middle C's octave.
+                assert!((width(j) - width(10 - j)).abs() < 1e-6, "{taper:?} at {j}");
             }
         }
     }
@@ -430,30 +478,41 @@ mod tests {
         }
     }
 
-    /// No indicator can reach a half turn, which is what lets the shader's
-    /// wedge test stay a plain intersection of two half-planes. The widest
-    /// one there is is the middle octave of the narrowest window under the
-    /// steepest taper.
+    /// An indicator can pass a half turn but never a whole one, which is
+    /// exactly the pair of facts the shader's wedge test is built on: past a
+    /// half turn a wedge is the UNION of its two half-planes rather than
+    /// their intersection, and at a whole turn neither reading means
+    /// anything. The widest there is is middle C's own octave at the
+    /// narrowest Range under the steepest Ratio taper — five octaves to the
+    /// turn with the middle one taking ten times the width of the ends.
     #[test]
-    fn no_indicator_reaches_a_half_turn() {
+    fn an_indicator_can_pass_a_half_turn_but_never_a_whole_one() {
+        let mut widest: f32 = 0.0;
         for (l, cents, case) in every_case() {
-            let (low, high) = l.slot_range(cents);
+            let (low, high) = l.slot_range();
             for slot in low..=high {
-                let pitch = l.slot_pitch(slot, cents);
-                let width = l.angle(pitch - 6.0) - l.angle(pitch + 6.0);
-                assert!(width < PI, "{case}: slot {slot} spans {width} rad");
+                let (e0, e1) = l.sector(slot, cents);
+                assert!(e0 - e1 < TAU, "{case}: slot {slot} spans {} rad", e0 - e1);
+                widest = widest.max(e0 - e1);
             }
         }
+        assert!(widest > PI, "nothing passes a half turn: widest {widest} rad");
+        let steepest = octave_layout(MIN_OCTAVE_SPAN, OctaveTaper::Geometric, MAX_TAPER_AMOUNT);
+        let (e0, e1) = steepest.sector(MIDDLE_C_SLOT as u32, 0.0);
+        assert!((widest - (e0 - e1)).abs() < 1e-5, "the widest is somewhere else: {widest}");
     }
 
     /// A span outside the supported range is clamped rather than producing a
-    /// layout the shader's fixed-size table cannot hold.
+    /// layout the shader's fixed-size tables cannot hold. The widest holds
+    /// every octave MIDI has, so nothing folds there.
     #[test]
-    fn span_is_clamped_to_the_table() {
-        assert_eq!(octave_layout(0, OctaveTaper::Uniform, 0.0).octaves, 2 * MIN_OCTAVE_SPAN);
+    fn span_is_clamped_to_the_tables() {
+        assert_eq!(octave_layout(0, OctaveTaper::Uniform, 0.0).octaves, 2 * MIN_OCTAVE_SPAN + 1);
         let widest = octave_layout(99, OctaveTaper::Uniform, 0.0);
-        assert_eq!(widest.octaves, 2 * MAX_OCTAVE_SPAN);
-        assert_eq!(widest.low_pitch, 0.0);
-        assert_eq!(widest.high_pitch(), 120.0);
+        assert_eq!(widest.octaves, 2 * MAX_OCTAVE_SPAN + 1);
+        assert_eq!(widest.octaves as usize, OCTAVE_SLOTS);
+        assert_eq!(widest.slot_range(), (0, OCTAVE_SLOTS as u32 - 1));
+        assert_eq!(widest.low_pitch, -6.0);
+        assert_eq!(widest.high_pitch(), 126.0);
     }
 }

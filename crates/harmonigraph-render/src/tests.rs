@@ -744,10 +744,10 @@ fn band_profile(px: &[u8], size: u32) -> Vec<bool> {
         px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 > 24
     };
     // The node is alone at the world origin and the camera looks at it, so
-    // the frame's center is its center. Not the lit pixels' centroid: the
-    // band is an annulus with a bite out of it at the seam, which pulls a
-    // centroid off-center toward the full side by exactly the amount the
-    // measurement below is trying to see.
+    // the frame's center is its center. Not the lit pixels' centroid: a
+    // tapered band is heavier on the side its wide octaves fall, which would
+    // pull a centroid off-center by roughly what the measurement below is
+    // trying to see.
     let drawn = (0..size * size)
         .filter(|k| lit((k % size) as f32, (k / size) as f32))
         .count();
@@ -795,17 +795,48 @@ fn gap_at(profile: &[bool], at_degrees: f32) -> f32 {
     run as f32 * step
 }
 
+/// Every unlit run around the profile, in degrees. On a closed ring of
+/// indicators the only unlit stretches are the Gap setting's slits, one per
+/// boundary between neighbours — so counting these counts the indicators,
+/// and a missing one shows as two slits merged into a wider hole.
+fn unlit_runs(profile: &[bool]) -> Vec<f32> {
+    let step = 360.0 / PROFILE_STEPS as f32;
+    // Start from a lit sample so the walk cannot begin mid-run and count one
+    // run as two.
+    let from = profile.iter().position(|b| *b).expect("something lit to measure from");
+    let mut runs = Vec::new();
+    let mut run = 0;
+    for k in 0..PROFILE_STEPS {
+        if profile[(from + k) % PROFILE_STEPS] {
+            if run > 0 {
+                runs.push(run as f32 * step);
+                run = 0;
+            }
+        } else {
+            run += 1;
+        }
+    }
+    if run > 0 {
+        runs.push(run as f32 * step);
+    }
+    runs
+}
+
 /// The invariant the wheel is built around, checked on the picture rather
-/// than on the layout that feeds it: the bottom of the node is the window's
-/// two ends at once, so NO indicator covers it — whatever the span, the
-/// taper or the node's pitch class — and the leftover there is under an
-/// octave. Middle C is straight up, so the top is always covered.
+/// than on the layout that feeds it: every octave the Range names gets an
+/// indicator, and together they close the ring — whatever the span, the
+/// taper or the node's pitch class. So the only unlit stretches are the Gap
+/// setting's slits, one per boundary; the bottom is covered like anywhere
+/// else on a node whose octaves do not land on the seam; and middle C is
+/// straight up, so the top is always covered.
 ///
 /// Reading it off rendered pixels is the point. The layout's own tests pin
 /// the angles down; this one says the shader draws the axis the table
-/// describes, in the right direction, anchored where it claims.
+/// describes, in the right direction, anchored where it claims — and in
+/// particular that it draws the indicator that runs off the top of the
+/// window and comes round the seam, which is one whole octave of the Range.
 #[test]
-fn the_bottom_is_the_windows_two_ends_and_no_indicator_crosses_it() {
+fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     use harmonigraph_scene::{octave_layout, OctaveTaper, MAX_TAPER_AMOUNT};
 
     let Some((device, queue)) = headless_device() else {
@@ -854,29 +885,38 @@ fn the_bottom_is_the_windows_two_ends_and_no_indicator_crosses_it() {
                 let profile = band_profile(&px, SIZE[0]);
                 let case = format!("span {span}, {taper:?} {amount}, {cents}c");
 
-                // 270 degrees is straight down: the seam, and never covered.
-                let gap = gap_at(&profile, 270.0);
-                assert!(gap > 0.0, "{case}: an indicator covers the bottom");
-                // What the layout says that gap should be, in degrees, plus
-                // the padding the Gap setting adds either side of it.
-                let (low, high) = layout.slot_range(cents);
-                let expected = (layout.angle(layout.low_pitch)
-                    - layout.angle(layout.slot_pitch(low, cents) - 6.0)
-                    + layout.angle(layout.slot_pitch(high, cents) + 6.0)
-                    - layout.angle(layout.high_pitch()))
-                .abs()
-                .to_degrees();
-                assert!(
-                    gap >= expected - 3.0 && gap <= expected + 20.0,
-                    "{case}: bottom gap {gap:.1} deg, layout says {expected:.1}"
+                // One indicator per octave of the Range, closing the ring:
+                // that is one slit per boundary and no other break. A missing
+                // indicator merges two slits into one hole, so the count is
+                // what says all of them are there.
+                let (low, high) = layout.slot_range();
+                let runs = unlit_runs(&profile);
+                assert_eq!(
+                    runs.len(),
+                    (high - low + 1) as usize,
+                    "{case}: unlit runs {runs:?} for {} indicators",
+                    high - low + 1
                 );
 
-                // Middle C is straight up, and some octave of every node
-                // contains it, so the top is covered on every node.
-                assert!(
-                    gap_at(&profile, 90.0) == 0.0,
-                    "{case}: nothing covers the top"
-                );
+                // Middle C is straight up, and every node draws the octave
+                // that contains it, so the top is covered on every node.
+                assert!(gap_at(&profile, 90.0) == 0.0, "{case}: nothing covers the top");
+
+                // 270 degrees is straight down: the window's two ends at
+                // once. An indicator runs THROUGH it, so it is covered like
+                // any other direction — except on nodes whose own octaves
+                // land there, which is the C case (a boundary exactly on the
+                // seam) and the 1150c case (one half a semitone off it,
+                // inside the slit the Gap cuts). Read on the even axis, where
+                // those two are the only exceptions at every span.
+                if taper == OctaveTaper::Uniform {
+                    let bottom = gap_at(&profile, 270.0);
+                    if cents == 0.0 {
+                        assert!(bottom > 0.0, "{case}: a C node's octaves meet at the seam");
+                    } else if cents != 1150.0 {
+                        assert!(bottom == 0.0, "{case}: {bottom:.1} deg of the bottom uncovered");
+                    }
+                }
             }
         }
     }
@@ -904,13 +944,21 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     for (span, taper) in [(2u32, OctaveTaper::Uniform), (5, OctaveTaper::Geometric)] {
         // A C node and a node a fifth up: same slot, pitches 7 semitones
         // apart, so the bright arc must move by exactly that much of the axis.
-        for cents in [0.0f32, 700.0] {
+        // Middle C's octave, and the top of the Range — the one that runs off
+        // the window's high end and comes round the seam, whose angle is the
+        // whole of what a wrapped indicator has to get right.
+        for (cents, slot) in [
+            (0.0f32, harmonigraph_scene::MIDDLE_C_SLOT as u32),
+            (700.0, harmonigraph_scene::MIDDLE_C_SLOT as u32),
+            (0.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
+            (700.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
+        ] {
             let layout = octave_layout(span, taper, 0.7);
             let mut scene = octave_wheel_scene(layout, cents);
             // One octave sounding. The silent slots still ghost in behind it
             // at GHOST_LEVEL, which the brightness threshold below sorts out.
             scene.nodes[0].octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-            scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+            scene.nodes[0].octaves[slot as usize] = 1.0;
 
             let cb = LatticeCallback::from_scene(&scene, vec_size, format, pane, None);
             pane += 1;
@@ -954,15 +1002,13 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             // The indicator's own middle, from the layout: the pitch halfway
             // between its two edges in ANGLE, which a taper can shift off the
             // pitch itself.
-            let pitch = layout.slot_pitch(harmonigraph_scene::MIDDLE_C_SLOT as u32, cents);
-            let expected = (0.5 * (layout.angle(pitch - 6.0) + layout.angle(pitch + 6.0)))
-                .to_degrees()
-                .rem_euclid(360.0);
+            let (e0, e1) = layout.sector(slot, cents);
+            let expected = (0.5 * (e0 + e1)).to_degrees().rem_euclid(360.0);
             let off = (drawn.rem_euclid(360.0) - expected).rem_euclid(360.0);
             let off = off.min(360.0 - off);
             assert!(
                 off < 6.0,
-                "span {span}, {cents}c: indicator drawn at {drawn:.1} deg, \
+                "span {span}, {cents}c, slot {slot}: indicator drawn at {drawn:.1} deg, \
                  the axis puts its pitch at {expected:.1}"
             );
         }

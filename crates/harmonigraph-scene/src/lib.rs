@@ -249,9 +249,9 @@ pub struct Scene {
     /// The pitch axis the octave indicators are drawn on (see [`octaves`]):
     /// which pitches one turn of a node covers, and how the circle is shared
     /// out between their octaves. ONE axis for the whole frame — every node
-    /// reads the same one, which is what makes an indicator's ANGLE mean an
-    /// absolute pitch. Which of a node's octaves fit whole inside it is per
-    /// node, since that depends on the node's own pitch class.
+    /// reads the same one and draws the same octaves of it, which is what
+    /// makes an indicator's ANGLE mean an absolute pitch. A node's pitch
+    /// class says only where round the turn its own octaves land.
     pub octave_layout: OctaveLayout,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and

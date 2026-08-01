@@ -171,12 +171,12 @@ pub struct ViewConfig {
     /// the rings right against it.
     #[serde(default = "default_outer_gap")]
     pub outer_gap: f32,
-    /// The PITCH WINDOW the octave wheel covers, in octaves either side of
-    /// middle C, 2..=5 (see [`octaves`](crate::octaves)). One turn of the
-    /// node is that window, so this says how many degrees an octave is worth
-    /// — not how many indicators there are, which follows from where the
-    /// node's own pitch class sits inside it. Notes outside the window light
-    /// the outermost indicator on their side.
+    /// How many octaves either side of middle C's the wheel shows, 2..=5
+    /// (see [`octaves`](crate::octaves)). That is `2 * span + 1` indicators,
+    /// the same octave NUMBERS on every node whatever its pitch class, and
+    /// one turn of the node holds all of them — so this also says how many
+    /// degrees an octave is worth. Notes outside the range light the
+    /// outermost indicator on their side.
     #[serde(default = "default_octave_span")]
     pub octave_span: u32,
     /// Which formula narrows an octave of the axis as it gets further from

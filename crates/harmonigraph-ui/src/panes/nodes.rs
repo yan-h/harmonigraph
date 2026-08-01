@@ -70,18 +70,18 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
     // Range and Taper are the axis; Band and Gap below are where it is drawn.
-    // Range is a PITCH WINDOW, not a count of indicators: it says which
-    // stretch of the keyboard one turn covers, and how many of a node's
-    // octaves fit inside that follows from where the node's pitch class sits.
+    // Range counts octaves out from middle C's and every node draws all of
+    // them — the same octave numbers whatever the node's pitch class, which
+    // is only what decides where round the turn they land.
     choice_row(
         ui,
         "Range",
         &mut view.octave_span,
         &[
-            (2, "±2", "C1..C5 around middle C — one turn per four octaves"),
+            (2, "±2", "C1..C5 around middle C — five octaves to the turn"),
             (3, "±3", "C0..C6"),
             (4, "±4", "C-1..C7"),
-            (5, "±5", "C-2..C8 — the whole MIDI range, so an octave is 36 degrees"),
+            (5, "±5", "C-2..C8 — every octave MIDI has, so one is 33 degrees"),
         ],
     );
     // Uniform is the plain circular division and ignores the amount, so the
