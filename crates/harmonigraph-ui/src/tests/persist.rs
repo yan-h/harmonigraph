@@ -690,3 +690,111 @@ fn loading_a_project_re_opens_the_comma_verdicts() {
     assert!(state.view.marvel_auto, "and the missing detect key still opts in");
 }
 
+
+
+/// [`ViewConfig`](harmonigraph_scene::ViewConfig)'s serde fallbacks and its
+/// `impl Default` answer DIFFERENTLY on purpose, and this pins which fields.
+///
+/// The rule the struct is built on: a serde fallback is what a blob written
+/// before that field existed was DRAWN with, so loading an old view does not
+/// restyle it, while `impl Default` is the look a fresh view opens in. Where
+/// the two disagree the value is written literally in `impl Default`, so
+/// retuning the out-of-the-box look never reaches someone's saved project.
+///
+/// That rule is carried by hand, by two mechanisms that look nothing alike: a
+/// named `default_*` fn where the old value has to be stated, and a BARE
+/// `#[serde(default)]` where `T::default()` already is the old value —
+/// `IdleMarker::Circle` (the classic placeholder look), `TrailMark::Off`, a
+/// bloom of 0 from before the chain existed. Nothing at a declaration says
+/// which of those two a field is using, or whether anyone chose.
+///
+/// So this probes it from the outside instead: drop one key at a time from a
+/// serialized fresh view and reload, which is exactly what an old blob is.
+/// A field whose name is listed below reloads as something OTHER than the
+/// fresh-install value — which is the intent for every name currently on it.
+///
+/// A name APPEARING here means a field just stopped handing old blobs the
+/// fresh value; a name LEAVING means a saved view will now be restyled by a
+/// change to `impl Default`, which is the failure the whole arrangement
+/// exists to prevent. Either way the diff is the review question, and
+/// updating this list is the deliberate edit that answers it.
+///
+/// Deliberately NOT the same call as `SpectrumConfig`'s, which collapsed its
+/// per-field fallbacks into one container-level `#[serde(default)]`. That is
+/// right there because its fallbacks and its `impl Default` are meant to
+/// agree; here they are meant not to.
+#[test]
+fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
+    // In serialization order, which is the order the probe reports them.
+    const LEGACY: &[&str] = &[
+        "sevens_gutter",
+        "core_solidity",
+        "core_radius",
+        "outer_inner",
+        "outer_outer",
+        "outer_gap",
+        "idle_marker",
+        "idle_radius",
+        "mark_thickness",
+        "grid_thickness",
+        "grid_inset",
+        "trail_mark",
+        "trail_labels",
+        "bloom_strength",
+    ];
+    // These have no fallback at all: drop one and the WHOLE view fails to
+    // parse, taking every other field with it. Harmless only because all four
+    // predate the persist version floor, so no blob that exists is missing
+    // one. The list must not GROW — a new field landing here is the bug
+    // `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob`
+    // was written for, one layer up.
+    const NO_FALLBACK: &[&str] = &["spacing", "extent_threes", "extent_fives", "extent_sevens"];
+
+    let fresh = harmonigraph_scene::ViewConfig::default();
+    let full = ron::to_string(&fresh).expect("a view serializes");
+    let pairs = view_pairs(&full);
+    assert!(pairs.len() > 40, "the probe must see the whole struct, got {}", pairs.len());
+
+    let (mut legacy, mut no_fallback) = (Vec::new(), Vec::new());
+    for (key, _) in &pairs {
+        // The blob rebuilt without this one key IS a blob written before the
+        // field existed, which is the case the fallbacks are for.
+        let kept: Vec<&str> =
+            pairs.iter().filter(|(k, _)| k != key).map(|(_, text)| text.as_str()).collect();
+        let without = format!("({})", kept.join(","));
+        match ron::from_str::<harmonigraph_scene::ViewConfig>(&without) {
+            Err(_) => no_fallback.push(key.as_str()),
+            Ok(loaded) => {
+                if ron::to_string(&loaded).expect("a view serializes") != full {
+                    legacy.push(key.as_str());
+                }
+            }
+        }
+    }
+
+    assert_eq!(legacy, LEGACY, "the fields an old blob reloads differently have changed");
+    assert_eq!(no_fallback, NO_FALLBACK, "a field without a serde fallback sinks the whole view");
+}
+
+/// Split a serialized view into its top-level `key:value` pairs, as
+/// `(key, whole pair)`. Depth-aware, so `grid_color:(r,g,b,a)` stays one pair
+/// rather than splitting on the commas inside it.
+fn view_pairs(blob: &str) -> Vec<(String, String)> {
+    let inner = blob.trim().trim_start_matches('(').trim_end_matches(')');
+    let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
+    for (i, c) in inner.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(inner[start..i].to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(inner[start..].to_string());
+    out.into_iter()
+        .map(|text| (text[..text.find(':').expect("a pair has a colon")].to_string(), text))
+        .collect()
+}
