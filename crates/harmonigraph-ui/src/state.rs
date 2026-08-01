@@ -501,12 +501,22 @@ impl SharedState {
     /// so is anything older than [`UI_PERSIST_VERSION`].
     ///
     /// Refusing an older blob rather than migrating it is safe because no
-    /// older blob can reach this build. The version reached 2 on 2026-07-23;
-    /// the plugin's `CLAP_ID` and `VST3_CLASS_ID` changed on 2026-07-26, three
-    /// days later. A project saved before the version bump therefore names a
-    /// plugin identity this binary does not claim, so the host never loads us
-    /// into that slot and its state never arrives here. Versions 0 and 1 are
-    /// unreachable by construction, not merely unlikely.
+    /// older blob can reach this build THROUGH THE HOST. The version reached 2
+    /// on 2026-07-23; the plugin's `CLAP_ID` and `VST3_CLASS_ID` changed on
+    /// 2026-07-26, three days later. A project saved before the version bump
+    /// therefore names a plugin identity this binary does not claim, so the
+    /// host never loads us into that slot and its state never arrives here.
+    ///
+    /// That argument covers the editor and nothing else, and this has two
+    /// other callers with no identity gate behind them: the offline renderer
+    /// reading a `.take` header, and the standalone reading its `app.ron`. A
+    /// take is an archive — `harmonigraph-take` refuses only takes from the
+    /// FUTURE — so an old one opens and hands its `ui_state` straight here.
+    /// What keeps that harmless is that every take on disk is at the current
+    /// version, which the next bump ends for all of them at once; the floor is
+    /// mirrored in [`render_config_from_persist`] so the two doors into one
+    /// blob at least agree, and a refused take renders wholly at defaults
+    /// rather than a recorded frame wrapped around them.
     ///
     /// That is what the identity change bought and what a future one would
     /// buy again: a clean floor under the format. A bump WITHOUT one is a
@@ -567,21 +577,29 @@ fn default_ui_scale() -> f32 {
     1.0
 }
 
-/// The current [`UiPersist`] layout version. Bumped when the `Tab` set changes
-/// shape (rename/split/add/merge) so `load_persist` can refresh a stale dock
-/// instead of stranding the user with missing tabs.
+/// The current [`UiPersist`] layout version, and the FLOOR under it. Bumped
+/// when the `Tab` set changes shape (rename/split/add/merge), which would
+/// otherwise strand the user with missing or doubled tabs.
+///
+/// A bump costs the whole blob, not the dock alone: `load_persist` refuses
+/// anything below this outright, so camera, view, spectrum and render settings
+/// all fall back to defaults with it. That is what lets the migrations for
+/// older formats be deleted rather than carried forever, and it is why raising
+/// this means either writing the migration or changing the plugin ids again
+/// (see [`SharedState::load_persist`], which sets out what the id change
+/// bought and which of its callers the argument covers).
 ///
 /// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
-/// they now name the same variant — without the refresh the dock would open
-/// with the merged pane in it twice.
+/// they now name the same variant — kept as the floor's worked example, since
+/// a dock opening with the merged pane in it twice is what the refusal avoids.
 pub(crate) const UI_PERSIST_VERSION: u32 = 2;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
 /// failed deserialize silently falls back to defaults.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct UiPersist {
-    /// serde(default) reads a pre-versioning blob as version 0, which
-    /// [`SharedState::load_persist`] treats as "refresh the dock layout".
+    /// serde(default) reads a pre-versioning blob as version 0, which is below
+    /// the floor — [`SharedState::load_persist`] refuses it entirely.
     #[serde(default)]
     pub(crate) version: u32,
     pub(crate) dock: DockState<panes::Tab>,
@@ -622,12 +640,26 @@ pub(crate) struct UiPersist {
 /// `extra_args`; the renderer reading them is the whole reason those shims
 /// exist, since re-rendering an old take must still compose the frame it was
 /// framed at. See [`RenderConfig::migrate_legacy`].
+///
+/// Floored like [`SharedState::load_persist`], and it has to be: the offline
+/// renderer reads one blob through BOTH, this for the frame it composes at and
+/// that for the lattice it draws. Honour it here alone and an old take renders
+/// at its recorded size and aspect around a scene nobody dialled in, which
+/// reads as a working render rather than a refused blob. Refusing here instead
+/// leaves `main`'s `unwrap_or_default` composing at a frame it can see.
+///
+/// Costs no shim. Both migrations above are NEWER than the floor — the four
+/// sides and the Resolution control landed 2026-07-27 and 2026-07-28, the
+/// floor moved 2026-07-23 — so every blob they exist for is at the floor
+/// already.
 pub fn render_config_from_persist(serialized: &str) -> Option<RenderConfig> {
-    ron::from_str::<UiPersist>(serialized).ok().map(|persist| {
-        let mut render = persist.render;
-        render.migrate_legacy();
-        render
-    })
+    ron::from_str::<UiPersist>(serialized).ok().filter(|p| p.version >= UI_PERSIST_VERSION).map(
+        |persist| {
+            let mut render = persist.render;
+            render.migrate_legacy();
+            render
+        },
+    )
 }
 
 impl SharedState {
