@@ -37,13 +37,13 @@ fn marked_slots(scene: &Scene, melody: bool) -> (u32, usize) {
 
 #[test]
 fn melody_and_bass_mark_the_outer_held_notes() {
-    // C4/E4/G4: the melody is G4 (octave slot 4), the bass C4 (slot 4
-    // too -- same MIDI octave, but different nodes/pitch classes).
+    // C4/E4/G4: the melody is G4, the bass C4 -- middle C's octave for
+    // both (same MIDI octave, but different nodes/pitch classes).
     let scene = marked_scene(&[60, 64, 67], true, true);
     let (melody_bits, melody_nodes) = marked_slots(&scene, true);
     let (bass_bits, bass_nodes) = marked_slots(&scene, false);
-    assert_eq!(melody_bits, 1 << 4, "G4 sounds in MIDI octave 4");
-    assert_eq!(bass_bits, 1 << 4, "C4 too");
+    assert_eq!(melody_bits, 1 << MIDDLE_C_SLOT, "G4 sounds in middle C's octave");
+    assert_eq!(bass_bits, 1 << MIDDLE_C_SLOT, "C4 too");
     assert!(melody_nodes > 0 && bass_nodes > 0);
 
     // The marks land on the nodes those notes actually light, and the
@@ -61,7 +61,7 @@ fn melody_and_bass_mark_the_outer_held_notes() {
 
     // Asking for one end leaves the other unmarked.
     let melody_only = marked_scene(&[60, 64, 67], true, false);
-    assert_eq!(marked_slots(&melody_only, true).0, 1 << 4);
+    assert_eq!(marked_slots(&melody_only, true).0, 1 << MIDDLE_C_SLOT);
     assert_eq!(marked_slots(&melody_only, false).0, 0, "bass not asked for");
     let off = marked_scene(&[60, 64, 67], false, false);
     assert_eq!(marked_slots(&off, true).0, 0);
@@ -88,7 +88,7 @@ fn a_lone_held_note_is_marked_as_both_ends() {
 
 #[test]
 fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
-    // C2 and C4: one pitch class, so both land on the SAME node and the
+    // C3 and C5: one pitch class, so both land on the SAME node and the
     // core can't say which is which -- but they sound in different
     // octave slots, which is what keeps them tellable apart.
     let scene = marked_scene(&[48, 72], true, true);
@@ -99,9 +99,10 @@ fn a_chord_inside_one_pitch_class_separates_on_the_octave_layer() {
         .collect();
     assert!(!marked.is_empty(), "C should be marked");
     for n in &marked {
-        // MIDI octave = note/12 - 1, so C4 (72) is slot 5, C2 (48) slot 3.
-        assert_eq!(n.melody_slots, 1 << 5, "the high C is the melody");
-        assert_eq!(n.bass_slots, 1 << 3, "the low C is the bass");
+        // Slot = MIDI octave + 1, so C5 (72) is one above middle C's slot
+        // and C3 (48) is one below.
+        assert_eq!(n.melody_slots, 1 << (MIDDLE_C_SLOT + 1), "the high C is the melody");
+        assert_eq!(n.bass_slots, 1 << (MIDDLE_C_SLOT - 1), "the low C is the bass");
         // No slot claimed by both, so the octave layer marks each end
         // rather than suppressing them the way the core has to.
         assert_eq!(n.melody_slots & n.bass_slots, 0);
@@ -135,18 +136,18 @@ fn a_released_note_drops_its_mark_while_the_held_note_keeps_the_live_one() {
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "the held C4 keeps the node lit");
     // Only the held C4's slot is marked, at both ends; the released C5's
-    // slot (5) carries no mark, and the mark level is at full, not fading.
-    assert_eq!(origin.melody_slots, 1 << 4, "only the held C4 is the melody");
-    assert_eq!(origin.bass_slots, 1 << 4, "and the bass");
+    // slot carries no mark, and the mark level is at full, not fading.
+    assert_eq!(origin.melody_slots, 1 << MIDDLE_C_SLOT, "only the held C4 is the melody");
+    assert_eq!(origin.bass_slots, 1 << MIDDLE_C_SLOT, "and the bass");
     assert_eq!(origin.melody_level, 1.0, "the held mark is at full, not mid-fade");
     // The octave glyph for the released C5 still fades on its own envelope —
     // it is only the RING that snaps off, not the disc or the glyph.
     assert!(
-        (origin.octaves[5] - 0.5).abs() < 1e-5,
+        (origin.octaves[MIDDLE_C_SLOT + 1] - 0.5).abs() < 1e-5,
         "the released C5's octave is half-faded, got {}",
-        origin.octaves[5]
+        origin.octaves[MIDDLE_C_SLOT + 1]
     );
-    assert_eq!(origin.octaves[4], 1.0, "the held C4's octave is at full");
+    assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "the held C4's octave is at full");
 }
 
 #[test]
@@ -159,7 +160,7 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
     tracker.handle_event(NoteEvent {
         time: 0.0,
         channel: 0,
-        note: 60, // C4: the origin node, in octave slot 4
+        note: 60, // C4: the origin node, in middle C's octave slot
         kind: NoteEventKind::On { velocity: 1.0 },
     });
     let view = ViewConfig {
@@ -170,7 +171,7 @@ fn a_fresh_mark_eases_in_with_the_octave_it_links_to() {
     let at = |now: f64| {
         let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), now);
         let n = origin_node(&scene);
-        (n.melody_level, n.bass_level, n.octaves[4])
+        (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
     };
 
     assert_eq!(at(0.0), (0.0, 0.0, 0.0), "nothing has arrived on the frame itself");

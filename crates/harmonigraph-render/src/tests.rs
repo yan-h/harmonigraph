@@ -156,9 +156,17 @@ fn parity_scene() -> Scene {
     let mut nodes = Vec::new();
     for i in 0..6u32 {
         let f = i as f32;
+        // Slots walked inside the DEFAULT Range: a level on a slot the view
+        // doesn't show is drawn by no sector, so a scene claiming to exercise
+        // every draw path has to sound in the range it renders. Asked of the
+        // same layout the scene carries below rather than re-derived from the
+        // slot count, which would part company with it the first time the
+        // default span moved.
+        let (low, high) = harmonigraph_scene::OctaveLayout::default().slot_range();
+        let slot = |k: usize| (low as usize) + k % (high - low + 1) as usize;
         let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
-        octaves[(i as usize) % harmonigraph_scene::OCTAVE_SLOTS] = 1.0 - f * 0.1;
-        octaves[(i as usize + 5) % harmonigraph_scene::OCTAVE_SLOTS] = 0.4;
+        octaves[slot(i as usize)] = 1.0 - f * 0.1;
+        octaves[slot(i as usize + 5)] = 0.4;
         nodes.push(harmonigraph_scene::NodeInstance {
             lattice_pos: LatticePos::new(i as i32 - 3, i as i32 % 2, 0),
             // Cluster tightly around the origin so discs overlap and
@@ -180,8 +188,8 @@ fn parity_scene() -> Scene {
             cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass,
             // and one claiming both slots at once (the split mark).
-            melody_slots: if i == 0 || i == 4 { 1 << (i as usize % harmonigraph_scene::OCTAVE_SLOTS) } else { 0 },
-            bass_slots: if i == 2 || i == 4 { 1 << (i as usize % harmonigraph_scene::OCTAVE_SLOTS) } else { 0 },
+            melody_slots: if i == 0 || i == 4 { 1 << slot(i as usize) } else { 0 },
+            bass_slots: if i == 2 || i == 4 { 1 << slot(i as usize) } else { 0 },
             melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
@@ -221,6 +229,10 @@ fn parity_scene() -> Scene {
         outer_inner: 0.545,
         outer_outer: 0.795,
         outer_gap: 0.12,
+        // The plain circular division: this scene is about how the draw
+        // paths composite, so the indicators are the ones every other
+        // setting is a departure from.
+        octave_layout: harmonigraph_scene::OctaveLayout::default(),
         idle_marker: harmonigraph_scene::IdleMarker::None,
         idle_radius: 0.0,
         grid,
@@ -442,6 +454,10 @@ fn offscreen_composite_matches_direct_draw() {
     );
 }
 
+/// The slot mask naming middle C's octave — the one the node below sounds
+/// in, and so the one a mark can link back to.
+const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
+
 /// Bloom must add light (halo energy over the bloom-off output) —
 /// and only when asked: strength 0 keeps the parity test above valid.
 /// One big centered node, sounding, with one octave slot lit: a clean
@@ -453,7 +469,9 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     use harmonigraph_core::LatticePos;
 
     let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
-    octaves[0] = 1.0;
+    // Middle C's slot: the marks link back to a sector, so the note has to
+    // sound in one the view actually shows.
+    octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
     let mut scene = parity_scene();
     scene.nodes = vec![harmonigraph_scene::NodeInstance {
         lattice_pos: LatticePos::ORIGIN,
@@ -543,7 +561,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     // count: what matters is that the mark claims a real share of the
     // thing it is marking, at whatever size it happens to be drawn.
     let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
-    let melody = shot(&single_marked_node(1, 0), 41);
+    let melody = shot(&single_marked_node(MIDDLE_C, 0), 41);
     let both_px = changed_px(&melody);
     eprintln!("node {node_px} px; mark {both_px}");
     // A floor, not a target, measured against the node's whole lit
@@ -566,7 +584,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     // the mark exactly when two things are true at once. The two ends are
     // rings at DIFFERENT radii, so both simply draw: the result must cover
     // at least as much as one end alone. This guards that.
-    let split = shot(&single_marked_node(1, 1), 45);
+    let split = shot(&single_marked_node(MIDDLE_C, MIDDLE_C), 45);
     let split_px = changed_px(&split);
     eprintln!("split mark {split_px} px of {node_px}");
     assert!(
@@ -577,7 +595,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
 
     // ...and it really is BOTH rings, not one end quietly winning: the
     // melody-only and bass-only pictures must each differ from it.
-    let bass_only = shot(&single_marked_node(0, 1), 46);
+    let bass_only = shot(&single_marked_node(0, MIDDLE_C), 46);
     let differs = |a: &[u8], b: &[u8]| {
         a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
     };
@@ -694,6 +712,321 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         "turning the marks on barely changed a real chord: \
          {changed} px of {lit} lit"
     );
+}
+
+/// A node showing every octave it can, for reading the wheel's geometry off
+/// the picture: no core and no mark rings, so the only thing drawn is the
+/// band, and a wide gap so the seams between indicators are several pixels
+/// across at the size this renders at.
+fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> Scene {
+    let mut scene = single_marked_node(0, 0);
+    scene.octave_layout = layout;
+    scene.core_radius = 0.0;
+    scene.outer_inner = 0.30;
+    scene.outer_outer = 0.95;
+    scene.outer_gap = 0.10;
+    scene.mark_thickness = 0.0;
+    // Every octave the Range draws, and only those: a level on a slot no
+    // sector draws is a state `derive_scene` cannot reach, and the swirl and
+    // the glow would still take a color from it.
+    let (low, high) = layout.slot_range();
+    let node = &mut scene.nodes[0];
+    node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    for slot in low..=high {
+        node.octaves[slot as usize] = 1.0;
+    }
+    node.cents = cents;
+    scene
+}
+
+/// The band's lit/unlit profile around a rendered node: index `i` is the
+/// angle `360 * i / STEPS` counter-clockwise from screen right.
+/// Self-calibrating — it finds the node's center and the band's radius from
+/// the image rather than reproducing the camera's arithmetic, which would
+/// only re-assert it.
+const PROFILE_STEPS: usize = 720;
+fn band_profile(px: &[u8], size: u32) -> Vec<bool> {
+    let w = size as usize;
+    let lit = |x: f32, y: f32| -> bool {
+        if x < 0.0 || y < 0.0 || x >= size as f32 || y >= size as f32 {
+            return false;
+        }
+        let i = (y as usize * w + x as usize) * 4;
+        px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 > 24
+    };
+    // The node is alone at the world origin and the camera looks at it, so
+    // the frame's center is its center. Not the lit pixels' centroid: a
+    // tapered band is heavier on the side its wide octaves fall, which would
+    // pull a centroid off-center by roughly what the measurement below is
+    // trying to see.
+    let drawn = (0..size * size)
+        .filter(|k| lit((k % size) as f32, (k / size) as f32))
+        .count();
+    assert!(drawn > 100, "nothing drawn to measure ({drawn} lit px)");
+    let (cx, cy) = (size as f32 / 2.0, size as f32 / 2.0);
+
+    // Sample at whichever radius has the most band on it: picking one by
+    // arithmetic would land in a seam or off the band as the settings move.
+    // Screen y grows downward, so the sample angle is negated.
+    let ring = |r: f32| -> Vec<bool> {
+        (0..PROFILE_STEPS)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / PROFILE_STEPS as f32;
+                lit(cx + r * a.cos(), cy - r * a.sin())
+            })
+            .collect()
+    };
+    let best = (4..size / 2)
+        .map(|r| (ring(r as f32).iter().filter(|b| **b).count(), r))
+        .max()
+        .expect("a band to sample")
+        .1;
+    ring(best as f32)
+}
+
+/// Width in degrees of the unlit run containing `at_degrees`, or 0 if that
+/// direction is lit.
+fn gap_at(profile: &[bool], at_degrees: f32) -> f32 {
+    let step = 360.0 / PROFILE_STEPS as f32;
+    let start = (at_degrees / step).round() as usize % PROFILE_STEPS;
+    if profile[start] {
+        return 0.0;
+    }
+    let mut run = 1;
+    let mut k = 1;
+    while k < PROFILE_STEPS && !profile[(start + k) % PROFILE_STEPS] {
+        run += 1;
+        k += 1;
+    }
+    let mut k = 1;
+    while k < PROFILE_STEPS && !profile[(start + PROFILE_STEPS - k) % PROFILE_STEPS] {
+        run += 1;
+        k += 1;
+    }
+    run as f32 * step
+}
+
+/// Every unlit run around the profile, in degrees. On a closed ring of
+/// indicators the only unlit stretches are the Gap setting's slits, one per
+/// boundary between neighbours — so counting these counts the indicators,
+/// and a missing one shows as two slits merged into a wider hole.
+fn unlit_runs(profile: &[bool]) -> Vec<f32> {
+    let step = 360.0 / PROFILE_STEPS as f32;
+    // Start from a lit sample so the walk cannot begin mid-run and count one
+    // run as two.
+    let from = profile.iter().position(|b| *b).expect("something lit to measure from");
+    let mut runs = Vec::new();
+    let mut run = 0;
+    for k in 0..PROFILE_STEPS {
+        if profile[(from + k) % PROFILE_STEPS] {
+            if run > 0 {
+                runs.push(run as f32 * step);
+                run = 0;
+            }
+        } else {
+            run += 1;
+        }
+    }
+    if run > 0 {
+        runs.push(run as f32 * step);
+    }
+    runs
+}
+
+/// The invariant the wheel is built around, checked on the picture rather
+/// than on the layout that feeds it: every octave the Range names gets an
+/// indicator, and together they close the ring — whatever the span, the
+/// taper or the node's pitch class. So the only unlit stretches are the Gap
+/// setting's slits, one per boundary; the bottom is covered like anywhere
+/// else on a node whose octaves do not land on the seam; and middle C is
+/// straight up, so the top is always covered.
+///
+/// Reading it off rendered pixels is the point. The layout's own tests pin
+/// the angles down; this one says the shader draws the axis the table
+/// describes, in the right direction, anchored where it claims — and in
+/// particular that it draws the indicator that runs off the top of the
+/// window and comes round the seam, which is one whole octave of the Range.
+#[test]
+fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
+    use harmonigraph_scene::octave_layout;
+
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [512, 512];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+
+    // Every span and formula, at a C node (whose indicators land flush on the
+    // window's ends) and at three pitch classes that do not.
+    let mut pane = 60;
+    for span in 2..=5u32 {
+        // An even axis, a straight ramp, the sharpest shape, and a plateau.
+        //
+        // Not the FULLEST amount, which is the one thing here the picture
+        // cannot answer: the Gap is cut out of the sectors either side of it,
+        // and at 0.9 the edge slices are thinner than that padding, so their
+        // two slits meet and the ring reads as one indicator short. That is
+        // the setting talking rather than a missing indicator — `octaves.rs`
+        // pins the extreme exactly, on angles, where no padding is involved.
+        for (amount, shape) in [(0.0, 0.5), (0.6, 0.5), (0.7, 0.0), (0.6, 0.85)] {
+            for cents in [0.0, 350.0, 700.0, 1150.0] {
+                let layout = octave_layout(span, amount, shape);
+                let px = shot(&octave_wheel_scene(layout, cents), pane);
+                pane += 1;
+                let profile = band_profile(&px, SIZE[0]);
+                let case = format!("span {span}, amount {amount} shape {shape}, {cents}c");
+
+                // One indicator per octave of the Range, closing the ring:
+                // that is one slit per boundary and no other break. A missing
+                // indicator merges two slits into one hole, so the count is
+                // what says all of them are there.
+                let (low, high) = layout.slot_range();
+                let runs = unlit_runs(&profile);
+                assert_eq!(
+                    runs.len(),
+                    (high - low + 1) as usize,
+                    "{case}: unlit runs {runs:?} for {} indicators",
+                    high - low + 1
+                );
+
+                // Middle C is straight up, and every node draws the octave
+                // that contains it, so the top is covered on every node.
+                assert!(gap_at(&profile, 90.0) == 0.0, "{case}: nothing covers the top");
+
+                // 270 degrees is straight down: the window's two ends at
+                // once. An indicator runs THROUGH it, so it is covered like
+                // any other direction — except on nodes whose own octaves
+                // land there, which is the C case (a boundary exactly on the
+                // seam) and the 1150c case (one half a semitone off it,
+                // inside the slit the Gap cuts). Read on the even axis, where
+                // those two are the only exceptions at every span.
+                if amount == 0.0 {
+                    let bottom = gap_at(&profile, 270.0);
+                    if cents == 0.0 {
+                        assert!(bottom > 0.0, "{case}: a C node's octaves meet at the seam");
+                    } else if cents != 1150.0 {
+                        assert!(bottom == 0.0, "{case}: {bottom:.1} deg of the bottom uncovered");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Which PITCH each indicator is drawn at — the whole of what "positioned by
+/// absolute pitch" means, and the part a seam test cannot see. One octave
+/// sounds; the bright arc has to land where the layout puts that pitch, and
+/// a node's pitch class has to move it.
+#[test]
+fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
+    use harmonigraph_scene::octave_layout;
+
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [512, 512];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+
+    let mut pane = 100;
+    for (span, amount, shape) in [(2u32, 0.0, 0.5), (5, 0.7, 0.25)] {
+        // A C node and a node a fifth up: same slot, pitches 7 semitones
+        // apart, so the bright arc must move by exactly that much of the axis.
+        // Middle C's octave, and the top of the Range — the one that runs off
+        // the window's high end and comes round the seam, whose angle is the
+        // whole of what a wrapped indicator has to get right.
+        for (cents, slot) in [
+            (0.0f32, harmonigraph_scene::MIDDLE_C_SLOT as u32),
+            (700.0, harmonigraph_scene::MIDDLE_C_SLOT as u32),
+            (0.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
+            (700.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
+        ] {
+            let layout = octave_layout(span, amount, shape);
+            let mut scene = octave_wheel_scene(layout, cents);
+            // One octave sounding. The silent slots still ghost in behind it
+            // at GHOST_LEVEL, which the brightness threshold below sorts out.
+            scene.nodes[0].octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+            scene.nodes[0].octaves[slot as usize] = 1.0;
+
+            let cb = LatticeCallback::from_scene(&scene, vec_size, format, pane, None);
+            pane += 1;
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            queue.submit(bufs.into_iter().chain([encoder.finish()]));
+            let tex =
+                render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: 1.0,
+                            screen_size_px: SIZE,
+                        },
+                        pass,
+                        &resources,
+                    );
+                });
+            let px = readback(&device, &queue, &tex, SIZE);
+
+            // Where the BRIGHT pixels are, as a mean direction. The lit
+            // indicator runs several times the ghosts' level, so half the
+            // maximum separates them cleanly whatever the node color is.
+            let bright = |i: usize| px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32;
+            let peak = (0..px.len() / 4).map(|k| bright(k * 4)).max().unwrap_or(0);
+            assert!(peak > 60, "span {span}: nothing bright enough to measure");
+            let (mut vx, mut vy) = (0f64, 0f64);
+            let c = SIZE[0] as f64 / 2.0;
+            for y in 0..SIZE[1] {
+                for x in 0..SIZE[0] {
+                    let i = ((y * SIZE[0] + x) * 4) as usize;
+                    if bright(i) > peak / 2 {
+                        // Screen y grows downward; flip it for an ordinary angle.
+                        vx += x as f64 - c;
+                        vy += c - y as f64;
+                    }
+                }
+            }
+            let drawn = vy.atan2(vx).to_degrees() as f32;
+            // The indicator's own middle, from the layout: the pitch halfway
+            // between its two edges in ANGLE, which a taper can shift off the
+            // pitch itself.
+            let (e0, e1) = layout.sector(slot, cents);
+            let expected = (0.5 * (e0 + e1)).to_degrees().rem_euclid(360.0);
+            let off = (drawn.rem_euclid(360.0) - expected).rem_euclid(360.0);
+            let off = off.min(360.0 - off);
+            assert!(
+                off < 6.0,
+                "span {span}, {cents}c, slot {slot}: indicator drawn at {drawn:.1} deg, \
+                 the axis puts its pitch at {expected:.1}"
+            );
+        }
+    }
 }
 
 #[test]

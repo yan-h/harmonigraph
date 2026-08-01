@@ -40,7 +40,7 @@ fn pitch_lut_lut_reproduces_the_pitch_gradient() {
 
 #[test]
 fn octaves_fade_independently() {
-    // Hold C4, tap-and-release C5: the octave-5 indicator must decay on
+    // Hold C4, tap-and-release C5: the C5 indicator must decay on
     // its own envelope even though the node stays fully active.
     let mut tracker = NoteTracker::new();
     for (note, kind) in [
@@ -62,11 +62,11 @@ fn octaves_fade_independently() {
         scene_of(&tracker, &Tuning::default(), &ViewConfig::default(), &frame, 0.6);
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0, "node stays lit by the held C4");
-    assert_eq!(origin.octaves[4], 1.0, "held octave at full");
+    assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0, "held octave at full");
     assert!(
-        origin.octaves[5] > 0.0 && origin.octaves[5] < 0.75,
+        origin.octaves[MIDDLE_C_SLOT + 1] > 0.0 && origin.octaves[MIDDLE_C_SLOT + 1] < 0.75,
         "released octave mid-fade, got {}",
-        origin.octaves[5]
+        origin.octaves[MIDDLE_C_SLOT + 1]
     );
 }
 
@@ -103,7 +103,7 @@ fn one_fade_time_carries_the_body_but_the_marks_snap_off() {
     // C4 sits on the origin node; its body is half-faded...
     let origin = origin_node(&scene);
     half("the core", origin.activation);
-    half("the octave glyph", origin.octaves[4]);
+    half("the octave glyph", origin.octaves[MIDDLE_C_SLOT]);
     // ...but no ring survives the release, on any node.
     assert!(
         scene.nodes.iter().all(|n| n.melody_slots == 0 && n.bass_slots == 0),
@@ -259,5 +259,108 @@ fn held_note_lights_matching_nodes() {
     );
     let origin = origin_node(&scene);
     assert_eq!(origin.activation, 1.0);
-    assert_eq!(origin.octaves[4], 1.0);
+    assert_eq!(origin.octaves[MIDDLE_C_SLOT], 1.0);
+}
+
+#[test]
+fn a_note_outside_the_window_lights_the_outermost_indicator() {
+    // A narrow window is a way of READING the music, not a filter over it: an
+    // octave the wheel has no indicator for folds into the nearest one it
+    // does, so the note is still there to see and only its exact octave is
+    // given up. Dropping it instead would make a node go dark for notes that
+    // are audibly sounding on it.
+    let view = ViewConfig { octave_span: 2, ..ViewConfig::default() };
+    // ±2 draws five indicators: middle C's octave and two either side, so
+    // MIDI 36..95 — every note from C1 to B5 in the DAW's numbering — has one
+    // of its own, and only what is past those folds.
+    let lit = |note: u8| {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let scene = scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.5);
+        let octaves = origin_node(&scene).octaves;
+        let slots: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| octaves[s] > 0.0).collect();
+        assert_eq!(slots.len(), 1, "one octave sounds, got slots {slots:?}");
+        slots[0]
+    };
+    assert_eq!(lit(60), MIDDLE_C_SLOT, "middle C sounds in its own indicator");
+    // Both ends of the Range the setting names, which is the whole of what
+    // ±2 claims: every C from MIDI 36 to MIDI 84 lights an indicator of its
+    // own, and no two of them share one.
+    assert_eq!(lit(36), MIDDLE_C_SLOT - 2, "the bottom of the Range has its own");
+    assert_eq!(lit(84), MIDDLE_C_SLOT + 2, "the top of the Range has its own");
+    assert_eq!(lit(96), MIDDLE_C_SLOT + 2, "an octave past the top folds into it");
+    assert_eq!(lit(24), MIDDLE_C_SLOT - 2, "an octave under the bottom folds into it");
+    // The widest window reaches those octaves for real, so the fold is the
+    // setting talking and not a ceiling in the packing.
+    let wide = ViewConfig { octave_span: 5, ..ViewConfig::default() };
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 96,
+        kind: NoteEventKind::On { velocity: 1.0 },
+    });
+    let scene = scene_of(&tracker, &Tuning::default(), &wide, &FrameParams::default(), 0.5);
+    assert_eq!(
+        origin_node(&scene).octaves[MIDDLE_C_SLOT + 3],
+        1.0,
+        "at the widest window C7 has an indicator of its own"
+    );
+}
+
+#[test]
+fn every_node_draws_the_octaves_the_range_names() {
+    // A slot is a MIDI octave, so the Range names octave NUMBERS and every
+    // node draws all of them — the same five at ±2 whether the node is a C or
+    // a tritone off it. A node's pitch class only says where round the turn
+    // its octaves land, never which ones there are, so the fold a note takes
+    // is one lookup for the whole frame.
+    let layout = octave_layout(2, 0.0, DEFAULT_TAPER_SHAPE);
+    assert_eq!(
+        layout.slot_range(),
+        (MIDDLE_C_SLOT as u32 - 2, MIDDLE_C_SLOT as u32 + 2),
+        "±2 draws middle C's octave and two either side"
+    );
+    // Where they land does move with the pitch class: an F# node's octaves
+    // sit half an octave round from a C node's.
+    let (c_edge, _) = layout.sector(MIDDLE_C_SLOT as u32, 0.0);
+    let (f_edge, _) = layout.sector(MIDDLE_C_SLOT as u32, 600.0);
+    let step = std::f32::consts::TAU / (2.0 * layout.octaves as f32);
+    assert!((c_edge - f_edge - step).abs() < 1e-4, "an F# node's indicators sit elsewhere");
+}
+
+#[test]
+fn the_views_taper_reaches_the_wheel() {
+    // The span is pinned by the fold test above, which reads it back through
+    // the clamp — but nothing there touches the taper or its amount, so
+    // hard-coding either at the derive call would leave the suite green while
+    // every ring on screen came out evenly divided.
+    let view = ViewConfig {
+        octave_span: 3,
+        octave_taper_amount: 0.6,
+        octave_taper_shape: 0.25,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(
+        &sounding(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.5,
+    );
+    assert_eq!(
+        scene.octave_layout,
+        octave_layout(3, 0.6, 0.25),
+        "the frame's wheel is the one the view asked for"
+    );
+    assert_ne!(
+        scene.octave_layout,
+        octave_layout(3, 0.0, DEFAULT_TAPER_SHAPE),
+        "and a taper is not the even division"
+    );
 }

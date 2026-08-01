@@ -170,6 +170,28 @@ pub struct ViewConfig {
     /// the rings right against it.
     #[serde(default = "default_outer_gap")]
     pub outer_gap: f32,
+    /// How many octaves either side of middle C's the wheel shows, 2..=5
+    /// (see [`octaves`](crate::octaves)). That is `2 * span + 1` indicators,
+    /// the same octave NUMBERS on every node whatever its pitch class, and
+    /// one turn of the node holds all of them — so this also says how many
+    /// degrees an octave is worth. Notes outside the range light the
+    /// outermost indicator on their side.
+    #[serde(default = "default_octave_span")]
+    pub octave_span: u32,
+    /// How much of its width the octave at the EDGE of the Range gives up
+    /// to the ones inside it, 0..0.9. It is the ONLY thing that sets those
+    /// outermost slices: they come out `1 - this` of an even slice at every
+    /// shape, so 0 is an even axis and 0.9 leaves them a tenth. Where the
+    /// width they give up lands is the shape below.
+    #[serde(default = "default_octave_taper_amount")]
+    pub octave_taper_amount: f32,
+    /// WHERE that loss falls between middle C and the edge, 0..1: under half
+    /// it lands at once and the outer octaves flatten out, over half the
+    /// middle several are held near full width and the last ones fall away.
+    /// The ends are pinned by the amount whatever this is, so it is a shape
+    /// rather than a second strength — and it is inert at amount 0.
+    #[serde(default = "default_octave_taper_shape")]
+    pub octave_taper_shape: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -452,6 +474,31 @@ fn default_outer_gap() -> f32 {
     0.12
 }
 
+/// Indicators C0..C8 in this crate's numbering (middle C = C4; the UI
+/// spells the same nine C-1..C7, in Bitwig's): past both ends of any
+/// keyboard part, and at 9 octaves to the turn an octave is worth 40
+/// degrees, which reads at a glance. A blob written before the span was a
+/// setting was drawn with ten fixed 45-degree sectors covering MIDI octaves
+/// 0..9 — nine of them at 40 degrees is the nearest honest reading of that,
+/// and unlike the ten it divides the circle evenly instead of wrapping the
+/// top two octaves back over the bottom two.
+fn default_octave_span() -> u32 {
+    crate::octaves::DEFAULT_OCTAVE_SPAN
+}
+
+/// No taper: the amount is the whole of whether there is one, so a fresh
+/// view starts on an even axis and any weighting of the middle octaves is a
+/// choice made from there.
+fn default_octave_taper_amount() -> f32 {
+    0.0
+}
+
+/// The straight ramp — the middle of the Shape bar, and inert until the
+/// amount leaves 0.
+fn default_octave_taper_shape() -> f32 {
+    crate::octaves::DEFAULT_TAPER_SHAPE
+}
+
 /// Idle marker at the classic disc radius, so a pre-field blob (whose
 /// marker is a Circle) reproduces the old placeholder ring — now
 /// independent of the core and of the playing state.
@@ -607,6 +654,12 @@ impl Default for ViewConfig {
             outer_inner: 0.641_313_55,
             outer_outer: 0.851_483_05,
             outer_gap: 0.051_732_67,
+            // Nine octaves to the turn, evenly: the taper is off, so the
+            // axis a fresh view starts from is an even one, and any
+            // weighting of the middle octaves is a choice made from there.
+            octave_span: default_octave_span(),
+            octave_taper_amount: default_octave_taper_amount(),
+            octave_taper_shape: default_octave_taper_shape(),
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so

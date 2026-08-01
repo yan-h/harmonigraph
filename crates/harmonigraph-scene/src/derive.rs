@@ -4,6 +4,7 @@
 
 use crate::camera::Camera;
 use crate::color::{channel_color, idle_color, pitch_ramp_lut};
+use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
@@ -170,6 +171,16 @@ pub fn derive_scene(
     // in uv, and the gutter has to finish inside it or it would be clipped
     // square instead of ending as a circle.
     let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
+    // The octave wheel is a pitch axis, so it is a property of the VIEW and
+    // is built once: every node reads the same axis, and draws the same
+    // octaves of it. A node's pitch class only says where round the turn its
+    // own octaves land, so the fold below is one lookup for the frame.
+    let octave_layout =
+        octave_layout(view.octave_span, view.octave_taper_amount, view.octave_taper_shape);
+    let (low_slot, high_slot) = {
+        let (low, high) = octave_layout.slot_range();
+        (low as i8, high as i8)
+    };
 
     // Each voice's color, computed once here rather than re-running the
     // LCH->sRGB conversion on every node the voice matches. It depends only on
@@ -194,7 +205,6 @@ pub fn derive_scene(
 
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
-
         let mut activation = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
@@ -214,7 +224,12 @@ pub fn derive_scene(
                     outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
                     seed = (voice.on_time % 256.0) as f32;
                 }
-                let slot = voice.octave.clamp(0, OCTAVE_SLOTS as i8 - 1) as usize;
+                // Slot = MIDI octave + 1 (so middle C's octave 4 is slot 5),
+                // clamped into the octaves the Range names: a note past
+                // either end lights the outermost indicator on its side
+                // rather than vanishing, which is what keeps a narrow Range
+                // a way of READING the music rather than a filter over it.
+                let slot = (voice.octave + 1).clamp(low_slot, high_slot) as usize;
                 // Eases in from note-on; release still fades on the octave
                 // envelope.
                 octaves[slot] = octaves[slot].max(envelope * attack(now, voice.on_time));
@@ -366,6 +381,7 @@ pub fn derive_scene(
         outer_inner,
         outer_outer,
         outer_gap,
+        octave_layout,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,

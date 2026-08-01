@@ -178,12 +178,29 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
+    /// x: octaves the pitch window spans (`OctaveLayout::octaves`); y: the
+    /// MIDI pitch at its low end, which is the seam. Together they are the
+    /// domain of the wheel's pitch axis. z, w: the lowest and highest octave
+    /// slot every node draws (`OctaveLayout::slot_range`), so the shader is
+    /// told which octaves the Range names rather than re-deriving them.
+    misc7: [f32; 4],
+    /// `OctaveLayout::bounds` — the angle of each octave boundary of the
+    /// window — four to a row, which is how a uniform array is laid out
+    /// anyway.
+    oct_bounds: [[f32; 4]; 3],
 }
 
-// The octave packing fits OCTAVE_SLOTS 8-bit levels into 3 u32 words;
-// growing the constant in harmonigraph-scene past 12 would index out of bounds
-// at runtime here, so fail the build instead.
-const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS <= 12);
+// Two fixed-size GPU homes for the slots, and the tighter one is what this
+// asserts: 3 u32 words hold 12 packed levels, but `oct_bounds`'s 3 vec4s
+// hold 12 boundary angles and the layout needs SLOTS + 1 of them — so 11
+// slots is the ceiling, not 12. Growing the constant in harmonigraph-scene
+// past it would index out of bounds at runtime here, so fail the build.
+//
+// An EQUALITY, because the `oct_bounds` upload below fills all 12 angles
+// unconditionally: a SMALLER OCTAVE_SLOTS reads off the end of a shorter
+// `bounds` instead, which a one-sided ceiling would wave through into a
+// panic on the first frame.
+const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS + 1 == 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
@@ -204,8 +221,11 @@ struct GpuInstance {
     octaves: [u32; 3],
     /// Per-note animation seed (small constant, not a timestamp).
     seed: f32,
-    /// The node's pitch class in cents (0..1200); dots mode uses it to place
-    /// each octave dot at the note's absolute-pitch angle.
+    /// The node's pitch class in cents (0..1200). It both PLACES the octave
+    /// indicators and COLORS them, off the one quantity: an indicator's
+    /// octave has a pitch, that octave's C plus this, and the indicator sits
+    /// at that pitch's angle on the shared axis and in that pitch's color
+    /// (see `harmonigraph_scene::octaves`).
     cents: f32,
     /// 1 when the node is on the home (center sevens) sheet: idle home
     /// nodes draw a blank placeholder ring.
@@ -508,6 +528,22 @@ impl LatticeCallback {
                     0.0,
                 ],
                 background: scene.background.to_array(),
+                misc7: {
+                    let (low_slot, high_slot) = scene.octave_layout.slot_range();
+                    [
+                        scene.octave_layout.octaves as f32,
+                        scene.octave_layout.low_pitch,
+                        low_slot as f32,
+                        high_slot as f32,
+                    ]
+                },
+                // Straight indexing: the table is exactly as long as the
+                // rows are wide (the const assert above is what keeps it so),
+                // and a fallback here would quietly ship a wheel with a wrong
+                // angle in it rather than failing the build.
+                oct_bounds: std::array::from_fn(|row| {
+                    std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col])
+                }),
             },
             target_format,
             pane_id,

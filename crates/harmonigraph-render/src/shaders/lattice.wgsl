@@ -64,6 +64,17 @@ struct Uniforms {
     // gutter can knock out only to black, which is darker than the pane and
     // reads as a plate sitting ON the picture rather than a hole THROUGH it.
     background: vec4<f32>,
+    // x: octaves the pitch window spans; y: the MIDI pitch at its low end
+    // (the seam); z, w: the lowest and highest octave slot every node draws.
+    // The slot range comes over rather than being re-derived from x here, so
+    // the CPU's `slot_range` is the only thing that decides it.
+    misc7: vec4<f32>,
+    // The angle of each octave boundary of the window, four to a row and read
+    // through oct_bound(): boundary j walking clockwise from the seam.
+    // Computed on the CPU (harmonigraph_scene's `octave_layout`) because it
+    // depends on settings alone — the alternative is accumulating the same
+    // widths per pixel per sector.
+    oct_bounds: array<vec4<f32>, 3>,
 };
 
 const TAU: f32 = 6.2831853;
@@ -174,9 +185,11 @@ struct Instance {
     // hash for the field styles (the scene picks — see node_seed in
     // harmonigraph-scene); Steady ignores it.
     @location(4) seed: f32,
-    // The node's pitch class in cents (0..1200). The octave indicator
-    // The octave glyphs sit at the note's absolute-pitch angle, which needs
-    // the pitch class within the octave.
+    // The node's pitch class in cents (0..1200). It both PLACES the octave
+    // indicators and COLORS them, off the one quantity: each indicator's
+    // octave has a pitch, that octave's C plus this, and the indicator sits
+    // at that pitch's angle on the shared axis (see oct_sector) in that
+    // pitch's color.
     @location(5) cents: f32,
     // 1 on the home (center sevens) sheet: idle home nodes draw a blank
     // placeholder ring where their disc would be.
@@ -284,8 +297,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     return out;
 }
 
-// Number of octave slots the indicators display (MIDI octaves 0..9).
-const OCTAVE_SLOTS: u32 = 10u;
+// Octave indicator slots the packing carries: MIDI octaves -1..=9, so slot =
+// octave + 1 and slot s is the octave whose C is MIDI 12*s. Which of them a
+// node DRAWS is the Range setting, the same set on every node — see
+// oct_low_slot / oct_high_slot.
+const OCTAVE_SLOTS: u32 = 11u;
 
 // Length of the pitch->color LUT (mirrors harmonigraph_scene::PITCH_LUT_N
 // and the `pitch_lut` array in Uniforms).
@@ -325,12 +341,89 @@ fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
     return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
 }
 
-// Octave slot of middle C (C4): MIDI 60 -> octave 4. The dots anchor this
-// slot straight up and measure every other dot's angle relative to it.
-const MIDDLE_C_SLOT: f32 = 4.0;
-// 45deg (pi/4) of rotation per octave, so two octaves reach the horizontal.
-// Clockwise as pitch rises.
-const RAD_PER_OCTAVE: f32 = 0.7853982;
+// ---- Where the octave indicators sit ---------------------------------------
+// The wheel is a PITCH AXIS, and the same axis on every node: one monotone
+// map from absolute MIDI pitch to angle, running clockwise (the direction
+// pitch rises) from the very bottom of the node. Three things follow, and
+// they are the whole layout:
+//
+//   - the window's lowest pitch and its highest are the SAME point, straight
+//     down, since that is both where the walk starts and where a full turn
+//     brings it back to;
+//   - middle C is straight up, since the octave widths depend only on the
+//     distance from it and so are symmetric about it;
+//   - an indicator sits at the angle of the pitch it stands for, so a node's
+//     pitch class is what decides where its indicators fall — which is what
+//     makes the angle mean an absolute pitch rather than a position in this
+//     node's own ring.
+//
+// An indicator is one whole octave of that axis, centered on its own pitch,
+// and every slot in oct_low_slot()..oct_high_slot() gets one on every node.
+// The window is an octave per indicator plus half an octave over at each end,
+// which is exactly the room they need: they tile the turn, meeting at the
+// boundaries they share. On a node whose pitch class is not C the highest one
+// runs past the window's high end and comes round the seam to meet the lowest
+// — the same point of the circle, which is why oct_angle continues there
+// rather than stopping.
+//
+// The angles themselves are computed on the CPU (harmonigraph_scene's
+// `octave_layout`) and read out of `oct_bounds` here.
+
+// Octaves the window spans, and the MIDI pitch at its low end. The count is
+// held inside the boundary table it indexes (oct_angle reads bound(count)),
+// so a stale or oversized uniform draws a wrong sector rather than reading
+// past the last row.
+fn oct_count() -> u32 {
+    return clamp(u32(u.misc7.x), 1u, OCTAVE_SLOTS);
+}
+fn oct_low_pitch() -> f32 {
+    return u.misc7.y;
+}
+// The octave slots every node draws, inclusive (harmonigraph_scene's
+// `slot_range`): `span` either side of middle C's, the same octave NUMBERS
+// whatever the node's pitch class.
+fn oct_low_slot() -> u32 {
+    return u32(max(u.misc7.z, 0.0));
+}
+fn oct_high_slot() -> u32 {
+    return u32(clamp(u.misc7.w, 0.0, f32(OCTAVE_SLOTS - 1u)));
+}
+// Boundary `j` of the window, four to a uniform row. j runs 0..count: 0 is
+// the seam at the low end and count is the same seam a full turn on.
+fn oct_bound(j: u32) -> f32 {
+    return u.oct_bounds[j / 4u][j % 4u];
+}
+// Where MIDI pitch `p` sits on the wheel. Linear within each octave and
+// monotone across them, so an interval reads as an angle.
+//
+// Past the window's high end it CONTINUES, at the last octave's scale: the
+// highest indicator on a node whose pitch class is not C runs up to an octave
+// past that end, and since the axis's first and last octaves are the same
+// width, continuing is the same angle as wrapping round the seam into the
+// first. Below the low end there is nothing to continue for, so that side
+// clamps — which also keeps the u32 cast off a negative.
+fn oct_angle(p: f32) -> f32 {
+    let x = max((p - oct_low_pitch()) / 12.0, 0.0);
+    let j = min(u32(x), oct_count() - 1u);
+    return mix(oct_bound(j), oct_bound(j + 1u), x - f32(j));
+}
+// MIDI pitch of octave slot `s` on a node whose pitch class is `cents`: slot
+// s is the octave whose C is MIDI 12*s.
+fn oct_slot_pitch(s: u32, cents: f32) -> f32 {
+    return f32(s) * 12.0 + cents / 100.0;
+}
+// The two angular edges of slot `s`'s indicator — its octave's ends — in the
+// order the wedge tests below want them: x the counter-clockwise edge, y the
+// clockwise one.
+fn oct_sector(s: u32, cents: f32) -> vec2<f32> {
+    let p = oct_slot_pitch(s, cents);
+    return vec2<f32>(oct_angle(p - 6.0), oct_angle(p + 6.0));
+}
+// Where an indicator "points": the angle of its own pitch, for anything that
+// needs one angle for the whole of it rather than its two edges.
+fn oct_mid(s: u32, cents: f32) -> f32 {
+    return oct_angle(oct_slot_pitch(s, cents));
+}
 // ---- Outer octave layer ----------------------------------------------------
 // Every outer style draws its glyphs inside the radial band
 // [u.misc3.y, u.misc3.z] (quad UV units): the band IS the glyph set's
@@ -340,18 +433,20 @@ const RAD_PER_OCTAVE: f32 = 0.7853982;
 //
 // The backdrop is always on: it is the cohesion device that makes a note
 // read as ONE whole shape even when a single octave sounds, so the SILENT
-// slots draw as faint ghosts in the note's own color, completing the circle
-// silhouette around the bright sector.
+// octaves draw as faint ghosts in the note's own color, carrying the ring's
+// shape around the bright one. It completes the circle, since the indicators
+// tile the whole turn: the only breaks in it are the gaps between them.
 //
 // The glyphs are always crisp, too: `aa` alone is their edge width, which
 // is what makes it screen-constant at every zoom.
 
-// Neighboring sectors (slots are 0.785 rad apart) are separated by a
-// CONSTANT-thickness gap: the slice edges are radial lines offset half the
-// gap from the sector bisectors, not constant-angle edges (those read as a V
-// that widens outward). At band inner 0 the sectors become full pie wedges;
+// Neighboring sectors are separated by a CONSTANT-thickness gap: the slice
+// edges are radial lines offset half the gap from the boundary the two
+// sectors share, not constant-angle edges (those read as a V that widens
+// outward). That matters more the more indicators there are, and their
+// number is a setting. At band inner 0 the sectors become full pie wedges;
 // near the center every wedge falls inside the gap band, leaving a small
-// clear hub instead of a ten-way mush point.
+// clear hub instead of an N-way mush point.
 //
 // The gap's full width is u.misc5.z (the view's Gap bar), in quad UV units.
 // The SAME value separates the mark rings from the band, so one number is
@@ -379,27 +474,23 @@ const CORE_FADE_IN: f32 = 0.06;
 // home placeholder ring (which spanned 0.37..0.46 at the classic radius).
 const IDLE_RING_THICK: f32 = 0.09;
 
-// Coverage (0..1) of the outer glyph for octave slot `i` on a node whose
+// Coverage (0..1) of the outer glyph for octave slot `s` on a node whose
 // pitch class is `cents`, drawn in the uniform band. Reads nothing from the
-// core layer — the outer glyphs are independent of it. The glyph's angle is
-// its absolute pitch: middle C straight up, 45deg clockwise per octave,
-// pitch class within the octave included. `aa` is the caller's per-pixel
-// soft-band width, giving the shape screen-constant edges.
-fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
-    // (uv.y is up, so clockwise = subtracting from the angle.)
-    let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
-    let ang = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
+// core layer — the outer glyphs are independent of it. Callers check the slot
+// range first; this draws whatever sector it is handed. `aa` is the caller's
+// per-pixel soft-band width, giving the shape screen-constant edges.
+fn outer_glyph(s: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f32) -> f32 {
     let d = length(uv);
 
-    // Annular sectors, screen-constant edges. The sector bisector
-    // directions b1/b2 bound this slot's wedge; the cross products against
-    // them give BOTH the side-of-line tests (which wedge owns the pixel)
-    // and the Euclidean distance to each edge line, thresholded at
-    // half the gap width, for a gap of constant thickness at every radius.
+    // Annular sectors, screen-constant edges. The directions b1/b2 are this
+    // sector's two edges; the cross products against them give BOTH the
+    // side-of-line tests (which wedge owns the pixel) and the Euclidean
+    // distance to each edge line, thresholded at half the gap width, for a
+    // gap of constant thickness at every radius.
     let band = aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
-    let hb = RAD_PER_OCTAVE * 0.5;
-    let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
-    let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
+    let edges = oct_sector(s, cents);
+    let b1 = vec2<f32>(cos(edges.x), sin(edges.x));
+    let b2 = vec2<f32>(cos(edges.y), sin(edges.y));
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
     // Ownership softened over `aa`: a hard step would show as a straight
@@ -407,10 +498,26 @@ fn outer_glyph(i: u32, cents: f32, uv: vec2<f32>, inner: f32, outer: f32, aa: f3
     // wedge boundary — a Gap of 0, which closes the sectors into a solid
     // annulus, is exactly that case. Soft ownership lets adjacent slices
     // cross-fade (the loop keeps the max), so the sector edges stay clean.
-    let own = smoothstep(-aa, aa, c1) * smoothstep(-aa, aa, -c2);
+    //
+    // A wedge under a half turn is the INTERSECTION of its two half-planes;
+    // one PAST a half turn is their union, and reading it as an intersection
+    // would empty the sector instead of filling it. Both cases are real here:
+    // an indicator is one octave of a window that is only five of them wide
+    // at the narrowest Range, so the fullest amount at the sharpest shape
+    // takes middle C's own out to about 253 degrees, which is what
+    // `an_indicator_can_pass_a_half_turn_but_never_a_whole_one` in
+    // harmonigraph-scene pins.
+    let s1 = smoothstep(-aa, aa, c1);
+    let s2 = smoothstep(-aa, aa, -c2);
+    let own = select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
+    // Each edge's gap is cut only on the side the edge actually runs to. The
+    // boundary LINE passes just as close on the far side of the node, which
+    // falls outside a narrow wedge and so does not matter there, but lands
+    // inside a wide one — where it would read as a slit across an indicator
+    // that has no boundary at all in that direction.
     let gap_half = slice_gap_half();
-    let g = (1.0 - aa_inside(gap_half, abs(c1), aa))
-        * (1.0 - aa_inside(gap_half, abs(c2), aa));
+    let g = (1.0 - aa_inside(gap_half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)))
+        * (1.0 - aa_inside(gap_half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)));
     return band * own * g;
 }
 
@@ -522,10 +629,10 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
         // span, keeping patches pure rather than averaged.
         let x = (pick - center) / (level * 0.5 + 0.02);
         let w = level * exp(-x * x);
-        // Slot i is MIDI octave i (its C is MIDI (i+1)*12), same mapping as
-        // the dots style.
+        // Slot i is MIDI octave i - 1, whose C is MIDI i*12; fold in this
+        // node's pitch class for the octave's true pitch.
         wsum = wsum + w;
-        csum = csum + pitch_lut_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
+        csum = csum + pitch_lut_color(f32(i) * 12.0 + cents / 100.0) * w;
     }
     if wsum < 1e-5 {
         return fallback;
@@ -535,18 +642,19 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
 
 // Concentration of each octave's angular color lobe in the glow (a von
 // Mises-like falloff): higher is tighter, more separated arcs. Tuned so
-// octaves a dot-step (45deg) apart blend softly rather than banding.
+// neighbouring octaves blend softly rather than banding at the widest span,
+// where they sit closest together.
 const GLOW_LOBE_KAPPA: f32 = 4.0;
 
 // The glow's color when a chord sounds: every sounding octave's hue laid
-// around the halo in the direction of its OWN dot (the shared dots angle
-// convention), so the glow shows ALL the playing notes at once instead of
-// just the loudest voice's single color. Seam-free — each octave's weight
-// is a periodic bump in cos(angle - dot_angle), never an atan2 wrap. A
-// lone sounding octave yields its color uniformly (the single term cancels
-// the angle dependence); with a solo note or nothing sounding it falls
-// back to `fallback`, so a single voice keeps its exact color (fixed
-// channel hues included, which the pitch ramp would not reproduce).
+// around the halo in the direction of its OWN indicator, so the glow shows
+// ALL the playing notes at once instead of just the loudest voice's single
+// color. Seam-free — each octave's weight is a periodic bump in
+// cos(angle - indicator angle), never an atan2 wrap. A lone sounding octave
+// yields its color uniformly (the single term cancels the angle dependence);
+// with a solo note or nothing sounding it falls back to `fallback`, so a
+// single voice keeps its exact color (fixed channel hues included, which the
+// pitch ramp would not reproduce).
 fn octave_glow_color(octaves: vec3<u32>, cents: f32, angle: f32, fallback: vec3<f32>) -> vec3<f32> {
     var count = 0u;
     var wsum = 0.0;
@@ -557,14 +665,11 @@ fn octave_glow_color(octaves: vec3<u32>, cents: f32, angle: f32, fallback: vec3<
             continue;
         }
         count = count + 1u;
-        // Octave i's dot angle (matches outer_glyph): middle C straight
-        // up, 45deg clockwise per octave, this node's pitch class folded in.
-        let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
-        let theta = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
+        let theta = oct_mid(i, cents);
         let w = level * exp(GLOW_LOBE_KAPPA * (cos(angle - theta) - 1.0));
-        // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; fold in this
-        // node's pitch class for the octave's true pitch (as the dots do).
-        csum = csum + pitch_lut_color((f32(i) + 1.0) * 12.0 + cents / 100.0) * w;
+        // Slot i is MIDI octave i - 1, whose C is MIDI i*12; fold in this
+        // node's pitch class for the octave's true pitch.
+        csum = csum + pitch_lut_color(f32(i) * 12.0 + cents / 100.0) * w;
         wsum = wsum + w;
     }
     // A solo note (or none) keeps its exact node color; two or more
@@ -778,28 +883,31 @@ const MARK_RING_MIN_AA: f32 = 1.5;
 // slits merely break -- which is what says which octave without spending the
 // shape to say it.
 //
-// The dot gate throws away the antipode: a boundary line runs through the
+// The facing gate throws away the antipode: a boundary line runs through the
 // origin, so it passes just as close on the far side of the node and would
-// otherwise cut the ring twice.
+// otherwise cut the ring twice. It is taken per EDGE rather than against the
+// sector's bisector, which is the same cut while a sector is narrow and the
+// right one once a taper has made it wide (past a half turn, a point by one
+// edge faces away from the bisector entirely).
 //
 // A slot mask can name more than one sector: releasing the top of a chord
 // leaves the old melody fading on its slot while the new one takes another,
 // and both are the melody for as long as that lasts.
 fn mark_ring_alpha(slots: u32, cents: f32, uv: vec2<f32>, aa: f32) -> f32 {
     let half = slice_gap_half();
-    let hb = RAD_PER_OCTAVE * 0.5;
     var slit = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-        if (slots & (1u << i)) != 0u {
-            let octaves_from_mid_c = (f32(i) - MIDDLE_C_SLOT) + cents / 1200.0;
-            let ang = 1.5707963 - RAD_PER_OCTAVE * octaves_from_mid_c;
-            let b1 = vec2<f32>(cos(ang + hb), sin(ang + hb));
-            let b2 = vec2<f32>(cos(ang - hb), sin(ang - hb));
+        if (slots & (1u << i)) != 0u && i >= oct_low_slot() && i <= oct_high_slot() {
+            let edges = oct_sector(i, cents);
+            let b1 = vec2<f32>(cos(edges.x), sin(edges.x));
+            let b2 = vec2<f32>(cos(edges.y), sin(edges.y));
             let c1 = uv.x * b1.y - uv.y * b1.x;
             let c2 = uv.x * b2.y - uv.y * b2.x;
-            let facing = step(0.0, dot(uv, vec2<f32>(cos(ang), sin(ang))));
-            let cut = max(aa_inside(half, abs(c1), aa), aa_inside(half, abs(c2), aa));
-            slit = max(slit, cut * facing);
+            let cut = max(
+                aa_inside(half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)),
+                aa_inside(half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)),
+            );
+            slit = max(slit, cut);
         }
     }
     return 1.0 - slit;
@@ -1002,14 +1110,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // loop below, riding the note's own presence so the whole ring fades
     // with the pitch class rather than outliving it.
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        // The octaves the Range names, the same set on every node. The
+        // packing carries a slot per MIDI octave; the ones outside the Range
+        // never light, since a note there folds into the outermost drawn.
+        if i < oct_low_slot() || i > oct_high_slot() {
+            continue;
+        }
         let level = octave_level(in.octaves, i);
         if level <= 0.0 && presence <= 0.0 {
             continue;
         }
         let shape = outer_glyph(i, in.cents, in.uv, band_in, band_out, aa);
-        // Ghosts complete the circle silhouette in the note's own color; a
-        // sounding slot never dips below its ghost, so a fading octave hands
-        // off to it instead of leaving a hole.
+        // Ghosts carry the ring's shape in the note's own color; a sounding
+        // slot never dips below its ghost, so a fading octave hands off to it
+        // instead of leaving a hole.
         var cov = shape * GHOST_LEVEL * presence;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
@@ -1018,9 +1132,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             // a backdrop slot off to its ghost as the lit coverage sinks
             // through it.
             cov = max(cov, shape * level);
-            // Slot i is MIDI octave i, whose C is MIDI (i+1)*12; add this
+            // Slot i is MIDI octave i - 1, whose C is MIDI i*12; add this
             // node's pitch class for the glyph's true pitch.
-            let pitch = (f32(i) + 1.0) * 12.0 + in.cents / 100.0;
+            let pitch = f32(i) * 12.0 + in.cents / 100.0;
             // Exactly the color that pitch lights everywhere else. The LUT is
             // the pitch ramp, which is defined already lightened
             // (pitch_ramp_lch / NOTE_LIGHTEN in harmonigraph-scene), and the core
