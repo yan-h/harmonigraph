@@ -293,21 +293,21 @@ impl Window {
 /// into [`PerfStats::windows`], which measures it — so naming a stage here is
 /// what ties the two together, and neither can hold a row the other does not.
 ///
-/// This is the list of what is MEASURED; `STAGES` says how each one reaches
-/// the screen. Two of them never get a row of their own, because the GPU pair
-/// share one printed line.
+/// This is the list of what is MEASURED; [`STAGES`] says how each one reaches
+/// the screen — which for three of them is by hand rather than as a row of
+/// the breakdown.
 #[derive(Clone, Copy)]
 enum Stage {
     /// The frame interval, in MILLISECONDS — which also drives the FPS
     /// readout. Held in the same unit as every other row so one shared helper
     /// can format both number columns.
     Frame,
-    /// The frame callback end to end. The stages nested under it are its
-    /// parts, and they do not have to add up to it: whatever is missing is
-    /// work nothing measures yet.
+    /// The frame callback end to end. `egui` and `render` are its two halves
+    /// by construction, so those three always add up; the rows under THOSE do
+    /// not have to, and what is missing there is work nothing measures yet.
     Tick,
     /// The egui half of the callback — the UI closure plus egui's own
-    /// end-of-pass work.
+    /// end-of-pass work, which is the part of it nothing below measures.
     Egui,
     /// Shell work before the UI ran: draining the event rings.
     Shell,
@@ -332,7 +332,9 @@ enum Stage {
     /// costs to take.
     Poll,
     /// Of that, staging the frame: offscreen sizing and the three buffer
-    /// writes.
+    /// writes. Worth telling apart from `scene` — a cost that tracks the node
+    /// count is staging and one that does not is the encoder, and the two
+    /// have no fix in common.
     Write,
     /// Of that, encoding the scene pass and the bloom chain. Despite sitting
     /// under a row called "buf up", this is the frame's largest single piece
@@ -357,7 +359,8 @@ enum Stage {
 impl Stage {
     /// How many there are. Taken off the last variant, so the table and the
     /// window array size themselves from the enum rather than from a number
-    /// someone has to remember to bump.
+    /// someone has to remember to bump — which does mean `Gpu` has to STAY
+    /// last: a variant added after it sizes nothing and indexes past both.
     const COUNT: usize = Stage::Gpu as usize + 1;
 }
 
@@ -368,39 +371,56 @@ impl Stage {
 /// default, an accumulate, a latch and a print. Spread over five lists, a row
 /// left out of one of them still compiles and still draws — it simply holds
 /// whatever it last showed, which is the failure that reads as a plausible
-/// number. Here, adding a stage is a variant and a line.
+/// number. Here, adding a stage is a variant and a line, and the compiler
+/// will not let the two of them disagree.
 struct StageInfo {
     /// Which stage this describes, and by construction its own index in
     /// [`STAGES`] — see the check under the table.
     stage: Stage,
     /// How deep the breakdown indents it.
     depth: u8,
-    /// What the row is called. The GPU pair share one line, so `EguiGpu`'s
-    /// name reaches the screen only through `Gpu`'s row.
+    /// What the row is called. `egui gpu` is the one stage whose label never
+    /// reaches the screen: only its number does, inside `gpu`'s row.
     label: &'static str,
-    /// This frame's value, read or computed from the frame's costs.
-    ///
-    /// `None` where [`PerfStats::record`] feeds the window itself, because
-    /// whether the frame has a sample AT ALL turns on state no `FrameCosts`
-    /// carries: the previous frame's timestamp for the interval, and the
-    /// three-way GPU sentinel for the lattice's passes.
+    /// Whether the breakdown prints a row of its own for it, at `depth`.
+    /// False for the three [`overlay_rows`] places by hand.
+    breakdown: bool,
+    /// This frame's value, read or computed from the frame's costs. `None`
+    /// where [`PerfStats::record`] feeds the window itself.
     sample: Option<fn(&FrameCosts) -> f32>,
 }
 
-/// A stage read straight out of the frame's costs, or computed from them.
+/// A stage the breakdown prints a row for, read straight out of the frame's
+/// costs or computed from them. The ordinary case, and the whole of what
+/// adding a stage takes.
 const fn measured(
     stage: Stage,
     depth: u8,
     label: &'static str,
     sample: fn(&FrameCosts) -> f32,
 ) -> StageInfo {
-    StageInfo { stage, depth, label, sample: Some(sample) }
+    StageInfo { stage, depth, label, breakdown: true, sample: Some(sample) }
 }
 
-/// A stage [`PerfStats::record`] feeds by hand, because whether this frame
-/// has a sample for it is a question about state rather than about costs.
-const fn fed(stage: Stage, depth: u8, label: &'static str) -> StageInfo {
-    StageInfo { stage, depth, label, sample: None }
+/// A stage [`overlay_rows`] places by hand instead, because where it prints
+/// does not follow from the table — and, where `sample` is `None`, one
+/// [`PerfStats::record`] feeds by hand as well.
+///
+/// Three of them, for three different reasons. `frame` heads BOTH lists, so
+/// the breakdown cannot own it, and only `record` knows whether a frame had a
+/// predecessor to measure an interval against. The GPU pair share one printed
+/// line, so `egui gpu`'s label and depth are never drawn, only its number.
+/// And `gpu` is fed by hand because its sentinel decides more than a value:
+/// the same reading is what sets `gpu_supported` and `have_gpu`, and two of
+/// its three answers are no sample at all — none of which a
+/// `fn(&FrameCosts) -> f32` can say.
+const fn by_hand(
+    stage: Stage,
+    depth: u8,
+    label: &'static str,
+    sample: Option<fn(&FrameCosts) -> f32>,
+) -> StageInfo {
+    StageInfo { stage, depth, label, breakdown: false, sample }
 }
 
 /// Every stage: the depth it prints at, the label it prints under, and where
@@ -418,8 +438,13 @@ const fn fed(stage: Stage, depth: u8, label: &'static str) -> StageInfo {
 /// right, rather than subtracted from the printed means — because the maximum
 /// of a difference is not the difference of the maxima, and the peak column
 /// would be quietly wrong.
+///
+/// A cost that reaches [`FrameCosts`] and no stage here reads is caught
+/// rather than quietly dropped: `perf` is a private module, so the unread
+/// field trips `dead_code`, and `ci.sh` denies warnings. Wiring a new reading
+/// into the overlay is this table and nothing else.
 const STAGES: [StageInfo; Stage::COUNT] = [
-    fed(Stage::Frame, 0, "frame"),
+    by_hand(Stage::Frame, 0, "frame", None),
     measured(Stage::Tick, 0, "tick", |c| c.tick_ms),
     // Clamped at zero because the two readings are of independently timed
     // nested spans, and measurement noise can put the inner one a hair above
@@ -444,10 +469,10 @@ const STAGES: [StageInfo; Stage::COUNT] = [
     measured(Stage::Submit, 2, "submit", |c| c.submit_ms),
     // The GPU pair, at the TOP level: they run alongside the CPU stages rather
     // than inside any of them, so nesting either under `tick` would be a lie
-    // about what contains what. They share one printed line (see
-    // [`overlay_rows`]), which is why only one of these labels is drawn.
-    measured(Stage::EguiGpu, 0, "egui gpu", |c| c.egui_gpu_ms),
-    fed(Stage::Gpu, 0, "gpu"),
+    // about what contains what. They share one printed line, which is `gpu`'s,
+    // so it is `gpu`'s depth that the overlay reads.
+    by_hand(Stage::EguiGpu, 0, "egui gpu", Some(|c| c.egui_gpu_ms)),
+    by_hand(Stage::Gpu, 0, "gpu", None),
 ];
 
 // Every entry sits at its own stage's index, which is what makes
@@ -474,7 +499,7 @@ pub struct PerfStats {
     /// lists, and a stage missing from any one of them still compiles and
     /// still draws — a row that never latches simply holds the last figure it
     /// showed, which is a plausible number and so invisible. Indexed by the
-    /// enum, there is nowhere left to forget: [`STAGES`] is the only list.
+    /// enum, [`STAGES`] is the only list there is to be missing from.
     windows: [Window; Stage::COUNT],
     /// Which slot of every window's `recent_max` this latch writes.
     peak_slot: usize,
@@ -619,8 +644,8 @@ impl PerfStats {
                 window.record(sample(&costs));
             }
         }
-        // ...and the two the table cannot answer for, because for them whether
-        // this frame has a sample at all turns on state rather than on costs.
+        // ...and the two the table leaves to be fed here, each because whether
+        // this frame has a sample at all is a decision rather than a reading.
         //
         // The first frame has nothing to measure an interval against, so it
         // contributes no sample rather than a zero that would drag the mean.
@@ -700,8 +725,9 @@ impl PerfStats {
         }
     }
 
-    /// One stage's readout. Every window is reached this way, so there is no
-    /// stage the overlay can name that the array does not hold.
+    /// One stage's readout, for the rows that name a stage rather than walking
+    /// the table. Indexed by the enum, so there is no stage the overlay can
+    /// name that the array does not hold.
     fn window(&self, stage: Stage) -> &Window {
         &self.windows[stage as usize]
     }
@@ -811,10 +837,14 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     // HUD means watching that peak, or turning the breakdown on.
     let mut rows: Vec<(u8, &str, String, Option<String>)> = vec![timed(Stage::Frame as usize)];
     if detail {
-        // `tick` and everything nested under it, straight off the table and in
-        // its order — so the breakdown is the list of stages rather than a
-        // second copy of it that can fall out of step.
-        rows.extend((Stage::Tick as usize..=Stage::Submit as usize).map(timed));
+        // Every stage the table says to print, in its order — `tick` and
+        // everything nested under it. Filtered out of the table rather than
+        // named by a range, so a stage appears in the breakdown by having been
+        // added to [`STAGES`], and cannot be measured every frame and then
+        // left off the list.
+        rows.extend(
+            STAGES.iter().enumerate().filter(|(_, s)| s.breakdown).map(|(i, _)| timed(i)),
+        );
         let gpu = &STAGES[Stage::Gpu as usize];
         rows.push((gpu.depth, gpu.label, {
             // Both passes on one line, at the depth the table gives them: the
@@ -1470,12 +1500,18 @@ mod tests {
             now += 1.0 / 60.0;
             let render_ms = 2.0 + (i % 5) as f32;
             let texture_ms = 0.5 + (i % 4) as f32 * 0.25;
+            // `ubuf` nonzero, so `buf up` and `around` differ: they are the
+            // same subtraction bar this term, and with it at zero the two
+            // stages compute the same number — a row reading its neighbour's
+            // cost would print a plausible figure and pass.
+            let ubuf_ms = 0.2 + (i % 3) as f32 * 0.1;
             perf.record(
                 FrameCosts {
                     tick_ms: render_ms + 1.0 + (i % 3) as f32,
                     render_ms,
                     upload_ms: texture_ms + 1.5,
                     texture_ms,
+                    ubuf_ms,
                     ..Default::default()
                 },
                 now,
@@ -1487,6 +1523,12 @@ mod tests {
         assert!((egui + render - tick).abs() < 1e-4, "{egui} + {render} != {tick}");
         // Same for the upload's two halves, accumulated the same way.
         assert!((mean(&perf, Stage::BufUp) - 1.5).abs() < 1e-4, "{}", mean(&perf, Stage::BufUp));
+        // ...and one level further in, where the same promise is made about
+        // `buf up` and the two rows indented under it.
+        let (buf_up, ubuf, around) =
+            (mean(&perf, Stage::BufUp), mean(&perf, Stage::Ubuf), mean(&perf, Stage::Around));
+        assert!((ubuf + around - buf_up).abs() < 1e-4, "{ubuf} + {around} != {buf_up}");
+        assert!(ubuf > 0.0 && around > 0.0, "both halves have to be real: {ubuf}, {around}");
     }
 
     /// Digits that never hold still get squinted at rather than read. The
