@@ -230,6 +230,20 @@ pub fn octave_layout(low: f32, high: f32, amount: f32, shape: f32) -> OctaveLayo
     let first = u_low.floor() + 1.0;
     let last = u_high.ceil() - 1.0;
     let interior = (last - first + 1.0).max(0.0) as usize;
+    // The `min` is a bound on the WRITES below, not a fit: a window needing
+    // more cells than the table holds would come out with its last boundary an
+    // octave short of the window's end, and `angle` would then fold every
+    // pitch above that onto the seam — a wheel whose top octave silently stops
+    // moving, which nothing downstream can notice. Widening the pitch limits
+    // past what MAX_CELLS covers is the way to get there, so fail loudly in a
+    // debug build; `the_widest_window_fits_the_table` is the standing check.
+    debug_assert!(
+        interior < MAX_CELLS,
+        "a {}..{} window needs {} cells and the table holds {MAX_CELLS}",
+        low_pitch,
+        high_pitch,
+        interior + 1
+    );
     let cells = (interior + 1).min(MAX_CELLS);
     let mut edge = [0f32; MAX_CELLS + 1];
     edge[0] = u_low;
@@ -284,11 +298,6 @@ pub fn octave_layout(low: f32, high: f32, amount: f32, shape: f32) -> OctaveLayo
 }
 
 impl OctaveLayout {
-    /// Semitones the window spans.
-    pub fn span(&self) -> f32 {
-        self.high_pitch - self.low_pitch
-    }
-
     /// Where MIDI pitch `pitch` sits on the wheel, in radians. Linear within
     /// each cell and monotone across them, so an interval reads as an angle.
     ///
@@ -474,12 +483,24 @@ mod tests {
                 assert!(e0 > e1, "{case}: slot {slot} runs backwards");
                 let inside = l.angle(pitch);
                 assert!(e0 >= inside && inside >= e1, "{case}: slot {slot} misses its own pitch");
-                // An interior indicator is its own octave and nothing else.
-                if slot > low && slot < high {
+                // An interior indicator is its own octave: one twelfth of the
+                // turn per semitone under an even axis, and the pitch dead
+                // center of it. Read on the even axis alone — a taper changes
+                // the scale at each cell boundary, so an indicator straddling
+                // one legitimately has its two halves at different scales, and
+                // then only the edges' PITCHES are the claim (which is what
+                // `the_indicators_tile_the_turn` reads).
+                let even = l.bounds[0] - l.bounds[1] == l.bounds[1] - l.bounds[2];
+                if slot > low && slot < high && even {
+                    let octave = TAU * SEMIS / (l.high_pitch - l.low_pitch);
                     assert!(
-                        (e0 - l.angle(pitch - 6.0)).abs() < 1e-4
-                            && (e1 - l.angle(pitch + 6.0)).abs() < 1e-4,
-                        "{case}: slot {slot} is not a whole octave"
+                        (e0 - e1 - octave).abs() < 1e-4,
+                        "{case}: slot {slot} spans {} of the {octave} an octave is worth",
+                        e0 - e1
+                    );
+                    assert!(
+                        (inside - 0.5 * (e0 + e1)).abs() < 1e-4,
+                        "{case}: slot {slot} is not centered on its pitch"
                     );
                 }
             }
@@ -605,13 +626,14 @@ mod tests {
     /// exactly the pair of facts the shader's wedge test is built on: past a
     /// half turn a wedge is the UNION of its two half-planes rather than
     /// their intersection, and at a whole turn neither reading means
-    /// anything. The widest there is is the middle indicator at the narrowest
-    /// window, the fullest amount and the sharpest shape — five octaves to the
-    /// turn, the edges pinned at a tenth of an even slice and the middle taking
-    /// everything they and their neighbours give up.
+    /// anything. The widest there is is an indicator near the middle of the
+    /// NARROWEST window at the fullest amount and the sharpest shape — four
+    /// octaves to the turn, the edges pinned at a tenth of an even slice and
+    /// the middle taking everything they and their neighbours give up. It
+    /// reaches 266 degrees.
     ///
     /// This is what [`MIN_WINDOW`] exists for: the same settings over a
-    /// three-octave window take the middle indicator to 336 degrees, and a
+    /// three-octave window take that indicator to 336 degrees, and a
     /// two-octave one to 342.
     #[test]
     fn an_indicator_can_pass_a_half_turn_but_never_a_whole_one() {
@@ -626,9 +648,9 @@ mod tests {
         }
         assert!(widest > PI, "nothing passes a half turn: widest {widest} rad");
         // Sweeping the NARROWEST window along the axis at every pitch class,
-        // since the widest indicator there is is the one the floor is set to
-        // keep in hand: where the window sits, and where the node's octaves
-        // fall inside it, decide how much of the turn one of them can hold.
+        // since that is where the extreme lives and the floor is what keeps it
+        // in hand: how much of the turn one indicator can hold depends on where
+        // the window sits and where the node's octaves fall inside it.
         //
         // The threshold is a good deal tighter than a whole turn, because a
         // measurement 15 degrees off the cliff is not a guard. At MIN_WINDOW
@@ -636,8 +658,8 @@ mod tests {
         // 274 and three octaves at 336.
         let mut narrowest: f32 = 0.0;
         for low in 0..=(PITCH_CEIL - MIN_WINDOW) as u32 {
+            let l = octave_layout(low as f32, low as f32 + MIN_WINDOW, MAX_TAPER_AMOUNT, 0.0);
             for cents in [0.0f32, 100.0, 350.0, 600.0, 700.0, 1150.0] {
-                let l = octave_layout(low as f32, low as f32 + MIN_WINDOW, MAX_TAPER_AMOUNT, 0.0);
                 let (a, b) = l.slot_range(cents);
                 for slot in a..=b {
                     let (e0, e1) = l.sector(slot, cents);
@@ -648,6 +670,17 @@ mod tests {
         assert!(
             narrowest < TAU * 0.78,
             "the narrowest window reaches {} deg",
+            narrowest.to_degrees()
+        );
+        // And the narrowest window is WHERE the extreme is, which is the
+        // sentence above this test and the reason the sweep is of that window
+        // rather than of any other. Without this a formula change could move
+        // the extreme somewhere the sweep never looks, and both bounds would
+        // still pass.
+        assert!(
+            widest <= narrowest + 1e-4,
+            "a wider window reaches {} deg, past the narrowest window's {}",
+            widest.to_degrees(),
             narrowest.to_degrees()
         );
     }
@@ -667,29 +700,40 @@ mod tests {
     }
 
     /// The widest window still fits the boundary table, which the renderer's
-    /// uniform is sized against. Swept rather than reasoned, because the count
-    /// depends on where the window's middle falls between two cell boundaries
-    /// as well as on how wide it is.
+    /// uniform is sized against.
+    ///
+    /// A sweep over the SPAN alone, because the cells are cut from the
+    /// window's own middle: `cell_origin` is half an octave above it, so
+    /// `u_low` and `u_high` come out `±span/24 - 0.5` and the count depends on
+    /// how wide the window is and on nothing else. Where it sits on the axis
+    /// cannot change it — which is worth a sweep to state, since it is a
+    /// property of `cell_origin` rather than of anything visible here. In
+    /// quarter-semitone steps, so the fractional spans between whole octaves
+    /// are covered too.
     #[test]
     fn the_widest_window_fits_the_table() {
         let mut most = 0;
-        let mut at = (0.0, 0.0);
-        for low in 0..=127 {
-            for high in low..=127 {
-                let (low, high) = (low as f32, high as f32);
-                if high - low < MIN_WINDOW {
-                    continue;
-                }
-                for offset in [0.0f32, 0.25, 0.5, 0.75] {
-                    let l = octave_layout(low, high + offset, 0.0, DEFAULT_TAPER_SHAPE);
-                    if l.cells as usize > most {
-                        most = l.cells as usize;
-                        at = (l.low_pitch, l.high_pitch);
-                    }
+        let mut at = 0.0f32;
+        let mut span = MIN_WINDOW;
+        while span <= PITCH_CEIL - PITCH_FLOOR {
+            for low in [PITCH_FLOOR, 3.5, (PITCH_CEIL - span).max(PITCH_FLOOR)] {
+                let l = octave_layout(low, low + span, 0.0, DEFAULT_TAPER_SHAPE);
+                assert_eq!(
+                    l.cells,
+                    octave_layout(PITCH_FLOOR, PITCH_FLOOR + span, 0.0, DEFAULT_TAPER_SHAPE).cells,
+                    "a {span}-semitone window at {low} is cut differently from one at the floor"
+                );
+                if l.cells as usize > most {
+                    most = l.cells as usize;
+                    at = span;
                 }
             }
+            span += 0.25;
         }
-        assert!(most <= MAX_CELLS, "{at:?} needs {most} cells, and the table holds {MAX_CELLS}");
+        assert!(
+            most <= MAX_CELLS,
+            "a {at}-semitone window needs {most} cells and the table holds {MAX_CELLS}"
+        );
         assert_eq!(
             most, MAX_CELLS,
             "the table is {} cells bigger than anything needs",

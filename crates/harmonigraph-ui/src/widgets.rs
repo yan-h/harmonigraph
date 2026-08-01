@@ -693,16 +693,44 @@ pub struct RangeBar<'a> {
     /// Closest the two ends may come, in value units — the range can be
     /// narrowed but never collapsed.
     min_span: f32,
+    /// Whether a drag lands on whole values only (see [`RangeBar::integer`]).
+    integer: bool,
     display: fn(f32) -> String,
 }
 
 impl<'a> RangeBar<'a> {
     pub fn new(low: &'a mut f32, high: &'a mut f32, range: RangeInclusive<f32>) -> Self {
-        RangeBar { low, high, range, min_span: 0.0, display: |v| format!("{v:.2}") }
+        RangeBar {
+            low,
+            high,
+            range,
+            min_span: 0.0,
+            integer: false,
+            display: |v| format!("{v:.2}"),
+        }
     }
 
     pub fn min_span(mut self, span: f32) -> Self {
         self.min_span = span;
+        self
+    }
+
+    /// Land on whole values only — for a range whose ends MEAN something at
+    /// each step and whose readout says which one it is.
+    ///
+    /// The octave wheel's Range is the case: its readout is a note name, and
+    /// what it draws changes on a semitone boundary (a node's octave is either
+    /// inside the window or it isn't). Left continuous, two windows a tenth of
+    /// a semitone apart both read "C1" while one of them draws an indicator
+    /// fewer, and a window exactly on an octave — the reference case for the
+    /// whole layout — is unreachable except by luck.
+    ///
+    /// Snapped at the POINTER, ahead of the grab arithmetic, so the minimum
+    /// span survives it: rounding the pair afterwards can take a semitone off
+    /// a span that was exactly at the minimum, while rounding the value the
+    /// gesture is reading leaves every bound it is clamped against whole.
+    pub fn integer(mut self) -> Self {
+        self.integer = true;
         self
     }
 
@@ -738,6 +766,7 @@ impl<'a> RangeBar<'a> {
         if response.dragged() {
             if let Some(p) = response.interact_pointer_pos() {
                 let v = value_at(p.x);
+                let v = if self.integer { v.round() } else { v };
                 // Decided on the first frame of the gesture and remembered for
                 // the rest of it, so dragging one end past the other doesn't
                 // hand the drag to whichever handle is nearest now. Decided
@@ -959,6 +988,94 @@ mod tests {
             },
         );
         out.shapes.into_iter().map(|s| s.shape).collect()
+    }
+
+    /// Drag a range bar from `from` to `to` (fractions of its width) and
+    /// answer where its two ends ended up. A real gesture through a real
+    /// context: press, then move with the button still down, which is the only
+    /// way to reach the pointer-value path `integer()` snaps in.
+    fn drag_range_bar(
+        (low, high): (f32, f32),
+        (from, to): (f32, f32),
+        integer: bool,
+    ) -> (f32, f32) {
+        const W: f32 = 300.0;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(W, 100.0));
+        let (mut lo, mut hi) = (low, high);
+        let track = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut t = 0.0;
+        let mut frame = |lo: &mut f32, hi: &mut f32, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let bar = RangeBar::new(lo, hi, AXIS.0..=AXIS.1).min_span(OCTAVE);
+                    let response = if integer { bar.integer().show(ui) } else { bar.show(ui) };
+                    track.set(response.rect);
+                },
+            );
+        };
+        // A frame with no input first: egui resolves the pointer against the
+        // PREVIOUS pass's widget rects, so the bar has to have been laid out
+        // once before a press can land on it — and this is also where the
+        // gesture learns where the bar actually is.
+        frame(&mut lo, &mut hi, vec![]);
+        let bar = track.get();
+        let at = |x: f32| egui::pos2(bar.left() + bar.width() * x, bar.center().y);
+        frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from))]);
+        frame(&mut lo, &mut hi, vec![
+            egui::Event::PointerMoved(at(from)),
+            egui::Event::PointerButton {
+                pos: at(from),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        // A step clear of egui's drag threshold first, then the rest of the
+        // way. The grab is decided on the first frame the drag is LIVE, so a
+        // gesture that jumps straight to its target decides it there — which
+        // can be a different grab from the one the press was aimed at.
+        let step = 12.0 / bar.width() * (to - from).signum();
+        frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from + step))]);
+        frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(to))]);
+        (lo, hi)
+    }
+
+    /// An `integer()` bar lands on whole values, and a plain one does not —
+    /// the second half matters as much as the first, since a snap that came
+    /// from the axis rather than from the flag would pass the first alone.
+    ///
+    /// The minimum span survives the snap too. That is the reason it is taken
+    /// at the POINTER rather than by rounding the pair afterwards: a span
+    /// sitting exactly at the minimum, rounded end by end, can come out a
+    /// whole value short of it.
+    #[test]
+    fn an_integer_range_bar_lands_on_whole_values() {
+        // Slide the whole span, which is the grab that could carry a
+        // fraction furthest: it holds an OFFSET taken at the press and adds
+        // it back on every frame, so a fractional one would leave both ends
+        // off the grid for the rest of the gesture.
+        let held = (48.0f32, 84.0f32);
+        let (lo, hi) = drag_range_bar(held, (0.45, 0.6), true);
+        assert_eq!((lo, hi), (lo.round(), hi.round()), "{lo}..{hi} is not whole");
+        assert!(lo > held.0, "the drag moved nothing");
+        assert_eq!(hi - lo, held.1 - held.0, "a slid span keeps its width");
+        let (loose, _) = drag_range_bar(held, (0.45, 0.6), false);
+        assert_ne!(loose, loose.round(), "the axis snaps by itself; the flag proves nothing");
+
+        // Squeezed against the minimum span: the high end dragged down past
+        // the low one, from a position that is not a whole value.
+        let (lo, hi) = drag_range_bar((60.0, 96.0), (1.0, 0.371), true);
+        assert_eq!((lo, hi), (lo.round(), hi.round()), "{lo}..{hi} is not whole");
+        assert_eq!(hi - lo, OCTAVE, "the span stopped at {} rather than the minimum", hi - lo);
     }
 
     /// The filled rects, in paint order.

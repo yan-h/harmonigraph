@@ -86,6 +86,10 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.label("Range");
     RangeBar::new(&mut view.octave_low, &mut view.octave_high, PITCH_FLOOR..=PITCH_CEIL)
         .min_span(MIN_WINDOW)
+        // Whole semitones, because that is what the readout can say and what
+        // the wheel can act on: an octave of a node is either inside the
+        // window or it isn't, and the boundary is a semitone.
+        .integer()
         .display(pitch_readout)
         .show(ui)
         .on_hover_text(
@@ -191,8 +195,16 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// A MIDI note as a key name and octave, for the color-range readout — "C1",
-/// "C8" — so the ends read as pitches rather than bare numbers.
+/// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
+/// as pitches rather than bare numbers. Shared by the octave Range and the
+/// color range.
+///
+/// It ROUNDS, which is exact for the octave Range (its bar lands on whole
+/// semitones) and a reading for the color range (whose ends are a continuous
+/// gradient, where a tenth of a semitone changes nothing anyone can see). A
+/// caller wanting finer steps than a semitone needs its own readout, not a
+/// looser one here: this one would then name two visibly different settings
+/// the same note.
 fn pitch_readout(midi: f32) -> String {
     let n = midi.round() as i32;
     let name = super::KEY_NAMES[n.rem_euclid(12) as usize];

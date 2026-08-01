@@ -882,12 +882,20 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
         readback(&device, &queue, &tex, SIZE)
     };
 
-    // The narrowest window, the default, the widest, and one that is neither
-    // a whole number of octaves nor centered on a C — the case the end
-    // indicators exist for. Each at a C node (whose octaves land flush on the
-    // default window's ends) and at three pitch classes that do not.
+    // The narrowest window there is (MIN_WINDOW, where the taper takes a
+    // sector widest and the union branch of the wedge test is stressed
+    // hardest), the widest, the default, and two that are neither a whole
+    // number of octaves nor centered on a C — the case the end indicators
+    // exist for. Each at a C node (whose octaves land flush on the default
+    // window's ends) and at three pitch classes that do not.
     let mut pane = 60;
-    for (low, high) in [(30.0f32, 90.0f32), (6.0, 114.0), (6.0, 126.0), (24.0, 97.5)] {
+    for (low, high) in [
+        (36.0f32, 84.0f32),
+        (0.0, 127.0),
+        (6.0, 114.0),
+        (30.0, 90.0),
+        (24.0, 97.5),
+    ] {
         // An even axis, a straight ramp, the sharpest shape, and a plateau.
         //
         // Not the FULLEST amount, which is the one thing here the picture

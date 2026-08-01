@@ -601,7 +601,7 @@ impl ViewConfig {
     }
 
     /// Fit a deserialized view to what its controls can actually produce, and
-    /// fold the one field a loadable blob may still spell the old way.
+    /// fold the fields a loadable blob may still spell an older way.
     ///
     /// The clamping is not about old blobs: a bar cannot produce a nonsense
     /// value but a hand-edited RON can, and these feed a rasterizer.
@@ -630,12 +630,33 @@ impl ViewConfig {
         // MIDI 0, where the settable range now stops — comes back inside it
         // rather than being dropped.
         if let Some(span) = self.legacy_octave_span.take() {
-            let half = 6.0 * (2 * span.clamp(1, 5) + 1) as f32;
+            // 2..=5 because that is what the layout clamped the count to, and
+            // a blob outside it was drawn at the clamp: a lower span here
+            // would name a window under the settable minimum, which
+            // `clamp_window` then widens at the HIGH end — leaving the wheel
+            // centered somewhere the project never asked for.
+            let half = 6.0 * (2 * span.clamp(2, 5) + 1) as f32;
             self.octave_low = 60.0 - half;
             self.octave_high = 60.0 + half;
         }
         (self.octave_low, self.octave_high) =
             crate::octaves::clamp_window(self.octave_low, self.octave_high);
+
+        // The taper feeds the wheel's boundary angles, and a non-finite amount
+        // or shape poisons every one of them: the widths come out NaN, so does
+        // each `cos`/`sin` in the shader, and the whole octave layer vanishes
+        // with nothing to say why. `clamp` alone does not catch it — NaN is
+        // its own answer — hence the finite check either side of it.
+        self.octave_taper_amount = if self.octave_taper_amount.is_finite() {
+            self.octave_taper_amount.clamp(0.0, crate::octaves::MAX_TAPER_AMOUNT)
+        } else {
+            default_octave_taper_amount()
+        };
+        self.octave_taper_shape = if self.octave_taper_shape.is_finite() {
+            self.octave_taper_shape.clamp(0.0, 1.0)
+        } else {
+            default_octave_taper_shape()
+        };
     }
 }
 
