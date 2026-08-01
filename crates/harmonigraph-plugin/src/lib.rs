@@ -187,6 +187,134 @@ impl ParamBackend for PluginParamBackend<'_> {
     }
 }
 
+// The decisions `process` makes that do not need a host.
+//
+// `process` only runs with a live `Buffer` and `ProcessContext`, so nothing
+// inside it can be reached from a test. These are the parts where being wrong
+// is SILENT — a ring left out of phase, a take stamped on the wrong clock —
+// which is exactly the class a build cannot catch and a listener notices late.
+// They live out here so they can be tested; `process` stays the wiring.
+
+/// What this block's take timestamps hang off, before the recorder gets a say.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OriginSource {
+    /// Not armed: nothing is recorded this block. The recorder has still been
+    /// consulted by then — see the `armed` argument, which only `is_armed` can
+    /// supply and which cannot be skipped on a disarmed block.
+    Idle,
+    /// The host reports a position. Only `observe_transport` can say whether it
+    /// counts, so the caller still has to ask.
+    Transport(f64),
+    /// The host reports no position at all: fall back to the plugin's own clock,
+    /// so "just record what I play" still works.
+    LocalClock(f64),
+}
+
+/// Take timestamps come from the TRANSPORT, not the plugin's own sample
+/// counter, so a take lines up with a bounce of the same song without an offset
+/// to work out. Nothing is recorded while the transport is stopped.
+///
+/// `pos_seconds` is read even when disarmed; it is a plain getter, so asking
+/// for it on a block that will not use it costs nothing.
+fn origin_source(
+    armed: bool,
+    pos_seconds: Option<f64>,
+    block_start: u64,
+    sample_rate: f64,
+) -> OriginSource {
+    if !armed {
+        OriginSource::Idle
+    } else if let Some(seconds) = pos_seconds {
+        OriginSource::Transport(seconds)
+    } else {
+        OriginSource::LocalClock(block_start as f64 / sample_rate)
+    }
+}
+
+/// When an event happened on the RING's clock: the plugin's own sample counter,
+/// which is what the editor's `ClockMapper` reads.
+fn ring_time(block_start: u64, timing: u32, sample_rate: f64) -> f64 {
+    (block_start + u64::from(timing)) as f64 / sample_rate
+}
+
+/// When the same event happened on the TAKE's clock, which hangs off the
+/// transport instead. The two bases differ by wherever the song sat when the
+/// plugin loaded, and a take stamped on the ring's clock lines up with no
+/// bounce of the same song.
+fn take_time(origin: f64, timing: u32, sample_rate: f64) -> f64 {
+    origin + f64::from(timing) / sample_rate
+}
+
+/// One host event, in the terms the lattice draws it in.
+///
+/// Named fields rather than a tuple, because `channel` and `note` are both
+/// `u8` and adjacent: a tuple lets the destructuring site transpose them and
+/// still compile, and every note-on then draws a channel as a pitch. `process`
+/// has no test that would catch it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MappedNote {
+    timing: u32,
+    channel: u8,
+    note: u8,
+    kind: NoteEventKind,
+}
+
+/// The events the visualization cares about, and what each becomes. A host
+/// sends far more than this; everything unmatched is forwarded untouched and
+/// never reaches the lattice.
+fn mapped_note(event: NoteEvent<()>) -> Option<MappedNote> {
+    match event {
+        NoteEvent::NoteOn { timing, channel, note, velocity, .. } => {
+            Some(MappedNote { timing, channel, note, kind: NoteEventKind::On { velocity } })
+        }
+        NoteEvent::NoteOff { timing, channel, note, .. }
+        | NoteEvent::Choke { timing, channel, note, .. } => {
+            Some(MappedNote { timing, channel, note, kind: NoteEventKind::Off })
+        }
+        // Per-note tuning (CLAP note expression / MPE via the host); v1
+        // supported this as PolyTuning.
+        NoteEvent::PolyTuning { timing, channel, note, tuning, .. } => {
+            Some(MappedNote {
+                timing,
+                channel,
+                note,
+                kind: NoteEventKind::Tuning { semitones: tuning },
+            })
+        }
+        _ => None,
+    }
+}
+
+/// How much of this block fits in the audio ring, in SAMPLES, rounded DOWN to
+/// whole frames.
+///
+/// The rounding is the one thing here that must not be wrong. A tail dropped
+/// mid-frame leaves the ring one sample out of phase, and every later frame
+/// hands the left channel's data to the right for as long as the plugin runs —
+/// silently, because nothing downstream can tell a phase slip from the signal.
+/// Bounding by free space is what makes a near-full ring (GUI stalled, or
+/// closed) drop the block's tail rather than stall the audio thread.
+///
+/// The zero-channel arm is not a live path — both callers gate on a positive
+/// channel count. It is handled so the function carries no precondition a
+/// caller can violate, which is what makes it safe to reuse; it does not move
+/// the division off the audio thread, and does not pretend to.
+fn interleaved_reservation(free_slots: usize, samples: usize, channels: usize) -> usize {
+    if channels == 0 {
+        return 0;
+    }
+    let free = free_slots / channels * channels;
+    (samples * channels).min(free)
+}
+
+/// Which input plane the take's right channel reads from. A take's WAV is
+/// always stereo, matching AUDIO_IO_LAYOUTS, so a mono input is duplicated
+/// rather than written as half a frame — which would desync every frame after
+/// it.
+fn take_right_channel(channels: usize) -> usize {
+    usize::from(channels > 1)
+}
+
 impl Default for Harmonigraph {
     fn default() -> Self {
         let (producer, consumer) = rtrb::RingBuffer::new(EVENT_RING_CAPACITY);
@@ -231,8 +359,10 @@ impl Plugin for Harmonigraph {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    // Audio passes through untouched, but is tapped (mono mixdown) for the
-    // GUI's spectrum analyzer; MIDI is forwarded verbatim.
+    // Audio passes through untouched, but is tapped for the GUI's spectrum
+    // analyzer — INTERLEAVED, channel by channel, not as a mixdown (see
+    // `process`, and `interleaved_reservation` for what that costs). MIDI is
+    // forwarded verbatim.
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: NonZeroU32::new(2),
         main_output_channels: NonZeroU32::new(2),
@@ -286,51 +416,34 @@ impl Plugin for Harmonigraph {
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         let block_start = self.samples_processed;
-        // Take timestamps come from the TRANSPORT, not the plugin's own
-        // sample counter, so a take lines up with a bounce of the same
-        // song without an offset to work out. Nothing is recorded while
-        // the transport is stopped; a host that reports no position at
-        // all falls back to the local clock so "just record what I play"
-        // still works.
         let transport = context.transport();
-        let take_origin = if !self.take.is_armed() {
-            None
-        } else if let Some(seconds) = transport.pos_seconds() {
-            // observe_transport decides whether the transport is rolling (and
-            // splits the take on a loop wrap, or ends it at the loop end under
-            // AtLoopEnd). It is deliberately more permissive than the host's
-            // `playing` flag — see there.
-            self.take.observe_transport(seconds, transport.playing).then_some(seconds)
-        } else {
-            // No transport at all: fall back to the plugin's own clock so
-            // "just record what I play" still works.
-            Some(block_start as f64 / self.sample_rate)
-        };
+        // EVERY block, armed or not. `is_armed` is an edge detector, not a
+        // getter: it latches `was_armed` and clears the recorder's per-take
+        // state on the arming edge. Skipping it on a disarmed block means the
+        // next arm edge never fires and recording silently never resumes.
+        let armed = self.take.is_armed();
+        let take_origin =
+            match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
+                OriginSource::Idle => None,
+                // observe_transport decides whether the transport is rolling (and
+                // splits the take on a loop wrap, or ends it at the loop end under
+                // AtLoopEnd). It is deliberately more permissive than the host's
+                // `playing` flag — see there.
+                OriginSource::Transport(seconds) => {
+                    self.take.observe_transport(seconds, transport.playing).then_some(seconds)
+                }
+                OriginSource::LocalClock(seconds) => Some(seconds),
+            };
 
         while let Some(event) = context.next_event() {
-            let mapped = match event {
-                NoteEvent::NoteOn { timing, channel, note, velocity, .. } => {
-                    Some((timing, channel, note, NoteEventKind::On { velocity }))
-                }
-                NoteEvent::NoteOff { timing, channel, note, .. }
-                | NoteEvent::Choke { timing, channel, note, .. } => {
-                    Some((timing, channel, note, NoteEventKind::Off))
-                }
-                // Per-note tuning (CLAP note expression / MPE via the
-                // host); v1 supported this as PolyTuning.
-                NoteEvent::PolyTuning { timing, channel, note, tuning, .. } => {
-                    Some((timing, channel, note, NoteEventKind::Tuning { semitones: tuning }))
-                }
-                _ => None,
-            };
-            if let Some((timing, channel, note, kind)) = mapped {
-                let time = (block_start + u64::from(timing)) as f64 / self.sample_rate;
+            if let Some(MappedNote { timing, channel, note, kind }) = mapped_note(event) {
+                let time = ring_time(block_start, timing, self.sample_rate);
                 // Full ring = GUI stalled; dropping visualization events is
                 // the right failure mode for the audio thread.
                 let _ = self.note_producer.push(CoreNoteEvent { time, channel, note, kind });
                 if let Some(origin) = take_origin {
                     self.take.note(
-                        origin + f64::from(timing) / self.sample_rate,
+                        take_time(origin, timing, self.sample_rate),
                         channel,
                         note,
                         kind,
@@ -353,19 +466,11 @@ impl Plugin for Harmonigraph {
             self.audio_channels.store(channels as u32, Ordering::Relaxed);
             // Reserve the block's slots once and fill them, rather than a
             // per-sample push(): one ring-atomic touch per block instead of
-            // ~48k/s on the audio thread. Bound the reservation by free space
-            // so a near-full ring (GUI stalled/closed) drops the block's tail
-            // — the same "drop rather than stall" failure mode as before, just
-            // at block granularity. `slots()` only grows as the consumer
+            // ~48k/s on the audio thread. `slots()` only grows as the consumer
             // drains, so the reservation of `want` never fails; the `if let`
             // is defensive.
-            //
-            // Rounded DOWN TO WHOLE FRAMES, which is the one thing this must not
-            // get wrong: a tail dropped mid-frame would leave the ring one sample
-            // out of phase, and every later frame would hand the left channel's
-            // data to the right for as long as the plugin ran.
-            let free = self.audio_producer.slots() / channels * channels;
-            let want = (buffer.samples() * channels).min(free);
+            let want =
+                interleaved_reservation(self.audio_producer.slots(), buffer.samples(), channels);
             if want > 0 {
                 // Interleaved from the per-channel planes the host gave us. A
                 // shared slice-of-slices rather than `iter_samples`, because a
@@ -388,13 +493,14 @@ impl Plugin for Harmonigraph {
 
             // The take's own audio, when asked for: the input bus exactly
             // as it arrives, so the render gets a spectrum and a
-            // soundtrack without a separate bounce. Always stereo,
-            // matching AUDIO_IO_LAYOUTS — a mono host input is
-            // duplicated rather than desyncing the WAV's frames.
+            // soundtrack without a separate bounce. Sized by TAKE_CHANNELS
+            // rather than the host's own channel count — the WAV is stereo
+            // whatever arrives, which is what `take_right_channel` duplicates
+            // a mono input for.
             if self.take.wants_audio() && channels > 0 {
                 self.take.mark_audio_start(origin);
-                let right = usize::from(channels > 1);
-                let wanted = buffer.samples() * 2;
+                let right = take_right_channel(channels);
+                let wanted = buffer.samples() * take::TAKE_CHANNELS;
                 let mut interleaved = buffer.iter_samples().flat_map(|mut frame| {
                     let l = frame.get_mut(0).map_or(0.0, |s| *s);
                     let r = frame.get_mut(right).map_or(0.0, |s| *s);
@@ -461,5 +567,197 @@ mod tests {
             ParamKey::ALL.len(),
             "the plugin exposes parameters ParamKey doesn't know about: {host_ids:?}"
         );
+    }
+
+    /// A note-on carries its velocity through; a note-off and a choke both mean
+    /// "this voice is done" and collapse to the same kind. The fields are
+    /// asserted by name, which is the pairing `MappedNote` exists to keep.
+    #[test]
+    fn the_note_events_the_lattice_draws_keep_their_fields() {
+        let on =
+            NoteEvent::NoteOn { timing: 7, voice_id: None, channel: 2, note: 60, velocity: 0.5 };
+        assert_eq!(
+            mapped_note(on),
+            Some(MappedNote {
+                timing: 7,
+                channel: 2,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 0.5 },
+            })
+        );
+
+        let off =
+            NoteEvent::NoteOff { timing: 9, voice_id: None, channel: 2, note: 60, velocity: 0.0 };
+        assert_eq!(
+            mapped_note(off),
+            Some(MappedNote { timing: 9, channel: 2, note: 60, kind: NoteEventKind::Off })
+        );
+
+        // A choke is a note-off the host will not follow with one.
+        let choke = NoteEvent::Choke { timing: 11, voice_id: None, channel: 3, note: 64 };
+        assert_eq!(
+            mapped_note(choke),
+            Some(MappedNote { timing: 11, channel: 3, note: 64, kind: NoteEventKind::Off })
+        );
+
+        let tuning = NoteEvent::PolyTuning {
+            timing: 13, voice_id: None, channel: 1, note: 67, tuning: -0.25,
+        };
+        assert_eq!(
+            mapped_note(tuning),
+            Some(MappedNote {
+                timing: 13,
+                channel: 1,
+                note: 67,
+                kind: NoteEventKind::Tuning { semitones: -0.25 },
+            })
+        );
+    }
+
+    /// The negatives are where this goes wrong quietly. `MidiConfig::Basic`
+    /// delivers every poly expression below, and each carries the same
+    /// `{ timing, channel, note, .. }` shape as the PolyTuning arm — so each is
+    /// one copy-pasted arm away from drawing notes nobody played, with
+    /// `#[non_exhaustive]` guaranteeing the compiler never points at the
+    /// omission.
+    #[test]
+    fn the_poly_expressions_are_not_notes() {
+        let not_notes = [
+            NoteEvent::PolyPressure {
+                timing: 5, voice_id: None, channel: 1, note: 67, pressure: 0.5,
+            },
+            NoteEvent::PolyVolume {
+                timing: 5, voice_id: None, channel: 1, note: 67, gain: 0.5,
+            },
+            NoteEvent::PolyPan {
+                timing: 5, voice_id: None, channel: 1, note: 67, pan: 0.5,
+            },
+            NoteEvent::PolyVibrato {
+                timing: 5, voice_id: None, channel: 1, note: 67, vibrato: 0.5,
+            },
+            NoteEvent::PolyExpression {
+                timing: 5, voice_id: None, channel: 1, note: 67, expression: 0.5,
+            },
+            NoteEvent::PolyBrightness {
+                timing: 5, voice_id: None, channel: 1, note: 67, brightness: 0.5,
+            },
+            // Plugin-to-host: this one cannot arrive on the path at all.
+            NoteEvent::VoiceTerminated { timing: 5, voice_id: None, channel: 1, note: 67 },
+        ];
+        for event in not_notes {
+            assert_eq!(mapped_note(event), None, "{event:?} must not reach the lattice");
+        }
+    }
+
+    /// The three ways a block decides where its take timestamps start. The
+    /// middle rung is the one that matters: a take stamped on the plugin's own
+    /// clock rather than the transport's lines up with no bounce of the same
+    /// song, and nothing looks wrong until the audio is dropped underneath it.
+    #[test]
+    fn a_take_origin_prefers_the_transport_over_the_local_clock() {
+        // Disarmed: the recorder is not consulted, whatever the host reports.
+        assert_eq!(origin_source(false, Some(12.0), 22_050, 44_100.0), OriginSource::Idle);
+        assert_eq!(origin_source(false, None, 22_050, 44_100.0), OriginSource::Idle);
+
+        // Armed, and the host reports a position: that position, untouched.
+        assert_eq!(
+            origin_source(true, Some(12.0), 22_050, 44_100.0),
+            OriginSource::Transport(12.0)
+        );
+
+        // Armed, and the host reports nothing at all: the plugin's own sample
+        // counter in seconds, so "just record what I play" still works.
+        assert_eq!(origin_source(true, None, 22_050, 44_100.0), OriginSource::LocalClock(0.5));
+    }
+
+    /// One event, two clocks. The ring is stamped on the plugin's own sample
+    /// counter, which is what the editor's ClockMapper reads; the take is
+    /// stamped on the transport, which is what lets it be lined up against a
+    /// bounce later. Collapsing them into one would look right on screen and
+    /// put every recorded take at the wrong song position.
+    ///
+    /// Every constant here divides to an exact binary fraction, which is what
+    /// lets `assert_eq!` compare f64 at all. Picking more realistic numbers — a
+    /// 512-sample block, an odd offset at 44.1 kHz — lands off a representable
+    /// value and fails on the last bit with the implementation still correct.
+    #[test]
+    fn an_event_is_stamped_on_two_independent_clocks() {
+        let rate = 48_000.0;
+
+        // Both clocks advance by the event's offset within the block...
+        assert_eq!(ring_time(0, 24_000, rate) - ring_time(0, 0, rate), 0.5);
+        assert_eq!(take_time(90.0, 24_000, rate) - take_time(90.0, 0, rate), 0.5);
+
+        // ...but only the ring's counts the plugin's own blocks,
+        assert_eq!(ring_time(48_000, 0, rate), 1.0);
+        // and only the take's counts the song position it hangs off.
+        assert_eq!(take_time(90.0, 0, rate), 90.0);
+    }
+
+    /// The phase-slip guard, exhaustively. A reservation that is not a whole
+    /// number of frames leaves the ring one sample out of alignment, and every
+    /// frame after it hands the left channel's samples to the right — for as
+    /// long as the plugin runs, with nothing downstream able to tell that from
+    /// the signal itself.
+    #[test]
+    fn a_reservation_is_always_a_whole_number_of_frames() {
+        for channels in 1..=8usize {
+            for free_slots in 0..96usize {
+                for samples in 0..24usize {
+                    let want = interleaved_reservation(free_slots, samples, channels);
+                    assert_eq!(
+                        want % channels,
+                        0,
+                        "{want} samples is a partial frame at {channels} channels \
+                         (free_slots={free_slots}, samples={samples})"
+                    );
+                    assert!(want <= free_slots, "reserved {want} of {free_slots} free slots");
+                    assert!(
+                        want <= samples * channels,
+                        "reserved {want}, more than the {} this block holds",
+                        samples * channels
+                    );
+                }
+            }
+        }
+    }
+
+    /// What the reservation does at each end: a ring with room takes the whole
+    /// block, a full one drops it rather than stalling the audio thread, and a
+    /// nearly-full one takes whole frames and drops the tail.
+    #[test]
+    fn a_full_ring_drops_the_block_rather_than_stalling() {
+        // Room to spare: the whole block, interleaved.
+        assert_eq!(interleaved_reservation(4096, 512, 2), 1024);
+        // Exactly enough.
+        assert_eq!(interleaved_reservation(1024, 512, 2), 1024);
+        // Full: nothing, and the caller skips the write entirely.
+        assert_eq!(interleaved_reservation(0, 512, 2), 0);
+        // Nearly full, with the free space a PARTIAL frame: round down, so the
+        // tail is dropped on a frame boundary rather than mid-frame.
+        assert_eq!(interleaved_reservation(7, 512, 2), 6);
+        assert_eq!(interleaved_reservation(7, 512, 4), 4);
+        // Less free space than a single frame: nothing at all.
+        assert_eq!(interleaved_reservation(3, 512, 4), 0);
+    }
+
+    /// Both callers gate on a positive channel count, so no live path reaches
+    /// this. It is pinned because it is what lets the function be called
+    /// without checking first — a total function is reusable, and reuse is how
+    /// `Recorder::audio` came to share the guard.
+    #[test]
+    fn a_zero_channel_bus_reserves_nothing() {
+        assert_eq!(interleaved_reservation(4096, 512, 0), 0);
+    }
+
+    /// A take's WAV is always stereo. A mono host input is DUPLICATED into both
+    /// planes rather than written as half a frame, which would put every
+    /// subsequent frame out of step with the notes it is meant to match.
+    #[test]
+    fn a_mono_input_is_duplicated_into_both_take_channels() {
+        assert_eq!(take_right_channel(1), 0, "mono reads plane 0 twice");
+        assert_eq!(take_right_channel(2), 1);
+        // A host offering more than two planes still writes a stereo take.
+        assert_eq!(take_right_channel(8), 1);
     }
 }
