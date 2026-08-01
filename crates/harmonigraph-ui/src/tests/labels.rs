@@ -613,7 +613,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
 /// worth asserting — an assertion that clamping to a constant lands inside it
 /// only restates `clamp`. The lattice's `label_scale` is the one that can:
 /// `ViewConfig` lives in `harmonigraph-scene`, which is BELOW this crate, so the
-/// range is not visible there and `migrate_legacy` clamps to a written-out
+/// range is not visible there and `sanitize` clamps to a written-out
 /// copy of the same two numbers.
 ///
 /// Nothing ties the copy to the original. Widen the bar and a saved view keeps

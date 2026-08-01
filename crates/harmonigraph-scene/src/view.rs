@@ -253,7 +253,7 @@ pub struct ViewConfig {
     pub mark_bass: bool,
     /// Load-only shim: blobs from before the two marks became independent
     /// flags carry one `highlight_extremes` token (Off/Melody/Bass/Both).
-    /// Folded into the pair by [`migrate_legacy`](Self::migrate_legacy) and
+    /// Folded into the pair by [`sanitize`](Self::sanitize) and
     /// never written back. It reads through `bare_as_some` because the old
     /// blobs wrote the variant BARE, which RON will not read into an
     /// `Option`'s `Some`, and a failed parse drops the whole persist rather
