@@ -18,7 +18,6 @@
       "Bash(cargo --version)",
       "Bash(cargo check *)",
       "Bash(cargo test *)",
-      "Bash(cargo xtask *)",
       "Bash(gh pr view *)",
       "Bash(git add *)",
       "Bash(git checkout *)",
