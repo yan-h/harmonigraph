@@ -666,7 +666,7 @@ impl SpectrumConfig {
 /// numbers and nothing downstream cared how tight it got.
 ///
 /// A range saved narrower than this widens to it on load
-/// ([`SpectrumConfig::migrate_legacy`]), takes included — so a video rendered
+/// ([`SpectrumConfig::sanitize`]), takes included — so a video rendered
 /// from an old take renders at the wider range too.
 ///
 /// Named for the analyzer alone, and read by nothing else. The Nodes tab's

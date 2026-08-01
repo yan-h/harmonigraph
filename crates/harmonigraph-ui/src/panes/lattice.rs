@@ -279,9 +279,16 @@ pub(crate) fn draw_node_labels(
         // it will really be set at, not for the pane's. `magnify` is the
         // little that is left over, and it is what the ladder would otherwise
         // have thrown away.
+        //
+        // Through `ladder` rather than a `snap_scale` and a division, so the
+        // ceiling on the raster is a ceiling on the DRAWN size too. Dividing
+        // the raw request by the clamped raster absorbs everything past
+        // `MAX_GLYPH_PX` into the magnification, which is a bitmap stretched
+        // rather than type set larger — and on a 2x display the ceiling is
+        // crossed at half the zoom, so the same camera reads sharp on an
+        // external monitor and soft on the laptop panel.
         let want = want * node.scale.max(0.6);
-        let scale = crate::text::snap_scale(want, NAME_SIZE, ppp);
-        let magnify = want / scale;
+        let (scale, magnify) = crate::text::ladder(want, NAME_SIZE, ppp);
         // What an off-sheet node says, and whether it says anything: its
         // name shares a LETTER and an accidental with the node two fifths
         // down, but not the whole string — the septimal mark is the column

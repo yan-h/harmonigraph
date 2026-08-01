@@ -51,9 +51,10 @@ enum comments in `crates/harmonigraph-scene/src/lib.rs`:
 - **`OuterStyle`**: gone. The glyph shapes settled on slices and the layer
   became unconditional, so the enum and its persisted key were dropped; an
   old blob's `outer_style` is now an ignored unknown field.
-- **`CoreStyle`**: replaced entirely by a `core_radius` + `core_solidity`
-  slider pair; the enum is now legacy load-only (`migrate_legacy` folds old
-  tokens into radius/solidity).
+- **`CoreStyle`**: gone. It was replaced by a `core_radius` +
+  `core_solidity` slider pair and kept as a load-only enum for a while; the
+  version floor made that fold unreachable and the enum went with it, so an
+  old blob's `core_style` is now an ignored unknown field.
 
 **The work.** A final aesthetic pass on the 4 surviving node styles: decide
 whether Vortex, Checker and Spiral all earn their keep. Each cut

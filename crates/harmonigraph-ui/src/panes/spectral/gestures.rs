@@ -198,7 +198,7 @@ pub(super) fn drag_zoom(
         return;
     }
     // Land inside the axis the analyzer actually covers. Same invariant
-    // `SpectrumConfig::migrate_legacy` enforces on load: a range past the axis
+    // `SpectrumConfig::sanitize` enforces on load: a range past the axis
     // draws a band with no buckets behind it. The upper bound takes a `max`
     // because at the full span the two ends meet, and float rounding is enough
     // to cross them — which `clamp` answers with a panic.

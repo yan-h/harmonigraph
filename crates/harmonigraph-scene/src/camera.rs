@@ -319,7 +319,7 @@ mod tests {
     /// Nothing in the UI writes a bad camera — `zoom`, `zoom_by` and `Default`
     /// all clamp — so the only route in is a hand-edited or corrupted blob,
     /// which is the route this codebase guards every other divisor against
-    /// (see `SpectrumConfig::migrate_legacy`). It matters here because the
+    /// (see `SpectrumConfig::sanitize`). It matters here because the
     /// factor multiplies a font size, and egui answers a nonsense one by
     /// rasterizing nothing: the labels do not draw wrong, they disappear.
     #[test]

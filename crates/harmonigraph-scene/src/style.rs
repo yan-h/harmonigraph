@@ -101,7 +101,7 @@ impl IdleMarker {
 /// falling out of two boxes both being ticked.
 ///
 /// Persisted blobs still carry a `highlight_extremes` token;
-/// [`ViewConfig::migrate_legacy`](crate::ViewConfig::migrate_legacy) folds
+/// [`ViewConfig::sanitize`](crate::ViewConfig::sanitize) folds
 /// it into the pair and it is never written back. Kept as a distinct type
 /// only so those tokens keep deserializing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

@@ -661,6 +661,65 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     assert_eq!(current.view.extent_sevens, 3);
 }
 
+/// The two doors into a take's `ui_state` agree about whether it is loadable.
+///
+/// The offline renderer reads the SAME blob twice: `render_config_from_persist`
+/// for the frame it composes at and the lead-in it starts from, and
+/// `load_persist` for the camera, view and spectrum it draws with. A floor on
+/// one and not the other renders an old take at its recorded size and aspect —
+/// so the output looks honoured — around a lattice nobody dialled in, with the
+/// whole-song playhead the take asked for silently off.
+///
+/// The floor above is argued from plugin identity, and that argument covers one
+/// of `load_persist`'s three callers. A `.take` is a file on disk and
+/// `harmonigraph-take` refuses only takes from the FUTURE, so an old one opens
+/// and hands its `ui_state` straight through; the standalone's `app.ron` has no
+/// identity gate either. What keeps this from being reachable today is only
+/// that every take on disk is at the current version — which the next bump
+/// ends, for all of them at once.
+///
+/// Costs no shim: `stacked` and the `--size` inside `extra_args` are both
+/// NEWER than the floor, so every blob they migrate is at the floor already.
+#[test]
+fn both_doors_into_a_blob_agree_about_the_version_floor() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Values a default cannot produce, so a door that drops the blob is visible
+    // rather than looking like it loaded something.
+    state.render_config.frame.aspect_w = 9;
+    state.render_config.frame.aspect_h = 16;
+    state.render_config.playhead = true;
+    state.render_config.lead_in = 2.5;
+    let saved = state.save_persist();
+
+    let stale = saved.replacen(
+        &format!("version:{UI_PERSIST_VERSION}"),
+        &format!("version:{}", UI_PERSIST_VERSION - 1),
+        1,
+    );
+    assert_ne!(stale, saved, "the version splice must land for this to test anything");
+
+    // The door `load_persist` is: refused, so the render config is the default.
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&stale);
+    let fresh = SharedState::new(TextureFormat::Bgra8Unorm);
+    assert_eq!(restored.render_config.playhead, fresh.render_config.playhead);
+
+    // The door `harmonigraph-offline`'s `main` is. Refusing the blob whole
+    // means refusing it here too, so the renderer composes at a default frame
+    // it can see rather than a recorded one wrapped around defaults.
+    assert!(
+        crate::render_config_from_persist(&stale).is_none(),
+        "one door honoured a blob the other refused",
+    );
+
+    // And a blob AT the floor still comes through both, so this is measuring
+    // the version rather than a blob that was broken anyway.
+    let at_floor = crate::render_config_from_persist(&saved).expect("the floor still parses");
+    assert_eq!(at_floor.frame.aspect_w, 9);
+    assert!(at_floor.playhead);
+    assert_eq!(at_floor.lead_in, 2.5);
+}
+
 /// Loading a project asks the detects afresh, even at a tuning this session
 /// has already judged.
 ///

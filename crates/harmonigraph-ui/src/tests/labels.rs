@@ -427,6 +427,93 @@ fn a_natural_note_label_is_just_the_letter() {
     assert!((text_box(&texts, "G").center().x - anchor.x).abs() < 0.5);
 }
 
+/// Every label the lattice draws, at one camera and one Size bar setting: the
+/// rasterized type size, and the ink it actually covers.
+fn lattice_labels_at(label_scale: f32, distance: f32, ppp: f32) -> Vec<(f32, egui::Rect)> {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.show_labels = true;
+    state.view.label_scale = label_scale;
+    state.camera.distance = distance;
+    // Middle C: the origin node, which the camera looks straight at.
+    state.tracker.handle_event(harmonigraph_core::NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+    });
+    let scene = harmonigraph_scene::derive_scene(
+        &state.tracker,
+        &state.tuning,
+        &state.view,
+        &state.frame_params,
+        state.camera,
+        None,
+        0.0,
+    );
+
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    ctx.set_pixels_per_point(ppp);
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let mut batch = crate::text::TextBatch::default();
+    let _ = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
+        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch),
+    );
+    batch.pieces().iter().map(|p| (p.font_size, p.ink)).collect()
+}
+
+/// Past the raster ceiling, asking for bigger type draws no bigger.
+///
+/// [`crate::text::MAX_GLYPH_PX`] bounds what a label is RASTERIZED at, and
+/// `text::ladder` exists so the magnification is bounded with it: it clamps the
+/// request before dividing, so past the ceiling the factor is exactly 1 and the
+/// drawn size stops where the raster does. A caller that snaps and then divides
+/// the RAW request instead absorbs everything past the ceiling into the
+/// magnification, which draws a bitmap the sampler has to stretch — not big
+/// type, blurred type. `ladder`'s own doc names this as the reason it is a
+/// function rather than two lines at each call site.
+///
+/// Both settings here are past the ceiling, so both must rasterize at it and
+/// draw the same size. `want` is `pane/860 · label_scale · screen_scale`, which
+/// at an 800pt pane and the camera at `MIN_DISTANCE` (`screen_scale` 6) is
+/// `5.58 · label_scale` against a ceiling of `512/(30·ppp)` = 8.53 at `ppp` 2.
+///
+/// Retina is what makes this ordinary rather than a corner: the ceiling is
+/// crossed at half the zoom on a 2x display, so the same camera and the same
+/// Size bar are sharp on an external monitor and soft on the laptop panel —
+/// and dragging the plugin window between the two crosses it with nothing
+/// touched.
+#[test]
+fn a_zoom_past_the_raster_ceiling_stops_growing_the_drawn_label() {
+    let distance = harmonigraph_scene::Camera::MIN_DISTANCE;
+    let just_past = lattice_labels_at(1.6, distance, 2.0);
+    let far_past = lattice_labels_at(3.0, distance, 2.0);
+    assert!(!just_past.is_empty() && !far_past.is_empty(), "the held C should be labeled");
+
+    // The raster is clamped either way -- this is what puts both settings past
+    // the ceiling rather than merely at different zooms.
+    let biggest = |v: &[(f32, egui::Rect)]| v.iter().map(|(s, _)| *s).fold(0.0, f32::max);
+    assert_eq!(
+        biggest(&just_past),
+        biggest(&far_past),
+        "both settings must rasterize at the ceiling for this to measure the magnification",
+    );
+
+    // So the ink must match too. It is the magnification that differs, and it
+    // is the magnification that should have been clamped alongside the raster.
+    let tallest = |v: &[(f32, egui::Rect)]| {
+        v.iter().map(|(_, ink)| ink.height()).fold(0.0, f32::max)
+    };
+    let (a, b) = (tallest(&just_past), tallest(&far_past));
+    assert!(
+        (a - b).abs() <= a * 0.01,
+        "the Size bar kept growing the drawn label past the raster ceiling: \
+         {a} then {b}, a factor of {:.2} stretched out of one bitmap",
+        b / a,
+    );
+}
+
 /// The cents readout hangs off the note name's GLYPHS, not its galley box --
 /// a monospace line box carries several pixels of leading below the letter,
 /// and spacing box-to-box left the readout visibly adrift from the name it
@@ -526,7 +613,7 @@ fn the_cents_readout_sits_right_under_the_note_name() {
 /// worth asserting — an assertion that clamping to a constant lands inside it
 /// only restates `clamp`. The lattice's `label_scale` is the one that can:
 /// `ViewConfig` lives in `harmonigraph-scene`, which is BELOW this crate, so the
-/// range is not visible there and `migrate_legacy` clamps to a written-out
+/// range is not visible there and `sanitize` clamps to a written-out
 /// copy of the same two numbers.
 ///
 /// Nothing ties the copy to the original. Widen the bar and a saved view keeps

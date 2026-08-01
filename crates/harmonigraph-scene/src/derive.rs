@@ -232,12 +232,23 @@ pub fn derive_scene(
                     outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
                     seed = (voice.on_time % 256.0) as f32;
                 }
-                // Slot = MIDI octave + 1 (so middle C's octave 4 is slot 5),
-                // clamped into the octaves the Range names: a note past
-                // either end lights the outermost indicator on its side
-                // rather than vanishing, which is what keeps a narrow Range
-                // a way of READING the music rather than a filter over it.
-                let slot = (voice.octave + 1).clamp(low_slot, high_slot) as usize;
+                // The slot whose own pitch on THIS node is the one sounding —
+                // `slot_pitch` solved for the slot, which is what keeps the
+                // indicator that lights the one the note is drawn at. Taking
+                // the voice's MIDI octave instead is the same number whenever
+                // the two pitch classes sit on the same side of the octave,
+                // and one out when they straddle it: `matches` wraps, so a
+                // node a shade under 1200¢ is lit by a played 0¢, and its
+                // pitches are an octave below what the voice's own octave
+                // names. Middle C on an untransposed lattice is slot 5 either
+                // way.
+                //
+                // Clamped into the octaves the Range names: a note past either
+                // end lights the outermost indicator on its side rather than
+                // vanishing, which is what keeps a narrow Range a way of
+                // READING the music rather than a filter over it.
+                let sounding = ((voice.pitch - node_cents / 100.0) / 12.0).round() as i8;
+                let slot = sounding.clamp(low_slot, high_slot) as usize;
                 // Eases in from note-on; release still fades on the octave
                 // envelope.
                 octaves[slot] = octaves[slot].max(envelope * attack(now, voice.on_time));

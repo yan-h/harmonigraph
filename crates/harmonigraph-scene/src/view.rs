@@ -142,8 +142,9 @@ pub struct ViewConfig {
     #[serde(default = "default_core_radius")]
     pub core_radius: f32,
     /// The outer octave layer's radial band (same UV units): every outer
-    /// style fits its glyphs' radial footprint to this. The aliases keep
-    /// the previous build's slice_inner/slice_outer blobs loading;
+    /// style fits its glyphs' radial footprint to this. The `slice_inner` /
+    /// `slice_outer` spellings these replaced were pre-floor, so no blob
+    /// this build accepts carries them and no alias is kept for them;
     /// derive_scene keeps outer ahead of inner, so any dragged
     /// combination still renders a visible band.
     #[serde(default = "default_outer_inner")]
@@ -253,7 +254,7 @@ pub struct ViewConfig {
     pub mark_bass: bool,
     /// Load-only shim: blobs from before the two marks became independent
     /// flags carry one `highlight_extremes` token (Off/Melody/Bass/Both).
-    /// Folded into the pair by [`migrate_legacy`](Self::migrate_legacy) and
+    /// Folded into the pair by [`sanitize`](Self::sanitize) and
     /// never written back. It reads through `bare_as_some` because the old
     /// blobs wrote the variant BARE, which RON will not read into an
     /// `Option`'s `Some`, and a failed parse drops the whole persist rather
