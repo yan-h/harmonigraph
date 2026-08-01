@@ -59,18 +59,19 @@ pub const PITCH_FLOOR: f32 = 0.0;
 /// See [`PITCH_FLOOR`].
 pub const PITCH_CEIL: f32 = 127.0;
 
-/// Narrowest window, in semitones: five octaves, which is what the narrowest
-/// fixed span used to be.
+/// Narrowest window, in semitones: four octaves — C1..C5 in the DAW's
+/// numbering, the register a keyboard part actually lives in.
 ///
 /// A floor rather than a preference, and the taper is why. The width the
-/// middle of the axis can take is shared out from the cells either side of it,
-/// so the fewer cells there are the more of the turn one indicator can end up
-/// holding: at five octaves the fullest amount and the sharpest shape take
-/// middle C's own indicator to 253 degrees, and at two octaves the same
-/// settings take it past a whole turn — where a wedge is no longer a wedge and
-/// the shader's two-half-plane test has nothing to say. See
-/// [`an_indicator_can_pass_a_half_turn_but_never_a_whole_one`](self).
-pub const MIN_WINDOW: f32 = 60.0;
+/// middle of the axis takes is shared out from the cells either side of it, so
+/// the fewer cells there are the more of the turn one indicator can end up
+/// holding. Measured, at the fullest amount and the sharpest shape, sweeping
+/// the window along the axis at every pitch class: four octaves takes the
+/// widest indicator to 266 degrees and five to 253, but three and a half takes
+/// it to 274, three to 336, and two to 342 — closing on a whole turn, where a
+/// wedge is no longer a wedge and the shader's two-half-plane test has nothing
+/// to say. See [`an_indicator_can_pass_a_half_turn_but_never_a_whole_one`](self).
+pub const MIN_WINDOW: f32 = 48.0;
 
 /// The window a fresh view starts on: C0..C8 in this crate's numbering (middle
 /// C = C4; the UI spells the same C-1..C7, in Bitwig's), centered on middle C
@@ -377,9 +378,11 @@ mod tests {
     /// widest, and four that are deliberately NOT a whole number of octaves or
     /// not centered on a C — which is the whole point of the range being
     /// continuous, and the case every "it tiles" argument has to survive.
-    const WINDOWS: [(f32, f32); 7] = [
+    const WINDOWS: [(f32, f32); 8] = [
         (DEFAULT_WINDOW_LOW, DEFAULT_WINDOW_HIGH),
         (PITCH_FLOOR, PITCH_CEIL),
+        // The narrowest there is, which is C1..C5 in the DAW's numbering.
+        (36.0, 84.0),
         (36.0, 96.0),
         (36.0, 97.5),
         (30.5, 100.25),
@@ -608,7 +611,8 @@ mod tests {
     /// everything they and their neighbours give up.
     ///
     /// This is what [`MIN_WINDOW`] exists for: the same settings over a
-    /// two-octave window take the middle indicator past a whole turn.
+    /// three-octave window take the middle indicator to 336 degrees, and a
+    /// two-octave one to 342.
     #[test]
     fn an_indicator_can_pass_a_half_turn_but_never_a_whole_one() {
         let mut widest: f32 = 0.0;
@@ -621,18 +625,31 @@ mod tests {
             }
         }
         assert!(widest > PI, "nothing passes a half turn: widest {widest} rad");
-        // Sweeping the narrowest window along the axis, since where it sits
-        // decides how much of it one indicator can hold.
+        // Sweeping the NARROWEST window along the axis at every pitch class,
+        // since the widest indicator there is is the one the floor is set to
+        // keep in hand: where the window sits, and where the node's octaves
+        // fall inside it, decide how much of the turn one of them can hold.
+        //
+        // The threshold is a good deal tighter than a whole turn, because a
+        // measurement 15 degrees off the cliff is not a guard. At MIN_WINDOW
+        // this reaches 266 degrees; three and a half octaves would put it at
+        // 274 and three octaves at 336.
         let mut narrowest: f32 = 0.0;
-        for low in 0..=67 {
-            let l = octave_layout(low as f32, low as f32 + MIN_WINDOW, MAX_TAPER_AMOUNT, 0.0);
-            let (a, b) = l.slot_range(0.0);
-            for slot in a..=b {
-                let (e0, e1) = l.sector(slot, 0.0);
-                narrowest = narrowest.max(e0 - e1);
+        for low in 0..=(PITCH_CEIL - MIN_WINDOW) as u32 {
+            for cents in [0.0f32, 100.0, 350.0, 600.0, 700.0, 1150.0] {
+                let l = octave_layout(low as f32, low as f32 + MIN_WINDOW, MAX_TAPER_AMOUNT, 0.0);
+                let (a, b) = l.slot_range(cents);
+                for slot in a..=b {
+                    let (e0, e1) = l.sector(slot, cents);
+                    narrowest = narrowest.max(e0 - e1);
+                }
             }
         }
-        assert!(narrowest < TAU * 0.95, "the narrowest window reaches {narrowest} rad");
+        assert!(
+            narrowest < TAU * 0.78,
+            "the narrowest window reaches {} deg",
+            narrowest.to_degrees()
+        );
     }
 
     /// A window outside the settable pair — a hand-edited blob, a migration —

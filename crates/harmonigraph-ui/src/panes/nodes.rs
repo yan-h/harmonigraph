@@ -80,8 +80,8 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // wherever the ends fall between them.
     //
     // Both ends over the whole of MIDI, so any register can be framed; the
-    // minimum span is five octaves, which is where the taper's arithmetic
-    // stops being able to keep an indicator under a whole turn (see
+    // minimum span is four octaves — C1..C5 — which is where the taper's
+    // arithmetic starts running an indicator up toward a whole turn (see
     // `harmonigraph_scene::MIN_WINDOW`).
     ui.label("Range");
     RangeBar::new(&mut view.octave_low, &mut view.octave_high, PITCH_FLOOR..=PITCH_CEIL)
