@@ -1,6 +1,21 @@
 //! Recording a take: capturing everything the visualization is a
 //! function of, so it can be re-rendered offline into a video.
 //!
+//! # Why this is a crate of its own
+//!
+//! `harmonigraph-take` is the take FORMAT, and stays tiny — serde and ron —
+//! so anything that reads or writes a take can have it without a GUI stack.
+//! Recording one needs more than the format: `ParamKey` to name an automation
+//! record by, and the Video pane's `RenderConfig`/`RenderProgress` to launch
+//! and report a render, all of which live in `harmonigraph-ui`. So the
+//! recorder sits BESIDE the format crate rather than inside it, and the format
+//! crate's dependency list is left alone.
+//!
+//! Nothing here touches the plugin API. That is what lets the whole
+//! record-and-render path — rings, transport handling, subprocess driver,
+//! stderr parsing — be tested without building a CLAP/VST3 bundle, and reached
+//! from any shell that wants it rather than only from the plugin.
+//!
 //! # Why this is a button and not automatic
 //!
 //! The first version armed itself when nice-plug reported
@@ -70,7 +85,33 @@ const AUDIO_RING_CAPACITY: usize = 1 << 20;
 /// interleaving in `process` all read this one number: if any of them
 /// disagrees, the header describes frames the data does not have, and nothing
 /// downstream checks.
-pub(crate) const TAKE_CHANNELS: usize = 2;
+pub const TAKE_CHANNELS: usize = 2;
+
+/// How much of a block fits in an interleaved audio ring, in SAMPLES, rounded
+/// DOWN to whole frames.
+///
+/// The rounding is the one thing here that must not be wrong. A tail dropped
+/// mid-frame leaves the ring one sample out of phase, and every later frame
+/// hands the left channel's data to the right for as long as the plugin runs —
+/// silently, because nothing downstream can tell a phase slip from the signal.
+/// Bounding by free space is what makes a near-full ring (a stalled or closed
+/// consumer) drop the block's tail rather than stall the audio thread.
+///
+/// Shared by [`Recorder::audio`] and the plugin's own spectrum ring, which is
+/// why it is public: one guard, so the two cannot disagree about what a whole
+/// frame is.
+///
+/// The zero-channel arm is not a live path — both callers gate on a positive
+/// channel count. It is handled so the function carries no precondition a
+/// caller can violate, which is what makes it safe to reuse; it does not move
+/// the division off the audio thread, and does not pretend to.
+pub fn interleaved_reservation(free_slots: usize, samples: usize, channels: usize) -> usize {
+    if channels == 0 {
+        return 0;
+    }
+    let free = free_slots / channels * channels;
+    (samples * channels).min(free)
+}
 
 /// One recorded thing, in a form the audio thread can push without
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
@@ -285,7 +326,7 @@ impl Recorder {
     /// that commits everything), but nothing declares that, and an odd
     /// capacity or a partial drain would end the argument silently.
     pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize) {
-        let room = crate::interleaved_reservation(
+        let room = interleaved_reservation(
             self.audio.slots(),
             samples / TAKE_CHANNELS,
             TAKE_CHANNELS,
@@ -1276,6 +1317,62 @@ mod tests {
             "an odd tail must be dropped, not written out of phase; got: {}",
             ctrl.status()
         );
+    }
+
+    /// The phase-slip guard, exhaustively. A reservation that is not a whole
+    /// number of frames leaves the ring one sample out of alignment, and every
+    /// frame after it hands the left channel's samples to the right — for as
+    /// long as the plugin runs, with nothing downstream able to tell that from
+    /// the signal itself.
+    #[test]
+    fn a_reservation_is_always_a_whole_number_of_frames() {
+        for channels in 1..=8usize {
+            for free_slots in 0..96usize {
+                for samples in 0..24usize {
+                    let want = interleaved_reservation(free_slots, samples, channels);
+                    assert_eq!(
+                        want % channels,
+                        0,
+                        "{want} samples is a partial frame at {channels} channels \
+                         (free_slots={free_slots}, samples={samples})"
+                    );
+                    assert!(want <= free_slots, "reserved {want} of {free_slots} free slots");
+                    assert!(
+                        want <= samples * channels,
+                        "reserved {want}, more than the {} this block holds",
+                        samples * channels
+                    );
+                }
+            }
+        }
+    }
+
+    /// What the reservation does at each end: a ring with room takes the whole
+    /// block, a full one drops it rather than stalling the audio thread, and a
+    /// nearly-full one takes whole frames and drops the tail.
+    #[test]
+    fn a_full_ring_drops_the_block_rather_than_stalling() {
+        // Room to spare: the whole block, interleaved.
+        assert_eq!(interleaved_reservation(4096, 512, 2), 1024);
+        // Exactly enough.
+        assert_eq!(interleaved_reservation(1024, 512, 2), 1024);
+        // Full: nothing, and the caller skips the write entirely.
+        assert_eq!(interleaved_reservation(0, 512, 2), 0);
+        // Nearly full, with the free space a PARTIAL frame: round down, so the
+        // tail is dropped on a frame boundary rather than mid-frame.
+        assert_eq!(interleaved_reservation(7, 512, 2), 6);
+        assert_eq!(interleaved_reservation(7, 512, 4), 4);
+        // Less free space than a single frame: nothing at all.
+        assert_eq!(interleaved_reservation(3, 512, 4), 0);
+    }
+
+    /// Both callers gate on a positive channel count, so no live path reaches
+    /// this. It is pinned because it is what lets the function be called
+    /// without checking first — a total function is reusable, and reuse is how
+    /// `Recorder::audio` came to share the guard.
+    #[test]
+    fn a_zero_channel_bus_reserves_nothing() {
+        assert_eq!(interleaved_reservation(4096, 512, 0), 0);
     }
 
     #[test]

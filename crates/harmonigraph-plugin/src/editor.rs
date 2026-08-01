@@ -108,7 +108,7 @@ pub struct EditorShared {
     /// Param key currently inside a begin_set/end_set automation gesture.
     gesture: std::cell::Cell<Option<harmonigraph_ui::params::ParamKey>>,
     /// Take recording, driven from the Video pane's toggle.
-    take: crate::take::Control,
+    take: harmonigraph_record::Control,
     /// Events the audio thread has recorded into the current take.
     take_events: Arc<std::sync::atomic::AtomicU64>,
     /// Whether the transport was rolling as of the last recorded event,
@@ -129,7 +129,7 @@ impl EditorShared {
         audio_consumer: rtrb::Consumer<f32>,
         sample_rate_bits: Arc<AtomicU32>,
         audio_channels: Arc<AtomicU32>,
-        take: crate::take::Control,
+        take: harmonigraph_record::Control,
         take_events: Arc<std::sync::atomic::AtomicU64>,
     ) -> Self {
         EditorShared {
@@ -191,7 +191,7 @@ impl EditorShared {
             self.take_last_count = 0;
             self.take.start(sample_rate, self.ui.save_persist(), true);
         } else if !self.ui.take_recording && recording {
-            self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
+            self.take.stop(harmonigraph_record::RenderRequest::from_config(&self.ui.render_config));
         }
 
         // "Re-render take": render the last finished take with the CURRENT settings.
@@ -199,7 +199,7 @@ impl EditorShared {
         // offset dialed in after recording all reach the video.
         self.ui.last_take_ready = self.take.last_take().is_some();
         if std::mem::take(&mut self.ui.render_now) {
-            self.take.render_now(crate::take::RenderRequest::render_now(
+            self.take.render_now(harmonigraph_record::RenderRequest::render_now(
                 &self.ui.render_config,
                 self.ui.save_persist(),
             ));
@@ -224,7 +224,7 @@ impl EditorShared {
             && self.take.hit_loop_end()
         {
             self.ui.take_recording = false;
-            self.take.stop(crate::take::RenderRequest::from_config(&self.ui.render_config));
+            self.take.stop(harmonigraph_record::RenderRequest::from_config(&self.ui.render_config));
         }
 
         // "The take is done" as soon as the transport stops, if asked —
@@ -241,7 +241,7 @@ impl EditorShared {
                 self.take_still_frames += 1;
                 if self.take_still_frames >= Self::STOP_FRAMES {
                     self.ui.take_recording = false;
-                    self.take.stop(crate::take::RenderRequest::from_config(
+                    self.take.stop(harmonigraph_record::RenderRequest::from_config(
                         &self.ui.render_config,
                     ));
                 }
@@ -881,7 +881,7 @@ mod tests {
         // tests below can't cover: observe-newest-THEN-map ordering.)
         let (mut producer, consumer) = rtrb::RingBuffer::new(64);
         let (_audio_producer, audio_consumer) = rtrb::RingBuffer::new(64);
-        let (_recorder, take_control) = crate::take::channel();
+        let (_recorder, take_control) = harmonigraph_record::channel();
         let mut shared = EditorShared::new(
             consumer,
             audio_consumer,

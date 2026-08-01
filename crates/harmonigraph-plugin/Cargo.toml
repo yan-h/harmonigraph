@@ -14,7 +14,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-ui = { workspace = true }
-harmonigraph-take = { workspace = true }
+harmonigraph-record = { workspace = true }
 harmonigraph-render = { workspace = true }
 
 nice-plug = { workspace = true }

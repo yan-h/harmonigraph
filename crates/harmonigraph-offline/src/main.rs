@@ -586,7 +586,7 @@ fn run() -> Result<(), String> {
         //
         // This line and the `-> {total} frames` one above it are also READ, by
         // the plugin's Video pane, which follows this stderr to drive its
-        // progress bar (`take::parse_report`): the count before ` frames` is
+        // progress bar (`harmonigraph_record::parse_report`): the count before ` frames` is
         // the part it matches, so keep that shape. Reformatting the rest is
         // free; losing the count leaves the bar empty.
         if done.is_multiple_of(30) || done == total {

@@ -1380,14 +1380,25 @@ dependencies = [
  "egui",
  "egui-baseview",
  "harmonigraph-core",
+ "harmonigraph-record",
  "harmonigraph-render",
- "harmonigraph-take",
  "harmonigraph-ui",
  "nice-plug",
  "parking_lot",
  "raw-window-handle 0.5.2",
  "rtrb",
  "serde",
+]
+
+[[package]]
+name = "harmonigraph-record"
+version = "0.1.0"
+dependencies = [
+ "harmonigraph-core",
+ "harmonigraph-take",
+ "harmonigraph-ui",
+ "parking_lot",
+ "rtrb",
 ]
 
 [[package]]

@@ -139,6 +139,11 @@ harmonigraph-take        the recorded input to a visualization: note events and
                          parameter automation on the audio clock. Linked into
                          the plugin, so serde+ron only. See
                          docs/offline-rendering.md.
+harmonigraph-record      writes a take while the transport rolls (lock-free
+                         rings, transport-jump detection) and drives
+                         harmonigraph-offline as a subprocess when one
+                         finishes, following its stderr for the progress bar.
+                         No plugin API, so it is testable on its own.
 harmonigraph-offline     offline video renderer: replays a take headless at an
                          exact frame rate, any resolution, own pane layout,
                          frames piped to ffmpeg. No window, no DAW, no realtime.
