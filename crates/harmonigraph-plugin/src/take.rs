@@ -65,6 +65,13 @@ const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 /// put a silent hole in the finished video.
 const AUDIO_RING_CAPACITY: usize = 1 << 20;
 
+/// A take's WAV is always stereo, whatever the host's input bus carries. The
+/// spec handed to the writer, the reservation in [`Recorder::audio`] and the
+/// interleaving in `process` all read this one number: if any of them
+/// disagrees, the header describes frames the data does not have, and nothing
+/// downstream checks.
+pub(crate) const TAKE_CHANNELS: usize = 2;
+
 /// One recorded thing, in a form the audio thread can push without
 /// allocating. Converted to a `harmonigraph_take::Record` on the writer thread.
 #[derive(Clone, Copy)]
@@ -268,8 +275,21 @@ impl Recorder {
     /// one ring-atomic touch per block instead of tens of thousands a
     /// second. A short reservation means the ring filled, which is a
     /// hole in the recording, so it is counted like any dropped record.
+    ///
+    /// Rounded down to whole FRAMES, for the reason `interleaved_reservation`
+    /// gives — and it matters more here than on the spectrum's ring. This one
+    /// lands in a WAV, so half a frame swaps that file's channels from there
+    /// on, permanently, and the writer cannot notice: it derives its frame
+    /// count by dividing the bytes it was handed. The callers happen to keep
+    /// the free count even today (even capacity, even `samples`, and a drain
+    /// that commits everything), but nothing declares that, and an odd
+    /// capacity or a partial drain would end the argument silently.
     pub fn audio(&mut self, block: &mut dyn Iterator<Item = f32>, samples: usize) {
-        let room = self.audio.slots().min(samples);
+        let room = crate::interleaved_reservation(
+            self.audio.slots(),
+            samples / TAKE_CHANNELS,
+            TAKE_CHANNELS,
+        );
         if room < samples {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
@@ -487,7 +507,7 @@ impl Control {
 
         self.dropped.store(0, Ordering::Relaxed);
         self.with_audio.store(audio, Ordering::Relaxed);
-        let spec = audio.then_some(AudioSpec { sample_rate, channels: 2 });
+        let spec = audio.then_some(AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 });
         if self.commands.send(Command::Start(Box::new(header), path, spec)).is_err() {
             *self.status.lock() = "take writer thread is gone".into();
             return;
@@ -1217,6 +1237,46 @@ fn spawn_render(
 mod tests {
     use super::*;
     use harmonigraph_ui::RenderConfig;
+
+    /// `audio` reserves in whole FRAMES, not samples. This ring is
+    /// stereo-interleaved and lands in a WAV, so half a frame written here
+    /// swaps that file's channels from there on — permanently, and the writer
+    /// cannot notice, because it derives its frame count by dividing the bytes
+    /// it was handed.
+    ///
+    /// An odd `samples` is what a caller hands over the moment it sizes a block
+    /// by the host's channel count instead of [`TAKE_CHANNELS`]. The tail
+    /// sample has to be dropped rather than written out of phase, and counted
+    /// as the hole in the recording that it is.
+    ///
+    /// This pins the BLOCK-size half of the reservation, which is the half that
+    /// does the work: the ring here is only ever written in whole frames, so
+    /// its free count cannot go odd on its own. The free-space half is proved
+    /// exhaustively over on `interleaved_reservation`, since driving this ring
+    /// to an odd occupancy would mean reaching past the writer thread.
+    #[test]
+    fn recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail() {
+        let (mut rec, ctrl) = channel();
+        ctrl.recording.store(true, Ordering::Relaxed);
+
+        // Even, into an empty ring: the whole block fits, nothing is dropped.
+        rec.audio(&mut std::iter::repeat_n(0.25f32, 8), 8);
+        ctrl.tick(true, 0);
+        assert!(
+            !ctrl.status().contains("DROPPED"),
+            "an even block fits whole, but got: {}",
+            ctrl.status()
+        );
+
+        // Odd: the last sample is half a frame and must not reach the ring.
+        rec.audio(&mut std::iter::repeat_n(0.25f32, 9), 9);
+        ctrl.tick(true, 0);
+        assert!(
+            ctrl.status().contains("DROPPED"),
+            "an odd tail must be dropped, not written out of phase; got: {}",
+            ctrl.status()
+        );
+    }
 
     #[test]
     fn a_finished_take_always_renders() {

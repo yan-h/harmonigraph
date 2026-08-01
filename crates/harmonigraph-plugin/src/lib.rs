@@ -198,7 +198,9 @@ impl ParamBackend for PluginParamBackend<'_> {
 /// What this block's take timestamps hang off, before the recorder gets a say.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum OriginSource {
-    /// Not armed: nothing is recorded, and the recorder is not consulted.
+    /// Not armed: nothing is recorded this block. The recorder has still been
+    /// consulted by then — see the `armed` argument, which only `is_armed` can
+    /// supply and which cannot be skipped on a disarmed block.
     Idle,
     /// The host reports a position. Only `observe_transport` can say whether it
     /// counts, so the caller still has to ask.
@@ -212,8 +214,8 @@ enum OriginSource {
 /// counter, so a take lines up with a bounce of the same song without an offset
 /// to work out. Nothing is recorded while the transport is stopped.
 ///
-/// `pos_seconds` is read even when disarmed, which the ladder inside `process`
-/// short-circuits past; it is a plain getter, so asking early costs nothing.
+/// `pos_seconds` is read even when disarmed; it is a plain getter, so asking
+/// for it on a block that will not use it costs nothing.
 fn origin_source(
     armed: bool,
     pos_seconds: Option<f64>,
@@ -243,22 +245,41 @@ fn take_time(origin: f64, timing: u32, sample_rate: f64) -> f64 {
     origin + f64::from(timing) / sample_rate
 }
 
+/// One host event, in the terms the lattice draws it in.
+///
+/// Named fields rather than a tuple, because `channel` and `note` are both
+/// `u8` and adjacent: a tuple lets the destructuring site transpose them and
+/// still compile, and every note-on then draws a channel as a pitch. `process`
+/// has no test that would catch it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MappedNote {
+    timing: u32,
+    channel: u8,
+    note: u8,
+    kind: NoteEventKind,
+}
+
 /// The events the visualization cares about, and what each becomes. A host
 /// sends far more than this; everything unmatched is forwarded untouched and
 /// never reaches the lattice.
-fn mapped_note(event: NoteEvent<()>) -> Option<(u32, u8, u8, NoteEventKind)> {
+fn mapped_note(event: NoteEvent<()>) -> Option<MappedNote> {
     match event {
         NoteEvent::NoteOn { timing, channel, note, velocity, .. } => {
-            Some((timing, channel, note, NoteEventKind::On { velocity }))
+            Some(MappedNote { timing, channel, note, kind: NoteEventKind::On { velocity } })
         }
         NoteEvent::NoteOff { timing, channel, note, .. }
         | NoteEvent::Choke { timing, channel, note, .. } => {
-            Some((timing, channel, note, NoteEventKind::Off))
+            Some(MappedNote { timing, channel, note, kind: NoteEventKind::Off })
         }
         // Per-note tuning (CLAP note expression / MPE via the host); v1
         // supported this as PolyTuning.
         NoteEvent::PolyTuning { timing, channel, note, tuning, .. } => {
-            Some((timing, channel, note, NoteEventKind::Tuning { semitones: tuning }))
+            Some(MappedNote {
+                timing,
+                channel,
+                note,
+                kind: NoteEventKind::Tuning { semitones: tuning },
+            })
         }
         _ => None,
     }
@@ -274,8 +295,10 @@ fn mapped_note(event: NoteEvent<()>) -> Option<(u32, u8, u8, NoteEventKind)> {
 /// Bounding by free space is what makes a near-full ring (GUI stalled, or
 /// closed) drop the block's tail rather than stall the audio thread.
 ///
-/// `process` only calls this with `channels > 0`; staying total anyway keeps a
-/// division the audio thread could trap on out of the hot path entirely.
+/// The zero-channel arm is not a live path — both callers gate on a positive
+/// channel count. It is handled so the function carries no precondition a
+/// caller can violate, which is what makes it safe to reuse; it does not move
+/// the division off the audio thread, and does not pretend to.
 fn interleaved_reservation(free_slots: usize, samples: usize, channels: usize) -> usize {
     if channels == 0 {
         return 0;
@@ -336,8 +359,10 @@ impl Plugin for Harmonigraph {
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
-    // Audio passes through untouched, but is tapped (mono mixdown) for the
-    // GUI's spectrum analyzer; MIDI is forwarded verbatim.
+    // Audio passes through untouched, but is tapped for the GUI's spectrum
+    // analyzer — INTERLEAVED, channel by channel, not as a mixdown (see
+    // `process`, and `interleaved_reservation` for what that costs). MIDI is
+    // forwarded verbatim.
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: NonZeroU32::new(2),
         main_output_channels: NonZeroU32::new(2),
@@ -392,6 +417,10 @@ impl Plugin for Harmonigraph {
     ) -> ProcessStatus {
         let block_start = self.samples_processed;
         let transport = context.transport();
+        // EVERY block, armed or not. `is_armed` is an edge detector, not a
+        // getter: it latches `was_armed` and clears the recorder's per-take
+        // state on the arming edge. Skipping it on a disarmed block means the
+        // next arm edge never fires and recording silently never resumes.
         let armed = self.take.is_armed();
         let take_origin =
             match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
@@ -407,7 +436,7 @@ impl Plugin for Harmonigraph {
             };
 
         while let Some(event) = context.next_event() {
-            if let Some((timing, channel, note, kind)) = mapped_note(event) {
+            if let Some(MappedNote { timing, channel, note, kind }) = mapped_note(event) {
                 let time = ring_time(block_start, timing, self.sample_rate);
                 // Full ring = GUI stalled; dropping visualization events is
                 // the right failure mode for the audio thread.
@@ -464,11 +493,14 @@ impl Plugin for Harmonigraph {
 
             // The take's own audio, when asked for: the input bus exactly
             // as it arrives, so the render gets a spectrum and a
-            // soundtrack without a separate bounce.
+            // soundtrack without a separate bounce. Sized by TAKE_CHANNELS
+            // rather than the host's own channel count — the WAV is stereo
+            // whatever arrives, which is what `take_right_channel` duplicates
+            // a mono input for.
             if self.take.wants_audio() && channels > 0 {
                 self.take.mark_audio_start(origin);
                 let right = take_right_channel(channels);
-                let wanted = buffer.samples() * 2;
+                let wanted = buffer.samples() * take::TAKE_CHANNELS;
                 let mut interleaved = buffer.iter_samples().flat_map(|mut frame| {
                     let l = frame.get_mut(0).map_or(0.0, |s| *s);
                     let r = frame.get_mut(right).map_or(0.0, |s| *s);
@@ -538,39 +570,83 @@ mod tests {
     }
 
     /// A note-on carries its velocity through; a note-off and a choke both mean
-    /// "this voice is done" and collapse to the same kind. Everything else a
-    /// host sends is forwarded but not drawn, so a variant quietly starting to
-    /// map would put notes on the lattice that nobody played.
+    /// "this voice is done" and collapse to the same kind. The fields are
+    /// asserted by name, which is the pairing `MappedNote` exists to keep.
     #[test]
-    fn only_the_note_events_the_lattice_draws_are_mapped() {
+    fn the_note_events_the_lattice_draws_keep_their_fields() {
         let on =
             NoteEvent::NoteOn { timing: 7, voice_id: None, channel: 2, note: 60, velocity: 0.5 };
-        assert_eq!(mapped_note(on), Some((7, 2, 60, NoteEventKind::On { velocity: 0.5 })));
+        assert_eq!(
+            mapped_note(on),
+            Some(MappedNote {
+                timing: 7,
+                channel: 2,
+                note: 60,
+                kind: NoteEventKind::On { velocity: 0.5 },
+            })
+        );
 
         let off =
             NoteEvent::NoteOff { timing: 9, voice_id: None, channel: 2, note: 60, velocity: 0.0 };
-        assert_eq!(mapped_note(off), Some((9, 2, 60, NoteEventKind::Off)));
+        assert_eq!(
+            mapped_note(off),
+            Some(MappedNote { timing: 9, channel: 2, note: 60, kind: NoteEventKind::Off })
+        );
 
         // A choke is a note-off the host will not follow with one.
         let choke = NoteEvent::Choke { timing: 11, voice_id: None, channel: 3, note: 64 };
-        assert_eq!(mapped_note(choke), Some((11, 3, 64, NoteEventKind::Off)));
+        assert_eq!(
+            mapped_note(choke),
+            Some(MappedNote { timing: 11, channel: 3, note: 64, kind: NoteEventKind::Off })
+        );
 
         let tuning = NoteEvent::PolyTuning {
-            timing: 13,
-            voice_id: None,
-            channel: 1,
-            note: 67,
-            tuning: -0.25,
+            timing: 13, voice_id: None, channel: 1, note: 67, tuning: -0.25,
         };
         assert_eq!(
             mapped_note(tuning),
-            Some((13, 1, 67, NoteEventKind::Tuning { semitones: -0.25 }))
+            Some(MappedNote {
+                timing: 13,
+                channel: 1,
+                note: 67,
+                kind: NoteEventKind::Tuning { semitones: -0.25 },
+            })
         );
+    }
 
-        // Sent by a plugin to its host, never drawn.
-        let terminated =
-            NoteEvent::VoiceTerminated { timing: 0, voice_id: None, channel: 0, note: 60 };
-        assert_eq!(mapped_note(terminated), None);
+    /// The negatives are where this goes wrong quietly. `MidiConfig::Basic`
+    /// delivers every poly expression below, and each carries the same
+    /// `{ timing, channel, note, .. }` shape as the PolyTuning arm — so each is
+    /// one copy-pasted arm away from drawing notes nobody played, with
+    /// `#[non_exhaustive]` guaranteeing the compiler never points at the
+    /// omission.
+    #[test]
+    fn the_poly_expressions_are_not_notes() {
+        let not_notes = [
+            NoteEvent::PolyPressure {
+                timing: 5, voice_id: None, channel: 1, note: 67, pressure: 0.5,
+            },
+            NoteEvent::PolyVolume {
+                timing: 5, voice_id: None, channel: 1, note: 67, gain: 0.5,
+            },
+            NoteEvent::PolyPan {
+                timing: 5, voice_id: None, channel: 1, note: 67, pan: 0.5,
+            },
+            NoteEvent::PolyVibrato {
+                timing: 5, voice_id: None, channel: 1, note: 67, vibrato: 0.5,
+            },
+            NoteEvent::PolyExpression {
+                timing: 5, voice_id: None, channel: 1, note: 67, expression: 0.5,
+            },
+            NoteEvent::PolyBrightness {
+                timing: 5, voice_id: None, channel: 1, note: 67, brightness: 0.5,
+            },
+            // Plugin-to-host: this one cannot arrive on the path at all.
+            NoteEvent::VoiceTerminated { timing: 5, voice_id: None, channel: 1, note: 67 },
+        ];
+        for event in not_notes {
+            assert_eq!(mapped_note(event), None, "{event:?} must not reach the lattice");
+        }
     }
 
     /// The three ways a block decides where its take timestamps start. The
@@ -599,6 +675,11 @@ mod tests {
     /// stamped on the transport, which is what lets it be lined up against a
     /// bounce later. Collapsing them into one would look right on screen and
     /// put every recorded take at the wrong song position.
+    ///
+    /// Every constant here divides to an exact binary fraction, which is what
+    /// lets `assert_eq!` compare f64 at all. Picking more realistic numbers — a
+    /// 512-sample block, an odd offset at 44.1 kHz — lands off a representable
+    /// value and fails on the last bit with the implementation still correct.
     #[test]
     fn an_event_is_stamped_on_two_independent_clocks() {
         let rate = 48_000.0;
@@ -660,10 +741,10 @@ mod tests {
         assert_eq!(interleaved_reservation(3, 512, 4), 0);
     }
 
-    /// `process` guards on `channels > 0`, so this is unreachable from there.
-    /// It is pinned anyway because a division by the channel count on the audio
-    /// thread is the kind of trap that only appears when a host renegotiates
-    /// the bus layout mid-session.
+    /// Both callers gate on a positive channel count, so no live path reaches
+    /// this. It is pinned because it is what lets the function be called
+    /// without checking first — a total function is reusable, and reuse is how
+    /// `Recorder::audio` came to share the guard.
     #[test]
     fn a_zero_channel_bus_reserves_nothing() {
         assert_eq!(interleaved_reservation(4096, 512, 0), 0);
