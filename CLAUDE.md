@@ -105,7 +105,8 @@ holds. Runtime "old" and "no longer" — a previously-held voice, the ring's
 previously-written columns — describe state rather than builds, and are not
 in scope at all.
 
-This matters more here than in most repos: the codebase is ~23% comments and
+This matters more here than in most repos: comments are ~36% of the non-blank
+lines under `crates/`, a quarter of it doc comments, and the codebase is
 heavily rationale-driven, so a comment is often the only carrier of why the
 code is weird, and it acts as a tripwire against plausible-but-wrong
 "simplifications". New PRs keep regenerating the pattern, so this is a habit
