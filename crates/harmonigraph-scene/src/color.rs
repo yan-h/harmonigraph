@@ -79,10 +79,11 @@ pub fn pitch_ramp_lut() -> [Vec4; PITCH_LUT_N] {
 /// The shader's `pitch_lut_color` on the CPU: [`pitch_ramp_lut`] sampled at
 /// `pitch`, interpolated between entries exactly as the shader does.
 ///
-/// This is what the octave layer DRAWS a pitch — every part of that layer
-/// stands for a position on the pitch axis rather than for a voice, so the lit
-/// glyphs and the glow's per-octave lobes both come through this table. Which
-/// is why anything the CPU has to color to match one of them comes through it
+/// This is what the octave layer draws a LIT pitch — a sounding glyph stands
+/// for a position on the pitch axis rather than for the voice that lit it, and
+/// so do the glow's lobes once two octaves sound. (The band's ghosts and a solo
+/// voice's glow keep the node's own color instead, deliberately.) Which is why
+/// anything the CPU has to color to match a lit glyph comes through this table
 /// too, rather than off the ramp direct: [`PITCH_LUT_N`] entries across a
 /// 190-degree hue sweep reproduce the ramp only to within about 15/255 on a
 /// channel, which is a visible step between two shapes that share an edge.

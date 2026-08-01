@@ -261,12 +261,15 @@ pub fn derive_scene(
                     // the outermost slot, so its ring would carry a pitch
                     // that is nowhere on the axis it is drawn around.
                     //
-                    // Off the pitch ramp whatever the channel, because that
-                    // is what the whole octave layer is: a fixed-color or
-                    // outline channel paints its DISC, and leaves the band —
-                    // glyphs, glow lobes, and these rings alike — reading as
-                    // pitch. The ramp is already lightened, so there is no
-                    // extra lift here.
+                    // Off the pitch ramp whatever the channel, because a LIT
+                    // glyph is: the shader tints one by its own pitch and
+                    // asks nothing about the voice, so a fixed-color or
+                    // outline channel that keeps its hue on the disc still
+                    // brackets a ramp-colored sector. Only the lit glyph —
+                    // the band's ghosts wear the whitened node color, and a
+                    // solo voice's glow keeps the channel hue, both of them
+                    // on purpose. The ramp is already lightened, so there is
+                    // no extra lift here.
                     //
                     // Strongest marking voice wins the color; the slots still
                     // collect every one of them, since a release crossfades

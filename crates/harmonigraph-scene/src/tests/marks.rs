@@ -320,11 +320,13 @@ fn a_mark_is_the_color_of_the_sector_it_brackets() {
 }
 
 #[test]
-fn a_fixed_color_channel_paints_its_disc_and_leaves_the_band_on_the_ramp() {
-    // A fixed-color channel colors the note itself, and nothing in the octave
-    // layer: the lit glyphs are the pitch ramp whatever the channel (the
-    // shader's `pitch_lut_color`), so the ring that brackets them is too.
+fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
+    // A fixed-color channel colors the note itself; it does not reach the LIT
+    // glyph, which the shader tints by its own pitch whatever the channel
+    // (`pitch_lut_color`), so the ring that brackets one is on the ramp too.
     // Otherwise a red voice wears a red ring around a ramp-colored indicator.
+    // The band's other parts still carry the channel — its ghosts are the
+    // whitened node color — which is why this is about the lit sector alone.
     let (node, frame) = lone_mark(0, 60, 36.0, 84.0); // channel 0 is red
     let slot = node.melody_slots.trailing_zeros();
     assert_eq!(node.melody_color, sector_color(&node, slot, &frame));
