@@ -421,7 +421,8 @@ fn an_inverted_color_range_still_derives_a_scene() {
     // and Darkest above Brightest is one drag of a host's parameter list
     // away (raise Darkest before lowering Brightest and it is the state in
     // between). Deriving must not panic there.
-    let frame = FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
+    let frame =
+        FrameParams { darkest_pitch: 110.0, brightest_pitch: 108.0, ..FrameParams::default() };
     let view = ViewConfig { mark_melody: true, mark_bass: true, ..ViewConfig::default() };
     let scene = scene_of(&held(60), &Tuning::default(), &view, &frame, 0.0);
     let origin = origin_node(&scene);
