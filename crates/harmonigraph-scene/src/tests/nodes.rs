@@ -305,3 +305,34 @@ fn a_note_past_the_shown_span_lights_the_outermost_indicator() {
         "at the widest span C7 has an indicator of its own"
     );
 }
+
+#[test]
+fn the_views_taper_reaches_the_wheel() {
+    // The span is pinned by the fold test above, which reads it back through
+    // the clamp — but nothing there touches the taper or its amount, so
+    // hard-coding either at the derive call would leave the suite green while
+    // every ring on screen came out evenly divided.
+    let view = ViewConfig {
+        octave_span: 3,
+        octave_taper: OctaveTaper::Geometric,
+        octave_taper_amount: 0.6,
+        ..ViewConfig::default()
+    };
+    let scene = scene_of(
+        &sounding(),
+        &Tuning::default(),
+        &view,
+        &FrameParams::default(),
+        0.5,
+    );
+    assert_eq!(
+        scene.octave_layout,
+        octave_layout(3, OctaveTaper::Geometric, 0.6),
+        "the frame's wheel is the one the view asked for"
+    );
+    assert_ne!(
+        scene.octave_layout,
+        octave_layout(3, OctaveTaper::Uniform, 0.0),
+        "and a taper is not the even division"
+    );
+}

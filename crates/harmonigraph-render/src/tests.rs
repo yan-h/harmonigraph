@@ -156,9 +156,13 @@ fn parity_scene() -> Scene {
     let mut nodes = Vec::new();
     for i in 0..6u32 {
         let f = i as f32;
+        // Slots walked inside the DEFAULT span (1..=9): a level on a slot the
+        // view doesn't show is drawn by no sector, so a scene claiming to
+        // exercise every draw path has to sound in the range it renders.
+        let slot = |k: usize| 1 + k % (harmonigraph_scene::OCTAVE_SLOTS - 2);
         let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
-        octaves[(i as usize) % harmonigraph_scene::OCTAVE_SLOTS] = 1.0 - f * 0.1;
-        octaves[(i as usize + 5) % harmonigraph_scene::OCTAVE_SLOTS] = 0.4;
+        octaves[slot(i as usize)] = 1.0 - f * 0.1;
+        octaves[slot(i as usize + 5)] = 0.4;
         nodes.push(harmonigraph_scene::NodeInstance {
             lattice_pos: LatticePos::new(i as i32 - 3, i as i32 % 2, 0),
             // Cluster tightly around the origin so discs overlap and
@@ -180,8 +184,8 @@ fn parity_scene() -> Scene {
             cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass,
             // and one claiming both slots at once (the split mark).
-            melody_slots: if i == 0 || i == 4 { 1 << (i as usize % harmonigraph_scene::OCTAVE_SLOTS) } else { 0 },
-            bass_slots: if i == 2 || i == 4 { 1 << (i as usize % harmonigraph_scene::OCTAVE_SLOTS) } else { 0 },
+            melody_slots: if i == 0 || i == 4 { 1 << slot(i as usize) } else { 0 },
+            bass_slots: if i == 2 || i == 4 { 1 << slot(i as usize) } else { 0 },
             melody_level: if i == 0 || i == 4 { 1.0 } else { 0.0 },
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
@@ -803,7 +807,7 @@ fn seam_angles(px: &[u8], size: u32) -> Vec<f32> {
 /// table describes, in the right direction, with the right one anchored.
 #[test]
 fn the_octave_wheel_splits_at_the_bottom_whatever_the_settings() {
-    use harmonigraph_scene::{octave_layout, OctaveTaper};
+    use harmonigraph_scene::{octave_layout, OctaveTaper, MAX_TAPER_AMOUNT};
 
     let Some((device, queue)) = headless_device() else {
         return;
@@ -842,7 +846,13 @@ fn the_octave_wheel_splits_at_the_bottom_whatever_the_settings() {
             (OctaveTaper::Uniform, 0.0),
             (OctaveTaper::Linear, 0.6),
             (OctaveTaper::Geometric, 0.6),
-            (OctaveTaper::Smooth, 0.6),
+            (OctaveTaper::Plateau, 0.6),
+            // The ceiling, which at span 2 under Ratio gives middle C 196
+            // degrees — the ONLY setting in reach of the shader's reflex-wedge
+            // branch, where a sector past a half turn is the union of its
+            // half-planes rather than their intersection. At 0.6 nothing
+            // exceeds 118 degrees and that branch never runs.
+            (OctaveTaper::Geometric, MAX_TAPER_AMOUNT),
         ] {
             for cents in [0.0, 700.0] {
                 let layout = octave_layout(span, taper, amount);
@@ -872,6 +882,77 @@ fn the_octave_wheel_splits_at_the_bottom_whatever_the_settings() {
                 assert!(top > 5.0, "{case}: middle C is split by the top, seams {seams:?}");
             }
         }
+    }
+}
+
+/// Which SLOT each sector draws, not just where the sectors are. The test
+/// above lights every slot, so it reads the same picture whatever
+/// `oct_first` returns; this lights exactly one — middle C's — and asks
+/// where the bright arc landed. An off-by-one in the slot -> sector mapping
+/// puts it a whole indicator off the top, and a taper makes the neighbours
+/// the wrong size as well, so it cannot land there by luck.
+#[test]
+fn middle_cs_indicator_points_straight_up() {
+    use harmonigraph_scene::{octave_layout, OctaveTaper};
+
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [512, 512];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+
+    for (span, taper) in [(2u32, OctaveTaper::Uniform), (5, OctaveTaper::Geometric)] {
+        let mut scene = octave_wheel_scene(octave_layout(span, taper, 0.7), 0.0);
+        // One octave sounding. The silent slots still ghost in behind it at
+        // GHOST_LEVEL, which is what the brightness threshold below sorts out.
+        scene.nodes[0].octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+
+        let cb = LatticeCallback::from_scene(&scene, vec_size, format, 70 + span as u64, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        let px = readback(&device, &queue, &tex, SIZE);
+
+        // Where the BRIGHT pixels are, as a mean direction. The lit sector
+        // runs several times the ghosts' level, so half the maximum separates
+        // them cleanly whatever the node color is.
+        let bright = |i: usize| px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32;
+        let peak = (0..px.len() / 4).map(|k| bright(k * 4)).max().unwrap_or(0);
+        assert!(peak > 60, "{span}/{taper:?}: nothing bright enough to measure");
+        let (mut vx, mut vy) = (0f64, 0f64);
+        let c = SIZE[0] as f64 / 2.0;
+        for y in 0..SIZE[1] {
+            for x in 0..SIZE[0] {
+                let i = ((y * SIZE[0] + x) * 4) as usize;
+                if bright(i) > peak / 2 {
+                    // Screen y grows downward; flip it for an ordinary angle.
+                    vx += x as f64 - c;
+                    vy += c - y as f64;
+                }
+            }
+        }
+        let angle = vy.atan2(vx).to_degrees();
+        assert!(
+            (angle - 90.0).abs() < 6.0,
+            "span {span}, {taper:?}: middle C's indicator points {angle:.1} deg, not up"
+        );
     }
 }
 
