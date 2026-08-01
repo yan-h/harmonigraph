@@ -9,6 +9,31 @@ fn baked_shader_validates() {
         .expect("baked lattice.wgsl must parse, validate, and keep its entry points");
 }
 
+/// The `const _: () = assert!(PITCH_LUT_N == 64)` in `lib.rs` ties one Rust
+/// literal to another; the two that decide what the GPU actually reads are in
+/// WGSL, where no compiler is checking them against the scene's constant. This
+/// is the half that catches a one-sided bump.
+///
+/// Both slips are silent otherwise. Raise the array but not the const and the
+/// shader walks 63 entries of a longer table, painting a top-of-range glyph the
+/// color of a pitch halfway down the ramp while the disc under it takes the
+/// top — the mismatch #165 closed, reopened at several times the width. Raise
+/// the const but not the array and the surplus indices clamp at runtime, which
+/// is not a validation error either. naga sees a well-formed shader both ways,
+/// `min_binding_size: None` means an over-long buffer never complains, and the
+/// scene tests read PITCH_LUT_N symbolically, so they pass at any value.
+#[test]
+fn the_shaders_pitch_lut_is_the_length_the_scene_says() {
+    let n = harmonigraph_scene::PITCH_LUT_N;
+    for needle in [format!("array<vec4<f32>, {n}>"), format!("const PITCH_LUT_N: u32 = {n}u;")] {
+        assert!(
+            SHADER_SRC.contains(&needle),
+            "lattice.wgsl must declare `{needle}` to match harmonigraph_scene::PITCH_LUT_N \
+             ({n}); the CPU uploads that many entries and the GPU would index a different table",
+        );
+    }
+}
+
 /// blit.wgsl has no hot-reload path, so a broken edit would otherwise
 /// first surface as a pipeline panic inside a DAW.
 #[test]

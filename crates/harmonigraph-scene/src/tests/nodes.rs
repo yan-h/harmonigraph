@@ -16,18 +16,24 @@ fn pitch_colored_channels_vary_with_pitch() {
 }
 
 #[test]
-fn a_disc_and_the_glyph_drawn_on_it_are_the_same_color_exactly() {
+fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
     // The shader tints an octave glyph by walking `pitch_ramp_lut`; the disc
     // beneath it is colored on the CPU. They share an edge, which is the
     // harshest test of a color match there is, so the two walks have to agree
     // EXACTLY — a tolerance here is a step someone can see. Reproducing the
     // shader's walk by hand and comparing against the disc path (channel 9 is
     // pitch-gradient) is what pins that.
+    //
+    // Scoped to ONE pitch down both sides, which is the property the shared
+    // table can deliver. What a disc and a glyph are each FED can still differ
+    // — derive clamps a voice outside the wheel's Range onto the outermost
+    // slot — and that is a different pitch, not a disagreement about a color.
     let lut = pitch_ramp_lut();
     let (dark, bright) = (24.0f32, 108.0f32);
-    // Sweep finely rather than at a few round pitches: the ramp's dark end
-    // rides the sRGB gamut boundary, and a corner is exactly what a handful of
-    // sample points steps over.
+    // The sweep is insurance rather than coverage: both sides reduce to the
+    // same arithmetic today, so it can only fail once someone changes one
+    // walk's interpolation form and not the other's — which is precisely the
+    // edit that would put the gamut corner back between two shapes.
     let mut pitch = dark;
     while pitch <= bright {
         let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
@@ -48,10 +54,13 @@ fn the_table_tracks_the_curve_it_samples() {
     // Pin that separately so a future cut to the constant shows up as the
     // gradient drifting off its design rather than as nothing at all.
     //
-    // The bound is loose against the 3.6/255 the constant currently measures
-    // because the worst case is governed by where a sample lands relative to
-    // the gamut corner near MIDI 43 — a tweak to the ramp's own constants
-    // moves that corner and swings the number without anything being wrong.
+    // 4.5/255 against the 3.6 the constant currently measures. The slack is
+    // there because the worst case is governed by where a sample lands
+    // relative to the gamut corner near MIDI 43, so a tweak to the ramp's own
+    // constants moves that corner and swings the number without anything being
+    // wrong — but it is drawn tight enough to fail every cut a person would
+    // actually make: 48 measures 9.0/255, 32 measures 9.6, 24 measures 6.2,
+    // and 16 — where this started — measures 14.9.
     let (dark, bright) = (24.0f32, 108.0f32);
     let mut worst = 0.0f32;
     let mut worst_pitch = 0.0f32;
@@ -68,7 +77,7 @@ fn the_table_tracks_the_curve_it_samples() {
         pitch += 0.01;
     }
     assert!(
-        worst * 255.0 < 6.0,
+        worst * 255.0 < 4.5,
         "table strays {:.1}/255 from the designed curve at MIDI {worst_pitch:.2}",
         worst * 255.0
     );
