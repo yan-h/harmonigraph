@@ -627,6 +627,50 @@ fn an_impossible_ui_scale_is_clamped() {
     }
 }
 
+/// A non-finite end of the analyzer's pitch range loads at the design range
+/// rather than taking the editor down with it.
+///
+/// `clamp` alone does not catch a NaN — it is its own answer to every
+/// comparison — and `f32::clamp` opens with `assert!(min <= max)`. So a NaN
+/// `low_midi` survives its own clamp and then becomes the MIN of the next one,
+/// which fails that assert: the editor panics on load, and the only trace is
+/// the backtrace the host writes to its log.
+///
+/// A NaN `high_midi` does not panic — it is the `self` of its clamp rather
+/// than the bound — and is worse for it: the range stays NaN all the way into
+/// `PitchScale`, so the analyzer draws nothing and nothing says why.
+///
+/// The bars cannot produce either; a hand-edited blob or a corrupted float
+/// can. This function already guards its two text scales against exactly this
+/// (see [`sane_scale`]) — the pitch range is the half that was left bare.
+#[test]
+fn a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range() {
+    for end in ["low_midi", "high_midi"] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        // Off the defaults, so the splice has something to name and a range
+        // that survives proves it survived rather than matching by luck.
+        state.spectrum_config.low_midi = 40.5;
+        state.spectrum_config.high_midi = 90.25;
+        let saved = state.save_persist();
+        let value = if end == "low_midi" { 40.5f32 } else { 90.25f32 };
+        let broken = saved.replacen(&format!("{end}:{value:?}"), &format!("{end}:NaN"), 1);
+        assert_ne!(broken, saved, "the {end} splice must land for this to test anything");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&broken);
+        let (low, high) = (restored.spectrum_config.low_midi, restored.spectrum_config.high_midi);
+        assert!(low.is_finite() && high.is_finite(), "{end}:NaN left the range at {low}..{high}");
+        assert!(low < high, "{end}:NaN left the range inverted at {low}..{high}");
+        // The end that was NOT broken keeps what the blob said, so a guard
+        // cannot pass by resetting the whole range.
+        if end == "low_midi" {
+            assert_eq!(high, 90.25, "the good end still loads");
+        } else {
+            assert_eq!(low, 40.5, "the good end still loads");
+        }
+    }
+}
+
 #[test]
 fn a_blob_older_than_the_version_floor_is_refused_whole() {
     // Versions below UI_PERSIST_VERSION cannot reach a real editor: the
