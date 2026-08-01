@@ -409,6 +409,52 @@ fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
     assert_eq!(restored.view.extent_sevens, 3, "an unknown field must not sink the blob");
 }
 
+/// The mirror of the case above: a field the blob is MISSING must not sink it
+/// either, and must come back as what a fresh install has rather than as a bare
+/// `0`/`false`.
+///
+/// `smoothing`, `window` and `floor_db` are the three that make this worth
+/// pinning. Every other field of [`SpectrumConfig`](crate::SpectrumConfig)
+/// named a fallback of its own; these three named none, so a blob without one
+/// failed to parse — and a blob that fails to parse loses the WHOLE UI state,
+/// not the one key. Dropping `smoothing` cost the camera, the dock and the view
+/// along with it. The struct's container-level `default` is what closes that:
+/// every field falls back to `impl Default`'s value, so a missing key costs
+/// only itself.
+///
+/// Pinned per field rather than once, because the hazard is per field: nothing
+/// at a declaration says whether it has a fallback, so the next field added is
+/// covered silently and the next one REMOVED is the one that would sink a saved
+/// project.
+#[test]
+fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
+    let fresh = crate::SpectrumConfig::default();
+    for key in [
+        format!("smoothing:{:?},", fresh.smoothing),
+        format!("floor_db:{:?},", fresh.floor_db),
+        format!("window:{:?},", fresh.window),
+    ] {
+        let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+        // A non-default elsewhere in the blob, so "the blob survived" is
+        // distinguishable from "it sank and everything reverted".
+        state.view.extent_sevens = 3;
+        let saved = state.save_persist();
+        let without = saved.replacen(key.as_str(), "", 1);
+        assert_ne!(without, saved, "{key:?} must be in the blob to drop");
+
+        let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+        restored.load_persist(&without);
+        assert_eq!(
+            restored.view.extent_sevens, 3,
+            "dropping {key:?} must cost that key alone, not the whole blob",
+        );
+        assert_eq!(
+            restored.spectrum_config, fresh,
+            "and the config it belongs to must load at the fresh-install values",
+        );
+    }
+}
+
 #[test]
 fn persist_round_trips_the_frame_rate_cap() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
@@ -643,3 +689,4 @@ fn loading_a_project_re_opens_the_comma_verdicts() {
     );
     assert!(state.view.marvel_auto, "and the missing detect key still opts in");
 }
+

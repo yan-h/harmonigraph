@@ -180,31 +180,35 @@ pub enum RenderTrigger {
 /// separate binary with a headless GPU device and an ffmpeg pipe, and
 /// nothing about it belongs inside a real-time audio plugin. What the
 /// plugin can do is *run* it, the moment a take is complete.
+/// Container-level `default`, so a key this struct gained after a blob was
+/// written loads with the value a fresh install gets — `impl Default`'s,
+/// field by field. Per-field `default = "..."` fns said the same thing one
+/// field at a time and had to be kept in step with `impl Default` by hand;
+/// a pair that drifted meant a blob omitting that key loaded as a config
+/// nobody chose. Where a field's fallback must instead be what the blob was
+/// SAVED with, rather than what a fresh install gets, it needs its own fn
+/// back — `ViewConfig` is the worked example, and its `default_*` block says
+/// so.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RenderConfig {
     /// Record the plugin's audio input into the take (see
     /// `SharedState::take_audio`, which mirrors this at runtime).
-    #[serde(default)]
     pub record_audio: bool,
     /// Run the renderer as soon as a take finishes.
-    #[serde(default)]
     pub auto_render: bool,
     /// What "finishes" means; see [`RenderTrigger`].
-    #[serde(default)]
     pub trigger: RenderTrigger,
     /// Path to the `harmonigraph-offline` binary. Empty means the
     /// conventional install location, which `update-plugin.sh` writes to.
-    #[serde(default)]
     pub renderer_path: String,
     /// Bounced audio to pass as `--audio`: it feeds the spectrum curve
     /// and is muxed into the video. Empty renders silent, with no
     /// spectrum — the roll and the lattice are unaffected.
-    #[serde(default)]
     pub audio_path: String,
     /// Take-time (seconds) where the bounce starts — empty means auto-align to
     /// the MIDI onsets, a number passes `--align`. A string so "empty = auto"
     /// reads naturally and it matches the other free-text fields.
-    #[serde(default)]
     pub audio_offset: String,
     /// Load-only shim: the Video pane used to carry an "Options" field of raw
     /// `harmonigraph-offline` flags, and blobs written then still hold it.
@@ -219,13 +223,12 @@ pub struct RenderConfig {
     /// none of. What it uniquely bought was a STANDING non-default for
     /// auto-render, and that was worth less than a row of a pane whose height
     /// budget has a test of its own.
-    #[serde(default, skip_serializing, rename = "extra_args")]
+    #[serde(skip_serializing, rename = "extra_args")]
     pub legacy_extra_args: String,
     /// Whole-song playhead spectrogram: lay the take out at once and sweep a
     /// playhead through it, instead of the live scrolling window. Read by the
     /// offline renderer from the take; `--playhead` on the command line also
     /// turns it on. Needs audio.
-    #[serde(default)]
     pub playhead: bool,
     /// Extra seconds of empty frame before the recording starts, which is
     /// where the render begins.
@@ -247,12 +250,10 @@ pub struct RenderConfig {
     /// [`playhead`](Self::playhead); `--lead` overrides it and `--start`
     /// overrides both, being an absolute song position rather than a
     /// relative one.
-    #[serde(default = "default_lead_in")]
     pub lead_in: f32,
     /// The composed video frame — aspect ratio and the lattice/spectral split.
     /// Edited and previewed in the Video pane; the offline renderer reads it
     /// to compose the same picture.
-    #[serde(default)]
     pub frame: RenderFrame,
     /// The render's short edge in pixels; with [`frame`](Self::frame)'s aspect
     /// this is the whole output size (see [`RenderFrame::pixels`]).
@@ -262,7 +263,6 @@ pub struct RenderConfig {
     /// dialed in at. Resolution is a per-export choice — draft at 1080, final
     /// at 2160, same picture — so it stays out here where changing it cannot
     /// mean the take was framed differently.
-    #[serde(default = "default_short_edge")]
     pub short_edge: u32,
 }
 
@@ -277,25 +277,19 @@ impl Default for RenderConfig {
             audio_offset: String::new(),
             legacy_extra_args: String::new(),
             playhead: false,
-            lead_in: default_lead_in(),
+            // None: the render opens where the recording did, so the run-up
+            // actually played is already in the video. Padding beyond it is a
+            // deliberate taste, and empty frame by construction — nothing was
+            // captured before the take started — so it is not something to
+            // hand out by default.
+            lead_in: 0.0,
             frame: RenderFrame::default(),
-            short_edge: default_short_edge(),
+            // 1080 on the short edge — 1920x1080 at the default 16:9 frame,
+            // and the resolution every host and site takes without
+            // transcoding.
+            short_edge: 1080,
         }
     }
-}
-
-/// None: the render opens where the recording did, so the run-up actually
-/// played is already in the video. Padding beyond it is a deliberate taste,
-/// and empty frame by construction — nothing was captured before the take
-/// started — so it is not something to hand out by default.
-pub(crate) fn default_lead_in() -> f32 {
-    0.0
-}
-
-/// 1080 on the short edge — 1920x1080 at the default 16:9 frame, and the
-/// resolution every host and site takes without transcoding.
-pub(crate) fn default_short_edge() -> u32 {
-    1080
 }
 
 impl RenderConfig {
@@ -432,28 +426,25 @@ impl LatticeSide {
 /// so the plugin's live preview and the offline renderer build the identical
 /// frame.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RenderFrame {
     /// Frame aspect numerator (e.g. 16 of 16:9). Drives the preview letterbox
     /// and the render's default resolution.
-    #[serde(default = "default_aspect_w")]
     pub aspect_w: u32,
-    #[serde(default = "default_aspect_h")]
     pub aspect_h: u32,
     /// The lattice's share of the frame, `0..1` (the rest is the spectral
     /// pane) — a width beside the Spectral pane, a height above or below it.
     /// The lattice's share whichever side it takes, so this number means one
     /// thing as [`lattice`](Self::lattice) changes under it.
-    #[serde(default = "default_frame_split")]
     pub split: f32,
     /// Where the lattice sits; see [`LatticeSide`].
-    #[serde(default)]
     pub lattice: LatticeSide,
     /// Load-only shim: blobs written before the four sides — and the
     /// `ui_state` carried inside takes recorded then — say `stacked: bool`
     /// here, the two-way choice this replaced. Folded into
     /// [`lattice`](Self::lattice) by
     /// [`migrate_legacy`](Self::migrate_legacy) and never written back.
-    #[serde(default, skip_serializing, rename = "stacked")]
+    #[serde(skip_serializing, rename = "stacked")]
     pub legacy_stacked: bool,
 }
 
@@ -496,29 +487,17 @@ impl RenderFrame {
     }
 }
 
-pub(crate) fn default_aspect_w() -> u32 {
-    16
-}
-pub(crate) fn default_aspect_h() -> u32 {
-    9
-}
-/// A fifth of the frame to the lattice, the rest to the spectral pane. The
-/// two are not competing for the same job: the lattice reads at whatever size
-/// it is given (it is a handful of nodes, and the camera frames them), while
-/// the spectrogram's width IS its time axis, so width buys it seconds on
-/// screen. Kept in step with `RenderFrame::default`'s `split` — the serde
-/// default and the struct default answering differently would mean a blob
-/// that omits the field loads as a frame nobody chose.
-pub(crate) fn default_frame_split() -> f32 {
-    0.20
-}
-
 impl Default for RenderFrame {
     fn default() -> Self {
         RenderFrame {
             aspect_w: 16,
             aspect_h: 9,
-            split: default_frame_split(),
+            // A fifth of the frame to the lattice, the rest to the spectral
+            // pane. The two are not competing for the same job: the lattice
+            // reads at whatever size it is given (it is a handful of nodes,
+            // and the camera frames them), while the spectrogram's width IS
+            // its time axis, so width buys it seconds on screen.
+            split: 0.20,
             lattice: LatticeSide::Left,
             legacy_stacked: false,
         }
@@ -528,12 +507,12 @@ impl Default for RenderFrame {
 /// Everything the Spectral pane's display is configured by, edited in the
 /// Spectrum settings tab and persisted with the UI state.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SpectrumConfig {
     /// Which side of the pane the now-line sits on, and so which way time
     /// runs; see [`SpectralOrientation`]. Four sides and no more — the pitch
     /// axis reads the conventional way in each, so there is nothing left to
     /// flip.
-    #[serde(default)]
     pub orientation: SpectralOrientation,
     pub window: SpectrumWindow,
     /// Bottom of the dB height scale: what reads as silence. A full-scale
@@ -546,7 +525,6 @@ pub struct SpectrumConfig {
     ///
     /// The pair is one control, like the pitch range: the window on the
     /// spectrum's dynamics, movable at either end.
-    #[serde(default = "default_ceiling_db")]
     pub ceiling_db: f32,
     /// Display inertia: 0 = every refresh lands instantly, 0.9 = slow.
     pub smoothing: f32,
@@ -557,10 +535,9 @@ pub struct SpectrumConfig {
     /// treble by the magnitude, pivoting at 1 kHz — there is no
     /// bass-emphasizing direction, matching convention.
     ///
-    /// `default_tilt`, not `default`, so a blob saved before the field
-    /// existed loads with the slope a fresh install gets rather than the
-    /// raw-power 0 a bare f32 default would hand it.
-    #[serde(default = "default_tilt")]
+    /// One of the fields the struct's container-level `default` earns its
+    /// keep on: a blob predating it loads with the slope a fresh install
+    /// gets, where a bare `f32` default would hand it raw-power 0.
     pub tilt: f32,
     /// Overall size of the pane's own markings — the frequency labels along the
     /// axis and the pitch readout that follows the pointer — as a multiple of
@@ -575,13 +552,11 @@ pub struct SpectrumConfig {
     /// `panes::spectral::axes::MARKING_PT`). Deliberate, and the same call as the
     /// lattice's: 10pt was the wrong number rather than one of several, and a
     /// blob that kept it would be preserving a mistake.
-    #[serde(default = "default_one")]
     pub marking_scale: f32,
     /// Strength of the light edge drawn along the spectrum's profile and
     /// around each note ribbon, 0 = none. On a roll note it is the whole of
     /// the rim — how bright the keyline is, and whether it is drawn at all.
     /// See `panes::spectral::roll::keyline`.
-    #[serde(default = "default_keyline")]
     pub keyline: f32,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
     /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
@@ -591,9 +566,7 @@ pub struct SpectrumConfig {
     /// makes this both the number the pane wants and — since a semitone is a
     /// constant frequency RATIO — a logarithmic frequency scale. The control
     /// drags it linearly and reads it out in Hz.
-    #[serde(default = "default_low_midi")]
     pub low_midi: f32,
-    #[serde(default = "default_high_midi")]
     pub high_midi: f32,
 
     // ---- Piano roll -------------------------------------------------
@@ -602,27 +575,20 @@ pub struct SpectrumConfig {
     // away from the spectrum: a note leaving the roll's near edge meets
     // the spectrum peak it is making.
     /// Draw the incoming MIDI's history at all.
-    #[serde(default = "default_true")]
     pub show_roll: bool,
     /// Share of the pane's depth given to the roll (the rest is the
     /// spectrum). 0 hides it; 1 gives the whole pane to the roll. Set by
     /// dragging the divider in the Spectral pane itself
     /// (`panes::spectral::gestures::drag_split`) — there is no bar for it.
-    #[serde(default = "default_roll_fraction")]
     pub roll_fraction: f32,
     /// Seconds of history the roll's depth spans.
-    #[serde(default = "default_roll_seconds")]
     pub roll_seconds: f32,
     /// Note ribbon width, in semitones of the pitch axis. This IS the note's
     /// painted width — a note is a solid rectangle of its own color, with
     /// nothing straddling its boundary.
-    #[serde(default = "default_roll_thickness")]
     pub roll_thickness: f32,
     /// Write each note's name over its ribbon, at the moment it was struck —
-    /// see [`panes::spectral::names`](crate::panes::spectral::names). `default_true`, not `default`, or a state blob
-    /// saved before this field existed would load with them off, contradicting
-    /// the struct's own default, which is what a fresh install gets.
-    #[serde(default = "default_true")]
+    /// see [`panes::spectral::names`](crate::panes::spectral::names).
     pub note_names: bool,
     /// Overall size of those names, as a multiple of their built-in size.
     ///
@@ -634,19 +600,16 @@ pub struct SpectrumConfig {
     /// A saved view loads at 1 and so draws its names 1.3 times the size it
     /// was saved at, for the reason [`marking_scale`](Self::marking_scale)
     /// gives.
-    #[serde(default = "default_one")]
     pub note_name_scale: f32,
 
     // ---- Spectrogram ------------------------------------------------
     // A frequency-vs-time heatmap of the analyzed audio, drawn in the
     // roll's depth region on the roll's own time axis — so each column of
     // spectral energy lines up with the notes that made it.
-    /// Draw the spectrogram heatmap (over the roll's time window).
-    /// `default_true`, not `default`, or every state blob saved before this
-    /// field existed loads with the spectrogram off — contradicting the
-    /// struct's own default, which is what a fresh install gets. A blob that
+    /// Draw the spectrogram heatmap (over the roll's time window). A blob
+    /// predating the field loads with it ON, as a fresh install has it,
+    /// rather than the `false` a bare `bool` default would mean; one that
     /// really did turn it off carries `false` and still round-trips.
-    #[serde(default = "default_true")]
     pub show_spectrogram: bool,
     /// The heatmap's color ramp — the only thing about it left to choose.
     ///
@@ -664,28 +627,7 @@ pub struct SpectrumConfig {
     /// serde ignores keys it has no field for, which
     /// `a_persist_blob_carrying_a_since_removed_field_still_loads` pins — so a
     /// project saved with an opacity simply loads without one.
-    #[serde(default)]
     pub spectrogram_color: SpectrogramColor,
-}
-
-pub(crate) fn default_one() -> f32 {
-    1.0
-}
-
-/// Enough of an edge to hold a shape against a bright spectrogram cell,
-/// little enough that it doesn't read as a second outline of its own.
-pub(crate) fn default_keyline() -> f32 {
-    0.3
-}
-
-/// The default pitch range is the analyzer's whole axis — the zoom starts
-/// showing everything there is.
-pub(crate) fn default_low_midi() -> f32 {
-    harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI
-}
-
-pub(crate) fn default_high_midi() -> f32 {
-    harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI
 }
 
 impl SpectrumConfig {
@@ -698,7 +640,8 @@ impl SpectrumConfig {
     /// with no buckets behind it; an inverted one divides by zero in
     /// PitchScale.
     pub(crate) fn sanitize(&mut self) {
-        let (floor, ceil) = (default_low_midi(), default_high_midi());
+        use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
+        let (floor, ceil) = (SPECTRUM_MIN_MIDI, SPECTRUM_MAX_MIDI);
         self.low_midi = self.low_midi.clamp(floor, ceil - PITCH_RANGE_MIN_SPAN);
         self.high_midi = self.high_midi.clamp(self.low_midi + PITCH_RANGE_MIN_SPAN, ceil);
         // And the same treatment for the two text scales, for the same reason
@@ -792,40 +735,11 @@ pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 /// trade: the pane is read against material, not against a test tone.
 ///
 /// The bar still offers [`LEVEL_MAX_DB`], so 0 is one drag away.
-pub(crate) fn default_ceiling_db() -> f32 {
-    -20.0
-}
-
-pub(crate) fn default_true() -> bool {
-    true
-}
-
-pub(crate) fn default_roll_fraction() -> f32 {
-    0.55
-}
-
-pub(crate) fn default_roll_seconds() -> f32 {
-    12.0
-}
-
-/// Thin: a note is a line through the spectrogram at its own pitch, not a
-/// slab over it. At 0.3 semitones a semitone of pitch axis still separates
-/// two neighbouring keys, which is what makes the roll readable when the
-/// pitch range is zoomed out over the whole spectrum.
-pub(crate) fn default_roll_thickness() -> f32 {
-    0.3
-}
+const DEFAULT_CEILING_DB: f32 = -20.0;
 
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
 pub const TILT_STEPS: [f32; 5] = [0.0, -1.5, -3.0, -4.5, -6.0];
-
-/// The slope that flattens typical musical material — what the analyzer is
-/// looked at through nearly all the time, so it is where it starts. Raw
-/// power (0) buries everything above a couple of kHz.
-pub(crate) fn default_tilt() -> f32 {
-    -4.5
-}
 
 impl Default for SpectrumConfig {
     fn default() -> Self {
@@ -833,19 +747,33 @@ impl Default for SpectrumConfig {
             orientation: SpectralOrientation::Left,
             window: SpectrumWindow::Balanced,
             floor_db: -60.0,
-            ceiling_db: default_ceiling_db(),
+            ceiling_db: DEFAULT_CEILING_DB,
             smoothing: 0.55,
-            tilt: default_tilt(),
-            marking_scale: default_one(),
-            keyline: default_keyline(),
-            low_midi: default_low_midi(),
-            high_midi: default_high_midi(),
+            // The slope that flattens typical musical material — what the
+            // analyzer is looked at through nearly all the time, so it is
+            // where it starts. Raw power (0) buries everything above a
+            // couple of kHz.
+            tilt: -4.5,
+            marking_scale: 1.0,
+            // Enough of an edge to hold a shape against a bright spectrogram
+            // cell, little enough that it doesn't read as a second outline of
+            // its own.
+            keyline: 0.3,
+            // The pitch range starts as the analyzer's whole axis — the zoom
+            // opens showing everything there is.
+            low_midi: harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
+            high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
             show_roll: true,
-            roll_fraction: default_roll_fraction(),
-            roll_seconds: default_roll_seconds(),
-            roll_thickness: default_roll_thickness(),
+            roll_fraction: 0.55,
+            roll_seconds: 12.0,
+            // Thin: a note is a line through the spectrogram at its own
+            // pitch, not a slab over it. At 0.3 semitones a semitone of pitch
+            // axis still separates two neighbouring keys, which is what makes
+            // the roll readable when the pitch range is zoomed out over the
+            // whole spectrum.
+            roll_thickness: 0.3,
             note_names: true,
-            note_name_scale: default_one(),
+            note_name_scale: 1.0,
             show_spectrogram: true,
             spectrogram_color: SpectrogramColor::default(),
         }
