@@ -35,8 +35,9 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use octaves::{
-    octave_layout, OctaveLayout, DEFAULT_TAPER_SHAPE, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT,
-    MIDDLE_C_SLOT, MIN_OCTAVE_SPAN, OCTAVE_SLOTS,
+    clamp_window, octave_layout, OctaveLayout, DEFAULT_TAPER_SHAPE, DEFAULT_WINDOW_HIGH,
+    DEFAULT_WINDOW_LOW, MAX_CELLS, MAX_TAPER_AMOUNT, MIDDLE_C_SLOT, MIN_WINDOW, OCTAVE_SLOTS,
+    PITCH_CEIL, PITCH_FLOOR,
 };
 pub use style::{
     HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
@@ -249,9 +250,10 @@ pub struct Scene {
     /// The pitch axis the octave indicators are drawn on (see [`octaves`]):
     /// which pitches one turn of a node covers, and how the circle is shared
     /// out between their octaves. ONE axis for the whole frame — every node
-    /// reads the same one and draws the same octaves of it, which is what
-    /// makes an indicator's ANGLE mean an absolute pitch. A node's pitch
-    /// class says only where round the turn its own octaves land.
+    /// reads the same one, which is what makes an indicator's ANGLE mean an
+    /// absolute pitch. A node's pitch class says where round the turn its own
+    /// octaves land, and (since the window is a pitch range rather than a
+    /// count of octaves) how many of them land there at all.
     pub octave_layout: OctaveLayout,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and

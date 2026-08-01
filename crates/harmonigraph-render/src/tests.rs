@@ -161,8 +161,12 @@ fn parity_scene() -> Scene {
         // every draw path has to sound in the range it renders. Asked of the
         // same layout the scene carries below rather than re-derived from the
         // slot count, which would part company with it the first time the
-        // default span moved.
-        let (low, high) = harmonigraph_scene::OctaveLayout::default().slot_range();
+        // default window moved. The slots a node draws depend on its pitch
+        // class, so this is the set EVERY node here has: the highest node's
+        // low end, the lowest node's high end.
+        let layout = harmonigraph_scene::OctaveLayout::default();
+        let (low, _) = layout.slot_range(0.0);
+        let (_, high) = layout.slot_range(950.0);
         let slot = |k: usize| (low as usize) + k % (high - low + 1) as usize;
         let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
         octaves[slot(i as usize)] = 1.0 - f * 0.1;
@@ -726,10 +730,10 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.outer_outer = 0.95;
     scene.outer_gap = 0.10;
     scene.mark_thickness = 0.0;
-    // Every octave the Range draws, and only those: a level on a slot no
-    // sector draws is a state `derive_scene` cannot reach, and the swirl and
-    // the glow would still take a color from it.
-    let (low, high) = layout.slot_range();
+    // Every octave the Range draws for THIS pitch class, and only those: a
+    // level on a slot no sector draws is a state `derive_scene` cannot reach,
+    // and the swirl and the glow would still take a color from it.
+    let (low, high) = layout.slot_range(cents);
     let node = &mut scene.nodes[0];
     node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
     for slot in low..=high {
@@ -834,18 +838,17 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 }
 
 /// The invariant the wheel is built around, checked on the picture rather
-/// than on the layout that feeds it: every octave the Range names gets an
-/// indicator, and together they close the ring — whatever the span, the
-/// taper or the node's pitch class. So the only unlit stretches are the Gap
-/// setting's slits, one per boundary; the bottom is covered like anywhere
-/// else on a node whose octaves do not land on the seam; and middle C is
-/// straight up, so the top is always covered.
+/// than on the layout that feeds it: every octave a node has inside the Range
+/// gets an indicator, and together they close the ring — whatever the window,
+/// the taper or the node's pitch class. So the only unlit stretches are the
+/// Gap setting's slits, one per boundary, and the seam is one of them on every
+/// node, since the two end indicators reach it from either side.
 ///
 /// Reading it off rendered pixels is the point. The layout's own tests pin
 /// the angles down; this one says the shader draws the axis the table
 /// describes, in the right direction, anchored where it claims — and in
-/// particular that it draws the indicator that runs off the top of the
-/// window and comes round the seam, which is one whole octave of the Range.
+/// particular that it draws the end indicators out to the seam, which is what
+/// closes the ring when the window is not a whole number of octaves.
 #[test]
 fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     use harmonigraph_scene::octave_layout;
@@ -879,10 +882,20 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
         readback(&device, &queue, &tex, SIZE)
     };
 
-    // Every span and formula, at a C node (whose indicators land flush on the
+    // The narrowest window there is (MIN_WINDOW, where the taper takes a
+    // sector widest and the union branch of the wedge test is stressed
+    // hardest), the widest, the default, and two that are neither a whole
+    // number of octaves nor centered on a C — the case the end indicators
+    // exist for. Each at a C node (whose octaves land flush on the default
     // window's ends) and at three pitch classes that do not.
     let mut pane = 60;
-    for span in 2..=5u32 {
+    for (low, high) in [
+        (36.0f32, 84.0f32),
+        (0.0, 127.0),
+        (6.0, 114.0),
+        (30.0, 90.0),
+        (24.0, 97.5),
+    ] {
         // An even axis, a straight ramp, the sharpest shape, and a plateau.
         //
         // Not the FULLEST amount, which is the one thing here the picture
@@ -893,43 +906,55 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
         // pins the extreme exactly, on angles, where no padding is involved.
         for (amount, shape) in [(0.0, 0.5), (0.6, 0.5), (0.7, 0.0), (0.6, 0.85)] {
             for cents in [0.0, 350.0, 700.0, 1150.0] {
-                let layout = octave_layout(span, amount, shape);
+                let layout = octave_layout(low, high, amount, shape);
                 let px = shot(&octave_wheel_scene(layout, cents), pane);
                 pane += 1;
                 let profile = band_profile(&px, SIZE[0]);
-                let case = format!("span {span}, amount {amount} shape {shape}, {cents}c");
+                let case =
+                    format!("{low}..{high}, amount {amount} shape {shape}, {cents}c");
 
-                // One indicator per octave of the Range, closing the ring:
-                // that is one slit per boundary and no other break. A missing
-                // indicator merges two slits into one hole, so the count is
-                // what says all of them are there.
-                let (low, high) = layout.slot_range();
+                // One indicator per octave this node has in the window,
+                // closing the ring: that is one slit per boundary and no
+                // other break. A missing indicator merges two slits into one
+                // hole, so the count is what says all of them are there.
+                let (first, last) = layout.slot_range(cents);
+                let want = (last - first + 1) as usize;
                 let runs = unlit_runs(&profile);
-                assert_eq!(
-                    runs.len(),
-                    (high - low + 1) as usize,
-                    "{case}: unlit runs {runs:?} for {} indicators",
-                    high - low + 1
-                );
-
-                // Middle C is straight up, and every node draws the octave
-                // that contains it, so the top is covered on every node.
-                assert!(gap_at(&profile, 90.0) == 0.0, "{case}: nothing covers the top");
+                // Except at the two ENDS under a heavy taper, and that is the
+                // settings talking rather than a missing indicator. An end
+                // indicator reaches from the seam to its own octave's edge, so
+                // it can be as little as half an octave — the window generally
+                // stops part way between two of a node's octaves — while the
+                // Gap is cut out of it from both sides at full width. Past
+                // about 0.6 the edge of the axis is thin enough that those two
+                // slits meet on a short one, and the ring reads an indicator
+                // short. `octaves.rs` pins the count exactly, on angles, where
+                // no padding is involved.
+                if amount <= 0.6 {
+                    assert_eq!(runs.len(), want, "{case}: unlit runs {runs:?} for {want} sectors");
+                } else {
+                    assert!(
+                        runs.len() >= want - 2 && runs.len() <= want,
+                        "{case}: unlit runs {runs:?} for {want} sectors — at most the two \
+                         end indicators can be lost to the Gap"
+                    );
+                }
 
                 // 270 degrees is straight down: the window's two ends at
-                // once. An indicator runs THROUGH it, so it is covered like
-                // any other direction — except on nodes whose own octaves
-                // land there, which is the C case (a boundary exactly on the
-                // seam) and the 1150c case (one half a semitone off it,
-                // inside the slit the Gap cuts). Read on the even axis, where
-                // those two are the only exceptions at every span.
-                if amount == 0.0 {
-                    let bottom = gap_at(&profile, 270.0);
-                    if cents == 0.0 {
-                        assert!(bottom > 0.0, "{case}: a C node's octaves meet at the seam");
-                    } else if cents != 1150.0 {
-                        assert!(bottom == 0.0, "{case}: {bottom:.1} deg of the bottom uncovered");
-                    }
+                // once, and now a boundary on EVERY node — the lowest
+                // indicator reaches the seam from one side and the highest
+                // from the other, whatever the pitch class. That is what
+                // replaced the wrap, and it is the whole of why the ring
+                // closes at a window like 24..97.5.
+                assert!(gap_at(&profile, 270.0) > 0.0, "{case}: no seam at the bottom");
+
+                // The middle of the window is straight up, and a node whose
+                // octaves straddle it covers the top. Read on the two pitch
+                // classes that sit clear of a boundary there, at windows
+                // whose middle is a C: the others legitimately put a slit at
+                // the top, which is the axis being read rather than a hole.
+                if 0.5 * (low + high) == 60.0 && (cents == 0.0 || cents == 700.0) {
+                    assert!(gap_at(&profile, 90.0) == 0.0, "{case}: nothing covers the top");
                 }
             }
         }
@@ -955,19 +980,22 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
 
     let mut pane = 100;
-    for (span, amount, shape) in [(2u32, 0.0, 0.5), (5, 0.7, 0.25)] {
+    for (low, high, amount, shape) in [(30.0f32, 90.0f32, 0.0, 0.5), (6.0, 126.0, 0.7, 0.25)] {
+        let layout = octave_layout(low, high, amount, shape);
         // A C node and a node a fifth up: same slot, pitches 7 semitones
         // apart, so the bright arc must move by exactly that much of the axis.
-        // Middle C's octave, and the top of the Range — the one that runs off
-        // the window's high end and comes round the seam, whose angle is the
-        // whole of what a wrapped indicator has to get right.
-        for (cents, slot) in [
-            (0.0f32, harmonigraph_scene::MIDDLE_C_SLOT as u32),
-            (700.0, harmonigraph_scene::MIDDLE_C_SLOT as u32),
-            (0.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
-            (700.0, harmonigraph_scene::MIDDLE_C_SLOT as u32 + span),
-        ] {
-            let layout = octave_layout(span, amount, shape);
+        // The octave holding the window's middle, and one further round the
+        // wheel, where a wrong anchor or a wrong direction shows.
+        //
+        // Both held INSIDE the node's own range rather than at its ends: an
+        // end indicator can be half an octave, which a heavy taper leaves
+        // thinner than the Gap's slits, and a centroid needs an arc to
+        // measure. That the ends reach the seam at all is
+        // `every_octave_in_the_range_is_drawn_and_they_close_the_ring`.
+        for (cents, offset) in [(0.0f32, 0u32), (700.0, 0), (0.0, 2), (700.0, 2)] {
+            let (first, last) = layout.slot_range(cents);
+            let slot =
+                (harmonigraph_scene::MIDDLE_C_SLOT as u32 + offset).clamp(first + 1, last - 1);
             let mut scene = octave_wheel_scene(layout, cents);
             // One octave sounding. The silent slots still ghost in behind it
             // at GHOST_LEVEL, which the brightness threshold below sorts out.
@@ -999,7 +1027,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             // maximum separates them cleanly whatever the node color is.
             let bright = |i: usize| px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32;
             let peak = (0..px.len() / 4).map(|k| bright(k * 4)).max().unwrap_or(0);
-            assert!(peak > 60, "span {span}: nothing bright enough to measure");
+            assert!(peak > 60, "{low}..{high}: nothing bright enough to measure");
             let (mut vx, mut vy) = (0f64, 0f64);
             let c = SIZE[0] as f64 / 2.0;
             for y in 0..SIZE[1] {
@@ -1022,7 +1050,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             let off = off.min(360.0 - off);
             assert!(
                 off < 6.0,
-                "span {span}, {cents}c, slot {slot}: indicator drawn at {drawn:.1} deg, \
+                "{low}..{high}, {cents}c, slot {slot}: indicator drawn at {drawn:.1} deg, \
                  the axis puts its pitch at {expected:.1}"
             );
         }
@@ -1251,3 +1279,4 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         );
     }
 }
+

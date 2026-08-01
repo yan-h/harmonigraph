@@ -19,7 +19,7 @@ use harmonigraph_render::lattice_paint_callback;
 use harmonigraph_scene::derive_scene;
 
 use super::section;
-use crate::widgets::{button_row, choice_row, record_button, ValueBar};
+use crate::widgets::{button_row, choice_row, option_label, record_button, ValueBar};
 use crate::{theme, LatticeSide, Layout, Pane, SharedState};
 
 /// The preview's lattice is a second live view, so it needs its own GPU id —
@@ -123,7 +123,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         let f = &mut state.render_config.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
-            if ui.selectable_label(on, format!("{w}:{h}")).clicked() {
+            if ui.selectable_label(on, option_label(&format!("{w}:{h}"))).clicked() {
                 f.aspect_w = w;
                 f.aspect_h = h;
             }

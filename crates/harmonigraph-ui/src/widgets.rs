@@ -693,16 +693,44 @@ pub struct RangeBar<'a> {
     /// Closest the two ends may come, in value units — the range can be
     /// narrowed but never collapsed.
     min_span: f32,
+    /// Whether a drag lands on whole values only (see [`RangeBar::integer`]).
+    integer: bool,
     display: fn(f32) -> String,
 }
 
 impl<'a> RangeBar<'a> {
     pub fn new(low: &'a mut f32, high: &'a mut f32, range: RangeInclusive<f32>) -> Self {
-        RangeBar { low, high, range, min_span: 0.0, display: |v| format!("{v:.2}") }
+        RangeBar {
+            low,
+            high,
+            range,
+            min_span: 0.0,
+            integer: false,
+            display: |v| format!("{v:.2}"),
+        }
     }
 
     pub fn min_span(mut self, span: f32) -> Self {
         self.min_span = span;
+        self
+    }
+
+    /// Land on whole values only — for a range whose ends MEAN something at
+    /// each step and whose readout says which one it is.
+    ///
+    /// The octave wheel's Range is the case: its readout is a note name, and
+    /// what it draws changes on a semitone boundary (a node's octave is either
+    /// inside the window or it isn't). Left continuous, two windows a tenth of
+    /// a semitone apart both read "C1" while one of them draws an indicator
+    /// fewer, and a window exactly on an octave — the reference case for the
+    /// whole layout — is unreachable except by luck.
+    ///
+    /// Snapped at the POINTER, ahead of the grab arithmetic, so the minimum
+    /// span survives it: rounding the pair afterwards can take a semitone off
+    /// a span that was exactly at the minimum, while rounding the value the
+    /// gesture is reading leaves every bound it is clamped against whole.
+    pub fn integer(mut self) -> Self {
+        self.integer = true;
         self
     }
 
@@ -738,6 +766,7 @@ impl<'a> RangeBar<'a> {
         if response.dragged() {
             if let Some(p) = response.interact_pointer_pos() {
                 let v = value_at(p.x);
+                let v = if self.integer { v.round() } else { v };
                 // Decided on the first frame of the gesture and remembered for
                 // the rest of it, so dragging one end past the other doesn't
                 // hand the drag to whichever handle is nearest now. Decided
@@ -884,12 +913,43 @@ pub fn button_row<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     .inner
 }
 
+/// A selectable option's label, set in MONOSPACE when the label is a bare
+/// number ("1080", "16:9", "-1.5") and left alone when it is a word.
+///
+/// Numbers are monospace everywhere else in this UI — every bar readout, the
+/// perf HUD, the lattice text — for the reason digits always want it: one
+/// width per glyph, so a column of them lines up and none of them wiggles as
+/// it changes. A row of number buttons is the same picture sideways. Set in
+/// the proportional face, "1080" and "1440" come out different widths and the
+/// row reads as four unrelated words rather than as a scale.
+///
+/// The FAMILY only, not [`TextStyle::Monospace`], which would also drop the
+/// label to the monospace size and leave a number sitting smaller than the
+/// words beside it.
+///
+/// Decided per label rather than per row, because rows mix: the frame-rate row
+/// is "Uncapped" beside four numbers, and only the numbers want this.
+pub fn option_label(label: &str) -> egui::RichText {
+    let text = egui::RichText::new(label);
+    // A digit, and nothing but digits and the punctuation numbers wear.
+    let numeric = label.chars().any(|c| c.is_ascii_digit())
+        && label.chars().all(|c| c.is_ascii_digit() || "+-±.,:/× ".contains(c));
+    if numeric {
+        text.family(egui::FontFamily::Monospace)
+    } else {
+        text
+    }
+}
+
 /// A labelled row of mutually-exclusive choices for `value`: the standard
 /// shape of every enum setting in the settings panes.
 ///
 /// Each option is `(value, label, hover hint)`; an empty hint means no
 /// tooltip. Adding a variant to a style enum is then one line here rather
 /// than another copy of the label/loop/`selectable_value` scaffolding.
+///
+/// Number labels come out monospace — see [`option_label`], which the rows
+/// built by hand out of `selectable_value` call for themselves.
 pub fn choice_row<T: Copy + PartialEq>(
     ui: &mut Ui,
     name: &str,
@@ -899,7 +959,7 @@ pub fn choice_row<T: Copy + PartialEq>(
     button_row(ui, |ui| {
         ui.label(name);
         for (option, label, hint) in options {
-            let response = ui.selectable_value(value, *option, *label);
+            let response = ui.selectable_value(value, *option, option_label(label));
             if !hint.is_empty() {
                 response.on_hover_text(*hint);
             }
@@ -928,6 +988,94 @@ mod tests {
             },
         );
         out.shapes.into_iter().map(|s| s.shape).collect()
+    }
+
+    /// Drag a range bar from `from` to `to` (fractions of its width) and
+    /// answer where its two ends ended up. A real gesture through a real
+    /// context: press, then move with the button still down, which is the only
+    /// way to reach the pointer-value path `integer()` snaps in.
+    fn drag_range_bar(
+        (low, high): (f32, f32),
+        (from, to): (f32, f32),
+        integer: bool,
+    ) -> (f32, f32) {
+        const W: f32 = 300.0;
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(W, 100.0));
+        let (mut lo, mut hi) = (low, high);
+        let track = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut t = 0.0;
+        let mut frame = |lo: &mut f32, hi: &mut f32, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let bar = RangeBar::new(lo, hi, AXIS.0..=AXIS.1).min_span(OCTAVE);
+                    let response = if integer { bar.integer().show(ui) } else { bar.show(ui) };
+                    track.set(response.rect);
+                },
+            );
+        };
+        // A frame with no input first: egui resolves the pointer against the
+        // PREVIOUS pass's widget rects, so the bar has to have been laid out
+        // once before a press can land on it — and this is also where the
+        // gesture learns where the bar actually is.
+        frame(&mut lo, &mut hi, vec![]);
+        let bar = track.get();
+        let at = |x: f32| egui::pos2(bar.left() + bar.width() * x, bar.center().y);
+        frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from))]);
+        frame(&mut lo, &mut hi, vec![
+            egui::Event::PointerMoved(at(from)),
+            egui::Event::PointerButton {
+                pos: at(from),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        // A step clear of egui's drag threshold first, then the rest of the
+        // way. The grab is decided on the first frame the drag is LIVE, so a
+        // gesture that jumps straight to its target decides it there — which
+        // can be a different grab from the one the press was aimed at.
+        let step = 12.0 / bar.width() * (to - from).signum();
+        frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from + step))]);
+        frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(to))]);
+        (lo, hi)
+    }
+
+    /// An `integer()` bar lands on whole values, and a plain one does not —
+    /// the second half matters as much as the first, since a snap that came
+    /// from the axis rather than from the flag would pass the first alone.
+    ///
+    /// The minimum span survives the snap too. That is the reason it is taken
+    /// at the POINTER rather than by rounding the pair afterwards: a span
+    /// sitting exactly at the minimum, rounded end by end, can come out a
+    /// whole value short of it.
+    #[test]
+    fn an_integer_range_bar_lands_on_whole_values() {
+        // Slide the whole span, which is the grab that could carry a
+        // fraction furthest: it holds an OFFSET taken at the press and adds
+        // it back on every frame, so a fractional one would leave both ends
+        // off the grid for the rest of the gesture.
+        let held = (48.0f32, 84.0f32);
+        let (lo, hi) = drag_range_bar(held, (0.45, 0.6), true);
+        assert_eq!((lo, hi), (lo.round(), hi.round()), "{lo}..{hi} is not whole");
+        assert!(lo > held.0, "the drag moved nothing");
+        assert_eq!(hi - lo, held.1 - held.0, "a slid span keeps its width");
+        let (loose, _) = drag_range_bar(held, (0.45, 0.6), false);
+        assert_ne!(loose, loose.round(), "the axis snaps by itself; the flag proves nothing");
+
+        // Squeezed against the minimum span: the high end dragged down past
+        // the low one, from a position that is not a whole value.
+        let (lo, hi) = drag_range_bar((60.0, 96.0), (1.0, 0.371), true);
+        assert_eq!((lo, hi), (lo.round(), hi.round()), "{lo}..{hi} is not whole");
+        assert_eq!(hi - lo, OCTAVE, "the span stopped at {} rather than the minimum", hi - lo);
     }
 
     /// The filled rects, in paint order.
@@ -1185,6 +1333,64 @@ mod tests {
         let bar = ValueBar::new(&mut value, 1.0..=8.0, "test").integer();
         let v = bar.value_at(0.37);
         assert_eq!(v, v.round());
+    }
+
+    /// Every text run a `choice_row` of these options paints, as
+    /// `text -> (family, size)`.
+    fn choice_row_fonts(options: &[(u32, &str, &str)]) -> Vec<(String, egui::FontId)> {
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 100.0));
+        let mut value = 0u32;
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| choice_row(ui, "Row", &mut value, options),
+        );
+        out.shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) => Some((
+                    t.galley.text().to_owned(),
+                    t.galley.job.sections[0].format.font_id.clone(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// An option label that is a bare number is set in the monospace face, and
+    /// one that is a word is not — decided per label, since a row can hold
+    /// both. The size is the row's own either way: taking the whole monospace
+    /// TEXT STYLE would shrink the numbers, leaving "30" visibly smaller than
+    /// the "Uncapped" beside it.
+    #[test]
+    fn number_option_labels_are_monospace_at_the_rows_own_size() {
+        let painted = choice_row_fonts(&[
+            (0, "Uncapped", ""),
+            (1, "30", ""),
+            (2, "144", ""),
+            (3, "16:9", ""),
+            (4, "-1.5", ""),
+            (5, "12-TET", ""),
+        ]);
+        let numbers = ["30", "144", "16:9", "-1.5"];
+        let words = ["Row", "Uncapped", "12-TET"];
+        let row_size = painted
+            .iter()
+            .find(|(text, _)| text == "Uncapped")
+            .map(|(_, font)| font.size)
+            .expect("the row painted no 'Uncapped'");
+        for (text, font) in &painted {
+            let wanted = if numbers.contains(&text.as_str()) {
+                egui::FontFamily::Monospace
+            } else {
+                assert!(words.contains(&text.as_str()), "unexpected run {text:?}");
+                egui::FontFamily::Proportional
+            };
+            assert_eq!(font.family, wanted, "{text:?} was painted in {:?}", font.family);
+            assert_eq!(font.size, row_size, "{text:?} was painted at {}pt", font.size);
+        }
+        assert_eq!(painted.len(), numbers.len() + words.len(), "a label went unpainted");
     }
 
     /// A row-builder: lays out a control row, calling back to add its label

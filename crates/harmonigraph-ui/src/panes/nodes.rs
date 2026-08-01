@@ -6,10 +6,10 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{choice_row, RangeBar, ValueBar};
+use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    NodeStyle, ViewConfig, MAX_OCTAVE_SPAN, MAX_TAPER_AMOUNT, MIN_OCTAVE_SPAN,
+    NodeStyle, ViewConfig, MAX_TAPER_AMOUNT, MIN_WINDOW, PITCH_CEIL, PITCH_FLOOR,
 };
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
@@ -72,52 +72,58 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
     // Range and Taper are the axis; Band and Gap below are where it is drawn.
-    // Range counts octaves out from middle C's and every node draws all of
-    // them — the same octave numbers whatever the node's pitch class, which
-    // is only what decides where round the turn they land.
     //
-    // The buttons ARE the supported range, written out one octave list at a
-    // time because each names its own; nothing derives them from the layout's
-    // bounds. So widening those bounds without adding a row would leave the
-    // extra Range unreachable, and narrowing them would leave a button that
-    // sets a span the layout clamps away — a control disagreeing with the
-    // wheel it draws. Fail the build on either instead.
-    const _: () = assert!(MIN_OCTAVE_SPAN == 2 && MAX_OCTAVE_SPAN == 5);
-    choice_row(
-        ui,
-        "Range",
-        &mut view.octave_span,
-        &[
-            (2, "±2", "C1..C5 around middle C — five octaves to the turn"),
-            (3, "±3", "C0..C6"),
-            (4, "±4", "C-1..C7"),
-            (5, "±5", "C-2..C8 — every octave MIDI has, so one is 33 degrees"),
-        ],
-    );
-    // The taper is two bars rather than a list of named curves: Amount is the
-    // only thing that moves the ends, Shape says where in between the loss
-    // falls, and an even axis is Amount 0 rather than a mode beside them.
-    ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Amount")
+    // A PITCH RANGE, dragged like the color range and the analyzer's axis, not
+    // a count of octaves: the wheel is a window onto the keyboard, and which
+    // register it is about is the question worth asking of it. The octaves are
+    // what the window is divided BY — a node draws the ones it has inside,
+    // wherever the ends fall between them.
+    //
+    // Both ends over the whole of MIDI, so any register can be framed; the
+    // minimum span is four octaves — C1..C5 — which is where the taper's
+    // arithmetic starts running an indicator up toward a whole turn (see
+    // `harmonigraph_scene::MIN_WINDOW`).
+    ui.label("Range");
+    RangeBar::new(&mut view.octave_low, &mut view.octave_high, PITCH_FLOOR..=PITCH_CEIL)
+        .min_span(MIN_WINDOW)
+        // Whole semitones, because that is what the readout can say and what
+        // the wheel can act on: an octave of a node is either inside the
+        // window or it isn't, and the boundary is a semitone.
+        .integer()
+        .display(pitch_readout)
+        .show(ui)
+        .on_hover_text(
+            "The pitch window one turn of a node covers. Each node draws the \
+             octaves of itself that land inside it, so a narrow window gives \
+             each of them more of the ring and a wide one reaches more of the \
+             keyboard. Drag either end, or drag between them to move the whole \
+             window; notes outside it light the outermost indicator on their \
+             side rather than vanishing.",
+        );
+    // The taper is two bars rather than a list of named curves: the amount is
+    // the only thing that moves the ends, the shape says where in between the
+    // loss falls, and an even axis is amount 0 rather than a mode beside them.
+    ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Taper amount")
         .show(ui)
         .on_hover_text(
             "How much of its width the octave at the EDGE of the range gives \
              up, which the ones inside it take: 0 is an even axis — no taper \
              at all — and 0.9 leaves those outermost slices a tenth of the \
-             width an even octave would have. This alone sets them; the Shape \
-             below never moves them",
+             width an even octave would have. This alone sets them; the Taper \
+             shape below never moves them",
         );
-    // Inert at Amount 0, where there is no loss to place: the Shape bar can
+    // Inert at amount 0, where there is no loss to place: the shape bar can
     // only say where a taper falls, not whether there is one.
     ui.add_enabled_ui(view.octave_taper_amount > 0.0, |ui| {
-        ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Shape")
+        ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Taper shape")
             .show(ui)
             .on_hover_text(
                 "WHERE that width is given up. Left of the middle it goes at \
-                 once — the octave next to middle C gives up most of what the \
-                 edge one does and the outer ones flatten off, a spotlight on \
-                 the middle. Right of it the middle several octaves stay near \
-                 full width and the outermost fall away, a plateau. The \
-                 middle of the bar is a straight ramp",
+                 once — the octave next to the middle of the range gives up \
+                 most of what the edge one does and the outer ones flatten \
+                 off, a spotlight on the middle. Right of it the middle \
+                 several octaves stay near full width and the outermost fall \
+                 away, a plateau. The middle of the bar is a straight ramp",
             );
     });
     // No on/off: the layer is what says which octaves are sounding, which
@@ -162,10 +168,18 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // told apart by radius rather than by hue, and a note that is at once
     // the highest and the lowest -- a lone held note, or a chord whose top
     // and bottom share a pitch class -- simply gets both.
-    ui.checkbox(&mut view.mark_melody, "Melody")
-        .on_hover_text("Ring the highest held note, just inside the octave band");
-    ui.checkbox(&mut view.mark_bass, "Bass")
-        .on_hover_text("Ring the lowest held note, just outside the octave band");
+    //
+    // Side by side, because they are that pair: two ends of one idea, both
+    // named in the heading above them, and short enough that a column of two
+    // spends a row on saying nothing. A `button_row` rather than a bare
+    // `horizontal` so a narrow pane wraps them instead of running Bass off
+    // the edge.
+    button_row(ui, |ui| {
+        ui.checkbox(&mut view.mark_melody, "Melody")
+            .on_hover_text("Ring the highest held note, just inside the octave band");
+        ui.checkbox(&mut view.mark_bass, "Bass")
+            .on_hover_text("Ring the lowest held note, just outside the octave band");
+    });
     // The marks are full rings bracketing the octave band (melody
     // inside, bass outside), each slit either side of the octave
     // responsible so that stretch reads as its own piece.
@@ -181,8 +195,16 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
-/// A MIDI note as a key name and octave, for the color-range readout — "C1",
-/// "C8" — so the ends read as pitches rather than bare numbers.
+/// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
+/// as pitches rather than bare numbers. Shared by the octave Range and the
+/// color range.
+///
+/// It ROUNDS, which is exact for the octave Range (its bar lands on whole
+/// semitones) and a reading for the color range (whose ends are a continuous
+/// gradient, where a tenth of a semitone changes nothing anyone can see). A
+/// caller wanting finer steps than a semitone needs its own readout, not a
+/// looser one here: this one would then name two visibly different settings
+/// the same note.
 fn pitch_readout(midi: f32) -> String {
     let n = midi.round() as i32;
     let name = super::KEY_NAMES[n.rem_euclid(12) as usize];
