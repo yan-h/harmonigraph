@@ -33,6 +33,12 @@
 //! events with. They are deliberately NOT wall-clock or frame times: the
 //! whole point is that the replay chooses its own frame rate.
 
+pub mod params;
+pub mod render;
+
+pub use params::{MAX_TUNING_OFFSET, ParamKey};
+pub use render::{LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger};
+
 use std::io::{BufRead, Write};
 
 use serde::{Deserialize, Serialize};
@@ -103,9 +109,10 @@ impl Default for Header {
 }
 
 /// A note event, mirroring `harmonigraph_core::NoteEventKind`. Mirrored rather
-/// than reused so this crate stays dependency-free in both directions:
-/// `harmonigraph-core` is MIT/Apache and must not gain a serde dependency (see
-/// `ci.sh`), and the take format must be free to outlive an internal enum.
+/// than reused even though this crate does depend on core: `harmonigraph-core`
+/// is MIT/Apache and must not gain a serde dependency (see `ci.sh`), so it
+/// cannot derive the impls this needs — and the take format must be free to
+/// outlive an internal enum, which reusing one would forfeit.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum NoteKind {
     On { velocity: f32 },
@@ -126,7 +133,7 @@ pub struct NoteRecord {
 }
 
 /// One automatable parameter changing value. `id` is the host-facing
-/// parameter id (`ParamKey::id`), so a take reads next to a project file
+/// parameter id ([`ParamKey::id`]), so a take reads next to a project file
 /// and survives an internal enum being reordered.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ParamRecord {

@@ -136,9 +136,10 @@ harmonigraph-ui          egui_dock pane shell: Lattice / Tuning / Nodes /
                          (the lattice's hovered node), ParamBackend trait
                          abstracting "where params live".
 harmonigraph-take        the recorded input to a visualization: note events and
-                         parameter automation on the audio clock. Linked into
-                         the plugin, so serde+ron only. See
-                         docs/offline-rendering.md.
+                         parameter automation on the audio clock, plus the
+                         settings a render is composed from. Linked into the
+                         plugin, so no GUI stack: serde+ron and
+                         harmonigraph-core. See docs/offline-rendering.md.
 harmonigraph-record      writes a take while the transport rolls (lock-free
                          rings, transport-jump detection) and drives
                          harmonigraph-offline as a subprocess when one

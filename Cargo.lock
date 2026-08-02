@@ -1396,7 +1396,6 @@ version = "0.1.0"
 dependencies = [
  "harmonigraph-core",
  "harmonigraph-take",
- "harmonigraph-ui",
  "parking_lot",
  "rtrb",
 ]
@@ -1443,6 +1442,7 @@ dependencies = [
 name = "harmonigraph-take"
 version = "0.1.0"
 dependencies = [
+ "harmonigraph-core",
  "ron 0.8.1",
  "serde",
 ]
@@ -1457,6 +1457,7 @@ dependencies = [
  "harmonigraph-core",
  "harmonigraph-render",
  "harmonigraph-scene",
+ "harmonigraph-take",
  "libc",
  "ron 0.8.1",
  "serde",

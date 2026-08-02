@@ -7,11 +7,15 @@ license.workspace = true
 
 # Deliberately tiny: this crate is linked into the PLUGIN, whose audio
 # thread writes takes. Nothing here may pull in a GUI stack, and nothing
-# on the write path may allocate or block. serde + ron only.
+# on the write path may allocate or block. serde + ron, plus
+# harmonigraph-core, which is itself dependency-free (ci.sh guards it) and
+# is here for the tuning constants `ParamKey`'s ranges are quoted against.
 #
-# That is what keeps `harmonigraph-record` — the recorder and the render
-# driver, which need ParamKey and RenderConfig out of harmonigraph-ui — a
-# crate beside this one rather than a module inside it.
+# What keeps `harmonigraph-record` a crate beside this one rather than a
+# module inside it is the recording itself — audio-thread rings, transport
+# handling, a subprocess driver — none of which reading a take should have
+# to link.
 [dependencies]
+harmonigraph-core = { workspace = true }
 serde = { workspace = true }
 ron = { workspace = true }
