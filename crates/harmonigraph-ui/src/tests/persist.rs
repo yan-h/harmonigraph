@@ -32,6 +32,12 @@ fn persist_round_trips_camera_and_view() {
     // a blob is entitled to one.
     state.view.octave_count = 7;
     state.view.octave_center = 64.5;
+    // A fringe too, with a blend the strip can only reach once there are two
+    // extras a side — the three fields are set together because a wheel is
+    // what they mean together.
+    state.view.octave_extras = 2;
+    state.view.octave_extra_size = 0.4;
+    state.view.octave_extra_blend = 0.5;
     state.view.grid_color = [0.9, 0.1, 0.4, 0.25];
     state.view.grid_thickness = 2.5;
     state.view.grid_inset = 0.0;
@@ -66,6 +72,9 @@ fn persist_round_trips_camera_and_view() {
     assert!(restored.view.mark_melody);
     assert!(!restored.view.mark_bass, "bass off round-trips");
     assert_eq!((restored.view.octave_count, restored.view.octave_center), (7, 64.5));
+    assert_eq!(restored.view.octave_extras, 2, "the fringe round-trips");
+    assert_eq!(restored.view.octave_extra_size, 0.4);
+    assert_eq!(restored.view.octave_extra_blend, 0.5);
     assert_eq!(restored.view.grid_color, [0.9, 0.1, 0.4, 0.25]);
     assert_eq!(restored.view.grid_thickness, 2.5);
     assert_eq!(restored.view.grid_inset, 0.0, "0 (lines to the center) round-trips");
@@ -110,6 +119,45 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     assert!(restored.view.marvel_auto, "a missing detect key means on");
     assert!(!restored.view.marvel, "a missing mode key means off, and the detect decides");
     assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
+}
+
+/// The wheel's two-bar TAPER is gone, and a project saved against it carries
+/// the pair of keys nothing reads now. It has to open on the count it always
+/// drew, evenly — an unknown field being ignored rather than refused is the
+/// whole of why that works, and it is a property of how the blob is read
+/// rather than anything this crate spells out, so it is worth a blob to say
+/// so.
+#[test]
+fn a_blob_written_against_the_taper_opens_on_an_even_wheel() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    state.view.octave_count = 7;
+    state.view.octave_extras = 3;
+    state.view.octave_extra_size = 0.4;
+    state.view.octave_extra_blend = 0.5;
+    let mut saved = state.save_persist();
+    // Exactly a pre-fringe blob: none of the three keys the fringe added, and
+    // the two the taper wrote where they now sit. One key at a time, each
+    // checked to have hit, so a rename cannot leave a default untested.
+    for key in [
+        format!("octave_extras:{},", state.view.octave_extras),
+        format!("octave_extra_size:{:?},", state.view.octave_extra_size),
+        format!("octave_extra_blend:{:?},", state.view.octave_extra_blend),
+    ] {
+        let stripped = saved.replace(&key, "");
+        assert_ne!(stripped, saved, "{key:?} is not in the blob to remove");
+        saved = stripped;
+    }
+    let count = format!("octave_count:{},", state.view.octave_count);
+    let tapered =
+        saved.replace(&count, &format!("{count}octave_taper_amount:0.6,octave_taper_shape:0.25,"));
+    assert_ne!(tapered, saved, "the taper's keys did not go into the blob");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&tapered);
+    assert_eq!(restored.view.octave_count, 7, "the count the project drew");
+    assert_eq!(restored.view.octave_extras, 0, "and no fringe, which is an even wheel");
+    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
 /// The keys a blob written against an older wheel carries instead of the count

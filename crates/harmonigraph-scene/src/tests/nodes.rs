@@ -398,7 +398,7 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
     // and the COUNT is not: every class draws the span, so the numbers shift
     // and nothing else does. Five octaves centered on middle C gives a C node
     // slots 3..7 and a G node the five that straddle those.
-    let wheel = octave_layout(5, 60.0, 0.0, DEFAULT_TAPER_SHAPE);
+    let wheel = octave_layout(5, 60.0, 0, DEFAULT_EXTRA_SIZE, DEFAULT_EXTRA_BLEND);
     assert_eq!(
         wheel.slots(0.0),
         (MIDDLE_C_SLOT as i32 - 2, MIDDLE_C_SLOT as i32 + 2),
@@ -414,7 +414,9 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
     // exactly on one of the node's octaves breaks the tie downward. Pinned
     // absolutely, because everything else here is measured FROM the ring's
     // base and would read the same with the whole ring an octave out.
-    let even = |center: f32| octave_layout(4, center, 0.0, DEFAULT_TAPER_SHAPE).slots(0.0);
+    let even = |center: f32| {
+        octave_layout(4, center, 0, DEFAULT_EXTRA_SIZE, DEFAULT_EXTRA_BLEND).slots(0.0)
+    };
     assert_eq!(even(59.0), (3, 6), "a center under the node's octave reaches down");
     assert_eq!(even(61.0), (4, 7), "and one over it reaches up");
     assert_eq!(even(60.0), (3, 6), "a center on the octave itself ties downward");
@@ -432,16 +434,17 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
 }
 
 #[test]
-fn the_views_taper_reaches_the_wheel() {
-    // The span and center are pinned by the fold test above, which reads them
-    // back through the clamp — but nothing there touches the taper or its
-    // amount, so hard-coding either at the derive call would leave the suite
-    // green while every ring on screen came out evenly divided.
+fn the_views_fringe_reaches_the_wheel() {
+    // The count and center are pinned by the fold test above, which reads them
+    // back through the clamp — but nothing there touches the extras or their
+    // size, so hard-coding any of the three at the derive call would leave the
+    // suite green while every ring on screen came out evenly divided.
     let view = ViewConfig {
-        octave_count: 7,
+        octave_count: 5,
         octave_center: 60.0,
-        octave_taper_amount: 0.6,
-        octave_taper_shape: 0.25,
+        octave_extras: 2,
+        octave_extra_size: 0.4,
+        octave_extra_blend: 0.25,
         ..ViewConfig::default()
     };
     let scene = scene_of(
@@ -453,13 +456,13 @@ fn the_views_taper_reaches_the_wheel() {
     );
     assert_eq!(
         scene.octave_layout,
-        octave_layout(7, 60.0, 0.6, 0.25),
+        octave_layout(5, 60.0, 2, 0.4, 0.25),
         "the frame's wheel is the one the view asked for"
     );
     assert_ne!(
         scene.octave_layout,
-        octave_layout(7, 60.0, 0.0, DEFAULT_TAPER_SHAPE),
-        "and a taper is not the even division"
+        octave_layout(5, 60.0, 0, 0.4, 0.25),
+        "and a fringe is not the even division"
     );
 }
 

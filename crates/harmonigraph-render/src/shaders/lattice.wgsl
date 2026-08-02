@@ -355,8 +355,8 @@ fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
 // every node draws the span octaves of ITSELF nearest that center. Three
 // things follow, and they are the whole layout:
 //
-//   - a slice is exactly one octave, so with the taper off it is exactly a
-//     turn over the span — on every node, whatever its pitch class;
+//   - a slice is exactly one octave, so with no extras it is exactly a turn
+//     over the span — on every node, whatever its pitch class;
 //   - the center pitch is straight up on every node too, which is what makes
 //     the top of the picture mean one pitch across the whole lattice;
 //   - a node whose class sits d semitones from the center's has its whole ring
@@ -435,7 +435,7 @@ fn oct_ring(cents: f32) -> OctRing {
     var ring: OctRing;
     ring.base = i32(nearest) + low;
     // Turned so the CENTER pitch lands straight up. Solved for rather than
-    // derived from the ring's middle: under a taper the slice the center falls
+    // derived from the ring's middle: with extras the slice the center falls
     // in is not one span-th of the turn, and the pitch sits at its own
     // fraction of whatever width that slice has.
     let along = (oct_center() - oct_slot_pitch(ring.base, cents)) / 12.0 + 0.5;
@@ -546,8 +546,9 @@ fn outer_glyph(
     // A wedge under a half turn is the INTERSECTION of its two half-planes;
     // one PAST a half turn is their union, and reading it as an intersection
     // would empty the sector instead of filling it. Both cases are real here:
-    // at a span of three the fullest taper amount pins the two edge slices at
-    // a tenth of an even slice each, leaving the one between them 336 degrees.
+    // one full-size octave flanked by an extra either side, at the thinnest
+    // size, pins those two at a tenth of an even slice each and leaves the one
+    // between them 336 degrees.
     // That extreme, and the floor that keeps it under a whole turn, are
     // `an_indicator_can_pass_a_half_turn_but_never_a_whole_one` and `MIN_SPAN`
     // in harmonigraph-scene.
@@ -933,7 +934,7 @@ const MARK_RING_MIN_AA: f32 = 1.5;
 // origin, so it passes just as close on the far side of the node and would
 // otherwise cut the ring twice. It is taken per EDGE rather than against the
 // sector's bisector, which is the same cut while a sector is narrow and the
-// right one once a taper has made it wide (past a half turn, a point by one
+// right one once a fringe has made it wide (past a half turn, a point by one
 // edge faces away from the bisector entirely).
 //
 // A slot mask can name more than one sector: releasing the top of a chord

@@ -67,8 +67,9 @@ fn main() -> Result<(), String> {
             // them.
             "octave_count" => view.octave_count = num()? as u32,
             "octave_center" => view.octave_center = num()?,
-            "octave_taper_amount" => view.octave_taper_amount = num()?,
-            "octave_taper_shape" => view.octave_taper_shape = num()?,
+            "octave_extras" => view.octave_extras = num()? as u32,
+            "octave_extra_size" => view.octave_extra_size = num()?,
+            "octave_extra_blend" => view.octave_extra_blend = num()?,
             "bloom_strength" => view.bloom_strength = num()?,
             "show_labels" => view.show_labels = flag()?,
             "show_cents" => view.show_cents = flag()?,
