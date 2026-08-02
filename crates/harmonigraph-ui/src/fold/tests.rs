@@ -1236,6 +1236,43 @@ impl Window {
     }
 }
 
+/// A pane is never DRAWN collapsed at more than a rail's width.
+///
+/// A fold is a two-step — one frame decides what to ask the window for, the
+/// next is laid out in the window it was given — and a collapsed flag that
+/// lands on the first of those is a pane with its body gone and its whole
+/// column kept: a wide empty hole for exactly one frame, worth a third of the
+/// editor where the Spectral pane is what folded.
+///
+/// Deferring the layout write does not reach it. The hole is what a collapsed
+/// flag draws at an un-narrowed fraction, and the fraction is the thing being
+/// deferred — so the flag is what has to wait ([`Wait`]). Held, the pane stays
+/// open and fully drawn for that frame, which is what the frame before it
+/// showed, and folds on the frame whose window fits the rail.
+#[test]
+fn a_pane_is_never_drawn_collapsed_at_more_than_a_rail() {
+    let mut dock = dock();
+    let mut window = Window::new(1000.0);
+    let mut folds = Folds::default();
+    window.settle(&mut folds, &mut dock);
+    // egui_dock's own collapse button, which it draws from inside `show` — so
+    // the flag arrives between one fold pass and the next.
+    collapse(&mut dock, Tab::Spectral, true);
+    for frame in 0..6 {
+        window.frame(&mut folds, &mut dock);
+        let path = dock.find_tab(&Tab::Spectral).expect("docked");
+        let node = &dock[path.surface][path.node];
+        let width = node.rect().expect("on screen").width();
+        assert!(
+            !node.is_collapsed() || width < 40.0,
+            "frame {frame}: a collapsed pane is {width} wide, not a rail"
+        );
+    }
+    // And it did fold, rather than passing by never folding at all.
+    let path = dock.find_tab(&Tab::Spectral).expect("docked");
+    assert!(dock[path.surface][path.node].is_collapsed(), "the pane never folded");
+}
+
 
 /// A folded subtree divides its rail span by how many rails each side
 /// holds, not evenly: fold three panes that sit side by side and the split
@@ -1335,7 +1372,7 @@ fn an_unfold_never_asks_past_the_widest_the_window_has_been() {
 /// An unfold waits for its window, whoever did it. egui_dock re-derives its
 /// own fractions inside `show` the moment the flag comes off, so a pane opened
 /// against the window it is LEAVING is laid out in that window and every
-/// boundary on screen jumps inward for the frame (see [`Open`]).
+/// boundary on screen jumps inward for the frame (see [`Wait`]).
 ///
 /// Driven through `collapse`, which is egui_dock's own expand: that is the
 /// writer the hold has to catch, and the rail arrow is only the other door
