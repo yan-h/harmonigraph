@@ -1218,6 +1218,17 @@ impl SpectrogramAgg {
         keep: usize,
     ) -> (Vec<f64>, Vec<BucketDb>) {
         let nb = reads.len();
+        // One mark per slab, which the hold loop at the bottom relies on to
+        // index `held` by the same offset it indexes `centers` by. The three
+        // arrays are grown together by `fold` and trimmed together below, and
+        // nothing downstream compares a mark against anything, so the two
+        // going out of step is silent: the marks simply start answering for
+        // slabs `drop` positions older than the ones being read.
+        debug_assert_eq!(
+            self.grid.held.len(),
+            self.grid.centers.len(),
+            "a held mark per kept slab",
+        );
         let (Some(t), Some(&front_center)) = (target, self.grid.centers.first()) else {
             return (self.grid.centers.clone(), self.grid.power.clone());
         };
@@ -1925,6 +1936,61 @@ mod tests {
         // that the bug is in the hold itself.
         let mut fresh = SpectrogramAgg::new();
         assert_eq!(fresh.window(&history, 2, bucket, &reads, KEEP), bat, "and after a rebuild");
+    }
+
+    /// A held slab's MARK has to scroll out of the grid with the slab it
+    /// describes.
+    ///
+    /// `view` trims three arrays in step — `centers`, `power`, and the `held`
+    /// marks beside them — and only the first two carry a value anything
+    /// compares. Leave `held` untrimmed and it grows while the other two are
+    /// cut, so `held[start + j]` answers for a slab `drop` positions older
+    /// than the one being read. Both directions are wrong and neither shows
+    /// up as a crash: a held slab whose mark now reads `false` keeps the value
+    /// the GRID folded instead of the pruned one — the empty column past the
+    /// window's edge reading brighter than the audio ever was — and an
+    /// interior slab whose mark now reads `true` is overwritten with its
+    /// neighbour's column.
+    ///
+    /// The test above cannot reach it. It passes [`KEEP`], so `drop` is always
+    /// zero and the trim never runs; the tests that DO pass a pane-sized
+    /// retention push columns with no gaps, so every mark is `false` and a
+    /// misaligned read still reads `false`. This one needs both at once: a
+    /// one-slab gap, and a retention the fixture outgrows.
+    #[test]
+    fn the_held_marks_are_trimmed_with_the_slabs_they_describe() {
+        let reads = [RowRead::Max { from: 4, to: 6 }];
+        let bucket = 0.25;
+        // Three slabs — a retention the run below outgrows on its last column,
+        // unlike [`KEEP`].
+        const KEPT: usize = 3;
+        // Slab 2 holds three columns, of which the window keeps only the last;
+        // slab 3 is EMPTY, so `fold` marks it held and copies slab 2 as the
+        // grid holds it, which is the loud one rather than the pruned one.
+        let times = [0.00, 0.30, 0.55, 0.60, 0.65, 1.10];
+        let energy = [1.0f32, 0.8, 0.7, 0.6, 0.1, 0.5];
+        let mut history = crate::SpectrumHistory::default();
+        let mut agg = SpectrogramAgg::new();
+        for (&t, &e) in times.iter().zip(&energy) {
+            history.push(col(t, &[(4, e)]));
+            let _ = agg.window(&history, 0, bucket, &reads, KEPT);
+        }
+        // The last column opened slab 4 with slab 3 empty behind it, taking the
+        // grid to five slabs and forcing its first trim: two off the front, and
+        // with them two marks.
+        assert_eq!(agg.grid.centers.len(), KEPT, "the grid should have been trimmed");
+        assert_eq!(agg.grid.held.len(), KEPT, "and the marks trimmed with it");
+        // Not vacuous only if a held slab SURVIVED the trim — the whole point
+        // is a mark that is still being read after the array moved under it.
+        assert!(agg.grid.held.iter().any(|&h| h), "a held slab has to be left to read");
+        let rebuilds = agg.rebuilds();
+
+        // Read from the column at 0.65 — index 4 — so the two louder columns
+        // sharing its slab have fallen out of the window and are pruned.
+        let inc = agg.window(&history, 4, bucket, &reads, KEPT);
+        let bat = aggregate_rows(history.iter_from(4), &reads, bucket);
+        assert_eq!(agg.rebuilds(), rebuilds, "a rebuild would explain it away");
+        assert_eq!(inc, bat, "the held slab carries the PRUNED value forward");
     }
 
     /// Reaching back past a TIER MERGE — which the step-for-step test above
