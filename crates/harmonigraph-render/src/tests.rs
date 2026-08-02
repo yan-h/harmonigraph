@@ -1299,7 +1299,21 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         "the EARLY_OUT switch was renamed; this test is no longer comparing anything",
     );
 
-    for (name, scene) in [("lit", parity_scene()), ("idle", idle_scene())] {
+    // A core dialed near the top of its bar, with the solidity axis in the
+    // middle. Every other fixture here runs the default 0.46 radius at full
+    // solidity, where `core_reach` is GLOW_LIMIT and the radius arm of it is
+    // never the larger — so collapsing that bound to the constant passes.
+    // At 0.9 the disc still carries alpha where the glow's window has closed,
+    // and clipping it there is a hard circular cut across a soft core.
+    let fat_core = || {
+        let mut scene = parity_scene();
+        scene.core_radius = 0.9;
+        scene.core_solidity = 0.5;
+        scene
+    };
+    for (name, scene) in
+        [("lit", parity_scene()), ("idle", idle_scene()), ("fat core", fat_core())]
+    {
         let cb = LatticeCallback::from_scene(
             &scene,
             egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
