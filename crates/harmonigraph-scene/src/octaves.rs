@@ -450,11 +450,13 @@ mod tests {
     const SIZES: [f32; 3] = [MIN_EXTRA_SIZE, DEFAULT_EXTRA_SIZE, 1.0];
 
     /// Wheels to run the invariants over, as `(count, extras, center)`: the
-    /// default, both span limits reached two ways (all count, and the fewest
-    /// full-size octaves a wheel can have), even counts (where the drawn
-    /// octaves cannot be symmetric about the center), and centers that are
-    /// deliberately NOT a C and not near the middle of the keyboard — the last
-    /// three are where a ring reaches for octaves no MIDI note can play.
+    /// default, the narrowest wheel there is, the widest reached two ways (all
+    /// count, and the fewest full-size octaves a wheel can have — the
+    /// narrowest has only the one, since `1 + 2 * extras` is never 2), even
+    /// counts (where the drawn octaves cannot be symmetric about the center),
+    /// and centers that are deliberately NOT a C and not near the middle of
+    /// the keyboard — the last three are where a ring reaches for octaves no
+    /// MIDI note can play.
     const WHEELS: [(u32, u32, f32); 11] = [
         (DEFAULT_COUNT, 0, DEFAULT_CENTER),
         (DEFAULT_COUNT, 2, DEFAULT_CENTER),

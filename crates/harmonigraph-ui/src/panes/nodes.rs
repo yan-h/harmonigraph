@@ -115,7 +115,9 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // extras is even rather than a mode beside them.
     //
     // With no extras there is no second tier, so neither bar has anything to
-    // say — which is the whole of when the strip above is one flat row.
+    // say. Not the whole of when the strip above is one flat row, though: a
+    // fringe at size 1 is a second tier the same width as the first, and the
+    // size bar is live there to drag back off it.
     ui.add_enabled_ui(view.octave_extras > 0, |ui| {
         ValueBar::new(&mut view.octave_extra_size, MIN_EXTRA_SIZE..=1.0, "Extra size")
             .show(ui)
