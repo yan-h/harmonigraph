@@ -12,10 +12,16 @@
 //!
 //! What it does NOT need is the editor. `ParamKey` (what an automation record
 //! is named by) and `RenderConfig`/`RenderProgress` (what the Video pane asks
-//! for and reads back) are take payload and live in `harmonigraph-take`, so
-//! this crate depends on core and the format and nothing else. That is what
-//! makes the manifest's "nothing on the record path may allocate or block" a
-//! promise the dependency list can keep rather than only an intention.
+//! for and reads back) live in `harmonigraph-take`, so this crate needs no
+//! harmonigraph crate but core and the format — the rest of the list is
+//! `rtrb` and `parking_lot`, the two audio-thread primitives. That is what
+//! makes the manifest's "nothing here reaches egui or wgpu" a promise the
+//! dependency list can keep rather than only an intention.
+//!
+//! The manifest's OTHER promise — that nothing on the record path allocates
+//! or blocks — is not one a dependency list can make either way: `parking_lot`
+//! is a blocking mutex and is in it. That one is kept by the code, and the
+//! rings are where to check it.
 //!
 //! Nothing here touches the plugin API. That is what lets the whole
 //! record-and-render path — rings, transport handling, subprocess driver,
