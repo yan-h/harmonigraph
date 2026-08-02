@@ -1523,6 +1523,9 @@ fn an_idle_marker_or_a_trail_ring_keeps_its_nodes() {
     assert!(ships(&faded).is_empty(), "a ring at zero strength paints nothing");
 }
 
+/// One way of making a node sound, for the table in the test below.
+type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
+
 /// Each of the four things that make a node sounding keeps it on its own.
 ///
 /// The cull's first question is whether anything is lit — an envelope, a
@@ -1570,7 +1573,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     assert_eq!(ships(&bare()), 0, "the fixture has to start with nothing drawn");
 
     // One node per term, each the ONLY lit thing about it.
-    let cases: [(&str, fn(&mut harmonigraph_scene::NodeInstance)); 4] = [
+    let cases: [(&str, LightUp); 4] = [
         ("activation", |n| n.activation = 1.0),
         ("melody level", |n| n.melody_level = 1.0),
         ("bass level", |n| n.bass_level = 1.0),
