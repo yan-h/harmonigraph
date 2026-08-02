@@ -166,6 +166,11 @@ fn a_blob_written_against_the_pitch_window_opens_on_the_wheel_it_most_nearly_nam
         (30.0, 90.0, 5, 60.0),
         (36.0, 84.0, 4, 60.0),
         (27.5, 101.25, 6, 64.375),
+        // Nine and a half octaves — the case the migration comment is written
+        // about, and the only shape of window that says which way the rounding
+        // goes. Truncation would open this on nine, a whole octave narrower
+        // than the project asked for.
+        (3.0, 117.0, 10, 60.0),
         // Under the narrowest span the wheel can draw, which the clamp opens
         // back up — the center is what the blob asked for either way.
         (48.0, 60.0, 2, 54.0),
