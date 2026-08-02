@@ -1259,7 +1259,13 @@ fn idle_scene() -> Scene {
         node.bass_level = 0.0;
         node.hovered = false;
         node.on_home = i % 2 == 0;
-        node.trail = if i % 2 == 0 { 0.8 } else { 0.0 };
+        // Visited on a DIFFERENT cycle from the home sheet, so the two are
+        // separable: `idle_marker` shows where the node is home OR visited,
+        // and a fixture whose visited set is its home set makes that
+        // disjunction untestable — either branch alone reproduces it, and so
+        // does the complement of either. Node 3 is the one that matters: off
+        // the home sheet and visited, so it draws for exactly one reason.
+        node.trail = if i % 3 == 0 { 0.8 } else { 0.0 };
     }
     scene.idle_marker = harmonigraph_scene::IdleMarker::Circle;
     scene.idle_radius = 0.24;
@@ -1423,39 +1429,82 @@ fn format_of(cb: &LatticeCallback) -> wgpu::TextureFormat {
 /// `idle_marker`, so each needs its own case — the cull has to ask the same
 /// question the shader does, and a cull that only knew about one of them
 /// would blank the other with no symptom but a missing mark.
+///
+/// Asserted as the SET of positions kept, not how many. A count cannot tell
+/// a predicate from its complement: `idle_scene` has three home nodes, and a
+/// cull that shipped the three off-home ones instead would agree with every
+/// count this could make.
 #[test]
 fn an_idle_marker_or_a_trail_ring_keeps_its_nodes() {
     let ships = |scene: &Scene| {
-        LatticeCallback::from_scene(
+        let kept = LatticeCallback::from_scene(
             scene,
             egui::vec2(256.0, 256.0),
             wgpu::TextureFormat::Rgba8Unorm,
             32,
             None,
         )
-        .instances
-        .len()
+        .instances;
+        // The home flag and the memory are what the predicate reads, so they
+        // are what identifies a kept node here.
+        let mut ids: Vec<(bool, bool)> =
+            kept.iter().map(|g| (g.home >= 0.5, g.visited > 0.0)).collect();
+        ids.sort();
+        ids
     };
-    // `idle_scene` marks every other node as home, and the same alternate
-    // set as visited.
-    let home = idle_scene().nodes.iter().filter(|n| n.on_home).count();
-    assert!(home > 0 && home < idle_scene().nodes.len(), "the fixture has both kinds");
+    let of = |f: fn(&harmonigraph_scene::NodeInstance) -> bool| {
+        let mut ids: Vec<(bool, bool)> = idle_scene()
+            .nodes
+            .iter()
+            .filter(|n| f(n))
+            .map(|n| (n.on_home, n.trail > 0.0))
+            .collect();
+        ids.sort();
+        ids
+    };
+    // The fixture separates the two: home and visited are different sets, and
+    // node 3 is visited OFF the home sheet, which is the only node that can
+    // tell the marker's `home || trail` disjunction from its `home` half.
+    assert_ne!(of(|n| n.on_home), of(|n| n.trail > 0.0), "the two sets must differ");
+    assert!(
+        idle_scene().nodes.iter().any(|n| !n.on_home && n.trail > 0.0),
+        "one node has to be visited off the home sheet",
+    );
 
-    // The marker alone: it needs a home sheet or a memory to show on, and
-    // this fixture's visited nodes are its home ones, so it is the home set.
+    // The marker alone: it shows where the node is home OR carries a memory.
     let mut marker_only = idle_scene();
     marker_only.trail_mark = harmonigraph_scene::TrailMark::Off;
-    assert_eq!(ships(&marker_only), home, "the idle marker draws on the home sheet");
+    // Trails Off zeroes the memory the marker would also have shown on, so
+    // this is the home sheet exactly.
+    assert_eq!(
+        ships(&marker_only),
+        of(|n| n.on_home),
+        "with trails off the idle marker draws on the home sheet",
+    );
 
-    // The pale ring alone: it draws with the marker off, on what was visited.
+    // The marker with trails on reaches one node further: the off-sheet one
+    // the music visited. That node is the whole of the disjunction.
+    let mut marker_and_trail = idle_scene();
+    marker_and_trail.trail_mark = harmonigraph_scene::TrailMark::Lift;
+    assert_eq!(
+        ships(&marker_and_trail),
+        of(|n| n.on_home || n.trail > 0.0),
+        "a visited node keeps its marker off the home sheet",
+    );
+
+    // The pale ring alone: it draws with the marker off, on what was visited,
+    // wherever that is.
     let mut ring_only = idle_scene();
     ring_only.idle_marker = harmonigraph_scene::IdleMarker::None;
-    let visited = idle_scene().nodes.iter().filter(|n| n.trail > 0.0).count();
-    assert_eq!(ships(&ring_only), visited, "the trail ring draws on visited nodes");
+    assert_eq!(
+        ships(&ring_only),
+        of(|n| n.trail > 0.0),
+        "the trail ring draws on visited nodes, home sheet or not",
+    );
 
     // And a strength of zero is a ring that isn't there.
     let mut faded = idle_scene();
     faded.idle_marker = harmonigraph_scene::IdleMarker::None;
     faded.trail_strength = 0.0;
-    assert_eq!(ships(&faded), 0, "a ring at zero strength paints nothing");
+    assert!(ships(&faded).is_empty(), "a ring at zero strength paints nothing");
 }
