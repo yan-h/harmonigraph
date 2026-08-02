@@ -385,19 +385,27 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
         // 8191 calls across an n = 8192 transform against 53248 the other way
         // round, and the difference is most of what the FFT costs: the
         // butterflies themselves are a handful of multiplies, sin_cos is a
-        // libm call, and this order is 2.5x faster end to end.
+        // libm call, and this order is 2.5x faster on the transform — about
+        // 1.7x through `pitch_spectrum`, which does the bucketing as well.
         //
         // The blocks within a stage are independent, so this is the same
         // arithmetic on the same values in a different order — equal bit for
-        // bit, not merely within tolerance, which is the bar the offline
-        // render's determinism test sets.
+        // bit, not merely within tolerance. Bits are the bar because a
+        // transform that is only CLOSE moves every pixel of a render, so a
+        // take rendered by two builds stops matching itself and one shot of a
+        // multi-shot video no longer cuts against its siblings. The test that
+        // holds this is `reusing_a_stages_twiddles_does_not_move_a_single_bit`
+        // in this module, and it holds it alone: the offline determinism tests
+        // render twice from ONE build and compare the runs, so they catch
+        // nondeterminism and are blind to drift.
         //
-        // A twiddle TABLE is faster again (another ~18%), and is the thing to
-        // reach for if this ever matters more. It is not free the way this is:
-        // the table has to be rebuilt in `configure` whenever `fft_size`
-        // changes, and indexing one shared table per stage computes each angle
-        // by a different expression than `step * k`, so the results move in the
-        // last bit and the determinism test is what would have to absorb it.
+        // A twiddle TABLE is faster again (another ~18%) and is the thing to
+        // reach for if this ever matters more. It is bit-identical too,
+        // measured across n = 2..16384: `TAU / len` is exact for a power-of-two
+        // `len` and dividing by `n` is exact, so both spellings of the angle
+        // round the same real value once. What it costs is state — the table
+        // has to be rebuilt in `configure`, which is the one place `fft_size`
+        // changes, alongside `ring`, `window`, `re` and `im`.
         for k in 0..half {
             let angle = -step * k as f32;
             let (ws, wc) = angle.sin_cos();
