@@ -110,7 +110,15 @@ const SHAPE_EXTREME: f32 = 4.0;
 /// Logarithmic, so the bar's middle is the straight ramp (exponent 1) and
 /// the two halves are mirror images of each other rather than one being a
 /// squashed version of the other.
+///
+/// Non-finite in means the straight ramp out. `clamp` alone does not catch it
+/// — NaN is its own answer, so it passes both comparisons and comes out the
+/// far side — and the NaN then reaches the widths through `powf`, where it
+/// spares the edge slices (distance 1 to any power is 1) and poisons every
+/// slice inside them. A table like that draws a wheel with a hole in it and
+/// nothing to say why.
 fn shape_exponent(shape: f32) -> f32 {
+    let shape = if shape.is_finite() { shape } else { DEFAULT_TAPER_SHAPE };
     SHAPE_EXTREME.powf(2.0 * shape.clamp(0.0, 1.0) - 1.0)
 }
 
@@ -753,7 +761,20 @@ mod tests {
         assert_eq!(clamp_center(f32::NAN), DEFAULT_CENTER, "nonsense falls back");
         let l = octave_layout(99, f32::INFINITY, f32::NAN, DEFAULT_TAPER_SHAPE);
         assert_eq!((l.span, l.center), (MAX_SPAN, DEFAULT_CENTER));
-        assert!(l.bounds.iter().all(|b| b.is_finite()), "a NaN amount poisoned the widths");
+        // Both taper knobs, because a NaN reaches the widths by two different
+        // routes and neither is caught by a `clamp`: the amount multiplies
+        // every width, and the shape is the exponent the fall is raised to.
+        // The second is the quieter one — the edge slices survive it (they sit
+        // at distance 1, and 1 to any power is 1) so the table comes back with
+        // a plausible first entry and NaN inside it.
+        for (amount, shape) in [(f32::NAN, DEFAULT_TAPER_SHAPE), (0.5, f32::NAN)] {
+            let l = octave_layout(5, 60.0, amount, shape);
+            assert!(
+                l.bounds.iter().all(|b| b.is_finite() && (0.0..=TAU + 1e-3).contains(b)),
+                "amount {amount} shape {shape} poisoned the widths: {:?}",
+                l.bounds
+            );
+        }
     }
 
     /// The default wheel is the register a keyboard part lives in, drawn even:
