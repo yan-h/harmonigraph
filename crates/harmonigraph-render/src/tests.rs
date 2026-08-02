@@ -1176,11 +1176,20 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         extent_threes: 1,
         extent_fives: 1,
         extent_sevens: 2,
+        // The pale trail ring, which draws with no idle marker and on any
+        // sheet — the one mark that can put something at EVERY position.
+        // An idle marker cannot: it reaches only the home sheet or a visited
+        // node (`idle_marker` in lattice.wgsl), and trails are recorded on
+        // the home sheet alone (`TrailField::apply`), so with one of those
+        // the cull leaves a single sheet and the order below is one depth
+        // compared against itself.
+        trail_mark: harmonigraph_scene::TrailMark::Ring,
+        trail_strength: 1.0,
         ..ViewConfig::default()
     };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic]
     {
-        let scene = harmonigraph_scene::derive_scene(
+        let mut scene = harmonigraph_scene::derive_scene(
             &harmonigraph_core::NoteTracker::new(),
             &harmonigraph_core::Tuning::default(),
             &view,
@@ -1192,6 +1201,12 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             None,
             0.0,
         );
+        // Every position visited. Set here rather than played in, because
+        // what this test needs is one node per position on every sheet, and
+        // which nodes a tracker lights is a question about tuning.
+        for node in &mut scene.nodes {
+            node.trail = 1.0;
+        }
         let call = LatticeCallback::from_scene(
             &scene,
             egui::vec2(800.0, 600.0),
@@ -1207,7 +1222,18 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         // the wrong place in the order, and the home sheet's clearings have
         // nothing drawn before them left to clear.
         let depths: Vec<f32> = call.instances.iter().map(|i| i.world_pos[2]).collect();
-        assert!(depths.len() > 1, "the window has to hold several sheets");
+        // Several SHEETS, not several nodes. A node count passes on one
+        // sheet's worth of identical depths, where every pair below holds
+        // whatever the sort did — which is what culling the off-sheet nodes
+        // reduced this to, silently, while it went on reading as coverage.
+        let (lo, hi) = depths.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &d| {
+            (lo.min(d), hi.max(d))
+        });
+        assert!(
+            hi - lo > 1e-6,
+            "{projection:?}: every node drawn is at one depth ({lo}), so the order \
+             below compares a sheet with itself: {depths:?}",
+        );
         for pair in depths.windows(2) {
             assert!(
                 pair[1] >= pair[0] - 1e-6,
@@ -1233,7 +1259,13 @@ fn idle_scene() -> Scene {
         node.bass_level = 0.0;
         node.hovered = false;
         node.on_home = i % 2 == 0;
-        node.trail = if i % 2 == 0 { 0.8 } else { 0.0 };
+        // Visited on a DIFFERENT cycle from the home sheet, so the two are
+        // separable: `idle_marker` shows where the node is home OR visited,
+        // and a fixture whose visited set is its home set makes that
+        // disjunction untestable — either branch alone reproduces it, and so
+        // does the complement of either. Node 3 is the one that matters: off
+        // the home sheet and visited, so it draws for exactly one reason.
+        node.trail = if i % 3 == 0 { 0.8 } else { 0.0 };
     }
     scene.idle_marker = harmonigraph_scene::IdleMarker::Circle;
     scene.idle_radius = 0.24;
@@ -1267,7 +1299,21 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         "the EARLY_OUT switch was renamed; this test is no longer comparing anything",
     );
 
-    for (name, scene) in [("lit", parity_scene()), ("idle", idle_scene())] {
+    // A core dialed near the top of its bar, with the solidity axis in the
+    // middle. Every other fixture here runs the default 0.46 radius at full
+    // solidity, where `core_reach` is GLOW_LIMIT and the radius arm of it is
+    // never the larger — so collapsing that bound to the constant passes.
+    // At 0.9 the disc still carries alpha where the glow's window has closed,
+    // and clipping it there is a hard circular cut across a soft core.
+    let fat_core = || {
+        let mut scene = parity_scene();
+        scene.core_radius = 0.9;
+        scene.core_solidity = 0.5;
+        scene
+    };
+    for (name, scene) in
+        [("lit", parity_scene()), ("idle", idle_scene()), ("fat core", fat_core())]
+    {
         let cb = LatticeCallback::from_scene(
             &scene,
             egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
@@ -1321,3 +1367,361 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     }
 }
 
+/// A node that can paint nothing is not shipped at all — and the grid it
+/// sits in still is.
+///
+/// The billboard is deliberately bigger than the node, so a node the shader
+/// discards every fragment of still costs a quad's worth of rasterizing; on
+/// an unplayed lattice that is nearly every node. With the default idle
+/// marker (None) and trails off it is ALL of them, which is the case worth
+/// pinning: the frame drops to a grid and nothing else, and the callback
+/// has to keep drawing that grid, which is why neither `prepare` nor `paint`
+/// may read "no instances" as "nothing to draw": that test takes the grid
+/// down with the nodes.
+#[test]
+fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
+    let scene = {
+        let mut scene = idle_scene();
+        // What a fresh view opens at: nothing to show at an unplayed node.
+        scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+        scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+        scene
+    };
+    assert!(!scene.grid.is_empty(), "the fixture has to carry a grid");
+    let cb = LatticeCallback::from_scene(
+        &scene,
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        31,
+        None,
+    );
+    assert!(
+        cb.instances.is_empty(),
+        "every node is idle with nothing to draw at one, so none should ship",
+    );
+    assert!(!cb.edges.is_empty(), "the grid is not a node and must survive");
+
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+    queue.submit(bufs.into_iter().chain([encoder.finish()]));
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256.0, 256.0));
+    let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
+    let texture = render_to_texture(&device, &queue, SIZE, format_of(&cb), clear, |pass| {
+        cb.paint(
+            egui::PaintCallbackInfo {
+                viewport: rect,
+                clip_rect: rect,
+                pixels_per_point: 1.0,
+                screen_size_px: SIZE,
+            },
+            pass,
+            &resources,
+        );
+    });
+    let px = readback(&device, &queue, &texture, SIZE);
+    let bg = [18u8, 20, 23, 255];
+    assert!(
+        px.chunks(4).any(|p| p.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 4)),
+        "the grid vanished with the nodes",
+    );
+}
+
+/// The target format the callback was built for, so the test above renders
+/// into the one its composite pipeline expects.
+fn format_of(cb: &LatticeCallback) -> wgpu::TextureFormat {
+    cb.target_format
+}
+
+/// What brings a silent node back: the two marks an idle node can wear.
+/// Each is read off a different uniform by a different branch of
+/// `idle_marker`, so each needs its own case — the cull has to ask the same
+/// question the shader does, and a cull that only knew about one of them
+/// would blank the other with no symptom but a missing mark.
+///
+/// Asserted as the SET of positions kept, not how many. A count cannot tell
+/// a predicate from its complement: `idle_scene` has three home nodes, and a
+/// cull that shipped the three off-home ones instead would agree with every
+/// count this could make.
+#[test]
+fn an_idle_marker_or_a_trail_ring_keeps_its_nodes() {
+    let ships = |scene: &Scene| {
+        let kept = LatticeCallback::from_scene(
+            scene,
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            32,
+            None,
+        )
+        .instances;
+        // The home flag and the memory are what the predicate reads, so they
+        // are what identifies a kept node here.
+        let mut ids: Vec<(bool, bool)> =
+            kept.iter().map(|g| (g.home >= 0.5, g.visited > 0.0)).collect();
+        ids.sort();
+        ids
+    };
+    let of = |f: fn(&harmonigraph_scene::NodeInstance) -> bool| {
+        let mut ids: Vec<(bool, bool)> = idle_scene()
+            .nodes
+            .iter()
+            .filter(|n| f(n))
+            .map(|n| (n.on_home, n.trail > 0.0))
+            .collect();
+        ids.sort();
+        ids
+    };
+    // The fixture separates the two: home and visited are different sets, and
+    // node 3 is visited OFF the home sheet, which is the only node that can
+    // tell the marker's `home || trail` disjunction from its `home` half.
+    assert_ne!(of(|n| n.on_home), of(|n| n.trail > 0.0), "the two sets must differ");
+    assert!(
+        idle_scene().nodes.iter().any(|n| !n.on_home && n.trail > 0.0),
+        "one node has to be visited off the home sheet",
+    );
+
+    // The marker alone: it shows where the node is home OR carries a memory.
+    let mut marker_only = idle_scene();
+    marker_only.trail_mark = harmonigraph_scene::TrailMark::Off;
+    // Trails Off zeroes the memory the marker would also have shown on, so
+    // this is the home sheet exactly.
+    assert_eq!(
+        ships(&marker_only),
+        of(|n| n.on_home),
+        "with trails off the idle marker draws on the home sheet",
+    );
+
+    // The marker with trails on reaches one node further: the off-sheet one
+    // the music visited. That node is the whole of the disjunction.
+    let mut marker_and_trail = idle_scene();
+    marker_and_trail.trail_mark = harmonigraph_scene::TrailMark::Lift;
+    assert_eq!(
+        ships(&marker_and_trail),
+        of(|n| n.on_home || n.trail > 0.0),
+        "a visited node keeps its marker off the home sheet",
+    );
+
+    // The pale ring alone: it draws with the marker off, on what was visited,
+    // wherever that is.
+    let mut ring_only = idle_scene();
+    ring_only.idle_marker = harmonigraph_scene::IdleMarker::None;
+    assert_eq!(
+        ships(&ring_only),
+        of(|n| n.trail > 0.0),
+        "the trail ring draws on visited nodes, home sheet or not",
+    );
+
+    // And a strength of zero is a ring that isn't there.
+    let mut faded = idle_scene();
+    faded.idle_marker = harmonigraph_scene::IdleMarker::None;
+    faded.trail_strength = 0.0;
+    assert!(ships(&faded).is_empty(), "a ring at zero strength paints nothing");
+}
+
+/// One way of making a node sound, for the table in the test below.
+type LightUp = fn(&mut harmonigraph_scene::NodeInstance);
+
+/// Each of the four things that make a node sounding keeps it on its own.
+///
+/// The cull's first question is whether anything is lit — an envelope, a
+/// melody or bass ring's level, or a lit octave — and it is a disjunction
+/// over four terms that ordinarily move together: `derive_scene` rides all
+/// of them on one envelope, so a scene built by playing notes has either
+/// none of them or several, and no single term ever decides whether a node
+/// ships. That is not a hypothetical gap. Inverting any one of the four,
+/// or turning any `||` between them into `&&`, passed the whole suite.
+///
+/// They come apart in practice, which is why each gets a node here. An
+/// octave's level is `envelope * attack(...)` and is packed to a byte, so
+/// for the first frames after a note-on a node has a full activation and an
+/// octave word of exactly zero — `params[0]` alone is holding it in the
+/// buffer, and a cull that stopped reading it would drop the first frame of
+/// a note. The mark levels ride their own ease-in (`melody_attack`) rather
+/// than the node's, so they part company the same way.
+///
+/// Built by hand rather than played in: the point is one term at a time,
+/// and a tracker cannot be asked for that.
+#[test]
+fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
+    let bare = || {
+        let mut scene = idle_scene();
+        // Nothing an IDLE node could draw, so the only reason to keep one is
+        // the term under test.
+        scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+        scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+        for node in &mut scene.nodes {
+            node.trail = 0.0;
+        }
+        scene
+    };
+    let ships = |scene: &Scene| {
+        LatticeCallback::from_scene(
+            scene,
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            33,
+            None,
+        )
+        .instances
+        .len()
+    };
+    assert_eq!(ships(&bare()), 0, "the fixture has to start with nothing drawn");
+
+    // One node per term, each the ONLY lit thing about it.
+    let cases: [(&str, LightUp); 4] = [
+        ("activation", |n| n.activation = 1.0),
+        ("melody level", |n| n.melody_level = 1.0),
+        ("bass level", |n| n.bass_level = 1.0),
+        ("a lit octave", |n| n.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0),
+    ];
+    for (what, set) in cases {
+        let mut scene = bare();
+        set(&mut scene.nodes[0]);
+        assert_eq!(ships(&scene), 1, "{what} alone has to keep its node");
+    }
+
+    // The octave levels pack into three u32s, four slots to a word, and the
+    // three are OR'd. Two octaves of one pitch class held at the same level
+    // is an ordinary voicing, and it puts the SAME byte in two words — where
+    // anything but an OR cancels them against each other and reads the node
+    // as unlit. Every pairing of words is needed, because which two cancel
+    // depends on where the operator lands and how it then binds: `^` binds
+    // tighter than `|`, so swapping either one regroups the whole expression
+    // as well as changing it.
+    for (a, b) in [(0usize, 4usize), (0, 8), (4, 8)] {
+        let mut spread = bare();
+        spread.nodes[0].octaves[a] = 1.0;
+        spread.nodes[0].octaves[b] = 1.0;
+        assert_eq!(
+            ships(&spread),
+            1,
+            "octaves {a} and {b} held at one level keep their node",
+        );
+    }
+}
+
+/// The grid's place in the draw order is counted over the nodes actually
+/// shipped, not over the ones the scene held.
+///
+/// `grid_at` is the seam between the sheets BEHIND the home sheet and the
+/// home sheet itself, and the whole argument for it is in `from_scene`: put
+/// the grid under everything and a node on a sheet behind the home one
+/// punches its clearing through the home grid. Culling breaks the old
+/// expression silently, because `split` indexes the list before the cull —
+/// with the sheets behind home mostly idle, `split` runs past the end of the
+/// kept run, `prepare`'s `.min(instance_count)` pins the grid to the very
+/// end, and it draws over every node instead of under the home sheet.
+///
+/// One lit node behind home and one on it, with an idle node behind home
+/// between them: the seam has to land at 1, and it is `split` (2) that says
+/// otherwise.
+#[test]
+fn the_grid_seam_counts_the_nodes_that_ship() {
+    let mut scene = idle_scene();
+    scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+    scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+    scene.nodes.truncate(3);
+    for node in &mut scene.nodes {
+        node.trail = 0.0;
+        node.activation = 0.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    }
+    // Which world z is "behind" is the camera's to say — the sort keys on
+    // `world_pos.z * forward.z` — and the default camera's eye sits at +z, so
+    // the sheets behind the home one are the negative side.
+    scene.nodes[0].world_pos.z = -2.0;
+    scene.nodes[0].activation = 1.0; // behind home, lit: ships, before the grid
+    scene.nodes[1].world_pos.z = -1.0; // behind home, idle: culled
+    scene.nodes[2].world_pos.z = 0.0;
+    scene.nodes[2].activation = 1.0; // the home sheet: ships, after the grid
+    scene.nodes[2].on_home = true;
+
+    let call = LatticeCallback::from_scene(
+        &scene,
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        34,
+        None,
+    );
+    assert_eq!(call.instances.len(), 2, "the idle node behind home is culled");
+    assert_eq!(
+        call.grid_at, 1,
+        "the grid draws after the one sheet-behind node that ships, not after \
+         the two the scene held",
+    );
+}
+
+/// A lattice that stops drawing stops reporting a GPU time, rather than
+/// holding the last one it measured.
+///
+/// The reading is a cross-frame value: it is only overwritten when the
+/// timer's readback cycle turns over, and that cycle is driven from inside
+/// the scene pass. Since nodes that paint nothing are no longer shipped, a
+/// lattice can encode no pass at all — with the grid's alpha at zero, no
+/// idle marker and no trail, a silent one ships neither a node nor an edge —
+/// and it can sit there indefinitely. Left alone, the overlay would keep
+/// re-averaging a figure from whenever the lattice last drew, which is the
+/// one thing `GPU_TIME_PENDING` exists to make impossible to confuse with a
+/// live reading.
+#[test]
+fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
+    let Some((device, queue)) = headless_device_with_timestamps() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [128, 128];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let stats = std::sync::Arc::new(LatticeStats::default());
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut frame = |cb: &LatticeCallback| {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    };
+
+    // Draw a real scene until a measurement lands. The cycle is
+    // Idle -> Recorded -> Mapping -> Idle, so it takes a few frames.
+    let lit = LatticeCallback::from_scene(
+        &parity_scene(),
+        size,
+        format,
+        40,
+        Some(stats.clone()),
+    );
+    let mut measured = None;
+    for _ in 0..12 {
+        frame(&lit);
+        let bits = stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed);
+        if bits != GPU_TIME_PENDING && bits != GPU_TIME_UNSUPPORTED {
+            measured = Some(bits);
+            break;
+        }
+    }
+    let Some(measured) = measured else {
+        // No reading ever landed, so there is no stale value to go stale.
+        return;
+    };
+    assert!(f32::from_bits(measured) >= 0.0, "a real reading, not a sentinel");
+
+    // Now the same pane with nothing at all in it.
+    let mut empty = idle_scene();
+    empty.idle_marker = harmonigraph_scene::IdleMarker::None;
+    empty.trail_mark = harmonigraph_scene::TrailMark::Off;
+    empty.grid.clear();
+    let blank = LatticeCallback::from_scene(&empty, size, format, 40, Some(stats.clone()));
+    assert!(blank.instances.is_empty() && blank.edges.is_empty(), "nothing to draw");
+    frame(&blank);
+    assert_eq!(
+        stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
+        GPU_TIME_PENDING,
+        "a pane that encodes no pass must not keep reporting the time it took \
+         when it last drew",
+    );
+}
