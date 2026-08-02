@@ -1309,6 +1309,20 @@ mod tests {
     /// pinned as their arithmetic rather than as a field, since that is what
     /// they are; their values are chosen not to collide with any reading
     /// either, so `egui` cannot quietly print `shell`'s.
+    ///
+    /// Every row is here, not just the millisecond ones. `spec` and `voices`
+    /// are the rows most exposed to this and the last to be covered: each
+    /// carries TWO independently-named quantities inside one format string, so
+    /// a transposition needs no second row to hide in and no type to disagree
+    /// with. Reading a refold rate as a ring rate sends the next investigation
+    /// to the aggregator when the ring cache is what stopped absorbing — and
+    /// `spec` is the readout kept precisely because it is the one that would
+    /// have caught both of the spectrogram's silent performance bugs.
+    ///
+    /// The last four are set on `perf` rather than driven through `record`:
+    /// what is under test is which field reaches which label, and the
+    /// derivations that fill them (a rate over an interval, an eased memory
+    /// reading) are pinned by tests of their own.
     #[test]
     fn every_breakdown_row_reports_the_cost_it_names() {
         // Readings 1..12 in table order, then the three the derived rows are
@@ -1343,8 +1357,23 @@ mod tests {
         // measurement of its own rather than the opening frame's absent one.
         for _ in 0..20 {
             now += 1.0 / 60.0;
-            perf.record(costs, now, Workload::default());
+            perf.record(
+                costs,
+                now,
+                // 17 held and 36 sounding, so `fading` is 19 — a third value
+                // rather than a difference either operand could stand in for.
+                Workload {
+                    active_voices: 36,
+                    held_voices: 17,
+                    visible_nodes: 21,
+                    render_scale: 3.25,
+                    animating: true,
+                },
+            );
         }
+        perf.spec_fallbacks = (14.0, 15.0);
+        perf.spec_restart_reason = crate::panes::spectral::spectrogram::Restart::LABELS[4];
+        perf.rss_bytes = 490 * 1024 * 1024;
 
         let rows = overlay_rows(&perf, true);
         let value_of = |label: &str| {
@@ -1376,6 +1405,13 @@ mod tests {
             ("gpu", "20.0 ui · 30.0 3d"),
             ("verts", "5k in 7 prims"),
             ("roll", "13 notes"),
+            // The two caches, in the order the labels name them, with the
+            // dominant reason on the end where it reads as a note on the ring
+            // rate rather than as part of it.
+            ("spec", "14/s refold · 15/s ring (pane)"),
+            ("memory", "490 MB"),
+            ("voices", "17 held · 19 fading"),
+            ("nodes", "21  ·  3.25× scale"),
         ] {
             assert_eq!(
                 value_of(label).as_deref(),
