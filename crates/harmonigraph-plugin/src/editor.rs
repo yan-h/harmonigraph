@@ -177,30 +177,31 @@ impl EditorShared {
     fn sync_take(&mut self, sample_rate: f32) {
         // The plugin can record; the control is hidden in shells that
         // can't (the standalone uses an env var instead).
-        self.ui.take_supported = true;
-        // Recording always captures the plugin's audio input now: the render
-        // uses it as the spectrogram, aligned to the picture by construction (no
-        // bounce, no offset). Silent-but-harmless if the plugin sits where no
-        // audio reaches it.
-        self.ui.take_audio = true;
+        self.ui.take.supported = true;
         let recording = self.take.is_recording();
-        if self.ui.take_recording && !recording {
+        if self.ui.take.recording && !recording {
             // Start from the CURRENT look, not the last-saved one: what
             // is on screen right now is what the render should reproduce.
             self.take_events.store(0, std::sync::atomic::Ordering::Relaxed);
             self.take_last_count = 0;
+            // `audio: true` unconditionally, rather than from a setting: the
+            // render uses the plugin's input as the spectrogram, aligned to the
+            // picture by construction (no bounce, no offset). Silent-but-harmless
+            // if the plugin sits where no audio reaches it.
             self.take.start(sample_rate, self.ui.save_persist(), true);
-        } else if !self.ui.take_recording && recording {
-            self.take.stop(harmonigraph_record::RenderRequest::from_config(&self.ui.render_config));
+        } else if !self.ui.take.recording && recording {
+            self.take.stop(harmonigraph_record::RenderRequest::from_config(
+                &self.ui.take.render_config,
+            ));
         }
 
         // "Re-render take": render the last finished take with the CURRENT settings.
         // The persist blob rides along as --ui-state, so the frame, bounce, and
         // offset dialed in after recording all reach the video.
-        self.ui.last_take_ready = self.take.last_take().is_some();
-        if std::mem::take(&mut self.ui.render_now) {
+        self.ui.take.last_ready = self.take.last_take().is_some();
+        if std::mem::take(&mut self.ui.take.render_now) {
             self.take.render_now(harmonigraph_record::RenderRequest::render_now(
-                &self.ui.render_config,
+                &self.ui.take.render_config,
                 self.ui.save_persist(),
             ));
         }
@@ -213,25 +214,27 @@ impl EditorShared {
 
         // Tell the audio thread whether to end the take at the first loop wrap.
         self.take.set_stop_at_loop_end(
-            self.ui.render_config.trigger == harmonigraph_ui::RenderTrigger::AtLoopEnd,
+            self.ui.take.render_config.trigger == harmonigraph_ui::RenderTrigger::AtLoopEnd,
         );
 
         // AtLoopEnd: the audio thread reached the loop end and ended the take
         // (one pass captured, exactly at the loop boundary). Reflect it in the
         // toggle and render that pass.
         if self.take.is_recording()
-            && self.ui.render_config.trigger == harmonigraph_ui::RenderTrigger::AtLoopEnd
+            && self.ui.take.render_config.trigger == harmonigraph_ui::RenderTrigger::AtLoopEnd
             && self.take.hit_loop_end()
         {
-            self.ui.take_recording = false;
-            self.take.stop(harmonigraph_record::RenderRequest::from_config(&self.ui.render_config));
+            self.ui.take.recording = false;
+            self.take.stop(harmonigraph_record::RenderRequest::from_config(
+                &self.ui.take.render_config,
+            ));
         }
 
         // "The take is done" as soon as the transport stops, if asked —
         // so a play-through or an audio export yields a video with
         // nothing further to click.
         if self.take.is_recording()
-            && self.ui.render_config.trigger == harmonigraph_ui::RenderTrigger::OnTransportStop
+            && self.ui.take.render_config.trigger == harmonigraph_ui::RenderTrigger::OnTransportStop
         {
             // Only after something was actually captured: arming ahead of
             // the downbeat must not immediately end the take.
@@ -240,9 +243,9 @@ impl EditorShared {
             } else {
                 self.take_still_frames += 1;
                 if self.take_still_frames >= Self::STOP_FRAMES {
-                    self.ui.take_recording = false;
+                    self.ui.take.recording = false;
                     self.take.stop(harmonigraph_record::RenderRequest::from_config(
-                        &self.ui.render_config,
+                        &self.ui.take.render_config,
                     ));
                 }
             }
@@ -250,13 +253,13 @@ impl EditorShared {
             self.take_still_frames = 0;
         }
         self.take.tick(self.take_rolling, count);
-        self.ui.take_status = self.take.status();
-        self.ui.render_progress = self.take.render_progress();
+        self.ui.take.status = self.take.status();
+        self.ui.take.render_progress = self.take.render_progress();
         // The shell may have refused to start (unwritable directory);
         // don't leave the indicator claiming otherwise.
-        self.ui.take_recording = self.take.is_recording();
+        self.ui.take.recording = self.take.is_recording();
         // Steady dot vs. breathing one: whether capture is actually happening.
-        self.ui.take_rolling = self.take_rolling;
+        self.ui.take.rolling = self.take_rolling;
     }
 
     /// Record a GUI frame, logging a console warning when the event loop

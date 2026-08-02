@@ -45,7 +45,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     spectrogram_controls(ui, state);
 
     section(ui, "Preview");
-    let frame = state.render_config.frame;
+    let frame = state.take.render_config.frame;
     let avail = ui.available_size();
     if avail.x < 20.0 {
         return;
@@ -87,7 +87,7 @@ pub(crate) fn render_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) 
     // than show the live scrolling spectrogram and quietly mislead, leave the
     // spectral region empty and say so.
     let placements = layout.resolve(box_rect.size());
-    let placeholder = state.render_config.playhead;
+    let placeholder = state.take.render_config.playhead;
     for (pane, rect) in &placements {
         let rect = rect.translate(box_rect.min.to_vec2());
         match pane {
@@ -120,7 +120,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // `selectable_value` to compare against.
     button_row(ui, |ui| {
         ui.label("Aspect");
-        let f = &mut state.render_config.frame;
+        let f = &mut state.take.render_config.frame;
         for (w, h) in [(16u32, 9u32), (9, 16), (1, 1), (4, 5), (21, 9)] {
             let on = f.aspect_w == w && f.aspect_h == h;
             if ui.selectable_label(on, option_label(&format!("{w}:{h}"))).clicked() {
@@ -140,7 +140,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     // list rather than only the three sizes worth delivering: it is both a
     // real draft setting for a render measured in minutes and where a
     // `--size 1280x720` migrates to.
-    let frame = state.render_config.frame;
+    let frame = state.take.render_config.frame;
     let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
         .iter()
         .map(|&short| {
@@ -150,8 +150,8 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut SharedState) {
         .collect();
     let options: Vec<(u32, &str, &str)> =
         sizes.iter().map(|(v, label, hint)| (*v, label.as_str(), hint.as_str())).collect();
-    choice_row(ui, "Resolution", &mut state.render_config.short_edge, &options);
-    let f = &mut state.render_config.frame;
+    choice_row(ui, "Resolution", &mut state.take.render_config.short_edge, &options);
+    let f = &mut state.take.render_config.frame;
     // Named for where the LATTICE goes, so the row reads as the placement it
     // is — "Lattice: Top" rather than an axis plus a convention about which
     // pane leads. Off `ALL` with an exhaustive match, like the Spectral pane's
@@ -225,7 +225,7 @@ fn spectrogram_controls(ui: &mut egui::Ui, state: &mut SharedState) {
     choice_row(
         ui,
         "Render",
-        &mut state.render_config.playhead,
+        &mut state.take.render_config.playhead,
         &[
             (false, "Live", "Bake the live scrolling spectrogram, exactly as previewed here"),
             (
@@ -338,7 +338,7 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
     // render layout's background rather than to the panel this preview
     // happens to sit on — the same color `harmonigraph-offline` will clear to.
     scene.background = harmonigraph_scene::skin::ground_color(
-        Layout::split(state.render_config.frame.lattice, state.render_config.frame.split)
+        Layout::split(state.take.render_config.frame.lattice, state.take.render_config.frame.split)
             .background,
     );
     // No GPU-time slot: the Video pane's preview is a second lattice on
@@ -373,20 +373,20 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     // button that doubles as its own indicator — press to arm; the dot breathes
     // while it waits for the transport, then goes solid while capturing. See
     // record_button in widgets.rs.
-    if !state.take_supported {
+    if !state.take.supported {
         return;
     }
     section(ui, "Record");
-    let rolling = state.take_rolling;
-    record_button(ui, &mut state.take_recording, rolling, "Record take").on_hover_text(
+    let rolling = state.take.rolling;
+    record_button(ui, &mut state.take.recording, rolling, "Record take").on_hover_text(
         "Record the performance — notes, bends, parameter automation, the \
          current look, and the plugin's audio input — to a .take file. Press \
          again to stop; the take then renders to video (its audio becomes the \
          spectrogram and a playhead sweeps the piece). Events are stamped with \
          transport position, so nothing is captured until the transport rolls.",
     );
-    if !state.take_status.is_empty() {
-        ui.weak(&state.take_status);
+    if !state.take.status.is_empty() {
+        ui.weak(&state.take.status);
     }
     clear_everything(ui, state);
     render_progress(ui, state);
@@ -396,7 +396,7 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     choice_row(
         ui,
         "Finish",
-        &mut state.render_config.trigger,
+        &mut state.take.render_config.trigger,
         &[
             (
                 crate::RenderTrigger::OnDisarm,
@@ -432,16 +432,18 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
     // nothing, which is what this row's default would otherwise have to paper
     // over.) What the bar adds is stillness BEFORE the recording, which is
     // empty frame by construction.
-    ValueBar::new(&mut state.render_config.lead_in, 0.0..=5.0, "Lead-in").show(ui).on_hover_text(
-        "Extra seconds of empty frame before the video starts. The render \
-         already opens where the recording did, so 0 gives you whatever run-up \
-         you actually played; raise this only to hold on a still frame first.",
-    );
+    ValueBar::new(&mut state.take.render_config.lead_in, 0.0..=5.0, "Lead-in")
+        .show(ui)
+        .on_hover_text(
+            "Extra seconds of empty frame before the video starts. The render \
+             already opens where the recording did, so 0 gives you whatever run-up \
+             you actually played; raise this only to hold on a still frame first.",
+        );
 
     // Re-render the last take with the frame you've dialed in since recording.
     // The take carries only a record-time snapshot, so this is how a reframed
     // preview reaches the video without recording again.
-    if state.last_take_ready {
+    if state.take.last_ready {
         ui.add_space(2.0);
         if ui
             .button("Re-render take")
@@ -452,7 +454,7 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
             )
             .clicked()
         {
-            state.render_now = true;
+            state.take.render_now = true;
         }
     }
 }
@@ -470,7 +472,7 @@ fn render_settings(ui: &mut egui::Ui, state: &mut SharedState) {
 /// pane's steady state and a permanent empty bar under them would read as a
 /// render stuck at zero.
 fn render_progress(ui: &mut egui::Ui, state: &SharedState) {
-    let Some(progress) = state.render_progress else { return };
+    let Some(progress) = state.take.render_progress else { return };
     let value = match progress.total {
         // Pad `done` to the width of `total` so the readout keeps one width as
         // it counts up: monospace, so that holds the name still beside it —

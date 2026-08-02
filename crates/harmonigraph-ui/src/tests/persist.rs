@@ -193,15 +193,15 @@ fn a_render_frame_saved_as_stacked_loads_as_the_side_it_meant() {
         state.camera.yaw = 1.23;
         // A side the migration can't reach by accident, so a shim that failed
         // to fire is visible rather than looking like the default.
-        state.render_config.frame.lattice = LatticeSide::Right;
-        state.render_config.frame.split = 0.42;
+        state.take.render_config.frame.lattice = LatticeSide::Right;
+        state.take.render_config.frame.split = 0.42;
         let saved = state.save_persist().replace("lattice:Right", &format!("stacked:{flag}"));
         assert_ne!(saved, state.save_persist(), "replacement must have hit for {flag}");
 
         let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
         restored.load_persist(&saved);
-        assert_eq!(restored.render_config.frame.lattice, side, "stacked:{flag}");
-        assert_eq!(restored.render_config.frame.split, 0.42, "the rest of the frame survives");
+        assert_eq!(restored.take.render_config.frame.lattice, side, "stacked:{flag}");
+        assert_eq!(restored.take.render_config.frame.split, 0.42, "the rest of the frame survives");
         assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 
         // The offline renderer's own door into the blob.
@@ -215,14 +215,14 @@ fn a_render_frame_saved_as_stacked_loads_as_the_side_it_meant() {
 #[test]
 fn a_saved_render_frame_carries_the_side_and_not_the_old_flag() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.render_config.frame.lattice = LatticeSide::Bottom;
+    state.take.render_config.frame.lattice = LatticeSide::Bottom;
     let saved = state.save_persist();
     assert!(saved.contains("lattice:Bottom"), "the side is what gets written");
     assert!(!saved.contains("stacked:"), "the shim must never be written back");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
-    assert_eq!(restored.render_config.frame.lattice, LatticeSide::Bottom);
+    assert_eq!(restored.take.render_config.frame.lattice, LatticeSide::Bottom);
 }
 
 /// A saved `--size` in the Options text becomes the Resolution control, and
@@ -295,8 +295,8 @@ fn a_loaded_blob_has_its_options_size_lifted() {
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&old);
-    assert_eq!(restored.render_config.short_edge, 1440, "the size became the Resolution");
-    assert_eq!(restored.render_config.legacy_extra_args, "", "and the text was consumed");
+    assert_eq!(restored.take.render_config.short_edge, 1440, "the size became the Resolution");
+    assert_eq!(restored.take.render_config.legacy_extra_args, "", "and the text was consumed");
 }
 
 #[test]
@@ -453,6 +453,88 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
             "and the config it belongs to must load at the fresh-install values",
         );
     }
+}
+
+/// The blob's top-level keys are [`UiPersist`]'s, whatever shape the state
+/// they are read out of has.
+///
+/// `save_persist` copies field by field out of [`SharedState`] into a struct
+/// of its own, so how the state groups those fields is not a persistence
+/// question — which is the only reason regrouping them is safe. This is what
+/// says so: a grouping that reached the blob renames or nests a key here, and
+/// a key that moves is a saved project that loads at defaults.
+///
+/// The ORDER too, not just the set: `load_persist` is order-insensitive, but a
+/// reordered blob is a diff no reviewer can tell from a reshaped one.
+#[test]
+fn the_persist_blob_carries_exactly_these_top_level_keys() {
+    // UiPersist's fields, in declaration order.
+    const KEYS: &[&str] = &[
+        "version",
+        "dock",
+        "folds",
+        "camera",
+        "view",
+        "camera_presets",
+        "spectrum",
+        "render",
+        "fps_cap",
+        "ui_scale",
+    ];
+
+    let saved = SharedState::new(TextureFormat::Bgra8Unorm).save_persist();
+    let keys: Vec<String> = top_level_pairs(&saved).into_iter().map(|(key, _)| key).collect();
+    assert_eq!(keys, KEYS, "the persist blob's top-level keys have moved");
+}
+
+/// Dropping the render settings from a blob costs the render settings alone.
+///
+/// The container-level `#[serde(default)]` on [`RenderConfig`] covers a key
+/// missing from INSIDE the section (the case
+/// `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` pins
+/// one layer down); this covers the whole section being absent, which is what
+/// a blob written before the Video pane existed is. Both doors into the blob
+/// have to survive it: `load_persist` for the rest of the settings, and
+/// `render_config_from_persist` for the frame the offline renderer composes
+/// at, which has nothing else to fall back to.
+#[test]
+fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Non-defaults on both sides of the drop, so "the blob survived" is
+    // distinguishable from "it sank and everything reverted".
+    state.view.extent_sevens = 3;
+    state.take.render_config.lead_in = 2.5;
+    let saved = state.save_persist();
+
+    let kept: Vec<String> = top_level_pairs(&saved)
+        .into_iter()
+        .filter(|(key, _)| key != "render")
+        .map(|(_, text)| text)
+        .collect();
+    let without = format!("({})", kept.join(","));
+    assert_ne!(without, saved, "the render section must be in the blob to drop");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&without);
+    assert_eq!(
+        restored.view.extent_sevens, 3,
+        "dropping the render settings must cost them alone, not the whole blob",
+    );
+    // Serialized rather than field by field: RenderConfig has no PartialEq, and
+    // the point is that the WHOLE section is at fresh-install values.
+    let fresh = ron::to_string(&crate::RenderConfig::default()).expect("a config serializes");
+    assert_eq!(
+        ron::to_string(&restored.take.render_config).expect("a config serializes"),
+        fresh,
+        "and the settings themselves must load at the fresh-install values",
+    );
+
+    let door = crate::render_config_from_persist(&without).expect("the blob still parses");
+    assert_eq!(
+        ron::to_string(&door).expect("a config serializes"),
+        fresh,
+        "the renderer's door must answer the same, rather than refusing the blob",
+    );
 }
 
 #[test]
@@ -729,10 +811,10 @@ fn both_doors_into_a_blob_agree_about_the_version_floor() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
     // Values a default cannot produce, so a door that drops the blob is visible
     // rather than looking like it loaded something.
-    state.render_config.frame.aspect_w = 9;
-    state.render_config.frame.aspect_h = 16;
-    state.render_config.playhead = true;
-    state.render_config.lead_in = 2.5;
+    state.take.render_config.frame.aspect_w = 9;
+    state.take.render_config.frame.aspect_h = 16;
+    state.take.render_config.playhead = true;
+    state.take.render_config.lead_in = 2.5;
     let saved = state.save_persist();
 
     let stale = saved.replacen(
@@ -746,7 +828,7 @@ fn both_doors_into_a_blob_agree_about_the_version_floor() {
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&stale);
     let fresh = SharedState::new(TextureFormat::Bgra8Unorm);
-    assert_eq!(restored.render_config.playhead, fresh.render_config.playhead);
+    assert_eq!(restored.take.render_config.playhead, fresh.take.render_config.playhead);
 
     // The door `harmonigraph-offline`'s `main` is. Refusing the blob whole
     // means refusing it here too, so the renderer composes at a default frame
@@ -855,7 +937,7 @@ fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
 
     let fresh = harmonigraph_scene::ViewConfig::default();
     let full = ron::to_string(&fresh).expect("a view serializes");
-    let pairs = view_pairs(&full);
+    let pairs = top_level_pairs(&full);
     assert!(pairs.len() > 40, "the probe must see the whole struct, got {}", pairs.len());
 
     let (mut legacy, mut no_fallback) = (Vec::new(), Vec::new());
@@ -879,10 +961,12 @@ fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
     assert_eq!(no_fallback, NO_FALLBACK, "a field without a serde fallback sinks the whole view");
 }
 
-/// Split a serialized view into its top-level `key:value` pairs, as
+/// Split a serialized struct into its top-level `key:value` pairs, as
 /// `(key, whole pair)`. Depth-aware, so `grid_color:(r,g,b,a)` stays one pair
-/// rather than splitting on the commas inside it.
-fn view_pairs(blob: &str) -> Vec<(String, String)> {
+/// rather than splitting on the commas inside it — which is equally what lets
+/// a whole persist section (`render:(...)`, `dock:(...)`) be dropped or
+/// counted as one.
+fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
     let inner = blob.trim().trim_start_matches('(').trim_end_matches(')');
     let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0usize);
     for (i, c) in inner.char_indices() {
@@ -901,3 +985,4 @@ fn view_pairs(blob: &str) -> Vec<(String, String)> {
         .map(|text| (text[..text.find(':').expect("a pair has a colon")].to_string(), text))
         .collect()
 }
+

@@ -192,8 +192,11 @@ pub enum RenderTrigger {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RenderConfig {
-    /// Record the plugin's audio input into the take (see
-    /// `SharedState::take_audio`, which mirrors this at runtime).
+    /// Record the plugin's audio input into the take. Nothing reads it: the
+    /// recorder captures audio unconditionally, since the render wants it as
+    /// the spectrogram (see the plugin editor's `sync_take`). Kept because it
+    /// is a key in every saved blob — dropping it is a persistence change
+    /// rather than a cleanup.
     pub record_audio: bool,
     /// Run the renderer as soon as a take finishes.
     pub auto_render: bool,

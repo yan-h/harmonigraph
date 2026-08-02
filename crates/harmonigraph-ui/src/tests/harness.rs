@@ -179,9 +179,9 @@ pub(super) fn settings_pane_at_width(
     projection: harmonigraph_scene::Projection,
 ) -> Vec<egui::epaint::ClippedShape> {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.take_supported = true;
-    state.last_take_ready = true;
-    state.render_progress = Some(FIXTURE_RENDER);
+    state.take.supported = true;
+    state.take.last_ready = true;
+    state.take.render_progress = Some(FIXTURE_RENDER);
     state.camera.projection = projection;
     // A saved angle, so the Angle row has the button a real session gives it.
     state.camera_presets.push(CameraPreset { name: "Front".into(), yaw: 0.0, pitch: 0.0 });
