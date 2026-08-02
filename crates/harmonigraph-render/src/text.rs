@@ -248,12 +248,23 @@ impl TextResources {
     ///     shader normalizes texels by that, so a pane left holding the old one
     ///     would sample a fraction of the way into the wrong row.
     ///
-    /// Both are put right here rather than deferred to a next frame that,
-    /// for those panes, comes after they have been drawn. Their instance data
-    /// needs nothing: an atlas that GREW keeps every glyph at the texel it was
-    /// already at, and the rebuild that moves them all clears the mirror's
-    /// `seen`, which makes every pane's glyphs fresh and every pane bring the
-    /// new atlas itself.
+    /// Both are put right here rather than deferred to a next frame that, for
+    /// those panes, comes after they have been drawn. Their instance data needs
+    /// nothing, and that rests on two things outside this function. The mirror
+    /// above it (`harmonigraph_ui::text::atlas_if_changed`) records a pane's
+    /// glyphs as seen BEFORE it decides whether to hand out an atlas at all, so
+    /// a pane told `None` is one whose every texel already sits in a snapshot
+    /// some earlier flush uploaded. And an atlas that GREW keeps those texels
+    /// where they were, epaint only ever doubling the height and appending
+    /// transparent rows — which is also what makes the atlas monotone across a
+    /// frame, so no later pane can bring a SMALLER one and strand an earlier
+    /// pane's uvs off the end of it.
+    ///
+    /// The one arrangement neither covers is epaint recycling texels in place,
+    /// which it does once a glyph is too big for the atlas to grow for: live
+    /// glyphs move at a CONSTANT size, so nothing is recreated and nothing here
+    /// can notice. That is held off upstream by `MAX_GLYPH_PX`, and is the
+    /// reason that ceiling is a ceiling rather than a preference.
     fn mirror_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &FontAtlas) {
         let size = [atlas.image.width() as u32, atlas.image.height() as u32];
         let recreated = self.atlas.is_none() || self.atlas_size != size;
