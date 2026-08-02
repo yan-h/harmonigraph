@@ -672,4 +672,73 @@ mod tests {
             );
         }
     }
+
+    /// [`fft_in_place`] computes each stage's twiddles once and reuses them
+    /// across that stage's blocks. Sound only if it agrees with the per-block
+    /// order BIT FOR BIT, which is a stricter bar than the tolerance the naive
+    /// DFT test above holds: a transform that is merely *close* moves every
+    /// pixel of a render, so a take rendered by two builds stops matching
+    /// itself and one shot of a multi-shot video no longer cuts against its
+    /// siblings.
+    ///
+    /// Nothing else in the tree pins that. Both offline determinism tests
+    /// render twice from ONE build and compare the runs to each other, so they
+    /// are invariant to any change in what the FFT computes — they catch
+    /// nondeterminism, not drift. This is the test that would fail.
+    ///
+    /// The per-block order is kept here as the reference rather than deleted
+    /// with the change, because the claim is *about* the two orders agreeing
+    /// and there is otherwise nothing to compare against.
+    #[test]
+    fn reusing_a_stages_twiddles_does_not_move_a_single_bit() {
+        /// Radix-2 with the twiddle recomputed inside the butterfly loop —
+        /// the same arithmetic on the same values, with the k and start loops
+        /// the other way round.
+        fn per_block_twiddles(re: &mut [f32], im: &mut [f32]) {
+            let n = re.len();
+            let bits = n.trailing_zeros();
+            for i in 0..n {
+                let j = i.reverse_bits() >> (usize::BITS - bits);
+                if j > i {
+                    re.swap(i, j);
+                    im.swap(i, j);
+                }
+            }
+            let mut len = 2;
+            while len <= n {
+                let step = std::f32::consts::TAU / len as f32;
+                let half = len / 2;
+                for start in (0..n).step_by(len) {
+                    for k in 0..half {
+                        let angle = -step * k as f32;
+                        let (ws, wc) = angle.sin_cos();
+                        let (i, j) = (start + k, start + k + half);
+                        let (tr, ti) = (re[j] * wc - im[j] * ws, re[j] * ws + im[j] * wc);
+                        re[j] = re[i] - tr;
+                        im[j] = im[i] - ti;
+                        re[i] += tr;
+                        im[i] += ti;
+                    }
+                }
+                len *= 2;
+            }
+        }
+
+        // 2 and 4 are the degenerate stages (one block, or one twiddle); the
+        // rest are every window `SpectrumWindow::samples` can ask for.
+        for n in [2usize, 4, 16, 256, 4096, DEFAULT_FFT_SIZE, 16384] {
+            let signal: Vec<f32> = (0..n)
+                .map(|i| (i as f32 * 0.017).sin() * 0.7 + (i as f32 * 0.11).cos())
+                .collect();
+            let (mut ar, mut ai) = (signal.clone(), vec![0.0f32; n]);
+            let (mut br, mut bi) = (signal.clone(), vec![0.0f32; n]);
+            fft_in_place(&mut ar, &mut ai);
+            per_block_twiddles(&mut br, &mut bi);
+            // Compared as bits, not by `==`: the point is that not one ULP
+            // moved, and float equality would also call two NaNs unequal.
+            let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<u32>>();
+            assert_eq!(bits(&ar), bits(&br), "real part differs at n = {n}");
+            assert_eq!(bits(&ai), bits(&bi), "imaginary part differs at n = {n}");
+        }
+    }
 }

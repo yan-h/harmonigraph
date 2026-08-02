@@ -216,34 +216,3 @@ fn main() {
         saved * 125.0 * 2.0 / 10.0
     );
 }
-
-#[cfg(test)]
-mod check {
-    use super::*;
-
-    /// The loop swap reorders independent butterflies within a stage but
-    /// changes no arithmetic, so it must agree to the last bit. The offline
-    /// render's determinism test is what makes that the bar.
-    #[test]
-    fn swapping_the_loops_is_bit_identical() {
-        for n in [64usize, 256, 1024, 8192] {
-            let sig: Vec<f32> =
-                (0..n).map(|i| (i as f32 * 0.017).sin() * 0.7 + (i as f32 * 0.11).cos()).collect();
-            let (mut ar, mut ai) = (sig.clone(), vec![0.0f32; n]);
-            let (mut br, mut bi) = (sig.clone(), vec![0.0f32; n]);
-            fft_baseline(&mut ar, &mut ai);
-            fft_hoisted(&mut br, &mut bi);
-            assert_eq!(ar.to_bits_vec(), br.to_bits_vec(), "re differs at n={n}");
-            assert_eq!(ai.to_bits_vec(), bi.to_bits_vec(), "im differs at n={n}");
-        }
-    }
-
-    trait Bits {
-        fn to_bits_vec(&self) -> Vec<u32>;
-    }
-    impl Bits for Vec<f32> {
-        fn to_bits_vec(&self) -> Vec<u32> {
-            self.iter().map(|v| v.to_bits()).collect()
-        }
-    }
-}
