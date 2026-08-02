@@ -269,22 +269,30 @@ pub struct SharedState {
 /// What the frame publishes about ITSELF: the measurements the performance
 /// overlay reads, and the side channels the draw callbacks write them through.
 ///
-/// Grouped for the second half, which is the part worth saying out loud.
-/// `lattice_stats`, `roll_notes` and `font_atlas` are an `Arc`, an atomic and a
-/// `Mutex` not because any of them is contended, but because the values are
-/// produced from a `&SharedState`: egui-wgpu's paint callbacks and the label
-/// batch's flush all run behind a shared reference, with no way to hand a value
-/// back up the call stack — and, for the GPU timer, several frames after the
-/// frame that asked for it. The concurrency primitive IS the return path.
-/// Spread flat among the ordinary fields around them that reason is invisible,
-/// and the obvious reading — that something here is contended — is the wrong
-/// one.
+/// Grouped for the second half, which is the part worth saying out loud. None
+/// of the three is contended; in each the concurrency primitive IS the return
+/// path, for one of two reasons.
+///
+/// `roll_notes` and `font_atlas` are an atomic and a `Mutex` because they are
+/// written from a `&SharedState` — the roll draws from one, and so does the
+/// label batch's flush — with no way to hand a value back up the call stack.
+///
+/// `lattice_stats` is an `Arc` for the harder version of the same problem, and
+/// NOT because of a shared borrow: egui stores a paint callback as
+/// `Arc<dyn Any + Send + Sync>`, so the sink has to be OWNED by the callback
+/// rather than borrowed from anything — `'static` leaves no lifetime a borrow
+/// could go in at. `prepare` then runs behind `&self`, several frames after
+/// the frame that asked for the timing.
+///
+/// Spread flat among the ordinary fields around them those reasons are
+/// invisible, and the obvious reading — that something here is contended — is
+/// the wrong one.
 ///
 /// `timings` and `perf` are the other end of the same frame: what the shell
 /// measured before `root_ui` ran, and the rolling windows `root_ui` folds all
 /// of it into. `font_atlas` is the odd member — a mirror rather than a
 /// measurement — and it rides here for the mechanism rather than the meaning:
-/// it is the third thing a draw callback publishes through a shared reference,
+/// it is the third thing the draw path publishes through a shared reference,
 /// taken once per flush and uncontended for exactly the same reason.
 ///
 /// None of it is persisted — `save_persist` builds `UiPersist` field by field,
