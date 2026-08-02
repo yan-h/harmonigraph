@@ -357,9 +357,16 @@ Determinism is tested, but the test is narrower than the property:
 byte-identical, at 320x200, `side-by-side`, ten frames of one second. If it
 ever fails, something time- or machine-dependent has entered the draw path.
 
-It does not currently hold at full size. **Issue #135** is open: two
-identical invocations at 1920x1080 with `--layout lattice` differ, on every
-pair of frames tried. So treat the test as a tripwire on the pipeline rather
-than a guarantee about a real export, and read the claim above as what this
-is meant to be — the take format and the replay are deterministic by
-construction; the lattice pass is where the property is currently broken.
+The test is still narrower than the property, so treat it as a tripwire on
+the pipeline rather than a guarantee about a real export. What it cannot see
+is a tie: its take is three chords on one channel with no two voices sharing
+a pitch class, so nothing in it exercises the case where two voices light one
+node and something has to choose between them. That blind spot is what let
+issue #135 — a hash map's per-map iteration order deciding a doubled node's
+colour, and so its pixels — live in shipped renders while this stayed green.
+
+#135 is fixed (the tracker's collections are ordered, not hashed), and what
+guards it now is a set of unit tests on those collections' iteration order
+rather than this render. That is deliberate: a hash map can always come back
+sorted, so an end-to-end render is at best a probabilistic detector of one,
+while asserting key order over a few hundred keys fails with probability 1.
