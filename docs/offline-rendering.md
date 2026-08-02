@@ -346,8 +346,9 @@ the DAW.
 - `harmonigraph-record` — the recording end. The audio thread's ring
   producers, the writer thread that turns them into a take, and the
   subprocess driver that runs `harmonigraph-offline` on a finished one.
-  Depends on the format crate rather than living in it, because naming an
-  automation record and reporting a render both need `harmonigraph-ui`.
+  Sits beside the format crate rather than inside it because recording is a
+  different job from reading: audio-thread rings, transport handling and a
+  subprocess driver, none of which reading a take should have to link.
 - `harmonigraph-offline` — the renderer. Headless wgpu device, egui driven by
   synthesized input, frames read back and piped to ffmpeg.
 
