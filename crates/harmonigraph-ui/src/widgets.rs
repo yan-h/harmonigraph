@@ -1111,8 +1111,17 @@ impl<'a> OctaveStrip<'a> {
         // drag changes its meaning — drawn whether or not there are extras
         // yet, since that is the edge you drag OUT from to get some.
         let handle_w = STRIP_HANDLE_W * scale;
+        // Held inside the bar by half a handle, for the reason HANDLE_INSET
+        // holds a RangeBar's ends off theirs: a wheel that spends the whole
+        // budget puts this boundary on the bar's own edge, and a handle
+        // centered there hangs half its width out over the pane, where the
+        // part still on the bar reads as its border rather than as something
+        // to grab. There is nothing outside it to drag toward at that width
+        // anyway — a full count leaves no room for a fringe.
+        let inset = 0.5 * handle_w;
         for side in [-1.0f32, 1.0] {
-            let x = middle + side * *self.count as f32 * 0.5 * slot;
+            let x = (middle + side * *self.count as f32 * 0.5 * slot)
+                .clamp(rect.left() + inset, rect.right() - inset);
             painter.rect_filled(
                 egui::Rect::from_center_size(
                     egui::pos2(x, rect.center().y),
@@ -2049,10 +2058,43 @@ mod tests {
         }
         // On the outer edge of the wheel, which is what a fringe is dragged
         // out from and the count is dragged in from.
-        let cells = cells(&shapes);
-        let edges = (cells[0].left(), cells[4].right());
+        let plain = cells(&shapes);
+        let edges = (plain[0].left(), plain[4].right());
         assert!((hs[0].center().x - edges.0).abs() < 1.0, "the low handle left the edge");
         assert!((hs[1].center().x - edges.1).abs() < 1.0, "and the high one");
+
+        // And with a fringe, where the boundary is INSIDE the wheel rather
+        // than on its edge — at zero extras the two coincide, so a strip drawn
+        // only there cannot tell the count's boundary from the wheel's.
+        let shapes = paint_octave_strip(5, 2, 0.4, 0.0);
+        let (hs, fringed) = (handles(&shapes), cells(&shapes));
+        assert_eq!(fringed.len(), 9, "five full-size octaves and two extras each end");
+        assert!(
+            (hs[0].center().x - fringed[2].left()).abs() < 1.0,
+            "the low handle is not where the fringe ends and the count starts"
+        );
+        assert!((hs[1].center().x - fringed[6].right()).abs() < 1.0, "nor the high one");
+    }
+
+    /// The widest wheel puts its boundary on the bar's own edge, and a handle
+    /// centered there hangs half its width outside — where it reads as the
+    /// border rather than as something to grab. That is the bug
+    /// `the_handles_read_as_handles_even_at_the_limits` pins for the range
+    /// bar, and it arrives here by a different route: not a value at the end
+    /// of a scale, but a count that fills every slot of the budget.
+    #[test]
+    fn the_strips_handles_stay_inside_the_bar_at_the_widest_wheel() {
+        let shapes = paint_octave_strip(MAX_SPAN, 0, DEFAULT_EXTRA_SIZE, 0.0);
+        let bar = filled_rects(&shapes)[0].0;
+        let hs = handles(&shapes);
+        assert_eq!(hs.len(), 2, "the widest wheel did not paint two handles");
+        for h in &hs {
+            assert!(
+                h.left() >= bar.left() - 0.01 && h.right() <= bar.right() + 0.01,
+                "handle {h:?} hangs outside the bar {bar:?}"
+            );
+            assert!(h.width() >= 4.0, "a handle thinner than this vanishes into the fill");
+        }
     }
 
     /// Which gesture a press starts is decided by the region it lands in, and
