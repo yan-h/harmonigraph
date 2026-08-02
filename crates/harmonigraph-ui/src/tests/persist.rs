@@ -494,12 +494,18 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
 /// `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` pins
 /// one layer down); this covers the whole section being absent.
 ///
-/// No blob on disk is in that shape, and the floor is why: `render` entered
-/// [`UiPersist`] before [`UI_PERSIST_VERSION`] last moved, so every blob
-/// written without it is below the floor and refused whole. What is left to
-/// pin is the `#[serde(default)]` on the field itself — a hand-edited
-/// `app.ron` can be missing it, and the next writer of this blob has no other
-/// statement that dropping one section must not sink the other nine.
+/// No blob this build WROTE is in that shape: `render` entered [`UiPersist`]
+/// two days before [`UI_PERSIST_VERSION`] last moved, so a saved project
+/// missing the section is below the floor and refused whole before its
+/// `#[serde(default)]` is ever consulted.
+///
+/// A HAND-AUTHORED blob is the reachable case, and it is a supported one, not
+/// a curiosity: `harmonigraph-offline --ui-state FILE` substitutes a file for
+/// the take's own blob without validating it, and the standalone reads its
+/// `app.ron` the same way. A file dialled by hand — or by
+/// `read-plugin-state.py`, which the flag's own help points at — is exactly
+/// the blob that can be missing a section, and dropping one there must not
+/// sink the other nine.
 ///
 /// Both doors, because they answer separately: `load_persist` for the rest of
 /// the settings, and `render_config_from_persist` for the frame the offline
