@@ -178,18 +178,18 @@ struct Uniforms {
     /// on the picture rather than as a hole through it. See
     /// `Scene::background`.
     background: [f32; 4],
-    /// The wheel's pitch axis, as its domain and the cuts in it. x: cells the
-    /// window is divided into (`OctaveLayout::cells`); y, z: the MIDI pitch at
-    /// its low end, which is the seam, and at its high end; w: the pitch the
-    /// cell boundaries are counted from (`OctaveLayout::cell_origin`).
+    /// The wheel's pitch axis. x: octaves one turn is cut into
+    /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
+    /// (`OctaveLayout::center`); z, w unused.
     ///
-    /// No slot range: which octaves a node draws depends on the node's own
-    /// pitch class, because the window IS a pitch range rather than a count
-    /// of octaves, so the shader derives it per node from these.
+    /// No slot range and no per-node angle: both depend on the node's own
+    /// pitch class — which of its octaves are the ones nearest the center, and
+    /// how far its ring is turned to put them on their pitches — so the shader
+    /// derives them per node from these two.
     misc7: [f32; 4],
-    /// `OctaveLayout::bounds` — the angle of each cell boundary of the
-    /// window — four to a row, which is how a uniform array is laid out
-    /// anyway.
+    /// `OctaveLayout::bounds` — the angle from a ring's seam to each of its
+    /// slice boundaries, the same table for every node — four to a row, which
+    /// is how a uniform array is laid out anyway.
     oct_bounds: [[f32; 4]; 3],
 }
 
@@ -201,10 +201,10 @@ struct Uniforms {
 // 3 u32 words hold 12 packed levels, one byte per octave slot.
 const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS == 11);
 // `oct_bounds`'s 3 vec4s hold 12 boundary angles, and the layout needs one per
-// cell plus the closing one — so 11 cells is the ceiling. Widening the pitch
-// limits in harmonigraph-scene past what 11 cells can cover is what would
-// break this; `the_widest_window_fits_the_table` there is the other half.
-const _: () = assert!(harmonigraph_scene::MAX_CELLS + 1 == 12);
+// slice plus the closing one — so a span of 11 is the ceiling, which is also
+// every MIDI octave there is. Raising MAX_SPAN in harmonigraph-scene is what
+// would break this.
+const _: () = assert!(harmonigraph_scene::MAX_SPAN as usize + 1 == 12);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree.
@@ -533,10 +533,10 @@ impl LatticeCallback {
                 ],
                 background: scene.background.to_array(),
                 misc7: [
-                    scene.octave_layout.cells as f32,
-                    scene.octave_layout.low_pitch,
-                    scene.octave_layout.high_pitch,
-                    scene.octave_layout.cell_origin,
+                    scene.octave_layout.span as f32,
+                    scene.octave_layout.center,
+                    0.0,
+                    0.0,
                 ],
                 // Straight indexing: the table is exactly as long as the
                 // rows are wide (the const assert above is what keeps it so),

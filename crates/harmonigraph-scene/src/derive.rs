@@ -172,12 +172,12 @@ pub fn derive_scene(
     // square instead of ending as a circle.
     let sevens_gutter = view.sevens_gutter.clamp(0.0, 0.5);
     // The octave wheel is a pitch axis, so it is a property of the VIEW and is
-    // built once: every node reads the same axis. Which octaves OF it a node
-    // draws is per node, since the window is a pitch range rather than a count
-    // of octaves — see the fold below.
+    // built once: every node draws the same slice WIDTHS. Which octaves those
+    // slices are, and how far the ring is turned to put them on their pitches,
+    // is per node — see the fold below.
     let octave_layout = octave_layout(
-        view.octave_low,
-        view.octave_high,
+        view.octave_count,
+        view.octave_center,
         view.octave_taper_amount,
         view.octave_taper_shape,
     );
@@ -204,15 +204,11 @@ pub fn derive_scene(
     for pos in view.visible_positions() {
         let node_pc = tuning.pitch_class(pos);
         let node_cents = node_pc.to_cents();
-        // The octaves of THIS pitch class that land in the window, which is
-        // what its indicators are. Per node rather than per frame: a window
-        // that is not a whole number of octaves holds one more of some pitch
-        // classes than of others, and the ring only closes if each node draws
-        // its own.
-        let (low_slot, high_slot) = {
-            let (low, high) = octave_layout.slot_range(node_cents);
-            (low as i8, high as i8)
-        };
+        // The octaves of THIS pitch class nearest the center pitch, which is
+        // what its indicators are. Per node rather than per frame: where a
+        // class falls against the center decides which octaves of it are the
+        // nearest ones, and the ring is turned to match.
+        let (low_slot, high_slot) = octave_layout.slots(node_cents);
         let mut activation = 0.0f32;
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
@@ -243,12 +239,22 @@ pub fn derive_scene(
                 // names. Middle C on an untransposed lattice is slot 5 either
                 // way.
                 //
-                // Clamped into the octaves the Range names: a note past either
+                // Clamped into the octaves the ring draws: a note past either
                 // end lights the outermost indicator on its side rather than
-                // vanishing, which is what keeps a narrow Range a way of
+                // vanishing, which is what keeps a narrow span a way of
                 // READING the music rather than a filter over it.
-                let sounding = ((voice.pitch - node_cents / 100.0) / 12.0).round() as i8;
-                let slot = sounding.clamp(low_slot, high_slot) as usize;
+                //
+                // And then into the packing, which is the MIDI octaves and
+                // nothing else: a ring near the pitch limits draws octaves no
+                // note can reach (see `Ring::base`), and the outermost
+                // indicator a note can fold onto is the outermost one that has
+                // a slot at all. The two ranges always overlap — a ring is at
+                // least two octaves wide and its middle is a playable pitch —
+                // so this lands on a slice that is drawn.
+                let sounding = ((voice.pitch - node_cents / 100.0) / 12.0).round() as i32;
+                let slot = sounding
+                    .clamp(low_slot, high_slot)
+                    .clamp(0, OCTAVE_SLOTS as i32 - 1) as usize;
                 // Eases in from note-on; release still fades on the octave
                 // envelope.
                 octaves[slot] = octaves[slot].max(envelope * attack(now, voice.on_time));
@@ -288,7 +294,7 @@ pub fn derive_scene(
                     // — from when the note took the end, which is not always
                     // its note-on (see `end_taken_at`).
                     let mark_color = pitch_lut_color(
-                        octave_layout.slot_pitch(slot as u32, node_cents),
+                        octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,
                         frame.brightest_pitch,
                     );

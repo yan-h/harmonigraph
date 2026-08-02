@@ -1,106 +1,102 @@
-//! Where each octave indicator sits around a node: the pitch window the wheel
-//! shows, how wide each octave of it is, and which octaves a node draws.
+//! Where each octave indicator sits around a node: how many octaves one turn
+//! of the wheel is cut into, which pitch sits at the top of it, and which
+//! octaves a node draws.
 //!
-//! **The wheel is a pitch axis, and it is the same axis on every node.** One
-//! monotone map takes an absolute MIDI pitch to an angle: the window's low end
-//! straight down, rising pitch clockwise, one full turn covering the window
-//! the Range setting names. An indicator is drawn at the angle of the pitch it
-//! stands for — so where a node's indicators sit says which pitches those
-//! octaves ARE, and two nodes' indicators for the same octave sit at different
-//! angles exactly as their pitches differ.
+//! **Every node draws N slices, and they are the same N slices turned.** The
+//! wheel is a SPAN (how many octaves fill one turn) and a CENTER (the pitch at
+//! the top), so a slice is always exactly one octave and — with the taper off
+//! — always exactly a turn over N. That is the whole of what the settings say;
+//! nothing about a node can make one of its slices short.
 //!
-//! **The Range is a PITCH WINDOW, continuous at both ends.** It is not a count
-//! of octaves: any low and any high pitch [`MIN_WINDOW`] apart will do, and the
-//! octaves are what the window is divided BY rather than what it is measured
-//! in. That is the whole reason the geometry below is what it is — a window
-//! that is not a whole number of octaves cannot have every node's octaves tile
-//! it (a pitch class has `floor` or `ceil` of them inside depending on where it
-//! falls), so the two indicators at the ENDS reach out to the seam and the ones
-//! between are exactly their own octave. Nothing is drawn twice and nothing is
-//! left bare, at any window and any pitch class.
+//! **The center pitch is at the top of every node, whatever its pitch class.**
+//! One monotone map takes an absolute MIDI pitch to an angle — `center`
+//! straight up, rising pitch clockwise, a full turn every N octaves — and each
+//! node draws the N octaves of ITSELF nearest the center, laid on that map. So
+//! an indicator's angle still means an absolute pitch, and two nodes' slices
+//! for the same octave sit at the same angle. What differs per node is only
+//! WHERE ITS OCTAVES FALL: a node whose class sits `d` semitones from the
+//! center's has its whole ring turned by `d` of an octave — left for the half
+//! octave below, right for the half octave above, and never further than half
+//! a slice either way.
 //!
-//! **A node draws the octaves of ITSELF that land in the window.** So two nodes
-//! can show a different count — nine and ten — when the window is not a whole
-//! number of octaves, and where each indicator sits still says its pitch. (At a
-//! whole number of octaves the counts agree again, which is the old fixed-span
-//! wheel come back as a special case.) Notes outside the window fold onto the
-//! nearest end, so a narrow Range is a way of READING the music rather than a
-//! filter over it.
+//! **What moves instead is the seam.** The map wraps every N octaves, and the
+//! point where a node's lowest slice meets its highest is that wrap. It is at
+//! the bottom for the center's own pitch class and turns away from it with the
+//! ring for every other — which is the trade this geometry makes, and it is
+//! the right way round: a wandering seam costs a discontinuity nobody reads
+//! twice, where the alternative (pinning the seam and cutting the two end
+//! slices to fit) costs every node a pair of indicators that are the wrong
+//! SIZE for the octave they name.
 //!
-//! **The bottom is both ends of the window at once.** The lowest pitch the
-//! window shows and the highest land on the same point, straight down, on every
-//! node whatever its pitch class — which is the thing a per-node rotation of the
-//! wheel cannot give. The window's MIDDLE pitch is then straight up, since the
-//! widths depend only on the distance from it and are therefore symmetric about
-//! it; with the default window, which is centered on middle C, that is middle C
-//! exactly as it reads on a keyboard.
+//! **A node draws N octaves whether or not they can sound.** The nearest N to
+//! the center are what tile the turn; when the center is far up or down the
+//! keyboard some of them are octaves no MIDI note reaches, and those draw as
+//! backdrop and never light. Cutting them instead would leave a wedge of the
+//! ring missing. Notes past either end of the ring fold onto the outermost
+//! slice on their side, so a narrow span is a way of READING the music rather
+//! than a filter over it.
 //!
-//! The map is computed here, on the CPU, and handed to the shader as a table of
-//! boundary angles — the alternative is accumulating the same widths per pixel
-//! per sector, which is the same arithmetic done a few million times a frame for
-//! a value that changes when a setting does.
+//! The widths are computed here, on the CPU, and handed to the shader as one
+//! table of cumulative angles that every node shares — the alternative is
+//! accumulating the same widths per pixel per sector, which is the same
+//! arithmetic done a few million times a frame for a value that changes when a
+//! setting does.
 
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 /// Octave indicator slots: MIDI octaves -1..=9, so `slot = octave + 1` and
 /// middle C (octave 4, MIDI 60) is slot 5. Slot `s` is the octave whose C is
 /// MIDI `12 * s`. Eleven covers the whole MIDI range; the renderer packs one
 /// byte per slot into 3 words and asserts the count fits.
+///
+/// A ring can name slots OUTSIDE this, at the top and bottom of the pitch
+/// limits — see [`Ring::base`]. They are octaves no note reaches, so they draw
+/// and never light, and nothing indexes the packing by them.
 pub const OCTAVE_SLOTS: usize = 11;
 
 /// Slot of middle C's octave: the slot a note at MIDI 60 lights, and the one
-/// the default window is centered on.
+/// the default center sits in.
 pub const MIDDLE_C_SLOT: usize = 5;
 
-/// Lowest and highest pitch the Range can reach — the MIDI note numbers, so
-/// every slot's C (0 to 120) is inside and the readout is a note anyone can
-/// name.
+/// Lowest and highest pitch the center can be set to — the MIDI note numbers,
+/// so the readout is a note anyone can name.
 pub const PITCH_FLOOR: f32 = 0.0;
 /// See [`PITCH_FLOOR`].
 pub const PITCH_CEIL: f32 = 127.0;
 
-/// Narrowest window, in semitones: four octaves — C1..C5 in the DAW's
-/// numbering, the register a keyboard part actually lives in.
-///
-/// A floor rather than a preference, and the taper is why. The width the
-/// middle of the axis takes is shared out from the cells either side of it, so
-/// the fewer cells there are the more of the turn one indicator can end up
-/// holding. Measured, at the fullest amount and the sharpest shape, sweeping
-/// the window along the axis at every pitch class: four octaves takes the
-/// widest indicator to 266 degrees and five to 253, but three and a half takes
-/// it to 274, three to 336, and two to 342 — closing on a whole turn, where a
-/// wedge is no longer a wedge and the shader's two-half-plane test has nothing
-/// to say. See [`an_indicator_can_pass_a_half_turn_but_never_a_whole_one`](self).
-pub const MIN_WINDOW: f32 = 48.0;
+/// Fewest octaves one turn can be cut into. Two half-turn slices is already a
+/// picture that says very little, and one would be a single slice covering the
+/// whole turn — where a wedge is no longer a wedge and the shader's
+/// two-half-plane test has nothing to say.
+pub const MIN_SPAN: u32 = 2;
 
-/// The window a fresh view starts on: C0..C8 in this crate's numbering (middle
-/// C = C4; the UI spells the same C-1..C7, in Bitwig's), centered on middle C
-/// and reaching half an octave past the outermost C either way. Past both ends
-/// of any keyboard part, and at nine octaves to the turn an octave is worth 40
-/// degrees, which reads at a glance.
-pub const DEFAULT_WINDOW_LOW: f32 = 6.0;
-/// See [`DEFAULT_WINDOW_LOW`].
-pub const DEFAULT_WINDOW_HIGH: f32 = 114.0;
+/// Most octaves one turn can be cut into: the eleven MIDI octaves, which is
+/// every slot there is and also exactly what the boundary table holds.
+pub const MAX_SPAN: u32 = OCTAVE_SLOTS as u32;
 
-/// Cells the widest window can be cut into, which is the table the boundary
-/// angles are written to.
-///
-/// A cell boundary sits every 12 semitones out from half an octave either side
-/// of the window's center, so the count is set by how many fit inside the
-/// widest half-window there is — see
-/// [`the_widest_window_fits_the_table`](self), which is what holds this to the
-/// pitch limits rather than to a hope.
-pub const MAX_CELLS: usize = 11;
+/// The span a fresh view starts on: five octaves to the turn, an octave worth
+/// 72 degrees, and — centered on middle C — C1..C5 in the DAW's numbering,
+/// which is the register a keyboard part actually lives in.
+pub const DEFAULT_SPAN: u32 = 5;
+
+/// The pitch a fresh view puts at the top: middle C, MIDI 60, which the UI
+/// spells C3 in Bitwig's numbering. The wheel then reads like a keyboard, with
+/// the note under the player's hand straight up.
+pub const DEFAULT_CENTER: f32 = 60.0;
 
 /// Ceiling on the taper amount. At 1 the outermost octave would have no
-/// width at all, which is a window that claims to show a pitch and doesn't;
+/// width at all, which is a slice that claims to show a pitch and doesn't;
 /// 0.9 leaves it a tenth of an even slice, still a sliver but a visible
-/// one — 3 degrees at the widest Range, 7 at the narrowest.
+/// one — 3 degrees at the widest span, 12 at the narrowest that tapers.
 pub const MAX_TAPER_AMOUNT: f32 = 0.9;
 
 /// Semitones to the octave, as a float: this module is all pitch arithmetic
 /// and the conversions read better named.
 const SEMIS: f32 = 12.0;
+
+/// Straight up, in the renderer's angles: the bottom of a node is
+/// `-FRAC_PI_2`, and clockwise — the direction pitch rises — subtracts.
+const UP: f32 = -FRAC_PI_2 - PI;
 
 /// How far the Shape setting can bend the taper either way, as an exponent:
 /// the ends of the bar are `x^(1/4)` and `x^4`, and its middle is the
@@ -123,79 +119,78 @@ fn shape_exponent(shape: f32) -> f32 {
 /// nothing until the Amount leaves 0.
 pub const DEFAULT_TAPER_SHAPE: f32 = 0.5;
 
-/// A settable pair reduced to a window the layout can actually draw: inside
-/// the pitch limits, low end first, and never narrower than [`MIN_WINDOW`].
-///
-/// The Range control cannot produce anything else — its bar carries the same
-/// limit and the same minimum span — so this is for the pair that did not come
-/// from it: a hand-edited blob, a project saved by a build whose limits were
-/// different, a migration off the old octave count.
-///
-/// Widening happens at the HIGH end, and falls back to the low one only when
-/// the ceiling is already reached: a too-narrow pair is nearly always one whose
-/// high end was clamped or dropped, and growing upward keeps the low end — the
-/// bass, which is where the music usually is — exactly where it was asked for.
-pub fn clamp_window(low: f32, high: f32) -> (f32, f32) {
-    let low = if low.is_finite() { low } else { DEFAULT_WINDOW_LOW };
-    let high = if high.is_finite() { high } else { DEFAULT_WINDOW_HIGH };
-    let (low, high) = if low <= high { (low, high) } else { (high, low) };
-    let low = low.clamp(PITCH_FLOOR, PITCH_CEIL - MIN_WINDOW);
-    let high = high.clamp(low + MIN_WINDOW, PITCH_CEIL);
-    (low, high)
+/// A settable span reduced to one the layout can draw. The Span control cannot
+/// produce anything else, so this is for the value that did not come from it:
+/// a hand-edited blob, a project saved by a build whose limits were different,
+/// a migration off the old pitch window.
+pub fn clamp_span(span: u32) -> u32 {
+    span.clamp(MIN_SPAN, MAX_SPAN)
+}
+
+/// The same for the center pitch, non-finite included — a NaN center poisons
+/// every angle on the wheel, and `clamp` alone does not catch it since NaN is
+/// its own answer.
+pub fn clamp_center(center: f32) -> f32 {
+    if center.is_finite() {
+        center.clamp(PITCH_FLOOR, PITCH_CEIL)
+    } else {
+        DEFAULT_CENTER
+    }
 }
 
 /// The pitch axis the octave indicators are drawn on, ready for the shader.
 ///
-/// Computed once per frame from the view settings, not per node: every node
-/// reads the SAME axis, which is what makes an indicator's angle mean an
-/// absolute pitch rather than a position in that node's own private ring.
+/// Computed once per frame from the view settings, not per node: the slice
+/// WIDTHS are the same on every node, and all a node contributes is where its
+/// own octaves fall against the center (see [`Self::ring`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OctaveLayout {
-    /// MIDI pitch at the seam approached from the LEFT — the lowest pitch the
-    /// window shows. [`high_pitch`](Self::high_pitch) is the same point on the
-    /// circle, come round the other way.
-    pub low_pitch: f32,
-    /// The highest pitch the window shows: the seam again, approached from the
-    /// right.
-    pub high_pitch: f32,
-    /// Cells the window is cut into — whole octaves except at the two ends,
-    /// where the window generally stops part way through one. The cells are
-    /// where the taper's slope changes, and nothing else: an INDICATOR is a
-    /// property of the node's pitch class (see [`Self::sector`]) and lines up
-    /// with a cell only when the node shares the window's own pitch class.
-    pub cells: u32,
-    /// Pitch of the cell boundary the walk counts from, which is half an
-    /// octave above the window's middle. Boundaries sit every 12 semitones
-    /// from here, so they are symmetric about that middle — which is what puts
-    /// the middle of the window at the top of the wheel under any taper.
-    pub cell_origin: f32,
-    /// Angle of each cell boundary, in radians, walking CLOCKWISE (the
-    /// direction pitch rises) from the seam: `bounds[0]` is the bottom at
-    /// `low_pitch`, and `bounds[cells]` is a full turn on — the same seam, at
-    /// the window's high end. Entries past `cells` repeat the last so a stale
-    /// index cannot produce a wild angle.
-    pub bounds: [f32; MAX_CELLS + 1],
+    /// MIDI pitch at the top of every node's wheel.
+    pub center: f32,
+    /// Octaves one full turn is cut into, so a slice is a turn over this under
+    /// an even axis and the taper is what moves it off that.
+    pub span: u32,
+    /// Angle from a ring's own seam to each of its slice boundaries, walking
+    /// CLOCKWISE (the direction pitch rises) and always positive: `bounds[0]`
+    /// is 0, the seam itself, and `bounds[span]` is `TAU`, the same seam a
+    /// full turn on. Every node reads the same table and subtracts it from its
+    /// own seam angle, which is what makes one ring the other turned.
+    ///
+    /// Entries past `span` repeat the last so a stale index cannot produce a
+    /// wild angle.
+    pub bounds: [f32; MAX_SPAN as usize + 1],
+}
+
+/// Where one node's ring sits: the two numbers that turn the shared widths
+/// into that node's own slices.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ring {
+    /// Slot of the ring's LOWEST slice. Slice `i` is slot `base + i`, and the
+    /// slots run to `base + span - 1`. Signed, and legitimately outside
+    /// `0..OCTAVE_SLOTS` at the extremes of the pitch limits — those octaves
+    /// draw and never light.
+    pub base: i32,
+    /// Angle of the seam at the ring's LOW-pitch end, which is where the walk
+    /// through [`OctaveLayout::bounds`] starts. It is the bottom of the node
+    /// only for the center's own pitch class; every other class turns it away
+    /// by up to half a slice.
+    pub seam: f32,
 }
 
 impl Default for OctaveLayout {
     fn default() -> Self {
-        octave_layout(DEFAULT_WINDOW_LOW, DEFAULT_WINDOW_HIGH, 0.0, DEFAULT_TAPER_SHAPE)
+        octave_layout(DEFAULT_SPAN, DEFAULT_CENTER, 0.0, DEFAULT_TAPER_SHAPE)
     }
 }
 
-/// The pitch axis for the window `low..high`, tapered by `amount` in the shape
-/// `shape`.
-///
-/// The seam is where the walk STARTS and a full turn is what it covers, which
-/// is the whole of why the window's two ends meet at the bottom under any
-/// settings: the invariant is structural rather than a property of the widths
-/// that a new formula could break.
+/// The pitch axis for `span` octaves to the turn centered on `center`, tapered
+/// by `amount` in the shape `shape`.
 ///
 /// Two knobs that mean two different things, which is the whole reason the
 /// taper is a pair of bars and not a list of named curves:
 ///
-/// - The AMOUNT sets the EDGE cells, and nothing else does: they come out
-///   `1 - amount` of an even slice at every shape and every window. That is a
+/// - The AMOUNT sets the EDGE slices, and nothing else does: they come out
+///   `1 - amount` of an even slice at every shape and every span. That is a
 ///   size on screen rather than a ratio against another octave, which matters
 ///   because the octave a ratio would be against is the one the shape moves the
 ///   most — pinning the edge's RELATIVE weight instead let dragging Shape
@@ -211,206 +206,201 @@ impl Default for OctaveLayout {
 ///
 /// An even axis is `amount` 0, so it is where the bar starts rather than a mode
 /// beside it — and the shape is inert there, which is exactly what "no taper"
-/// should mean.
-pub fn octave_layout(low: f32, high: f32, amount: f32, shape: f32) -> OctaveLayout {
-    let (low_pitch, high_pitch) = clamp_window(low, high);
-    let amount = amount.clamp(0.0, MAX_TAPER_AMOUNT);
-    // Half an octave above the middle of the window. Cell boundaries sit every
-    // octave from here, so the middle pitch is the CENTER of its own cell and
-    // the cells either side of it mirror each other — the symmetry that puts
-    // that pitch at the top of the wheel.
-    let cell_origin = 0.5 * (low_pitch + high_pitch) + 0.5 * SEMIS;
-    // The whole layout is computed in cells rather than semitones: `u` is the
-    // pitch measured in octaves from `cell_origin`, so a cell boundary is an
-    // integer and the two end cells are the only fractional lengths there are.
-    let u_of = |pitch: f32| (pitch - cell_origin) / SEMIS;
-    let (u_low, u_high) = (u_of(low_pitch), u_of(high_pitch));
-    // The interior boundaries: every integer strictly inside the window. The
-    // ends are the window's own, whole cell or part of one.
-    let first = u_low.floor() + 1.0;
-    let last = u_high.ceil() - 1.0;
-    let interior = (last - first + 1.0).max(0.0) as usize;
-    // The `min` is a bound on the WRITES below, not a fit: a window needing
-    // more cells than the table holds would come out with its last boundary an
-    // octave short of the window's end, and `angle` would then fold every
-    // pitch above that onto the seam — a wheel whose top octave silently stops
-    // moving, which nothing downstream can notice. Widening the pitch limits
-    // past what MAX_CELLS covers is the way to get there, so fail loudly in a
-    // debug build; `the_widest_window_fits_the_table` is the standing check.
-    debug_assert!(
-        interior < MAX_CELLS,
-        "a {}..{} window needs {} cells and the table holds {MAX_CELLS}",
-        low_pitch,
-        high_pitch,
-        interior + 1
-    );
-    let cells = (interior + 1).min(MAX_CELLS);
-    let mut edge = [0f32; MAX_CELLS + 1];
-    edge[0] = u_low;
-    for (j, e) in edge.iter_mut().enumerate().take(cells).skip(1) {
-        *e = first + (j - 1) as f32;
-    }
-    edge[cells] = u_high;
+/// should mean. Both are inert at a span of 2, where every slice IS an edge
+/// slice and there is nowhere for the width they give up to go.
+///
+/// The taper turns WITH each node's ring rather than staying pinned to the
+/// screen, so every node shows the same shape and the widest slice is always
+/// the node's own middle octave. The price is paid in the one property an even
+/// axis has: under a taper two nodes place the same octave a little apart, by
+/// however much their rings are turned, so a pitch is one angle across the
+/// lattice only while the amount is 0. The CENTER pitch is the exception, and
+/// it is pinned rather than lucky — [`OctaveLayout::ring`] solves for it, so
+/// the top of the picture means one pitch at every setting there is.
+pub fn octave_layout(span: u32, center: f32, amount: f32, shape: f32) -> OctaveLayout {
+    let span = clamp_span(span);
+    let center = clamp_center(center);
+    let amount = if amount.is_finite() { amount.clamp(0.0, MAX_TAPER_AMOUNT) } else { 0.0 };
+    let n = span as f32;
 
-    // How far each cell's middle is from the window's, normalized by the
-    // furthest one — so the taper's shape is the same picture at every window
-    // and only its resolution changes. The end cells are at distance 1, which
-    // is what pins them to `1 - amount` whatever the shape does, and the cell
-    // holding the window's middle is at 0.
+    // How far each slice sits from the middle of the ring, normalized by the
+    // furthest — so the taper's shape is the same picture at every span and
+    // only its resolution changes. The edge slices are at distance 1, which is
+    // what pins them to `1 - amount` whatever the shape does. With an even
+    // span there is no middle SLICE, only a middle boundary, and the two
+    // either side of it share the near end between them.
     //
-    // What the shape bends is how much each cell gives up on the way out,
-    // `fall`, which is 0 at the middle and 1 at the edge whatever the exponent.
-    let middle_u = u_of(0.5 * (low_pitch + high_pitch));
-    let mid = |j: usize| 0.5 * (edge[j] + edge[j + 1]);
-    let reach = (0..cells).fold(0f32, |far, j| far.max((mid(j) - middle_u).abs()));
+    // What the shape bends is how much each slice keeps on the way out,
+    // `fall`, which is 1 at the middle and 0 at the edge whatever the exponent.
+    let far = 0.5 * (n - 1.0);
     let p = shape_exponent(shape);
-    let mut fall = [0f32; MAX_CELLS];
-    let mut weighted = 0.0;
-    for (j, f) in fall.iter_mut().enumerate().take(cells) {
-        let dist = if reach > 0.0 { ((mid(j) - middle_u).abs() / reach).min(1.0) } else { 0.0 };
+    let mut fall = [0f32; MAX_SPAN as usize];
+    let mut total_fall = 0.0;
+    for (i, f) in fall.iter_mut().enumerate().take(span as usize) {
+        let dist = if far > 0.0 { ((i as f32 - far).abs() / far).min(1.0) } else { 0.0 };
         *f = 1.0 - dist.powf(p);
-        weighted += (edge[j + 1] - edge[j]) * *f;
+        total_fall += *f;
     }
 
-    // The widths, as an angle each. A cell's share is its LENGTH IN PITCH times
-    // its density, so an even axis (amount 0) is one where every semitone is
-    // worth the same angle however the cells fall — the end cells included,
-    // which are the ones the window cut short. The lift is what the cells
-    // inside the edge share out, and it is not a setting: the widths have to
-    // add up to the circle, and that pins it.
-    let span = u_high - u_low;
-    let lift = span * amount / weighted.max(1e-6);
-    let width = |j: usize| (edge[j + 1] - edge[j]) * ((1.0 - amount) + lift * fall[j]);
-    let total = (0..cells).map(width).sum::<f32>().max(1e-6);
-    // Clockwise is the direction pitch rises (uv.y is up, so the angle
-    // decreases), which is why the walk subtracts.
-    let mut bounds = [-FRAC_PI_2; MAX_CELLS + 1];
+    // The lift is what the slices inside the edges share out, and it is not a
+    // setting: the widths have to add up to the circle, and that pins it. At a
+    // span of 2 every slice is an edge and `total_fall` is 0 — nothing has
+    // anything to gain, so the amount has nothing to move and the axis stays
+    // even rather than coming out short of a turn.
+    let lift = if total_fall > 1e-6 { n * amount / total_fall } else { 0.0 };
+    let width = |i: usize| (1.0 - amount) + lift * fall[i];
+    let total = (0..span as usize).map(width).sum::<f32>().max(1e-6);
+    let mut bounds = [TAU; MAX_SPAN as usize + 1];
     let mut acc = 0.0;
-    for j in 0..cells {
-        acc += width(j);
-        bounds[j + 1] = -FRAC_PI_2 - TAU * (acc / total);
+    for i in 0..span as usize {
+        acc += width(i);
+        bounds[i + 1] = TAU * acc / total;
     }
-    for j in cells + 1..bounds.len() {
-        bounds[j] = bounds[cells];
-    }
+    bounds[0] = 0.0;
 
-    OctaveLayout { low_pitch, high_pitch, cells: cells as u32, cell_origin, bounds }
+    OctaveLayout { center, span, bounds }
 }
 
 impl OctaveLayout {
-    /// Where MIDI pitch `pitch` sits on the wheel, in radians. Linear within
-    /// each cell and monotone across them, so an interval reads as an angle.
+    /// Where the ring of a node whose pitch class is `cents` (0..1200) sits.
     ///
-    /// Outside the window it CLAMPS, at either end. There is nothing out there
-    /// to draw: an indicator that reaches past an end is cut off at the seam by
-    /// [`sector`](Self::sector), which is what keeps the ring exactly covered
-    /// when the window is not a whole number of octaves — continuing round
-    /// instead would land at the wrong pitch, since one turn of a window like
-    /// that does not come back to the same pitch class.
-    pub fn angle(&self, pitch: f32) -> f32 {
-        let (u_low, u_high) = (self.u_of(self.low_pitch), self.u_of(self.high_pitch));
-        let u = self.u_of(pitch).clamp(u_low, u_high);
-        // The same indexing the shader does, from the same three numbers: the
-        // cell a pitch is in, and the fraction along it, with the two end cells
-        // reaching only as far as the window does.
-        let base = u_low.floor();
-        let j = ((u.floor() - base).max(0.0) as usize).min(self.cells as usize - 1);
-        let start = (base + j as f32).max(u_low);
-        let end = (base + j as f32 + 1.0).min(u_high);
-        let t = ((u - start) / (end - start).max(1e-6)).clamp(0.0, 1.0);
-        self.bounds[j] + (self.bounds[j + 1] - self.bounds[j]) * t
+    /// The node draws the `span` octaves of its own class NEAREST the center
+    /// pitch, which is what keeps every node's ring over the same stretch of
+    /// keyboard however its class falls. With an odd span that set is
+    /// symmetric about the node's nearest octave; with an even one it reaches
+    /// one octave further on the side the center is NOT on, and a center
+    /// landing exactly on one of the node's octaves breaks the tie downward.
+    pub fn ring(&self, cents: f32) -> Ring {
+        let off = cents / 100.0;
+        // The node's octave nearest the center, and how far above the center
+        // that octave sits — the distance that turns the ring. Halves round
+        // up, so a node exactly a tritone from the center counts as the half
+        // octave ABOVE it; the two readings draw the same slices anyway, one
+        // octave apart in what they are named.
+        let nearest = ((self.center - off) / SEMIS + 0.5).floor();
+        let d = nearest * SEMIS + off - self.center;
+        let span = self.span as i32;
+        let low = if span % 2 == 1 {
+            -(span - 1) / 2
+        } else if d < 0.0 {
+            1 - span / 2
+        } else {
+            -span / 2
+        };
+        // Turned so the CENTER pitch lands straight up — which is the whole of
+        // where a ring sits, and is why this is solved for rather than derived
+        // from the ring's middle. The two agree while the axis is even; under
+        // a taper they part, because the slice the center falls in is not one
+        // span-th of the turn and the pitch sits at its own fraction of
+        // whatever width that slice has.
+        let base = nearest as i32 + low;
+        let along = (self.center - self.slot_pitch(base, cents)) / SEMIS + 0.5;
+        Ring { base, seam: UP + self.walk(along) }
     }
 
-    /// Pitch in octaves from the cell origin — the units the boundary table is
-    /// indexed in.
-    fn u_of(&self, pitch: f32) -> f32 {
-        (pitch - self.cell_origin) / SEMIS
+    /// Angle from a ring's seam to `x` slices along it, walking clockwise.
+    /// Linear inside a slice, so a pitch stands at the same fraction of its
+    /// own octave's wedge as it does of the octave.
+    fn walk(&self, x: f32) -> f32 {
+        let x = x.clamp(0.0, self.span as f32);
+        let i = (x.floor() as usize).min(self.span as usize - 1);
+        let t = x - i as f32;
+        self.bounds[i] + (self.bounds[i + 1] - self.bounds[i]) * t
+    }
+
+    /// Angle of boundary `i` of `ring`, counting clockwise from its seam.
+    pub fn edge(&self, ring: Ring, i: usize) -> f32 {
+        ring.seam - self.bounds[i.min(self.span as usize)]
+    }
+
+    /// The slots a node whose pitch class is `cents` draws, inclusive: `span`
+    /// of them, always. Signed — see [`Ring::base`].
+    pub fn slots(&self, cents: f32) -> (i32, i32) {
+        let base = self.ring(cents).base;
+        (base, base + self.span as i32 - 1)
     }
 
     /// MIDI pitch of octave slot `slot` on a node whose pitch class is
     /// `cents` (0..1200): the pitch that indicator stands for, and the pitch
     /// it is centered on.
-    pub fn slot_pitch(&self, slot: u32, cents: f32) -> f32 {
+    pub fn slot_pitch(&self, slot: i32, cents: f32) -> f32 {
         slot as f32 * SEMIS + cents / 100.0
-    }
-
-    /// The slots a node whose pitch class is `cents` draws, inclusive: the
-    /// octaves of that pitch class whose own pitch lands inside the window.
-    ///
-    /// Per node, unlike the fixed span this replaced, and it has to be: the
-    /// window is a pitch range rather than a count of octaves, so how many of a
-    /// pitch class fall inside it depends on where that class sits. A window of
-    /// nine and a half octaves holds nine of some classes and ten of others,
-    /// and drawing the same NUMBERS on every node would then leave one node's
-    /// ring with a bite out of it and another's overlapping itself.
-    ///
-    /// Notes outside it fold onto the nearest end (see `derive_scene`), so this
-    /// is also what a voice's octave is clamped into.
-    pub fn slot_range(&self, cents: f32) -> (u32, u32) {
-        let offset = cents / 100.0;
-        let last = OCTAVE_SLOTS as f32 - 1.0;
-        let low = ((self.low_pitch - offset) / SEMIS).ceil().clamp(0.0, last);
-        let high = ((self.high_pitch - offset) / SEMIS).floor().clamp(low, last);
-        (low as u32, high as u32)
     }
 
     /// The two edge angles of slot `slot`'s indicator on a node whose pitch
     /// class is `cents` — the counter-clockwise one first. The shader's
     /// `oct_sector` is this.
     ///
-    /// An indicator in the middle of the window is exactly its own octave, half
-    /// of it either side of its own pitch. The two at the ENDS reach out to the
-    /// seam instead, which is the whole of what makes a continuous window work:
-    /// the window generally stops part way between two of a node's octaves, and
-    /// the sliver left over belongs to the octave nearest it — the same octave
-    /// a note out there folds onto. So the indicators still meet edge to edge
-    /// and still close the ring, on every node, at any window.
-    pub fn sector(&self, slot: u32, cents: f32) -> (f32, f32) {
-        let (low_slot, high_slot) = self.slot_range(cents);
-        let pitch = self.slot_pitch(slot, cents);
-        let low = if slot <= low_slot { self.low_pitch } else { pitch - 0.5 * SEMIS };
-        let high = if slot >= high_slot { self.high_pitch } else { pitch + 0.5 * SEMIS };
-        (self.angle(low), self.angle(high))
+    /// Exactly one octave wide, at every slot and every node: the ring holds
+    /// whole octaves of the node's own class and nothing is cut to fit, so the
+    /// indicators meet edge to edge and close the turn without any of them
+    /// standing for less pitch than it claims.
+    pub fn sector(&self, slot: i32, cents: f32) -> (f32, f32) {
+        let ring = self.ring(cents);
+        let i = (slot - ring.base).clamp(0, self.span as i32 - 1) as usize;
+        (self.edge(ring, i), self.edge(ring, i + 1))
+    }
+
+    /// Where MIDI pitch `pitch` sits on the wheel of a node whose pitch class
+    /// is `cents`, in radians. Linear within each slice and monotone across
+    /// them, so an interval reads as an angle.
+    ///
+    /// Per node because the taper is: with an even axis this is one shared map
+    /// and every node agrees on it (see [`octave_layout`]). Outside the ring
+    /// it CLAMPS, at either end — an indicator never reaches past the seam,
+    /// and continuing round instead would land at the wrong pitch, since one
+    /// turn comes back to a pitch a whole span of octaves away.
+    pub fn angle(&self, pitch: f32, cents: f32) -> f32 {
+        let ring = self.ring(cents);
+        // In slices from the ring's low edge, which is half an octave under
+        // its lowest slot's own pitch.
+        let along = (pitch - self.slot_pitch(ring.base, cents)) / SEMIS + 0.5;
+        ring.seam - self.walk(along)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::f32::consts::PI;
 
     /// The Shape bar at both ends, at its middle, and either side of it: the
     /// sharpest spotlight, the straight ramp, and the flattest plateau.
     const SHAPES: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 
-    /// Windows to run the invariants over: the default, the narrowest and the
-    /// widest, and four that are deliberately NOT a whole number of octaves or
-    /// not centered on a C — which is the whole point of the range being
-    /// continuous, and the case every "it tiles" argument has to survive.
-    const WINDOWS: [(f32, f32); 8] = [
-        (DEFAULT_WINDOW_LOW, DEFAULT_WINDOW_HIGH),
-        (PITCH_FLOOR, PITCH_CEIL),
-        // The narrowest there is, which is C1..C5 in the DAW's numbering.
-        (36.0, 84.0),
-        (36.0, 96.0),
-        (36.0, 97.5),
-        (30.5, 100.25),
-        (0.0, 60.0),
-        (61.0, 127.0),
+    /// Wheels to run the invariants over: the default, the two span limits, an
+    /// even span (where the drawn octaves cannot be symmetric about the
+    /// center), and centers that are deliberately NOT a C and not near the
+    /// middle of the keyboard — the last two are where a ring reaches for
+    /// octaves no MIDI note can play.
+    const WHEELS: [(u32, f32); 8] = [
+        (DEFAULT_SPAN, DEFAULT_CENTER),
+        (MIN_SPAN, DEFAULT_CENTER),
+        (MAX_SPAN, DEFAULT_CENTER),
+        (4, DEFAULT_CENTER),
+        (4, 54.0),
+        (5, 67.0),
+        (3, PITCH_FLOOR),
+        (6, PITCH_CEIL),
     ];
 
-    /// Every window, shape and amount, against pitch classes that put an
-    /// indicator's edge exactly on a cell boundary (C), well clear of it, and
-    /// just short of it — the grid the invariants below all run over.
+    /// Pitch classes that put a node's octaves exactly on the center (C), well
+    /// clear of it either way, a tritone from it, and just short of a whole
+    /// octave.
+    const CLASSES: [f32; 5] = [0.0, 350.0, 600.0, 700.0, 1150.0];
+
+    /// Every wheel, shape, amount and pitch class — the grid the invariants
+    /// below all run over.
     fn every_case() -> impl Iterator<Item = (OctaveLayout, f32, String)> {
-        WINDOWS.iter().flat_map(|&(low, high)| {
+        WHEELS.iter().flat_map(|&(span, center)| {
             SHAPES.iter().flat_map(move |&shape| {
                 [0.0f32, 0.35, 0.9].iter().flat_map(move |&amount| {
-                    [0.0f32, 350.0, 700.0, 1150.0].iter().map(move |&cents| {
+                    CLASSES.iter().map(move |&cents| {
                         (
-                            octave_layout(low, high, amount, shape),
+                            octave_layout(span, center, amount, shape),
                             cents,
-                            format!("{low}..{high}, amount {amount} shape {shape}, {cents}c"),
+                            format!(
+                                "span {span} at {center}, amount {amount} shape {shape}, {cents}c"
+                            ),
                         )
                     })
                 })
@@ -418,107 +408,81 @@ mod tests {
         })
     }
 
-    /// The seam: the window's two ends are one point, and it is the bottom
-    /// of the node.
+    /// The whole of what the settings promise with the taper off: every slice
+    /// on every node is one span-th of the turn. Nothing about a node's pitch
+    /// class, and nothing about where the center falls, can shorten one.
     #[test]
-    fn the_windows_ends_meet_at_the_bottom() {
-        for (l, _, case) in every_case() {
-            assert!((l.angle(l.low_pitch) - -FRAC_PI_2).abs() < 1e-5, "{case}");
-            let high = l.angle(l.high_pitch);
-            assert!((high - (-FRAC_PI_2 - TAU)).abs() < 1e-4, "{case}: {high}");
-        }
-    }
-
-    /// The middle of the window is straight up — on the axis itself, so on
-    /// every node. With the default window, which is centered on middle C, that
-    /// is middle C, which is what makes the wheel read like a keyboard.
-    #[test]
-    fn the_middle_of_the_window_is_straight_up() {
-        for (l, _, case) in every_case() {
-            let up = l.angle(0.5 * (l.low_pitch + l.high_pitch));
-            assert!((up - (-FRAC_PI_2 - PI)).abs() < 1e-4, "{case}: {up}");
-        }
-        let default = OctaveLayout::default();
-        assert!((default.angle(60.0) - (-FRAC_PI_2 - PI)).abs() < 1e-4, "middle C is up");
-    }
-
-    /// What "faithful" means, as an assertion: the map is strictly falling
-    /// in pitch, and equal intervals WITHIN one cell subtend equal angles,
-    /// so an indicator sits on its pitch rather than near it.
-    #[test]
-    fn the_axis_is_monotone_and_linear_inside_a_cell() {
-        for (l, _, case) in every_case() {
-            let mut previous = l.angle(l.low_pitch);
-            let mut pitch = l.low_pitch;
-            while pitch < l.high_pitch - 0.25 {
-                pitch += 0.5;
-                let a = l.angle(pitch);
-                assert!(a < previous, "{case}: not falling at {pitch}");
-                previous = a;
-            }
-            // Three points evenly spaced in pitch inside the cell holding the
-            // window's middle come out evenly spaced in angle.
-            let base = 0.5 * (l.low_pitch + l.high_pitch) - 4.0;
-            let (a, b, c) = (l.angle(base), l.angle(base + 4.0), l.angle(base + 8.0));
-            assert!(((a - b) - (b - c)).abs() < 1e-4, "{case}: uneven inside a cell");
-        }
-    }
-
-    /// A drawn indicator is on its own pitch, and in the middle of the window
-    /// it is exactly one octave — cut short at the seam only where the window
-    /// itself stops. That is what keeps the mapping honest: an indicator moved
-    /// to fit would misstate its pitch.
-    #[test]
-    fn drawn_indicators_sit_on_their_own_pitch() {
-        for (l, cents, case) in every_case() {
-            let (low, high) = l.slot_range(cents);
-            assert!(low <= high, "{case}: nothing drawn");
-            for slot in low..=high {
-                let pitch = l.slot_pitch(slot, cents);
-                assert!(
-                    pitch >= l.low_pitch - 1e-3 && pitch <= l.high_pitch + 1e-3,
-                    "{case}: slot {slot} is drawn at {pitch}, outside the window"
-                );
-                let (e0, e1) = l.sector(slot, cents);
-                assert!(e0 > e1, "{case}: slot {slot} runs backwards");
-                let inside = l.angle(pitch);
-                assert!(e0 >= inside && inside >= e1, "{case}: slot {slot} misses its own pitch");
-                // An interior indicator is its own octave: one twelfth of the
-                // turn per semitone under an even axis, and the pitch dead
-                // center of it. Read on the even axis alone — a taper changes
-                // the scale at each cell boundary, so an indicator straddling
-                // one legitimately has its two halves at different scales, and
-                // then only the edges' PITCHES are the claim (which is what
-                // `the_indicators_tile_the_turn` reads).
-                let even = l.bounds[0] - l.bounds[1] == l.bounds[1] - l.bounds[2];
-                if slot > low && slot < high && even {
-                    let octave = TAU * SEMIS / (l.high_pitch - l.low_pitch);
+    fn an_even_axis_gives_every_node_even_slices() {
+        for &(span, center) in &WHEELS {
+            let l = octave_layout(span, center, 0.0, DEFAULT_TAPER_SHAPE);
+            let even = TAU / span as f32;
+            for cents in CLASSES {
+                let (low, high) = l.slots(cents);
+                let case = format!("span {span} at {center}, {cents}c");
+                assert_eq!(high - low + 1, span as i32, "{case}: not {span} slices");
+                for slot in low..=high {
+                    let (e0, e1) = l.sector(slot, cents);
                     assert!(
-                        (e0 - e1 - octave).abs() < 1e-4,
-                        "{case}: slot {slot} spans {} of the {octave} an octave is worth",
+                        (e0 - e1 - even).abs() < 1e-4,
+                        "{case}: slot {slot} spans {} of the {even} an octave is worth",
                         e0 - e1
-                    );
-                    assert!(
-                        (inside - 0.5 * (e0 + e1)).abs() < 1e-4,
-                        "{case}: slot {slot} is not centered on its pitch"
                     );
                 }
             }
         }
     }
 
+    /// The center pitch is straight up on EVERY node, whatever its pitch
+    /// class — which is the thing a per-node rotation of the wheel is for, and
+    /// what makes the top of the picture mean one pitch across the lattice.
+    #[test]
+    fn the_center_pitch_is_straight_up_on_every_node() {
+        for (l, cents, case) in every_case() {
+            let up = l.angle(l.center, cents);
+            assert!((up - UP).abs() < 1e-4, "{case}: the center is at {up}, not {UP}");
+        }
+    }
+
+    /// Which way a node turns: the half octave BELOW the center turns left
+    /// (the top of the ring moves counter-clockwise) and the half above turns
+    /// right, by the pitch distance and never by more than half a slice.
+    #[test]
+    fn a_node_turns_toward_its_own_octave() {
+        // An even axis, where the turn is the whole of what a pitch class
+        // does — a taper moves the widths too, and then "turned by d" is a
+        // statement about the ring's middle rather than about one edge.
+        let l = octave_layout(5, 60.0, 0.0, DEFAULT_TAPER_SHAPE);
+        let seam = |cents: f32| l.ring(cents).seam;
+        let straight = seam(0.0);
+        for (cents, turn) in [(100.0f32, 1.0), (500.0, 5.0), (600.0, 6.0)] {
+            // Above the center: clockwise, which subtracts.
+            let want = straight - TAU * turn / 60.0;
+            assert!((seam(cents) - want).abs() < 1e-4, "{cents}c did not turn right");
+        }
+        for (cents, turn) in [(1100.0f32, 1.0), (700.0, 5.0)] {
+            let want = straight + TAU * turn / 60.0;
+            assert!((seam(cents) - want).abs() < 1e-4, "{cents}c did not turn left");
+        }
+        // Half a slice is the whole of the travel: a tritone is as far as a
+        // pitch class can be from the center's own.
+        let half = TAU / (2.0 * 5.0);
+        for cents in (0..1200).step_by(10) {
+            let turn = (seam(cents as f32) - straight).abs();
+            assert!(turn <= half + 1e-4, "{cents}c turned {turn}, past half a slice");
+        }
+    }
+
     /// The indicators tile the turn: each one's clockwise edge is the next
-    /// one's counter-clockwise edge, the lowest starts at the seam and the
-    /// highest ends there. So the ring closes on every node whatever its pitch
-    /// class and whatever the window — which a wheel divided into whole octaves
-    /// gets for free and a continuous one has to be built for.
+    /// one's counter-clockwise edge, and the ring closes on every node
+    /// whatever its pitch class, span, center and taper.
     #[test]
     fn the_indicators_tile_the_turn() {
         for (l, cents, case) in every_case() {
-            let (low, high) = l.slot_range(cents);
+            let (low, high) = l.slots(cents);
             let mut total = 0.0;
             for slot in low..=high {
                 let (e0, e1) = l.sector(slot, cents);
+                assert!(e0 > e1, "{case}: slot {slot} runs backwards");
                 total += e0 - e1;
                 if slot < high {
                     let next = l.sector(slot + 1, cents).0;
@@ -529,32 +493,106 @@ mod tests {
         }
     }
 
+    /// A drawn indicator is on its own pitch, dead center of it, at every
+    /// taper — which is what keeps the mapping honest: an indicator moved to
+    /// fit would misstate its pitch.
+    #[test]
+    fn drawn_indicators_sit_on_their_own_pitch() {
+        for (l, cents, case) in every_case() {
+            let (low, high) = l.slots(cents);
+            for slot in low..=high {
+                let (e0, e1) = l.sector(slot, cents);
+                let inside = l.angle(l.slot_pitch(slot, cents), cents);
+                assert!(
+                    (inside - 0.5 * (e0 + e1)).abs() < 1e-4,
+                    "{case}: slot {slot} is not centered on its pitch"
+                );
+            }
+        }
+    }
+
+    /// What "faithful" means, as an assertion: the map is strictly falling in
+    /// pitch across the ring, and equal intervals WITHIN one slice subtend
+    /// equal angles, so an indicator sits on its pitch rather than near it.
+    #[test]
+    fn the_axis_is_monotone_and_linear_inside_a_slice() {
+        for (l, cents, case) in every_case() {
+            let (low, high) = l.slots(cents);
+            let bottom = l.slot_pitch(low, cents) - 0.5 * SEMIS;
+            let top = l.slot_pitch(high, cents) + 0.5 * SEMIS;
+            let mut previous = l.angle(bottom, cents);
+            let mut pitch = bottom;
+            while pitch < top - 0.25 {
+                pitch += 0.5;
+                let a = l.angle(pitch, cents);
+                assert!(a < previous, "{case}: not falling at {pitch}");
+                previous = a;
+            }
+            // Three points evenly spaced in pitch inside one slice come out
+            // evenly spaced in angle.
+            let base = l.slot_pitch(low, cents) - 4.0;
+            let (a, b, c) =
+                (l.angle(base, cents), l.angle(base + 4.0, cents), l.angle(base + 8.0, cents));
+            assert!(((a - b) - (b - c)).abs() < 1e-4, "{case}: uneven inside a slice");
+        }
+    }
+
+    /// With the taper off the axis is SHARED: one pitch is one angle on every
+    /// node, which is what makes an indicator's position mean an absolute
+    /// pitch rather than a place in that node's own private ring.
+    #[test]
+    fn an_even_axis_puts_a_pitch_at_the_same_angle_on_every_node() {
+        for &(span, center) in &WHEELS {
+            let l = octave_layout(span, center, 0.0, DEFAULT_TAPER_SHAPE);
+            for step in -6..=6 {
+                let pitch = center + step as f32 * 2.5;
+                let mut want: Option<f32> = None;
+                for cents in CLASSES {
+                    // Only where the pitch is actually on this node's ring:
+                    // past either end the angle clamps, and a node whose ring
+                    // stops short of the pitch legitimately says so.
+                    let (low, high) = l.slots(cents);
+                    let bottom = l.slot_pitch(low, cents) - 0.5 * SEMIS;
+                    let top = l.slot_pitch(high, cents) + 0.5 * SEMIS;
+                    if pitch <= bottom + 1e-3 || pitch >= top - 1e-3 {
+                        continue;
+                    }
+                    let a = l.angle(pitch, cents);
+                    match want {
+                        None => want = Some(a),
+                        Some(w) => assert!(
+                            (a - w).abs() < 1e-4,
+                            "span {span} at {center}: pitch {pitch} is {a} on \
+                             {cents}c and {w} elsewhere"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
     /// Octaves shrink outward, symmetrically, at every shape — and only when
-    /// an amount is asked for: the middle of the window is what carries the
+    /// an amount is asked for: the middle of the ring is what carries the
     /// extra weight.
     #[test]
     fn octaves_shrink_away_from_the_middle() {
         for shape in SHAPES {
             for amount in [0.0f32, 0.6] {
-                // Nine octaves centered on middle C — an odd count on a C is
-                // what puts both ends on a cell boundary, so every cell is a
-                // full octave and the widths compare directly.
-                let l = octave_layout(6.0, 114.0, amount, shape);
-                let width = |j: usize| l.bounds[j] - l.bounds[j + 1];
-                let cells = l.cells as usize;
-                for j in 0..cells / 2 {
-                    let (inner, outer) = (width(j + 1), width(j));
-                    let case = format!("shape {shape}, amount {amount}, cell {j}");
+                // An odd span, so there is a middle SLICE for the weight to
+                // land on and the widths compare directly either side of it.
+                let l = octave_layout(9, 60.0, amount, shape);
+                let width = |i: usize| l.bounds[i + 1] - l.bounds[i];
+                let span = l.span as usize;
+                for i in 0..span / 2 {
+                    let (inner, outer) = (width(i + 1), width(i));
+                    let case = format!("shape {shape}, amount {amount}, slice {i}");
                     if amount == 0.0 {
                         assert!((inner - outer).abs() < 1e-5, "{case}: an even axis moved");
                     } else {
                         assert!(outer < inner, "{case}: {outer} !< {inner}");
                     }
-                    // Symmetric about the middle cell.
-                    assert!(
-                        (width(j) - width(cells - 1 - j)).abs() < 1e-5,
-                        "{case}: lopsided"
-                    );
+                    // Symmetric about the middle slice.
+                    assert!((width(i) - width(span - 1 - i)).abs() < 1e-5, "{case}: lopsided");
                 }
             }
         }
@@ -562,28 +600,18 @@ mod tests {
 
     /// The Amount alone sets the edge slices, and the Shape leaves them
     /// exactly where they are: an edge octave is `1 - amount` of an even
-    /// slice at every shape and every window. Dragging Shape across its whole
+    /// slice at every shape and every span. Dragging Shape across its whole
     /// travel must not cost the outermost octaves a degree — they are the
     /// ones with the least to give.
-    ///
-    /// Windows made of whole cells, because those are the ones where "an even
-    /// slice" is a number rather than a figure of speech: the end cells of any
-    /// other window are short, and a short cell is legitimately worth less than
-    /// a full one. That means an ODD number of octaves centered on a C — the
-    /// count puts the window's ends half an octave out from the outermost C,
-    /// which is exactly where the cell boundaries fall.
     #[test]
     fn the_amount_alone_sets_the_edge_slices() {
-        for octaves in [5u32, 7, 9] {
-            let span = octaves as f32 * 12.0;
-            let (low, high) = (60.0 - span * 0.5, 60.0 + span * 0.5);
+        for span in [3u32, 4, 5, 9, MAX_SPAN] {
             for amount in [0.0f32, 0.35, MAX_TAPER_AMOUNT] {
-                let even = TAU / octaves as f32;
+                let even = TAU / span as f32;
                 for shape in SHAPES {
-                    let l = octave_layout(low, high, amount, shape);
-                    assert_eq!(l.cells, octaves, "{octaves} octaves came out {} cells", l.cells);
-                    let edge = l.bounds[0] - l.bounds[1];
-                    let case = format!("{octaves} octaves, amount {amount}, shape {shape}");
+                    let l = octave_layout(span, 60.0, amount, shape);
+                    let edge = l.bounds[1] - l.bounds[0];
+                    let case = format!("span {span}, amount {amount}, shape {shape}");
                     assert!(
                         (edge - (1.0 - amount) * even).abs() < 1e-4,
                         "{case}: the edge slice is {edge} rad, not {}",
@@ -594,15 +622,28 @@ mod tests {
         }
     }
 
+    /// Two slices is every slice an edge slice, so there is nowhere for the
+    /// width an amount takes to go: the axis stays even instead of coming out
+    /// short of a turn.
+    #[test]
+    fn the_narrowest_span_has_nothing_to_taper() {
+        for shape in SHAPES {
+            let l = octave_layout(MIN_SPAN, 60.0, MAX_TAPER_AMOUNT, shape);
+            for (i, want) in [0.0, PI, TAU].iter().enumerate() {
+                assert!((l.bounds[i] - want).abs() < 1e-5, "shape {shape}: two slices moved");
+            }
+        }
+    }
+
     /// What the Shape does move, given it cannot touch the edges: degrees
     /// between the middle octave and the ones out toward them. Every step
     /// right flattens the profile — the middle narrows and the octaves next
     /// to the edges widen — and every step left concentrates it again.
     #[test]
     fn the_shape_flattens_the_profile_between_the_edges() {
-        let width = |shape: f32, j: usize| {
-            let l = octave_layout(6.0, 114.0, 0.6, shape);
-            (l.bounds[j] - l.bounds[j + 1]).to_degrees()
+        let width = |shape: f32, i: usize| {
+            let l = octave_layout(9, 60.0, 0.6, shape);
+            (l.bounds[i + 1] - l.bounds[i]).to_degrees()
         };
         // Nine octaves: the middle one is index 4, and index 1 is the widest
         // one the shape can still reach, just inside the pinned edge.
@@ -616,7 +657,7 @@ mod tests {
             previous = Some((middle, outer));
         }
         // The bar's middle is the straight ramp: equal steps octave to octave.
-        let ramp: Vec<f32> = (0..4).map(|j| width(0.5, j + 1) - width(0.5, j)).collect();
+        let ramp: Vec<f32> = (0..4).map(|i| width(0.5, i + 1) - width(0.5, i)).collect();
         for step in &ramp {
             assert!((step - ramp[0]).abs() < 1e-3, "the bar's middle is not a straight ramp");
         }
@@ -626,20 +667,14 @@ mod tests {
     /// exactly the pair of facts the shader's wedge test is built on: past a
     /// half turn a wedge is the UNION of its two half-planes rather than
     /// their intersection, and at a whole turn neither reading means
-    /// anything. The widest there is is an indicator near the middle of the
-    /// NARROWEST window at the fullest amount and the sharpest shape — four
-    /// octaves to the turn, the edges pinned at a tenth of an even slice and
-    /// the middle taking everything they and their neighbours give up. It
-    /// reaches 266 degrees.
-    ///
-    /// This is what [`MIN_WINDOW`] exists for: the same settings over a
-    /// three-octave window take that indicator to 336 degrees, and a
-    /// two-octave one to 342.
+    /// anything. The widest there is is the middle of a THREE-octave wheel at
+    /// the fullest amount, where two edge slices at a tenth of an even slice
+    /// leave the one between them 336 degrees.
     #[test]
     fn an_indicator_can_pass_a_half_turn_but_never_a_whole_one() {
         let mut widest: f32 = 0.0;
         for (l, cents, case) in every_case() {
-            let (low, high) = l.slot_range(cents);
+            let (low, high) = l.slots(cents);
             for slot in low..=high {
                 let (e0, e1) = l.sector(slot, cents);
                 assert!(e0 - e1 < TAU - 1e-3, "{case}: slot {slot} spans {} rad", e0 - e1);
@@ -647,127 +682,59 @@ mod tests {
             }
         }
         assert!(widest > PI, "nothing passes a half turn: widest {widest} rad");
-        // Sweeping the NARROWEST window along the axis at every pitch class,
-        // since that is where the extreme lives and the floor is what keeps it
-        // in hand: how much of the turn one indicator can hold depends on where
-        // the window sits and where the node's octaves fall inside it.
-        //
-        // The threshold is a good deal tighter than a whole turn, because a
-        // measurement 15 degrees off the cliff is not a guard. At MIN_WINDOW
-        // this reaches 266 degrees; three and a half octaves would put it at
-        // 274 and three octaves at 336.
-        let mut narrowest: f32 = 0.0;
-        for low in 0..=(PITCH_CEIL - MIN_WINDOW) as u32 {
-            let l = octave_layout(low as f32, low as f32 + MIN_WINDOW, MAX_TAPER_AMOUNT, 0.0);
-            for cents in [0.0f32, 100.0, 350.0, 600.0, 700.0, 1150.0] {
-                let (a, b) = l.slot_range(cents);
-                for slot in a..=b {
-                    let (e0, e1) = l.sector(slot, cents);
-                    narrowest = narrowest.max(e0 - e1);
-                }
-            }
-        }
+        // The extreme, and where it lives: the smallest span that can taper at
+        // all, at the fullest amount. Every shape reaches it, since with one
+        // slice between the two edges there is no profile left to bend.
+        let l = octave_layout(3, 60.0, MAX_TAPER_AMOUNT, 0.5);
+        let middle = (l.bounds[2] - l.bounds[1]).to_degrees();
+        assert!((middle - 336.0).abs() < 0.5, "the extreme is {middle} deg");
         assert!(
-            narrowest < TAU * 0.78,
-            "the narrowest window reaches {} deg",
-            narrowest.to_degrees()
-        );
-        // And the narrowest window is WHERE the extreme is, which is the
-        // sentence above this test and the reason the sweep is of that window
-        // rather than of any other. Without this a formula change could move
-        // the extreme somewhere the sweep never looks, and both bounds would
-        // still pass.
-        assert!(
-            widest <= narrowest + 1e-4,
-            "a wider window reaches {} deg, past the narrowest window's {}",
-            widest.to_degrees(),
-            narrowest.to_degrees()
+            widest.to_degrees() <= middle + 1e-3,
+            "something reaches past the three-octave middle's {middle} deg"
         );
     }
 
-    /// A window outside the settable pair — a hand-edited blob, a migration —
-    /// is brought back inside it rather than producing a layout the shader's
-    /// fixed-size tables cannot hold.
+    /// A ring at the pitch limits reaches for octaves no note can play, and
+    /// draws them rather than cutting the turn short — the invariant that
+    /// matters there is that it is still `span` slices tiling a turn, which
+    /// `the_indicators_tile_the_turn` covers over the same wheels.
     #[test]
-    fn a_window_outside_the_limits_is_clamped() {
-        assert_eq!(clamp_window(60.0, 60.0), (60.0, 60.0 + MIN_WINDOW), "a collapsed window opens");
-        assert_eq!(clamp_window(114.0, 6.0), (6.0, 114.0), "a backwards pair is read either way");
-        assert_eq!(clamp_window(-40.0, 400.0), (PITCH_FLOOR, PITCH_CEIL), "and the limits hold");
-        let (low, high) = clamp_window(120.0, 121.0);
-        assert!(high - low >= MIN_WINDOW && high <= PITCH_CEIL, "{low}..{high} at the ceiling");
-        let nan = clamp_window(f32::NAN, f32::INFINITY);
-        assert_eq!(nan, (DEFAULT_WINDOW_LOW, DEFAULT_WINDOW_HIGH), "nonsense falls back");
+    fn a_ring_at_the_limits_keeps_its_span() {
+        let l = octave_layout(5, PITCH_CEIL, 0.0, DEFAULT_TAPER_SHAPE);
+        let (low, high) = l.slots(0.0);
+        assert_eq!(high - low + 1, 5, "a ring at the ceiling lost a slice");
+        assert!(high >= OCTAVE_SLOTS as i32, "nothing reaches past the table at the ceiling");
+        let l = octave_layout(5, PITCH_FLOOR, 0.0, DEFAULT_TAPER_SHAPE);
+        let (low, high) = l.slots(1150.0);
+        assert_eq!(high - low + 1, 5, "a ring at the floor lost a slice");
+        assert!(low < 0, "nothing reaches under the table at the floor");
     }
 
-    /// The widest window still fits the boundary table, which the renderer's
-    /// uniform is sized against.
-    ///
-    /// A sweep over the SPAN alone, because the cells are cut from the
-    /// window's own middle: `cell_origin` is half an octave above it, so
-    /// `u_low` and `u_high` come out `±span/24 - 0.5` and the count depends on
-    /// how wide the window is and on nothing else. Where it sits on the axis
-    /// cannot change it — which is worth a sweep to state, since it is a
-    /// property of `cell_origin` rather than of anything visible here. In
-    /// quarter-semitone steps, so the fractional spans between whole octaves
-    /// are covered too.
+    /// A span or center outside the settable pair — a hand-edited blob, a
+    /// migration — is brought back inside it rather than producing a layout
+    /// the shader's fixed-size tables cannot hold.
     #[test]
-    fn the_widest_window_fits_the_table() {
-        let mut most = 0;
-        let mut at = 0.0f32;
-        let mut span = MIN_WINDOW;
-        while span <= PITCH_CEIL - PITCH_FLOOR {
-            for low in [PITCH_FLOOR, 3.5, (PITCH_CEIL - span).max(PITCH_FLOOR)] {
-                let l = octave_layout(low, low + span, 0.0, DEFAULT_TAPER_SHAPE);
-                assert_eq!(
-                    l.cells,
-                    octave_layout(PITCH_FLOOR, PITCH_FLOOR + span, 0.0, DEFAULT_TAPER_SHAPE).cells,
-                    "a {span}-semitone window at {low} is cut differently from one at the floor"
-                );
-                if l.cells as usize > most {
-                    most = l.cells as usize;
-                    at = span;
-                }
-            }
-            span += 0.25;
-        }
-        assert!(
-            most <= MAX_CELLS,
-            "a {at}-semitone window needs {most} cells and the table holds {MAX_CELLS}"
-        );
-        assert_eq!(
-            most, MAX_CELLS,
-            "the table is {} cells bigger than anything needs",
-            MAX_CELLS - most
-        );
+    fn a_wheel_outside_the_limits_is_clamped() {
+        assert_eq!(clamp_span(0), MIN_SPAN, "a collapsed span opens");
+        assert_eq!(clamp_span(40), MAX_SPAN, "and the ceiling holds");
+        assert_eq!(clamp_center(-40.0), PITCH_FLOOR);
+        assert_eq!(clamp_center(400.0), PITCH_CEIL);
+        assert_eq!(clamp_center(f32::NAN), DEFAULT_CENTER, "nonsense falls back");
+        let l = octave_layout(99, f32::INFINITY, f32::NAN, DEFAULT_TAPER_SHAPE);
+        assert_eq!((l.span, l.center), (MAX_SPAN, DEFAULT_CENTER));
+        assert!(l.bounds.iter().all(|b| b.is_finite()), "a NaN amount poisoned the widths");
     }
 
-    /// A whole number of octaves centered on middle C is the wheel the fixed
-    /// span used to draw, cell for cell — so the continuous window is a
-    /// generalization of it rather than a different picture that happens to
-    /// look similar.
+    /// The default wheel is the register a keyboard part lives in, drawn even:
+    /// five octaves of 72 degrees each, C1..C5 in the DAW's numbering, with
+    /// middle C straight up.
     #[test]
-    fn a_whole_number_of_octaves_draws_the_span_it_replaced() {
-        // ±2 to ±4. The old ±5 reached MIDI -6, half an octave under the
-        // lowest note there is; it migrates to a window that starts at 0
-        // instead, which draws the same eleven octaves with the bottom one
-        // cut off at the seam rather than centered on it.
-        for span in 2..=4u32 {
-            let octaves = 2 * span + 1;
-            let low = 60.0 - 6.0 * octaves as f32;
-            let l = octave_layout(low, low + 12.0 * octaves as f32, 0.35, 0.25);
-            assert_eq!(l.cells, octaves, "±{span} is {octaves} cells");
-            let middle = MIDDLE_C_SLOT as u32;
-            assert_eq!(l.slot_range(0.0), (middle - span, middle + span));
-            // Every cell a whole octave, tiling the turn evenly about the
-            // middle, and middle C dead center of its own.
-            for j in 0..octaves as usize {
-                let width = l.bounds[j] - l.bounds[j + 1];
-                let mirror = l.bounds[octaves as usize - 1 - j] - l.bounds[octaves as usize - j];
-                assert!((width - mirror).abs() < 1e-5, "±{span}: cell {j} is lopsided");
-            }
-            let (e0, e1) = l.sector(MIDDLE_C_SLOT as u32, 0.0);
-            let middle_c = l.angle(60.0);
-            assert!((middle_c - 0.5 * (e0 + e1)).abs() < 1e-4, "±{span}: middle C off center");
-        }
+    fn the_default_wheel_is_five_even_octaves_around_middle_c() {
+        let l = OctaveLayout::default();
+        assert_eq!(l.slots(0.0), (3, 7), "not C1..C5");
+        assert_eq!(l.slot_pitch(MIDDLE_C_SLOT as i32, 0.0), 60.0);
+        let (e0, e1) = l.sector(MIDDLE_C_SLOT as i32, 0.0);
+        assert!((e0 - e1 - TAU / 5.0).abs() < 1e-5, "middle C's slice is not a fifth of the turn");
+        assert!((0.5 * (e0 + e1) - UP).abs() < 1e-5, "middle C is not straight up");
     }
 }

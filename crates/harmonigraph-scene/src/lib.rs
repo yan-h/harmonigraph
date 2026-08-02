@@ -35,8 +35,8 @@ pub use camera::{Camera, Projection, Projector};
 pub use color::{channel_color, pitch_lut_color, pitch_ramp_lut};
 pub use derive::derive_scene;
 pub use octaves::{
-    clamp_window, octave_layout, OctaveLayout, DEFAULT_TAPER_SHAPE, DEFAULT_WINDOW_HIGH,
-    DEFAULT_WINDOW_LOW, MAX_CELLS, MAX_TAPER_AMOUNT, MIDDLE_C_SLOT, MIN_WINDOW, OCTAVE_SLOTS,
+    clamp_center, clamp_span, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_SPAN,
+    DEFAULT_TAPER_SHAPE, MAX_SPAN, MAX_TAPER_AMOUNT, MIDDLE_C_SLOT, MIN_SPAN, OCTAVE_SLOTS,
     PITCH_CEIL, PITCH_FLOOR,
 };
 pub use style::{
@@ -199,8 +199,8 @@ pub struct NodeInstance {
     /// nothing; a second one would leave the ring a shade whiter than the band.
     ///
     /// The slot's pitch rather than the marking VOICE's: a note past either end
-    /// of the octave window folds onto the outermost slot, and a ring carrying
-    /// the unfolded pitch would then sit a register off the sector it brackets.
+    /// of the ring folds onto the outermost slot, and a ring carrying the
+    /// unfolded pitch would then sit a register off the sector it brackets.
     pub melody_color: Vec4,
     pub bass_color: Vec4,
     /// How strongly the music is remembered here (see [`trail`]): 0 where
@@ -272,12 +272,11 @@ pub struct Scene {
     /// sector-to-sector and band-to-mark-ring alike. Already clamped.
     pub outer_gap: f32,
     /// The pitch axis the octave indicators are drawn on (see [`octaves`]):
-    /// which pitches one turn of a node covers, and how the circle is shared
-    /// out between their octaves. ONE axis for the whole frame — every node
-    /// reads the same one, which is what makes an indicator's ANGLE mean an
-    /// absolute pitch. A node's pitch class says where round the turn its own
-    /// octaves land, and (since the window is a pitch range rather than a
-    /// count of octaves) how many of them land there at all.
+    /// how many octaves one turn of a node covers, which pitch sits at the top
+    /// of it, and how the circle is shared out between them. ONE set of widths
+    /// for the whole frame — every node draws the same slices, turned by where
+    /// its own octaves fall against the center pitch, which is what makes an
+    /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and
