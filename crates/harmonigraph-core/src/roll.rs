@@ -20,7 +20,7 @@
 //! open for a day does not grow without limit. Nothing here knows it will
 //! be drawn.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::notes::Time;
 
@@ -157,9 +157,12 @@ impl RollNote {
 pub struct NoteRoll {
     /// Finished notes, oldest release first.
     past: VecDeque<RollNote>,
-    /// Still-sounding notes, keyed the way the tracker keys its held
-    /// voices. Bounded by the number of keys, so never trimmed.
-    live: HashMap<(u8, u8), RollNote>,
+    /// Still-sounding notes, keyed and ORDERED the way the tracker keys and
+    /// orders its held voices — a hashed order here reaches `past` through
+    /// `all_off` and stays there, and reaches the pane through `notes()`
+    /// (see [`NoteTracker`](crate::NoteTracker), and #135). Bounded by the
+    /// number of keys, so never trimmed.
+    live: BTreeMap<(u8, u8), RollNote>,
 }
 
 impl NoteRoll {
@@ -203,7 +206,7 @@ impl NoteRoll {
 
     /// Close every sounding note (transport reset).
     pub fn all_off(&mut self, at: Time) {
-        for (_, mut note) in self.live.drain() {
+        for mut note in std::mem::take(&mut self.live).into_values() {
             note.end = Some(at.max(note.start));
             self.past.push_back(note);
         }
@@ -233,8 +236,10 @@ impl NoteRoll {
         }
     }
 
-    /// Every remembered note, finished ones first. Not sorted by start
-    /// time: overlapping notes draw as overlapping ribbons either way.
+    /// Every remembered note, finished ones first and then the sounding
+    /// ones in `(channel, note)` order. Not sorted by start time:
+    /// overlapping notes draw as overlapping ribbons either way, and the
+    /// pane sorts for itself when the paint order matters.
     pub fn notes(&self) -> impl Iterator<Item = &RollNote> {
         self.past.iter().chain(self.live.values())
     }
@@ -311,6 +316,27 @@ mod tests {
         tracker.handle_event(off(4.0, 60));
         let note = tracker.roll().notes().next().unwrap();
         assert_eq!(note.stop(9.0), 4.0, "a released note stops at its release");
+    }
+
+    /// Sounding notes reach the pane through `notes()`, and the transport
+    /// reset walks them into `past` — which then holds that order for as
+    /// long as it remembers them. Both have to be the music's order, not a
+    /// map's; see `NoteTracker::voices` and #135.
+    ///
+    /// Pressed high to low so only the key order can pass.
+    #[test]
+    fn sounding_notes_come_back_in_channel_note_order() {
+        let mut tracker = NoteTracker::new();
+        let expected: Vec<u8> = (40..104u8).collect();
+        for &note in expected.iter().rev() {
+            tracker.handle_event(on(0.0, note));
+        }
+        let live: Vec<u8> = tracker.roll().notes().map(|n| n.note).collect();
+        assert_eq!(live, expected, "sounding notes must iterate in key order");
+
+        tracker.all_notes_off(1.0);
+        let past: Vec<u8> = tracker.roll().notes().map(|n| n.note).collect();
+        assert_eq!(past, expected, "the finished tail must inherit key order");
     }
 
     #[test]

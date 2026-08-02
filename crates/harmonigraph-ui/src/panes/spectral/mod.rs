@@ -276,9 +276,10 @@ pub(crate) fn spectral_pane(
                 nearest_visible_node(&state.view, &state.tuning, v.pitch_class).is_none()
             })
             .collect();
-        // Stable order: voices iterate a HashMap and translucent bands
-        // accumulate where they overlap, so the offline render must not
-        // depend on it.
+        // Translucent bands accumulate where they overlap, so the paint
+        // order is part of the picture. The tracker's own order is by
+        // (channel, note) and stable, but it is not this one — pitch is
+        // what decides which band is on top here.
         voices.sort_unstable_by(|a, b| {
             a.pitch.total_cmp(&b.pitch).then(a.channel.cmp(&b.channel)).then(a.note.cmp(&b.note))
         });

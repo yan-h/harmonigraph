@@ -11,7 +11,7 @@
 //! mark on the lattice needs. The scene draws from this; nothing here knows
 //! that it will be drawn.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::notes::{Time, Voice, VoiceState};
 use crate::tuning::PitchClass;
@@ -37,9 +37,15 @@ fn visit_key(pitch: f32) -> i32 {
 }
 
 /// Every pitch played so far, as far back as [`MAX_VISITS`](Self::MAX_VISITS).
+///
+/// Ordered by key — the pitch in cents — for the reason
+/// [`NoteTracker`](crate::NoteTracker) is: two remembered pitches can match
+/// one node, the trail's `max` keeps the FIRST of them, and a hashed order
+/// would settle that differently per process (#135). `forget_oldest` is the
+/// same argument for a tie in `last_off`, which a chord's notes all share.
 #[derive(Default)]
 pub struct NoteHistory {
-    visits: HashMap<i32, Visit>,
+    visits: BTreeMap<i32, Visit>,
 }
 
 impl NoteHistory {
@@ -75,7 +81,10 @@ impl NoteHistory {
     }
 
     /// Drop the least recently played pitch. O(visits), and only ever runs
-    /// on the one insert that crosses the cap.
+    /// on the one insert that crosses the cap. A chord's notes share a
+    /// `last_off`, so the tie `min_by` breaks by taking the first is a real
+    /// case rather than a rounding accident — it resolves to the lowest
+    /// pitch of the tied set.
     fn forget_oldest(&mut self) {
         let oldest = self
             .visits
@@ -87,7 +96,9 @@ impl NoteHistory {
         }
     }
 
-    /// Every remembered pitch, in no particular order.
+    /// Every remembered pitch, lowest first. Not the order they were played
+    /// in — the key is the pitch — but a fixed one, which is what the trail
+    /// needs of it.
     pub fn visits(&self) -> impl Iterator<Item = &Visit> {
         self.visits.values()
     }
@@ -146,6 +157,27 @@ mod tests {
         let visits: Vec<&Visit> = tracker.history().visits().collect();
         assert_eq!(visits.len(), 1);
         assert_eq!(visits[0].last_off, 10.5, "the freshest visit wins");
+    }
+
+    /// The trail keeps the FIRST of several remembered pitches that match
+    /// one node (`max`, and every level is 1.0 while the memory span is
+    /// "never forget"), so this order picks the mark's color. It has to be
+    /// a property of the music rather than of the map — see the same
+    /// argument on `NoteTracker::voices`, and #135.
+    ///
+    /// Played high to low, so an order inherited from the playing would
+    /// come back reversed and only the key order can pass.
+    #[test]
+    fn visits_come_back_lowest_pitch_first() {
+        let mut tracker = NoteTracker::new();
+        let played: Vec<u8> = (0..64u8).map(|i| 100 - i).collect();
+        for (i, &note) in played.iter().enumerate() {
+            play(&mut tracker, note, i as f64 * 4.0, i as f64 * 4.0 + 1.0);
+        }
+        let pitches: Vec<f32> = tracker.history().visits().map(|v| v.pitch).collect();
+        let mut ascending = pitches.clone();
+        ascending.sort_by(f32::total_cmp);
+        assert_eq!(pitches, ascending, "visits must iterate in pitch order");
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! harness generates them from a mock source. Either way, the GUI thread
 //! owns a [`NoteTracker`] and feeds every event into it.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::history::NoteHistory;
 use crate::roll::NoteRoll;
@@ -153,9 +153,17 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 /// fade out instead of vanishing), and behind those a [`NoteHistory`] of
 /// every pitch that has finished fading and a [`NoteRoll`] of when each
 /// note sounded.
+///
+/// Ordered, not hashed, and that is load-bearing rather than a taste in
+/// containers: `voices()` decides which of two voices lighting ONE node
+/// wins its color, and a `HashMap`'s iteration order is seeded per map, so
+/// the same take rendered twice picked different winners and produced
+/// different pixels (#135). A `BTreeMap` keyed by `(channel, note)` makes
+/// that choice a property of the music. The map holds a chord, so the
+/// ordering costs nothing worth measuring.
 #[derive(Default)]
 pub struct NoteTracker {
-    held: HashMap<(u8, u8), Voice>,
+    held: BTreeMap<(u8, u8), Voice>,
     released: Vec<Voice>,
     history: NoteHistory,
     roll: NoteRoll,
@@ -243,7 +251,14 @@ impl NoteTracker {
         self.roll.clear();
     }
 
-    /// All voices that should currently be visualized (held first).
+    /// All voices that should currently be visualized: held first, in
+    /// `(channel, note)` order, then the released ones in the order they
+    /// were let go.
+    ///
+    /// The order is part of the contract. Consumers accumulate over this —
+    /// the lattice's node color goes to the first voice at the winning
+    /// envelope, and every held voice shares one — so an unspecified order
+    /// is an unspecified picture.
     pub fn voices(&self) -> impl Iterator<Item = &Voice> {
         self.held.values().chain(self.released.iter())
     }
@@ -254,7 +269,10 @@ impl NoteTracker {
 
     pub fn all_notes_off(&mut self, now: Time) {
         self.roll.all_off(now);
-        for (_, mut voice) in self.held.drain() {
+        // Key order into `released`, which keeps its own order stable too —
+        // a Vec built by draining a map inherits whatever order the map
+        // iterated in, and then holds it for the whole fade.
+        for mut voice in std::mem::take(&mut self.held).into_values() {
             voice.state = VoiceState::Released { at: now };
             self.released.push(voice);
         }
@@ -271,6 +289,60 @@ mod tests {
 
     fn off(time: Time, note: u8) -> NoteEvent {
         NoteEvent { time, channel: 0, note, kind: NoteEventKind::Off }
+    }
+
+    /// Press one note on every tracked channel at each of several pitches,
+    /// arriving in nothing like key order. Enough keys that a map iterating
+    /// in some order of its own could not come back sorted by accident,
+    /// which is what makes the assertion below a test rather than a coin
+    /// toss.
+    fn scrambled_chord(tracker: &mut NoteTracker) -> Vec<(u8, u8)> {
+        let mut keys = Vec::new();
+        // Pitch outside, channel inside: the presses walk across the
+        // channels at one pitch before moving on, so insertion order and
+        // key order share nothing but their first element.
+        for step in 0..11u8 {
+            for channel in 0..15u8 {
+                let note = 21 + step * 7;
+                tracker.handle_event(NoteEvent {
+                    time: 0.0,
+                    channel,
+                    note,
+                    kind: NoteEventKind::On { velocity: 0.8 },
+                });
+                keys.push((channel, note));
+            }
+        }
+        keys.sort_unstable();
+        keys
+    }
+
+    /// The order `voices()` hands the held voices back in is part of the
+    /// picture rather than an implementation detail. Every held voice sits
+    /// at activation 1.0, and the lattice gives a node's color and seed to
+    /// the FIRST voice at the winning envelope — so which of two voices
+    /// lighting one node (an octave doubling, say) wins is settled by this
+    /// order alone. Off a hashed map it was settled per process instead,
+    /// and one take rendered twice came out with different pixels in it
+    /// (#135).
+    #[test]
+    fn held_voices_come_back_in_channel_note_order() {
+        let mut tracker = NoteTracker::new();
+        let expected = scrambled_chord(&mut tracker);
+        let order: Vec<(u8, u8)> = tracker.voices().map(|v| (v.channel, v.note)).collect();
+        assert_eq!(order, expected, "held voices must iterate in key order");
+    }
+
+    /// The same order has to survive the transport reset that turns every
+    /// held voice into a releasing one: `released` is a Vec, so whatever
+    /// order it is filled in is the order it keeps for the whole fade.
+    #[test]
+    fn all_notes_off_releases_the_voices_in_that_same_order() {
+        let mut tracker = NoteTracker::new();
+        let expected = scrambled_chord(&mut tracker);
+        tracker.all_notes_off(1.0);
+        let order: Vec<(u8, u8)> = tracker.voices().map(|v| (v.channel, v.note)).collect();
+        assert_eq!(order, expected, "the released tail must inherit key order");
     }
 
     #[test]
