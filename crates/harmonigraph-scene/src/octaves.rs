@@ -284,8 +284,10 @@ impl OctaveLayout {
     /// pitch, which is what keeps every node's ring over the same stretch of
     /// keyboard however its class falls. With an odd span that set is
     /// symmetric about the node's nearest octave; with an even one it reaches
-    /// one octave further on the side the center is NOT on, and a center
-    /// landing exactly on one of the node's octaves breaks the tie downward.
+    /// one octave further on the side of that octave the CENTER itself sits —
+    /// a center just under one of the node's octaves reaches down, one just
+    /// over it reaches up — and a center landing exactly on one of them breaks
+    /// the tie downward.
     pub fn ring(&self, cents: f32) -> Ring {
         let off = cents / 100.0;
         // The node's octave nearest the center, and how far above the center

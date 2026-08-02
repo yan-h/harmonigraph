@@ -408,6 +408,17 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
     assert_eq!(g.1 - g.0, 4, "a G node draws five as well");
     assert_ne!(g, wheel.slots(0.0), "just not the same five");
 
+    // An EVEN span has no symmetric answer, so which side the extra octave
+    // falls is a decision rather than arithmetic: it goes on the side of the
+    // node's nearest octave the center itself sits, and a center landing
+    // exactly on one of the node's octaves breaks the tie downward. Pinned
+    // absolutely, because everything else here is measured FROM the ring's
+    // base and would read the same with the whole ring an octave out.
+    let even = |center: f32| octave_layout(4, center, 0.0, DEFAULT_TAPER_SHAPE).slots(0.0);
+    assert_eq!(even(59.0), (3, 6), "a center under the node's octave reaches down");
+    assert_eq!(even(61.0), (4, 7), "and one over it reaches up");
+    assert_eq!(even(60.0), (3, 6), "a center on the octave itself ties downward");
+
     // Where they land moves with the pitch class too, and by exactly the pitch
     // distance: a G is five semitones under the C above it, so its ring turns
     // left by five semitones' worth of the turn — half a slice at the tritone

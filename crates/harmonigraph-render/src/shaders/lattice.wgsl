@@ -425,8 +425,9 @@ fn oct_ring(cents: f32) -> OctRing {
     // half octave ABOVE.
     let nearest = floor((oct_center() - off) / 12.0 + 0.5);
     let d = nearest * 12.0 + off - oct_center();
-    // The span octaves nearest the center: symmetric when the span is odd,
-    // and one octave deeper on the side the center is not on when it is even.
+    // The span octaves nearest the center: symmetric when the span is odd, and
+    // when it is even one octave deeper on the side of the node's nearest
+    // octave the center itself sits, with a tie going down.
     var low = -(span - 1) / 2;
     if (span % 2) == 0 {
         low = select(-span / 2, 1 - span / 2, d < 0.0);
