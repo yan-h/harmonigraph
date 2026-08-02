@@ -35,7 +35,7 @@ That third command decides how much of the rest of this file you run. Keep
 its output.
 
 If the diff is trivial — a comment fix, a one-line constant with an obvious
-test — say so and stop. Five agents over a two-line change trains you to skim
+test — say so and stop. Four agents over a two-line change trains you to skim
 the output, and skimmed review is worse than none.
 
 ## Who does the reading
@@ -51,21 +51,70 @@ Give every agent the range command verbatim and its lens in full.
 
 If the executable-files grep came back non-empty, run `./ci.sh` and **paste
 its output into every lens prompt.** Red means stop and fix first — there is
-nothing to review on a branch that does not build, and five agents would
+nothing to review on a branch that does not build, and four agents would
 each rediscover the same failure.
 
 The agents have `Bash` and will otherwise each reach for cargo themselves.
 Across the runs measured so far, 36 of 37 spawned agents invoked cargo, 386
 times between them: five lenses clippying and testing the same tree, for the
 same branch, five times over. One run here costs a fraction of that, and it
-gives every lens the same ground truth to argue against instead of five
-private ones.
+gives every lens the same ground truth to argue against instead of one
+private copy per lens.
+
+### Run the mutants once too, when the diff changes a function body
+
+Test reach is the highest-yield lens, and every one of its best findings is
+the same defect: **a test that passes for the wrong reason.** #168's render
+fixture had stopped exercising the index arithmetic its own PR was about,
+while staying green; #177's `ubuf_ms: 0.0` made two closures the same
+subtraction, so transposing them passed the whole suite; #106's overlay test
+read labels only, so a flattened nesting passed too.
+
+`cargo mutants` proves that class rather than arguing it, and it spends no
+context doing it. Scope it to the functions this diff changed — never a whole
+file, which is a 14-to-16-minute run:
+
+```sh
+cargo mutants -p <pkg> -F '<fn>|<fn>' --list     # no build; get a real count first
+cargo mutants -p <pkg> -F '<fn>|<fn>' -j 4 --copy-target true --minimum-test-timeout 60
+```
+
+`-F` is a regex over the names `--list` prints, which is how you scope to the
+functions this diff rewrote without paying for a whole file.
+
+**Paste the surviving-mutant list into the test-reach lens prompt**, exactly
+as `./ci.sh`'s output goes to every lens. A survivor is a reached-but-unpinned
+path with a line number already on it, so the lens starts from proof and
+spends its budget on the half mutation cannot reach.
+
+Four things that cost time on the first run:
+
+- **`--list` first.** Wall-clock is the per-mutant rebuild, not the tests, so
+  the count is the cost: 131 mutants over one file took 14–16 minutes on 8
+  cores. Past ~40 the filter is too wide — narrow it to the functions the
+  diff actually rewrote.
+- **`-F` does not filter every mutant.** `delete field … from struct …
+  expression` mutants come out whatever the regex says: on
+  `harmonigraph-record` a pattern matching nothing at all still lists three of
+  them. So a scoped list carries a few lines from functions you did not name
+  — drop those before pasting, or the lens spends its pass on a path this
+  branch never touched.
+- **`mutants.out/` is not in `.gitignore`.** Delete it before you commit.
+- **Each `-j` job leaves a ~1.5 GB scratch copy** under
+  `$TMPDIR/cargo-mutants-*.tmp`, not reliably cleaned up. `rm -rf` them when
+  the run ends; parallel sessions have filled this disk before.
+
+Skip this when the diff changes no function body — docs, comments, a constant
+with its test. A survivor on a line this branch did not touch is not this
+review's finding: note it and move on, the same as any other pre-existing
+defect.
 
 ### Which lenses to run
 
 **Key the lens set on that grep, not on what the diff feels like.** Empty —
 no `.rs`, `.sh` or `.py` touched — and the conventions lens runs alone.
-Non-empty, and the full set runs.
+Non-empty, and the four standing lenses run: conventions, bugs, state and
+invalidation, test reach.
 
 The gate is mechanical because judgement reads a rename sweep or a backlog
 drain as a docs change and scales down on it. #114 was exactly that shape,
@@ -73,9 +122,54 @@ and its worst defect was two lines of shell: both loader scripts built
 `lib${PKG}.dylib`, which the old underscored package name had made correct
 by accident, so the rename pointed them at a file cargo does not write.
 
-Below that gate, dropping a lens is still yours to call — a self-contained
-change to one file does not need the history lens — but name the ones you
-dropped rather than dropping them silently.
+Below that gate, dropping a lens is still yours to call, but name the ones
+you dropped rather than dropping them silently.
+
+### The history lens runs only when the diff takes something away
+
+It is the one lens whose price has never been repaid by breadth. Across
+twelve measured runs it found one thing — #114's sha-anchored NIGHT-NOTES
+entry, which the rename sweep rewrote to name a symbol the commit that same
+entry cites does not contain — and settled one "deliberate decision or quiet
+orphaning?" question. The rest of the time it returns a clean list, at a
+lens's full price. That is a real service at the price of the defects only it
+can see, and a poor one at the price of running every time.
+
+So it is conditional, on the same footing as the executable grep. Both greps
+look for what the diff **removes**, because an added line has no history to
+read:
+
+```sh
+G='assert|clamp|saturating|checked_|unwrap_or|is_finite|\.min\(|\.max\('
+rm=$(git diff <base>...HEAD | grep '^-' | grep -v '^---' | grep -cE "$G")
+ad=$(git diff <base>...HEAD | grep '^+' | grep -v '^+++' | grep -cE "$G")
+[ "$rm" -gt 0 ] && [ "$rm" -ge "$ad" ] && echo 'history: a guard came out'
+
+git diff <base>...HEAD | grep '^-' | grep -v '^---' \
+  | grep -E '\b[0-9a-f]{7,40}\b|#[0-9]+|20[0-9]{2}-'   # prose citing a sha, PR or date
+```
+
+Either one firing runs the lens; both quiet and it stays off, and you say so.
+
+**The guard test is net, and that is the whole of why it works.** Counting
+removed guard lines alone fires on every code diff in this repo, which clamps
+and asserts everywhere: measured over nine merged PRs it said *run* nine
+times out of nine and saved nothing. What separates them is the ratio — real
+feature work *adds* guards (#164 removed 2 and added 30, #119 removed 4 and
+added 56), while a diff that takes one away does not. `rm >= ad` with
+`rm > 0` fires on #114 and stays off for six of those nine; the two others it
+fires on, #191 and #192, are both "stops doing X" removals, which is the
+shape the lens exists for.
+
+The prose grep is deliberately loose — `defaced` is a hex word and a take id
+is a long number, so it catches things that are not shas. That bias is the
+right way round: a false positive costs one lens on one branch, a false
+negative costs the only reading that sees a hunk quietly undoing a fix. Do
+not tighten it into something that misses #114.
+
+Building the gate out of the cases the lens has earned is deliberate. The
+alternative is a guess at what it might find next, and the measurement says
+the guess would come back empty ten times in twelve.
 
 ### The lenses
 
@@ -106,35 +200,48 @@ dropped rather than dropping them silently.
    executes it and confirm the fixture is actually big enough to get there.
    A test whose input is too small to reach the new branch passes for the
    wrong reason and reads as coverage. Name any path this diff adds that no
-   test reaches.
+   test reaches. Where the prompt carries a surviving-mutant list, start
+   from it — each survivor is that defect already proven, with a line number
+   on it — and spend the rest of the pass on what mutation cannot model: a
+   fixture that reaches the line but asserts against the wrong branch, and a
+   path no mutant is generated for at all.
 
-5. **History.** `git blame` the lines this diff *modifies or deletes* — not
-   the ones it adds, which have no history to read — and `git log -n 5` the
-   commits behind them. Ask why the code was the way it was: a hunk that
-   reverts a deliberate fix, re-opens a bug someone closed, or drops a guard
-   added in response to a real failure is invisible to every other lens.
-   Hold to that bound. This is the most expensive lens of the five by a wide
-   margin — it has read around three times the median lens's context — and
-   it earns its place on the defects only it can see, not on breadth of
-   history read.
+**History**, when the gate above opens. `git blame` the lines this diff
+*modifies or deletes* — not the ones it adds, which have no history to read —
+and `git log -n 5` the commits behind them. Ask why the code was the way it
+was: a hunk that reverts a deliberate fix, re-opens a bug someone closed, or
+drops a guard added in response to a real failure is invisible to every other
+lens. Hold to that bound, which is also what its gate is keyed on.
 
 ## Verifying, before you believe any of it
 
 Findings from a first reading are mostly wrong, and a review that forwards
 them all is noise wearing a review's format.
 
-For each finding, spawn **one `diff-reviewer` in parallel prompted to refute
-it** — give it the finding, the file, and the claimed breaking input, and ask
-it to establish that the finding is *false*, defaulting to refuted when it
-cannot decide. Keep what survives. Drop what is refuted, and drop what the
-refuter can only call plausible.
+For each finding **that would change code**, spawn **one `diff-reviewer` in
+parallel prompted to refute it** — give it the finding, the file, and the
+claimed breaking input, and ask it to establish that the finding is *false*,
+defaulting to refuted when it cannot decide. Keep what survives. Drop what is
+refuted, and drop what the refuter can only call plausible.
 
-If the lenses return more than eight findings, refute the eight most severe
-and **say in your output how many you did not verify** — a truncated
-verification pass that reports as a complete one is the failure mode this
-whole section exists to prevent.
+**A finding about prose does not get an agent.** A claim that a comment, a
+doc line or a name says something the code does not is settled by reading the
+code it describes: one `Read` of the function, here, and the question is
+closed. An adversary buys nothing against a definite answer, and it is priced
+like one that argues about behaviour. In the run this rule comes from, three
+of eight refuters were on doc claims and spent 76k output tokens between them
+— 54% of that whole verification pass — to conclude what the function body
+says outright.
 
-Deduplicate before refuting: five lenses reading one diff will land on the
+That split is the one the fix already follows: prose findings are checked
+here and fixed here, code findings get an adversary first.
+
+If the code findings run past eight, refute the eight most severe and **say
+in your output how many you did not verify** — a truncated verification pass
+that reports as a complete one is the failure mode this whole section exists
+to prevent.
+
+Deduplicate before refuting: four lenses reading one diff will land on the
 same line more than once, and refuting a finding twice costs twice.
 
 ## The bar

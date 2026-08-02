@@ -58,6 +58,15 @@ alarming, say so under a separate heading and do not count it as a finding.
    is paid for once per lens. Builds go through `sccache`; see the root
    CLAUDE.md if one fails to launch.
 
+   A test-reach prompt may also carry a **surviving-mutant list** from
+   `cargo mutants`, scoped to the functions the diff changed. Those are your
+   findings already proven — a survivor is a line the tests reach and do not
+   pin — so take them and spend your reading on what mutation cannot model:
+   a fixture that reaches the line but asserts against the wrong branch, and
+   a path that generates no mutant. Do not re-run `cargo mutants` to check
+   the list; a scoped run costs minutes of rebuilds, and it was paid for
+   once already.
+
 5. **Read with `Read`, `Grep` and `Glob`. Keep `Bash` for `git`.** That is
    what those tools are for, and their results come back structured rather
    than as shell output you then pay to read back. The habit runs the other
