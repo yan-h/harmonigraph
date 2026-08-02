@@ -1176,6 +1176,13 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         extent_threes: 1,
         extent_fives: 1,
         extent_sevens: 2,
+        // A marker on every position, so every node in the window is shipped
+        // and the order below is the order of the whole lattice. Without one
+        // an idle node paints nothing and `from_scene` drops it, which would
+        // leave this asserting about whichever handful happened to draw.
+        idle_marker: harmonigraph_scene::IdleMarker::Dot,
+        trail_mark: harmonigraph_scene::TrailMark::Ring,
+        trail_strength: 1.0,
         ..ViewConfig::default()
     };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic]
@@ -1321,3 +1328,115 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     }
 }
 
+/// A node that can paint nothing is not shipped at all — and the grid it
+/// sits in still is.
+///
+/// The billboard is deliberately bigger than the node, so a node the shader
+/// discards every fragment of still costs a quad's worth of rasterizing; on
+/// an unplayed lattice that is nearly every node. With the default idle
+/// marker (None) and trails off it is ALL of them, which is the case worth
+/// pinning: the frame drops to a grid and nothing else, and the callback
+/// has to keep drawing that grid, which is why neither `prepare` nor `paint`
+/// may read "no instances" as "nothing to draw": that test takes the grid
+/// down with the nodes.
+#[test]
+fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
+    let scene = {
+        let mut scene = idle_scene();
+        // What a fresh view opens at: nothing to show at an unplayed node.
+        scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+        scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+        scene
+    };
+    assert!(!scene.grid.is_empty(), "the fixture has to carry a grid");
+    let cb = LatticeCallback::from_scene(
+        &scene,
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        31,
+        None,
+    );
+    assert!(
+        cb.instances.is_empty(),
+        "every node is idle with nothing to draw at one, so none should ship",
+    );
+    assert!(!cb.edges.is_empty(), "the grid is not a node and must survive");
+
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+    queue.submit(bufs.into_iter().chain([encoder.finish()]));
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256.0, 256.0));
+    let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
+    let texture = render_to_texture(&device, &queue, SIZE, format_of(&cb), clear, |pass| {
+        cb.paint(
+            egui::PaintCallbackInfo {
+                viewport: rect,
+                clip_rect: rect,
+                pixels_per_point: 1.0,
+                screen_size_px: SIZE,
+            },
+            pass,
+            &resources,
+        );
+    });
+    let px = readback(&device, &queue, &texture, SIZE);
+    let bg = [18u8, 20, 23, 255];
+    assert!(
+        px.chunks(4).any(|p| p.iter().zip(bg).any(|(&c, b)| c.abs_diff(b) > 4)),
+        "the grid vanished with the nodes",
+    );
+}
+
+/// The target format the callback was built for, so the test above renders
+/// into the one its composite pipeline expects.
+fn format_of(cb: &LatticeCallback) -> wgpu::TextureFormat {
+    cb.target_format
+}
+
+/// What brings a silent node back: the two marks an idle node can wear.
+/// Each is read off a different uniform by a different branch of
+/// `idle_marker`, so each needs its own case — the cull has to ask the same
+/// question the shader does, and a cull that only knew about one of them
+/// would blank the other with no symptom but a missing mark.
+#[test]
+fn an_idle_marker_or_a_trail_ring_keeps_its_nodes() {
+    let ships = |scene: &Scene| {
+        LatticeCallback::from_scene(
+            scene,
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            32,
+            None,
+        )
+        .instances
+        .len()
+    };
+    // `idle_scene` marks every other node as home, and the same alternate
+    // set as visited.
+    let home = idle_scene().nodes.iter().filter(|n| n.on_home).count();
+    assert!(home > 0 && home < idle_scene().nodes.len(), "the fixture has both kinds");
+
+    // The marker alone: it needs a home sheet or a memory to show on, and
+    // this fixture's visited nodes are its home ones, so it is the home set.
+    let mut marker_only = idle_scene();
+    marker_only.trail_mark = harmonigraph_scene::TrailMark::Off;
+    assert_eq!(ships(&marker_only), home, "the idle marker draws on the home sheet");
+
+    // The pale ring alone: it draws with the marker off, on what was visited.
+    let mut ring_only = idle_scene();
+    ring_only.idle_marker = harmonigraph_scene::IdleMarker::None;
+    let visited = idle_scene().nodes.iter().filter(|n| n.trail > 0.0).count();
+    assert_eq!(ships(&ring_only), visited, "the trail ring draws on visited nodes");
+
+    // And a strength of zero is a ring that isn't there.
+    let mut faded = idle_scene();
+    faded.idle_marker = harmonigraph_scene::IdleMarker::None;
+    faded.trail_strength = 0.0;
+    assert_eq!(ships(&faded), 0, "a ring at zero strength paints nothing");
+}

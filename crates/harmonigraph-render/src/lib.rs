@@ -478,10 +478,50 @@ impl LatticeCallback {
             .iter()
             .position(|&(plane, _, _)| plane <= 0.0)
             .unwrap_or(order.len());
+        // A node that can paint nothing is not shipped at all. The shader
+        // already discards it per fragment, but the billboard is deliberately
+        // bigger than the node (QUAD_MARGIN and then some), so the discard is
+        // paid a fragment at a time over a quad the disc never reaches — and
+        // an unplayed lattice is almost entirely such nodes. With the default
+        // idle marker (None) and trails off, ALL of them are: a still lattice
+        // then ships its grid and nothing else.
+        //
+        // The gates are the ones `fs_main`'s idle branch and `idle_marker`
+        // read, in the same order, off the packed instance rather than the
+        // scene node — so this asks the question the shader answers, not a
+        // restatement of it that could drift. Where it errs it errs toward
+        // KEEPING a node (a level that packs to a zero byte is still a level
+        // here), which costs a quad and can never drop one that draws.
+        let trail_level = |visited: f32| match scene.trail_mark {
+            harmonigraph_scene::TrailMark::Off => 0.0,
+            _ => visited.clamp(0.0, 1.0) * scene.trail_strength.clamp(0.0, 1.0),
+        };
+        let paints = |g: &GpuInstance| {
+            if g.params[0] > 0.0
+                || g.params[1] > 0.0
+                || g.params[2] > 0.0
+                || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
+            {
+                return true;
+            }
+            let trail = trail_level(g.visited);
+            // The idle marker needs a style, and a home sheet or a memory to
+            // show on; the trail's pale ring draws with the marker off.
+            let marked = scene.idle_marker != harmonigraph_scene::IdleMarker::None
+                && (g.home >= 0.5 || trail > 0.0);
+            marked || (scene.trail_mark == harmonigraph_scene::TrailMark::Ring && trail > 0.0)
+        };
+        let drawn = |out: &mut Vec<GpuInstance>,
+                     ns: &[(f32, f32, &harmonigraph_scene::NodeInstance)]| {
+            out.extend(ns.iter().map(|(_, _, n)| to_gpu(n, n.gutter)).filter(&paints));
+        };
         let mut instances = Vec::with_capacity(order.len());
-        instances.extend(order.iter().map(|(_, _, n)| to_gpu(n, n.gutter)));
-        // Where the grid is drawn inside that run.
-        let grid_at = split as u32;
+        drawn(&mut instances, &order[..split]);
+        // Where the grid is drawn inside that run: after the sheets BEHIND the
+        // home one, counted over the kept instances rather than over `split`,
+        // which indexes the list before the cull.
+        let grid_at = instances.len() as u32;
+        drawn(&mut instances, &order[split..]);
 
         // The grid draws under the nodes.
         let edges = scene
@@ -1421,8 +1461,13 @@ impl CallbackTrait for LatticeCallback {
         let size = px_size(self.render_scale);
         let screen_size = px_size(1.0);
         // Nothing to draw (matches paint()'s early-out): skip the offscreen
-        // target and pass entirely.
-        let offscreen_size = (!self.instances.is_empty()).then_some(size);
+        // target and pass entirely. The EDGES count as much as the nodes —
+        // `from_scene` drops nodes that can paint nothing, so a still lattice
+        // with the idle marker off is exactly a frame of grid and no
+        // instances, and keying this on the instances alone would take the
+        // grid down with them.
+        let anything = !self.instances.is_empty() || !self.edges.is_empty();
+        let offscreen_size = anything.then_some(size);
 
         let pane = resources.pane_buffers(device, self.pane_id, offscreen_size, screen_size);
 
@@ -1465,7 +1510,8 @@ impl CallbackTrait for LatticeCallback {
             .panes
             .get(&self.pane_id)
             .expect("created by pane_buffers above");
-        if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| pane.instance_count > 0) {
+        let draws = pane.instance_count > 0 || pane.edge_count > 0;
+        if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| draws) {
             // Bracket the scene pass and the bloom chain together: what the
             // overlay wants is the cost of drawing THE LATTICE, which is both.
             // Skipped while a readback is still in flight, so the query set is
@@ -1572,7 +1618,10 @@ impl CallbackTrait for LatticeCallback {
         let Some(pane) = resources.panes.get(&self.pane_id) else {
             return;
         };
-        if pane.instance_count == 0 {
+        // Nothing was rendered into the offscreen target. The edges count as
+        // much as the nodes here — see `prepare`, where the same test decides
+        // whether the target exists at all.
+        if pane.instance_count == 0 && pane.edge_count == 0 {
             return;
         }
         let Some(offscreen) = &pane.offscreen else {
