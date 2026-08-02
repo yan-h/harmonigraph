@@ -171,11 +171,12 @@ pub struct ViewConfig {
     /// the rings right against it.
     #[serde(default = "default_outer_gap")]
     pub outer_gap: f32,
-    /// How many octaves one turn of a node covers (see
-    /// [`octaves`](crate::octaves)), 2..=11. Every node draws exactly this
-    /// many indicators and each is exactly one octave, so this alone says how
-    /// much keyboard the ring reaches and how many degrees an octave of it is
-    /// worth. Notes past either end light the outermost indicator on their
+    /// How many octaves one turn of a node covers at FULL SIZE (see
+    /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
+    /// this plus twice [`octave_extras`](Self::octave_extras). Each is exactly
+    /// one octave and they all share whatever the extras leave, so this says
+    /// how many degrees an octave of the main register is worth. Notes past
+    /// either end of the whole wheel light the outermost indicator on their
     /// side.
     #[serde(default = "default_octave_count")]
     pub octave_count: u32,
@@ -213,21 +214,30 @@ pub struct ViewConfig {
         deserialize_with = "bare_as_some"
     )]
     pub legacy_octave_span: Option<u32>,
-    /// How much of its width the octave at the EDGE of the ring gives up
-    /// to the ones inside it, 0..0.9. It is the ONLY thing that sets those
-    /// outermost slices: they come out `1 - this` of an even slice at every
-    /// shape, so 0 is an even axis and 0.9 leaves them a tenth. Where the
-    /// width they give up lands is the shape below.
-    #[serde(default = "default_octave_taper_amount")]
-    pub octave_taper_amount: f32,
-    /// WHERE that loss falls between the middle of the ring and its edge,
-    /// 0..1: under half it lands at once and the outer octaves flatten out,
-    /// over half the middle several are held near full width and the last
-    /// ones fall away.
-    /// The ends are pinned by the amount whatever this is, so it is a shape
-    /// rather than a second strength — and it is inert at amount 0.
-    #[serde(default = "default_octave_taper_shape")]
-    pub octave_taper_shape: f32,
+    /// Extra octaves at EACH end of the wheel, drawn small: 0..=5, and never
+    /// so many that the whole wheel passes eleven slices. Each one reaches an
+    /// octave further up AND down the keyboard for a sliver of the turn, where
+    /// an octave of count is paid for by every full-size octave at once.
+    ///
+    /// A blob written before the fringe existed carries the two bars it
+    /// replaced, `octave_taper_amount` and `octave_taper_shape`. Nothing reads
+    /// them — an unknown field is ignored rather than refused — so such a
+    /// project opens on the same count of octaves it always drew, evenly.
+    #[serde(default = "default_octave_extras")]
+    pub octave_extras: u32,
+    /// How wide one extra is, as a fraction of an EVEN slice (the turn over
+    /// the whole wheel, extras included), 0.1..=1. Under 1 an extra is always
+    /// narrower than a full-size octave, whatever the count and however many
+    /// extras there are, and 1 is an even wheel.
+    #[serde(default = "default_octave_extra_size")]
+    pub octave_extra_size: f32,
+    /// How much the extras GRADE from the outermost inward, 0..1: 0 is a flat
+    /// fringe of equal slivers and 1 is a ramp that meets the full-size
+    /// octaves in a step the size of its own. The outermost extra is the size
+    /// above whatever this is, so it is a shape rather than a second
+    /// strength — and it is inert without two extras to differ.
+    #[serde(default = "default_octave_extra_blend")]
+    pub octave_extra_blend: f32,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -557,17 +567,22 @@ fn default_octave_center() -> f32 {
     crate::octaves::DEFAULT_CENTER
 }
 
-/// No taper: the amount is the whole of whether there is one, so a fresh
-/// view starts on an even axis and any weighting of the middle octaves is a
-/// choice made from there.
-fn default_octave_taper_amount() -> f32 {
-    0.0
+/// No fringe: the count is the whole of what a blob written before the extras
+/// asked for, so it opens on an even wheel and any fringe is a choice made
+/// from there.
+fn default_octave_extras() -> u32 {
+    0
 }
 
-/// The straight ramp — the middle of the Shape bar, and inert until the
-/// amount leaves 0.
-fn default_octave_taper_shape() -> f32 {
-    crate::octaves::DEFAULT_TAPER_SHAPE
+/// The size a fresh extra comes in at, and inert until there is one.
+fn default_octave_extra_size() -> f32 {
+    crate::octaves::DEFAULT_EXTRA_SIZE
+}
+
+/// A flat fringe — the bottom of the Blend bar, and inert until there are two
+/// extras to grade between.
+fn default_octave_extra_blend() -> f32 {
+    crate::octaves::DEFAULT_EXTRA_BLEND
 }
 
 /// Idle marker at the classic disc radius, so a pre-field blob (whose
@@ -742,23 +757,26 @@ impl ViewConfig {
                 self.octave_count = ((high - low) / 12.0).round().max(0.0) as u32;
             }
         }
-        self.octave_count = crate::octaves::clamp_span(self.octave_count);
+        // Together, because the pair is what has to fit the boundary table and
+        // either one alone can be legal in a wheel that isn't.
+        (self.octave_count, self.octave_extras) =
+            crate::octaves::clamp_wheel(self.octave_count, self.octave_extras);
         self.octave_center = crate::octaves::clamp_center(self.octave_center);
 
-        // The taper feeds the wheel's boundary angles, and a non-finite amount
-        // or shape poisons every one of them: the widths come out NaN, so does
+        // The fringe feeds the wheel's boundary angles, and a non-finite size
+        // or blend poisons every one of them: the widths come out NaN, so does
         // each `cos`/`sin` in the shader, and the whole octave layer vanishes
         // with nothing to say why. `clamp` alone does not catch it — NaN is
         // its own answer — hence the finite check either side of it.
-        self.octave_taper_amount = if self.octave_taper_amount.is_finite() {
-            self.octave_taper_amount.clamp(0.0, crate::octaves::MAX_TAPER_AMOUNT)
+        self.octave_extra_size = if self.octave_extra_size.is_finite() {
+            self.octave_extra_size.clamp(crate::octaves::MIN_EXTRA_SIZE, 1.0)
         } else {
-            default_octave_taper_amount()
+            default_octave_extra_size()
         };
-        self.octave_taper_shape = if self.octave_taper_shape.is_finite() {
-            self.octave_taper_shape.clamp(0.0, 1.0)
+        self.octave_extra_blend = if self.octave_extra_blend.is_finite() {
+            self.octave_extra_blend.clamp(0.0, 1.0)
         } else {
-            default_octave_taper_shape()
+            default_octave_extra_blend()
         };
     }
 }
@@ -821,16 +839,17 @@ impl Default for ViewConfig {
             outer_gap: 0.051_732_67,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at
-            // 72 degrees an octave. Evenly, since the taper is off: the axis a
-            // fresh view starts from is an even one, and any weighting of the
-            // middle octaves is a choice made from there.
-            octave_count: crate::octaves::DEFAULT_SPAN,
+            // 72 degrees an octave. With no fringe: the wheel a fresh view
+            // starts from is an even one, and reaching past that register for
+            // a sliver of the turn is a choice made from there.
+            octave_count: crate::octaves::DEFAULT_COUNT,
             octave_center: crate::octaves::DEFAULT_CENTER,
             legacy_octave_low: None,
             legacy_octave_high: None,
             legacy_octave_span: None,
-            octave_taper_amount: default_octave_taper_amount(),
-            octave_taper_shape: default_octave_taper_shape(),
+            octave_extras: default_octave_extras(),
+            octave_extra_size: default_octave_extra_size(),
+            octave_extra_blend: default_octave_extra_blend(),
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so

@@ -6,12 +6,9 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
+use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
-use harmonigraph_scene::{
-    clamp_span, NodeStyle, ViewConfig, MAX_SPAN, MAX_TAPER_AMOUNT, MIN_SPAN, PITCH_CEIL,
-    PITCH_FLOOR,
-};
+use harmonigraph_scene::{NodeStyle, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -72,27 +69,34 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// pitch axis that runs once round the node. Independent of the Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
-    // Octaves, Center and Taper are the axis; Band and Gap below are where it
-    // is drawn.
+    // Octaves, Center and the fringe are the axis; Band and Gap below are
+    // where it is drawn.
     //
-    // A COUNT and a CENTER rather than a pitch range: a slice is always
-    // exactly one octave, so an indicator can never stand for less pitch than
-    // it names — which a continuous window cannot promise, its two ends
-    // falling wherever they like between two of a node's octaves and cutting
-    // the indicators there short. Which register the wheel is about is the
-    // Center; how much keyboard reaches round it is the count.
-    let mut count = view.octave_count as f32;
-    ValueBar::new(&mut count, MIN_SPAN as f32..=MAX_SPAN as f32, "Octaves")
-        .integer()
-        .show(ui)
-        .on_hover_text(
-            "How many octaves one turn of a node covers. Every node draws this \
-             many indicators and each is exactly one octave, so a narrow \
-             setting gives each of them more of the ring and a wide one \
-             reaches more of the keyboard; notes past either end light the \
-             outermost indicator on their side rather than vanishing",
-        );
-    view.octave_count = clamp_span(count.round().max(0.0) as u32);
+    // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
+    // one octave, so an indicator can never stand for less pitch than it
+    // names — which a continuous window cannot promise, its two ends falling
+    // wherever they like between two of a node's octaves and cutting the
+    // indicators there short. Which register the wheel is about is the Center;
+    // how much keyboard reaches round it is the two counts.
+    //
+    // One strip rather than a bar each, because the two are not independent:
+    // they share the eleven-slice budget, and the thing being traded — how
+    // much of the ring each octave keeps — is what the strip draws.
+    OctaveStrip::new(
+        &mut view.octave_count,
+        &mut view.octave_extras,
+        view.octave_extra_size,
+        view.octave_extra_blend,
+    )
+    .show(ui)
+    .on_hover_text(
+        "How many octaves one turn of a node covers, out of the eleven the \
+         strip's slots stand for. Drag BETWEEN the handles to set how many \
+         are drawn full size, OUTSIDE them to add small extra octaves at each \
+         end. Every cell is one octave, drawn as tall as its share of the ring \
+         against the widest octave on the wheel; notes past either end light \
+         the outermost indicator on their side rather than vanishing",
+    );
     // Whole semitones, because that is the step the wheel can act on and what
     // the readout can name.
     ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center")
@@ -105,40 +109,43 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
              one, and its ring is turned so they land on their own pitches: \
              the half octave below turns left, the half above turns right",
         );
-    // The taper is two bars rather than a list of named curves: the amount is
-    // the only thing that moves the edges, the shape says where in between the
-    // loss falls, and an even axis is amount 0 rather than a mode beside them.
+    // The fringe is two bars rather than a list of named curves: the size is
+    // the only thing that sets the outermost extra, the blend says how the
+    // ones inside it climb toward the full-size octaves, and a wheel with no
+    // extras is even rather than a mode beside them.
     //
-    // At two octaves every slice IS an edge slice, so there is nowhere for the
-    // width the amount takes to go and the bar has nothing to say.
-    ui.add_enabled_ui(view.octave_count > MIN_SPAN, |ui| {
-        ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Taper amount")
+    // With no extras there is no second tier, so neither bar has anything to
+    // say. Not the whole of when the strip above is one flat row, though: a
+    // fringe at size 1 is a second tier the same width as the first, and the
+    // size bar is live there to drag back off it.
+    ui.add_enabled_ui(view.octave_extras > 0, |ui| {
+        ValueBar::new(&mut view.octave_extra_size, MIN_EXTRA_SIZE..=1.0, "Extra size")
             .show(ui)
             .on_hover_text(
-                "How much of its width the octave at the EDGE of the ring gives \
-                 up, which the ones inside it take: 0 is an even axis — no taper \
-                 at all — and 0.9 leaves those outermost slices a tenth of the \
-                 width an even octave would have. This alone sets them; the Taper \
-                 shape below never moves them",
+                "How wide one extra octave is, as a fraction of an even slice \
+                 — the turn divided by every octave on the wheel. Under 1 an \
+                 extra is always narrower than a full-size octave, however \
+                 many of either there are; 1 is an even wheel, and 0.1 leaves \
+                 the extras a tenth of an even slice",
             );
     });
-    // Inert at amount 0, where there is no loss to place, and at four octaves
-    // and under, where the shape has nothing to tell apart: at three the one
-    // slice between the two edges takes all of the lift whatever the curve,
-    // and at four the two of them sit the same distance from the middle and
-    // split it evenly at every exponent. Five is the first span the bar can
-    // move (`the_shape_is_inert_at_four_octaves_and_under`). The shape bar can
-    // only say where a taper falls, never whether there is one.
-    ui.add_enabled_ui(view.octave_taper_amount > 0.0 && view.octave_count > 4, |ui| {
-        ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Taper shape")
+    // Inert with one extra a side, where a ramp has nothing to rise between:
+    // the outermost extra is pinned by the size and the full-size octaves take
+    // the rest, so there is no slice in between for a step to land on. Two is
+    // the first fringe the bar can move
+    // (`the_blend_is_inert_below_two_extras`). Equally inert at size 1, where
+    // both tiers are already the same width. The blend can only say how a
+    // fringe falls away, never whether there is one.
+    ui.add_enabled_ui(view.octave_extras > 1 && view.octave_extra_size < 1.0, |ui| {
+        ValueBar::new(&mut view.octave_extra_blend, 0.0..=1.0, "Extra blend")
             .show(ui)
             .on_hover_text(
-                "WHERE that width is given up. Left of the middle it goes at \
-                 once — the octave next to the middle of the ring gives up \
-                 most of what the edge one does and the outer ones flatten \
-                 off, a spotlight on the middle. Right of it the middle \
-                 several octaves stay near full width and the outermost fall \
-                 away, a plateau. The middle of the bar is a straight ramp",
+                "How the extras GRADE. At 0 they are all the size above, a \
+                 flat fringe meeting the full-size octaves in one step. \
+                 Dragging right lifts the inner ones toward full size — which \
+                 the full-size octaves pay for — until at 1 the whole wheel is \
+                 one ramp from the outermost extra inward. The outermost one \
+                 never moves",
             );
     });
     // No on/off: the layer is what says which octaves are sounding, which

@@ -178,8 +178,9 @@ pub fn derive_scene(
     let octave_layout = octave_layout(
         view.octave_count,
         view.octave_center,
-        view.octave_taper_amount,
-        view.octave_taper_shape,
+        view.octave_extras,
+        view.octave_extra_size,
+        view.octave_extra_blend,
     );
 
     // Each voice's color, computed once here rather than re-running the

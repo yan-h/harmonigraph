@@ -794,7 +794,7 @@ fn band_profile(px: &[u8], size: u32) -> Vec<bool> {
     };
     // The node is alone at the world origin and the camera looks at it, so
     // the frame's center is its center. Not the lit pixels' centroid: a
-    // tapered band is heavier on the side its wide octaves fall, which would
+    // fringed band is heavier on the side its wide octaves fall, which would
     // pull a centroid off-center by roughly what the measurement below is
     // trying to see.
     let drawn = (0..size * size)
@@ -873,10 +873,10 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 
 /// The invariant the wheel is built around, checked on the picture rather
 /// than on the layout that feeds it: every octave of the span gets an
-/// indicator and together they close the ring — whatever the span, the center,
-/// the taper or the node's pitch class. So the only unlit stretches are the
-/// Gap setting's slits, one per boundary, and the seam is one of them on every
-/// node, wherever that node's turn has carried it.
+/// indicator and together they close the ring — whatever the counts, the
+/// center, the fringe or the node's pitch class. So the only unlit stretches
+/// are the Gap setting's slits, one per boundary, and the seam is one of them
+/// on every node, wherever that node's turn has carried it.
 ///
 /// Reading it off rendered pixels is the point. The layout's own tests pin
 /// the angles down; this one says the shader draws the axis the table
@@ -916,59 +916,67 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
         readback(&device, &queue, &tex, SIZE)
     };
 
-    // The narrowest span that can taper (where it takes a sector widest and
-    // the union branch of the wedge test is stressed hardest), the widest, the
-    // default, an even span — where the ring reaches an octave further on one
-    // side — and a center that is neither a C nor near the middle of the
-    // keyboard, where the ring names octaves the packing has no room for. Each
-    // at a C node (whose octaves land flush on the center) and at three pitch
-    // classes that do not, one of them the tritone that turns furthest.
+    // The widest wheel, the default, an even count — where the ring reaches an
+    // octave further on one side — a center that is neither a C nor near the
+    // middle of the keyboard, where the ring names octaves the packing has no
+    // room for, and three fringed wheels: the narrowest there is (where the
+    // one full-size octave takes a sector widest and the union branch of the
+    // wedge test is stressed hardest), a plain register with a pair either
+    // side, and a deep fringe filling the budget. Each at a C node (whose
+    // octaves land flush on the center) and at three pitch classes that do
+    // not, one of them the tritone that turns furthest.
+    //
+    // An even wheel, a flat fringe, a graded one, and then a fringe thin
+    // enough to be eaten by the Gap.
+    const FRINGES: [(f32, f32); 4] = [(1.0, 0.0), (0.6, 0.0), (0.6, 1.0), (0.15, 0.0)];
     let mut pane = 60;
-    for (span, center) in [
-        (3u32, 60.0f32),
-        (11, 60.0),
-        (5, 60.0),
-        (4, 60.0),
-        (5, 103.0),
+    for (count, extras, center) in [
+        (11u32, 0u32, 60.0f32),
+        (5, 0, 60.0),
+        (4, 0, 60.0),
+        (5, 0, 103.0),
+        (1, 1, 60.0),
+        (5, 2, 60.0),
+        (3, 4, 60.0),
     ] {
-        // An even axis, a straight ramp, the sharpest shape, and a plateau.
-        //
-        // Not the FULLEST amount, which is the one thing here the picture
-        // cannot answer: the Gap is cut out of the sectors either side of it,
-        // and at 0.9 the edge slices are thinner than that padding, so their
-        // two slits meet and the ring reads as one indicator short. That is
-        // the setting talking rather than a missing indicator — `octaves.rs`
-        // pins the extreme exactly, on angles, where no padding is involved.
-        for (amount, shape) in [(0.0, 0.5), (0.6, 0.5), (0.7, 0.0), (0.6, 0.85)] {
+        for (i, &(size, blend)) in FRINGES.iter().enumerate() {
+            // Both fringe settings are inert without extras, so the other
+            // three would render the same picture at four times the cost.
+            if extras == 0 && i > 0 {
+                continue;
+            }
             for cents in [0.0, 350.0, 600.0, 1150.0] {
-                let layout = octave_layout(span, center, amount, shape);
+                let layout = octave_layout(count, center, extras, size, blend);
                 let px = shot(&octave_wheel_scene(layout, cents), pane);
                 pane += 1;
                 let profile = band_profile(&px, SIZE[0]);
-                let case =
-                    format!("span {span} at {center}, amount {amount} shape {shape}, {cents}c");
+                let case = format!(
+                    "{count}+2x{extras} at {center}, size {size} blend {blend}, {cents}c"
+                );
 
-                // One indicator per octave of the span, closing the ring: that
-                // is one slit per boundary and no other break. A missing
+                // One indicator per octave of the wheel, closing the ring:
+                // that is one slit per boundary and no other break. A missing
                 // indicator merges two slits into one hole, so the count is
                 // what says all of them are there — including the ones drawn
                 // for octaves no note can reach.
-                let want = span as usize;
+                let want = layout.span as usize;
                 let runs = unlit_runs(&profile);
-                // Except under a heavy taper, and that is the settings talking
-                // rather than a missing indicator: the amount pins the two
-                // EDGE slices at `1 - amount` of an even one while the Gap is
-                // cut out of them from both sides at full width, so past about
-                // 0.6 those two slits meet and the ring reads an indicator
-                // short. `octaves.rs` pins the count exactly, on angles, where
-                // no padding is involved.
-                if amount <= 0.6 {
+                // Except under a thin fringe, and that is the settings talking
+                // rather than a missing indicator: the Gap is cut out of every
+                // sector from both sides at full width, so an extra thinner
+                // than twice that padding has its two slits meet and reads as
+                // no indicator at all. At 0.6 of an even slice they still
+                // resolve; 0.15 is where they go, and only the extras are ever
+                // that thin. `octaves.rs` pins the count exactly, on angles,
+                // where no padding is involved.
+                if size >= 0.4 {
                     assert_eq!(runs.len(), want, "{case}: unlit runs {runs:?} for {want} sectors");
                 } else {
+                    let lost = 2 * extras as usize;
                     assert!(
-                        runs.len() >= want - 2 && runs.len() <= want,
-                        "{case}: unlit runs {runs:?} for {want} sectors — at most the two \
-                         edge indicators can be lost to the Gap"
+                        runs.len() + lost >= want && runs.len() <= want,
+                        "{case}: unlit runs {runs:?} for {want} sectors — at most the \
+                         {lost} extras can be lost to the Gap"
                     );
                 }
 
@@ -1012,17 +1020,18 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
 
     let mut pane = 100;
-    for (span, center, amount, shape) in [(5u32, 60.0f32, 0.0, 0.5), (10, 66.0, 0.7, 0.25)] {
-        let layout = octave_layout(span, center, amount, shape);
+    for (count, extras, center, size, blend) in
+        [(5u32, 0u32, 60.0f32, 1.0, 0.0), (8, 1, 66.0, 0.3, 0.0)]
+    {
+        let layout = octave_layout(count, center, extras, size, blend);
         // A C node and a node a fifth up: same slot, pitches 7 semitones
         // apart, so the bright arc must move by exactly that much of the axis.
         // The octave holding the center pitch, and one further round the
         // wheel, where a wrong anchor or a wrong direction shows.
         //
-        // Both held INSIDE the ring rather than at its edges: the amount pins
-        // an edge slice at `1 - amount` of an even one, which a heavy taper
-        // leaves thinner than the Gap's slits, and a centroid needs an arc to
-        // measure. That the edges reach the seam at all is
+        // Both held INSIDE the ring rather than at its edges: a thin fringe
+        // leaves the extras narrower than the Gap's slits, and a centroid
+        // needs an arc to measure. That the edges reach the seam at all is
         // `every_octave_in_the_range_is_drawn_and_they_close_the_ring`.
         for (cents, offset) in [(0.0f32, 0i32), (700.0, 0), (0.0, 2), (700.0, 2)] {
             let (first, last) = layout.slots(cents);
@@ -1059,7 +1068,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             // maximum separates them cleanly whatever the node color is.
             let bright = |i: usize| px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32;
             let peak = (0..px.len() / 4).map(|k| bright(k * 4)).max().unwrap_or(0);
-            assert!(peak > 60, "span {span} at {center}: nothing bright enough");
+            assert!(peak > 60, "{count}+2x{extras} at {center}: nothing bright enough");
             let (mut vx, mut vy) = (0f64, 0f64);
             let c = SIZE[0] as f64 / 2.0;
             for y in 0..SIZE[1] {
@@ -1074,7 +1083,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             }
             let drawn = vy.atan2(vx).to_degrees() as f32;
             // The indicator's own middle, from the layout: the pitch halfway
-            // between its two edges in ANGLE, which a taper can shift off the
+            // between its two edges in ANGLE, which a fringe can shift off the
             // pitch itself.
             let (e0, e1) = layout.sector(slot, cents);
             let expected = (0.5 * (e0 + e1)).to_degrees().rem_euclid(360.0);
@@ -1082,8 +1091,8 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             let off = off.min(360.0 - off);
             assert!(
                 off < 6.0,
-                "span {span} at {center}, {cents}c, slot {slot}: indicator drawn at \
-                 {drawn:.1} deg, the axis puts its pitch at {expected:.1}"
+                "{count}+2x{extras} at {center}, {cents}c, slot {slot}: indicator drawn \
+                 at {drawn:.1} deg, the axis puts its pitch at {expected:.1}"
             );
         }
     }
