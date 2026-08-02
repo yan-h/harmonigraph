@@ -192,11 +192,20 @@ pub enum RenderTrigger {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct RenderConfig {
-    /// Record the plugin's audio input into the take. Nothing reads it: the
-    /// recorder captures audio unconditionally, since the render wants it as
-    /// the spectrogram (see the plugin editor's `sync_take`). Kept because it
-    /// is a key in every saved blob — dropping it is a persistence change
-    /// rather than a cleanup.
+    /// Record the plugin's audio input into the take. Dormant, and nothing
+    /// reads it: the recorder captures audio unconditionally and every render
+    /// uses the take's own recording as soundtrack and spectrum, aligned to
+    /// the picture by construction — see `RenderRequest::build` in
+    /// `harmonigraph-record`, which passes neither `--audio` nor `--align`.
+    /// (Named rather than linked: that crate depends on this one, not the
+    /// other way round.)
+    ///
+    /// Kept, with `auto_render`, `audio_path` and `audio_offset`, so the
+    /// bounced-audio drop-in the four belong to can be revived without
+    /// re-deciding its shape. NOT kept for the blob: serde ignores a key it
+    /// has no field for, so removing one costs nothing at load — which is
+    /// what `a_persist_blob_carrying_a_since_removed_field_still_loads`
+    /// holds, and what five removed spectrogram keys already relied on.
     pub record_audio: bool,
     /// Run the renderer as soon as a take finishes.
     pub auto_render: bool,
