@@ -274,7 +274,7 @@ pub fn derive_scene(
                     // table the shader tints the lit glyph from — so the ring
                     // is never a shade off the one indicator it is pointing
                     // at. The voice's own color is the wrong one to reuse
-                    // here: a note past either end of the window folds onto
+                    // here: a note past either end of the ring folds onto
                     // the outermost slot, so its ring would carry a pitch
                     // that is nowhere on the axis it is drawn around.
                     //

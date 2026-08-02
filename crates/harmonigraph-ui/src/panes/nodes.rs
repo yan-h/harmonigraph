@@ -77,8 +77,8 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     //
     // A COUNT and a CENTER rather than a pitch range: a slice is always
     // exactly one octave, so an indicator can never stand for less pitch than
-    // it names — which a continuous window could not promise, its two ends
-    // falling wherever they liked between two of a node's octaves and cutting
+    // it names — which a continuous window cannot promise, its two ends
+    // falling wherever they like between two of a node's octaves and cutting
     // the indicators there short. Which register the wheel is about is the
     // Center; how much keyboard reaches round it is the count.
     let mut count = view.octave_count as f32;
