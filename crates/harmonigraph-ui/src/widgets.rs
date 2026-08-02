@@ -1040,7 +1040,22 @@ impl<'a> OctaveStrip<'a> {
                 let grab = match stored {
                     Some(grab) => grab,
                     None => {
-                        let grab = StripGrab::at(reach, *self.count, *self.extras);
+                        // From where the press LANDED, which is not where the
+                        // pointer is on the frame this first runs: egui calls
+                        // a gesture a drag only once it has left a six-point
+                        // click threshold, so by here it is already that far
+                        // along, in the direction of travel. A `RangeBar`
+                        // survives reading the live position because its
+                        // handles carry fourteen points of reach; this control
+                        // splits its two gestures on a hard line, and half of
+                        // the drawn handle sits inside the six — so the live
+                        // position hands "grab the handle, pull it outward",
+                        // which is the count, to the fringe.
+                        let start = ui
+                            .ctx()
+                            .input(|i| i.pointer.press_origin())
+                            .map_or(reach, |p| out(p.x));
+                        let grab = StripGrab::at(start, *self.count, *self.extras);
                         ui.data_mut(|d| d.insert_temp(grab_id, grab));
                         grab
                     }
@@ -2137,16 +2152,16 @@ mod tests {
         );
     }
 
-    /// The wiring, once: a real press inside the handles dragged outward
-    /// changes the COUNT and not the fringe, however far past the handles it
-    /// ends up — the grab is taken at the press.
-    #[test]
-    fn a_real_drag_on_the_strip_keeps_the_gesture_it_started() {
+    /// Drive a real gesture over a 300pt strip: press `press` slots out from
+    /// the middle, drag to `release`, and answer the wheel it left behind.
+    /// Through a real `egui::Context` with real pointer events, which is the
+    /// only way to reach what the widget does with egui's own drag threshold.
+    fn drag_strip(start: (u32, u32), press: f32, release: f32) -> (u32, u32) {
         const W: f32 = 300.0;
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(W, 100.0));
-        let (mut count, mut extras) = (5u32, 2u32);
+        let (mut count, mut extras) = start;
         let track = std::cell::Cell::new(egui::Rect::NOTHING);
         let mut t = 0.0;
         let mut frame = |count: &mut u32, extras: &mut u32, events: Vec<egui::Event>| {
@@ -2169,11 +2184,9 @@ mod tests {
         // once before a press can land on it.
         frame(&mut count, &mut extras, vec![]);
         let bar = track.get();
-        let at = |x: f32| egui::pos2(bar.left() + bar.width() * x, bar.center().y);
-        // Press just inside the right-hand handle (a five-octave count reaches
-        // 2.5 slots of eleven either side of the middle), then drag well past
-        // it into what is fringe.
-        let (press, release) = (0.5 + 2.0 / MAX_SPAN as f32, 0.5 + 4.5 / MAX_SPAN as f32);
+        let at = |slots: f32| {
+            egui::pos2(bar.left() + bar.width() * (0.5 + slots / MAX_SPAN as f32), bar.center().y)
+        };
         frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(press))]);
         frame(&mut count, &mut extras, vec![
             egui::Event::PointerMoved(at(press)),
@@ -2184,11 +2197,53 @@ mod tests {
                 modifiers: egui::Modifiers::NONE,
             },
         ]);
-        // A step clear of egui's drag threshold first, then the rest of the
-        // way: the grab is decided on the first frame the drag is LIVE.
-        frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(press + 0.04))]);
+        // A small step first, then the rest of the way. egui does not call a
+        // gesture a drag until the pointer has left a six-point click
+        // threshold, so this step is where the widget first sees one — and a
+        // step of about half a slot is what a real hand produces at 60fps.
+        frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(press + 0.44))]);
         frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(release))]);
-        assert_eq!(count, 9, "the drag did not carry the count out to the pointer");
-        assert_eq!(extras, 1, "the fringe yielded only what the budget demanded");
+        (count, extras)
+    }
+
+    /// The wiring, once: a real press inside the handles dragged outward
+    /// changes the COUNT and not the fringe, however far past the handles it
+    /// ends up — the grab is taken at the press.
+    #[test]
+    fn a_real_drag_on_the_strip_keeps_the_gesture_it_started() {
+        // A five-octave count reaches 2.5 slots of eleven either side of the
+        // middle, so this presses inside the right-hand handle and drags well
+        // past it into what is fringe.
+        assert_eq!(
+            drag_strip((5, 2), 2.0, 4.5),
+            (9, 1),
+            "the drag did not carry the count out to the pointer, or the fringe \
+             yielded more than the budget demanded"
+        );
+    }
+
+    /// A press within egui's own six-point click threshold of a handle, which
+    /// is where half of the handle IS. egui reports no drag until the pointer
+    /// has moved that far, so the first frame the widget can decide anything
+    /// on is already past the boundary — and this control splits its two
+    /// gestures on a hard line, where a `RangeBar` handle has fourteen points
+    /// of reach around it. Reading the live pointer there hands the canonical
+    /// gesture, grab the handle and pull it out, to the fringe.
+    #[test]
+    fn a_press_just_inside_a_handle_still_takes_the_count() {
+        // 2.4 slots out on a 300pt strip is 2.7pt inside the boundary, and the
+        // handle is drawn 2pt either side of it — so this is a press ON the
+        // affordance, dragged the way it invites.
+        assert_eq!(
+            drag_strip((5, 0), 2.4, 4.5),
+            (9, 0),
+            "a press on the handle's inner half grew a fringe instead of the count"
+        );
+        // The mirror: just OUTSIDE the handle, dragging inward, is the fringe.
+        assert_eq!(
+            drag_strip((5, 2), 2.6, 3.6),
+            (5, 1),
+            "a press just outside the handle moved the count"
+        );
     }
 }
