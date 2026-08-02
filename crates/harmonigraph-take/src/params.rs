@@ -6,11 +6,11 @@
 //! format rather than part of any one shell, which is why it lives here
 //! beside [`ParamRecord`](crate::ParamRecord) and not in the UI that edits it.
 //!
-//! What did NOT come with it is the editing seam: `ParamBackend`, the trait
-//! the five shells implement to read and write these through their own
-//! parameter systems, stays in `harmonigraph-ui`. A take names a parameter; it
-//! does not edit one. `harmonigraph-ui` re-exports `ParamKey` beside that
-//! trait, so a pane still sees the two together.
+//! The editing seam stays in `harmonigraph-ui`: `ParamBackend`, the trait each
+//! shell implements to read and write these through its own parameter system.
+//! A take names a parameter; it does not edit one. `harmonigraph-ui`
+//! re-exports `ParamKey` beside that trait, so a pane still sees the two
+//! together.
 
 use std::ops::RangeInclusive;
 
