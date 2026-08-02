@@ -309,9 +309,12 @@ pub struct SharedState {
 /// exactly what would break determinism.
 pub struct Instruments {
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
-    /// by the render callback and read by the performance overlay. 0 means no
-    /// reading — the device didn't grant timestamp queries, or none has landed
-    /// yet.
+    /// by the render callback and read by the performance overlay. Carries the
+    /// `GPU_TIME_UNSUPPORTED` / `GPU_TIME_PENDING` sentinels, which are NaN bit
+    /// patterns rather than zero — a lattice pass below the timer's resolution
+    /// is a real reading of 0.0 ms, so zero cannot mean "nothing" here. See the
+    /// seed in [`Instruments::default`], which is what stops a fresh editor
+    /// reporting a fabricated 0.0 before the first readback lands.
     ///
     /// Same shape the plugin already uses to publish its sample rate. Never
     /// read by the offline renderer, which also never asks for the feature, so
