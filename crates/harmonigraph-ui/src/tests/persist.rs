@@ -121,6 +121,32 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     assert_eq!(restored.camera.yaw, 1.23, "rest of the blob still restores");
 }
 
+/// A hand-edited blob can name a count and a fringe that do not fit the
+/// eleven slices the boundary table holds, and neither field is illegal on its
+/// own — which is why `sanitize` clamps the PAIR rather than each of them.
+/// Clamping only the count would leave the panes showing a fringe the picture
+/// does not draw, since the layout re-clamps for itself and says nothing.
+#[test]
+fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    state.view.octave_count = 9;
+    state.view.octave_extras = 0;
+    let saved = state.save_persist();
+    // Nine full-size octaves leave room for one extra a side, not five.
+    let overrun = saved.replace("octave_extras:0,", "octave_extras:5,");
+    assert_ne!(overrun, saved, "`octave_extras` is not in the blob to overrun");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&overrun);
+    assert_eq!(
+        (restored.view.octave_count, restored.view.octave_extras),
+        (9, 1),
+        "the count wins and the fringe yields to what is left"
+    );
+    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
+}
+
 /// The wheel's two-bar TAPER is gone, and a project saved against it carries
 /// the pair of keys nothing reads now. It has to open on the count it always
 /// drew, evenly — an unknown field being ignored rather than refused is the

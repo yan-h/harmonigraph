@@ -2249,11 +2249,13 @@ mod tests {
         );
     }
 
-    /// Drive a real gesture over a 300pt strip: press `press` slots out from
-    /// the middle, drag to `release`, and answer the wheel it left behind.
-    /// Through a real `egui::Context` with real pointer events, which is the
-    /// only way to reach what the widget does with egui's own drag threshold.
-    fn drag_strip(start: (u32, u32), press: f32, release: f32) -> (u32, u32) {
+    /// Drive real gestures over a 300pt strip: for each `(press, release)`,
+    /// press that many slots out from the middle, drag to the second and let
+    /// go. Answers the wheel left behind. Through a real `egui::Context` with
+    /// real pointer events, which is the only way to reach what the widget
+    /// does with egui's own drag threshold — and, across two gestures, with
+    /// the grab it remembers between them.
+    fn drag_strip(start: (u32, u32), gestures: &[(f32, f32)]) -> (u32, u32) {
         const W: f32 = 300.0;
         let ctx = egui::Context::default();
         crate::theme::apply_theme(&ctx);
@@ -2284,22 +2286,34 @@ mod tests {
         let at = |slots: f32| {
             egui::pos2(bar.left() + bar.width() * (0.5 + slots / MAX_SPAN as f32), bar.center().y)
         };
-        frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(press))]);
-        frame(&mut count, &mut extras, vec![
-            egui::Event::PointerMoved(at(press)),
-            egui::Event::PointerButton {
-                pos: at(press),
+        for &(press, release) in gestures {
+            let toward = (release - press).signum();
+            frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(press))]);
+            frame(&mut count, &mut extras, vec![
+                egui::Event::PointerMoved(at(press)),
+                egui::Event::PointerButton {
+                    pos: at(press),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            // A small step first, then the rest of the way. egui does not call
+            // a gesture a drag until the pointer has left a six-point click
+            // threshold, so this step is where the widget first sees one — and
+            // a step of about half a slot is what a real hand produces at
+            // 60fps.
+            let step = at(press + 0.44 * toward);
+            frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(step)]);
+            frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(release))]);
+            // And let go, which is the only thing that forgets the grab.
+            frame(&mut count, &mut extras, vec![egui::Event::PointerButton {
+                pos: at(release),
                 button: egui::PointerButton::Primary,
-                pressed: true,
+                pressed: false,
                 modifiers: egui::Modifiers::NONE,
-            },
-        ]);
-        // A small step first, then the rest of the way. egui does not call a
-        // gesture a drag until the pointer has left a six-point click
-        // threshold, so this step is where the widget first sees one — and a
-        // step of about half a slot is what a real hand produces at 60fps.
-        frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(press + 0.44))]);
-        frame(&mut count, &mut extras, vec![egui::Event::PointerMoved(at(release))]);
+            }]);
+        }
         (count, extras)
     }
 
@@ -2312,10 +2326,27 @@ mod tests {
         // middle, so this presses inside the right-hand handle and drags well
         // past it into what is fringe.
         assert_eq!(
-            drag_strip((5, 2), 2.0, 4.5),
+            drag_strip((5, 2), &[(2.0, 4.5)]),
             (9, 1),
             "the drag did not carry the count out to the pointer, or the fringe \
              yielded more than the budget demanded"
+        );
+    }
+
+    /// Letting go forgets which gesture was being held. egui's temp store has
+    /// no expiry, so a grab left behind is inherited by the NEXT press — and
+    /// since it is read before `at` is consulted, that press never gets to
+    /// choose. One stale count grab would make the fringe unreachable for the
+    /// rest of the session.
+    #[test]
+    fn a_second_gesture_on_the_strip_chooses_for_itself() {
+        // Drag the count out to nine, let go, then press in the fringe past
+        // its new boundary at 4.5 slots and pull outward. Holding the first
+        // grab, that second drag would read as a count and land on eleven.
+        assert_eq!(
+            drag_strip((5, 0), &[(2.0, 4.5), (5.0, 5.4)]),
+            (9, 1),
+            "the second gesture inherited the first one's grab"
         );
     }
 
@@ -2332,13 +2363,13 @@ mod tests {
         // handle is drawn 2pt either side of it — so this is a press ON the
         // affordance, dragged the way it invites.
         assert_eq!(
-            drag_strip((5, 0), 2.4, 4.5),
+            drag_strip((5, 0), &[(2.4, 4.5)]),
             (9, 0),
             "a press on the handle's inner half grew a fringe instead of the count"
         );
         // The mirror: just OUTSIDE the handle, dragging inward, is the fringe.
         assert_eq!(
-            drag_strip((5, 2), 2.6, 3.6),
+            drag_strip((5, 2), &[(2.6, 3.6)]),
             (5, 1),
             "a press just outside the handle moved the count"
         );
