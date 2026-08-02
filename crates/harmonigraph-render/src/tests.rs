@@ -1508,3 +1508,80 @@ fn an_idle_marker_or_a_trail_ring_keeps_its_nodes() {
     faded.trail_strength = 0.0;
     assert!(ships(&faded).is_empty(), "a ring at zero strength paints nothing");
 }
+
+/// Each of the four things that make a node sounding keeps it on its own.
+///
+/// The cull's first question is whether anything is lit — an envelope, a
+/// melody or bass ring's level, or a lit octave — and it is a disjunction
+/// over four terms that ordinarily move together: `derive_scene` rides all
+/// of them on one envelope, so a scene built by playing notes has either
+/// none of them or several, and no single term ever decides whether a node
+/// ships. That is not a hypothetical gap. Inverting any one of the four,
+/// or turning any `||` between them into `&&`, passed the whole suite.
+///
+/// They come apart in practice, which is why each gets a node here. An
+/// octave's level is `envelope * attack(...)` and is packed to a byte, so
+/// for the first frames after a note-on a node has a full activation and an
+/// octave word of exactly zero — `params[0]` alone is holding it in the
+/// buffer, and a cull that stopped reading it would drop the first frame of
+/// a note. The mark levels ride their own ease-in (`melody_attack`) rather
+/// than the node's, so they part company the same way.
+///
+/// Built by hand rather than played in: the point is one term at a time,
+/// and a tracker cannot be asked for that.
+#[test]
+fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
+    let bare = || {
+        let mut scene = idle_scene();
+        // Nothing an IDLE node could draw, so the only reason to keep one is
+        // the term under test.
+        scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+        scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+        for node in &mut scene.nodes {
+            node.trail = 0.0;
+        }
+        scene
+    };
+    let ships = |scene: &Scene| {
+        LatticeCallback::from_scene(
+            scene,
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            33,
+            None,
+        )
+        .instances
+        .len()
+    };
+    assert_eq!(ships(&bare()), 0, "the fixture has to start with nothing drawn");
+
+    // One node per term, each the ONLY lit thing about it.
+    let cases: [(&str, fn(&mut harmonigraph_scene::NodeInstance)); 4] = [
+        ("activation", |n| n.activation = 1.0),
+        ("melody level", |n| n.melody_level = 1.0),
+        ("bass level", |n| n.bass_level = 1.0),
+        ("a lit octave", |n| n.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0),
+    ];
+    for (what, set) in cases {
+        let mut scene = bare();
+        set(&mut scene.nodes[0]);
+        assert_eq!(ships(&scene), 1, "{what} alone has to keep its node");
+    }
+
+    // The octave levels pack into three u32s, four slots to a word, and the
+    // three are OR'd. Two octaves of one pitch class held at the same level
+    // is an ordinary voicing, and it puts the SAME byte in two words — where
+    // anything but an OR cancels them against each other and reads the node
+    // as unlit. Both pairings are needed: the first cancels the two words the
+    // inner OR joins, the second cancels that result against the third.
+    for (a, b) in [(0usize, 4usize), (0, 8)] {
+        let mut spread = bare();
+        spread.nodes[0].octaves[a] = 1.0;
+        spread.nodes[0].octaves[b] = 1.0;
+        assert_eq!(
+            ships(&spread),
+            1,
+            "octaves {a} and {b} held at one level keep their node",
+        );
+    }
+}
