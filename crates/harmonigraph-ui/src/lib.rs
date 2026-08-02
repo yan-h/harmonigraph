@@ -148,7 +148,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Cleared before the panes run, so a frame with the roll hidden (or the
     // Spectral pane not on screen at all) reports zero notes rather than
     // whatever the last frame that had one reported.
-    state.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
+    state.instruments.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
 
     // Frameless mode hides every tab bar (the Lattice and Spectral panes
     // meet with no chrome between them — clean for captures). The pane
@@ -270,12 +270,12 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // Performance overlay: fold this frame's numbers in and, if it's on, draw
     // the corner HUD. Interactive path only — the offline renderer never
     // reaches root_ui, so nothing here touches a recorded frame.
-    state.perf.record(
+    state.instruments.perf.record(
         perf::FrameCosts::assemble(
-            state.timings,
+            state.instruments.timings,
             cpu_ms,
-            &state.lattice_stats,
-            state.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
+            &state.instruments.lattice_stats,
+            state.instruments.roll_notes.load(std::sync::atomic::Ordering::Relaxed),
             state.spectrum.spectrogram_fallbacks(),
         ),
         now,
@@ -291,7 +291,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
         perf::draw_overlay(
             ui.ctx(),
             perf_overlay_area(state, ui.max_rect(), ui_scale),
-            &state.perf,
+            &state.instruments.perf,
             state.view.show_perf_detail,
         );
     }
