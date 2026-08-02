@@ -492,11 +492,21 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
 /// The container-level `#[serde(default)]` on [`RenderConfig`] covers a key
 /// missing from INSIDE the section (the case
 /// `a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob` pins
-/// one layer down); this covers the whole section being absent, which is what
-/// a blob written before the Video pane existed is. Both doors into the blob
-/// have to survive it: `load_persist` for the rest of the settings, and
-/// `render_config_from_persist` for the frame the offline renderer composes
-/// at, which has nothing else to fall back to.
+/// one layer down); this covers the whole section being absent.
+///
+/// No blob on disk is in that shape, and the floor is why: `render` entered
+/// [`UiPersist`] before [`UI_PERSIST_VERSION`] last moved, so every blob
+/// written without it is below the floor and refused whole. What is left to
+/// pin is the `#[serde(default)]` on the field itself — a hand-edited
+/// `app.ron` can be missing it, and the next writer of this blob has no other
+/// statement that dropping one section must not sink the other nine.
+///
+/// Both doors, because they answer separately: `load_persist` for the rest of
+/// the settings, and `render_config_from_persist` for the frame the offline
+/// renderer composes at. The renderer does have a fallback behind that door
+/// (`main`'s `unwrap_or_default`), so what this holds is the two doors
+/// AGREEING about one blob — the property
+/// `both_doors_into_a_blob_agree_about_the_version_floor` holds at the version.
 #[test]
 fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
