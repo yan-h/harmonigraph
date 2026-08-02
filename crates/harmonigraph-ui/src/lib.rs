@@ -195,10 +195,11 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     //
     // What the fold takes comes off the window rather than off the pane beside
     // it, and the window is the shell's to resize — so the points are banked
-    // here and spent after this frame (see `take_window_width_change`). This
-    // frame still lays out at the size the window IS, so a fold shows one
-    // frame of its neighbour holding the space before the window closes over
-    // it.
+    // here and spent after this frame (see `take_window_width_change`). The
+    // flags a fold or an unfold moves wait for that window before they land
+    // (see `fold::Wait`), so the frame that asks draws what the frame before it
+    // drew and no boundary moves until the window is there to hold it.
+    //
     // What the pointer is doing, before the fold reads the fractions last frame
     // left behind: a fraction that moved with no gesture behind it is egui_dock's
     // own per-frame clamp, not a drag the layout should follow — and where the
