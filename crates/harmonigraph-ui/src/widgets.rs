@@ -1269,7 +1269,7 @@ pub fn choice_row<T: Copy + PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_scene::DEFAULT_EXTRA_SIZE;
+    use harmonigraph_scene::{DEFAULT_EXTRA_SIZE, MIN_EXTRA_SIZE};
 
     /// The analyzer's axis, the range bar's real caller.
     const AXIS: (f32, f32) = (12.0, 132.0);
@@ -1995,12 +1995,22 @@ mod tests {
     #[test]
     fn the_strip_draws_one_cell_per_octave_at_its_own_width() {
         // An even wheel: every octave the same, and the cells with it.
-        let even = cells(&paint_octave_strip(5, 0, DEFAULT_EXTRA_SIZE, 0.0));
+        let shapes = paint_octave_strip(5, 0, DEFAULT_EXTRA_SIZE, 0.0);
+        let bar = filled_rects(&shapes)[0].0;
+        let even = cells(&shapes);
         assert_eq!(even.len(), 5, "one cell per octave");
         for cell in &even {
             assert!(
                 (cell.height() - even[0].height()).abs() < 0.01,
                 "an even wheel drew cells of different heights",
+            );
+            // Against the widest octave on the wheel, so a full-size one is
+            // the whole row — the scale, not just the ordering, which nothing
+            // else here would notice.
+            assert!(
+                (cell.height() - bar.height()).abs() < 0.01,
+                "a full-size octave is {} of the row, not all of it",
+                cell.height() / bar.height()
             );
         }
         // A flat fringe: two tiers, the extras equal and shorter, symmetric.
@@ -2017,6 +2027,51 @@ mod tests {
             ramp[0].height() < ramp[1].height() && ramp[1].height() < ramp[2].height(),
             "the blend did not grade the fringe: {:?}",
             ramp.iter().map(egui::Rect::height).collect::<Vec<_>>()
+        );
+    }
+
+    /// The thinnest extra there is comes out under a pixel of a 20pt row, and
+    /// a cell that is not there says the octave is not either — which is what
+    /// `CELL_MIN_H` exists to stop. No other fixture reaches it: the floor
+    /// only binds under about a seventh of a full-size octave, and every other
+    /// strip painted here sits well above that.
+    #[test]
+    fn the_thinnest_extra_still_draws() {
+        let shapes = paint_octave_strip(5, 3, MIN_EXTRA_SIZE, 0.0);
+        let bar = filled_rects(&shapes)[0].0;
+        let cells = cells(&shapes);
+        assert_eq!(cells.len(), 11, "five full-size octaves and three extras each end");
+        // The fixture has to actually reach the floor, or this passes on a
+        // cell the clamp never touched. Unclamped it is 0.1 of an even slice
+        // against a full-size octave of 2.08 — 0.96pt of a 20pt row.
+        let wheel = octave_layout(5, DEFAULT_CENTER, 3, MIN_EXTRA_SIZE, 0.0);
+        let ratio = (wheel.bounds[1] - wheel.bounds[0]) / (wheel.bounds[4] - wheel.bounds[3]);
+        let unclamped = ratio * bar.height();
+        assert!(unclamped < CELL_MIN_H, "the fixture does not reach the floor: {unclamped}pt");
+        let extra = cells[0].height();
+        assert!((extra - CELL_MIN_H).abs() < 0.01, "the thinnest extra drew {extra}pt");
+    }
+
+    /// What the strip says in words. The readout carries three numbers where
+    /// every other bar in the pane carries one, and their ORDER is the whole
+    /// of what tells a fringed wheel from its transpose — "2+5+2" and "5+2+5"
+    /// are both plausible-looking readouts for the same three digits.
+    #[test]
+    fn the_strip_reads_out_the_wheel_it_draws() {
+        let texts = |shapes: &[egui::Shape]| {
+            text_boxes(shapes).into_iter().map(|(_, t)| t).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            texts(&paint_octave_strip(5, 2, 0.4, 0.0)),
+            vec!["Octaves".to_owned(), "2+5+2".to_owned()],
+            "a fringed wheel reads out fringe, count, fringe"
+        );
+        // No fringe, no plus signs: a bare count, so the readout says there is
+        // nothing outside the handles rather than spelling out a zero.
+        assert_eq!(
+            texts(&paint_octave_strip(MAX_SPAN, 0, 0.4, 0.0)),
+            vec!["Octaves".to_owned(), "11".to_owned()],
+            "an unfringed wheel reads out its count alone"
         );
     }
 
