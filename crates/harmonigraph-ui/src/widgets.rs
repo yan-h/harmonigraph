@@ -962,8 +962,16 @@ impl StripGrab {
 /// zero extras, where both handles sit on the wheel's outer edge and a
 /// nearest-handle rule would have nothing to say.
 ///
-/// Cell WIDTH is a slot of the budget and cell HEIGHT is the angle that octave
-/// takes on the wheel, which is the whole reason this is a strip and not two
+/// Cell WIDTH is a slot of the budget; cell HEIGHT is how much of the ring
+/// that octave takes AGAINST THE WIDEST ONE ON THIS WHEEL, so the full-size
+/// octaves stand full height at every count and the axis reads "of a full-size
+/// octave" rather than "of a turn". Two wheels cannot be compared by height —
+/// a lone octave and one of eleven both draw full — and that is the right
+/// trade, since against the turn the strip would spend its whole height on the
+/// count and leave the fringe, which is what the bars below actually set, in
+/// the bottom tenth.
+///
+/// Carrying the profile at all is the whole reason this is a strip and not two
 /// bars: the fringe's size and blend have nowhere else to be seen before they
 /// are dragged, and the thing they trade against — how much of the turn the
 /// full-size octaves keep — is the same picture read the other way.

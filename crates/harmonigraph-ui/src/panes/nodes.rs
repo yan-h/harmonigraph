@@ -93,9 +93,9 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "How many octaves one turn of a node covers, out of the eleven the \
          strip's slots stand for. Drag BETWEEN the handles to set how many \
          are drawn full size, OUTSIDE them to add small extra octaves at each \
-         end. Every cell is one octave and its height is how much of the ring \
-         that octave takes; notes past either end light the outermost \
-         indicator on their side rather than vanishing",
+         end. Every cell is one octave, drawn as tall as its share of the ring \
+         against the widest octave on the wheel; notes past either end light \
+         the outermost indicator on their side rather than vanishing",
     );
     // Whole semitones, because that is the step the wheel can act on and what
     // the readout can name.
