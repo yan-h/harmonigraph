@@ -249,11 +249,14 @@ impl Default for OctaveLayout {
 /// - The SIZE is a fraction of an EVEN slice — the turn over the whole span,
 ///   extras included — and that is what makes it the one number both tiers can
 ///   be stated in. An extra comes out smaller than a full-size octave exactly
-///   when `size < 1`, at every count and every number of extras: the full-size
-///   width works out to `(span - 2 * extras * size) / count` even slices, which
-///   beats `size` precisely when `span > size * span`. So there is no ceiling
-///   that moves under the other two controls, and `size` 1 is an even axis
-///   rather than a mode beside one.
+///   when `size < 1`, at every count and every number of extras: a flat fringe
+///   leaves the full-size octaves `(span - 2 * extras * size) / count` even
+///   slices, which beats `size` precisely when `span > size * span`. A graded
+///   one adds a `ramp * size` to that numerator and a `ramp` to its
+///   denominator (see the body), and those two cancel against each other in
+///   the same comparison — so the condition is `size < 1` at every blend as
+///   well. There is no ceiling that moves under the other two controls, and
+///   `size` 1 is an even axis rather than a mode beside one.
 /// - The BLEND grades the extras from the outermost inward, a step of
 ///   `blend * (full - size) / extras` each, so 0 is the flat fringe the size
 ///   alone describes and 1 is a ramp whose last step into the full-size
