@@ -1589,9 +1589,11 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     // three are OR'd. Two octaves of one pitch class held at the same level
     // is an ordinary voicing, and it puts the SAME byte in two words — where
     // anything but an OR cancels them against each other and reads the node
-    // as unlit. Both pairings are needed: the first cancels the two words the
-    // inner OR joins, the second cancels that result against the third.
-    for (a, b) in [(0usize, 4usize), (0, 8)] {
+    // as unlit. Every pairing of words is needed, because which two cancel
+    // depends on where the operator lands and how it then binds: `^` binds
+    // tighter than `|`, so swapping either one regroups the whole expression
+    // as well as changing it.
+    for (a, b) in [(0usize, 4usize), (0, 8), (4, 8)] {
         let mut spread = bare();
         spread.nodes[0].octaves[a] = 1.0;
         spread.nodes[0].octaves[b] = 1.0;
