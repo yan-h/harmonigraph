@@ -296,9 +296,17 @@ pub struct SharedState {
 /// taken once per flush and uncontended for exactly the same reason.
 ///
 /// None of it is persisted — `save_persist` builds `UiPersist` field by field,
-/// so what is grouped here cannot reach the blob either way — and the offline
-/// renderer never reaches `root_ui`. So nothing in here touches a recorded
-/// frame, which is part of what keeps the determinism test honest.
+/// so what is grouped here cannot reach the blob either way.
+///
+/// What keeps it clear of a RECORDED frame is three different arguments, not
+/// one, and the difference is worth having: `timings` and `perf` belong to
+/// `root_ui`, which the offline renderer never enters at all. The three side
+/// channels it DOES write, every offline frame, because it calls `draw_pane` —
+/// but nothing offline reads `lattice_stats` or `roll_notes`, so those are
+/// dead writes, and the atlas mirror is a function of the glyphs the frame
+/// drew rather than of anything timed. Both `lattice_stats` and `roll_notes`
+/// carry wall-clock or per-frame values, so a future offline READ of either is
+/// exactly what would break determinism.
 pub struct Instruments {
     /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
     /// by the render callback and read by the performance overlay. 0 means no
