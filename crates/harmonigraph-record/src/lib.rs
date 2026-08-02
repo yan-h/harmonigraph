@@ -539,12 +539,7 @@ impl Control {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let path = dir.join(format!("take-{stamp}.{}", harmonigraph_take::EXTENSION));
-        let header = harmonigraph_take::Header {
-            sample_rate,
-            ui_state: Some(ui_state),
-            source: "harmonigraph".into(),
-            ..Default::default()
-        };
+        let header = header_for(sample_rate, ui_state);
 
         self.dropped.store(0, Ordering::Relaxed);
         self.with_audio.store(audio, Ordering::Relaxed);
@@ -594,6 +589,42 @@ impl Control {
         } else {
             "armed — waiting for the transport to roll".into()
         };
+    }
+}
+
+/// The take's opening line: everything constant for the whole recording,
+/// decided before the first event is written and not revisable afterwards.
+///
+/// Split out of [`Control::start`] because it is the part of arming that is
+/// PURE. `start` itself cannot be reached from a test without either writing
+/// into the real takes directory — `~/Music/Harmonigraph Takes`, which a
+/// `cargo test` run would then litter on every invocation — or setting
+/// `LATTICE_TAKE_DIR`, which means a process-global `set_var` racing the
+/// writer and render threads this crate's own tests spawn. Everything `start`
+/// decides that is not the filesystem is decided here instead, where a test
+/// can simply call it.
+///
+/// Each field fails SILENTLY rather than loudly if it stops being set, which
+/// is what makes the three of them worth a function and a test of their own
+/// rather than a struct literal inline:
+///
+/// - `ui_state` is the persist blob that decides how the replay LOOKS. Unset,
+///   the take still records and the render still succeeds — and the video is
+///   of the default palette, camera and tuning instead of the ones the take
+///   was recorded under.
+/// - `sample_rate` is the take's whole time base. Unset it falls back to
+///   [`harmonigraph_take::Header::default`], which is 48 kHz rather than a
+///   zero that would show up at once: every event lands at the wrong offset
+///   and the video drifts against the bounce it was supposed to line up with
+///   by construction.
+/// - `source` is what lets the renderer tell a Harmonigraph take from
+///   anything else that grows the format later.
+pub fn header_for(sample_rate: f32, ui_state: String) -> harmonigraph_take::Header {
+    harmonigraph_take::Header {
+        sample_rate,
+        ui_state: Some(ui_state),
+        source: "harmonigraph".into(),
+        ..Default::default()
     }
 }
 
@@ -1278,6 +1309,40 @@ fn spawn_render(
 mod tests {
     use super::*;
     use harmonigraph_ui::RenderConfig;
+
+    /// The three fields [`header_for`] sets, each asserted against a value the
+    /// header could not have arrived at on its own.
+    ///
+    /// That is the whole point of the test. `Header`'s `Default` is not a
+    /// zeroed struct — it carries 48 kHz, `None` and `""` — so a field that
+    /// stops being set produces a header that still serializes, still opens a
+    /// take the renderer will accept, and is simply wrong about the recording.
+    /// Nothing downstream can tell that apart from a take genuinely recorded
+    /// at 48 kHz with no look saved.
+    ///
+    /// So the rate here is deliberately NOT 48 kHz: at the default value the
+    /// assertion would hold whether or not the field were set at all.
+    #[test]
+    fn the_header_carries_the_rate_the_look_and_the_source() {
+        let blob = "(camera:(distance:9.0),palette:magma)".to_owned();
+        let header = header_for(44_100.0, blob.clone());
+        assert_ne!(
+            44_100.0,
+            harmonigraph_take::Header::default().sample_rate,
+            "the fixture's rate has to differ from the default to test anything",
+        );
+        assert_eq!(header.sample_rate, 44_100.0, "the take's time base is the one it was given");
+        assert_eq!(
+            header.ui_state.as_deref(),
+            Some(blob.as_str()),
+            "the look the take was recorded under has to reach the replay",
+        );
+        // A literal on both sides on purpose: this string is what the renderer
+        // matches a Harmonigraph take on, so it is a format contract, and a
+        // test that read it off a constant would follow a rename that broke
+        // every take already written.
+        assert_eq!(header.source, "harmonigraph", "the take says what wrote it");
+    }
 
     /// A [`Recorder`] whose rings the test keeps the far end of.
     ///
