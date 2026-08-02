@@ -25,7 +25,7 @@ fn drawn_label(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
 ) -> (Vec<(egui::Rect, String)>, Vec<egui::Rect>) {
-    let (pieces, shapes) = label_pieces(name, anchor);
+    let (pieces, shapes) = label_pieces(name, anchor, 1.0);
     (pieces.into_iter().map(|(galley, _, text)| (galley, text)).collect(), shapes)
 }
 
@@ -40,7 +40,7 @@ fn drawn_label_ink(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
 ) -> Vec<(egui::Rect, String)> {
-    label_pieces(name, anchor).0.into_iter().map(|(_, ink, text)| (ink, text)).collect()
+    label_pieces(name, anchor, 1.0).0.into_iter().map(|(_, ink, text)| (ink, text)).collect()
 }
 
 /// A label's ink, drawn at an arbitrary `scale` and pixels-per-point.
@@ -82,9 +82,16 @@ fn label_ink_at(
 
 /// Every text piece of a label as (galley box, ink box, text), and the boxes
 /// of its drawn marks.
+///
+/// `magnify` is what the label is DRAWN at against the size it was rasterized
+/// at — the split [`crate::text::TextBatch::magnified`] exists for. It reaches
+/// the text pieces and the drawn marks by two entirely separate routes, the
+/// batch's transform and `paint_mark`'s own, so a fixture that leaves it at 1
+/// is blind to the two of them disagreeing.
 fn label_pieces(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
+    magnify: f32,
 ) -> (Vec<(egui::Rect, egui::Rect, String)>, Vec<egui::Rect>) {
     let ctx = egui::Context::default();
     theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
@@ -101,7 +108,7 @@ fn label_pieces(
                 egui::Color32::WHITE,
                 egui::Color32::BLACK,
                 1.0,
-                1.0,
+                magnify,
             );
         },
     );
@@ -512,6 +519,80 @@ fn a_zoom_past_the_raster_ceiling_stops_growing_the_drawn_label() {
          {a} then {b}, a factor of {:.2} stretched out of one bitmap",
         b / a,
     );
+}
+
+/// The drawn marks follow the zoom the letters follow.
+///
+/// A label is rasterized at one size and DRAWN at another, and the comma marks
+/// had to take the same split as the type: they are bitmaps on a whole-pixel
+/// grid, so rasterizing them per zoom would step while the name beside them
+/// glided. `paint_mark` therefore applies the magnification itself, in three
+/// places — the position it transforms about the anchor, the fill quad's size,
+/// and the rim quad's — by an entirely separate route from the batch transform
+/// the text pieces go through.
+///
+/// Which is what makes this worth a test of its own: every other fixture here
+/// draws at magnification 1, where the two routes cannot disagree. Invert all
+/// three of those transforms — place and size every mark by the RECIPROCAL of
+/// the magnification — and nothing else in the suite moves. On screen that is
+/// the letters gliding smoothly through a zoom while the `+` beside them jumps
+/// to the wrong side of the letter and the wrong size.
+///
+/// Asserted as an identity rather than against measured coordinates: at
+/// magnification `k` the whole label, text and marks alike, is its unmagnified
+/// self scaled about the anchor by `k`. Measured numbers would only restate
+/// `paint_mark`'s own arithmetic and pass with it however it is written.
+#[test]
+fn the_drawn_marks_magnify_with_the_letters_beside_them() {
+    let anchor = egui::pos2(200.0, 200.0);
+    // Both kinds of drawn mark, and a count beside one of them: a name with no
+    // comma draws no shapes at all, and then every assertion below holds over
+    // an empty list and the test passes for free.
+    let name = harmonigraph_core::NoteName {
+        letter: 'B',
+        sharps: -1,
+        syntonic_commas: 2,
+        septimal_commas: -1,
+    };
+    let (texts, shapes) = label_pieces(name, anchor, 1.0);
+    assert!(!shapes.is_empty(), "the fixture has to carry drawn marks to say anything");
+
+    // About the anchor -- the point both `TextBatch::magnified` and
+    // `paint_mark` are handed, so that the label grows about the node it names
+    // rather than sliding off it.
+    let scaled = |r: egui::Rect, k: f32| {
+        egui::Rect::from_min_max(anchor + (r.min - anchor) * k, anchor + (r.max - anchor) * k)
+    };
+    // A shade under a tenth of a point: far below anything the eye or the
+    // layout cares about, and far above the float noise of scaling a corner.
+    let close = |a: egui::Rect, b: egui::Rect| {
+        (a.min - b.min).length() < 0.05 && (a.max - b.max).length() < 0.05
+    };
+
+    // Either side of 1, and one of them barely off it: a magnification close to
+    // 1 is the ordinary case on screen (a pane at its dialled-in size sits a
+    // fraction of a percent off the rasterized size), and it is also where a
+    // wrong transform moves a mark by least.
+    for k in [0.9, 1.03, 1.4] {
+        let (texts_k, shapes_k) = label_pieces(name, anchor, k);
+        assert_eq!(texts_k.len(), texts.len(), "magnifying must not change what is drawn");
+        assert_eq!(shapes_k.len(), shapes.len(), "...nor how many marks it takes");
+        for ((_, ink, text), (_, ink_k, text_k)) in texts.iter().zip(&texts_k) {
+            assert_eq!(text, text_k, "the pieces must line up to be compared");
+            assert!(
+                close(scaled(*ink, k), *ink_k),
+                "{text:?} at {k}x: expected {:?}, drew {ink_k:?}",
+                scaled(*ink, k),
+            );
+        }
+        for (i, (shape, shape_k)) in shapes.iter().zip(&shapes_k).enumerate() {
+            assert!(
+                close(scaled(*shape, k), *shape_k),
+                "mark {i} at {k}x: expected {:?}, drew {shape_k:?}",
+                scaled(*shape, k),
+            );
+        }
+    }
 }
 
 /// The cents readout hangs off the note name's GLYPHS, not its galley box --

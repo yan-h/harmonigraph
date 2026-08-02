@@ -1212,10 +1212,10 @@ mod tests {
             "the basic overlay is the rate, its worst frame, and the workload behind them",
         );
 
+        // WHICH rows the breakdown adds, and at what depth, is
+        // [`the_breakdown_is_this_exact_list_of_rows`]. Here it is only the
+        // relationship between the two modes.
         let detail = label_of(&overlay_rows(&perf, true));
-        for row in ["tick", "gpu", "egui", "render", "verts", "spec"] {
-            assert!(detail.contains(&row), "the breakdown should still carry `{row}`");
-        }
         // The breakdown EXPANDS the headline list: every basic row survives,
         // in order, and — the part a subsequence check alone does not say —
         // each stays where it was, with the new rows spliced INTO the list
@@ -1230,15 +1230,158 @@ mod tests {
             "the workload rows belong at the foot of both lists",
         );
 
-        // Depth, not just labels: the nesting is what lets a total and its
-        // parts be read against each other, and a flattened breakdown draws
-        // a plausible list of numbers that has quietly stopped saying what
-        // contains what.
-        let depth_of = |label: &str| {
-            overlay_rows(&perf, true).into_iter().find(|(_, l, _, _)| *l == label).map(|(d, ..)| d)
+    }
+
+    /// The breakdown, written out: every row, in order, at its depth.
+    ///
+    /// Deliberately a second copy of [`STAGES`], kept by hand, because the two
+    /// ways that table goes wrong SILENTLY are omission and transposition and
+    /// neither is visible from inside it. Turning a `measured` entry into a
+    /// `by_hand` one drops its row while the stage goes on accumulating and
+    /// latching every frame: the HUD simply stops mentioning a cost it is
+    /// still measuring, and nothing about the remaining rows looks wrong. The
+    /// index assertion under the table is no help — it makes REORDERING a
+    /// compile error, which was already the one mistake that could not happen
+    /// quietly.
+    ///
+    /// So adding a stage costs a line here, and that is the point rather than
+    /// an oversight. A `contains` check over a handful of the rows is what
+    /// this replaced, and it saw neither failure.
+    ///
+    /// The depths are half of what is pinned. The nesting is what lets a total
+    /// and its parts be read against each other; flattened, the breakdown
+    /// draws a plausible list of numbers that has quietly stopped saying what
+    /// contains what.
+    #[test]
+    fn the_breakdown_is_this_exact_list_of_rows() {
+        let perf = PerfStats::default();
+        let rows: Vec<(u8, &str)> =
+            overlay_rows(&perf, true).iter().map(|(depth, label, _, _)| (*depth, *label)).collect();
+        assert_eq!(
+            rows,
+            [
+                (0, "frame"),
+                // `tick` and its two halves, `egui` and `render`, which sum to
+                // it by construction.
+                (0, "tick"),
+                (1, "egui"),
+                (2, "shell"),
+                (2, "ui"),
+                (1, "render"),
+                (2, "tess"),
+                (2, "tex up"),
+                (2, "buf up"),
+                (3, "ubuf"),
+                (4, "prep"),
+                (4, "poll"),
+                (4, "write"),
+                (4, "scene"),
+                (3, "around"),
+                (2, "wait"),
+                (2, "encode"),
+                (2, "submit"),
+                // The GPU pair share this one line, so `egui gpu`'s own label
+                // and depth never reach the screen.
+                (0, "gpu"),
+                (0, "verts"),
+                (1, "roll"),
+                (1, "spec"),
+                // The headline rows, which the breakdown keeps at the foot.
+                (0, "memory"),
+                (0, "voices"),
+                (0, "nodes"),
+            ],
+        );
+    }
+
+    /// Every row prints the cost its label names.
+    ///
+    /// Transposing two `sample` closures in [`STAGES`] puts scene's cost under
+    /// `write` and write's under `scene`. Both rows stay, both hold a
+    /// plausible millisecond figure, and the HUD is confidently wrong about
+    /// where the frame went — which is worse than a missing row, because this
+    /// overlay is the diagnostic channel and a number under a name gets
+    /// believed. Only a test that relates a [`FrameCosts`] field to the label
+    /// it ends up under can see it.
+    ///
+    /// One distinct value per field, so no two rows can read the same number
+    /// and swapping any pair changes what prints. The three DERIVED rows are
+    /// pinned as their arithmetic rather than as a field, since that is what
+    /// they are; their values are chosen not to collide with any reading
+    /// either, so `egui` cannot quietly print `shell`'s.
+    #[test]
+    fn every_breakdown_row_reports_the_cost_it_names() {
+        // Readings 1..12 in table order, then the three the derived rows are
+        // computed from, spread far enough up that no difference lands on a
+        // reading: egui = 100 - 60, buf up = 50 - 4, around = 50 - 4 - 5.
+        let costs = FrameCosts {
+            shell_ms: 1.0,
+            cpu_ms: 2.0,
+            tess_ms: 3.0,
+            texture_ms: 4.0,
+            ubuf_ms: 5.0,
+            prepare_ms: 6.0,
+            poll_ms: 7.0,
+            write_ms: 8.0,
+            scene_ms: 9.0,
+            acquire_ms: 10.0,
+            encode_ms: 11.0,
+            submit_ms: 12.0,
+            egui_gpu_ms: 20.0,
+            lattice_gpu_ms: 30.0,
+            render_ms: 60.0,
+            tick_ms: 100.0,
+            upload_ms: 50.0,
+            prims: 7,
+            verts: 5000,
+            roll_notes: 13,
+            spectrogram_fallbacks: Default::default(),
         };
-        for (label, depth) in [("frame", 0), ("tick", 0), ("egui", 1), ("shell", 2), ("prep", 4)] {
-            assert_eq!(depth_of(label), Some(depth), "`{label}` sits at depth {depth}");
+        let mut perf = PerfStats::default();
+        let mut now = 0.0;
+        // Past one latch with a real interval behind it, so `frame` has a
+        // measurement of its own rather than the opening frame's absent one.
+        for _ in 0..20 {
+            now += 1.0 / 60.0;
+            perf.record(costs, now, Workload::default());
+        }
+
+        let rows = overlay_rows(&perf, true);
+        let value_of = |label: &str| {
+            rows.iter().find(|(_, l, _, _)| *l == label).map(|(_, _, v, _)| v.clone())
+        };
+        for (label, value) in [
+            // 60 Hz in milliseconds — the header's fps in the unit every other
+            // row is held in.
+            ("frame", "16.7"),
+            ("tick", "100.0"),
+            ("egui", "40.0"),
+            ("shell", "1.0"),
+            ("ui", "2.0"),
+            ("render", "60.0"),
+            ("tess", "3.0"),
+            ("tex up", "4.0"),
+            ("buf up", "46.0"),
+            ("ubuf", "5.0"),
+            ("prep", "6.0"),
+            ("poll", "7.0"),
+            ("write", "8.0"),
+            ("scene", "9.0"),
+            ("around", "41.0"),
+            ("wait", "10.0"),
+            ("encode", "11.0"),
+            ("submit", "12.0"),
+            // The one row carrying two stages' numbers: egui's pass and the
+            // lattice's, in that order.
+            ("gpu", "20.0 ui · 30.0 3d"),
+            ("verts", "5k in 7 prims"),
+            ("roll", "13 notes"),
+        ] {
+            assert_eq!(
+                value_of(label).as_deref(),
+                Some(value),
+                "`{label}` must report the cost it names",
+            );
         }
     }
 
