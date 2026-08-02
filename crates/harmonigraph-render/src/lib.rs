@@ -489,9 +489,13 @@ impl LatticeCallback {
         // The gates are the ones `fs_main`'s idle branch and `idle_marker`
         // read, in the same order, off the packed instance rather than the
         // scene node — so this asks the question the shader answers, not a
-        // restatement of it that could drift. Where it errs it errs toward
-        // KEEPING a node (a level that packs to a zero byte is still a level
-        // here), which costs a quad and can never drop one that draws.
+        // restatement of it that could drift. Reading the PACKED octave word
+        // is what makes that exact rather than close: an octave level under
+        // half a byte quantizes to zero on the way to the GPU, and a node
+        // dropped for that is a node the shader would have discarded anyway.
+        // The two settings it does NOT read — the idle radius, and the trail
+        // ring's own constants — can only make a kept node paint less, never
+        // make a dropped one paint, so they err toward keeping a quad.
         let trail_level = |visited: f32| match scene.trail_mark {
             harmonigraph_scene::TrailMark::Off => 0.0,
             _ => visited.clamp(0.0, 1.0) * scene.trail_strength.clamp(0.0, 1.0),

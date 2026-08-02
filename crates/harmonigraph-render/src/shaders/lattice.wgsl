@@ -99,8 +99,10 @@ const QUAD_MARGIN: f32 = 1.6;
 const GLYPH_FADE_LIMIT: f32 = 1.3;
 // Where the glow's window closes: past this the exponential is multiplied by
 // exactly zero, which is what stops the quad boundary reading as a boxy halo.
-// Named because it is also the outer end of the whole core layer, and the
-// fragment shader skips that layer beyond it (see `core_reach`).
+// Named because `core_reach` is built on it — but it is only ONE of that
+// bound's two arms, and the disc's own reach passes it once the core radius
+// is dialed much past two thirds. Collapsing `core_reach` to this constant
+// clips a big soft core, which is why the bound is a max rather than this.
 const GLOW_LIMIT: f32 = 0.95;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -526,9 +528,10 @@ const IDLE_RING_THICK: f32 = 0.09;
 // is scaled by. It asks only about the radius, so it is the same answer for
 // every slot on the node — hoisted out of [`outer_glyph`] so the caller can
 // take it once and, where it is zero, skip the whole per-slot loop. The band
-// is a narrow annulus (0.64..0.85 by default) inside a billboard shaded out
-// to GLYPH_FADE_LIMIT, so most of a lit node's fragments are outside it, and
-// running the loop there is `span` sectors of work for an answer of zero.
+// is a narrow annulus (0.64..0.85 by default) and the glyph layer is done
+// with by GLYPH_FADE_LIMIT, inside a billboard reaching QUAD_MARGIN or more,
+// so most of a lit node's fragments are outside the band, and running the
+// loop there is `span` sectors of work for an answer of zero.
 fn glyph_band(d: f32, inner: f32, outer: f32, aa: f32) -> f32 {
     return aa_inside(outer, d, aa) * (1.0 - aa_inside(inner, d, aa));
 }
@@ -996,7 +999,8 @@ fn mark_ring(
     // Off the ring entirely: the slits below only ever scale this coverage, so
     // walking the slots for them would be an 11-iteration answer to a pixel
     // that is already zero. A ring is a thin annulus in a billboard reaching
-    // GLYPH_FADE_LIMIT, so that is nearly all of them.
+    // QUAD_MARGIN — the margin it lives in is the one the rings are the
+    // reason for — so that is nearly all of them.
     if EARLY_OUT && ring <= 0.0 {
         return 0.0;
     }
@@ -1231,9 +1235,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // should never do.
     // The band coverage every slot's glyph is scaled by — the same answer for
     // all of them, so it is taken once here. Zero is most of the node: the
-    // band is a narrow annulus and the billboard shades out to
-    // GLYPH_FADE_LIMIT, so outside it the loop below can be skipped entirely
-    // rather than run to reach zero `span` times over.
+    // band is a narrow annulus in a billboard that reaches QUAD_MARGIN, so
+    // outside it the loop below can be skipped entirely rather than run to
+    // reach zero `span` times over.
     let band = glyph_band(d, band_in, band_out, aa);
     for (var i = 0u; i < oct_span() && (!EARLY_OUT || band > 0.0); i = i + 1u) {
         let slot = oct.base + i32(i);
