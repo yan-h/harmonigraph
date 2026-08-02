@@ -314,7 +314,11 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     // does, so the note is still there to see and only its exact octave is
     // given up. Dropping it instead would make a node go dark for notes that
     // are audibly sounding on it.
-    let view = ViewConfig { octave_count: 5, octave_center: 60.0, ..ViewConfig::default() };
+    // `octave_extras: 0` explicitly rather than `ViewConfig::default()`: the
+    // fresh-view look is Yan's and is free to ship a fringe, but this test is
+    // about the fold at the ring's own edge, which a fringe would move.
+    let view =
+        ViewConfig { octave_count: 5, octave_center: 60.0, octave_extras: 0, ..ViewConfig::default() };
     // Five octaves with middle C at the top, so a C node draws five
     // indicators: middle C's octave and two either side. MIDI 36..95 — every
     // note from C1 to B5 in the DAW's numbering — has one of its own, and only
@@ -346,6 +350,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     let wide = ViewConfig {
         octave_count: crate::MAX_SPAN,
         octave_center: 60.0,
+        octave_extras: 0,
         ..ViewConfig::default()
     };
     let mut tracker = NoteTracker::new();
@@ -377,7 +382,11 @@ fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
     // below the node's own numbering: `matches` wraps, so a node at 1195¢ is
     // lit by a played 0¢, and the lowest MIDI C on it comes out as slot -1.
     let tuning = Tuning::from_cents(-5.0, 700.0, 400.0, 1000.0, 5.0);
-    let view = ViewConfig { octave_count: 5, octave_center: 12.0, ..ViewConfig::default() };
+    // `octave_extras: 0` explicitly rather than `ViewConfig::default()`: the
+    // fresh-view look is Yan's and is free to ship a fringe, but this test is
+    // about the packing's own edge, which a fringe would move.
+    let view =
+        ViewConfig { octave_count: 5, octave_center: 12.0, octave_extras: 0, ..ViewConfig::default() };
     let scene = scene_of(&held(0), &tuning, &view, &FrameParams::default(), 0.5);
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
     assert!(node_cents > 1190.0, "the origin must sit just under the wrap, got {node_cents}");
