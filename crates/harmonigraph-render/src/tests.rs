@@ -1585,3 +1585,54 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
         );
     }
 }
+
+/// The grid's place in the draw order is counted over the nodes actually
+/// shipped, not over the ones the scene held.
+///
+/// `grid_at` is the seam between the sheets BEHIND the home sheet and the
+/// home sheet itself, and the whole argument for it is in `from_scene`: put
+/// the grid under everything and a node on a sheet behind the home one
+/// punches its clearing through the home grid. Culling breaks the old
+/// expression silently, because `split` indexes the list before the cull —
+/// with the sheets behind home mostly idle, `split` runs past the end of the
+/// kept run, `prepare`'s `.min(instance_count)` pins the grid to the very
+/// end, and it draws over every node instead of under the home sheet.
+///
+/// One lit node behind home and one on it, with an idle node behind home
+/// between them: the seam has to land at 1, and it is `split` (2) that says
+/// otherwise.
+#[test]
+fn the_grid_seam_counts_the_nodes_that_ship() {
+    let mut scene = idle_scene();
+    scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+    scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+    scene.nodes.truncate(3);
+    for node in &mut scene.nodes {
+        node.trail = 0.0;
+        node.activation = 0.0;
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    }
+    // Which world z is "behind" is the camera's to say — the sort keys on
+    // `world_pos.z * forward.z` — and the default camera's eye sits at +z, so
+    // the sheets behind the home one are the negative side.
+    scene.nodes[0].world_pos.z = -2.0;
+    scene.nodes[0].activation = 1.0; // behind home, lit: ships, before the grid
+    scene.nodes[1].world_pos.z = -1.0; // behind home, idle: culled
+    scene.nodes[2].world_pos.z = 0.0;
+    scene.nodes[2].activation = 1.0; // the home sheet: ships, after the grid
+    scene.nodes[2].on_home = true;
+
+    let call = LatticeCallback::from_scene(
+        &scene,
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        34,
+        None,
+    );
+    assert_eq!(call.instances.len(), 2, "the idle node behind home is culled");
+    assert_eq!(
+        call.grid_at, 1,
+        "the grid draws after the one sheet-behind node that ships, not after \
+         the two the scene held",
+    );
+}
