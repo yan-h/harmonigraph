@@ -40,9 +40,13 @@ fn visit_key(pitch: f32) -> i32 {
 ///
 /// Ordered by key — the pitch in cents — for the reason
 /// [`NoteTracker`](crate::NoteTracker) is: two remembered pitches can match
-/// one node, the trail's `max` keeps the FIRST of them, and a hashed order
-/// would settle that differently per process (#135). `forget_oldest` is the
-/// same argument for a tie in `last_off`, which a chord's notes all share.
+/// one node, and where they TIE the trail's `max` keeps the first of them, so
+/// a hashed order would settle that differently per process (#135). The tie is
+/// the ordinary case rather than a corner: `level` is 1.0 for every visit
+/// while the memory span is "never forget", which is the default. Give the
+/// span a value and the fresher visit simply wins on level, order or no order.
+/// `forget_oldest` is the same argument for a tie in `last_off`, which a
+/// chord's notes all share.
 #[derive(Default)]
 pub struct NoteHistory {
     visits: BTreeMap<i32, Visit>,

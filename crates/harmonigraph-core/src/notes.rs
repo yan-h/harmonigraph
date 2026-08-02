@@ -156,8 +156,8 @@ pub fn octave_start_midi(octave: i32) -> i32 {
 ///
 /// Ordered, not hashed, and that is load-bearing rather than a taste in
 /// containers: `voices()` decides which of two voices lighting ONE node
-/// wins its color, and a `HashMap`'s iteration order is seeded per map, so
-/// the same take rendered twice picked different winners and produced
+/// wins its color, and a `HashMap`'s iteration order is seeded per map — so
+/// off one, the same take rendered twice picks different winners and produces
 /// different pixels (#135). A `BTreeMap` keyed by `(channel, note)` makes
 /// that choice a property of the music. The map holds a chord, so the
 /// ordering costs nothing worth measuring.
@@ -322,9 +322,8 @@ mod tests {
     /// at activation 1.0, and the lattice gives a node's color and seed to
     /// the FIRST voice at the winning envelope — so which of two voices
     /// lighting one node (an octave doubling, say) wins is settled by this
-    /// order alone. Off a hashed map it was settled per process instead,
-    /// and one take rendered twice came out with different pixels in it
-    /// (#135).
+    /// order alone. Off a hashed map it is settled per process instead, and
+    /// one take rendered twice comes out with different pixels in it (#135).
     #[test]
     fn held_voices_come_back_in_channel_note_order() {
         let mut tracker = NoteTracker::new();

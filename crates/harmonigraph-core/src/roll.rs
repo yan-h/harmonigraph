@@ -158,10 +158,13 @@ pub struct NoteRoll {
     /// Finished notes, oldest release first.
     past: VecDeque<RollNote>,
     /// Still-sounding notes, keyed and ORDERED the way the tracker keys and
-    /// orders its held voices — a hashed order here reaches `past` through
-    /// `all_off` and stays there, and reaches the pane through `notes()`
-    /// (see [`NoteTracker`](crate::NoteTracker), and #135). Bounded by the
-    /// number of keys, so never trimmed.
+    /// orders its held voices (see [`NoteTracker`](crate::NoteTracker), and
+    /// #135). Not for the pane's sake — both readers of [`notes`](Self::notes)
+    /// sort for themselves — but because `all_off` drains this map into `past`
+    /// in whatever order it iterates, and `past` is what `enforce_cap` pops
+    /// from the front of: past `MAX_NOTES`, a hashed order here would decide
+    /// which press is forgotten. Bounded by the number of keys, so never
+    /// trimmed.
     live: BTreeMap<(u8, u8), RollNote>,
 }
 
