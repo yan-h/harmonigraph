@@ -1,17 +1,25 @@
-//! Measurement scratch for the perf audit: what the spectrum's FFT costs, and
-//! what the obvious variants of it cost. Not part of the build's contract —
+//! What the spectrum's FFT costs, and what the variants of it cost:
 //! `cargo run --release --example fft_bench -p harmonigraph-core`.
 //!
-//! `fft_in_place` is private, so the baseline here is a faithful copy of it.
-//! `pitch_spectrum` is called through the public API, so the end-to-end row is
-//! the real thing.
+//! CI compiles this and gates it on warnings (`ci.sh` runs clippy with
+//! `--all-targets`, and `.githooks/pre-push` runs `ci.sh`), so it can break a
+//! push — it is only the RUNNING of it that is manual. It is also the one
+//! place outside `spectrum.rs` naming `DEFAULT_FFT_SIZE`, so a rename has to
+//! come through here.
+//!
+//! `fft_in_place` is private, so the rows below are copies of it. Keeping them
+//! honest is a matter of reading: what pins the shipped transform is
+//! `reusing_a_stages_twiddles_does_not_move_a_single_bit` over in
+//! `spectrum.rs`, not anything here. `pitch_spectrum` is called through the
+//! public API, so that row alone is the real thing.
 
 use harmonigraph_core::spectrum::{SpectrumAnalyzer, DEFAULT_FFT_SIZE};
 use std::hint::black_box;
 use std::time::Instant;
 
-/// Verbatim copy of `harmonigraph_core::spectrum::fft_in_place`.
-fn fft_baseline(re: &mut [f32], im: &mut [f32]) {
+/// The twiddle recomputed inside the butterfly loop — what `fft_in_place`
+/// does NOT do, kept as the thing its cost is measured against.
+fn fft_per_block(re: &mut [f32], im: &mut [f32]) {
     let n = re.len();
     let bits = n.trailing_zeros();
     for i in 0..n {
@@ -41,9 +49,10 @@ fn fft_baseline(re: &mut [f32], im: &mut [f32]) {
     }
 }
 
-/// The same butterflies in the same order, with the k and start loops swapped
-/// so each twiddle is computed once per stage instead of once per block.
-fn fft_hoisted(re: &mut [f32], im: &mut [f32]) {
+/// A copy of the shipped `fft_in_place`: the same butterflies on the same
+/// values, with each twiddle computed once per stage rather than once per
+/// block.
+fn fft_per_stage(re: &mut [f32], im: &mut [f32]) {
     let n = re.len();
     let bits = n.trailing_zeros();
     for i in 0..n {
@@ -137,17 +146,31 @@ fn unroll_split(ring: &[f32], window: &[f32], write: usize, re: &mut [f32], im: 
     im.fill(0.0);
 }
 
+/// How many timed rounds each row runs, of which the FASTEST is reported.
+///
+/// A mean over one round is the wrong statistic on a machine running several
+/// sessions at once, which this repo does by design: a round that lost the
+/// core to someone else's build is not a slower FFT, it is a different
+/// measurement. Interference only ever adds time, so the minimum is the round
+/// that ran least disturbed. Left as a single mean, this probe printed
+/// "swapping loops 0.41x faster" under load — the summary contradicting its
+/// own rows.
+const ROUNDS: u32 = 5;
+
 fn bench<F: FnMut()>(name: &str, iters: u32, mut f: F) -> f64 {
     for _ in 0..iters.min(20) {
         f();
     }
-    let t = Instant::now();
-    for _ in 0..iters {
-        f();
+    let mut best = f64::INFINITY;
+    for _ in 0..ROUNDS {
+        let t = Instant::now();
+        for _ in 0..iters {
+            f();
+        }
+        best = best.min(t.elapsed().as_secs_f64() * 1e3 / f64::from(iters));
     }
-    let per = t.elapsed().as_secs_f64() * 1e3 / f64::from(iters);
-    println!("  {name:<34} {per:>8.4} ms");
-    per
+    println!("  {name:<34} {best:>8.4} ms");
+    best
 }
 
 fn main() {
@@ -167,15 +190,15 @@ fn main() {
     println!("\nFFT core, n = {n}, {iters} iterations each");
     let mut re = signal.clone();
     let mut im = vec![0.0f32; n];
-    let base = bench("fft_in_place (current)", iters, || {
+    let per_block = bench("fft, twiddle per butterfly", iters, || {
         re.copy_from_slice(&signal);
         im.fill(0.0);
-        fft_baseline(black_box(&mut re), black_box(&mut im));
+        fft_per_block(black_box(&mut re), black_box(&mut im));
     });
-    let hoisted = bench("fft, k/start loops swapped", iters, || {
+    let shipped = bench("fft_in_place (current)", iters, || {
         re.copy_from_slice(&signal);
         im.fill(0.0);
-        fft_hoisted(black_box(&mut re), black_box(&mut im));
+        fft_per_stage(black_box(&mut re), black_box(&mut im));
     });
     let table = bench("fft, precomputed twiddle table", iters, || {
         re.copy_from_slice(&signal);
@@ -202,17 +225,30 @@ fn main() {
     });
 
     println!("\nSummary");
-    println!("  sin_cos calls per FFT (current)   {}", (n / 2) * n.trailing_zeros() as usize);
-    println!("  distinct twiddles actually needed  {}", n - 1);
-    println!("  fft: swapping loops               {:.2}x faster", base / hoisted);
-    println!("  fft: twiddle table                {:.2}x faster", base / table);
+    let stages = n.trailing_zeros() as usize;
+    // Per stage the shipped order computes `half` twiddles and the per-block
+    // order computes them once per block, i.e. `half` times `n / len`.
+    println!("  sin_cos per FFT, current          {}", n - 1);
+    println!("  sin_cos per FFT, per butterfly    {}", (n / 2) * stages);
+    // What a shared table would have to hold: one per k of the LAST stage,
+    // every earlier stage's angles being a subsampling of those.
+    println!("  distinct twiddles in the transform {}", n / 2);
+    println!("  current vs per butterfly          {:.2}x faster", per_block / shipped);
+    println!("  a twiddle table would be          {:.2}x faster", per_block / table);
     println!("  unroll: split vs modulo           {:.2}x faster", modulo / split);
-    println!("  FFT as a share of pitch_spectrum  {:.0}%", base / whole * 100.0);
-    let saved = base - table.min(hoisted);
+    // `shipped`, not `per_block`: `whole` calls the FFT this crate now has, so
+    // dividing the OLD transform's time by it is not a share of anything (it
+    // printed 153%).
+    println!("  FFT as a share of pitch_spectrum  {:.0}%", shipped / whole * 100.0);
+    // What the loop order actually merged saves. Crediting the table here —
+    // the faster of the two, and the one NOT implemented — overstated it 11%.
+    let saved = per_block - shipped;
     println!("  saved per FFT                     {saved:.4} ms");
+    // A hop is 8 ms (`AudioSpectrum::FFT_INTERVAL`), so 125 columns a second,
+    // and one FFT per column PER CHANNEL. A core is 1000 ms of the same second.
+    let per_second = saved * 125.0 * 2.0;
     println!(
-        "  saved per second, stereo @ 8 ms hop {:.2} ms/s ({:.1}% of a core)",
-        saved * 125.0 * 2.0,
-        saved * 125.0 * 2.0 / 10.0
+        "  saved per second, stereo @ 8 ms hop {per_second:.2} ms/s ({:.1}% of a core)",
+        per_second / 10.0
     );
 }

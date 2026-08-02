@@ -7,8 +7,13 @@
 //! from wherever their audio comes from (the plugin's input bus, the
 //! standalone's mock synth) and the whole pipeline stays unit-testable.
 //! The FFT is a hand-rolled iterative radix-2 (the crate deliberately has
-//! no dependencies); at 8192 points a few times per second it is nowhere
-//! near a bottleneck.
+//! no dependencies), and it is not incidental work: the Spectral pane asks
+//! for a column every 8 ms (`AudioSpectrum::FFT_INTERVAL`) PER CHANNEL, so a
+//! stereo input at 8192 points runs 250 transforms a second — and a DAW keeps
+//! that fed with silence as much as with audio, so the cost is continuous
+//! rather than only while something plays. At ~0.11 ms each that is ~3% of a
+//! core, which is why `fft_in_place` is written for the call rate it actually
+//! sees rather than the one a spectrum analyzer sounds like it should have.
 
 /// The spectrum's pitch axis: MIDI notes [MIN, MAX), which is 20 Hz to
 /// 20 kHz — the audible band, as every analyzer states it. The axis is linear
@@ -385,7 +390,7 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
         // 8191 calls across an n = 8192 transform against 53248 the other way
         // round, and the difference is most of what the FFT costs: the
         // butterflies themselves are a handful of multiplies, sin_cos is a
-        // libm call, and this order is 2.5x faster on the transform — about
+        // libm call, and this order is 2.1x faster on the transform — about
         // 1.7x through `pitch_spectrum`, which does the bucketing as well.
         //
         // The blocks within a stage are independent, so this is the same
@@ -399,7 +404,7 @@ fn fft_in_place(re: &mut [f32], im: &mut [f32]) {
         // render twice from ONE build and compare the runs, so they catch
         // nondeterminism and are blind to drift.
         //
-        // A twiddle TABLE is faster again (another ~18%) and is the thing to
+        // A twiddle TABLE is faster again — another ~19% — and is the thing to
         // reach for if this ever matters more. It is bit-identical too,
         // measured across n = 2..16384: `TAU / len` is exact for a power-of-two
         // `len` and dividing by `n` is exact, so both spellings of the angle
