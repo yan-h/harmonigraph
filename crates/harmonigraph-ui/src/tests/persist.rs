@@ -193,7 +193,7 @@ fn opens_as(keys: &str, count: u32, center: f32) {
     state.camera.yaw = 1.23;
     // The count and center are what an older blob does NOT carry, so swapping
     // the pair for the older keys is exactly that blob.
-    let saved = state.save_persist().replace(
+    let mut saved = state.save_persist().replace(
         &format!(
             "octave_count:{},octave_center:{:?}",
             state.view.octave_count, state.view.octave_center
@@ -201,6 +201,21 @@ fn opens_as(keys: &str, count: u32, center: f32) {
         keys,
     );
     assert_ne!(saved, state.save_persist(), "replacement must have hit for {keys}");
+    // The wheel this blob was written against predates the fringe too, so a
+    // faithful stand-in carries none of its three keys either — the same
+    // stripping `a_blob_written_against_the_taper_opens_on_an_even_wheel`
+    // does, or a fresh view's own fringe would ride along into every window
+    // and span the table below folds in, quietly changing what MIN_SPAN's
+    // clamp has left to open onto.
+    for key in [
+        format!("octave_extras:{},", state.view.octave_extras),
+        format!("octave_extra_size:{:?},", state.view.octave_extra_size),
+        format!("octave_extra_blend:{:?},", state.view.octave_extra_blend),
+    ] {
+        let stripped = saved.replace(&key, "");
+        assert_ne!(stripped, saved, "{key:?} is not in the blob to remove");
+        saved = stripped;
+    }
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&saved);
@@ -1050,6 +1065,12 @@ fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
         // center is NOT here: a blob that old was centered on middle C, which
         // is where a fresh view puts it too.
         "octave_count",
+        // A blob with no fringe keys predates the fringe, and was drawn on an
+        // even wheel — where a fresh view now opens with a two-octave fringe
+        // of its own (see `impl Default for ViewConfig`).
+        "octave_extras",
+        "octave_extra_size",
+        "octave_extra_blend",
         "idle_marker",
         "idle_radius",
         "mark_thickness",

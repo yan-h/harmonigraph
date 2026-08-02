@@ -790,17 +790,15 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            // A tall window of fifths and a wide band of thirds, on the home
-            // sevens sheet alone. Opening with a sheet either side (extent 1)
-            // shows the septimal axis without anyone having to go find it,
-            // but it also puts a second sheet in the picture before anything
-            // tells the eye which sheet a node is on; flat is the look this
-            // is actually used at. The sevens layer settings below are the
-            // lever for making depth readable, but they need setting by hand
-            // when it is opened rather than being sized for it already.
+            // A tall window of fifths and a wide band of thirds. A sheet
+            // either side (extent 1) shows the septimal axis without anyone
+            // having to go find it; the tradeoff is that nothing tells the
+            // eye which sheet a node is on until the sevens layer settings
+            // below are turned down to read as an annotation rather than a
+            // second sheet (see sevens_size).
             extent_threes: 10,
             extent_fives: 6,
-            extent_sevens: 0,
+            extent_sevens: 1,
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
@@ -834,22 +832,22 @@ impl Default for ViewConfig {
             // read as a ring of distinct marks rather than a solid annulus,
             // and the core keeps clear space around it. (The backdrop that
             // holds the whole ring's shape behind them is fixed on.)
-            outer_inner: 0.641_313_55,
+            outer_inner: 0.661_417_3,
             outer_outer: 0.851_483_05,
             outer_gap: 0.051_732_67,
             // Five octaves to the turn with middle C straight up — C1..C5 in
             // the DAW's numbering, the register a keyboard part lives in, at
-            // 72 degrees an octave. With no fringe: the wheel a fresh view
-            // starts from is an even one, and reaching past that register for
-            // a sliver of the turn is a choice made from there.
+            // 72 degrees an octave, with a two-octave fringe either end (see
+            // octave_extras) narrower than a full-size slice and graded from
+            // the outer edge in.
             octave_count: crate::octaves::DEFAULT_COUNT,
             octave_center: crate::octaves::DEFAULT_CENTER,
             legacy_octave_low: None,
             legacy_octave_high: None,
             legacy_octave_span: None,
-            octave_extras: default_octave_extras(),
-            octave_extra_size: default_octave_extra_size(),
-            octave_extra_blend: default_octave_extra_blend(),
+            octave_extras: 2,
+            octave_extra_size: 0.387_534_47,
+            octave_extra_blend: 0.562_241_4,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so
