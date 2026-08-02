@@ -305,7 +305,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
 // octave + 1 and slot s is the octave whose C is MIDI 12*s. Which of them a
 // node DRAWS is the span setting and its own pitch class — see oct_ring. A
 // ring at the pitch limits reaches for slots outside this, which draw as
-// backdrop and never light; oct_level is what holds the lookup inside.
+// backdrop and never light; oct_slot_level is what holds the lookup inside.
+// (octave_level unpacks without that guard, and is not the one to reach for.)
 const OCTAVE_SLOTS: u32 = 11u;
 
 // Octaves one turn can be cut into (harmonigraph_scene::MAX_SPAN). One fewer

@@ -629,8 +629,11 @@ impl Control {
 ///   zero that would show up at once: every event lands at the wrong offset
 ///   and the video drifts against the bounce it was supposed to line up with
 ///   by construction.
-/// - `source` is what lets the renderer tell a Harmonigraph take from
-///   anything else that grows the format later.
+/// - `source` says which shell wrote the take — this one, or the standalone,
+///   which writes its own name. Nothing reads it: it is a field for whoever
+///   is holding a take and asking where it came from, and the reason it
+///   belongs here is that a shell which forgets to stamp it leaves that
+///   question unanswerable later, with nothing at the time to notice.
 pub fn header_for(sample_rate: f32, ui_state: String) -> harmonigraph_take::Header {
     harmonigraph_take::Header {
         sample_rate,

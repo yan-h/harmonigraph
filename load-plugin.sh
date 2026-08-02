@@ -130,10 +130,10 @@ load_build() {  # $1 = worktree index
     mkdir -p "$support"; cp "$offline" "$support/harmonigraph-offline"
     echo "Loaded renderer: $support/harmonigraph-offline"
   else
-    # Says "if any" because the rename moved the support directory: a renderer
-    # installed under the old product name is not on the path the plugin now
-    # resolves, so the first load after the rename has none until some worktree
-    # builds -p harmonigraph-offline.
+    # Says "if any" because the support directory can hold no renderer at all:
+    # the plugin resolves one fixed path under the product name, and nothing
+    # puts a binary there until some worktree builds -p harmonigraph-offline
+    # and a load copies it across.
     echo "NOTE: no harmonigraph-offline in this build; offline render keeps the previously-installed renderer, if any." >&2
   fi
 

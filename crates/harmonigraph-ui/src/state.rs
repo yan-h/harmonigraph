@@ -534,8 +534,21 @@ impl SharedState {
     /// allocated. The spectrogram simply vanished after hiding and re-showing
     /// the window, and stayed gone, because nothing ever asked for a fresh
     /// handle.
+    ///
+    /// The label mirror is the same trap one layer along. It holds the atlas
+    /// size, scale and fill ratio it last saw and the texel of every glyph
+    /// drawn at them — all four readings of one context — and answers "already
+    /// uploaded" from them. Carried into a new window it answers for texels in
+    /// a texture the new renderer never allocated, so the callback finds no
+    /// atlas, paints nothing, and every haloed label stays absent: nothing else
+    /// asks for a refresh, because the mirror IS what asks.
     pub fn release_context_resources(&mut self) {
         self.spectrum.release_textures();
+        self.instruments
+            .font_atlas
+            .get_mut()
+            .expect("the label mirror is never held across a panic")
+            .forget_context();
     }
 
     /// Restore state saved by [`save_persist`](Self::save_persist). Unknown or

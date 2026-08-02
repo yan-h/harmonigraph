@@ -157,9 +157,11 @@ and asserts everywhere: measured over nine merged PRs it said *run* nine
 times out of nine and saved nothing. What separates them is the ratio — real
 feature work *adds* guards (#164 removed 2 and added 30, #119 removed 4 and
 added 56), while a diff that takes one away does not. `rm >= ad` with
-`rm > 0` fires on #114 and stays off for six of those nine; the two others it
-fires on, #191 and #192, are both "stops doing X" removals, which is the
-shape the lens exists for.
+`rm > 0` fires on #114 and stays off for seven of those nine; the one other
+it fires on, #191, is a "stops doing X" removal, which is the shape the lens
+exists for. #192 is that shape too and the guard test misses it (`rm=0`,
+`ad=7`) — what runs the lens there is the prose grep, on the `**Issue #135**
+is open` line it deleted, which is the case for keeping both.
 
 The prose grep is deliberately loose — `defaced` is a hex word and a take id
 is a long number, so it catches things that are not shas. That bias is the
