@@ -9,15 +9,17 @@
 //! nothing about a node can make one of its slices short.
 //!
 //! **The center pitch is at the top of every node, whatever its pitch class.**
-//! One monotone map takes an absolute MIDI pitch to an angle — `center`
-//! straight up, rising pitch clockwise, a full turn every N octaves — and each
-//! node draws the N octaves of ITSELF nearest the center, laid on that map. So
-//! an indicator's angle still means an absolute pitch, and two nodes' slices
-//! for the same octave sit at the same angle. What differs per node is only
-//! WHERE ITS OCTAVES FALL: a node whose class sits `d` semitones from the
-//! center's has its whole ring turned by `d` of an octave — left for the half
-//! octave below, right for the half octave above, and never further than half
-//! a slice either way.
+//! With the taper off, one monotone map takes an absolute MIDI pitch to an
+//! angle — `center` straight up, rising pitch clockwise, a full turn every N
+//! octaves — and each node draws the N octaves of ITSELF nearest the center,
+//! laid on that map. So an indicator's angle means an absolute pitch, and two
+//! nodes' slices for the same octave NUMBER sit at different angles, exactly
+//! as their pitches differ. (A taper makes that map per-node — see
+//! [`octave_layout`] — and the center pitch is the one point it cannot move.)
+//! What differs per node is only WHERE ITS OCTAVES FALL: a node whose class
+//! sits `d` semitones from the center's has its whole ring turned by `d` of an
+//! octave — left for the half octave below, right for the half octave above,
+//! and never further than half a slice either way.
 //!
 //! **What moves instead is the seam.** The map wraps every N octaves, and the
 //! point where a node's lowest slice meets its highest is that wrap. It rests
