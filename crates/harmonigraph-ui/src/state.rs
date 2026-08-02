@@ -63,6 +63,52 @@ impl RenderProgress {
     }
 }
 
+/// Take recording and video export: the whole contract between the Video pane
+/// and the shell.
+///
+/// The shell owns the actual recorder — `harmonigraph_record::Control` in the
+/// plugin, nothing at all in the standalone, which records through an env var
+/// instead — and this is what the two say to each other: the pane writes the
+/// toggles, the shell writes back what the recorder is doing. Nothing in here
+/// reaches the recorder itself, which is why the pane compiles in a shell that
+/// has none.
+///
+/// Runtime-only but for [`render_config`](Self::render_config), which is a
+/// setting rather than a live flag and persists with the rest of them. A take
+/// is a deliberate act, so nothing else here is ever resumed on load — an
+/// editor that reopened armed would record a session nobody asked it to.
+///
+/// In the plugin's editor `self.take` is the recorder and `self.ui.take` is
+/// this; the frame-by-frame copying between them is `sync_take`.
+#[derive(Default)]
+pub struct TakeState {
+    /// Whether this shell can record at all. Gates the control: a shell that
+    /// cannot (or a build without a writer) simply doesn't show it, rather
+    /// than offering a button that does nothing.
+    pub supported: bool,
+    /// Toggled by the Video pane, acted on by the shell.
+    pub recording: bool,
+    /// Whether the transport is actually rolling (capture is happening), as
+    /// opposed to armed-and-waiting. Drives the record indicator: a steady dot
+    /// while rolling, a breathing one while it waits. Shell-set.
+    pub rolling: bool,
+    /// Shell-supplied one-liner shown under the toggle: where the file is
+    /// going, how many events, or what went wrong.
+    pub status: String,
+    /// Whether a take has been recorded this session — the shell sets it so the
+    /// Video pane can offer "Re-render take".
+    pub last_ready: bool,
+    /// One-shot: set by the Video pane's "Re-render take" button, consumed by
+    /// the shell to render the last take with the CURRENT settings.
+    pub render_now: bool,
+    /// What to do with a take once it is finished. The one persisted field
+    /// here — see [`UiPersist`], which carries it as `render`.
+    pub render_config: RenderConfig,
+    /// How far the video render running in the background has got, or `None`
+    /// when none is. Shell-set every frame, like [`status`](Self::status).
+    pub render_progress: Option<RenderProgress>,
+}
+
 /// Everything the UI reads and mutates each frame. One instance lives in the
 /// shell (inside the editor state in the plugin, inside the app in the
 /// standalone harness).
@@ -132,40 +178,9 @@ pub struct SharedState {
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,
-    /// Take recording, for offline video rendering. The shell owns the
-    /// actual recorder; these three fields are the whole contract.
-    /// Runtime-only — a take is a deliberate act, never resumed on load.
-    ///
-    /// `take_supported` gates the control: shells that cannot record
-    /// (or a build without a writer) simply don't show it, rather than
-    /// offering a button that does nothing.
-    pub take_supported: bool,
-    /// Toggled by the Video pane, acted on by the shell.
-    pub take_recording: bool,
-    /// Whether the transport is actually rolling (capture is happening), as
-    /// opposed to armed-and-waiting. Drives the record indicator: a steady dot
-    /// while rolling, a breathing one while it waits. Shell-set, runtime-only.
-    pub take_rolling: bool,
-    /// One-shot: set by the Video pane's "Re-render take" button, consumed by the
-    /// shell to render the last take with the CURRENT settings. Runtime-only.
-    pub render_now: bool,
-    /// Whether a take has been recorded this session — the shell sets it so the
-    /// Video pane can offer "Re-render take". Runtime-only.
-    pub last_take_ready: bool,
-    /// Record the input bus alongside the notes, so the render has a
-    /// spectrum and a soundtrack without a separate bounce. Persisted
-    /// with the render settings rather than the take state, since it is
-    /// a preference, not a live flag.
-    pub take_audio: bool,
-    /// What to do with a take once it is finished (persisted).
-    pub render_config: RenderConfig,
-    /// Shell-supplied one-liner shown under the toggle: where the file is
-    /// going, how many events, or what went wrong.
-    pub take_status: String,
-    /// How far the video render running in the background has got, or `None`
-    /// when none is. Shell-set every frame, like
-    /// [`take_status`](Self::take_status). Runtime-only.
-    pub render_progress: Option<RenderProgress>,
+    /// Take recording and video export, which the Video pane and the shell
+    /// pass between them — see [`TakeState`].
+    pub take: TakeState,
     /// Audio-derived spectrum for the Spectral pane. Runtime-only.
     pub spectrum: AudioSpectrum,
     /// The Spectral pane's settings (Analyzer tab; persisted).
@@ -396,15 +411,7 @@ impl SharedState {
             temper_judged: [None; Comma::COUNT],
             camera_presets: Vec::new(),
             preset_name: String::new(),
-            take_supported: false,
-            take_recording: false,
-            take_rolling: false,
-            render_now: false,
-            last_take_ready: false,
-            take_audio: false,
-            render_config: RenderConfig::default(),
-            take_status: String::new(),
-            render_progress: None,
+            take: TakeState::default(),
             spectrum: AudioSpectrum::default(),
             spectrum_config: SpectrumConfig::default(),
             whole_song: None,
@@ -474,7 +481,7 @@ impl SharedState {
             view: self.view.clone(),
             camera_presets: self.camera_presets.clone(),
             spectrum: self.spectrum_config,
-            render: self.render_config.clone(),
+            render: self.take.render_config.clone(),
             fps_cap: self.fps_cap,
             ui_scale: self.ui_scale,
         })
@@ -552,12 +559,12 @@ impl SharedState {
             self.camera_presets = persist.camera_presets;
             self.spectrum_config = persist.spectrum;
             self.spectrum_config.sanitize();
-            self.render_config = persist.render;
+            self.take.render_config = persist.render;
             // The render frame's two-way `stacked` flag became a named side,
             // and the `--size` that used to sit in the Options text became the
             // Resolution control. Both changed AFTER the version last moved,
             // so a blob this function accepts can still carry either.
-            self.render_config.migrate_legacy();
+            self.take.render_config.migrate_legacy();
             self.fps_cap = persist.fps_cap;
             // Clamped here rather than only where it is drawn, so the control
             // cannot read out a number the chrome is not at: `set_ui_scale`

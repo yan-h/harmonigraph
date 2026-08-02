@@ -45,7 +45,7 @@ pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong}
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
 pub use perf::ShellTimings;
 pub use state::{
-    render_config_from_persist, CameraPreset, Console, RenderProgress, SharedState,
+    render_config_from_persist, CameraPreset, Console, RenderProgress, SharedState, TakeState,
 };
 pub(crate) use state::default_dock;
 

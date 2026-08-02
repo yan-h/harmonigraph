@@ -236,9 +236,9 @@ fn the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in() {
 /// puts every body inside a `ScrollArea`, and that ui arrives with a
 /// full-height `min_rect` where a hand-built one arrives empty. A fixture that
 /// skips it cannot see the difference — see `section`.
-fn video_pane_shapes(take_supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui::Color32) {
+fn video_pane_shapes(supported: bool) -> (Vec<egui::epaint::ClippedShape>, egui::Color32) {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
-    state.take_supported = take_supported;
+    state.take.supported = supported;
     // Soloed so the Video pane's body is the only settings body on screen and
     // the first heading found is unambiguously its own.
     state.dock = egui_dock::DockState::new(vec![panes::Tab::Video]);
@@ -289,8 +289,8 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 fn the_video_pane_does_not_start_with_a_rule() {
     // Which section leads, per shell: a host can record takes, so Record
     // leads; the standalone cannot, so `render_settings` returns early.
-    for (take_supported, leads) in [(true, "Record"), (false, "Frame")] {
-        let (shapes, rule) = video_pane_shapes(take_supported);
+    for (supported, leads) in [(true, "Record"), (false, "Frame")] {
+        let (shapes, rule) = video_pane_shapes(supported);
         let heading = text_y(&shapes, leads)
             .unwrap_or_else(|| panic!("the Video pane drew no {leads:?} heading"));
         // Only rules BELOW the tab bar are the pane's own. The dock's chrome
@@ -305,7 +305,7 @@ fn the_video_pane_does_not_start_with_a_rule() {
         });
         assert!(
             !above,
-            "take_supported={take_supported}: a rule sits above {leads:?}, the pane's \
+            "take.supported={supported}: a rule sits above {leads:?}, the pane's \
              first heading, at y {heading}"
         );
     }
