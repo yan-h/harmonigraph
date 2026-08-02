@@ -17,7 +17,7 @@ use egui::Color32;
 use harmonigraph_core::spectrogram::{db_of, BucketDb};
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
 
-use super::axes::{loudness_db, Axes, PitchScale, TimeAxis};
+use super::axes::{loudness_raw, Axes, PitchScale, TimeAxis};
 use crate::{SharedState, SpectrogramColor, SpectrumConfig};
 
 /// Most time slabs a live window is ever cut into, whatever the pane's size —
@@ -1377,21 +1377,66 @@ fn restart_pixels(
     h: usize,
     first_key: i64,
     last_key: i64,
-    mut column: impl FnMut(usize) -> Vec<Color32>,
+    mut column: impl FnMut(usize, &mut Vec<Color32>),
 ) -> Vec<Color32> {
     let mut pixels = vec![Color32::BLACK; tex_w * h];
+    // Columns are built into a TILE and transposed into the texture a block at
+    // a time, because the texture's rows are what a column crosses: a texel and
+    // the one under it are `tex_w` apart, so writing a column straight down is
+    // one cache miss per texel, and at a full-width pane that is 1.4 million of
+    // them in the frame a restart lands on. Measured, the scatter outweighed all
+    // the colour arithmetic it was carrying. A tile's worth of columns share
+    // each line instead.
+    let mut tile: Vec<Color32> = Vec::new();
+    // A tile's texels, resolved once per column and not once per texel:
+    // [`SpectrogramRing::x_of`] is a `rem_euclid` by a capacity the compiler
+    // cannot see, so leaving it in the row loop is a division per pixel.
+    let mut xs: Vec<usize> = Vec::with_capacity(TRANSPOSE_TILE);
+    let mut scratch = Vec::with_capacity(h);
     // From one before the run: that key is the guard, which duplicates the
     // oldest slab, so it reads the same column as `first_key`.
-    for key in first_key - 1..=last_key {
-        let column = column((key.max(first_key) - first_key) as usize);
-        let x = ring.x_of(key);
-        for (row, texel) in column.iter().enumerate().take(h) {
-            pixels[row * tex_w + x] = *texel;
-            pixels[row * tex_w + x + ring.capacity] = *texel;
+    let keys: Vec<i64> = (first_key - 1..=last_key).collect();
+    for block in keys.chunks(TRANSPOSE_TILE) {
+        tile.clear();
+        xs.clear();
+        for &key in block {
+            column((key.max(first_key) - first_key) as usize, &mut scratch);
+            scratch.resize(h, Color32::BLACK);
+            tile.extend_from_slice(&scratch);
+            xs.push(ring.x_of(key));
         }
+        // ROW outer, so the texels a row receives are written in one run —
+        // contiguous keys land on contiguous texels. The tile is read down a
+        // column instead, and each of its cache lines then serves the next
+        // sixteen rows rather than being evicted before they ask for it.
+        for row in 0..h {
+            let base = row * tex_w;
+            for (c, &x) in xs.iter().enumerate() {
+                pixels[base + x] = tile[c * h + row];
+            }
+        }
+    }
+    // Every column's twin, `capacity` texels along. Both halves start black and
+    // every write above is mirrored here, so the second half IS the first —
+    // including the columns the run never reached, which are black in both. One
+    // contiguous copy per row, against a second scattered write per texel.
+    //
+    // The halves being equal is what makes that a copy rather than a second
+    // pass, so the texture has to be exactly two laps wide; anything else and
+    // the twin is somewhere this does not put it.
+    debug_assert_eq!(tex_w, ring.capacity * 2, "the ring's texture is two laps wide");
+    for row in 0..h {
+        let base = row * tex_w;
+        let (lo, hi) = pixels[base..base + tex_w].split_at_mut(ring.capacity);
+        hi.copy_from_slice(lo);
     }
     pixels
 }
+
+/// Columns transposed into the texture at once — see [`restart_pixels`]. Sized
+/// so a tile's row spans one cache line of texels (16 x 4 bytes) while the
+/// columns it reads from stay within a line each for sixteen rows running.
+const TRANSPOSE_TILE: usize = 16;
 
 /// Bring the ring's texture up to date for the visible slabs, allocating or
 /// restarting it when it cannot be carried forward.
@@ -1417,6 +1462,8 @@ fn write_ring(
     let tex_w = capacity * 2;
     let last_key = first_key + visible as i64 - 1;
     let opts = egui::TextureOptions::LINEAR; // bilinear + ClampToEdge
+    let shades = Shades::new(cfg, bins);
+    let mut scratch = Vec::with_capacity(h);
 
     // A ring with no texture under it describes nothing, whatever its
     // bookkeeping says — and there is no more specific reason to report than
@@ -1445,8 +1492,8 @@ fn write_ring(
         // a column never written has to read as silence rather than as
         // whatever the allocation held.
         let fresh = SpectrogramRing::restarted(capacity, style, first_key);
-        let pixels = restart_pixels(&fresh, tex_w, h, first_key, last_key, |i| {
-            fill_column(cfg, bins, &power[i * h..(i + 1) * h])
+        let pixels = restart_pixels(&fresh, tex_w, h, first_key, last_key, |i, out| {
+            fill_column_into(&shades, &power[i * h..(i + 1) * h], out)
         });
         let image = egui::ColorImage::new([tex_w, h], pixels);
         match &mut spectrum.spectrogram[surface].tex {
@@ -1479,8 +1526,8 @@ fn write_ring(
     let forward = ring.written_through.max(first_key)..=last_key;
     for key in back.chain(forward) {
         let i = (key - first_key) as usize;
-        let column = fill_column(cfg, bins, &power[i * h..(i + 1) * h]);
-        let image = egui::ColorImage::new([1, h], column);
+        fill_column_into(&shades, &power[i * h..(i + 1) * h], &mut scratch);
+        let image = egui::ColorImage::new([1, h], scratch.clone());
         let x = ring.x_of(key);
         tex.set_partial([x, 0], image.clone(), opts);
         // The twin, `capacity` texels along, is what keeps any run of at most
@@ -1500,8 +1547,8 @@ fn write_ring(
     // instead (see [`u_drawn`]) — which leaves nothing past the last slab's
     // centre ever sampled.
     {
-        let column = fill_column(cfg, bins, &power[..h]);
-        let image = egui::ColorImage::new([1, h], column);
+        fill_column_into(&shades, &power[..h], &mut scratch);
+        let image = egui::ColorImage::new([1, h], scratch.clone());
         let x = ring.x_of(first_key - 1);
         tex.set_partial([x, 0], image.clone(), opts);
         tex.set_partial([x + capacity, 0], image, opts);
@@ -1510,17 +1557,99 @@ fn write_ring(
     ring.wrote(first_key, last_key);
 }
 
+/// The stored-byte -> pixel colour map for one build, with the per-pixel work
+/// lifted out of the pixel loop.
+///
+/// A texel's colour is `cell_color(ramp, bin_level(cfg, byte, midi))`, and
+/// evaluated cell by cell that is where a repaint's time goes: at a full-width
+/// pane (1400 rows x 1024 slabs) the pair measured 11.0 ms, of which the ramp
+/// alone was 6.4 ms — a restart being the frame a pitch pan, a colour change or
+/// a resize step costs. Both halves collapse:
+///
+/// - [`loudness_raw`] is AFFINE in dB and a stored byte is a linear dB grid, so
+///   a row's whole mapping is `row0 + step * byte` — two constants per row, and
+///   `step` is shared by all of them.
+/// - The ramp is then a function of one scalar, so it is sampled once into
+///   [`SHADES`] entries and indexed.
+///
+/// The table is built per build (a few microseconds against the repaint it
+/// serves) rather than cached, because everything it depends on — the ramp, the
+/// dB window, the tilt — is already what [`ColumnStyle`] restarts the ring for.
+struct Shades {
+    /// [`cell_color`] at the centre of each of [`SHADES`] equal level slices.
+    lut: Vec<Color32>,
+    /// Level per stored dB step, shared by every row.
+    step: f32,
+    /// Level at a stored `0`, per row — the tilt is the only thing that varies.
+    row0: Vec<f32>,
+}
+
+/// Levels the ramp is sampled at.
+///
+/// A table indexed by level cannot be exact for every row at once — a row's
+/// offset is continuous, so its levels fall between samples wherever they like,
+/// and no sample count stops one landing on the wrong side of a channel's
+/// rounding boundary. What a count buys is how FAR wrong: the ramp's segments
+/// span at most 255 levels of an 8-bit channel, so 1024 samples per segment put
+/// every texel within an eighth of a level of the mapping's own value, and the
+/// only texels that then differ are those whose true value sat within that
+/// eighth of a boundary. Swept across every ramp, dB window and tilt,
+/// `the_shade_table_matches_the_mapping_it_replaces` measures 1.25% of texels
+/// differing, always by exactly one level of one channel.
+///
+/// That is the same order as the store's OWN quantization, which moves a colour
+/// by about a level at the default window (half a dB step of a 60 dB range,
+/// across a 255-level ramp) and was settled by eye against a sixteen-bit store
+/// — see `quantizing_a_bucket_does_not_move_its_colour`, which is the same
+/// judgement made one layer down. Exactness would need a table per ROW, which is
+/// 1.4 MB re-read per column and slower than the arithmetic it replaces.
+const SHADES: usize = 4096;
+
+impl Shades {
+    fn new(cfg: &SpectrumConfig, bins: &[Bin]) -> Shades {
+        let db0 = db_of(0);
+        Shades {
+            lut: (0..SHADES)
+                .map(|i| {
+                    cell_color(cfg.spectrogram_color, (i as f32 + 0.5) / SHADES as f32)
+                })
+                .collect(),
+            // From the mapping itself at two adjacent stored values, rather than
+            // from a second copy of its algebra: the slope is `loudness_raw`'s
+            // own, whatever it is written as. Any row will do — it does not
+            // depend on pitch.
+            step: loudness_raw(cfg, db0 + harmonigraph_core::spectrogram::DB_STEP, 0.0)
+                - loudness_raw(cfg, db0, 0.0),
+            row0: bins.iter().map(|b| loudness_raw(cfg, db0, b.midi)).collect(),
+        }
+    }
+
+    /// The 0..1 loudness row `r` reads a stored byte at — [`loudness_db`]'s
+    /// answer for that byte, reached by the affine form and carrying its clamp.
+    fn level(&self, r: usize, bucket: BucketDb) -> f32 {
+        (self.row0[r] + self.step * bucket as f32).clamp(0.0, 1.0)
+    }
+
+    /// Row `r`'s colour for a stored byte.
+    fn at(&self, r: usize, bucket: BucketDb) -> Color32 {
+        let i = (self.level(r, bucket) * SHADES as f32) as usize;
+        self.lut[i.min(SHADES - 1)]
+    }
+}
+
 /// One slab's column of the heatmap, bottom (lowest bin) first — the pixels
 /// [`fill_pixels`] would put in that column, for a build that writes columns
 /// one at a time.
-fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[BucketDb]) -> Vec<Color32> {
-    bins.iter()
-        .zip(slab)
-        .map(|(bin, &p)| cell_color(cfg.spectrogram_color, bin_level(cfg, p, bin.midi)))
-        .collect()
+///
+/// Into a caller-owned buffer: a restart paints a thousand columns, and a fresh
+/// `Vec` each was a thousand allocations of a few kilobytes inside one frame.
+fn fill_column_into(shades: &Shades, slab: &[BucketDb], out: &mut Vec<Color32>) {
+    out.clear();
+    out.extend(slab.iter().enumerate().map(|(r, &p)| shades.at(r, p)));
 }
 
-/// One cell's 0..1 loudness from its stored byte.
+/// One cell's 0..1 loudness from its stored byte, evaluated directly — the
+/// REFERENCE [`Shades`] is a table of, and only reachable from tests.
 ///
 /// Deliberately unguarded. A shortcut here — answering anything under -90 dB
 /// as flat silence without consulting the mapping — is tempting on the grounds
@@ -1530,21 +1659,26 @@ fn fill_column(cfg: &SpectrumConfig, bins: &[Bin], slab: &[BucketDb]) -> Vec<Col
 /// way up the ramp, and the columns are dB already, so there is no `log10` to
 /// skip. What such a shortcut actually does is cut the ramp off at -90 dB —
 /// the faintest colour dropping straight to black, with the whole quiet end of
-/// a wide window missing behind the cliff.
+/// a wide window missing behind the cliff. The table inherits that: it samples
+/// the ramp across the whole of `0..1` rather than from some floor up.
+#[cfg(test)]
 fn bin_level(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    loudness_db(cfg, db_of(bucket), midi)
+    super::axes::loudness_db(cfg, db_of(bucket), midi)
 }
 
-/// [`bin_level`] for the crate's own tests — the bridge
-/// `the_heatmap_reads_the_curve_s_own_level_scale` holds the curve against.
+/// The level the heatmap's pixels actually go through, for the crate's own
+/// tests — the bridge `the_heatmap_reads_the_curve_s_own_level_scale` holds the
+/// curve against.
 ///
-/// Exposed rather than let that test reach for `loudness_db` itself, which is
-/// what the curve reads too: an assertion whose two sides are both the curve's
-/// mapping is one expression compared with itself, and cannot fail however the
-/// heatmap's pixels are derived.
+/// Through [`Shades`], not through [`bin_level`], and that is the whole point of
+/// the function: the bridge has to be what the SHIPPING path computes, or it
+/// stops being able to fail. `bin_level` is now the table's reference rather
+/// than the heatmap's mapping, so a bridge pointed at it would be comparing the
+/// curve to a function no pixel is drawn from.
 #[cfg(test)]
 pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f32) -> f32 {
-    bin_level(cfg, bucket, midi)
+    let bins = [Bin { read: RowRead::Max { from: 0, to: 1 }, midi, t: 0.0 }];
+    Shades::new(cfg, &bins).level(0, bucket)
 }
 
 /// The heatmap image, row-major `pixel(x = slab, y = bin)` at `[y * w + x]`,
@@ -1553,12 +1687,20 @@ pub(crate) fn bin_level_for_test(cfg: &SpectrumConfig, bucket: BucketDb, midi: f
 /// the plane is filled rather than see-through.
 fn fill_pixels(cfg: &SpectrumConfig, w: usize, bins: &[Bin], power: &[BucketDb]) -> Vec<Color32> {
     let h = bins.len();
+    let shades = Shades::new(cfg, bins);
     let mut pixels = vec![Color32::BLACK; w * h];
-    for x in 0..w {
-        let base = x * h;
-        for (y, bin) in bins.iter().enumerate() {
-            let level = bin_level(cfg, power[base + y], bin.midi);
-            pixels[y * w + x] = cell_color(cfg.spectrogram_color, level);
+    // A slab of `power` is one column of the image, so this is a transpose, and
+    // taken a whole column at a time it misses cache on every texel — the same
+    // cost [`restart_pixels`] tiles away, and for the same reason. A tile of
+    // slabs writes each row in one contiguous run, while the slabs it reads
+    // advance a byte at a time down their own columns.
+    for x0 in (0..w).step_by(TRANSPOSE_TILE) {
+        let x1 = (x0 + TRANSPOSE_TILE).min(w);
+        for y in 0..h {
+            let base = y * w;
+            for x in x0..x1 {
+                pixels[base + x] = shades.at(y, power[x * h + y]);
+            }
         }
     }
     pixels
@@ -2695,8 +2837,10 @@ mod tests {
         let w = power.len() / h;
 
         let whole = fill_pixels(&cfg, w, &bins, &power);
+        let shades = Shades::new(&cfg, &bins);
+        let mut column = Vec::new();
         for slab in 0..w {
-            let column = fill_column(&cfg, &bins, &power[slab * h..(slab + 1) * h]);
+            fill_column_into(&shades, &power[slab * h..(slab + 1) * h], &mut column);
             for (y, pixel) in column.iter().enumerate() {
                 assert_eq!(*pixel, whole[y * w + slab], "slab {slab}, bin {y}");
             }
@@ -2754,7 +2898,12 @@ mod tests {
         let power_of = |key: i64| -> Vec<BucketDb> {
             (0..h).map(|b| ((key * 13 + b as i64 * 29).rem_euclid(200) + 30) as BucketDb).collect()
         };
-        let expect = |key: i64| fill_column(&cfg, &bins, &power_of(key));
+        let shades = Shades::new(&cfg, &bins);
+        let expect = |key: i64| {
+            let mut out = Vec::new();
+            fill_column_into(&shades, &power_of(key), &mut out);
+            out
+        };
 
         // A model of the uploaded texture, kept in step by draining egui's
         // texture deltas after every call — `set_partial` is the only thing
@@ -3010,7 +3159,10 @@ mod tests {
         // One flat colour per column, so where each lands is readable.
         let shade = |i: usize| Color32::from_gray(10 * (i as u8 + 1));
         let pixels =
-            restart_pixels(&ring, tex_w, H, 10, 12, |i| vec![shade(i); H]);
+            restart_pixels(&ring, tex_w, H, 10, 12, |i, out| {
+                out.clear();
+                out.extend(std::iter::repeat_n(shade(i), H));
+            });
 
         for (i, key) in (10..=12).enumerate() {
             let x = ring.x_of(key);
@@ -3039,4 +3191,81 @@ mod tests {
         }
     }
 
+    /// The shade table stands in for `cell_color(ramp, bin_level(..))`, and this
+    /// holds it to that mapping byte for byte across every setting that reshapes
+    /// it — the ramp, the dB window's width and position, and the tilt, which is
+    /// the only reason rows differ from each other at all.
+    ///
+    /// A level-indexed table cannot be exact (see [`SHADES`]), so the assertion
+    /// is the BOUND: one level of one channel, on the few texels whose true
+    /// value sat within the sample spacing of a rounding boundary. Asserting the
+    /// rate as well as the size is what makes this a real check — a slope or
+    /// offset read out of the CLAMPED mapping flattens a row, and every texel of
+    /// it would still be "within one level" of black.
+    #[test]
+    fn the_shade_table_matches_the_mapping_it_replaces() {
+        let ramps = [
+            SpectrogramColor::Mono,
+            SpectrogramColor::Ice,
+            SpectrogramColor::Aurora,
+            SpectrogramColor::Magma,
+        ];
+        // A row per octave across the spectrum's whole reach, so the tilt's
+        // effect is sampled where it is largest as well as at the pivot.
+        let bins: Vec<Bin> = (0..12)
+            .map(|i| {
+                let midi = SPECTRUM_MIN_MIDI + i as f32 * 12.0;
+                Bin { read: RowRead::Max { from: 0, to: 1 }, midi, t: i as f32 / 11.0 }
+            })
+            .collect();
+        let (mut worst, mut differing, mut total) = (0i32, 0u64, 0u64);
+        for ramp in ramps {
+            // Including a window narrower than the guard allows, so the table
+            // inherits the same collapse `loudness_db` protects against.
+            for &(floor, ceiling) in &[(-60.0, 0.0), (-120.0, 6.0), (-30.0, -20.0), (-10.0, -10.0)]
+            {
+                for tilt in [0.0, 3.0, -3.0, 6.0] {
+                    let cfg = SpectrumConfig {
+                        spectrogram_color: ramp,
+                        floor_db: floor,
+                        ceiling_db: ceiling,
+                        tilt,
+                        ..SpectrumConfig::default()
+                    };
+                    let shades = Shades::new(&cfg, &bins);
+                    for (r, bin) in bins.iter().enumerate() {
+                        for byte in 0..=BucketDb::MAX {
+                            let want = cell_color(ramp, bin_level(&cfg, byte, bin.midi));
+                            let got = shades.at(r, byte);
+                            total += 1u64;
+                            let d = [
+                                (got.r() as i32 - want.r() as i32).abs(),
+                                (got.g() as i32 - want.g() as i32).abs(),
+                                (got.b() as i32 - want.b() as i32).abs(),
+                            ]
+                            .into_iter()
+                            .max()
+                            .unwrap();
+                            differing += u64::from(d > 0);
+                            assert!(
+                                d <= 1,
+                                "{ramp:?} floor {floor} ceiling {ceiling} tilt {tilt}: row \
+                                 {r} (midi {}) byte {byte} moved a channel by {d} levels \
+                                 ({got:?} against {want:?})",
+                                bin.midi,
+                            );
+                            worst = worst.max(d);
+                        }
+                    }
+                }
+            }
+        }
+        // The rate, not just the size: a row read out of the CLAMPED mapping is
+        // flat, and every texel of it would still be "within one level" of black.
+        assert!(
+            differing * 20 < total,
+            "{differing} of {total} texels differ (worst {worst} level) — the table is \
+             meant to stand in for the mapping, not to approximate it",
+        );
+    }
 }

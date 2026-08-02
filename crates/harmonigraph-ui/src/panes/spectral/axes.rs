@@ -137,13 +137,33 @@ pub(crate) fn power_db(power: f32) -> f32 {
 /// "loud" the same claim in both halves of one pane, and a second one is a
 /// second thing to keep in step.
 pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
+    loudness_raw(cfg, power_db, midi).clamp(0.0, 1.0)
+}
+
+/// [`loudness_db`] before its 0..1 clamp — AFFINE in `power_db`, with a slope
+/// that does not depend on `midi`.
+///
+/// That shape is why this is exposed rather than folded into the one caller
+/// that wants it. The heatmap's cells are stored dB bytes, so a row's whole
+/// mapping is `level = row0 + step * byte` for two constants it can lift out of
+/// the pixel loop, and the ramp behind it can then be a table
+/// (`Shades` in the spectrogram) instead of a per-pixel evaluation — measured at
+/// 58% of a full repaint's arithmetic.
+///
+/// The clamp is what makes it a separate function rather than a note on the
+/// existing one: at a stored `0` the level is far below the floor for any
+/// ordinary dB window, so reading the constants out of the CLAMPED mapping
+/// returns 0 for both and flattens the row. Deriving them here keeps one copy of
+/// the formula — `the_shade_table_matches_the_mapping_it_replaces` holds the
+/// table to it byte for byte.
+pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     // Never trust the pair to be ordered or apart, exactly as the pitch range
     // is not trusted: the bar can't produce a collapsed one, a hand-edited
     // state blob can, and dividing by its zero span paints NaN geometry that
     // takes the editor — and with it the host — down.
     let ceiling = cfg.ceiling_db.max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
-    ((db - cfg.floor_db) / (ceiling - cfg.floor_db)).clamp(0.0, 1.0)
+    (db - cfg.floor_db) / (ceiling - cfg.floor_db)
 }
 
 /// The pane's abstract drawing plane, and how it lands on screen.
