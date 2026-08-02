@@ -790,15 +790,16 @@ impl Default for ViewConfig {
     fn default() -> Self {
         ViewConfig {
             spacing: 1.0,
-            // A tall window of fifths and a wide band of thirds. A sheet
-            // either side (extent 1) shows the septimal axis without anyone
-            // having to go find it; the tradeoff is that nothing tells the
-            // eye which sheet a node is on until the sevens layer settings
-            // below are turned down to read as an annotation rather than a
-            // second sheet (see sevens_size).
+            // A tall window of fifths and a wide band of thirds, on the home
+            // sevens sheet alone. A sheet either side (extent 1) shows the
+            // septimal axis without anyone having to go find it; the
+            // tradeoff is that nothing tells the eye which sheet a node is
+            // on until the sevens layer settings below are turned down to
+            // read as an annotation rather than a second sheet (see
+            // sevens_size).
             extent_threes: 10,
             extent_fives: 6,
-            extent_sevens: 1,
+            extent_sevens: 0,
             center_threes: 0,
             center_fives: 0,
             center_sevens: 0,
