@@ -521,7 +521,8 @@ fn atlas_if_changed(
     state: &crate::SharedState,
     drawn: Vec<GlyphKey>,
 ) -> Option<harmonigraph_render::FontAtlas> {
-    let mut mirror = state.font_atlas.lock().expect("the label mirror is never held across a panic");
+    let mut mirror =
+        state.instruments.font_atlas.lock().expect("the label mirror is never held across a panic");
     // A resize (or the overflow that clears the atlas and starts over)
     // rearranges everything, so it counts as a change on its own.
     let size = ctx.fonts(|fonts| fonts.font_image_size());

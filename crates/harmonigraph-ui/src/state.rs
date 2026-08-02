@@ -229,42 +229,10 @@ pub struct SharedState {
     /// a window it was not saved at is seeded from the fractions it finds in
     /// the dock.
     pub(crate) dial: fold::Dial,
-    /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
-    /// by the render callback and read by the performance overlay. 0 means no
-    /// reading — the device didn't grant timestamp queries, or none has landed
-    /// yet.
-    ///
-    /// An atomic rather than a return value because the measurement crosses a
-    /// boundary the call stack doesn't: it is produced inside egui-wgpu's
-    /// paint callback, several frames after the frame that asked for it. Same
-    /// shape the plugin already uses to publish its sample rate.
-    ///
-    /// Runtime-only, never persisted, and never read by the offline renderer —
-    /// which also never asks for the feature, so it has no timer to begin with.
-    pub(crate) lattice_stats: std::sync::Arc<harmonigraph_render::LatticeStats>,
-    /// How many note segments the docked roll handed its paint callback last
-    /// frame — the geometry `verts` does NOT see, four vertices at a time
-    /// instead of several hundred.
-    ///
-    /// Reported so the roll's load stays visible while it draws from its own
-    /// vertex buffer rather than egui's: without it the overlay would show
-    /// the cost vanish with nothing standing in its place, and "is the roll
-    /// drawing at all" would have no answer. An atomic for the same reason
-    /// `lattice_stats` is one — the roll draws from a `&SharedState`.
-    ///
-    /// Only the docked pane (surface 0) publishes; the Render preview is a
-    /// second roll on screen and reporting its count as THE count would be
-    /// wrong, exactly as it is for the preview's lattice.
-    pub(crate) roll_notes: std::sync::atomic::AtomicU32,
-    /// What the label callback's copy of egui's font atlas holds (see
-    /// [`text::AtlasMirror`]). Behind a lock for the same reason the other
-    /// per-frame publishing is behind atomics: labels are drawn from a
-    /// `&SharedState`. Taken once per flush, uncontended.
-    pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
-    /// What the shell measured about the previous frame, for the
-    /// performance overlay. Written by the shell before `root_ui` and read
-    /// once, by `perf::FrameCosts::assemble`; no pane touches it.
-    pub timings: perf::ShellTimings,
+    /// What the frame measures and publishes about itself — see
+    /// [`Instruments`], which is also where the reason these are not five more
+    /// flat fields lives.
+    pub instruments: Instruments,
     /// Upper bound on how often the UI is drawn, in frames per second;
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
@@ -296,10 +264,91 @@ pub struct SharedState {
     /// only thing that reads it, and the offline renderer never reaches
     /// there.
     pub ui_scale: f32,
+}
+
+/// What the frame publishes about ITSELF: the measurements the performance
+/// overlay reads, and the side channels the draw callbacks write them through.
+///
+/// Grouped for the second half, which is the part worth saying out loud.
+/// `lattice_stats`, `roll_notes` and `font_atlas` are an `Arc`, an atomic and a
+/// `Mutex` not because any of them is contended, but because the values are
+/// produced from a `&SharedState`: egui-wgpu's paint callbacks and the label
+/// batch's flush all run behind a shared reference, with no way to hand a value
+/// back up the call stack — and, for the GPU timer, several frames after the
+/// frame that asked for it. The concurrency primitive IS the return path.
+/// Spread flat among the ordinary fields around them that reason is invisible,
+/// and the obvious reading — that something here is contended — is the wrong
+/// one.
+///
+/// `timings` and `perf` are the other end of the same frame: what the shell
+/// measured before `root_ui` ran, and the rolling windows `root_ui` folds all
+/// of it into. `font_atlas` is the odd member — a mirror rather than a
+/// measurement — and it rides here for the mechanism rather than the meaning:
+/// it is the third thing a draw callback publishes through a shared reference,
+/// taken once per flush and uncontended for exactly the same reason.
+///
+/// None of it is persisted — `save_persist` builds `UiPersist` field by field,
+/// so what is grouped here cannot reach the blob either way — and the offline
+/// renderer never reaches `root_ui`. So nothing in here touches a recorded
+/// frame, which is part of what keeps the determinism test honest.
+pub struct Instruments {
+    /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
+    /// by the render callback and read by the performance overlay. 0 means no
+    /// reading — the device didn't grant timestamp queries, or none has landed
+    /// yet.
+    ///
+    /// Same shape the plugin already uses to publish its sample rate. Never
+    /// read by the offline renderer, which also never asks for the feature, so
+    /// it has no timer to begin with.
+    pub(crate) lattice_stats: std::sync::Arc<harmonigraph_render::LatticeStats>,
+    /// How many note segments the docked roll handed its paint callback last
+    /// frame — the geometry `verts` does NOT see, four vertices at a time
+    /// instead of several hundred.
+    ///
+    /// Reported so the roll's load stays visible while it draws from its own
+    /// vertex buffer rather than egui's: without it the overlay would show the
+    /// cost vanish with nothing standing in its place, and "is the roll drawing
+    /// at all" would have no answer.
+    ///
+    /// Only the docked pane (surface 0) publishes; the Render preview is a
+    /// second roll on screen and reporting its count as THE count would be
+    /// wrong, exactly as it is for the preview's lattice.
+    pub(crate) roll_notes: std::sync::atomic::AtomicU32,
+    /// What the label callback's copy of egui's font atlas holds (see
+    /// [`text::AtlasMirror`]). Taken once per flush, uncontended.
+    pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
+    /// What the shell measured about the previous frame. Written by the shell
+    /// before `root_ui` and read once, by `perf::FrameCosts::assemble`; no pane
+    /// touches it. The one field here a shell outside this crate writes, which
+    /// is why it alone is `pub`.
+    pub timings: perf::ShellTimings,
     /// Rolling frame-rate / CPU / memory numbers for the performance overlay.
-    /// Runtime-only; filled and drawn by [`root_ui`](crate::root_ui), never by the offline
-    /// renderer (so recorded frames stay deterministic).
+    /// Filled and drawn by [`root_ui`](crate::root_ui).
     pub(crate) perf: PerfStats,
+}
+
+impl Default for Instruments {
+    fn default() -> Self {
+        Instruments {
+            lattice_stats: {
+                let stats = harmonigraph_render::LatticeStats::default();
+                // The sentinel that says "no reading has landed yet", which the
+                // overlay draws as `—` rather than as a zero. Set here rather
+                // than being `LatticeStats`'s own default: zero is a legitimate
+                // GPU time, so the distinction belongs to whoever is going to
+                // read it back.
+                stats.gpu_ms.store(
+                    harmonigraph_render::GPU_TIME_PENDING,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                std::sync::Arc::new(stats)
+            },
+            roll_notes: std::sync::atomic::AtomicU32::new(0),
+            font_atlas: Default::default(),
+            timings: perf::ShellTimings::default(),
+            perf: PerfStats::default(),
+        }
+    }
 }
 
 /// A saved camera angle: what the built-in Flat/Isometric buttons are,
@@ -421,19 +470,9 @@ impl SharedState {
             window_width_change: 0.0,
             min_window_width: 0.0,
             dial: fold::Dial::default(),
-            lattice_stats: {
-                let stats = harmonigraph_render::LatticeStats::default();
-                stats
-                    .gpu_ms
-                    .store(harmonigraph_render::GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
-                std::sync::Arc::new(stats)
-            },
-            roll_notes: std::sync::atomic::AtomicU32::new(0),
-            font_atlas: Default::default(),
-            timings: perf::ShellTimings::default(),
+            instruments: Instruments::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
-            perf: PerfStats::default(),
         }
     }
 

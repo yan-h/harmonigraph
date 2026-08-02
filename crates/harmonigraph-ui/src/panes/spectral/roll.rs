@@ -168,8 +168,9 @@ pub(super) fn draw_roll(
         // What the roll costs, for the performance overlay: this geometry
         // does not pass through egui's vertex buffer, so the `verts` row
         // cannot see it. The Render preview is a second roll and does
-        // not publish (see `SharedState::roll_notes`).
+        // not publish (see `Instruments::roll_notes`).
         state
+            .instruments
             .roll_notes
             .store(notes.len() as u32, std::sync::atomic::Ordering::Relaxed);
     }

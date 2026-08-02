@@ -81,7 +81,13 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     }
 
     ui.painter()
-        .add(lattice_paint_callback(rect, &scene, state.target_format, 0, Some(state.lattice_stats.clone())));
+        .add(lattice_paint_callback(
+            rect,
+            &scene,
+            state.target_format,
+            0,
+            Some(state.instruments.lattice_stats.clone()),
+        ));
 
     // One batch for the node labels, flushed before the overlay: a batch draws
     // in the order it collected, so anything meant to sit ON TOP of the names
