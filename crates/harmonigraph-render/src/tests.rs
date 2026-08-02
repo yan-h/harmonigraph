@@ -1176,18 +1176,20 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         extent_threes: 1,
         extent_fives: 1,
         extent_sevens: 2,
-        // A marker on every position, so every node in the window is shipped
-        // and the order below is the order of the whole lattice. Without one
-        // an idle node paints nothing and `from_scene` drops it, which would
-        // leave this asserting about whichever handful happened to draw.
-        idle_marker: harmonigraph_scene::IdleMarker::Dot,
+        // The pale trail ring, which draws with no idle marker and on any
+        // sheet — the one mark that can put something at EVERY position.
+        // An idle marker cannot: it reaches only the home sheet or a visited
+        // node (`idle_marker` in lattice.wgsl), and trails are recorded on
+        // the home sheet alone (`TrailField::apply`), so with one of those
+        // the cull leaves a single sheet and the order below is one depth
+        // compared against itself.
         trail_mark: harmonigraph_scene::TrailMark::Ring,
         trail_strength: 1.0,
         ..ViewConfig::default()
     };
     for projection in [Projection::Cabinet, Projection::Perspective, Projection::Orthographic]
     {
-        let scene = harmonigraph_scene::derive_scene(
+        let mut scene = harmonigraph_scene::derive_scene(
             &harmonigraph_core::NoteTracker::new(),
             &harmonigraph_core::Tuning::default(),
             &view,
@@ -1199,6 +1201,12 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
             None,
             0.0,
         );
+        // Every position visited. Set here rather than played in, because
+        // what this test needs is one node per position on every sheet, and
+        // which nodes a tracker lights is a question about tuning.
+        for node in &mut scene.nodes {
+            node.trail = 1.0;
+        }
         let call = LatticeCallback::from_scene(
             &scene,
             egui::vec2(800.0, 600.0),
@@ -1214,7 +1222,18 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         // the wrong place in the order, and the home sheet's clearings have
         // nothing drawn before them left to clear.
         let depths: Vec<f32> = call.instances.iter().map(|i| i.world_pos[2]).collect();
-        assert!(depths.len() > 1, "the window has to hold several sheets");
+        // Several SHEETS, not several nodes. A node count passes on one
+        // sheet's worth of identical depths, where every pair below holds
+        // whatever the sort did — which is what culling the off-sheet nodes
+        // reduced this to, silently, while it went on reading as coverage.
+        let (lo, hi) = depths.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &d| {
+            (lo.min(d), hi.max(d))
+        });
+        assert!(
+            hi - lo > 1e-6,
+            "{projection:?}: every node drawn is at one depth ({lo}), so the order \
+             below compares a sheet with itself: {depths:?}",
+        );
         for pair in depths.windows(2) {
             assert!(
                 pair[1] >= pair[0] - 1e-6,
