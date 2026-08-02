@@ -16,3 +16,4 @@ mod fold;
 mod settings;
 mod perf;
 mod scale;
+mod profile;
