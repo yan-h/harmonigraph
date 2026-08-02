@@ -99,11 +99,16 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     // The badge is laid out here, before the names are flushed, though it is
     // DRAWN after them. Laying text out is what rasterizes glyphs into egui's
     // font atlas, and an atlas that changes size between two flushes of one
-    // frame recreates the shared texture, which drops the bind group of every
-    // pane — including the one whose `prepare` has already run, whose text then
-    // draws nothing at all that frame. Growing the atlas before the first flush
+    // frame recreates the shared texture. Growing it before the first flush
     // makes that first flush the one carrying the new size, so the second is a
     // texture write and nothing more.
+    //
+    // A saving now, not a correctness requirement:
+    // `harmonigraph_render::TextResources::mirror_atlas` carries every pane it
+    // has already prepared onto the recreated texture, so laying the badge out
+    // at its natural site below would cost a recreate-and-recarry rather than
+    // this pane's text. That it is only a saving is worth knowing before moving
+    // it — the ordering is cheap, and the alternative is not free either.
     let badge = state.learn_active.then(|| learn_badge(ui, rect, now));
     batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
     if let Some(mut badge) = badge {

@@ -229,11 +229,46 @@ impl TextResources {
     }
 
     /// Upload egui's atlas into our own texture, recreating it when it has
-    /// grown. Bind groups referencing the old texture are dropped with it,
-    /// so every pane rebuilds one on its next frame.
+    /// grown — and carrying every pane already prepared this frame over onto
+    /// the new texture, since none of them will prepare again before they are
+    /// painted.
+    ///
+    /// That last part is the whole of why this is not four lines. egui-wgpu
+    /// runs EVERY callback's `prepare` and only then every `paint`, and which
+    /// pane brings a changed atlas is decided by which pane happened to lay out
+    /// a glyph nobody had drawn before — the roll scrolling a new name in, a
+    /// lattice node crossing onto a new rung of the size ladder. Every pane
+    /// that flushed BEFORE that one has already had its turn:
+    ///
+    ///   - its bind group names the texture being replaced here, and a pane
+    ///     whose bind group is dropped paints nothing at all — a whole pane's
+    ///     text gone for one frame, which on a pane that is scrolling reads as
+    ///     the text flickering;
+    ///   - its uniforms carry the atlas size it prepared against, and the
+    ///     shader normalizes texels by that, so a pane left holding the old one
+    ///     would sample a fraction of the way into the wrong row.
+    ///
+    /// Both are put right here rather than deferred to a next frame that, for
+    /// those panes, comes after they have been drawn. Their instance data needs
+    /// nothing, and that rests on two things outside this function. The mirror
+    /// above it (`harmonigraph_ui::text::atlas_if_changed`) records a pane's
+    /// glyphs as seen BEFORE it decides whether to hand out an atlas at all, so
+    /// a pane told `None` is one whose every texel already sits in a snapshot
+    /// some earlier flush uploaded. And an atlas that GREW keeps those texels
+    /// where they were, epaint only ever doubling the height and appending
+    /// transparent rows — which is also what makes the atlas monotone across a
+    /// frame, so no later pane can bring a SMALLER one and strand an earlier
+    /// pane's uvs off the end of it.
+    ///
+    /// The one arrangement neither covers is epaint recycling texels in place,
+    /// which it does once a glyph is too big for the atlas to grow for: live
+    /// glyphs move at a CONSTANT size, so nothing is recreated and nothing here
+    /// can notice. That is held off upstream by `MAX_GLYPH_PX`, and is the
+    /// reason that ceiling is a ceiling rather than a preference.
     fn mirror_atlas(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &FontAtlas) {
         let size = [atlas.image.width() as u32, atlas.image.height() as u32];
-        if self.atlas.is_none() || self.atlas_size != size {
+        let recreated = self.atlas.is_none() || self.atlas_size != size;
+        if recreated {
             self.atlas = Some(device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("text_font_atlas"),
                 size: wgpu::Extent3d {
@@ -249,9 +284,6 @@ impl TextResources {
                 view_formats: &[],
             }));
             self.atlas_size = size;
-            for pane in self.panes.values_mut() {
-                pane.bind_group = None;
-            }
         }
         let texture = self.atlas.as_ref().expect("created above");
         queue.write_texture(
@@ -265,7 +297,54 @@ impl TextResources {
             wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
         );
         self.atlas_key = atlas.key;
+        if !recreated {
+            return;
+        }
+        let view = texture.create_view(&Default::default());
+        let (layout, sampler) = (&self.layout, &self.sampler);
+        for pane in self.panes.values_mut() {
+            // The size alone, not the whole struct: a pane that has already
+            // prepared wrote the rest of its uniforms this frame, and one that
+            // has not is about to write all of them including this.
+            queue.write_buffer(
+                &pane.uniform_buffer,
+                ATLAS_SIZE_OFFSET,
+                bytemuck::cast_slice(&[size[0] as f32, size[1] as f32]),
+            );
+            pane.bind_group = Some(bind_group(device, layout, sampler, &view, pane));
+        }
     }
+}
+
+/// Where [`TextUniforms::atlas_size`] sits, for the partial write above.
+/// Taken from the type rather than counted, so reordering the struct cannot
+/// leave this pointing at `screen_points`.
+const ATLAS_SIZE_OFFSET: wgpu::BufferAddress =
+    std::mem::offset_of!(TextUniforms, atlas_size) as wgpu::BufferAddress;
+
+/// One pane's bind group: its own uniforms, and the shared atlas and sampler.
+fn bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    view: &wgpu::TextureView,
+    pane: &TextPane,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("text_bind_group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: pane.uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
 }
 
 /// One pass's pipeline: instanced quads blended exactly the way egui blends
@@ -391,24 +470,7 @@ impl CallbackTrait for TextCallback {
             count: 0,
         });
         if pane.bind_group.is_none() {
-            pane.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("text_bind_group"),
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: pane.uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                ],
-            }));
+            pane.bind_group = Some(bind_group(device, layout, sampler, &view, pane));
         }
 
         if self.glyphs.len() > pane.capacity {
@@ -591,6 +653,150 @@ mod tests {
         assert_eq!(pixel(&frame, 21, 28), [0, 0, 0, 0], "nothing past the rim's radius");
         assert_eq!(pixel(&frame, 4, 4), [0, 0, 0, 0], "nothing anywhere else");
     }
+
+    /// A pane whose text is already prepared keeps it when a LATER pane in the
+    /// same frame brings a grown atlas.
+    ///
+    /// Which pane brings one is not a property of the pane: it is whichever
+    /// happened to lay out a glyph nobody had drawn before, so on any frame the
+    /// panes ahead of it in paint order have already had their `prepare` and
+    /// will not get another before they are painted. Both halves of what
+    /// [`TextResources::mirror_atlas`] hands them are checked here, and each
+    /// fails on its own — dropping the bind group paints nothing at all, and
+    /// leaving the old `atlas_size` in the uniforms normalizes the glyph's
+    /// texels by the wrong height, which lands the sample below the patch,
+    /// where the atlas is empty. Both are a pane's whole text gone for a frame,
+    /// and on a pane that is scrolling that is text flickering.
+    ///
+    /// The last frame is what makes the second one mean anything. A pane left
+    /// holding BOTH its old bind group and its old uniforms is stale but
+    /// self-consistent: it samples the retired texture by the size that texture
+    /// really is, so it draws the right pixels and passes any assertion about
+    /// the frame it was stranded on. What it can never do is read a glyph
+    /// rasterized into the region the atlas grew INTO, since its texture stops
+    /// short of it — and it never recovers on its own, because `prepare`
+    /// rebuilds a bind group only when there is none. So the third frame draws
+    /// off a patch that exists solely in the grown half, which no pane still
+    /// bound to the old texture can reach.
+    #[test]
+    fn a_prepared_pane_survives_a_later_pane_growing_the_atlas() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // An opaque 8x8 patch at (8, 8), and — once the atlas is tall enough to
+        // hold one — a second at (8, 40), which is reachable only through a
+        // texture of the grown size. Everything else stays transparent, so a
+        // glyph normalized by the wrong height samples nothing rather than
+        // something plausible: the stale size puts this fixture's probe at texel
+        // 25, which is inside the ORIGINAL rows and below the first patch.
+        let atlas_of = |height: usize, key: u64| {
+            let mut image = egui::ColorImage::filled([32, height], egui::Color32::TRANSPARENT);
+            for top in [8, GROWN_PATCH_TOP] {
+                if top + 8 > height {
+                    continue;
+                }
+                for y in top..top + 8 {
+                    for x in 8..16 {
+                        image[(x, y)] = egui::Color32::WHITE;
+                    }
+                }
+            }
+            FontAtlas { image: std::sync::Arc::new(image), key }
+        };
+        let bare = [
+            TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
+            TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
+        ];
+        let at = |x: f32, pane_id: u64, atlas: Option<FontAtlas>| TextCallback {
+            glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], ..glyph() }],
+            rings: bare,
+            atlas,
+            target_format: FORMAT,
+            pane_id,
+        };
+
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+        let rect =
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+        // One frame, in egui-wgpu's own order: every `prepare`, then every
+        // `paint`. That order is the whole mechanism — a pane cannot repair
+        // itself between the two.
+        let frame = |resources: &mut CallbackResources, callbacks: [TextCallback; 2]| -> Vec<u8> {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let mut buffers = Vec::new();
+            for callback in &callbacks {
+                buffers.extend(callback.prepare(&device, &queue, &screen, &mut encoder, resources));
+            }
+            queue.submit(buffers.into_iter().chain([encoder.finish()]));
+            let texture =
+                render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::TRANSPARENT, |pass| {
+                    for callback in &callbacks {
+                        callback.paint(
+                            egui::PaintCallbackInfo {
+                                viewport: rect,
+                                clip_rect: rect,
+                                pixels_per_point: 1.0,
+                                screen_size_px: SIZE,
+                            },
+                            pass,
+                            resources,
+                        );
+                    }
+                });
+            readback(&device, &queue, &texture, SIZE)
+        };
+
+        // The first pane brings the atlas and the second rides on it, which is
+        // the ordinary frame and the baseline the second one is read against.
+        let first =
+            frame(&mut resources, [at(8.0, 0, Some(atlas_of(32, 1))), at(40.0, 1, None)]);
+        assert_eq!(pixel(&first, 12, 28), [255, 255, 255, 255], "the leading pane's glyph");
+        assert_eq!(pixel(&first, 44, 28), [255, 255, 255, 255], "the trailing pane's glyph");
+
+        // Now the other way round: the leading pane has nothing new to say and
+        // the trailing one grows the atlas out from under it.
+        let grown =
+            frame(&mut resources, [at(8.0, 0, None), at(40.0, 1, Some(atlas_of(64, 2)))]);
+        assert_eq!(
+            pixel(&grown, 12, 28),
+            [255, 255, 255, 255],
+            "the leading pane's text must survive the atlas growing after it prepared",
+        );
+        assert_eq!(pixel(&grown, 44, 28), [255, 255, 255, 255], "the trailing pane's glyph");
+
+        // And the leading pane is on the NEW texture, not merely coherent with
+        // the old one: it draws off the patch that only the grown atlas holds.
+        // The trailing pane re-uploads at the SAME size here, which is the
+        // ordinary case — a glyph packed into space the atlas already had — and
+        // takes `mirror_atlas`'s early return, so nothing is handed to the
+        // leading pane on this frame either.
+        let reaching = GlyphInstance {
+            rect: [8.0, 24.0, 8.0, 8.0],
+            uv: [8.0, GROWN_PATCH_TOP as f32, 16.0, GROWN_PATCH_TOP as f32 + 8.0],
+            ..glyph()
+        };
+        let deeper = frame(&mut resources, [
+            TextCallback {
+                glyphs: vec![reaching],
+                rings: bare,
+                atlas: None,
+                target_format: FORMAT,
+                pane_id: 0,
+            },
+            at(40.0, 1, Some(atlas_of(64, 3))),
+        ]);
+        assert_eq!(
+            pixel(&deeper, 12, 28),
+            [255, 255, 255, 255],
+            "the leading pane must be reading the grown texture, not the retired one",
+        );
+        assert_eq!(pixel(&deeper, 44, 28), [255, 255, 255, 255], "the trailing pane's glyph");
+    }
+
+    /// Where the second patch of the fixture above sits: past the 32 rows the
+    /// atlas starts with, so only a texture of the grown size holds it.
+    const GROWN_PATCH_TOP: usize = 40;
 
     /// The rim's opacity is `1 - PRODUCT(1 - alpha)` over the samples that
     /// cover a pixel, which is what stamping the text around that ring
