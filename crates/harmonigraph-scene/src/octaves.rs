@@ -206,8 +206,16 @@ impl Default for OctaveLayout {
 ///
 /// An even axis is `amount` 0, so it is where the bar starts rather than a mode
 /// beside it — and the shape is inert there, which is exactly what "no taper"
-/// should mean. Both are inert at a span of 2, where every slice IS an edge
-/// slice and there is nowhere for the width they give up to go.
+/// should mean.
+///
+/// Each is also inert at the bottom of the span, and at a different span,
+/// which is why the two bars are gated separately. The AMOUNT does nothing at
+/// a span of 2, where every slice IS an edge slice and there is nowhere for
+/// the width they give up to go. The SHAPE does nothing at 4 and under: it can
+/// only redistribute the lift between slices at different distances from the
+/// middle, and at 3 there is one slice between the edges while at 4 the two of
+/// them are equidistant and split it evenly whatever the exponent. See
+/// [`the_shape_is_inert_at_four_octaves_and_under`](self).
 ///
 /// The taper turns WITH each node's ring rather than staying pinned to the
 /// screen, so every node shows the same shape and the widest slice is always
@@ -660,6 +668,29 @@ mod tests {
         let ramp: Vec<f32> = (0..4).map(|i| width(0.5, i + 1) - width(0.5, i)).collect();
         for step in &ramp {
             assert!((step - ramp[0]).abs() < 1e-3, "the bar's middle is not a straight ramp");
+        }
+    }
+
+    /// WHERE the shape starts biting, which is the thing the UI's enable gate
+    /// has to agree with. The exponent only has somewhere to land once two
+    /// slices inside the edges sit at DIFFERENT distances from the middle: at
+    /// four octaves the two of them are equidistant, so they split the lift
+    /// evenly whatever the curve, exactly as the single one at three octaves
+    /// takes all of it. Five is the first span the bar can move.
+    #[test]
+    fn the_shape_is_inert_at_four_octaves_and_under() {
+        let moved = |span: u32| {
+            let (flat, sharp) =
+                (octave_layout(span, 60.0, 0.6, 0.0), octave_layout(span, 60.0, 0.6, 1.0));
+            (0..=span as usize)
+                .map(|i| (flat.bounds[i] - sharp.bounds[i]).abs())
+                .fold(0.0f32, f32::max)
+        };
+        for span in [MIN_SPAN, 3, 4] {
+            assert!(moved(span) < 1e-5, "span {span}: the shape moved {} rad", moved(span));
+        }
+        for span in [5u32, 9, MAX_SPAN] {
+            assert!(moved(span) > 0.01, "span {span}: the shape moved nothing");
         }
     }
 

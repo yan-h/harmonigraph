@@ -122,11 +122,14 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  shape below never moves them",
             );
     });
-    // Inert at amount 0, where there is no loss to place, and at three octaves
-    // and under, where the one slice between the two edges takes all of it
-    // whatever the curve: the shape bar can only say where a taper falls,
-    // never whether there is one.
-    ui.add_enabled_ui(view.octave_taper_amount > 0.0 && view.octave_count > 3, |ui| {
+    // Inert at amount 0, where there is no loss to place, and at four octaves
+    // and under, where the shape has nothing to tell apart: at three the one
+    // slice between the two edges takes all of the lift whatever the curve,
+    // and at four the two of them sit the same distance from the middle and
+    // split it evenly at every exponent. Five is the first span the bar can
+    // move (`the_shape_is_inert_at_four_octaves_and_under`). The shape bar can
+    // only say where a taper falls, never whether there is one.
+    ui.add_enabled_ui(view.octave_taper_amount > 0.0 && view.octave_count > 4, |ui| {
         ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Taper shape")
             .show(ui)
             .on_hover_text(
