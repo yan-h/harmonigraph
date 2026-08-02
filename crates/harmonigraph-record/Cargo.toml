@@ -10,9 +10,10 @@ publish = false
 # may allocate or block: rtrb for the rings, parking_lot for the one mutex the
 # GUI and writer threads share. Nothing here reaches egui or wgpu, and the
 # dependency list is what makes that checkable rather than merely intended —
-# `ParamKey` (what a recorded automation record is named by) and
-# `RenderConfig`/`RenderProgress` (what the Video pane asks for and reads back)
-# are take payload and live in harmonigraph-take, so no GUI stack is linked.
+# `ParamKey` (what a recorded automation record is named by) and `RenderConfig`
+# (what the Video pane asks for) are take payload and live in
+# harmonigraph-take, and `RenderProgress` (what this crate reports back) sits
+# beside them, so no GUI stack is linked.
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-take = { workspace = true }

@@ -1,18 +1,27 @@
 //! How a take becomes a video: what the render is composed and triggered by,
 //! and how far one has got.
 //!
-//! These live here rather than in the UI that edits them because they are take
-//! PAYLOAD. `RenderFrame` is the composition a take was framed at, and the
-//! offline renderer reads it out of the take so a re-render reproduces the
-//! framing it was dialled in at rather than whatever the editor happens to be
-//! set to now. `lead_in` and `playhead` are read the same way.
+//! The SETTINGS live here rather than in the UI that edits them because they
+//! are take PAYLOAD. `RenderFrame` is the composition a take was framed at,
+//! and the offline renderer reads it out of the take so a re-render reproduces
+//! the framing it was dialed in at rather than whatever the editor happens to
+//! be set to now. `lead_in` and `playhead` are read the same way.
 //!
 //! Resolution is the deliberate exception and stays outside `RenderFrame` —
 //! see [`RenderConfig::short_edge`].
 //!
-//! Serde-facing throughout: every one of these round-trips through a saved
-//! project's UI blob and through the `ui_state` a take carries, so a field's
-//! `default` is what a blob written before it existed loads as.
+//! They are serde-facing: each round-trips through a saved project's UI blob
+//! and through the `ui_state` a take carries, so a field's `default` is what a
+//! blob written before it existed loads as.
+//!
+//! [`RenderProgress`] is the one member that is NEITHER — no serde, and it
+//! never enters a take. It is counted off the renderer subprocess's stdout and
+//! lives only as long as that process. It sits beside the settings because
+//! `harmonigraph-record` drives that subprocess and reports it back, and must
+//! not link the editor to do so: settings in, progress out is the whole of
+//! what the recorder needs from the Video pane. Moving it back to the UI on
+//! the grounds that it is not payload would put the GUI stack back on the
+//! record path, which is what #176 removed.
 
 /// What counts as "the take is done", and so when a video gets rendered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

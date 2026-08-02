@@ -37,12 +37,15 @@ pub use config::{
     SpectralOrientation, SpectrogramColor, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
     TILT_STEPS,
 };
-// The render settings and the render's progress live in `harmonigraph-take`,
-// because they are take payload: a take carries the frame it was composed at,
-// so a re-render reproduces that framing rather than whatever the editor is
-// set to now. Re-exported here because every pane, shell and test already
-// reaches them through this crate, and where a type is defined is not their
-// business.
+// The render settings live in `harmonigraph-take` because they are take
+// payload: a take carries the frame it was composed at, so a re-render
+// reproduces that framing rather than whatever the editor is set to now.
+// `RenderProgress` travels with them for a different reason — it is what the
+// recorder reports back while a render runs, and it lives beside the settings
+// so `harmonigraph-record` needs no editor to hand it over.
+//
+// Re-exported here because every pane, shell and test already reaches them
+// through this crate, and where a type is defined is not their business.
 pub use harmonigraph_take::{
     LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger,
 };
