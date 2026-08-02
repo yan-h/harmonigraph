@@ -723,12 +723,15 @@ impl<'a> RangeBar<'a> {
     /// Land on whole values only — for a range whose ends MEAN something at
     /// each step and whose readout says which one it is.
     ///
-    /// The octave wheel's Range is the case: its readout is a note name, and
-    /// what it draws changes on a semitone boundary (a node's octave is either
-    /// inside the window or it isn't). Left continuous, two windows a tenth of
-    /// a semitone apart both read "C1" while one of them draws an indicator
-    /// fewer, and a window exactly on an octave — the reference case for the
-    /// whole layout — is unreachable except by luck.
+    /// The case for it is a range read out as a note name: left continuous,
+    /// two ends a tenth of a semitone apart both read "C1" while one of them
+    /// draws an indicator fewer, and an end exactly on an octave is
+    /// unreachable except by luck.
+    ///
+    /// No `RangeBar` in the panes asks for this — the octave wheel is a count
+    /// and a center, and snaps through [`ValueBar::integer`] instead. Kept as
+    /// the pair to that one so a range whose ends MEAN something at each step
+    /// has it available, and exercised by this module's tests.
     ///
     /// Snapped at the POINTER, ahead of the grab arithmetic, so the minimum
     /// span survives it: rounding the pair afterwards can take a semitone off

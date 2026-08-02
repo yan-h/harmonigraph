@@ -519,7 +519,7 @@ impl AtlasMirror {
     ///
     /// All four guards above read one egui `Context`, and a shell that builds
     /// a second one leaves them answering for an atlas nobody is drawing from.
-    /// See [`SharedState::release_context_resources`](crate::SharedState::release_context_resources),
+    /// See [`release_context_resources`](crate::SharedState::release_context_resources),
     /// which is the one caller.
     ///
     /// `key` is deliberately kept: it counts publications rather than
