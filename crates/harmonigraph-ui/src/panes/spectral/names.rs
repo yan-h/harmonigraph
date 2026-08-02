@@ -462,10 +462,11 @@ pub(super) fn plan(
             placed.push(NoteLabel { name, rect, #[cfg(test)] at: edge.time });
         }
     }
-    // Sounding notes reach the sweep out of a map, so their order among
-    // themselves is not one: it decides which of two overlapping held names
-    // lands on top, and the offline render must not draw that differently
-    // twice. Every other name was already ordered by the sweep.
+    // Sounding notes reach the sweep in the tracker's key order — stable, but
+    // not an order that means anything here: it would decide which of two
+    // overlapping held names lands on top, and that has to follow from where
+    // they sit rather than from how they are stored. Every other name was
+    // already ordered by the sweep.
     held.sort_unstable_by(|a, b| {
         a.rect.min.x.total_cmp(&b.rect.min.x).then(a.rect.min.y.total_cmp(&b.rect.min.y))
     });

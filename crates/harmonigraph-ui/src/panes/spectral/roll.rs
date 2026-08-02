@@ -223,10 +223,13 @@ pub(super) fn note_instances(
     // stops a brief note pulsing as it scrolls. See [`MIN_LENGTH_DEVICE_PX`].
     let min_half_depth = 0.5 * MIN_LENGTH_DEVICE_PX / ppp.max(1e-3);
 
-    // Build in a stable order (the live notes come out of a HashMap, whose
-    // iteration order varies per run): instances rasterize in buffer order,
-    // so where two notes overlap the paint order is visible, and the offline
-    // render must be byte-identical between runs.
+    // Build in START order. The tracker hands notes back finished-first and
+    // then sounding, which is release order followed by key order — stable,
+    // but not this one. Instances rasterize in buffer order, so where two
+    // translucent notes overlap the paint order is visible, and the comparator
+    // has to be TOTAL or the sort is free to vary between runs: a retrigger
+    // with no intervening note-off puts two entries at the same start, which
+    // is what the channel and note tails settle.
     // Whole-song (offline playhead): the render lays the whole take out at once
     // from a full roll built up front. Live: the causal tracker's rolling
     // window, filling in as notes arrive.
