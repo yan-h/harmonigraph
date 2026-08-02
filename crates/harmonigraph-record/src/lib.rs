@@ -3,13 +3,19 @@
 //!
 //! # Why this is a crate of its own
 //!
-//! `harmonigraph-take` is the take FORMAT, and stays tiny — serde and ron —
-//! so anything that reads or writes a take can have it without a GUI stack.
-//! Recording one needs more than the format: `ParamKey` to name an automation
-//! record by, and the Video pane's `RenderConfig`/`RenderProgress` to launch
-//! and report a render, all of which live in `harmonigraph-ui`. So the
-//! recorder sits BESIDE the format crate rather than inside it, and the format
-//! crate's dependency list is left alone.
+//! `harmonigraph-take` is the take FORMAT, and stays tiny — serde, ron and
+//! `harmonigraph-core` — so anything that reads or writes a take can have it
+//! without a GUI stack. Recording one is a different job: rings on the audio
+//! thread, transport handling, and a subprocess driver, none of which the
+//! format should have to carry to be read. So the recorder sits BESIDE the
+//! format crate rather than inside it.
+//!
+//! What it does NOT need is the editor. `ParamKey` (what an automation record
+//! is named by) and `RenderConfig`/`RenderProgress` (what the Video pane asks
+//! for and reads back) are take payload and live in `harmonigraph-take`, so
+//! this crate depends on core and the format and nothing else. That is what
+//! makes the manifest's "nothing on the record path may allocate or block" a
+//! promise the dependency list can keep rather than only an intention.
 //!
 //! Nothing here touches the plugin API. That is what lets the whole
 //! record-and-render path — rings, transport handling, subprocess driver,
@@ -62,7 +68,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use harmonigraph_core::notes::NoteEventKind;
-use harmonigraph_ui::params::ParamKey;
+use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
 /// Ring capacity. Sized for a fast offline render rather than for a
@@ -183,7 +189,7 @@ impl RenderRequest {
     /// now — its own recorded audio as the spectrogram, playhead on — so this is
     /// unconditional; the `Option` is kept only for `Control::stop`'s signature.
     /// Uses the take's own recorded look.
-    pub fn from_config(config: &harmonigraph_ui::RenderConfig) -> Option<RenderRequest> {
+    pub fn from_config(config: &harmonigraph_take::RenderConfig) -> Option<RenderRequest> {
         Some(Self::build(config, None))
     }
 
@@ -191,13 +197,13 @@ impl RenderRequest {
     /// carries the CURRENT `ui_state` blob so the render reflects the frame,
     /// bounce, and offset dialed in *after* recording — not the take's
     /// record-time snapshot.
-    pub fn render_now(config: &harmonigraph_ui::RenderConfig, ui_state: String) -> RenderRequest {
+    pub fn render_now(config: &harmonigraph_take::RenderConfig, ui_state: String) -> RenderRequest {
         Self::build(config, Some(ui_state))
     }
 
     /// A blank renderer path means "use the default" rather than an empty
     /// argument the renderer would reject.
-    fn build(config: &harmonigraph_ui::RenderConfig, ui_state: Option<String>) -> RenderRequest {
+    fn build(config: &harmonigraph_take::RenderConfig, ui_state: Option<String>) -> RenderRequest {
         let program = if config.renderer_path.trim().is_empty() {
             default_renderer_path()
         } else {
@@ -518,7 +524,7 @@ impl Control {
 
     /// How far the render running in the background has got, or `None` when
     /// none is. Read every GUI frame; see [`Progress`].
-    pub fn render_progress(&self) -> Option<harmonigraph_ui::RenderProgress> {
+    pub fn render_progress(&self) -> Option<harmonigraph_take::RenderProgress> {
         self.progress.read()
     }
 
@@ -1002,8 +1008,8 @@ impl Progress {
         self.in_flight.fetch_sub(1, Ordering::Release);
     }
 
-    fn read(&self) -> Option<harmonigraph_ui::RenderProgress> {
-        (self.in_flight.load(Ordering::Acquire) > 0).then(|| harmonigraph_ui::RenderProgress {
+    fn read(&self) -> Option<harmonigraph_take::RenderProgress> {
+        (self.in_flight.load(Ordering::Acquire) > 0).then(|| harmonigraph_take::RenderProgress {
             done: self.done.load(Ordering::Relaxed),
             total: self.total.load(Ordering::Relaxed),
         })
@@ -1277,7 +1283,7 @@ fn spawn_render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_ui::RenderConfig;
+    use harmonigraph_take::RenderConfig;
 
     /// A [`Recorder`] whose rings the test keeps the far end of.
     ///
@@ -1499,7 +1505,7 @@ mod tests {
     #[test]
     fn the_frame_sizes_the_render() {
         let portrait_4k = RenderConfig {
-            frame: harmonigraph_ui::RenderFrame {
+            frame: harmonigraph_take::RenderFrame {
                 aspect_w: 9,
                 aspect_h: 16,
                 ..Default::default()
@@ -1772,7 +1778,7 @@ mod tests {
         // the render finished on either.
         assert_eq!(
             progress.read(),
-            Some(harmonigraph_ui::RenderProgress { done: 108, total: 108 })
+            Some(harmonigraph_take::RenderProgress { done: 108, total: 108 })
         );
 
         progress.end();
@@ -1806,7 +1812,7 @@ mod tests {
         follow("x.take: -> 300 frames at 60 fps\n\r  240/300 frames (80%)".as_bytes(), &progress);
         assert_eq!(
             progress.read(),
-            Some(harmonigraph_ui::RenderProgress { done: 240, total: 300 })
+            Some(harmonigraph_take::RenderProgress { done: 240, total: 300 })
         );
     }
 
@@ -2275,7 +2281,7 @@ mod tests {
         ctrl.progress.total.store(9, Ordering::Relaxed);
         assert_eq!(
             ctrl.render_progress(),
-            Some(harmonigraph_ui::RenderProgress { done: 7, total: 9 })
+            Some(harmonigraph_take::RenderProgress { done: 7, total: 9 })
         );
         ctrl.progress.end();
         assert_eq!(ctrl.render_progress(), None);
@@ -2343,7 +2349,7 @@ mod tests {
         );
         assert_eq!(
             progress.read(),
-            Some(harmonigraph_ui::RenderProgress { done: 240, total: 300 })
+            Some(harmonigraph_take::RenderProgress { done: 240, total: 300 })
         );
 
         // A real error ends the read, so nothing past it is consumed.

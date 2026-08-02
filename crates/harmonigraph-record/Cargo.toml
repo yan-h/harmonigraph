@@ -8,14 +8,14 @@ publish = false
 
 # Half of this crate runs on the audio thread, so nothing on the record path
 # may allocate or block: rtrb for the rings, parking_lot for the one mutex the
-# GUI and writer threads share. harmonigraph-ui is here for `ParamKey` (what a
-# recorded automation record is named by) and `RenderConfig`/`RenderProgress`
-# (what the Video pane asks for and reads back) — it is a GUI stack, which is
-# why this lives beside harmonigraph-take rather than inside it.
+# GUI and writer threads share. Nothing here reaches egui or wgpu, and the
+# dependency list is what makes that checkable rather than merely intended —
+# `ParamKey` (what a recorded automation record is named by) and
+# `RenderConfig`/`RenderProgress` (what the Video pane asks for and reads back)
+# are take payload and live in harmonigraph-take, so no GUI stack is linked.
 [dependencies]
 harmonigraph-core = { workspace = true }
 harmonigraph-take = { workspace = true }
-harmonigraph-ui = { workspace = true }
 
 rtrb = { workspace = true }
 parking_lot = { workspace = true }

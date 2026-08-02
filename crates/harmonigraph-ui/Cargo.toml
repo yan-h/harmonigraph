@@ -9,6 +9,7 @@ license.workspace = true
 harmonigraph-core = { workspace = true }
 harmonigraph-scene = { workspace = true }
 harmonigraph-render = { workspace = true }
+harmonigraph-take = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }
 glam = { workspace = true }

@@ -34,8 +34,17 @@ pub use layout::{Layout, Placement, PRESETS};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    LatticeSide, RenderConfig, RenderFrame, RenderTrigger, SpectralOrientation, SpectrogramColor,
-    SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE, TILT_STEPS,
+    SpectralOrientation, SpectrogramColor, SpectrumConfig, SpectrumWindow, SCALE_BAR_RANGE,
+    TILT_STEPS,
+};
+// The render settings and the render's progress live in `harmonigraph-take`,
+// because they are take payload: a take carries the frame it was composed at,
+// so a re-render reproduces that framing rather than whatever the editor is
+// set to now. Re-exported here because every pane, shell and test already
+// reaches them through this crate, and where a type is defined is not their
+// business.
+pub use harmonigraph_take::{
+    LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger,
 };
 pub(crate) use config::{
     COLOR_RANGE_MIN_SPAN, LEVEL_MAX_DB, LEVEL_MIN_DB, LEVEL_RANGE_MIN_SPAN, PITCH_RANGE_MIN_SPAN,
@@ -44,9 +53,7 @@ pub(crate) use config::{
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory, WholeSong};
 pub(crate) use spectrum::{SpectrogramCache, SpectrogramKey};
 pub use perf::ShellTimings;
-pub use state::{
-    render_config_from_persist, CameraPreset, Console, RenderProgress, SharedState, TakeState,
-};
+pub use state::{render_config_from_persist, CameraPreset, Console, SharedState, TakeState};
 pub(crate) use state::default_dock;
 
 use harmonigraph_core::{Comma, PitchClass, Tuning};

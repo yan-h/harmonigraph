@@ -11,7 +11,7 @@ use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
 
 use crate::perf::{self, PerfStats};
 use crate::{fold, panes, text};
-use crate::{AudioSpectrum, RenderConfig, SpectrumConfig, WholeSong};
+use crate::{AudioSpectrum, RenderConfig, RenderProgress, SpectrumConfig, WholeSong};
 
 /// Scrollback for the debug console pane. Shells and panes log via
 /// [`SharedState::log`].
@@ -37,29 +37,6 @@ impl Console {
 
     pub fn clear(&mut self) {
         self.lines.clear();
-    }
-}
-
-/// How far a video render running in the background has got.
-///
-/// Frames rather than a fraction, because frames are what the renderer counts
-/// and "3400/5400" says something a filled bar cannot: how long is left, at
-/// whatever rate you have been watching it go.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RenderProgress {
-    /// Frames written so far.
-    pub done: u64,
-    /// Frames the render is aiming for — 0 until the renderer has said, which
-    /// is a moment into the run (it has a take to read and an encoder to
-    /// start first).
-    pub total: u64,
-}
-
-impl RenderProgress {
-    /// The share done, in `0..=1`, or `None` while the total is unknown —
-    /// which is not the same as zero, and must not draw as it.
-    pub fn fraction(self) -> Option<f32> {
-        (self.total > 0).then(|| (self.done as f32 / self.total as f32).clamp(0.0, 1.0))
     }
 }
 
