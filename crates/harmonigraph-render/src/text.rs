@@ -653,22 +653,41 @@ mod tests {
     /// [`TextResources::mirror_atlas`] hands them are checked here, and each
     /// fails on its own — dropping the bind group paints nothing at all, and
     /// leaving the old `atlas_size` in the uniforms normalizes the glyph's
-    /// texels by the wrong height, which here reads the empty half of the grown
-    /// atlas. Both are a pane's whole text gone for a frame, and on a pane that
-    /// is scrolling that is text flickering.
+    /// texels by the wrong height, which lands the sample below the patch,
+    /// where the atlas is empty. Both are a pane's whole text gone for a frame,
+    /// and on a pane that is scrolling that is text flickering.
+    ///
+    /// The last frame is what makes the second one mean anything. A pane left
+    /// holding BOTH its old bind group and its old uniforms is stale but
+    /// self-consistent: it samples the retired texture by the size that texture
+    /// really is, so it draws the right pixels and passes any assertion about
+    /// the frame it was stranded on. What it can never do is read a glyph
+    /// rasterized into the region the atlas grew INTO, since its texture stops
+    /// short of it — and it never recovers on its own, because `prepare`
+    /// rebuilds a bind group only when there is none. So the third frame draws
+    /// off a patch that exists solely in the grown half, which no pane still
+    /// bound to the old texture can reach.
     #[test]
     fn a_prepared_pane_survives_a_later_pane_growing_the_atlas() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        // The same opaque 8x8 patch at (8, 8), in an atlas of whatever height.
-        // Everything below it stays transparent, so a glyph normalized by the
-        // old height samples nothing rather than something plausible.
+        // An opaque 8x8 patch at (8, 8), and — once the atlas is tall enough to
+        // hold one — a second at (8, 40), which is reachable only through a
+        // texture of the grown size. Everything else stays transparent, so a
+        // glyph normalized by the wrong height samples nothing rather than
+        // something plausible: the stale size puts this fixture's probe at texel
+        // 25, which is inside the ORIGINAL rows and below the first patch.
         let atlas_of = |height: usize, key: u64| {
             let mut image = egui::ColorImage::filled([32, height], egui::Color32::TRANSPARENT);
-            for y in 8..16 {
-                for x in 8..16 {
-                    image[(x, y)] = egui::Color32::WHITE;
+            for top in [8, GROWN_PATCH_TOP] {
+                if top + 8 > height {
+                    continue;
+                }
+                for y in top..top + 8 {
+                    for x in 8..16 {
+                        image[(x, y)] = egui::Color32::WHITE;
+                    }
                 }
             }
             FontAtlas { image: std::sync::Arc::new(image), key }
@@ -734,7 +753,39 @@ mod tests {
             "the leading pane's text must survive the atlas growing after it prepared",
         );
         assert_eq!(pixel(&grown, 44, 28), [255, 255, 255, 255], "the trailing pane's glyph");
+
+        // And the leading pane is on the NEW texture, not merely coherent with
+        // the old one: it draws off the patch that only the grown atlas holds.
+        // The trailing pane re-uploads at the SAME size here, which is the
+        // ordinary case — a glyph packed into space the atlas already had — and
+        // takes `mirror_atlas`'s early return, so nothing is handed to the
+        // leading pane on this frame either.
+        let reaching = GlyphInstance {
+            rect: [8.0, 24.0, 8.0, 8.0],
+            uv: [8.0, GROWN_PATCH_TOP as f32, 16.0, GROWN_PATCH_TOP as f32 + 8.0],
+            ..glyph()
+        };
+        let deeper = frame(&mut resources, [
+            TextCallback {
+                glyphs: vec![reaching],
+                rings: bare,
+                atlas: None,
+                target_format: FORMAT,
+                pane_id: 0,
+            },
+            at(40.0, 1, Some(atlas_of(64, 3))),
+        ]);
+        assert_eq!(
+            pixel(&deeper, 12, 28),
+            [255, 255, 255, 255],
+            "the leading pane must be reading the grown texture, not the retired one",
+        );
+        assert_eq!(pixel(&deeper, 44, 28), [255, 255, 255, 255], "the trailing pane's glyph");
     }
+
+    /// Where the second patch of the fixture above sits: past the 32 rows the
+    /// atlas starts with, so only a texture of the grown size holds it.
+    const GROWN_PATCH_TOP: usize = 40;
 
     /// The rim's opacity is `1 - PRODUCT(1 - alpha)` over the samples that
     /// cover a pixel, which is what stamping the text around that ring
