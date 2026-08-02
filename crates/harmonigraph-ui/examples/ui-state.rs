@@ -62,10 +62,11 @@ fn main() -> Result<(), String> {
             "outer_outer" => view.outer_outer = num()?,
             "outer_gap" => view.outer_gap = num()?,
             "mark_thickness" => view.mark_thickness = num()?,
-            // The octave wheel: the pitch window it covers, and how the circle
-            // is divided between the octaves inside it.
-            "octave_low" => view.octave_low = num()?,
-            "octave_high" => view.octave_high = num()?,
+            // The octave wheel: how many octaves one turn covers, which pitch
+            // sits at the top of it, and how the circle is divided between
+            // them.
+            "octave_count" => view.octave_count = num()? as u32,
+            "octave_center" => view.octave_center = num()?,
             "octave_taper_amount" => view.octave_taper_amount = num()?,
             "octave_taper_shape" => view.octave_taper_shape = num()?,
             "bloom_strength" => view.bloom_strength = num()?,

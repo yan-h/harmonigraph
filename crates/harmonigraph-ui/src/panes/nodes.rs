@@ -9,7 +9,8 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{
-    NodeStyle, ViewConfig, MAX_TAPER_AMOUNT, MIN_WINDOW, PITCH_CEIL, PITCH_FLOOR,
+    clamp_span, NodeStyle, ViewConfig, MAX_SPAN, MAX_TAPER_AMOUNT, MIN_SPAN, PITCH_CEIL,
+    PITCH_FLOOR,
 };
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
@@ -71,55 +72,69 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// pitch axis that runs once round the node. Independent of the Core.
 fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Octaves");
-    // Range and Taper are the axis; Band and Gap below are where it is drawn.
+    // Octaves, Center and Taper are the axis; Band and Gap below are where it
+    // is drawn.
     //
-    // A PITCH RANGE, dragged like the color range and the analyzer's axis, not
-    // a count of octaves: the wheel is a window onto the keyboard, and which
-    // register it is about is the question worth asking of it. The octaves are
-    // what the window is divided BY — a node draws the ones it has inside,
-    // wherever the ends fall between them.
-    //
-    // Both ends over the whole of MIDI, so any register can be framed; the
-    // minimum span is four octaves — C1..C5 — which is where the taper's
-    // arithmetic starts running an indicator up toward a whole turn (see
-    // `harmonigraph_scene::MIN_WINDOW`).
-    ui.label("Range");
-    RangeBar::new(&mut view.octave_low, &mut view.octave_high, PITCH_FLOOR..=PITCH_CEIL)
-        .min_span(MIN_WINDOW)
-        // Whole semitones, because that is what the readout can say and what
-        // the wheel can act on: an octave of a node is either inside the
-        // window or it isn't, and the boundary is a semitone.
+    // A COUNT and a CENTER rather than a pitch range: a slice is always
+    // exactly one octave, so an indicator can never stand for less pitch than
+    // it names — which a continuous window cannot promise, its two ends
+    // falling wherever they like between two of a node's octaves and cutting
+    // the indicators there short. Which register the wheel is about is the
+    // Center; how much keyboard reaches round it is the count.
+    let mut count = view.octave_count as f32;
+    ValueBar::new(&mut count, MIN_SPAN as f32..=MAX_SPAN as f32, "Octaves")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "How many octaves one turn of a node covers. Every node draws this \
+             many indicators and each is exactly one octave, so a narrow \
+             setting gives each of them more of the ring and a wide one \
+             reaches more of the keyboard; notes past either end light the \
+             outermost indicator on their side rather than vanishing",
+        );
+    view.octave_count = clamp_span(count.round().max(0.0) as u32);
+    // Whole semitones, because that is the step the wheel can act on and what
+    // the readout can name.
+    ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center")
         .integer()
         .display(pitch_readout)
         .show(ui)
         .on_hover_text(
-            "The pitch window one turn of a node covers. Each node draws the \
-             octaves of itself that land inside it, so a narrow window gives \
-             each of them more of the ring and a wide one reaches more of the \
-             keyboard. Drag either end, or drag between them to move the whole \
-             window; notes outside it light the outermost indicator on their \
-             side rather than vanishing.",
+            "The pitch at the TOP of the wheel — on every node, whatever its \
+             pitch class. Each node draws the octaves of itself nearest this \
+             one, and its ring is turned so they land on their own pitches: \
+             the half octave below turns left, the half above turns right",
         );
     // The taper is two bars rather than a list of named curves: the amount is
-    // the only thing that moves the ends, the shape says where in between the
+    // the only thing that moves the edges, the shape says where in between the
     // loss falls, and an even axis is amount 0 rather than a mode beside them.
-    ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Taper amount")
-        .show(ui)
-        .on_hover_text(
-            "How much of its width the octave at the EDGE of the range gives \
-             up, which the ones inside it take: 0 is an even axis — no taper \
-             at all — and 0.9 leaves those outermost slices a tenth of the \
-             width an even octave would have. This alone sets them; the Taper \
-             shape below never moves them",
-        );
-    // Inert at amount 0, where there is no loss to place: the shape bar can
-    // only say where a taper falls, not whether there is one.
-    ui.add_enabled_ui(view.octave_taper_amount > 0.0, |ui| {
+    //
+    // At two octaves every slice IS an edge slice, so there is nowhere for the
+    // width the amount takes to go and the bar has nothing to say.
+    ui.add_enabled_ui(view.octave_count > MIN_SPAN, |ui| {
+        ValueBar::new(&mut view.octave_taper_amount, 0.0..=MAX_TAPER_AMOUNT, "Taper amount")
+            .show(ui)
+            .on_hover_text(
+                "How much of its width the octave at the EDGE of the ring gives \
+                 up, which the ones inside it take: 0 is an even axis — no taper \
+                 at all — and 0.9 leaves those outermost slices a tenth of the \
+                 width an even octave would have. This alone sets them; the Taper \
+                 shape below never moves them",
+            );
+    });
+    // Inert at amount 0, where there is no loss to place, and at four octaves
+    // and under, where the shape has nothing to tell apart: at three the one
+    // slice between the two edges takes all of the lift whatever the curve,
+    // and at four the two of them sit the same distance from the middle and
+    // split it evenly at every exponent. Five is the first span the bar can
+    // move (`the_shape_is_inert_at_four_octaves_and_under`). The shape bar can
+    // only say where a taper falls, never whether there is one.
+    ui.add_enabled_ui(view.octave_taper_amount > 0.0 && view.octave_count > 4, |ui| {
         ValueBar::new(&mut view.octave_taper_shape, 0.0..=1.0, "Taper shape")
             .show(ui)
             .on_hover_text(
                 "WHERE that width is given up. Left of the middle it goes at \
-                 once — the octave next to the middle of the range gives up \
+                 once — the octave next to the middle of the ring gives up \
                  most of what the edge one does and the outer ones flatten \
                  off, a spotlight on the middle. Right of it the middle \
                  several octaves stay near full width and the outermost fall \
@@ -196,10 +211,10 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 }
 
 /// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
-/// as pitches rather than bare numbers. Shared by the octave Range and the
+/// as pitches rather than bare numbers. Shared by the octave Center and the
 /// color range.
 ///
-/// It ROUNDS, which is exact for the octave Range (its bar lands on whole
+/// It ROUNDS, which is exact for the octave Center (its bar lands on whole
 /// semitones) and a reading for the color range (whose ends are a continuous
 /// gradient, where a tenth of a semitone changes nothing anyone can see). A
 /// caller wanting finer steps than a semitone needs its own readout, not a
