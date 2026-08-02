@@ -64,8 +64,9 @@
 //! is drawn in a window that has not moved yet. Neither direction survives
 //! that on its own: an unfold against the narrow window jumps every boundary
 //! inward, and a fold against the wide one keeps the folded pane's whole
-//! column, body gone and width held, which for the lattice in a 1000pt editor
-//! is a 207pt hole. Deferring the layout write does not reach the second — the
+//! column, body gone and width held, which for the Spectral pane in a 1000pt
+//! editor is a 207pt hole (the lattice, at 487, is a wider one). Deferring the
+//! layout write does not reach the second — the
 //! hole is what a collapsed flag draws at an un-narrowed fraction, and the
 //! fraction is what is being deferred.
 //!
@@ -416,9 +417,23 @@ impl Folds {
                 && mine.is_none()
                 && dial.wait.is_none()
                 && dial.flags.get(index).is_some_and(|was| {
-                    was.len() == tree.len()
-                        && (0..tree.len())
-                            .any(|node| was[node].0 != collapsed(tree, NodeIndex(node)))
+                    if was.len() != tree.len() {
+                        return false;
+                    }
+                    // What the window is asked for is what the HOLDS say, not
+                    // what the flags say. A pane folded downwards moves a flag
+                    // and moves no hold — `folded_side` reads horizontal splits
+                    // and nothing else, so egui_dock does the whole of that one
+                    // and there is no width to take off the window. Waiting on
+                    // a resize nobody is going to ask for costs the click a
+                    // frame and buys nothing, and the settings column's
+                    // Notes/Console bar is the arrow it would be bought on.
+                    let mut had = tree.clone();
+                    restore(&mut had, was);
+                    self::holds(&had)
+                        .iter()
+                        .map(|hold| hold.side)
+                        .ne(holds.iter().map(|hold| hold.side))
                 });
             if moving {
                 // The tree goes back to where the last pass left it, and what
@@ -466,7 +481,15 @@ impl Folds {
             // was armed at, not the narrower one it is landing in — the entry's
             // `window` is the ceiling a later unfold reads back off a persist
             // blob, and banking the post-fold width would lower it every time.
-            let before = holding.as_ref().filter(|_| lands).map_or(area, |wait| wait.from);
+            //
+            // A hold that OPENS a pane is the opposite case and must keep
+            // `area`. Its landing frame makes entries too — a pair folded whole
+            // holds no side, and opening one of its panes gives it one — but
+            // the window that entry stands for is the wide one the pane has
+            // just come back into, not the narrow one the unfold set off from.
+            // Priced from `from`, every unfold would ratchet the ceiling down.
+            let before =
+                holding.as_ref().filter(|wait| lands && wait.shuts).map_or(area, |wait| wait.from);
             let moved = self.reconcile(tree, surface, &holds, points, before) || mine.is_some();
             // The widest this window has been, for a session that was not there
             // to watch it get that wide: the folds came off the persist blob,
@@ -532,11 +555,12 @@ impl Folds {
                 dial.widest = dial.widest.max(area);
                 asking = (want[0] - area).min((dial.widest - area).max(0.0));
             }
-            // A pane still held shut buys its window before it opens, which
-            // means pricing the layout it is GOING to have while its flag still
-            // says otherwise. The holds it would leave behind come off a copy —
-            // the shape is what `wants` reads the tree for, and an unfold does
-            // not change the shape, only the flags.
+            // A pane held at the flags it had buys its window before they
+            // land, which means pricing the layout it is GOING to have while
+            // its flags still say otherwise — a pane held shut waiting to open,
+            // or held open waiting to shut. The holds it would leave behind
+            // come off a copy: the shape is what `wants` reads the tree for,
+            // and neither direction changes the shape, only the flags.
             if main && !lands {
                 if let Some(wait) = &holding {
                     let mut after = tree.clone();
@@ -558,13 +582,19 @@ impl Folds {
                     // gone. A FOLD is the opposite: the narrower window is the
                     // whole of what it is waiting for.
                     //
-                    // Never under the floor, which is the one limit on the ask
-                    // the shell applies and this pass can see: a fold wanting a
-                    // window narrower than the plugin's minimum is a wait for a
-                    // width nothing will ever deliver, and the pane would sit
-                    // open forever rather than for a frame.
-                    let at =
-                        (area + if wait.shuts { asking } else { asking.max(0.0) }).max(floor);
+                    // A fold's target is held above the floor, which is the
+                    // one limit on the ask the shell applies and this pass can
+                    // see (`editor.rs` clamps to `MIN_SIZE`). Below it the ask
+                    // names a width the window will never report back, and the
+                    // hold lands a frame late through the "not coming at all"
+                    // fallback instead of on its own condition. The floor is a
+                    // window width and this is an area, so it is a bound rather
+                    // than a boundary — which is all it is asked to be.
+                    let at = if wait.shuts {
+                        (area + asking).max(floor)
+                    } else {
+                        area + asking.max(0.0)
+                    };
                     dial.wait = Some(Wait { at: Some(at), ..wait.clone() });
                 }
             }
@@ -590,18 +620,20 @@ impl Folds {
             // never asks for one, so deferring there would be a frame of
             // nothing followed by a frame of nothing — and so would a resize
             // the cap or the floor has flattened to nothing. An unfold that
-            // waited (see [`Wait`]) opens on a frame whose window already fits
-            // it, which is exactly such a frame: there is nothing to wait for
+            // waited (see [`Wait`]) lands on a frame whose window already fits
+            // it — wide enough for a pane, narrow enough for a rail — which is
+            // exactly such a frame: there is nothing to wait for
             // and every reason to write the layout now, because egui_dock
             // re-derives its own fractions inside `show` the moment a flag is
             // off, and only a pass that has written first can hold them.
             if !(moved && main && asking.abs() > 0.01) {
                 points.spread(tree, &want, &fixed, area, separator);
             }
-            // What this pass is leaving the flags at, which is what the next one
-            // tells an unfold from. Taken at the END, so everything the pass
-            // itself did — a pull's uncollapse, a hold put back, a hold let go
-            // — is already in it and cannot read as somebody else's unfold.
+            // What this pass is leaving the flags at, which is what the next
+            // one tells a fold or an unfold from. Taken at the END, so
+            // everything the pass itself did — a pull's uncollapse, a hold put
+            // back, a hold let go — is already in it and cannot read as
+            // somebody else's gesture.
             dial.flags[index] = snapshot(tree);
         }
         // Entries naming a surface the dock no longer has.
@@ -623,7 +655,7 @@ impl Folds {
         surface: SurfaceIndex,
         holds: &[Hold],
         points: &Points,
-        area: f32,
+        window: f32,
     ) -> bool {
         let mut moved = false;
         // Unfolded, or re-docked out from under the entry.
@@ -640,16 +672,18 @@ impl Folds {
             if self.0.iter().any(|fold| fold.is(surface, NodeIndex(index))) {
                 continue;
             }
-            // First frame of this fold. `area` is still the pre-fold window —
-            // the resize has been decided and not yet asked for — which is the
-            // width this fold is about to take off it.
+            // First frame of this fold, priced against the window the pane
+            // was last open in — which is what `window` is handed, whether
+            // that is this frame's area or the one a hold was armed at a pass
+            // ago (see [`Wait::from`]). It is the width this fold takes off
+            // the window, and the ceiling a later unfold reads back.
             self.0.push(Fold {
                 surface: surface.0,
                 node: index,
                 side,
                 width: points.span(tree, side.of(NodeIndex(index))),
                 fraction: 0.0,
-                window: area,
+                window,
             });
             moved = true;
         }
@@ -720,7 +754,7 @@ pub struct Dial {
     /// One per surface, alongside [`Dial::panes`]. A single field would be the
     /// LAST surface's width by the time the main surface reads it next pass,
     /// which decides whether a resize was refused — and, with a hold
-    /// outstanding, whether a pane ever opens again.
+    /// outstanding, whether a pane's flags ever land at all.
     areas: Vec<f32>,
     /// Whether the last frame asked the window to change. If the window has not
     /// moved by the next one, the ask was refused and the layout takes what it
@@ -765,7 +799,7 @@ pub struct Dial {
 /// Both directions need it, for artifacts that do not look alike. An unfold
 /// against a too-narrow window jumps every boundary on screen inward. A fold
 /// against a too-wide one moves no boundary at all — the folded pane simply
-/// KEEPS its whole column, body gone and width held, so a pane worth a third
+/// KEEPS its whole column, body gone and width held, so a pane worth a fifth
 /// of the editor reads as a wide empty hole until the window closes over it.
 /// Deferring the layout write does not reach that one: the hole is what a
 /// collapsed flag draws at an un-narrowed fraction, and the fraction is the

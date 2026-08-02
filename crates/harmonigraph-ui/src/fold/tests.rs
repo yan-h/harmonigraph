@@ -515,7 +515,12 @@ fn a_layout_reset_hands_back_every_fold_it_holds() {
     // layout is dialled in at the window it is being drawn in.
     let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
     collapse(&mut dock, Tab::Lattice, true);
-    let window = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    // Settled, not one frame: a fold waits for the window it asked for before
+    // its flags land ([`Wait`]), so the entry this is about does not exist yet
+    // on the frame the click is caught. Asserting `is_empty` against a fold
+    // that has not been recorded proves nothing about `clear` dropping it.
+    let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+    assert!(!folds.is_empty(), "the fold is recorded before the reset throws it away");
     assert!((window + folds.clear(&dial, window) - 1000.0).abs() < 0.01);
     assert!(folds.is_empty());
 }
@@ -1241,8 +1246,8 @@ impl Window {
 /// A fold is a two-step — one frame decides what to ask the window for, the
 /// next is laid out in the window it was given — and a collapsed flag that
 /// lands on the first of those is a pane with its body gone and its whole
-/// column kept: a wide empty hole for exactly one frame, worth a third of the
-/// editor where the Spectral pane is what folded.
+/// column kept: a wide empty hole for exactly one frame, worth a fifth of the
+/// editor where the Spectral pane is what folded (207 of 1000).
 ///
 /// Deferring the layout write does not reach it. The hole is what a collapsed
 /// flag draws at an un-narrowed fraction, and the fraction is the thing being
@@ -1257,6 +1262,7 @@ fn a_pane_is_never_drawn_collapsed_at_more_than_a_rail() {
     window.settle(&mut folds, &mut dock);
     // egui_dock's own collapse button, which it draws from inside `show` — so
     // the flag arrives between one fold pass and the next.
+    let neighbour = width(&dock, LATTICE);
     collapse(&mut dock, Tab::Spectral, true);
     for frame in 0..6 {
         window.frame(&mut folds, &mut dock);
@@ -1271,6 +1277,117 @@ fn a_pane_is_never_drawn_collapsed_at_more_than_a_rail() {
     // And it did fold, rather than passing by never folding at all.
     let path = dock.find_tab(&Tab::Spectral).expect("docked");
     assert!(dock[path.surface][path.node].is_collapsed(), "the pane never folded");
+    // The pane beside it never moved. Writing the narrowed layout on the
+    // asking frame would keep the folded pane at a rail and satisfy the loop
+    // above, while the neighbours swell into the width the fold freed and give
+    // it back once the window lands — the other one-frame artifact, and the
+    // one the loop cannot see.
+    assert!(
+        (width(&dock, LATTICE) - neighbour).abs() < 0.01,
+        "the pane beside the fold moved from {neighbour} to {}",
+        width(&dock, LATTICE),
+    );
+}
+
+/// A downward fold lands on the frame it is clicked. It takes no width off the
+/// window, so there is nothing for it to wait for.
+///
+/// `Folds` is for the sideways folds alone — `folded_side` reads horizontal
+/// splits and nothing else — and egui_dock does the whole of a vertical one.
+/// A hold armed for a gesture that moves no boundary is a frame of latency
+/// bought for nothing, and the settings column's Notes/Console bar, which
+/// ships folded, is the arrow it would be bought on.
+///
+/// The settled frame first is the whole of why this can fail: a fresh `Dial`
+/// has no flags, and the length guard on the snapshot makes the detector
+/// short-circuit — which is why the sibling test above cannot see it.
+#[test]
+fn a_pane_folded_downwards_lands_on_the_frame_it_is_clicked() {
+    let mut dock = dock();
+    let mut folds = Folds::default();
+    let mut dial = Dial::default();
+    let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    collapse(&mut dock, Tab::Tuning, true);
+    let asked = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+    assert!(collapsed_tab(&dock, Tab::Tuning), "a downward fold waited on a window");
+    assert!((asked - 1000.0).abs() < 0.01, "and asked the window for {asked}, not nothing");
+}
+
+/// A hold waits for the window it ASKED for, not for any move at all.
+///
+/// Both directions, because the two are told apart by one flag ([`Wait::shuts`])
+/// and a shell that answers every ask exactly cannot tell a right answer from a
+/// wrong one — every arrival satisfies both comparisons at once. What separates
+/// them is a window that moves the way the gesture did NOT ask: a host resize,
+/// a display change, a drag landing in the held frame.
+#[test]
+fn a_hold_waits_for_the_window_it_asked_for_and_not_the_other_way() {
+    // A fold asks for a narrower window. A wider one is not it.
+    {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        collapse(&mut dock, Tab::Spectral, true);
+        let asked = frame(&mut folds, &mut dock, &mut dial, 1000.0);
+        assert!(asked < 999.0, "the fold asks for a narrower window, asked {asked}");
+        let _ = frame(&mut folds, &mut dock, &mut dial, 1100.0);
+        assert!(
+            !collapsed_tab(&dock, Tab::Spectral),
+            "the fold landed in a window wider than the one it was drawn in",
+        );
+    }
+
+    // And an unfold asks for a wider one, where a narrower window is not it.
+    {
+        let mut dock = dock();
+        let mut folds = Folds::default();
+        let mut dial = Dial::default();
+        collapse(&mut dock, Tab::Spectral, true);
+        let window = settle(&mut folds, &mut dock, &mut dial, 1000.0);
+        collapse(&mut dock, Tab::Spectral, false);
+        let asked = frame(&mut folds, &mut dock, &mut dial, window);
+        assert!(asked > window + 1.0, "the unfold asks for a wider window, asked {asked}");
+        let _ = frame(&mut folds, &mut dock, &mut dial, window - 100.0);
+        assert!(
+            collapsed_tab(&dock, Tab::Spectral),
+            "the unfold landed in a window narrower than the one it was drawn in",
+        );
+    }
+}
+
+/// What a fold banks as the window it was taken at is the window the PANE was
+/// last open in — never the narrower one an unfold happens to be landing in.
+///
+/// `Fold::window` is the ceiling a later unfold may ask the host for, and it is
+/// the only record of that ceiling to survive a persist blob ([`Dial::widest`]
+/// is runtime-only). An unfold's landing frame creates entries too, wherever a
+/// pair that was folded whole becomes folded on one side — and priced against
+/// the window the unfold STARTED in, every such landing ratchets the ceiling
+/// down, so a pane reopened in a later session comes back short and takes the
+/// difference out of its neighbour instead of out of the window.
+#[test]
+fn an_unfold_landing_does_not_ratchet_down_the_ceiling_a_fold_banked() {
+    let mut dock = dock();
+    let mut window = Window::new(1400.0);
+    let mut folds = Folds::default();
+    window.settle(&mut folds, &mut dock);
+    collapse(&mut dock, Tab::Lattice, true);
+    window.settle(&mut folds, &mut dock);
+    collapse(&mut dock, Tab::Spectral, true);
+    window.settle(&mut folds, &mut dock);
+    // Both pictures are rails now, so the pair is folded whole and holds no
+    // side. Opening one gives it a side again, which is a fold entry made on
+    // an UNFOLD's landing frame.
+    let narrow = window.size;
+    collapse(&mut dock, Tab::Lattice, false);
+    window.settle(&mut folds, &mut dock);
+    let pair = folds.0.iter().find(|fold| fold.node == PICTURES.0).expect("the pair holds a side");
+    assert!(
+        pair.window > narrow + 1.0,
+        "the pair banked {}, the window the unfold started in ({narrow})",
+        pair.window,
+    );
 }
 
 
