@@ -15,8 +15,9 @@ mod perf;
 /// downwards.
 mod fold;
 
-/// What the UI persists: the analyzer's display settings and the render
-/// settings, with the serde defaults that keep older blobs loadable.
+/// What the UI persists of the analyzer's display settings, with the serde
+/// defaults that keep older blobs loadable. The render settings persist too
+/// but live in `harmonigraph-take` — see the re-export below.
 mod config;
 /// The analyzer and its heatmap caches, none of it persisted.
 mod spectrum;

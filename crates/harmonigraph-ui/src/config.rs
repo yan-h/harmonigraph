@@ -1,7 +1,10 @@
 //! The display settings the UI persists: the Spectral pane's analyzer
-//! configuration, the video render settings, and the shared bar ranges they
-//! are edited through. Serde-facing — every `default_*` here names what a
-//! blob saved before its field existed loads as.
+//! configuration and the shared bar ranges it is edited through. Serde-facing
+//! — every `default_*` here names what a blob saved before its field existed
+//! loads as.
+//!
+//! The video render settings persist alongside these but live in
+//! `harmonigraph-take`, because a take carries the frame it was composed at.
 
 /// The Spectral pane's analysis window length, picked in the Spectrum
 /// settings tab: longer windows resolve bass pitch more sharply but
