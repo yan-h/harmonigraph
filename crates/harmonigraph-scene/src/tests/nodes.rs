@@ -364,6 +364,35 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
 }
 
 #[test]
+fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
+    // A ring near the bottom of the pitch limits draws octaves no MIDI note
+    // can reach (see `Ring::base`), so a note folding outward has to land on
+    // the outermost indicator that HAS a slot, not on the outermost one
+    // drawn. At any ordinary center every octave the ring names is a real
+    // one and the second clamp in `derive_scene` never moves anything — this
+    // is the case that makes it load-bearing, and without it the fold indexes
+    // the packing at -1.
+    //
+    // The origin a shade under the wrap is what puts a played C an octave
+    // below the node's own numbering: `matches` wraps, so a node at 1195¢ is
+    // lit by a played 0¢, and the lowest MIDI C on it comes out as slot -1.
+    let tuning = Tuning::from_cents(-5.0, 700.0, 400.0, 1000.0, 5.0);
+    let view = ViewConfig { octave_count: 5, octave_center: 12.0, ..ViewConfig::default() };
+    let scene = scene_of(&held(0), &tuning, &view, &FrameParams::default(), 0.5);
+    let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
+    assert!(node_cents > 1190.0, "the origin must sit just under the wrap, got {node_cents}");
+    assert_eq!(
+        scene.octave_layout.slots(node_cents).0,
+        -2,
+        "the ring has to reach under the packing, or this tests nothing"
+    );
+    let origin = origin_node(&scene);
+    assert_eq!(origin.activation, 1.0, "the played C lights the node it wraps onto");
+    let lit: Vec<usize> = (0..OCTAVE_SLOTS).filter(|&s| origin.octaves[s] > 0.0).collect();
+    assert_eq!(lit, [0], "the note folds onto the lowest slot the packing has");
+}
+
+#[test]
 fn each_node_draws_its_own_octaves_nearest_the_center() {
     // Which octaves a node draws is a question about that node's pitch class,
     // and the COUNT is not: every class draws the span, so the numbers shift
