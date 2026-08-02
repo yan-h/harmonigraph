@@ -1650,3 +1650,73 @@ fn the_grid_seam_counts_the_nodes_that_ship() {
          the two the scene held",
     );
 }
+
+/// A lattice that stops drawing stops reporting a GPU time, rather than
+/// holding the last one it measured.
+///
+/// The reading is a cross-frame value: it is only overwritten when the
+/// timer's readback cycle turns over, and that cycle is driven from inside
+/// the scene pass. Since nodes that paint nothing are no longer shipped, a
+/// lattice can encode no pass at all — with the grid's alpha at zero, no
+/// idle marker and no trail, a silent one ships neither a node nor an edge —
+/// and it can sit there indefinitely. Left alone, the overlay would keep
+/// re-averaging a figure from whenever the lattice last drew, which is the
+/// one thing `GPU_TIME_PENDING` exists to make impossible to confuse with a
+/// live reading.
+#[test]
+fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
+    let Some((device, queue)) = headless_device_with_timestamps() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [128, 128];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let stats = std::sync::Arc::new(LatticeStats::default());
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut frame = |cb: &LatticeCallback| {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    };
+
+    // Draw a real scene until a measurement lands. The cycle is
+    // Idle -> Recorded -> Mapping -> Idle, so it takes a few frames.
+    let lit = LatticeCallback::from_scene(
+        &parity_scene(),
+        size,
+        format,
+        40,
+        Some(stats.clone()),
+    );
+    let mut measured = None;
+    for _ in 0..12 {
+        frame(&lit);
+        let bits = stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed);
+        if bits != GPU_TIME_PENDING && bits != GPU_TIME_UNSUPPORTED {
+            measured = Some(bits);
+            break;
+        }
+    }
+    let Some(measured) = measured else {
+        // No reading ever landed, so there is no stale value to go stale.
+        return;
+    };
+    assert!(f32::from_bits(measured) >= 0.0, "a real reading, not a sentinel");
+
+    // Now the same pane with nothing at all in it.
+    let mut empty = idle_scene();
+    empty.idle_marker = harmonigraph_scene::IdleMarker::None;
+    empty.trail_mark = harmonigraph_scene::TrailMark::Off;
+    empty.grid.clear();
+    let blank = LatticeCallback::from_scene(&empty, size, format, 40, Some(stats.clone()));
+    assert!(blank.instances.is_empty() && blank.edges.is_empty(), "nothing to draw");
+    frame(&blank);
+    assert_eq!(
+        stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
+        GPU_TIME_PENDING,
+        "a pane that encodes no pass must not keep reporting the time it took \
+         when it last drew",
+    );
+}

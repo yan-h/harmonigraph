@@ -1590,6 +1590,19 @@ impl CallbackTrait for LatticeCallback {
                     timer.close(egui_encoder);
                 }
             }
+        } else if let Some(out) = &self.stats {
+            // No pass was encoded, so no reading can land and the timer's
+            // cycle does not turn over. Say "nothing measured" rather than
+            // leaving the last real figure sitting there: `poll` returns None
+            // from Idle forever, and the overlay would keep re-averaging a
+            // number from whenever the lattice last drew.
+            //
+            // The distinction is why GPU_TIME_PENDING exists at all — a frozen
+            // reading and a live one are the same bits otherwise. A lattice
+            // CAN sit here indefinitely: with the grid's alpha at zero, no
+            // idle marker and no trail, a silent lattice ships neither a node
+            // nor an edge.
+            out.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
         }
 
         let scene_ms = scene_start.elapsed().as_secs_f32() * 1000.0;
