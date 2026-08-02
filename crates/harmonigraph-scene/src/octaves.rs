@@ -20,13 +20,14 @@
 //! a slice either way.
 //!
 //! **What moves instead is the seam.** The map wraps every N octaves, and the
-//! point where a node's lowest slice meets its highest is that wrap. It is at
-//! the bottom for the center's own pitch class and turns away from it with the
-//! ring for every other — which is the trade this geometry makes, and it is
-//! the right way round: a wandering seam costs a discontinuity nobody reads
-//! twice, where the alternative (pinning the seam and cutting the two end
-//! slices to fit) costs every node a pair of indicators that are the wrong
-//! SIZE for the octave they name.
+//! point where a node's lowest slice meets its highest is that wrap. It rests
+//! at the bottom for exactly one pitch class — the center's own where N is
+//! odd, the tritone from it where N is even (see [`Ring::seam`]) — and turns
+//! away from there with the ring for every other, which is the trade this
+//! geometry makes — and it is the right way round: a wandering seam costs a
+//! discontinuity nobody reads twice, where the alternative (pinning the seam
+//! and cutting the two end slices to fit) costs every node a pair of
+//! indicators that are the wrong SIZE for the octave they name.
 //!
 //! **A node draws N octaves whether or not they can sound.** The nearest N to
 //! the center are what tile the turn; when the center is far up or down the
@@ -179,9 +180,16 @@ pub struct Ring {
     /// draw and never light.
     pub base: i32,
     /// Angle of the seam at the ring's LOW-pitch end, which is where the walk
-    /// through [`OctaveLayout::bounds`] starts. It is the bottom of the node
-    /// only for the center's own pitch class; every other class turns it away
-    /// by up to half a slice.
+    /// through [`OctaveLayout::bounds`] starts.
+    ///
+    /// It rests at the bottom of the node for exactly one pitch class, and
+    /// WHICH one is the span's parity: half a turn is `6 * span` semitones, so
+    /// an odd span puts the bottom on a half-octave point — a boundary, which
+    /// is what a seam is — for the center's own class, and an even span puts a
+    /// whole number of octaves there instead, which lands in the MIDDLE of one
+    /// of that class's slices. The class holding the seam at the bottom is
+    /// then the tritone from the center's, and the center's own class carries
+    /// it half a slice round.
     pub seam: f32,
 }
 
