@@ -8,7 +8,9 @@
 use std::ops::RangeInclusive;
 
 use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
-use harmonigraph_scene::{clamp_wheel, octave_layout, DEFAULT_CENTER, DEFAULT_COUNT, MAX_SPAN};
+use harmonigraph_scene::{
+    clamp_wheel, octave_layout, DEFAULT_CENTER, DEFAULT_COUNT, MAX_SPAN, MIN_SPAN,
+};
 
 use crate::theme;
 
@@ -902,16 +904,27 @@ const STRIP_HANDLE_W: f32 = 4.0;
 /// `Default` only because egui's temp-data store demands it of anything it can
 /// remove; nothing reads the default, since the value is always written by
 /// drag-start first.
-#[derive(Clone, Copy, Default)]
+///
+/// BOTH variants carry the other count, so `apply` is a pure function of how
+/// far out the pointer is and the gesture cannot read back a number it moved
+/// itself. Each direction has its own way of moving one: raising the count
+/// past the eleven-slice budget makes the extras yield, and taking the fringe
+/// off a lone full-size octave opens the count to two (`clamp_wheel`'s answer
+/// for an undrawable wheel). Either one read back mid-gesture makes dragging
+/// out and home again a one-way trip.
+#[derive(Clone, Copy)]
 enum StripGrab {
-    /// The full-size octaves. `extras` is what the wheel carried when the
-    /// gesture started, and every frame re-derives from THAT rather than from
-    /// the current pair: raising the count past the eleven-slice budget makes
-    /// the extras yield, and reading the yielded number back would make
-    /// dragging out and home again a one-way trip.
+    /// The full-size octaves, measured from the middle of the wheel.
     Count { extras: u32 },
-    #[default]
-    Extras,
+    /// The fringe, measured from the edge of the count — so `count` is the
+    /// gesture's own zero point as well as the number it must not move.
+    Extras { count: u32 },
+}
+
+impl Default for StripGrab {
+    fn default() -> Self {
+        StripGrab::Extras { count: DEFAULT_COUNT }
+    }
 }
 
 impl StripGrab {
@@ -927,22 +940,31 @@ impl StripGrab {
         if reach <= count as f32 * 0.5 {
             StripGrab::Count { extras }
         } else {
-            StripGrab::Extras
+            StripGrab::Extras { count }
         }
     }
 
     /// Where the two counts end up when this grab is dragged `reach` slots out
-    /// from the middle. Pure, so the things that actually matter — half a slot
-    /// of travel per octave, a fringe measured from the edge of the count, and
-    /// a wheel that never overruns the budget — are testable without a
-    /// pointer.
-    fn apply(self, reach: f32, count: u32) -> (u32, u32) {
+    /// from the middle. Pure, and a function of `reach` ALONE, so the things
+    /// that actually matter — half a slot of travel per octave, a fringe
+    /// measured from the edge of the count, a wheel that never overruns the
+    /// budget, and a drag that comes home to where it started — are testable
+    /// without a pointer.
+    fn apply(self, reach: f32) -> (u32, u32) {
         // Half a slot per octave in both gestures: the count grows at both
         // ends at once, and so does the fringe.
         let (count, extras) = match self {
             StripGrab::Count { extras } => ((2.0 * reach).round() as u32, extras),
-            StripGrab::Extras => {
-                (count, (reach - count as f32 * 0.5).max(0.0).round() as u32)
+            StripGrab::Extras { count } => {
+                let want = (reach - count as f32 * 0.5).max(0.0).round() as u32;
+                // A lone full-size octave is only drawable with a pair to
+                // flank it. Opening the count to two is what `clamp_wheel`
+                // does about that, which is the right answer for a blob and
+                // the wrong one for a gesture that is only holding the fringe:
+                // the fringe stops at one instead, and the count stays where
+                // the other gesture left it.
+                let floor = if count < MIN_SPAN { 1 } else { 0 };
+                (count, want.max(floor))
             }
         };
         clamp_wheel(count, extras)
@@ -1023,7 +1045,7 @@ impl<'a> OctaveStrip<'a> {
                         grab
                     }
                 };
-                let (count, extras) = grab.apply(reach, *self.count);
+                let (count, extras) = grab.apply(reach);
                 if (count, extras) != (*self.count, *self.extras) {
                     (*self.count, *self.extras) = (count, extras);
                     response.mark_changed();
@@ -1223,7 +1245,7 @@ pub fn choice_row<T: Copy + PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use harmonigraph_scene::{DEFAULT_EXTRA_SIZE, MIN_SPAN};
+    use harmonigraph_scene::DEFAULT_EXTRA_SIZE;
 
     /// The analyzer's axis, the range bar's real caller.
     const AXIS: (f32, f32) = (12.0, 132.0);
@@ -2043,13 +2065,13 @@ mod tests {
     fn a_strip_drag_moves_half_a_slot_an_octave() {
         let count = StripGrab::Count { extras: 0 };
         for (reach, want) in [(2.5f32, 5u32), (3.5, 7), (1.5, 3), (5.5, 11)] {
-            assert_eq!(count.apply(reach, 5).0, want, "{reach} slots out is not {want} octaves");
+            assert_eq!(count.apply(reach).0, want, "{reach} slots out is not {want} octaves");
         }
         // Measured from the edge of the count, so the fringe reads as octaves
         // added to the wheel rather than as a position on the strip.
         for (reach, want) in [(2.5f32, 0u32), (3.4, 1), (4.5, 2), (5.5, 3)] {
             assert_eq!(
-                StripGrab::Extras.apply(reach, 5).1,
+                StripGrab::Extras { count: 5 }.apply(reach).1,
                 want,
                 "{reach} slots out is not {want} extras past a count of five",
             );
@@ -2065,15 +2087,54 @@ mod tests {
     #[test]
     fn raising_the_count_yields_the_extras_and_dragging_home_restores_them() {
         let grab = StripGrab::at(0.0, 5, 3);
-        assert_eq!(grab.apply(2.5, 5), (5, 3), "the wheel it started on");
-        assert_eq!(grab.apply(4.5, 5), (9, 1), "the extras did not yield to the count");
-        assert_eq!(grab.apply(5.5, 5), (11, 0), "and the last of them at the ceiling");
-        assert_eq!(grab.apply(2.5, 11), (5, 3), "dragging home did not restore the fringe");
+        assert_eq!(grab.apply(2.5), (5, 3), "the wheel it started on");
+        assert_eq!(grab.apply(4.5), (9, 1), "the extras did not yield to the count");
+        assert_eq!(grab.apply(5.5), (11, 0), "and the last of them at the ceiling");
+        assert_eq!(grab.apply(2.5), (5, 3), "dragging home did not restore the fringe");
         // The fringe cannot overrun the budget either, and a count of one is
         // only drawable with a pair to flank it.
-        assert_eq!(StripGrab::Extras.apply(9.0, 5), (5, 3), "the fringe overran the budget");
-        assert_eq!(StripGrab::Count { extras: 0 }.apply(0.0, 5), (MIN_SPAN, 0));
-        assert_eq!(StripGrab::Count { extras: 2 }.apply(0.0, 5), (1, 2));
+        assert_eq!(
+            StripGrab::Extras { count: 5 }.apply(9.0),
+            (5, 3),
+            "the fringe overran the budget"
+        );
+        assert_eq!(StripGrab::Count { extras: 0 }.apply(0.0), (MIN_SPAN, 0));
+        assert_eq!(StripGrab::Count { extras: 2 }.apply(0.0), (1, 2));
+    }
+
+    /// The mirror of the round trip above, and the one the FRINGE gesture
+    /// needs for itself. `clamp_wheel` opens a lone full-size octave to two
+    /// when the fringe leaves it — its answer for a blob that asks for an
+    /// undrawable wheel — so a fringe drag that reads the live count back
+    /// moves the count, and then measures every later frame of the same drag
+    /// from the number it just moved. Dragging the fringe in off a lone octave
+    /// and back out has to land where it started.
+    #[test]
+    fn a_fringe_drag_off_a_lone_octave_comes_home() {
+        // Frame by frame the way `show` runs it: the grab is taken once at the
+        // press and every frame after re-applies it.
+        let played = |start: (u32, u32), press: f32, frames: &[f32]| {
+            let grab = StripGrab::at(press, start.0, start.1);
+            assert!(matches!(grab, StripGrab::Extras { .. }), "{press} slots out is the fringe");
+            let mut wheel = start;
+            for &reach in frames {
+                wheel = grab.apply(reach);
+            }
+            wheel
+        };
+        // A lone octave with one extra a side — the picture MIN_COUNT exists
+        // for — nudged in half a slot and back out to the pixel it started on.
+        assert_eq!(
+            played((1, 1), 1.4, &[1.4, 0.9, 1.4]),
+            (1, 1),
+            "a fringe drag out and home moved the count"
+        );
+        // And the long version, across the whole strip.
+        assert_eq!(
+            played((1, 5), 5.4, &[5.4, 3.5, 0.9, 3.5, 5.4]),
+            (1, 5),
+            "the widest fringed wheel did not come home"
+        );
     }
 
     /// The wiring, once: a real press inside the handles dragged outward
