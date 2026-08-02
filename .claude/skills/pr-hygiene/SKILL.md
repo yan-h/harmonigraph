@@ -23,9 +23,11 @@ an oversight to work around.
 
 Run **`/self-review`** instead. It is the project-local command that goes
 where `/code-review` cannot: it fans `diff-reviewer` subagents across
-`git diff main...HEAD`, one per lens — conventions, bugs, invalidation,
-test reach, history — then spawns a refuter per candidate and keeps only
-what survives. A session has full context on what it just wrote, which
+`git diff main...HEAD`, one per lens — conventions, bugs, invalidation and
+test reach as standing lenses, plus history when the diff takes something
+away — then spawns a refuter per CODE finding and keeps only what survives.
+Which lenses run and which findings earn a refuter are both gated on the
+diff, so read the command rather than assuming the full fan-out. A session has full context on what it just wrote, which
 makes this cheap; it is also biased toward its own work, which is what
 the subagents correct for, since they did not write it. This half catches
 the bugs that live entirely inside one branch — a stale invalidation key,
