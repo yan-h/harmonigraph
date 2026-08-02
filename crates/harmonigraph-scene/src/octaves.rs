@@ -235,13 +235,17 @@ impl Default for OctaveLayout {
 /// The wheel is two tiers, and the three knobs say how many of each, how small
 /// the small ones are, and whether the step between the tiers is a step at all:
 ///
-/// - The COUNT and the EXTRAS are both a reach: each adds an octave the wheel
-///   did not draw before, at the bottom and the top together. What they charge
-///   differs. A count is paid by every full-size octave equally, since they
-///   divide what the extras leave; an extra is paid almost entirely by the
-///   other extras, so the middle of the wheel barely moves for it. So the
-///   count is the register being read and the extras are how far around it you
-///   can still see.
+/// - The COUNT and the EXTRAS are both a reach, at different exchange rates. A
+///   count step adds ONE octave, at whichever end the span's parity puts it
+///   (see [`OctaveLayout::ring`]), so reaching one further BOTH ways costs two
+///   steps; one extra does that on its own. They are paid for differently too:
+///   a count step is paid by every full-size octave equally, since they divide
+///   whatever the extras leave, where an extra costs them a fraction of the
+///   same reach. Five full-size octaves take 72 degrees each; a pair of extras
+///   at the default size reaches an octave further either way and leaves them
+///   60.8, where the four count steps that reach those same octaves leave
+///   them 40. So the count is the register being read and the extras are how
+///   far around it you can still see.
 /// - The SIZE is a fraction of an EVEN slice — the turn over the whole span,
 ///   extras included — and that is what makes it the one number both tiers can
 ///   be stated in. An extra comes out smaller than a full-size octave exactly
