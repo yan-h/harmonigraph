@@ -514,6 +514,25 @@ pub(crate) struct AtlasMirror {
     key: u64,
 }
 
+impl AtlasMirror {
+    /// Forget the context this describes, so the next flush publishes.
+    ///
+    /// All four guards above read one egui `Context`, and a shell that builds
+    /// a second one leaves them answering for an atlas nobody is drawing from.
+    /// See [`SharedState::release_context_resources`](crate::SharedState::release_context_resources),
+    /// which is the one caller.
+    ///
+    /// `key` is deliberately kept: it counts publications rather than
+    /// describing an atlas, and a renderer that survived the context still
+    /// compares against the last one it uploaded, so it has to keep rising.
+    pub(crate) fn forget_context(&mut self) {
+        self.seen.clear();
+        self.size = [0, 0];
+        self.ppp = 0;
+        self.fill = 0.0;
+    }
+}
+
 /// egui's font atlas, on the frames the mirror needs it, and `None` on the
 /// rest — which is nearly all of them.
 fn atlas_if_changed(
@@ -674,6 +693,57 @@ mod tests {
         assert!(
             atlas_if_changed(&ctx, &state, swapped).is_some(),
             "a glyph at an unuploaded texel must refresh the mirror",
+        );
+    }
+
+    /// Every field the mirror compares describes ONE egui context, so the
+    /// mirror belongs to that context and dies with it.
+    ///
+    /// [`SharedState`](crate::SharedState) outlives the context — the plugin's
+    /// editor builds a fresh one per window — while the atlas texture and the
+    /// per-pane bind groups the mirror is a mirror OF live in the renderer,
+    /// which the new window builds fresh alongside it. A mirror carried across
+    /// therefore answers for texels in a texture nobody allocated: it reports
+    /// "already uploaded", the callback finds no atlas and paints nothing, and
+    /// the pane's labels are simply absent — the lattice's note names, the
+    /// analyzer's, the learn badge — with no frame that recovers them, because
+    /// the mirror is itself the only thing that would ask.
+    ///
+    /// [`release_context_resources`](crate::SharedState::release_context_resources)
+    /// is where a shell says the context is gone, and clearing the mirror
+    /// there is what bounds this to the window that opened it.
+    ///
+    /// The two contexts here draw the same text at the same scale, which is
+    /// what a reopened window does before anything moves: same atlas
+    /// dimensions, same fill ratio, same glyphs at the same texels. That is
+    /// the case none of the mirror's four guards can see. A window whose
+    /// first frame asks for LESS than the last one rasterized drops the fill
+    /// ratio and refreshes on that, which is why this survives casual use.
+    #[test]
+    fn a_fresh_context_is_shown_the_atlas_again() {
+        let font = egui::FontId::monospace(13.0);
+        let mut state =
+            crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+
+        // A window's worth of labels, settled: the second pass draws what the
+        // first pass rasterized, which is where the keys stop moving.
+        let ctx = egui::Context::default();
+        batch_keys(&ctx, &font, "C4 Eb5 G7");
+        let opened = batch_keys(&ctx, &font, "C4 Eb5 G7");
+        assert!(atlas_if_changed(&ctx, &state, opened.clone()).is_some(), "the first mirror");
+        assert!(atlas_if_changed(&ctx, &state, opened.clone()).is_none(), "nothing has moved");
+
+        // The window closes and another opens: a new context, and a new
+        // renderer holding no atlas at all.
+        state.release_context_resources();
+        let reopened = egui::Context::default();
+        batch_keys(&reopened, &font, "C4 Eb5 G7");
+        let drawn = batch_keys(&reopened, &font, "C4 Eb5 G7");
+        assert_eq!(drawn, opened, "the same labels rasterize to the same texels");
+
+        assert!(
+            atlas_if_changed(&reopened, &state, drawn).is_some(),
+            "a context that has never been handed the atlas must be handed it",
         );
     }
 
