@@ -525,6 +525,12 @@ fn a_persist_blob_missing_the_render_section_keeps_the_rest_of_the_blob() {
     assert_ne!(without, saved, "the render section must be in the blob to drop");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Loaded OVER a config that is not the fresh one, which is what makes the
+    // assertion below mean anything: a fresh state already holds
+    // `RenderConfig::default()`, so a load that skipped the section entirely
+    // would satisfy "it is at the fresh-install values" without doing it.
+    restored.take.render_config.lead_in = 4.0;
+    restored.take.render_config.short_edge = 2160;
     restored.load_persist(&without);
     assert_eq!(
         restored.view.extent_sevens, 3,
@@ -995,4 +1001,3 @@ fn top_level_pairs(blob: &str) -> Vec<(String, String)> {
         .map(|text| (text[..text.find(':').expect("a pair has a colon")].to_string(), text))
         .collect()
 }
-
