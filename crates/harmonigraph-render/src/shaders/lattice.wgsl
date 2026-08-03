@@ -708,6 +708,16 @@ const CORE_R_CLASSIC: f32 = 0.46;
 // classic orb), at 0 it has spread this far and the disc has faded out
 // into the glow skirt. Tunes how "soft" a mid-solidity core reads.
 const CORE_EDGE_SOFT: f32 = 0.30;
+// The companion to that, acting INSIDE the disc rather than at its rim: the
+// width the seams between a chord's colors are held to as solidity drops to
+// 0, as a fraction of the core radius. Those colors are laid in lobes of fixed
+// ANGULAR width (GLOW_LOBE_KAPPA), so the arc a seam spans shrinks with the
+// radius and the seams meet in a cusp at the node's centre — the one place
+// the edge softening above cannot reach, which is why a soft core otherwise
+// reads blurred at its rim and razor-sharp in the middle. A lobe's own width
+// at the rim is radius/sqrt(GLOW_LOBE_KAPPA) = 0.5 R, so this carries the
+// rim's softness inward and a little past it.
+const CORE_SEAM_SOFT: f32 = 0.6;
 // Radius below which the whole core fades to nothing, so a radius of 0 is
 // the off state and the core grows in smoothly (no pop) as the bar leaves
 // the bottom.
@@ -911,9 +921,24 @@ const GLOW_LOBE_KAPPA: f32 = 4.0;
 // with a solo note or nothing sounding it falls back to `fallback`, so a
 // single voice keeps its exact color (fixed channel hues included, which the
 // pitch ramp would not reproduce).
+//
+// `d` is the radius this pixel sits at and `seam` the narrowest the seams
+// between those hues may get there, both in quad UV units: the lobes are fixed
+// in ANGLE, so without a floor their seams narrow with `d` into a cusp at the
+// centre (see CORE_SEAM_SOFT, which is where the caller's floor comes from).
 fn octave_glow_color(
-    octaves: vec3<u32>, cents: f32, ring: OctRing, angle: f32, fallback: vec3<f32>,
+    octaves: vec3<u32>, cents: f32, ring: OctRing, angle: f32, d: f32, seam: f32,
+    fallback: vec3<f32>,
 ) -> vec3<f32> {
+    // The concentration that puts a `seam`-wide seam at this radius. A lobe of
+    // concentration k falls off as exp(-k*dtheta^2/2) about its centre, so it
+    // is 1/sqrt(k) wide in angle and spans d/sqrt(k) on screen; holding that at
+    // `seam` asks for k = (d/seam)^2. Capped at GLOW_LOBE_KAPPA, which is what
+    // it stays out where the arc is already wider than the floor — so this only
+    // ever loosens the blend, never tightens it. At the centre it reaches 0,
+    // every weight collapses to the octave's level, and the hues merge into one
+    // averaged color: no cusp left to be sharp.
+    let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
     var count = 0u;
     var wsum = 0.0;
     var csum = vec3<f32>(0.0);
@@ -924,7 +949,7 @@ fn octave_glow_color(
         }
         count = count + 1u;
         let theta = oct_mid(i32(i), ring);
-        let w = level * exp(GLOW_LOBE_KAPPA * (cos(angle - theta) - 1.0));
+        let w = level * exp(kappa * (cos(angle - theta) - 1.0));
         // Slot i is MIDI octave i - 1, whose C is MIDI i*12; fold in this
         // node's pitch class for the octave's true pitch.
         csum = csum + pitch_lut_color(f32(i) * 12.0 + cents / 100.0) * w;
@@ -1299,9 +1324,17 @@ fn core_layer(
     // disc mixes ALL its notes, not just the loudest), and the glow skirt
     // carries the same blend, so disc and halo read as one colored field. A
     // solo note falls back to its single color.
-    let octave_mix =
-        octave_glow_color(in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), in.color.rgb)
-            * brightness;
+    //
+    // The seams between those hues are held open toward the centre, where the
+    // fixed-angle lobes would otherwise converge to a cusp: only to the edge's
+    // own anti-alias width at solidity 1, where the classic orb keeps its crisp
+    // partition, widening to CORE_SEAM_SOFT of the radius as the core dissolves
+    // — the middle of a soft core then goes soft WITH its rim rather than
+    // staying sharp inside it.
+    let seam = max(aa, (1.0 - solidity) * radius * CORE_SEAM_SOFT);
+    let octave_mix = octave_glow_color(
+        in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), d, seam, in.color.rgb,
+    ) * brightness;
     var rgb = octave_mix;
 
     // Field styles instead paint the disc as a ball of gas or patterned

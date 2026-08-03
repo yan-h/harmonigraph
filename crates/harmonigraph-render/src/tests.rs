@@ -1661,6 +1661,125 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     }
 }
 
+/// The seams between a chord's colors have to soften WITH the core. They are
+/// laid down as lobes of fixed ANGULAR width, so the arc each one spans shrinks
+/// with the radius and they meet in a cusp at the node's centre — a core dialed
+/// soft would otherwise blur at its rim and stay knife-sharp in the middle,
+/// which is the one place its edge softening cannot reach (see CORE_SEAM_SOFT).
+///
+/// Measured as how far the colors around a ring point APART as directions, not
+/// as how much they differ: a soft core is also a dimmer one, and any measure
+/// of magnitude would read that dimming as a blur and pass on it.
+#[test]
+fn a_soft_core_blurs_the_seams_between_its_colors_at_the_centre() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [512, 512];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+
+    let mut pane = 300;
+    let mut shot = |solidity: f32| -> Vec<u8> {
+        let mut scene = single_marked_node(0, 0);
+        scene.core_solidity = solidity;
+        // Every octave the wheel draws for this pitch class. A single sounding
+        // voice takes the node's own color everywhere (octave_glow_color's solo
+        // fallback), which leaves no seam to measure at all.
+        let layout = scene.octave_layout;
+        let node = &mut scene.nodes[0];
+        let (low, high) = layout.slots(node.cents);
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        for slot in low.max(0)..=high.min(harmonigraph_scene::OCTAVE_SLOTS as i32 - 1) {
+            node.octaves[slot as usize] = 1.0;
+        }
+        let labels = LatticeLabels::default();
+        let cb = LatticeCallback::from_scene(&scene, labels, vec_size, format, pane, None);
+        pane += 1;
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+
+    // The node is alone at the world origin and the camera looks at it, so the
+    // frame's centre is its centre.
+    let c = (SIZE[0] / 2) as i32;
+    let rgb = |px: &[u8], x: i32, y: i32| -> glam::Vec3 {
+        let i = ((y as u32 * SIZE[0] + x as u32) * 4) as usize;
+        glam::Vec3::new(px[i] as f32, px[i + 1] as f32, px[i + 2] as f32) / 255.0
+    };
+    // How far apart, in degrees, the most divergent pair of colors around a
+    // ring of radius `r` point. Zero is one flat color all the way round.
+    let spread = |px: &[u8], r: f32| -> f32 {
+        let dirs: Vec<glam::Vec3> = (0..64)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / 64.0;
+                // Screen y grows downward; the sample angle is negated.
+                rgb(px, c + (r * a.cos()).round() as i32, c - (r * a.sin()).round() as i32)
+            })
+            .filter(|v| v.length() > 0.02)
+            .map(|v| v.normalize())
+            .collect();
+        let lit = dirs.len();
+        assert!(lit > 56, "the ring at r={r:.0} is not on the node: {lit} lit samples of 64");
+        let mut worst = 0.0f32;
+        for (i, a) in dirs.iter().enumerate() {
+            for b in &dirs[i + 1..] {
+                worst = worst.max(a.dot(*b).clamp(-1.0, 1.0).acos().to_degrees());
+            }
+        }
+        worst
+    };
+
+    let solid = shot(1.0);
+    // The disc's radius in pixels, read off the SOLID end, where its edge is
+    // the first sharp fall from the centre — at the soft end it has dissolved
+    // into the glow and there is no edge to find. It is the same disc either
+    // way, so one reading sizes both rings.
+    let centre = rgb(&solid, c, c).length();
+    let r_disc = (2..c)
+        .find(|r| rgb(&solid, c + r, c).length() < centre * 0.4)
+        .expect("a disc edge to find at full solidity") as f32;
+    assert!(r_disc > 20.0, "the disc is too small to sample rings inside ({r_disc} px)");
+
+    let soft = shot(0.25);
+    let (inner, outer) = (r_disc * 0.2, r_disc * 0.75);
+    let solid_in = spread(&solid, inner);
+    let soft_in = spread(&soft, inner);
+    let soft_out = spread(&soft, outer);
+    // The cusp this is about: at full solidity the hues stay fully separated
+    // right into the middle. Without it the rest of the test measures nothing.
+    assert!(solid_in > 30.0, "no sharp seam at the centre to soften: {solid_in:.0} deg");
+    assert!(
+        soft_in < solid_in * 0.5,
+        "a soft core's centre is still a hard seam: {soft_in:.0} deg across, \
+         against {solid_in:.0} at full solidity"
+    );
+    // And the softening is local to the centre: further out the node still
+    // shows its notes as distinct colors rather than one averaged wash.
+    assert!(
+        soft_out > soft_in * 2.0,
+        "the soft core lost its colors instead of blurring their seams: \
+         {soft_out:.0} deg out at the rim against {soft_in:.0} at the centre"
+    );
+}
+
 #[test]
 fn bloom_adds_light_over_the_plain_composite() {
     let Some((device, queue)) = headless_device() else {
