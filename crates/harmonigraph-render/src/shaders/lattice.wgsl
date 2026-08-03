@@ -72,6 +72,11 @@ struct Uniforms {
     // per node from these — both depend on the node's pitch class, so there is
     // no one answer to send.
     misc7: vec4<f32>,
+    // The shimmer, for whichever layers are running it. x: how fast the bands
+    // travel, in world units per second; y: how wide they are, in world units
+    // (the scene floors it above zero — the band phase divides by it). z, w
+    // unused. One pair for both layers: see the Shimmer section below.
+    misc8: vec4<f32>,
     // The angle from a ring's own seam to each of its slice boundaries, four
     // to a row and read through oct_bound(): boundary j walking clockwise. One
     // table for every node, since the widths are the node's only in where they
@@ -561,6 +566,12 @@ fn pulse_marks_mode() -> u32 {
 // breathe a split the layer already has, where this leaves the split alone
 // and runs a travelling highlight across the layer.
 //
+// WHICH layer is also not quite the same question here. The breathing modes
+// stay inside the layer whose switch they are; the mark rings' sweep also
+// takes the octave slices those rings point at (`mark_slice` in `fs_main`),
+// because a mark is the ring together with the octave it names rather than
+// the annulus alone. The octave layer's sweep stays the whole octave layer.
+//
 // The field is SHARED. Every node samples the same bands at its own place on
 // `in.field` — the plane the billboards face, in world units — so a band
 // crosses the lattice as one sheet of light rather than each node running a
@@ -576,23 +587,21 @@ fn pulse_marks_mode() -> u32 {
 // render then draw the same bands at the same size ON THE LATTICE, where a
 // period in pixels would lay a different number of them across the picture
 // in each — the same look in the plugin and in the exported video is worth
-// more here than bands that hold still while the camera moves.
+// more here than bands that hold still while the camera moves. Both the
+// settings below are in those units for that reason.
 //
-// Distance from one band to the next, in world units — about five nodes at
-// the default spacing, so a band spans several of them and reads as one
-// crossing the lattice.
-//
-// It has to beat the node spacing by a good margin, which is why this is not
-// tighter. At a couple of nodes to the period, neighbours land most of a
-// cycle apart and the picture reads as alternating nodes rather than as a
-// band passing over them — the lattice's own spacing is irregular (the
-// thirds and fifths axes both project onto the screen's x), so "one node
-// bright, the next dark" is exactly the pattern a tight period falls into.
-const SHIMMER_PERIOD: f32 = 5.0;
-// How fast the bands travel along their own normal, in world units per
-// second: about one period every three seconds, which is the calm end of
-// what still reads as moving (PULSE_HZ above is the same kind of choice).
-const SHIMMER_SPEED: f32 = 1.6;
+// Distance from one band to the next (u.misc8.y, the view's Width bar), and
+// how fast they travel along their own normal (u.misc8.x, the Speed bar).
+// The pair sizes and moves ONE shape: the sharpness below is what shares the
+// period out between the bright band and the dark, so a wider setting widens
+// both together rather than spacing out bands of a fixed size. See
+// `ViewConfig::shimmer_width` for what a setting under the node spacing
+// costs.
+fn shimmer_period() -> f32 {
+    // The scene clamps this well clear of zero; the floor is here so a hand-
+    // built Scene in a test cannot divide by it either.
+    return max(u.misc8.y, 0.01);
+}
 // Narrows the bright band and widens the dark between it and the next. The
 // raised cosine alone is half-lit everywhere at every instant, which reads
 // as a striped surface; raising it to a power leaves a soft highlight
@@ -657,11 +666,11 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, quarter_turns: f32) -> vec2<f32> {
     let dir = vec2<f32>(cos(a), sin(a));
     // Distance along the bands' normal, with the clock sliding it: a
     // fragment sees the same band a moment later than one behind it.
-    let travel = dot(field, dir) - u.misc.x * SHIMMER_SPEED;
+    let travel = dot(field, dir) - u.misc.x * u.misc8.x;
     // Clamped because the power below is `pow`, which is undefined for a
     // negative base — and sin is only promised to land NEAR its range, so a
     // wave of -1e-8 at a trough would put a NaN into the node's color.
-    let wave = clamp(0.5 + 0.5 * sin(TAU * travel / SHIMMER_PERIOD), 0.0, 1.0);
+    let wave = clamp(0.5 + 0.5 * sin(TAU * travel / shimmer_period()), 0.0, 1.0);
     let band = pow(wave, SHIMMER_SHARP);
     return vec2<f32>(SHIMMER_WHITE * band, mix(SHIMMER_TROUGH, 1.0, band));
 }
@@ -1452,6 +1461,14 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // is about, so it stays at the "rest" phase like a ghost would.
     let oct_pulse = pulse_pair(pulse_octaves_mode());
     let extreme_slots = in.marks.x | in.marks.y;
+    // How much of this pixel is a slice a melody or bass ring points at, and
+    // how strongly that ring is drawing there: the weight the MARK layer's
+    // shimmer reaches the octave glyphs with, below. The slice's own shape,
+    // so the sweep fades in exactly with the wedge's edges instead of at a
+    // boundary of its own, times the same mark level the ring itself is
+    // scaled by -- a released melody's slice stops shimmering as its ring
+    // goes, rather than outliving it.
+    var mark_slice = 0.0;
     for (var i = 0u; i < oct_span() && (!EARLY_OUT || band > 0.0); i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
@@ -1459,8 +1476,19 @@ fn node_paint(in: VsOut) -> vec4<f32> {
             continue;
         }
         let shape = outer_glyph(slot, oct, in.uv, band, aa);
-        let is_extreme = slot >= 0 && slot < i32(OCTAVE_SLOTS)
-            && (extreme_slots & (1u << u32(slot))) != 0u;
+        // This slot's bit in the mark masks, or none at all where the ring
+        // names an octave the packing has no room for. The shift is CLAMPED
+        // into the word rather than guarded by the range test alone: `select`
+        // evaluates both arms, and a shift past the width is undefined.
+        let in_range = slot >= 0 && slot < i32(OCTAVE_SLOTS);
+        let bit = select(0u, 1u << u32(clamp(slot, 0, i32(OCTAVE_SLOTS) - 1)), in_range);
+        let is_extreme = (extreme_slots & bit) != 0u;
+        if is_extreme {
+            mark_slice = max(mark_slice, shape * max(
+                select(0.0, in.params.y, (in.marks.x & bit) != 0u),
+                select(0.0, in.params.z, (in.marks.y & bit) != 0u),
+            ));
+        }
         let pulse_here = select(oct_pulse.y, oct_pulse.x, is_extreme);
         // Ghosts carry the ring's shape in the note's own color; a sounding
         // slot never dips below its ghost, so a fading octave hands off to it
@@ -1502,8 +1530,32 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // reason, and after the margin taper so a band cannot push the layer
     // back out past the fade the taper just closed.
     let oct_shimmer = shimmer_terms(pulse_octaves_mode(), in.field, 0.0);
-    glyph_rgb = mix(glyph_rgb, vec3<f32>(1.0), oct_shimmer.x);
-    glyph = glyph * oct_shimmer.y;
+    // The MARK layer's sheet, which the glyphs take too -- over the slices a
+    // melody or bass ring points at, and nowhere else. A mark is the ring
+    // TOGETHER with the octave it names (the ring is slit at that slice's own
+    // boundaries to say so), so light crossing the one crosses the other; a
+    // sweep that stopped at the ring's edge would cut the mark in half at the
+    // gap. It is taken here rather than with the rings below because this is
+    // where the glyph layer is finished, and it is the same terms the rings
+    // themselves use -- one sheet, read twice, not two sweeps that could
+    // disagree.
+    let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, 1.0);
+    // Off the marked slices this is the identity, so an unmarked node's
+    // glyphs see the octave layer's sweep alone.
+    let slice_shimmer = mix(vec2<f32>(0.0, 1.0), mark_shimmer, mark_slice);
+    // Where BOTH layers shimmer, a marked slice is under two sheets running
+    // square to each other, and it takes the brighter: max on the white mix
+    // and min on the coverage. Adding them would push a crossing past what
+    // either sheet does alone -- a bright knot travelling the lattice's
+    // diagonals -- and would break the "never above 1" the coverage term owes
+    // `paint_reach`. The brighter sheet wins the pixel, which is what two
+    // crossing lights do.
+    let glyph_shimmer = vec2<f32>(
+        max(oct_shimmer.x, slice_shimmer.x),
+        min(oct_shimmer.y, slice_shimmer.y),
+    );
+    glyph_rgb = mix(glyph_rgb, vec3<f32>(1.0), glyph_shimmer.x);
+    glyph = glyph * glyph_shimmer.y;
 
     // Melody/bass rings, bracketing the octave band: melody inside, bass
     // outside — the ring's radius echoes where its note sits in the chord.
@@ -1522,12 +1574,12 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     ) * in.params.z;
     // Disjoint radii, so at most one of the two covers any given pixel.
     var mark = max(melody_cov, bass_cov);
-    // The rings' own shimmer, a quarter turn from the octave layer's — the
-    // 90 degrees between the two textures. ONE direction for both rings, not
-    // one each: they are concentric and never overlap, so a single sweep
-    // crossing both reads as light passing over the node, where two would
-    // read as two unrelated animations stacked at different radii.
-    let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, 1.0);
+    // The rings' own shimmer (`mark_shimmer`, taken with the glyph layer's
+    // above), a quarter turn from the octave layer's — the 90 degrees between
+    // the two textures. ONE direction for both rings, not one each: they are
+    // concentric and never overlap, so a single sweep crossing both reads as
+    // light passing over the node, where two would read as two unrelated
+    // animations stacked at different radii.
     let mark_rgb = mix(
         select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov),
         vec3<f32>(1.0),

@@ -377,6 +377,71 @@ fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
 }
 
 
+/// The mark rings' pulse folds off with the rings themselves.
+///
+/// Every mode animates the ring, so a thickness of 0 — the rings' documented
+/// off position, where `mark_ring` returns no coverage — leaves all of them
+/// with nothing to animate, and the pane grays the row there.
+///
+/// [`Pulse::Shimmer`] is the one that needs the fold: it also sweeps the
+/// octave SLICE a ring points at, which the glyph layer draws and no ring
+/// coverage multiplies away, so without this, switching the rings off leaves
+/// the marked octaves sweeping from a control the user can no longer reach to
+/// stop. The other modes are folded on the same grounds rather than because
+/// they misbehave — which mode is safe to leave standing is a fact about
+/// where each one draws, and pinning that to today's answer would make a mode
+/// reaching past the ring later a silent bug rather than an edit here.
+#[test]
+fn the_mark_pulse_folds_off_when_the_rings_are_off() {
+    let pulse = |mark_thickness: f32, pulse_marks: Pulse| {
+        let view = ViewConfig { mark_thickness, pulse_marks, ..ViewConfig::default() };
+        scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        )
+        .pulse_marks
+    };
+
+    for mode in [Pulse::Together, Pulse::Alternating, Pulse::Shimmer] {
+        assert_eq!(
+            pulse(0.0, mode),
+            Pulse::Off,
+            "{mode:?} survived the rings being switched off, and Shimmer at least \
+             keeps drawing there -- on the marked octave's own slice",
+        );
+        assert_eq!(pulse(0.09, mode), mode, "{mode:?} must survive a ring it can animate");
+    }
+}
+
+/// The shimmer's speed and width reach the scene, and the width arrives
+/// strictly positive however the view is set: the shader divides the band
+/// phase by it, so a 0 here is a whole lattice of NaN rather than a
+/// stationary sweep. (Speed 0 IS the stationary sweep, and passes through.)
+#[test]
+fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
+    let sweep = |shimmer_speed: f32, shimmer_width: f32| {
+        let view = ViewConfig { shimmer_speed, shimmer_width, ..ViewConfig::default() };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        (scene.shimmer_speed, scene.shimmer_width)
+    };
+
+    assert_eq!(sweep(3.0, 8.0), (3.0, 8.0), "a settable pair passes through untouched");
+    assert_eq!(sweep(0.0, 5.0).0, 0.0, "speed 0 is a look -- the sheet, held still");
+    assert!(sweep(1.6, 0.0).1 > 0.0, "a width of 0 divides by zero in the band phase");
+    assert!(sweep(1.6, -4.0).1 > 0.0, "and so does a negative one, having flipped it first");
+    let (speed, width) = sweep(1e9, 1e9);
+    assert!(speed <= 40.0 && width <= 40.0, "got {speed} / {width}");
+}
+
 /// Only ALTERNATING needs a marked slot. It is the mode whose two phases
 /// differ, so with neither mark on `extreme_slots` is 0, every glyph takes
 /// the "rest" phase, and what was a half-cycle split becomes a UNIFORM

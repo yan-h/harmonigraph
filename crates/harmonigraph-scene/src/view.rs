@@ -324,8 +324,12 @@ pub struct ViewConfig {
     pub mark_thickness: f32,
     /// How the melody/bass rings animate (see [`Pulse`]): the breathing
     /// modes take the arc directly over the marked octave's slice against
-    /// the rest of the ring, and [`Pulse::Shimmer`] sweeps both rings at
-    /// right angles to the octave band's own shimmer. Shares [`Pulse`] with
+    /// the rest of the ring, and [`Pulse::Shimmer`] sweeps both rings —
+    /// AND the octave slice each one points at — at right angles to the
+    /// octave band's own shimmer. That reach into the other layer is what
+    /// the breathing modes have too, from the other side: the mark is the
+    /// ring together with the slice it names, so the light crossing one
+    /// crosses the other. Shares [`Pulse`] with
     /// [`pulse_octaves`](Self::pulse_octaves) but is its own switch — a
     /// chord's outer voices and its octave glyphs are read at a glance
     /// independently, so animating one was never a reason to animate the
@@ -333,6 +337,39 @@ pub struct ViewConfig {
     /// fallback, so a bare `#[serde(default)]` covers it.
     #[serde(default)]
     pub pulse_marks: Pulse,
+
+    // ---- Shimmer ---------------------------------------------------------
+    // The Shimmer pulse mode's two knobs, and ONE pair for both layers that
+    // can run it. The mode is per layer because a chord's outer voices and
+    // its octave glyphs are read independently; the sweep itself is not,
+    // because it is one sheet of bands crossing the whole lattice — two
+    // layers sweeping at different sizes or rates would read as two
+    // animations stacked on one picture rather than as light passing over it.
+    // What the layers do differ in is direction, a quarter turn apart, which
+    // is the shader's own constant and not a setting.
+    //
+    // Both are inert unless a layer is in that mode.
+    /// How fast the shimmer's bands travel along their own normal, in world
+    /// units per second — the lattice's own units, so the DAW window and an
+    /// exported video sweep at the same rate across the same nodes, where a
+    /// rate in screen pixels would not. 0 freezes the sheet where it stands,
+    /// which is a look rather than an off switch (the mode is the switch).
+    #[serde(default = "default_shimmer_speed")]
+    pub shimmer_speed: f32,
+    /// How wide the bands are, in the same world units: the distance from one
+    /// band's peak to the next, which sizes the bright band and the dark
+    /// between it and its neighbour together — the shimmer is one shape,
+    /// scaled, rather than a width and a spacing that could disagree.
+    ///
+    /// It wants to beat the node spacing by a good margin. At a couple of
+    /// nodes to the band, neighbours land most of a cycle apart and the
+    /// picture reads as alternating nodes rather than as a band passing over
+    /// them — the lattice's spacing is irregular (the thirds and fifths axes
+    /// both project onto the screen's x), so "one node bright, the next
+    /// dark" is exactly the pattern a tight setting falls into. The bar
+    /// reaches down there anyway: it is a trade, not a bug.
+    #[serde(default = "default_shimmer_width")]
+    pub shimmer_width: f32,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -575,6 +612,20 @@ fn default_mark_thickness() -> f32 {
 /// the boundary), now also the rings' padding from the band.
 fn default_outer_gap() -> f32 {
     0.12
+}
+
+/// The rate the sweep was fixed at before it was a bar, and where a fresh
+/// view opens too: about one band every three seconds at the default width,
+/// which is the calm end of what still reads as moving.
+fn default_shimmer_speed() -> f32 {
+    1.6
+}
+
+/// The band size the sweep was fixed at, and the fresh-view value: about five
+/// nodes at the default spacing, so a band spans several of them and reads as
+/// one crossing the lattice rather than as a marking on each.
+fn default_shimmer_width() -> f32 {
+    5.0
 }
 
 /// Nine octaves, which is what a blob written before the wheel was a setting
@@ -897,6 +948,12 @@ impl Default for ViewConfig {
             // Steady here too, for the same reason as pulse_octaves above:
             // an option to reach for, not the out-of-the-box look.
             pulse_marks: Pulse::Off,
+            // The sweep opens at exactly what it was fixed at before the two
+            // bars existed, so switching a layer to Shimmer lands on the look
+            // the mode was tuned as — the bars are then a departure from it,
+            // not a setting to find first.
+            shimmer_speed: default_shimmer_speed(),
+            shimmer_width: default_shimmer_width(),
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,

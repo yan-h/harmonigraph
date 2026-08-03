@@ -62,6 +62,21 @@ fn main() -> Result<(), String> {
             "outer_outer" => view.outer_outer = num()?,
             "outer_gap" => view.outer_gap = num()?,
             "mark_thickness" => view.mark_thickness = num()?,
+            // What animates the octave glyphs and the mark rings, and how the
+            // sweep one of them can run is sized and paced. A still frame of
+            // a moving look is a real question — Shimmer's own bands are what
+            // the two bars below are for — and the scene's clock is what
+            // decides which instant of it the frame lands on.
+            "pulse_octaves" => {
+                view.pulse_octaves =
+                    ron::from_str(value).map_err(|e| format!("`pulse_octaves`: {e}"))?
+            }
+            "pulse_marks" => {
+                view.pulse_marks =
+                    ron::from_str(value).map_err(|e| format!("`pulse_marks`: {e}"))?
+            }
+            "shimmer_speed" => view.shimmer_speed = num()?,
+            "shimmer_width" => view.shimmer_width = num()?,
             // The octave wheel: how many octaves one turn covers, which pitch
             // sits at the top of it, and how the circle is divided between
             // them.

@@ -263,6 +263,13 @@ fn parity_scene() -> Scene {
         // Off, on the same grounds as pulse_octaves below: a single-instant
         // parity image can't depend on which moment of a cycle it lands on.
         pulse_marks: Default::default(),
+        // The sweep's own settings, at the fresh view's values (see
+        // `ViewConfig::shimmer_speed`). Inert while both modes above are Off,
+        // and stated rather than defaulted because a test that turns a mode
+        // ON — every shimmer test builds on this fixture — has to be sweeping
+        // something a reader can size against SHIMMER_PROBE_STEP.
+        shimmer_speed: 1.6,
+        shimmer_width: 5.0,
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -993,6 +1000,198 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
         differs(&marks_a, &marks_b) > 0,
         "the mark rings' Shimmer did not change between two different \
          times; the bands are not reading the clock"
+    );
+}
+
+/// The sweep's two settings reach the picture, and the clock reaches it only
+/// THROUGH the speed.
+///
+/// The last part is what makes this more than two "something changed"
+/// probes. Speed and width both scale the same phase (`travel / period`,
+/// with the clock inside `travel`), so a width that had quietly taken the
+/// clock's term with it, or a speed read as a frequency in the band count,
+/// would still move the picture on both bars and still animate — and would
+/// have made the two knobs one. At speed 0 the bands must stand still while
+/// the clock runs, whatever the width is set to.
+#[test]
+fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clock() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 400u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    // The octave layer, which sweeps whole and needs no mark: this is about
+    // the sheet's own shape and pace, not about what it crosses.
+    let sweep = |speed: f32, width: f32, time: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.shimmer_speed = speed;
+        scene.shimmer_width = width;
+        scene.time = time;
+        scene
+    };
+
+    // A time well off zero, or the speed would have nothing to multiply.
+    let base = shot(&sweep(1.6, 5.0, 0.4));
+    assert!(
+        differs(&base, &shot(&sweep(3.2, 5.0, 0.4))) > 0,
+        "the Speed bar did not move the bands: at a fixed instant it is what \
+         says how far along their normal they have travelled",
+    );
+    assert!(
+        differs(&base, &shot(&sweep(1.6, 2.5, 0.4))) > 0,
+        "the Width bar did not resize the bands",
+    );
+
+    // Held still: the sheet is where it started at every instant, and stays
+    // there through a width the bar can reach either side of the default.
+    for width in [2.5, 5.0, 12.0] {
+        assert_eq!(
+            differs(&shot(&sweep(0.0, width, 0.4)), &shot(&sweep(0.0, width, 9.7))),
+            0,
+            "at speed 0 the bands still moved between two instants at width \
+             {width}; the clock is reaching the sweep by some route other than \
+             the speed, and the two bars are not the independent pair they read as",
+        );
+    }
+}
+
+/// The mark rings' shimmer also sweeps the octave SLICE each ring points at,
+/// which is drawn by the glyph layer — a mark is the ring together with the
+/// octave it names, and light crossing the one has to cross the other or it
+/// cuts the mark in half at the gap between them.
+///
+/// The claim is about paint OUTSIDE the rings, so the rings are masked off
+/// rather than switched off: `mark_thickness = 0` would take the rings and
+/// the slice sweep with them (`the_mark_pulse_folds_off_when_the_rings_are_off`
+/// in harmonigraph-scene folds the mode there, and a fixture the app cannot
+/// build is not a reading of what it draws). The mask is measured instead —
+/// an unmarked node wears no rings, so the pixels a marked one differs from
+/// it at ARE the rings, fringe and all, whatever radii the band setting put
+/// them at. What is left is the rest of the node, where only the glyph layer
+/// draws.
+#[test]
+fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 300u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    // One instant, held across all four shots: the sweep moves, so anything
+    // compared across two clocks would differ whatever it drew.
+    let at = |melody: u32, pulse: harmonigraph_scene::Pulse| -> Scene {
+        let mut scene = single_marked_node(melody, 0);
+        scene.time = 0.4;
+        scene.pulse_marks = pulse;
+        scene
+    };
+    let off = harmonigraph_scene::Pulse::Off;
+    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+
+    // No mark: no ring to sweep and no slice to reach, so the mode changes
+    // nothing at all. This is the containment half of the claim — the mark
+    // layer's sweep must not have become a second octave-layer sweep.
+    let bare = shot(&at(0, off));
+    let bare_shimmer = shot(&at(0, shimmer));
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    assert_eq!(
+        differs(&bare, &bare_shimmer),
+        0,
+        "an unmarked node changed under the mark rings' Shimmer; the sweep has \
+         escaped the slices a ring points at and is crossing the whole octave layer",
+    );
+
+    let steady = shot(&at(MIDDLE_C, off));
+    let swept = shot(&at(MIDDLE_C, shimmer));
+    // Where the rings draw, from the node that wears none.
+    let ring = |i: usize| bare[i * 4..i * 4 + 4] != steady[i * 4..i * 4 + 4];
+    let (mut on_ring, mut past_ring) = (0usize, 0usize);
+    for i in 0..steady.len() / 4 {
+        if steady[i * 4..i * 4 + 4] == swept[i * 4..i * 4 + 4] {
+            continue;
+        }
+        if ring(i) {
+            on_ring += 1;
+        } else {
+            past_ring += 1;
+        }
+    }
+    eprintln!("mark shimmer moved {on_ring} px of ring and {past_ring} px past it");
+    // A floor rather than a share of the rings: the slice is one wedge of the
+    // band against two full annuli, and how much of the band the fixture
+    // shows is a setting. Measured 599 px past the ring, against 940 on it.
+    assert!(
+        past_ring > 200,
+        "the mark rings' Shimmer moved only {past_ring} px outside the rings \
+         ({on_ring} on them): it is sweeping the annulus alone and stopping at \
+         the gap, leaving the octave slice the mark names unlit",
     );
 }
 

@@ -413,6 +413,9 @@ pub fn derive_scene(
     // A gap wider than the band would erase the sectors entirely; cap it
     // well short of that.
     let outer_gap = view.outer_gap.clamp(0.0, 0.4);
+    // Taken before the struct because `pulse_marks` below reads it: 0 is the
+    // rings' off position, and what animates them folds off with them.
+    let mark_thickness = view.mark_thickness.clamp(0.0, 0.4);
 
     Scene {
         nodes,
@@ -457,8 +460,21 @@ pub fn derive_scene(
         node_idle,
         trail_mark: view.trail_mark,
         trail_strength: view.trail_strength.clamp(0.0, 1.0),
-        mark_thickness: view.mark_thickness.clamp(0.0, 0.4),
-        pulse_marks: view.pulse_marks,
+        mark_thickness,
+        // Every mark mode animates the ring itself, so with the rings off
+        // (thickness 0, the documented off position) none of them has
+        // anything left to work on — and the pane grays the row at exactly
+        // that thickness. For the three that stop at the ring's own edge the
+        // fold is belt and braces, the shader multiplying each of them away
+        // by a coverage of zero; Shimmer also sweeps the octave slice a ring
+        // points at, which the glyph layer draws and no ring coverage
+        // multiplies away, so without this it would go on animating from a
+        // control the user can no longer reach. Folded here so the picture
+        // and the control agree by construction, as `pulse_octaves` above is.
+        pulse_marks: if mark_thickness > 0.0 { view.pulse_marks } else { Pulse::Off },
+        shimmer_speed: view.shimmer_speed.clamp(0.0, 40.0),
+        // Strictly positive: the band phase divides by this.
+        shimmer_width: view.shimmer_width.clamp(0.25, 40.0),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),
         pitch_lut: pitch_ramp_lut(),
