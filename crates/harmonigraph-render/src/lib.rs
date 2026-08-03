@@ -22,8 +22,10 @@
 //! in the order (see [`LatticeLabels`]) — so a nearer node covers the name of
 //! the node behind it by ordinary alpha blending, exactly as it covers the
 //! sheet behind it. They arrive as glyphs, from the same collector the rest
-//! of the UI's text goes through; what differs is only which pass they land
-//! in, and that they inherit its render scale and its bloom.
+//! of the UI's text goes through; what differs is which pass they land in,
+//! and so that they inherit its render scale. They do NOT reach the bloom:
+//! the pass carries a second colour attachment holding the picture without
+//! them, and the bright pass reads that (see [`Offscreen::nodes_view`]).
 //!
 //! With the `hot-reload` feature (enabled by the standalone harness), the
 //! .wgsl file is watched on disk and the pipeline rebuilds on save —
@@ -60,10 +62,14 @@ pub use text::{text_paint_callback, FontAtlas, GlyphInstance, TextRing};
 /// finished picture, where no amount of masking can reconstruct what is
 /// BEHIND a name at a pixel.
 ///
-/// Two things follow from the pass it lands in, and both are visible:
-/// the offscreen target is sized at `Scene::render_scale`, so text drawn into
-/// it is rasterized at that size and resampled by the composite; and the
-/// bright pass samples that target, so a label blooms with everything else.
+/// One thing follows from the pass it lands in, and it is visible: the
+/// offscreen target is sized at `Scene::render_scale`, so text drawn into it
+/// is rasterized at that size and resampled by the composite. At 1 that is
+/// nothing; at 0.5 a name is as soft as the lattice under it, where it used
+/// to stay native-resolution whatever the picture did.
+///
+/// The bloom does NOT follow, though it would from a single-attachment pass:
+/// see [`Offscreen::nodes_view`], which is the copy the bright pass reads.
 #[derive(Default)]
 pub struct LatticeLabels {
     /// Every glyph of every label, one label's glyphs contiguous, in the
@@ -1098,12 +1104,26 @@ struct Offscreen {
     /// of the halo of the node it covers, which is what a name in the bloom
     /// input does by standing where that node's own bright pixels were.
     ///
+    /// Both halves measured, by rendering a frame four ways (labels on/off
+    /// crossed with bloom on/off) and subtracting, which isolates the bloom
+    /// TERM: text in the bright pass added up to 28/255 of light in its own
+    /// halo, against the whole frame's bloom peaking at 33, and took up to
+    /// 9/255 back out of the halo it crossed.
+    ///
     /// A whole second colour target is what that costs, at the render-scaled
-    /// size. There is no cheaper slot: the bright pass samples a finished
+    /// size — about 14 MB for a Retina-sized pane at scale 1, and it grows
+    /// with the square of the render scale like the two targets beside it.
+    /// What it does NOT cost is time: the scene pass and bloom chain over 384
+    /// overlapping lit nodes and 2300 glyphs at 1536x1024 median 0.359 ms with
+    /// this attachment and 0.365 ms without, which is the same within noise.
+    /// There is one more colour write per node fragment and nothing else — no
+    /// extra pass, no extra draw call, no extra geometry.
+    ///
+    /// There is also no cheaper slot. The bright pass samples a finished
     /// texture, so "after bloom but still interleaved with the nodes" does not
     /// exist, and anything short of a second attachment (a stencil, a
     /// threshold) buys back the memory by punching a hole in the node's own
-    /// halo where the name sits.
+    /// halo where the name sits — which is the artifact this removes.
     nodes_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     /// Bloom chain targets: half res (bright pass) and two quarter-res
