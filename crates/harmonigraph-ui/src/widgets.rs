@@ -9,7 +9,7 @@ use std::ops::RangeInclusive;
 
 use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
-    clamp_wheel, octave_layout, DEFAULT_CENTER, DEFAULT_COUNT, MAX_SPAN, MIN_SPAN,
+    clamp_wheel, octave_layout, ViewConfig, DEFAULT_CENTER, DEFAULT_COUNT, MAX_SPAN, MIN_SPAN,
 };
 
 use crate::theme;
@@ -981,7 +981,7 @@ impl StripGrab {
 /// each end, and the empty track past those is the budget still unspent.
 ///
 /// Drag inside the handles to set the count, outside them to set the extras;
-/// double-click resets to the default wheel. Which one a drag takes is decided
+/// double-click goes home to [`reset_wheel`]. Which one a drag takes is decided
 /// by where it STARTS rather than by proximity to a handle, so the gesture
 /// cannot change its mind halfway — and so the two are still told apart at
 /// zero extras, where both handles sit on the wheel's outer edge and a
@@ -1009,6 +1009,20 @@ pub struct OctaveStrip<'a> {
     blend: f32,
 }
 
+/// The wheel a double-click on the strip goes home to: the one a fresh view
+/// opens with.
+///
+/// Read off [`ViewConfig::default`] rather than restated as a literal, because
+/// a reset that names its own pair drifts the moment the fresh wheel moves —
+/// and it silently, since the strip goes on resetting to a wheel that is
+/// merely no longer anyone's default. Landing on zero extras is the visible
+/// end of that: the `Extra size` and `Extra blend` bars gate on there being a
+/// fringe, so they gray out still holding the values the reset just orphaned.
+fn reset_wheel() -> (u32, u32) {
+    let fresh = ViewConfig::default();
+    (fresh.octave_count, fresh.octave_extras)
+}
+
 impl<'a> OctaveStrip<'a> {
     pub fn new(count: &'a mut u32, extras: &'a mut u32, size: f32, blend: f32) -> Self {
         OctaveStrip { count, extras, size, blend }
@@ -1029,7 +1043,7 @@ impl<'a> OctaveStrip<'a> {
         // ---- Interaction ----------------------------------------------------
         let grab_id = response.id.with("grab");
         if response.double_clicked() {
-            (*self.count, *self.extras) = (DEFAULT_COUNT, 0);
+            (*self.count, *self.extras) = reset_wheel();
             response.mark_changed();
         }
         if response.dragged() {
@@ -1335,6 +1349,24 @@ fn row_of_choices<'a, T: Copy + PartialEq>(
 mod tests {
     use super::*;
     use harmonigraph_scene::{DEFAULT_EXTRA_SIZE, MIN_EXTRA_SIZE};
+
+    /// Double-clicking the strip is the only way back to the stock wheel, so
+    /// where it lands has to BE the stock wheel — not a pair that was the
+    /// stock wheel when the gesture was written. The fringe is the half that
+    /// goes wrong quietly: reset to zero extras and the two bars under the
+    /// strip gray out holding a size and a blend nothing is drawing, which
+    /// reads as the fringe knobs being unavailable rather than as the reset
+    /// having thrown the fringe away.
+    #[test]
+    fn a_double_click_goes_home_to_the_wheel_a_fresh_view_opens_with() {
+        let fresh = ViewConfig::default();
+        assert_eq!(reset_wheel(), (fresh.octave_count, fresh.octave_extras));
+        assert!(
+            reset_wheel().1 > 0,
+            "the stock wheel carries a fringe, so the reset must leave the \
+             Extra size and Extra blend bars live",
+        );
+    }
 
     /// The analyzer's axis, the range bar's real caller.
     const AXIS: (f32, f32) = (12.0, 132.0);
