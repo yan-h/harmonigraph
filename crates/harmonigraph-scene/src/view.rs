@@ -886,6 +886,8 @@ impl Default for ViewConfig {
             legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.063_829_795,
+            // Steady here too, for the same reason as pulse_octaves above:
+            // an option to reach for, not the out-of-the-box look.
             pulse_marks: Pulse::Off,
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,

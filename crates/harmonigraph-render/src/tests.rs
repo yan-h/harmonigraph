@@ -252,6 +252,8 @@ fn parity_scene() -> Scene {
         sevens_soft: 0.24,
         node_radius: 0.34,
         mark_thickness: 0.09,
+        // Off, on the same grounds as pulse_octaves below: a single-instant
+        // parity image can't depend on which moment of a cycle it lands on.
         pulse_marks: Default::default(),
         node_style: Default::default(),
         core_radius: 0.46,
