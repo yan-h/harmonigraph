@@ -1602,19 +1602,33 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // keeps that bound for free: neither input is ever above 1, so neither is
     // the larger of them.
     //
-    // What the max is taken over is the sheets PRESENT at this fragment,
-    // which is why the mark sheet arrives behind a weight rather than as an
-    // operand that is always there. `shimmer_terms` returns the IDENTITY
-    // (0, 1) for a layer that is not shimmering, and the two terms disagree
-    // about what identity means: 0 is the smallest white mix, but 1 is the
-    // largest coverage. So an absent mark sheet handed straight to the max
-    // WINS the coverage term -- flattening the octave sheet's own trough over
-    // every marked slice, with `pulse_marks` merely Off. The weight is what
-    // keeps the absent cases exact, and it has to carry the mode as well as
-    // the slice: off the slice, or with the mark layer steady, this is the
-    // octave sweep untouched.
+    // What the max is taken over is the sheets PRESENT at this fragment, and
+    // BOTH absences have to be kept exact rather than left to the max.
+    // `shimmer_terms` returns the IDENTITY (0, 1) for a layer that is not
+    // shimmering, and the two terms disagree about what identity means: 0 is
+    // the smallest white mix, but 1 is the largest coverage. A steady sheet
+    // is therefore neutral in one term and DOMINANT in the other, so handing
+    // one straight to the max loses whichever sheet is really running:
+    //
+    //  - an absent MARK sheet wins the coverage term outright, flattening the
+    //    octave sweep's own trough over every marked slice with `pulse_marks`
+    //    merely Off. `mark_sheet` is the guard -- a weight carrying the mode
+    //    as well as the slice, so off the slice, or with the mark layer
+    //    steady, this is the octave sweep untouched.
+    //  - an absent OCTAVE sheet wins it the same way, reading a steady layer
+    //    as a sheet permanently at its peak and pinning the slice's coverage
+    //    at 1 for the whole cycle. The slice would then only ever brighten,
+    //    while the ring it names -- which takes `mark_shimmer` whole below --
+    //    goes on dipping between bands, lighting one mark by two different
+    //    lights. `crossed` is the guard: two sheets cross only where there
+    //    are two, and where there is one the slice takes it whole.
     let mark_sheet = select(0.0, mark_slice, pulse_marks_mode() == 3u);
-    let glyph_shimmer = mix(oct_shimmer, max(oct_shimmer, mark_shimmer), mark_sheet);
+    let crossed = select(
+        mark_shimmer,
+        max(oct_shimmer, mark_shimmer),
+        pulse_octaves_mode() == 3u,
+    );
+    let glyph_shimmer = mix(oct_shimmer, crossed, mark_sheet);
     glyph_rgb = mix(glyph_rgb, vec3<f32>(1.0), glyph_shimmer.x);
     glyph = glyph * glyph_shimmer.y;
 
