@@ -77,6 +77,7 @@ fn main() -> Result<(), String> {
             }
             "shimmer_speed" => view.shimmer_speed = num()?,
             "shimmer_width" => view.shimmer_width = num()?,
+            "shimmer_intensity" => view.shimmer_intensity = num()?,
             // The octave wheel: how many octaves one turn covers, which pitch
             // sits at the top of it, and how the circle is divided between
             // them.

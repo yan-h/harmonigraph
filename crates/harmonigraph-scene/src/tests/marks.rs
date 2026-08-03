@@ -416,14 +416,25 @@ fn the_mark_pulse_folds_off_when_the_rings_are_off() {
     }
 }
 
-/// The shimmer's speed and width reach the scene, and the width arrives
+/// The shimmer's three settings reach the scene, and the width arrives
 /// strictly positive however the view is set: the shader divides the band
 /// phase by it, so a 0 here is a whole lattice of NaN rather than a
-/// stationary sweep. (Speed 0 IS the stationary sweep, and passes through.)
+/// stationary sweep. (Speed 0 IS the stationary sweep, and passes through, as
+/// intensity 0 is the layer drawn unshimmered.)
+///
+/// The width's FLOOR is the second claim, and it is a look rather than a
+/// safety margin: it has to leave room for several bands across one node, so
+/// it is checked against the node's own world size (`spacing` ×
+/// `NODE_RADIUS_FACTOR`) rather than against a bare "> 0".
 #[test]
 fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
-    let sweep = |shimmer_speed: f32, shimmer_width: f32| {
-        let view = ViewConfig { shimmer_speed, shimmer_width, ..ViewConfig::default() };
+    let sweep = |shimmer_speed: f32, shimmer_width: f32, shimmer_intensity: f32| {
+        let view = ViewConfig {
+            shimmer_speed,
+            shimmer_width,
+            shimmer_intensity,
+            ..ViewConfig::default()
+        };
         let scene = scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
@@ -431,15 +442,32 @@ fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
             &FrameParams::default(),
             0.0,
         );
-        (scene.shimmer_speed, scene.shimmer_width)
+        (scene.shimmer_speed, scene.shimmer_width, scene.shimmer_intensity)
     };
 
-    assert_eq!(sweep(3.0, 8.0), (3.0, 8.0), "a settable pair passes through untouched");
-    assert_eq!(sweep(0.0, 5.0).0, 0.0, "speed 0 is a look -- the sheet, held still");
-    assert!(sweep(1.6, 0.0).1 > 0.0, "a width of 0 divides by zero in the band phase");
-    assert!(sweep(1.6, -4.0).1 > 0.0, "and so does a negative one, having flipped it first");
-    let (speed, width) = sweep(1e9, 1e9);
-    assert!(speed <= 40.0 && width <= 40.0, "got {speed} / {width}");
+    assert_eq!(sweep(3.0, 8.0, 0.5), (3.0, 8.0, 0.5), "a settable set passes through untouched");
+    assert_eq!(sweep(0.0, 5.0, 0.0).0, 0.0, "speed 0 is a look -- the sheet, held still");
+    assert_eq!(sweep(1.6, 5.0, 0.0).2, 0.0, "and intensity 0 is the layer, unshimmered");
+    assert!(sweep(1.6, 0.0, 1.0).1 > 0.0, "a width of 0 divides by zero in the band phase");
+    assert!(sweep(1.6, -4.0, 1.0).1 > 0.0, "and so does a negative one, having flipped it first");
+
+    // Several bands across ONE node is the tight end's whole point, so the
+    // floor has to sit a good way under a node's diameter rather than merely
+    // above zero.
+    let node = ViewConfig::default().spacing * crate::NODE_RADIUS_FACTOR;
+    let floor = sweep(1.6, 0.0, 1.0).1;
+    assert!(
+        floor * 4.0 < node * 2.0,
+        "the width floor is {floor} against a node {} across: too coarse for the \
+         bands to cross one several at a time",
+        node * 2.0,
+    );
+
+    let (speed, width, intensity) = sweep(1e9, 1e9, 1e9);
+    assert!(
+        speed <= 40.0 && width <= 40.0 && intensity <= 4.0,
+        "got {speed} / {width} / {intensity}",
+    );
 }
 
 /// Only ALTERNATING needs a marked slot. It is the mode whose two phases

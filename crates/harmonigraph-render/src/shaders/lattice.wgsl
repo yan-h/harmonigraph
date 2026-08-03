@@ -609,26 +609,37 @@ fn shimmer_period() -> f32 {
 // the band still has shoulders — sharpen it much past this and it stops
 // being a soft band and starts being an edge.
 const SHIMMER_SHARP: f32 = 2.4;
-// How far a band's peak pulls the layer toward white.
+// How far a band's peak pulls the layer toward white, at intensity 1.
 //
-// This is the setting that costs something real, and it is the ask: a band
-// that only went half way to white would not read as a WHITE band. Where the
-// band crosses a sounding glyph it leaves an eighth of that octave's pitch
-// color, so under the peak an indicator says "an octave sounds here" without
-// saying which — the layer's whole message, spent for the sweep. What keeps
-// it payable is that the band is narrow (SHIMMER_SHARP) and moving, so any
-// given indicator is legible again a second later. Dial it down if the
-// register matters more than the light; that is a trade, not a bug.
+// This is the term that costs something real, and it is the ask: a band that
+// only went half way to white would not read as a WHITE band. Where the band
+// crosses a sounding glyph it leaves an eighth of that octave's pitch color,
+// so under the peak an indicator says "an octave sounds here" without saying
+// which — the layer's whole message, spent for the sweep. What keeps it
+// payable is that the band is narrow (SHIMMER_SHARP) and moving, so any given
+// indicator is legible again a second later. The Intensity bar is where that
+// trade is made rather than here: this is where the full-strength end of it
+// sits.
 //
 // Note it is NOT the bound SHIMMER_TROUGH is held to below. That one keeps
 // every indicator VISIBLE at every instant; this one gives up their colors
 // under a passing band and nothing else.
 const SHIMMER_WHITE: f32 = 0.85;
-// What the layer's coverage sits at between bands, against 1 under a peak. A
-// shallow dip on purpose: it is the trough that gives the sweep a body to
-// travel through, but the indicators still have to be readable at every
-// moment of the cycle, so this is nothing like PULSE_FLOOR's depth.
+// What the layer's coverage sits at between bands at intensity 1, against 1
+// under a peak. A shallow dip on purpose: it is the trough that gives the
+// sweep a body to travel through, but the indicators still have to be
+// readable at every moment of the cycle, so this is nothing like
+// PULSE_FLOOR's depth. Intensity past 1 deepens it, which is that promise
+// being spent — deliberately, by the bar.
 const SHIMMER_TROUGH: f32 = 0.82;
+// How much of that tuned depth this view asks for (u.misc8.z, the Intensity
+// bar). It scales the pair above TOGETHER, so the shimmer is one shape at
+// every setting rather than a brightness and a fade to be dialed against each
+// other, and 0 leaves `shimmer_terms` returning its exact identity — the
+// layer as it draws unshimmered, from the bar rather than from the mode.
+fn shimmer_depth() -> f32 {
+    return max(u.misc8.z, 0.0);
+}
 // Which way the octave layer's bands travel. A diagonal because the lattice's
 // own structure is upright — its rows of fifths and thirds — so bands along
 // either axis would run parallel to something already in the picture and
@@ -672,7 +683,15 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, quarter_turns: f32) -> vec2<f32> {
     // wave of -1e-8 at a trough would put a NaN into the node's color.
     let wave = clamp(0.5 + 0.5 * sin(TAU * travel / shimmer_period()), 0.0, 1.0);
     let band = pow(wave, SHIMMER_SHARP);
-    return vec2<f32>(SHIMMER_WHITE * band, mix(SHIMMER_TROUGH, 1.0, band));
+    let depth = shimmer_depth();
+    // Both clamped into what each term can mean rather than trusted to the
+    // bar's range: a mix past 1 would overshoot white into whatever the
+    // blend does with it, and a coverage scale below 0 would take the layer
+    // negative. The peak is clamped BEFORE the band shapes it, so a clamped
+    // intensity is still a band and not a flat lid over one.
+    let white = min(SHIMMER_WHITE * depth, 1.0);
+    let trough = clamp(1.0 - (1.0 - SHIMMER_TROUGH) * depth, 0.0, 1.0);
+    return vec2<f32>(white * band, mix(trough, 1.0, band));
 }
 
 // ---- Outer octave layer ----------------------------------------------------

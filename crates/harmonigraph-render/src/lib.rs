@@ -252,11 +252,12 @@ struct Uniforms {
     /// z: the octave glyphs' pulse mode (0 off, 1 together, 2 alternating,
     /// 3 shimmer — see `Pulse`); w unused.
     misc7: [f32; 4],
-    /// The shimmer's two knobs, shared by both layers that can run it (see
+    /// The shimmer's knobs, shared by both layers that can run it (see
     /// `Scene::shimmer_speed`). x: band travel in world units per second;
-    /// y: band width in world units, strictly positive; z, w unused.
+    /// y: band width in world units, strictly positive; z: how deep the
+    /// light is (0 none, 1 the tuned depth); w unused.
     ///
-    /// One slot for the pair rather than the free `misc7.w` plus a new one:
+    /// One slot for the set rather than the free `misc7.w` plus a new one:
     /// they are read together in one function, and splitting them across the
     /// seam between two vec4s buys nothing but a second place to look.
     misc8: [f32; 4],
@@ -767,7 +768,12 @@ impl LatticeCallback {
                     scene.pulse_octaves.shader_index() as f32,
                     0.0,
                 ],
-                misc8: [scene.shimmer_speed, scene.shimmer_width, 0.0, 0.0],
+                misc8: [
+                    scene.shimmer_speed,
+                    scene.shimmer_width,
+                    scene.shimmer_intensity,
+                    0.0,
+                ],
                 // Straight indexing: the table is exactly as long as the
                 // rows are wide (the const assert above is what keeps it so),
                 // and a fallback here would quietly ship a wheel with a wrong

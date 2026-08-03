@@ -361,15 +361,40 @@ pub struct ViewConfig {
     /// between it and its neighbour together — the shimmer is one shape,
     /// scaled, rather than a width and a spacing that could disagree.
     ///
-    /// It wants to beat the node spacing by a good margin. At a couple of
-    /// nodes to the band, neighbours land most of a cycle apart and the
-    /// picture reads as alternating nodes rather than as a band passing over
-    /// them — the lattice's spacing is irregular (the thirds and fifths axes
-    /// both project onto the screen's x), so "one node bright, the next
-    /// dark" is exactly the pattern a tight setting falls into. The bar
-    /// reaches down there anyway: it is a trade, not a bug.
+    /// The range spans three ORDERS of it, and the two ends are different
+    /// pictures rather than more and less of one:
+    ///
+    /// - Wide (around the default, several nodes to a band) is a sheet
+    ///   crossing the lattice, each node lighting as it passes.
+    /// - Around one node to a band the two read against each other worst:
+    ///   neighbours land most of a cycle apart and the picture is alternating
+    ///   NODES rather than a band passing over them, the lattice's own
+    ///   spacing being irregular (the thirds and fifths axes both project
+    ///   onto the screen's x).
+    /// - Below that, several bands cross a single node at once and it is a
+    ///   texture on the nodes rather than a sweep between them — which is a
+    ///   look worth reaching, and why the floor is a small fraction of a node
+    ///   rather than a stop above the awkward middle.
+    ///
+    /// A node is [`spacing`](Self::spacing) × 0.25 in world radius, so the
+    /// count of bands across one is roughly its diameter over this.
     #[serde(default = "default_shimmer_width")]
     pub shimmer_width: f32,
+    /// How strong the sweep is where it passes, 0..1 being none to the full
+    /// tuned depth: it scales BOTH of what a band does — how far it pulls the
+    /// layer toward white, and how far the layer's coverage dips between
+    /// bands — so the shimmer stays one shape at every setting rather than
+    /// coming apart into a brightness and a fade that can be dialed against
+    /// each other.
+    ///
+    /// 0 is the layer drawing exactly as it does unshimmered, from a bar
+    /// rather than from the mode; past 1 the band reaches full white and the
+    /// trough keeps deepening, which spends the indicators' color and then
+    /// their presence to buy the light. What that costs is real and it is the
+    /// point of the bar: under a strong band an indicator says "an octave
+    /// sounds here" without saying which.
+    #[serde(default = "default_shimmer_intensity")]
+    pub shimmer_intensity: f32,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -626,6 +651,13 @@ fn default_shimmer_speed() -> f32 {
 /// one crossing the lattice rather than as a marking on each.
 fn default_shimmer_width() -> f32 {
     5.0
+}
+
+/// The full tuned depth — what the sweep was fixed at before the bar, and
+/// where a fresh view opens: a band most of the way to white over a shallow
+/// dip, which is the balance the two shader constants were dialed to.
+fn default_shimmer_intensity() -> f32 {
+    1.0
 }
 
 /// Nine octaves, which is what a blob written before the wheel was a setting
@@ -954,6 +986,7 @@ impl Default for ViewConfig {
             // not a setting to find first.
             shimmer_speed: default_shimmer_speed(),
             shimmer_width: default_shimmer_width(),
+            shimmer_intensity: default_shimmer_intensity(),
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,

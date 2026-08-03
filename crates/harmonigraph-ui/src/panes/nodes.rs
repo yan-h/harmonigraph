@@ -331,14 +331,31 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  rate over the same nodes, whatever size either is drawn at. \
                  0 freezes the sheet where it stands",
             );
-        ValueBar::new(&mut view.shimmer_width, 1.0..=15.0, "Width")
+        // Eased, because the range is three orders wide and the useful
+        // settings are not spread evenly over it: the tight end is a
+        // different picture every few hundredths (0.05 to 0.1 halves the
+        // bands on a node), where the wide end changes little between 8 and
+        // 15. Geometric travel gives each end the same share of the bar.
+        ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Width")
+            .eased(true)
             .show(ui)
             .on_hover_text(
                 "How wide the bands are, in lattice units from one to the \
                  next -- about five nodes at the default spacing. Wider bands \
-                 are also further apart: it is one shape, sized. Under a \
-                 couple of nodes the light stops reading as a band crossing \
-                 the lattice and starts reading as alternating nodes",
+                 are also further apart: it is one shape, sized. Around one \
+                 node to a band the light reads as alternating nodes rather \
+                 than as a sweep; below that several bands cross each node at \
+                 once and it becomes a texture on the nodes",
+            );
+        ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity")
+            .show(ui)
+            .on_hover_text(
+                "How strong the light in a band is: how far it pulls the \
+                 layer toward white, and how far the layer dims between \
+                 bands, together. 0 draws the layer exactly as it is \
+                 unshimmered; 1 is the tuned depth. Past 1 the band reaches \
+                 full white -- an indicator under it says an octave sounds \
+                 without saying which",
             );
     });
 }

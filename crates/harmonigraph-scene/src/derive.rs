@@ -473,8 +473,12 @@ pub fn derive_scene(
         // and the control agree by construction, as `pulse_octaves` above is.
         pulse_marks: if mark_thickness > 0.0 { view.pulse_marks } else { Pulse::Off },
         shimmer_speed: view.shimmer_speed.clamp(0.0, 40.0),
-        // Strictly positive: the band phase divides by this.
-        shimmer_width: view.shimmer_width.clamp(0.25, 40.0),
+        // Strictly positive: the band phase divides by this. The floor is a
+        // small fraction of a node (radius `spacing` × NODE_RADIUS_FACTOR),
+        // not a fraction of the lattice — several bands crossing one node at
+        // once is a look the bar reaches on purpose.
+        shimmer_width: view.shimmer_width.clamp(0.02, 40.0),
+        shimmer_intensity: view.shimmer_intensity.clamp(0.0, 4.0),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),
         pitch_lut: pitch_ramp_lut(),
