@@ -149,14 +149,22 @@ impl Pulse {
         }
     }
 
-    /// Whether this mode animates the layer's "near the melody/bass slice"
-    /// against "the rest" split, which needs a marked slot to have two parts
-    /// at all — with neither mark on, the split collapses and the mode is a
-    /// uniform breathe that singles nothing out. The UI grays exactly these
-    /// out; [`Shimmer`](Pulse::Shimmer) crosses the whole layer and is what
-    /// it is either way, so it stays live.
+    /// Whether this mode DRIVES the layer's "near the melody/bass slice"
+    /// against "the rest" split apart, and so needs a marked slot to have two
+    /// parts to drive — with neither mark on, the split collapses and the
+    /// mode animates something other than what it says. The UI grays exactly
+    /// these out, and `derive_scene` folds them to [`Off`](Pulse::Off) so the
+    /// picture agrees with the grayed control.
+    ///
+    /// [`Alternating`](Pulse::Alternating) is the only one. The test is what
+    /// the shader's `pulse_pair` does, NOT which modes are named for the
+    /// split: [`Together`](Pulse::Together) is the mode that deliberately
+    /// does not drive it apart — its two phases are the same wave, so it
+    /// breathes the layer as one whether or not anything is marked, and has
+    /// nothing to collapse. [`Shimmer`](Pulse::Shimmer) crosses the whole
+    /// layer and never touches the split either.
     pub fn needs_a_marked_slot(self) -> bool {
-        matches!(self, Pulse::Together | Pulse::Alternating)
+        matches!(self, Pulse::Alternating)
     }
 }
 

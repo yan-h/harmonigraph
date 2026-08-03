@@ -2575,12 +2575,13 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         call.seams,
         vec![
             // Both silent nodes: nothing has been drawn yet, and two labels
-            // at one seam are one uninterrupted draw.
-            GlyphSeam { at: 0, start: 0, count: 2 },
+            // at one seam are one uninterrupted draw. They are behind the
+            // home sheet, so they are also behind the grid.
+            GlyphSeam { at: 0, start: 0, count: 2, after_grid: false },
             // The home sheet's own name, after its disc.
-            GlyphSeam { at: 1, start: 2, count: 1 },
+            GlyphSeam { at: 1, start: 2, count: 1, after_grid: true },
             // And the near sheet's, after everything.
-            GlyphSeam { at: 2, start: 3, count: 1 },
+            GlyphSeam { at: 2, start: 3, count: 1, after_grid: true },
         ],
         "a label goes after its own node, over the instances that ship",
     );
@@ -2588,6 +2589,75 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
         vec![1.0, 2.0, 3.0, 0.0],
         "the glyphs are regrouped into the order they are drawn in",
+    );
+}
+
+/// A name on a node that ships no disc still draws over the grid, not under
+/// it — the case where the two runs meet at the same number.
+///
+/// `grid_at` is where the grid goes, counted over the instances that SHIP.
+/// The sheets behind the home one draw before it and the home sheet after,
+/// so the boundary between the two runs is exactly `grid_at`. A node that
+/// paints nothing ships nothing, which leaves its seam sitting on the
+/// boundary rather than past it: with every node on the home sheet — the
+/// stock `extent_sevens: 0` — the far run is empty, `grid_at` is 0, and the
+/// first home node to be culled takes seam 0 as well. Reading the side off
+/// `at > grid_at` then files that node's name with the sheets BEHIND the
+/// grid, and the grid is painted over the name.
+///
+/// The state is the plugin's resting one, which is what makes it worth a
+/// test of its own: stock view, nothing played, hover any node. An idle node
+/// draws no disc under `IdleMarker::None` with the trail lifting rather than
+/// ringing, and a hovered node is named whether or not it draws.
+#[test]
+fn a_culled_home_nodes_name_draws_over_the_grid_it_shares_a_seam_with() {
+    let mut scene = parity_scene();
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    // The stock resting state: one sheet, no idle disc, the trail lifting
+    // rather than ringing, so an untouched node paints nothing at all.
+    scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+    scene.trail_mark = harmonigraph_scene::TrailMark::Lift;
+    let node = |activation: f32| harmonigraph_scene::NodeInstance {
+        world_pos: glam::Vec3::new(0.0, 0.0, 0.0),
+        activation,
+        octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
+        melody_slots: 0,
+        bass_slots: 0,
+        melody_level: 0.0,
+        bass_level: 0.0,
+        trail: 0.0,
+        on_home: true,
+        ..scene.nodes[0]
+    };
+    // The hovered one is silent and first, so it is culled before anything
+    // has shipped and its seam is 0 — the same number as `grid_at`.
+    scene.nodes = vec![node(0.0), node(1.0)];
+    let glyph = GlyphInstance { rect: [0.0, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
+    let call = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels {
+            glyphs: vec![glyph],
+            labels: vec![Label { node: 0, glyphs: 1 }],
+            rings: [TextRing::default(); 2],
+            atlas: Some(crate::text::tests::atlas()),
+        },
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        13,
+        None,
+    );
+
+    assert!(!scene.grid.is_empty(), "the fixture needs a grid for the name to be covered BY");
+    assert_eq!(call.grid_at, 0, "with one sheet there is nothing to draw before the grid");
+    assert_eq!(
+        call.seams,
+        vec![GlyphSeam { at: 0, start: 0, count: 1, after_grid: true }],
+        "a home node's name draws after the grid even when the cull leaves it on grid_at",
     );
 }
 

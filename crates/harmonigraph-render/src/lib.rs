@@ -471,6 +471,13 @@ struct GlyphSeam {
     at: u32,
     start: u32,
     count: u32,
+    /// Whether the node this names is in the home run, which draws AFTER the
+    /// grid — carried rather than inferred from `at`, because the two runs
+    /// meet at `grid_at` and a culled node sits on the boundary without
+    /// having moved it. The last far-sheet node to ship and a home node
+    /// culled before any home node ships both land on `at == grid_at`, and
+    /// they belong on opposite sides of the grid.
+    after_grid: bool,
 }
 
 /// Put every label at its node's place in the draw order: the glyphs
@@ -485,38 +492,45 @@ struct GlyphSeam {
 fn place_labels(
     glyphs: Vec<GlyphInstance>,
     labels: &[Label],
-    seam_of: &[u32],
+    seam_of: &[(u32, bool)],
 ) -> (Vec<GlyphInstance>, Vec<GlyphSeam>) {
     // Where each label's glyphs sit in what the caller handed over, paired
     // with the seam they are going to. The cursor advances over labels the
     // scene has no node for as much as over the rest: the run lengths are
     // what say which glyphs are whose.
     let mut cursor = 0usize;
-    let mut runs: Vec<(u32, usize, usize)> = Vec::with_capacity(labels.len());
+    let mut runs: Vec<((u32, bool), usize, usize)> = Vec::with_capacity(labels.len());
     for label in labels {
         let start = cursor;
         let count = label.glyphs as usize;
         cursor = (cursor + count).min(glyphs.len());
-        if let Some(&at) = seam_of.get(label.node as usize) {
-            runs.push((at, start, cursor - start));
+        if let Some(&seam) = seam_of.get(label.node as usize) {
+            runs.push((seam, start, cursor - start));
         }
     }
     // Stable, so two labels at one seam keep the order they were drawn in —
     // which is the order the nodes are in, and the only thing that decides
-    // between two names sharing a pixel.
-    runs.sort_by_key(|&(at, _, _)| at);
+    // between two names sharing a pixel. By the side of the grid before the
+    // count, so the two labels that share `grid_at` from opposite runs sort
+    // the way they draw rather than by which node came first.
+    runs.sort_by_key(|&((at, after_grid), _, _)| (at, after_grid));
 
     let mut placed = Vec::with_capacity(glyphs.len());
     let mut seams: Vec<GlyphSeam> = Vec::new();
-    for (at, start, count) in runs {
+    for ((at, after_grid), start, count) in runs {
         if count == 0 {
             continue;
         }
         let first = placed.len() as u32;
         placed.extend_from_slice(&glyphs[start..start + count]);
+        // Merged only with a seam on the SAME side of the grid: two labels
+        // at one `at` are one uninterrupted draw, unless the grid goes
+        // between them.
         match seams.last_mut() {
-            Some(last) if last.at == at => last.count += count as u32,
-            _ => seams.push(GlyphSeam { at, start: first, count: count as u32 }),
+            Some(last) if last.at == at && last.after_grid == after_grid => {
+                last.count += count as u32
+            }
+            _ => seams.push(GlyphSeam { at, start: first, count: count as u32, after_grid }),
         }
     }
     (placed, seams)
@@ -663,26 +677,27 @@ impl LatticeCallback {
         // nothing, and such a node can still carry a label (a hovered idle one
         // draws no disc and is named all the same), so the two part company at
         // the first culled node.
-        let mut seam_of = vec![0u32; scene.nodes.len()];
+        let mut seam_of = vec![(0u32, false); scene.nodes.len()];
         let drawn = |out: &mut Vec<GpuInstance>,
-                     seam_of: &mut [u32],
-                     ns: &[(f32, f32, usize)]| {
+                     seam_of: &mut [(u32, bool)],
+                     ns: &[(f32, f32, usize)],
+                     after_grid: bool| {
             for &(_, _, i) in ns {
                 let node = &scene.nodes[i];
                 let instance = to_gpu(node, node.gutter);
                 if paints(&instance) {
                     out.push(instance);
                 }
-                seam_of[i] = out.len() as u32;
+                seam_of[i] = (out.len() as u32, after_grid);
             }
         };
         let mut instances = Vec::with_capacity(order.len());
-        drawn(&mut instances, &mut seam_of, &order[..split]);
+        drawn(&mut instances, &mut seam_of, &order[..split], false);
         // Where the grid is drawn inside that run: after the sheets BEHIND the
         // home one, counted over the kept instances rather than over `split`,
         // which indexes the list before the cull.
         let grid_at = instances.len() as u32;
-        drawn(&mut instances, &mut seam_of, &order[split..]);
+        drawn(&mut instances, &mut seam_of, &order[split..], true);
         let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
 
         // The grid draws under the nodes.
@@ -1979,14 +1994,17 @@ impl CallbackTrait for LatticeCallback {
             // node it names — so what covers a name is exactly what covers
             // its node. The seams are sorted, so this walks forward once.
             //
-            // A label at the grid's own seam draws BEFORE the grid, since its
-            // node did: the grid covers a name if and only if it is drawn
-            // after it, which is the same rule everything else in this pass
-            // follows.
+            // Which side of the grid a label goes is the run its node was in,
+            // not how its seam compares to `grid_at`: the runs MEET at that
+            // number, so the last far node to ship and a home node culled
+            // before any home node ships share it while belonging on
+            // opposite sides. The grid covers a name if and only if it is
+            // drawn after it, which is the same rule everything else in this
+            // pass follows.
             let mut cursor = 0u32;
             let mut grid_drawn = false;
             for seam in &pane.seams {
-                if !grid_drawn && seam.at > pane.grid_at {
+                if !grid_drawn && seam.after_grid {
                     nodes(&mut pass, cursor..pane.grid_at);
                     grid(&mut pass);
                     (cursor, grid_drawn) = (pane.grid_at, true);

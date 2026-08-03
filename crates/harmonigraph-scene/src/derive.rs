@@ -426,15 +426,22 @@ pub fn derive_scene(
         outer_outer,
         outer_gap,
         octave_layout,
-        // A breathing mode with no mark on either end has no slot to single
-        // out, so its near/rest split collapses and it would breathe the
-        // WHOLE octave layer between the pulse floor and full — a 3x swing on
-        // the node's main feature, driven by a control the pane has grayed
-        // out and that therefore cannot be switched off. Folded to Off here
-        // rather than left to the shader: the modes that need a marked slot
-        // are the ones [`Pulse::needs_a_marked_slot`] names, which is the
-        // same test the pane grays on, so the picture and the control agree
-        // by construction. Shimmer sweeps the layer whole and is untouched.
+        // Alternating with no mark on either end has no slot to single out,
+        // so the half-cycle split it exists for collapses and every glyph
+        // takes the "rest" phase — the WHOLE octave layer breathing between
+        // the pulse floor and full, a 3x swing on the node's main feature
+        // from a control the pane has grayed out and that therefore cannot be
+        // switched off. Folded to Off here rather than left to the shader:
+        // the modes that need a marked slot are the ones
+        // [`Pulse::needs_a_marked_slot`] names, which is the same test the
+        // pane grays on, so the picture and the control agree by
+        // construction.
+        //
+        // Together and Shimmer both animate the layer as one and are
+        // untouched. Together looks like it belongs with Alternating and does
+        // not: `pulse_pair` gives it the same wave for both phases, so a
+        // marked slot changes nothing about its picture and there is no split
+        // to lose when the marks come off.
         pulse_octaves: if view.pulse_octaves.needs_a_marked_slot()
             && !view.mark_melody
             && !view.mark_bass

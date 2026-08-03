@@ -377,22 +377,24 @@ fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
 }
 
 
-/// The octave breathe needs a marked slot to have two parts. With neither
-/// mark on there is none, `extreme_slots` is 0 for every node, and every
-/// glyph takes the "rest" phase — which is not a no-op but a UNIFORM breathe
-/// of the whole octave layer between the shader's pulse floor and full, on
-/// the node's main feature.
+/// Only ALTERNATING needs a marked slot. It is the mode whose two phases
+/// differ, so with neither mark on `extreme_slots` is 0, every glyph takes
+/// the "rest" phase, and what was a half-cycle split becomes a UNIFORM
+/// breathe of the whole octave layer between the shader's pulse floor and
+/// full — a mode doing something other than what it says, from a control the
+/// pane has grayed out and that therefore cannot be switched off. Folding it
+/// here is what keeps the picture and the grayed control agreeing.
 ///
-/// The pane grays those modes out when both marks are off, so the state is
-/// one a person reaches by switching a mark back off with a mode already
-/// chosen — and then cannot switch the animation off, because the control
-/// causing it is disabled. Folding the mode here is what keeps the picture
-/// and the grayed control agreeing.
+/// Together is NOT that mode, however much the pairing of the two names
+/// suggests it is. `pulse_pair` gives it `near == rest` (both phases are
+/// `pulse_wave(0.0)`), so its picture is a uniform breathe of the whole layer
+/// whether or not anything is marked — the marked slot changes nothing to
+/// collapse. Folding it would take away a look that is reachable and steady,
+/// on the grounds that a split it never had has gone.
 ///
-/// Shimmer sweeps the layer whole and never wanted a slot, so it has to
-/// survive the same state.
+/// Shimmer sweeps the layer whole and never wanted a slot either.
 #[test]
-fn a_breathing_octave_mode_folds_away_when_neither_end_is_marked() {
+fn only_the_alternating_octave_breathe_needs_a_marked_end() {
     let breathe = |mark_melody: bool, mark_bass: bool, pulse: Pulse| {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent {
@@ -410,20 +412,26 @@ fn a_breathing_octave_mode_folds_away_when_neither_end_is_marked() {
         scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0).pulse_octaves
     };
 
-    for mode in [Pulse::Together, Pulse::Alternating] {
-        assert_eq!(
-            breathe(false, false, mode),
-            Pulse::Off,
-            "{mode:?} has no slot to single out with neither end marked, and would \
-             breathe the whole octave layer from a control the pane has grayed out",
-        );
-        // ...and one mark is enough to give it its two parts back.
-        assert_eq!(breathe(true, false, mode), mode, "the melody mark alone is a slot");
-        assert_eq!(breathe(false, true, mode), mode, "so is the bass mark alone");
-    }
     assert_eq!(
-        breathe(false, false, Pulse::Shimmer),
-        Pulse::Shimmer,
-        "Shimmer crosses the whole layer and never asked for a marked slot",
+        breathe(false, false, Pulse::Alternating),
+        Pulse::Off,
+        "Alternating has no slot to single out with neither end marked, and would \
+         breathe the whole octave layer from a control the pane has grayed out",
     );
+    // ...and one mark is enough to give it its two parts back.
+    let alt = Pulse::Alternating;
+    assert_eq!(breathe(true, false, alt), alt, "the melody mark alone is a slot");
+    assert_eq!(breathe(false, true, alt), alt, "so is the bass mark alone");
+
+    // The two modes that draw the same picture marked or not have to reach
+    // that picture either way.
+    for whole_layer in [Pulse::Together, Pulse::Shimmer] {
+        assert_eq!(
+            breathe(false, false, whole_layer),
+            whole_layer,
+            "{whole_layer:?} animates the layer as one and never asked for a marked \
+             slot, so nothing about it collapses when both marks come off",
+        );
+        assert_eq!(breathe(true, true, whole_layer), whole_layer, "and it survives marks too");
+    }
 }

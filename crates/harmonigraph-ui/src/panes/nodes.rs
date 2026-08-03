@@ -187,12 +187,12 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // is no separate bar the mode would otherwise gray out, so one row says
     // both whether it pulses and how.
     //
-    // Gated per option rather than as a row: the octave the breathing modes
-    // single out is whichever one a melody or bass ring is pointing at (see
-    // ViewConfig::pulse_octaves), so with both marks off they have no two
-    // parts to play against each other and collapse into one flat breathe —
-    // but Shimmer sweeps the whole layer and is itself on a node with no
-    // mark at all, so taking the row down would hide the one mode that has
+    // Gated per option rather than as a row: the octave Alternating plays
+    // against the rest of the ring is whichever one a melody or bass ring is
+    // pointing at (see ViewConfig::pulse_octaves), so with both marks off it
+    // has no two parts to put a half-cycle between and collapses into one
+    // flat breathe. Together and Shimmer both animate the layer as one to
+    // begin with, so taking the row down would hide the two modes that have
     // lost nothing.
     let marked = view.mark_melody || view.mark_bass;
     let live = |pulse: Pulse| !pulse.needs_a_marked_slot() || marked;
@@ -205,9 +205,8 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             (
                 Pulse::Together,
                 "Together",
-                "The melody/bass octave and the rest of the ring breathe \
-                 together. Needs Melody or Bass switched on -- that is what \
-                 picks the octave",
+                "The whole octave ring breathes as one, marked octave and \
+                 rest alike -- so it needs no mark to point at",
                 live(Pulse::Together),
             ),
             (

@@ -66,12 +66,12 @@ break either, and both are easy to break by reflex.
 **Never run `cargo fmt`.** There is no `rustfmt.toml`, and the tree has
 never been through rustfmt, so rustfmt's idea of this code and the code
 have drifted a long way apart: `cargo fmt --check` currently wants 1346
-changes across 82 of the 88 files in `crates/`. Running it once would bury
+changes across 82 of the 89 files in `crates/`. Running it once would bury
 whatever you actually changed under a whole-tree reformat that no reviewer
 can read past, which is why this is a ban rather than a preference. Match
 the surrounding style by hand, and wrap only the lines you write — about
 100 columns, which is where the tree sits. That is a habit, not a limit to
-enforce: 52 lines already exceed it and the longest runs to 155, and
+enforce: 50 lines already exceed it and the longest runs to 155, and
 rewrapping code you are only passing through costs a reviewer the same way
 `cargo fmt` does, in miniature. To catch only your own long lines, run
 `awk 'length>100'` over the lines you added; leave pre-existing ones alone.

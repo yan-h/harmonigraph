@@ -600,7 +600,8 @@ fn default_octave_extras() -> u32 {
     0
 }
 
-/// The size a fresh extra comes in at, and inert until there is one.
+/// The size an extra took before the size was settable, and inert until
+/// there is one. A fresh view opens on a wider fringe than this.
 fn default_octave_extra_size() -> f32 {
     crate::octaves::DEFAULT_EXTRA_SIZE
 }

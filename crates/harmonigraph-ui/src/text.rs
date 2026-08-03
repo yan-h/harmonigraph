@@ -513,11 +513,24 @@ impl TextBatch {
     ) -> harmonigraph_render::LatticeLabels {
         #[cfg(test)]
         self.pieces.clear();
-        let atlas = atlas_if_changed(
-            painter.ctx(),
-            &state.instruments.lattice_atlas,
-            std::mem::take(&mut self.drawn),
-        );
+        // A batch that drew nothing publishes nothing. [`flush`](Self::flush)
+        // says this by returning outright; this has a value to hand back, so
+        // it skips the publication alone — and it has to skip it explicitly,
+        // because `atlas_if_changed` cannot tell "no glyphs to check" from "a
+        // mirror holding nothing". Until the first lattice name is drawn its
+        // `seen` is empty, which is the arm that reports a resize, so an
+        // empty `drawn` would hand back the whole atlas and a new key on
+        // every frame — and the lattice pane draws no names at all whenever
+        // `show_labels` is off, or before the first note or hover.
+        let atlas = if self.glyphs.is_empty() {
+            None
+        } else {
+            atlas_if_changed(
+                painter.ctx(),
+                &state.instruments.lattice_atlas,
+                std::mem::take(&mut self.drawn),
+            )
+        };
         let mut glyphs = std::mem::take(&mut self.glyphs);
         for glyph in &mut glyphs {
             glyph.rect[0] -= origin.x;
@@ -754,6 +767,41 @@ mod tests {
     /// is what happens in a fresh editor for a few seconds, and is exactly why
     /// this went unnoticed: the bug needs an atlas that has stopped growing,
     /// which is every session after the first moments.
+    /// A lattice that drew no names hands over no atlas.
+    ///
+    /// [`TextBatch::flush`] returns early on an empty batch, and
+    /// [`TextBatch::lattice_labels`] has to do the same on its own —
+    /// `atlas_if_changed` cannot cover for it. `seen` is empty until the
+    /// first lattice glyph is handed over, so `resized` is true, an empty
+    /// `drawn` finds nothing fresh but takes that arm anyway, and every call
+    /// publishes: a whole `ColorImage` cloned out of egui and a new key,
+    /// which the renderer answers with a full-atlas `write_texture` and a
+    /// rebuilt glyph bind group. Once per frame, per lattice pane, for as
+    /// long as it lasts.
+    ///
+    /// It lasts. `show_labels` gates `draw_node_labels` and not this call, so
+    /// switching "Note names" off runs it for as long as the editor is open;
+    /// with names on it is the resting state from the editor opening until
+    /// the first note or hover, and it comes back whenever the mirror is
+    /// cleared with the lattice idle — a drag between the Retina display and
+    /// an external monitor, or the window closing and reopening.
+    #[test]
+    fn a_lattice_that_drew_no_names_hands_over_no_atlas() {
+        let ctx = egui::Context::default();
+        let state = crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        let mut published = 0usize;
+        // Several frames: the first publication is the one that would seed
+        // `seen` and quiet the rest, and with nothing drawn there is none.
+        for _ in 0..3 {
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut batch = TextBatch::default();
+                let labels = batch.lattice_labels(ui.painter(), egui::pos2(0.0, 0.0), &state);
+                published += usize::from(labels.atlas.is_some());
+            });
+        }
+        assert_eq!(published, 0, "an empty batch publishes no atlas, on any frame");
+    }
+
     #[test]
     fn a_glyph_at_a_new_texel_refreshes_the_mirror() {
         let ctx = egui::Context::default();
