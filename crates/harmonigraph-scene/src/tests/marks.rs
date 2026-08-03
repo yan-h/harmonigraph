@@ -391,10 +391,23 @@ fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
 /// they misbehave — which mode is safe to leave standing is a fact about
 /// where each one draws, and pinning that to today's answer would make a mode
 /// reaching past the ring later a silent bug rather than an edit here.
+/// The rings go off two ways, and BOTH have to fold the mode: no thickness to
+/// draw one with, and no end marked for one to belong to
+/// ([`ViewConfig::mark_rings_draw`], which the pane grays the row on). The
+/// marks-off half is the easier one to leave out, because nothing is visibly
+/// wrong when it is: no slot is marked, so `in.marks` is 0 and every term the
+/// mode drives collapses to zero on its own. That is the accident this fold
+/// exists not to depend on.
 #[test]
 fn the_mark_pulse_folds_off_when_the_rings_are_off() {
-    let pulse = |mark_thickness: f32, pulse_marks: Pulse| {
-        let view = ViewConfig { mark_thickness, pulse_marks, ..ViewConfig::default() };
+    let pulse = |mark_thickness: f32, marked: bool, pulse_marks: Pulse| {
+        let view = ViewConfig {
+            mark_thickness,
+            mark_melody: marked,
+            mark_bass: marked,
+            pulse_marks,
+            ..ViewConfig::default()
+        };
         scene_of(
             &NoteTracker::new(),
             &Tuning::default(),
@@ -407,12 +420,22 @@ fn the_mark_pulse_folds_off_when_the_rings_are_off() {
 
     for mode in [Pulse::Together, Pulse::Alternating, Pulse::Shimmer] {
         assert_eq!(
-            pulse(0.0, mode),
+            pulse(0.0, true, mode),
             Pulse::Off,
-            "{mode:?} survived the rings being switched off, and Shimmer at least \
+            "{mode:?} survived the ring thickness going to 0, and Shimmer at least \
              keeps drawing there -- on the marked octave's own slice",
         );
-        assert_eq!(pulse(0.09, mode), mode, "{mode:?} must survive a ring it can animate");
+        assert_eq!(
+            pulse(0.09, false, mode),
+            Pulse::Off,
+            "{mode:?} survived both marks coming off, where there is no ring for it \
+             to animate and the pane has grayed its row",
+        );
+        assert_eq!(
+            pulse(0.09, true, mode),
+            mode,
+            "{mode:?} must survive a ring it can animate",
+        );
     }
 }
 

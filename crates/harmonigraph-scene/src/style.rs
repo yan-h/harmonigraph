@@ -109,7 +109,11 @@ impl IdleMarker {
 ///
 /// [`Shimmer`](Pulse::Shimmer) leaves that split alone and sweeps a sheet of
 /// soft white bands across the layer instead, so it works on a node with no
-/// mark at all.
+/// mark at all. It is also the one mode that reaches OUT of its own layer:
+/// the mark rings' sweep takes the octave slice each ring points at, a mark
+/// being the ring together with the octave it names. How fast, how wide and
+/// how deep that sweep is are settings shared by both layers
+/// ([`ViewConfig::shimmer_speed`](crate::ViewConfig::shimmer_speed)).
 ///
 /// One enum for both layers: the states mean the same thing wherever they're
 /// read, and reading them off one shared clock keeps a node whose octaves
@@ -133,7 +137,10 @@ pub enum Pulse {
     /// plane the billboards face — so a band reads as light raking over the
     /// picture. The octave glyphs' bands and the mark rings' run a quarter
     /// turn apart, so a node wearing both crosses two textures at right
-    /// angles. Both of those live in `lattice.wgsl`'s Shimmer section.
+    /// angles, and where they cross the brighter of the two wins the pixel.
+    /// The mark rings' sweep covers the octave slice each ring points at as
+    /// well as the ring. All of that lives in `lattice.wgsl`'s Shimmer
+    /// section.
     Shimmer,
 }
 

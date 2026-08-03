@@ -179,6 +179,15 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
     }
 }
 
+/// The band width every fixture in this file sweeps at — the fresh view's
+/// own, so the shimmer tests measure the picture the plugin opens on.
+///
+/// Named because [`SHIMMER_PROBE_STEP`] is sized off it: the width is a view
+/// setting rather than the shader constant it was, so a fixture retuned in
+/// one place and not the other is how the probe would come to measure
+/// nothing.
+const PARITY_SHIMMER_WIDTH: f32 = 5.0;
+
 /// A scene exercising every draw path: lit + idle + outlined + hovered
 /// nodes with octave indicators, a chord beam, and solid + dashed grid
 /// lines, all overlapping so blend order matters.
@@ -269,7 +278,7 @@ fn parity_scene() -> Scene {
         // ON — every shimmer test builds on this fixture — has to be sweeping
         // something a reader can size against SHIMMER_PROBE_STEP.
         shimmer_speed: 1.6,
-        shimmer_width: 5.0,
+        shimmer_width: PARITY_SHIMMER_WIDTH,
         shimmer_intensity: 1.0,
         node_style: Default::default(),
         core_radius: 0.46,
@@ -912,10 +921,13 @@ fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
 /// octave a ring points at. Run on both layers, since each reads its own
 /// mode uniform and its own direction.
 ///
-/// The instants are picked without reference to `SHIMMER_SPEED` or
-/// `SHIMMER_PERIOD`: the claim is that the clock reaches the layer, not that
-/// a particular phase does, so retuning the sweep cannot make this pass by
-/// accident.
+/// The instants are picked without reference to the fixture's own speed or
+/// width: the claim is that the clock reaches the layer, not that a
+/// particular phase does, so retuning the sweep cannot make this pass by
+/// accident. (Which is also why this one does NOT read
+/// [`PARITY_SHIMMER_WIDTH`] the way `SHIMMER_PROBE_STEP` has to — a probe
+/// that asks WHERE the bands are needs sizing against them; one that asks
+/// whether they move at all does not.)
 #[test]
 fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
     let Some((device, queue)) = headless_device() else {
@@ -1089,6 +1101,269 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
              the speed, and the two bars are not the independent pair they read as",
         );
     }
+}
+
+/// Two sheets crossing a marked slice take the BRIGHTER of the two, so
+/// switching the mark rings' Shimmer on can only ADD light to the octave
+/// glyphs — never take any away.
+///
+/// The two terms a sheet carries pull opposite ways under a naive combine:
+/// the white mix is brightest at its largest, and the coverage scale is
+/// brightest at its largest too (1 under a peak, dipping to the trough
+/// between bands) — but reading the coverage as "how much the sheet takes
+/// away" and combining it with a min inverts exactly that half. The picture
+/// then has the marked slice DIMMER than the plain slices either side of it
+/// through the whole stretch where the octave sheet peaks and the mark sheet
+/// troughs: the wedge the marks exist to pick out, singled out darker, for
+/// half of every cycle.
+///
+/// Measured over several instants rather than one, because which sheet is
+/// ahead at a given moment is the thing being probed, and one instant would
+/// pick a winner by luck. The rings themselves are excluded — their own
+/// coverage genuinely dips under their own sweep, which is the mode working —
+/// so the claim is about the glyph layer, and the ring pixels are found the
+/// way `the_mark_shimmer_reaches_the_octave_slice_it_points_at` finds them.
+#[test]
+fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 700u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    // Getting the two sheets to DISAGREE over the marked slice is the whole
+    // setup, and where they disagree is not free to choose. They share one
+    // field and one clock and differ only in direction — a quarter turn, so
+    // their normals are the two diagonals — which makes the difference of the
+    // two dot products `f · (dir0 - dir1)`, and `dir0 - dir1` points straight
+    // along the camera's RIGHT axis. Their phase difference therefore depends
+    // on a fragment's x and on nothing else.
+    //
+    // The marked slot here is middle C, whose wedge sits at the TOP of the
+    // node, spanning x ≈ 0: exactly where the two sheets agree. A fixture
+    // left at the origin measures max() picking between two copies of one
+    // number, and would pass against any combine at all.
+    //
+    // So: a tight width, and the node offset along x by half a band's worth
+    // of phase — width / (2·sqrt2), the offset at which the sheets are a half
+    // cycle apart, one at its peak where the other is in its trough. Small
+    // enough to keep the whole node in frame, which the 45° probe step used
+    // by `the_shimmer_is_one_field_...` is not.
+    const WIDTH: f32 = 1.2;
+    let offset = WIDTH / (2.0 * std::f32::consts::SQRT_2);
+    let scene = |melody: u32, marks: harmonigraph_scene::Pulse, time: f32| -> Scene {
+        let mut scene = single_marked_node(melody, 0);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_marks = marks;
+        scene.shimmer_width = WIDTH;
+        scene.time = time;
+        let (right, _) = scene.camera.right_up();
+        scene.nodes[0].world_pos = right * offset;
+        scene
+    };
+    let off = harmonigraph_scene::Pulse::Off;
+    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+    let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+
+    // A cycle's worth of instants: the sheets run square to each other, so
+    // which one is ahead over the slice turns over as the clock runs.
+    let mut lifted = 0usize;
+    for step in 0..8 {
+        let time = 0.2 + step as f32 * 0.45;
+        // The rings, from the node that wears none: everything else is the
+        // glyph layer, which is what this is about.
+        let bare = shot(&scene(0, off, time));
+        let octaves_only = shot(&scene(MIDDLE_C, off, time));
+        let both = shot(&scene(MIDDLE_C, shimmer, time));
+        for i in 0..both.len() / 4 {
+            let px = i * 4..i * 4 + 4;
+            let on_ring = bare[px.clone()] != octaves_only[px.clone()];
+            if on_ring {
+                continue;
+            }
+            let (before, after) = (lum(&octaves_only[px.clone()]), lum(&both[px]));
+            // One count of rounding either way: the two shots run the same
+            // arithmetic to a different answer only where the sheets differ,
+            // and a term that lands on a channel boundary can round down.
+            assert!(
+                after >= before - 3,
+                "at t={time} a glyph pixel lost light ({before} -> {after}) when the \
+                 mark rings' Shimmer came on: the two sheets are being combined so \
+                 that one can darken what the other lit, which singles the marked \
+                 slice out DIMMER than the plain slices beside it",
+            );
+            if after > before + 3 {
+                lifted += 1;
+            }
+        }
+    }
+    // ...and the claim is not vacuous: the mark sheet does reach the glyphs.
+    eprintln!("glyph pixels lifted by the mark sheet across the cycle: {lifted}");
+    // Measured 1970, the brightest of them 407 counts of luminance up.
+    assert!(
+        lifted > 500,
+        "only {lifted} glyph pixels were lifted by the mark rings' Shimmer over a \
+         whole cycle; the never-darker claim above is passing on a sweep that \
+         isn't reaching the slice at all",
+    );
+}
+
+/// With the octave layer STEADY, the mark rings' sweep still reaches the
+/// slice whole — both of a band's terms, not just the bright one.
+///
+/// A band carries a pull toward white AND a dip in coverage, and the dip is
+/// what gives it a body to travel through (see `SHIMMER_TROUGH`). The ring
+/// takes both. The slice that ring names has to take both as well, or one
+/// mark is lit by two different lights: the annulus dipping between bands
+/// while the wedge it points at only ever brightens.
+///
+/// This is the MIRROR of the crossing test above, and it is a different
+/// claim rather than the same one restated. `shimmer_terms` returns the
+/// identity (0, 1) for a layer that is not shimmering, and the two terms
+/// disagree about what identity means — 0 is the smallest white mix, 1 the
+/// LARGEST coverage. So a steady sheet is neutral in one term and dominant
+/// in the other, and a combine has to keep BOTH absences exact: reaching for
+/// the mark sheet where it is off flattens the octave sweep over every
+/// marked slice, and reaching for the octave sheet where IT is off reads the
+/// steady layer as a sheet permanently at its peak, pinning the slice's
+/// coverage at 1 for every instant of the cycle. Both directions are one
+/// operand of one max, and covering only the first leaves the second.
+#[test]
+fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 800u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    // Tight enough that a band and the gap after it both fall across the
+    // node, so one instant of the cycle has the slice in a trough rather
+    // than the whole node riding one shoulder of a band five nodes wide.
+    const WIDTH: f32 = 1.2;
+    const SPEED: f32 = 1.6;
+    let scene = |melody: u32, marks: harmonigraph_scene::Pulse, time: f32| -> Scene {
+        let mut scene = single_marked_node(melody, 0);
+        // The octave layer steady is the whole point: this is the mark
+        // sheet ALONE over the glyphs.
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Off;
+        scene.pulse_marks = marks;
+        scene.shimmer_width = WIDTH;
+        scene.shimmer_speed = SPEED;
+        scene.time = time;
+        scene
+    };
+    let off = harmonigraph_scene::Pulse::Off;
+    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+    let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+
+    // One cycle, walked: the trough has to pass over the slice somewhere in
+    // it whatever phase the fixture happens to start at.
+    let (mut dimmed_slice, mut dimmed_ring) = (0usize, 0usize);
+    for step in 0..8 {
+        let time = 0.2 + step as f32 * (WIDTH / SPEED) / 8.0;
+        // The rings, from the node that wears none — the same mask the
+        // crossing test above takes, so what is left is the glyph layer.
+        let bare = shot(&scene(0, off, time));
+        let steady = shot(&scene(MIDDLE_C, off, time));
+        let swept = shot(&scene(MIDDLE_C, shimmer, time));
+        for i in 0..swept.len() / 4 {
+            let px = i * 4..i * 4 + 4;
+            let on_ring = bare[px.clone()] != steady[px.clone()];
+            let (before, after) = (lum(&steady[px.clone()]), lum(&swept[px]));
+            // The same one-count-per-channel rounding margin the crossing
+            // test allows, in the other direction.
+            if after < before - 3 {
+                if on_ring {
+                    dimmed_ring += 1;
+                } else {
+                    dimmed_slice += 1;
+                }
+            }
+        }
+    }
+    eprintln!("mark sheet dimmed {dimmed_ring} px of ring and {dimmed_slice} px of slice");
+    // The control: the sheet HAS a trough at these instants, and it reaches
+    // the layer it has always reached. Without this the slice figure below
+    // could be zero because nothing was sweeping at all.
+    assert!(
+        dimmed_ring > 0,
+        "the mark rings' Shimmer never dimmed a ring pixel across a whole cycle; \
+         the sweep has no trough at these instants and the slice claim below is \
+         measuring nothing",
+    );
+    // A floor rather than a share of the ring: how much of the band the
+    // fixture shows is a setting, and the slice is one wedge of it against
+    // two full annuli. Measured 1996 px of slice against 2548 of ring, and
+    // 0 of slice against 2548 before the combine kept both absences exact.
+    assert!(
+        dimmed_slice > 200,
+        "the mark rings' Shimmer dimmed {dimmed_ring} px of ring but only \
+         {dimmed_slice} px of the slice those rings point at: the sheet's trough \
+         stops at the ring's edge, so the wedge only ever brightens and the one \
+         mark is lit by two different lights",
+    );
 }
 
 /// Intensity is the DEPTH of the sweep, and its bottom end is the identity:
@@ -1456,10 +1731,18 @@ fn the_probe_moves_along_the_angle_the_shader_sweeps() {
     );
 }
 
-/// How far that probe moves the node, in world units: about half the
-/// shader's band period, so a move ALONG a layer's own travel lands it on a
+/// How far that probe moves the node, in world units: half the band width
+/// the fixtures sweep at, so a move ALONG a layer's own travel lands it on a
 /// very different part of the sweep rather than back where it started.
-const SHIMMER_PROBE_STEP: f32 = 2.5;
+///
+/// Derived from [`PARITY_SHIMMER_WIDTH`] rather than written as 2.5, because
+/// the width is a SETTING now and the fixture picks it. Retuned by hand the
+/// two would drift apart silently, and a step that came out a whole number of
+/// widths would move the node back onto the phase it started at — the probe
+/// would then report a shimmer defect for a shimmer that is working, which is
+/// the same trap `the_probe_moves_along_the_angle_the_shader_sweeps` keeps
+/// the ANGLE out of.
+const SHIMMER_PROBE_STEP: f32 = PARITY_SHIMMER_WIDTH * 0.5;
 
 /// `scene`'s only node, moved [`SHIMMER_PROBE_STEP`] world units along the
 /// camera-plane direction `turns` of a turn from the camera's right axis.

@@ -74,8 +74,9 @@ struct Uniforms {
     misc7: vec4<f32>,
     // The shimmer, for whichever layers are running it. x: how fast the bands
     // travel, in world units per second; y: how wide they are, in world units
-    // (the scene floors it above zero — the band phase divides by it). z, w
-    // unused. One pair for both layers: see the Shimmer section below.
+    // (the scene floors it above zero — the band phase divides by it); z: how
+    // deep the light they carry is, 0 none and 1 the tuned depth; w unused.
+    // One set for both layers: see the Shimmer section below.
     misc8: vec4<f32>,
     // The angle from a ring's own seam to each of its slice boundaries, four
     // to a row and read through oct_bound(): boundary j walking clockwise. One
@@ -1587,20 +1588,47 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // themselves use -- one sheet, read twice, not two sweeps that could
     // disagree.
     let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, 1.0);
-    // Off the marked slices this is the identity, so an unmarked node's
-    // glyphs see the octave layer's sweep alone.
-    let slice_shimmer = mix(vec2<f32>(0.0, 1.0), mark_shimmer, mark_slice);
     // Where BOTH layers shimmer, a marked slice is under two sheets running
-    // square to each other, and it takes the brighter: max on the white mix
-    // and min on the coverage. Adding them would push a crossing past what
-    // either sheet does alone -- a bright knot travelling the lattice's
-    // diagonals -- and would break the "never above 1" the coverage term owes
-    // `paint_reach`. The brighter sheet wins the pixel, which is what two
-    // crossing lights do.
-    let glyph_shimmer = vec2<f32>(
-        max(oct_shimmer.x, slice_shimmer.x),
-        min(oct_shimmer.y, slice_shimmer.y),
+    // square to each other, and it takes the BRIGHTER of the two: max on the
+    // white mix, and max on the coverage as well, that term being 1 under a
+    // peak and dipping to the trough between bands. Taking the smaller
+    // coverage would let the mark sheet's trough darken a slice under the
+    // octave sheet's peak -- the wedge the marks exist to pick out, singled
+    // out DIMMER than the plain slices beside it for half of every cycle.
+    //
+    // Adding them instead would push a crossing past what either sheet does
+    // alone -- a bright knot travelling the lattice's diagonals -- and would
+    // break the "never above 1" the coverage term owes `paint_reach`. Max
+    // keeps that bound for free: neither input is ever above 1, so neither is
+    // the larger of them.
+    //
+    // What the max is taken over is the sheets PRESENT at this fragment, and
+    // BOTH absences have to be kept exact rather than left to the max.
+    // `shimmer_terms` returns the IDENTITY (0, 1) for a layer that is not
+    // shimmering, and the two terms disagree about what identity means: 0 is
+    // the smallest white mix, but 1 is the largest coverage. A steady sheet
+    // is therefore neutral in one term and DOMINANT in the other, so handing
+    // one straight to the max loses whichever sheet is really running:
+    //
+    //  - an absent MARK sheet wins the coverage term outright, flattening the
+    //    octave sweep's own trough over every marked slice with `pulse_marks`
+    //    merely Off. `mark_sheet` is the guard -- a weight carrying the mode
+    //    as well as the slice, so off the slice, or with the mark layer
+    //    steady, this is the octave sweep untouched.
+    //  - an absent OCTAVE sheet wins it the same way, reading a steady layer
+    //    as a sheet permanently at its peak and pinning the slice's coverage
+    //    at 1 for the whole cycle. The slice would then only ever brighten,
+    //    while the ring it names -- which takes `mark_shimmer` whole below --
+    //    goes on dipping between bands, lighting one mark by two different
+    //    lights. `crossed` is the guard: two sheets cross only where there
+    //    are two, and where there is one the slice takes it whole.
+    let mark_sheet = select(0.0, mark_slice, pulse_marks_mode() == 3u);
+    let crossed = select(
+        mark_shimmer,
+        max(oct_shimmer, mark_shimmer),
+        pulse_octaves_mode() == 3u,
     );
+    let glyph_shimmer = mix(oct_shimmer, crossed, mark_sheet);
     glyph_rgb = mix(glyph_rgb, vec3<f32>(1.0), glyph_shimmer.x);
     glyph = glyph * glyph_shimmer.y;
 

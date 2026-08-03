@@ -378,21 +378,35 @@ pub struct ViewConfig {
     ///
     /// A node is [`spacing`](Self::spacing) × 0.25 in world radius, so the
     /// count of bands across one is roughly its diameter over this.
+    ///
+    /// The tight end is a resolution trade as well as a look. The bands are a
+    /// sine of a world coordinate sampled once per fragment, with no
+    /// derivative term damping them, so a period small enough to approach a
+    /// pixel — a tight setting seen from far enough out — aliases into moire
+    /// that shifts as the camera moves, and the DAW window and a render at a
+    /// different size will not shimmer the same way there. The setting is
+    /// still the size it says it is on the lattice; it is the SAMPLING that
+    /// runs out. Frame the shot at the zoom the tight end is chosen for.
     #[serde(default = "default_shimmer_width")]
     pub shimmer_width: f32,
     /// How strong the sweep is where it passes, 0..1 being none to the full
-    /// tuned depth: it scales BOTH of what a band does — how far it pulls the
-    /// layer toward white, and how far the layer's coverage dips between
-    /// bands — so the shimmer stays one shape at every setting rather than
-    /// coming apart into a brightness and a fade that can be dialed against
-    /// each other.
+    /// tuned depth: ONE number drives both of what a band does — how far it
+    /// pulls the layer toward white, and how far the layer's coverage dips
+    /// between bands — so the two can never be dialed against each other into
+    /// a shimmer that brightens without dimming or the reverse.
     ///
     /// 0 is the layer drawing exactly as it does unshimmered, from a bar
-    /// rather than from the mode; past 1 the band reaches full white and the
-    /// trough keeps deepening, which spends the indicators' color and then
-    /// their presence to buy the light. What that costs is real and it is the
-    /// point of the bar: under a strong band an indicator says "an octave
-    /// sounds here" without saying which.
+    /// rather than from the mode. Past 1 the two stop moving together, and
+    /// not because they are separate: the white mix RUNS OUT at about 1.18,
+    /// where a band peak reaches white and there is nothing whiter to reach
+    /// for, while the trough goes on deepening to the clamp. So the top of
+    /// the bar buys its contrast by darkening the layer between bands rather
+    /// than by lighting the band — still more shimmer, and worth having, but
+    /// a different trade from the bottom half.
+    ///
+    /// What the light costs is real at any setting, and it is the point of
+    /// the bar: under a strong band an indicator says "an octave sounds here"
+    /// without saying which.
     #[serde(default = "default_shimmer_intensity")]
     pub shimmer_intensity: f32,
 
@@ -743,6 +757,25 @@ fn default_grid_inset() -> f32 {
 }
 
 impl ViewConfig {
+    /// Whether a melody/bass ring can be drawn at all: an end has to be
+    /// marked for there to BE a ring, and the thickness has to leave it
+    /// something to draw with.
+    ///
+    /// One predicate because three places have to agree on it — the pane
+    /// grays the ring's own controls, `derive_scene` folds
+    /// [`pulse_marks`](Self::pulse_marks) off, and the Shimmer bars gray with
+    /// whatever is left running — and three copies of a two-term condition is
+    /// how they come to disagree. They did: the fold tested the thickness
+    /// alone, so a saved view with both marks off kept shipping a live pulse
+    /// mode, and the Shimmer bars tested neither and stayed draggable with
+    /// nothing to drag.
+    ///
+    /// Says nothing about whether a ring is drawn NOW — that is a held note's
+    /// business, per node. This is whether the layer is switched on.
+    pub fn mark_rings_draw(&self) -> bool {
+        self.mark_thickness > 0.0 && (self.mark_melody || self.mark_bass)
+    }
+
     /// Every lattice position the view currently displays. ALL consumers
     /// (scene derivation, spectral ticks, notes-pane mapping) must iterate
     /// this same set so "on the lattice" means one thing.
