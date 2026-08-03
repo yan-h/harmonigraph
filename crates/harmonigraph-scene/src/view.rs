@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
+    HighlightExtremes, IdleMarker, NodeStyle, Pulse, SevensLabel,
 };
 use crate::trail::TrailMark;
 use harmonigraph_core::{coords, Comma, LatticePos, Tempered};
@@ -238,6 +238,15 @@ pub struct ViewConfig {
     /// strength — and it is inert without two extras to differ.
     #[serde(default = "default_octave_extra_blend")]
     pub octave_extra_blend: f32,
+    /// Breathe the octave glyph the melody or bass ring is pointing at (see
+    /// [`Pulse`]): that slot's wedge against every other glyph on the node,
+    /// sounding or ghost alike — not every sounding octave, only the one an
+    /// indicator is actually about. [`Pulse::Off`] is the steady look every
+    /// earlier build drew, which is also what a blob predating this field
+    /// was drawn with — so a bare `#[serde(default)]` is both fallbacks at
+    /// once and needs no named `default_*` fn.
+    #[serde(default)]
+    pub pulse_octaves: Pulse,
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -299,14 +308,26 @@ pub struct ViewConfig {
     /// octave responsible for it — the slit IS the gap between two octaves,
     /// continued outward, so the ring says which octave without giving up
     /// the shape. (An `Unlinked` opacity used to fade everything but that
-    /// arc; it is fixed at full now, which is the ring reading as a ring.)
-    /// A [`outer_gap`](Self::outer_gap) of 0 leaves no slit to draw.
+    /// arc as a static split; [`pulse_marks`](Self::pulse_marks) is the same
+    /// split resurrected as an animation instead — the two parts still both
+    /// draw at full ring thickness, just breathing rather than one of them
+    /// fixed dim.) A [`outer_gap`](Self::outer_gap) of 0 leaves no slit to
+    /// draw.
     ///
     /// 0 turns the rings off, as a radius of 0 turns the core off. Was
     /// fixed at 0.16 of the band's WIDTH, which moved the rings whenever
     /// the band was resized; absolute holds them still.
     #[serde(default = "default_mark_thickness")]
     pub mark_thickness: f32,
+    /// Breathe the melody/bass rings (see [`Pulse`]): the arc directly over
+    /// the marked octave's slice against the rest of the ring. Shares
+    /// [`Pulse`] with [`pulse_octaves`](Self::pulse_octaves) but is its own
+    /// switch — a chord's outer voices and its octave glyphs are read at a
+    /// glance independently, so pulsing one was never a reason to pulse the
+    /// other. [`Pulse::Off`] is both the fresh-view and the old-blob
+    /// fallback, so a bare `#[serde(default)]` covers it.
+    #[serde(default)]
+    pub pulse_marks: Pulse,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -849,6 +870,9 @@ impl Default for ViewConfig {
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
+            // Steady by default: the pulse is an option to reach for, not
+            // the out-of-the-box look.
+            pulse_octaves: Pulse::Off,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so
@@ -864,6 +888,9 @@ impl Default for ViewConfig {
             legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
             mark_thickness: 0.063_829_795,
+            // Steady here too, for the same reason as pulse_octaves above:
+            // an option to reach for, not the out-of-the-box look.
+            pulse_marks: Pulse::Off,
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,

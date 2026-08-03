@@ -474,6 +474,72 @@ fn oct_slot_level(octaves: vec3<u32>, s: i32) -> f32 {
     }
     return octave_level(octaves, u32(s));
 }
+// Whether a pixel's angle falls inside sector `edges`'s own arc (between its
+// two boundaries), 0..1 with a soft edge over `aa`. Shared by `outer_glyph`
+// (where it decides which wedge owns the pixel) and `mark_ring_alpha` (where
+// it decides how much of the pulse's "near the marked slice" phase a pixel
+// gets), so the two agree on exactly the same wedge rather than each running
+// its own copy that could drift.
+//
+// A wedge under a half turn is the INTERSECTION of its two half-planes; one
+// PAST a half turn is their union, and reading it as an intersection would
+// empty the sector instead of filling it — see `outer_glyph`'s own note on
+// `an_indicator_can_pass_a_half_turn_but_never_a_whole_one`.
+fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
+    let b1 = vec2<f32>(cos(edges.x), sin(edges.x));
+    let b2 = vec2<f32>(cos(edges.y), sin(edges.y));
+    let c1 = uv.x * b1.y - uv.y * b1.x;
+    let c2 = uv.x * b2.y - uv.y * b2.x;
+    let s1 = smoothstep(-aa, aa, c1);
+    let s2 = smoothstep(-aa, aa, -c2);
+    return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
+}
+
+// ---- Pulse: a slow breathe on the octave glyphs and the mark rings --------
+// Both layers already split into a part "near" the melody/bass slice and
+// "the rest" of the shape (the octave loop in `fs_main`: the glyph for the
+// slot a melody or bass ring points at, against every other glyph on the
+// node -- sounding or ghost alike; `mark_ring_alpha`: the arc over that same
+// slot against the rest of the ring). Both key off the node's own
+// `melody_slots`/`bass_slots` bitmasks (`in.marks`), not off which octaves
+// happen to be sounding -- a chord tone that is neither the highest nor the
+// lowest held note is not an indicator this feature is about. Pulse animates
+// the balance between those two parts instead of leaving both fixed, and
+// both layers read the same clock (`u.misc.x`) and shape here so a node
+// pulsing both stays in step.
+const PULSE_HZ: f32 = 0.5;
+// Never dims all the way to nothing, so the dim half of an alternating pair
+// still reads as there rather than gone — the same reasoning as the record
+// button's and the learn pulse's breathe in harmonigraph-ui (`widgets.rs`,
+// `panes/mod.rs::learn_pulse`), just calmer: this runs continuously behind
+// whatever is playing rather than only while something is armed.
+const PULSE_FLOOR: f32 = 0.3;
+fn pulse_wave(phase_offset: f32) -> f32 {
+    let phase = TAU * PULSE_HZ * u.misc.x + phase_offset;
+    return PULSE_FLOOR + (1.0 - PULSE_FLOOR) * (0.5 + 0.5 * sin(phase));
+}
+// The near/rest pair for a pulse mode: x is the level the "near" part
+// breathes at, y the "rest" part's. Mode 0 (off) is both pinned to 1, which
+// is exactly today's fixed-at-full look; mode 1 (together) breathes both by
+// the same wave; mode 2 (alternating) puts them a half cycle apart, so one
+// brightens as the other dims (sin(x + TAU/2) = -sin(x)).
+fn pulse_pair(mode: u32) -> vec2<f32> {
+    if mode == 0u {
+        return vec2<f32>(1.0, 1.0);
+    }
+    let near = pulse_wave(0.0);
+    let rest = select(near, pulse_wave(TAU * 0.5), mode == 2u);
+    return vec2<f32>(near, rest);
+}
+// The octave glyphs' pulse mode (u.misc7.z — see `Pulse`).
+fn pulse_octaves_mode() -> u32 {
+    return u32(u.misc7.z + 0.5);
+}
+// The melody/bass mark rings' pulse mode (u.misc6.w — see `Pulse`).
+fn pulse_marks_mode() -> u32 {
+    return u32(u.misc6.w + 0.5);
+}
+
 // ---- Outer octave layer ----------------------------------------------------
 // Every outer style draws its glyphs inside the radial band
 // [u.misc3.y, u.misc3.z] (quad UV units): the band IS the glyph set's
@@ -571,10 +637,9 @@ fn outer_glyph(
     // between them 336 degrees.
     // That extreme, and the floor that keeps it under a whole turn, are
     // `an_indicator_can_pass_a_half_turn_but_never_a_whole_one` and `MIN_SPAN`
-    // in harmonigraph-scene.
-    let s1 = smoothstep(-aa, aa, c1);
-    let s2 = smoothstep(-aa, aa, -c2);
-    let own = select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
+    // in harmonigraph-scene. (The test itself is `oct_arc_coverage`, shared
+    // with `mark_ring_alpha`'s pulse split so the two agree on one wedge.)
+    let own = oct_arc_coverage(edges, uv, aa);
     // Each edge's gap is cut only on the side the edge actually runs to. The
     // boundary LINE passes just as close on the far side of the node, which
     // falls outside a narrow wedge and so does not matter there, but lands
@@ -944,11 +1009,15 @@ const MARK_RING_MIN_AA: f32 = 1.5;
 // would scale both the width and the blur by the ring's radius over the
 // band's, which reads as a wider, softer cut.
 //
-// The slits are the whole of the link now. An `Unlinked` opacity used to fade
-// the stretch of ring on the far side of them, down to just the arc over the
-// marked sector; it is pinned at full, so the ring is a whole circle that the
-// slits merely break -- which is what says which octave without spending the
-// shape to say it.
+// The slits are the whole of the link at rest. An `Unlinked` opacity used to
+// fade the stretch of ring on the far side of them, down to just the arc over
+// the marked sector, as a fixed split; that split is pinned at full by
+// default, so the ring is a whole circle that the slits merely break -- which
+// is what says which octave without spending the shape to say it.
+// `pulse_marks_mode` reopens the same split, animated instead of fixed --
+// see the Pulse section above -- so the two ends of a chord's rings can
+// still be told apart by eye if the fixed split isn't wanted, without
+// bringing back an opacity that just sits there.
 //
 // The facing gate throws away the antipode: a boundary line runs through the
 // origin, so it passes just as close on the far side of the node and would
@@ -964,6 +1033,10 @@ fn mark_ring_alpha(slots: u32, ring: OctRing, uv: vec2<f32>, aa: f32) -> f32 {
     let half = slice_gap_half();
     let top = ring.base + i32(oct_span()) - 1;
     var slit = 0.0;
+    // How much of THIS pixel's arc coverage belongs to the marked sector(s)
+    // -- the pulse's "near the slice" part, over the same slots the slit
+    // loop above already walks -- rather than "the rest" of the ring.
+    var near = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) != 0u && s >= ring.base && s <= top {
@@ -977,9 +1050,12 @@ fn mark_ring_alpha(slots: u32, ring: OctRing, uv: vec2<f32>, aa: f32) -> f32 {
                 aa_inside(half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)),
             );
             slit = max(slit, cut);
+            near = max(near, oct_arc_coverage(edges, uv, aa));
         }
     }
-    return 1.0 - slit;
+    let pair = pulse_pair(pulse_marks_mode());
+    let breathe = mix(pair.y, pair.x, near);
+    return (1.0 - slit) * breathe;
 }
 
 // Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
@@ -1239,6 +1315,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // outside it the loop below can be skipped entirely rather than run to
     // reach zero `span` times over.
     let band = glyph_band(d, band_in, band_out, aa);
+    // The octave pulse's near/rest pair: "near" is the octave slot the
+    // melody or bass ring is ALSO pointing at (in.marks, the same bitmasks
+    // `mark_ring` reads below), "rest" is every other slot -- sounding or
+    // ghost alike. Taken once outside the loop -- neither side depends on
+    // which slot is being drawn, only on the shared clock and mode. This is
+    // deliberately NOT "sounding vs silent": a chord tone that is neither
+    // the highest nor the lowest held note is not an indicator this feature
+    // is about, so it stays at the "rest" phase like a ghost would.
+    let oct_pulse = pulse_pair(pulse_octaves_mode());
+    let extreme_slots = in.marks.x | in.marks.y;
     for (var i = 0u; i < oct_span() && (!EARLY_OUT || band > 0.0); i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
@@ -1246,17 +1332,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             continue;
         }
         let shape = outer_glyph(slot, oct, in.uv, band, aa);
+        let is_extreme = slot >= 0 && slot < i32(OCTAVE_SLOTS)
+            && (extreme_slots & (1u << u32(slot))) != 0u;
+        let pulse_here = select(oct_pulse.y, oct_pulse.x, is_extreme);
         // Ghosts carry the ring's shape in the note's own color; a sounding
         // slot never dips below its ghost, so a fading octave hands off to it
-        // instead of leaving a hole.
-        var cov = shape * GHOST_LEVEL * presence;
+        // instead of leaving a hole. Both terms take the SAME phase -- a slot
+        // is wholly "near" or wholly "rest", not lit at one phase and ghosted
+        // at the other.
+        var cov = shape * GHOST_LEVEL * presence * pulse_here;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
             // Straight off the octave's own envelope, so the glyph eases in
             // over the attack and ends at nothing on release. The max() hands
             // a backdrop slot off to its ghost as the lit coverage sinks
             // through it.
-            cov = max(cov, shape * level);
+            cov = max(cov, shape * level * pulse_here);
             // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this
             // node's pitch class for the glyph's true pitch.
             let pitch = oct_slot_pitch(slot, in.cents);

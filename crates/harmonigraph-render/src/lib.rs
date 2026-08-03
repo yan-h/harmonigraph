@@ -169,7 +169,8 @@ struct Uniforms {
     /// strength 0..1 — both feed the idle-marker branch alone (see
     /// `TrailMark`); misc5 was full, so the trail started its own slot.
     /// z: the sevens knockout's fade width, in the uv of a full-size node
-    /// (`Scene::sevens_soft`); w unused.
+    /// (`Scene::sevens_soft`); w: the melody/bass mark rings' pulse mode
+    /// (0 off, 1 together, 2 alternating — see `Pulse`).
     misc6: [f32; 4],
     /// The ground the lattice is drawn onto — the pane fill this pass gets
     /// composited over — as the sevens knockout's target color. Without it
@@ -180,12 +181,15 @@ struct Uniforms {
     background: [f32; 4],
     /// The wheel's pitch axis. x: octaves one turn is cut into
     /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
-    /// (`OctaveLayout::center`); z, w unused.
+    /// (`OctaveLayout::center`).
     ///
     /// No slot range and no per-node angle: both depend on the node's own
     /// pitch class — which of its octaves are the ones nearest the center, and
     /// how far its ring is turned to put them on their pitches — so the shader
     /// derives them per node from these two.
+    ///
+    /// z: the octave glyphs' pulse mode (0 off, 1 together, 2 alternating —
+    /// see `Pulse`); w unused.
     misc7: [f32; 4],
     /// `OctaveLayout::bounds` — the angle from a ring's seam to each of its
     /// slice boundaries, the same table for every node — four to a row, which
@@ -573,13 +577,13 @@ impl LatticeCallback {
                     scene.trail_mark.shader_index() as f32,
                     scene.trail_strength,
                     scene.sevens_soft,
-                    0.0,
+                    scene.pulse_marks.shader_index() as f32,
                 ],
                 background: scene.background.to_array(),
                 misc7: [
                     scene.octave_layout.span as f32,
                     scene.octave_layout.center,
-                    0.0,
+                    scene.pulse_octaves.shader_index() as f32,
                     0.0,
                 ],
                 // Straight indexing: the table is exactly as long as the

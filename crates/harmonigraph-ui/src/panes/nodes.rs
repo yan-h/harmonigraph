@@ -8,7 +8,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
-use harmonigraph_scene::{NodeStyle, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
+use harmonigraph_scene::{NodeStyle, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -180,6 +180,37 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // always the crisp classic shapes, and the silent octaves always ghost
     // in behind the sounding ones — that backdrop is what completes the
     // ring, so a lone octave still reads as a whole note.
+
+    // Off is its own option rather than a checkbox beside a mode row: there
+    // is no separate bar the mode would otherwise gray out, so one row says
+    // both whether it pulses and how.
+    //
+    // Gated on the same flags the Melody/bass section's own Pulse row is,
+    // even though it lives in this section: the octave it breathes is
+    // whichever one a melody or bass ring is pointing at (see
+    // ViewConfig::pulse_octaves), so with both marks off there is no slot
+    // for it to single out and the mode would do nothing.
+    ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
+        choice_row(
+            ui,
+            "Pulse",
+            &mut view.pulse_octaves,
+            &[
+                (Pulse::Off, "Off", ""),
+                (
+                    Pulse::Together,
+                    "Together",
+                    "The melody/bass octave and the rest of the ring breathe together",
+                ),
+                (
+                    Pulse::Alternating,
+                    "Alternating",
+                    "The melody/bass octave and the rest of the ring breathe a \
+                     half-cycle apart, so one brightens as the other dims",
+                ),
+            ],
+        );
+    });
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line
@@ -214,6 +245,26 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  values grow the bass ring in over the core, so raise \
                  Band inner to make room",
             );
+        // The two-part split a ring already has -- the arc over its own
+        // marked octave, slit from the rest of the ring -- pulsed instead of
+        // left fixed. Same row shape as the Octaves pulse above: Off is a
+        // mode rather than a separate checkbox.
+        choice_row(
+            ui,
+            "Pulse",
+            &mut view.pulse_marks,
+            &[
+                (Pulse::Off, "Off", ""),
+                (Pulse::Together, "Together", "The whole ring breathes together"),
+                (
+                    Pulse::Alternating,
+                    "Alternating",
+                    "The arc over the marked octave and the rest of the ring \
+                     breathe a half-cycle apart, so one brightens as the \
+                     other dims",
+                ),
+            ],
+        );
     });
 }
 
