@@ -924,10 +924,14 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
     return csum / wsum;
 }
 
-// Concentration of each octave's angular color lobe in the glow (a von
-// Mises-like falloff): higher is tighter, more separated arcs. Tuned so
-// neighbouring octaves blend softly rather than banding at the widest span,
-// where they sit closest together.
+// The TIGHTEST each octave's angular color lobe is drawn at (a von Mises-like
+// falloff): higher is tighter, more separated arcs. Tuned so neighbouring
+// octaves blend softly rather than banding at the widest span, where they sit
+// closest together. A ceiling rather than the concentration itself — a pixel
+// near the node's centre is blended at less, so that the seams, which are
+// fixed in ANGLE and would otherwise converge to a cusp there, keep the arc
+// width they have at the rim (`core_layer`, and note that the rim width is
+// 1/sqrt of this, so the two move together).
 const GLOW_LOBE_KAPPA: f32 = 4.0;
 
 // The glow's color when a chord sounds: every sounding octave's hue laid
@@ -939,8 +943,14 @@ const GLOW_LOBE_KAPPA: f32 = 4.0;
 // with a solo note or nothing sounding it falls back to `fallback`, so a
 // single voice keeps its exact color (fixed channel hues included, which the
 // pitch ramp would not reproduce).
+//
+// `kappa` is how tightly to pack those hues — at most GLOW_LOBE_KAPPA, and
+// less where the caller wants their seams held open (see `core_layer`). At 0
+// every weight collapses to the octave's own level and the hues average into
+// one color.
 fn octave_glow_color(
-    octaves: vec3<u32>, cents: f32, ring: OctRing, angle: f32, fallback: vec3<f32>,
+    octaves: vec3<u32>, cents: f32, ring: OctRing, angle: f32, kappa: f32,
+    fallback: vec3<f32>,
 ) -> vec3<f32> {
     var count = 0u;
     var wsum = 0.0;
@@ -952,7 +962,7 @@ fn octave_glow_color(
         }
         count = count + 1u;
         let theta = oct_mid(i32(i), ring);
-        let w = level * exp(GLOW_LOBE_KAPPA * (cos(angle - theta) - 1.0));
+        let w = level * exp(kappa * (cos(angle - theta) - 1.0));
         // Slot i is MIDI octave i - 1, whose C is MIDI i*12; fold in this
         // node's pitch class for the octave's true pitch.
         csum = csum + pitch_lut_color(f32(i) * 12.0 + cents / 100.0) * w;
@@ -1327,9 +1337,27 @@ fn core_layer(
     // disc mixes ALL its notes, not just the loudest), and the glow skirt
     // carries the same blend, so disc and halo read as one colored field. A
     // solo note falls back to its single color.
-    let octave_mix =
-        octave_glow_color(in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), in.color.rgb)
-            * brightness;
+    //
+    // Those hues are laid in lobes fixed in ANGLE, so the arc a seam spans is
+    // d/sqrt(kappa) — it shrinks with the radius, and every seam converges to a
+    // cusp at the node's centre. That is a property of the KERNEL, not of any
+    // setting: the cusp is there at every solidity, and the glow skirt, which
+    // has no solidity of its own, carries the same blend. So the cure is not
+    // hung off the solidity axis (whose business is the disc's opacity and its
+    // rim, and which is at its widest exactly where there is no disc left to
+    // soften) — one width, everywhere.
+    //
+    // Hold the seams to that width and pick the concentration that gives it:
+    // k = (d/seam)^2, capped at GLOW_LOBE_KAPPA so this only ever loosens the
+    // blend, never tightens it. The width is the lobe's own arc where the disc
+    // ends, radius/sqrt(GLOW_LOBE_KAPPA), carried inward unchanged: the seams
+    // then run at one screen width from rim to centre instead of tapering to a
+    // point, and no pixel is ever blurrier than the rim already was.
+    let seam = radius * inverseSqrt(GLOW_LOBE_KAPPA);
+    let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
+    let octave_mix = octave_glow_color(
+        in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, in.color.rgb,
+    ) * brightness;
     var rgb = octave_mix;
 
     // Field styles instead paint the disc as a ball of gas or patterned

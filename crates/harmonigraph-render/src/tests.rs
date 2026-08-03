@@ -2094,6 +2094,174 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     }
 }
 
+/// The seams between a chord's colors run at ONE width from the rim to the
+/// centre. They are laid down as lobes of fixed ANGULAR width, so the arc each
+/// spans shrinks with the radius and they would otherwise converge to a cusp at
+/// the node's centre — sharpest exactly where the node has the fewest pixels to
+/// say it with.
+///
+/// Both halves of the bargain, because either alone has a trivial cheat: the
+/// centre has to lose its seam, AND the rim has to keep its colors, which is
+/// what stops the cure from being "average the whole node".
+///
+/// Taken at both ends of the solidity axis and at the shipped default, because
+/// the claim of this shape is that the width does NOT depend on solidity — the
+/// cusp belongs to the kernel, and the glow skirt that carries the same blend
+/// has no solidity of its own. So the three readings have to AGREE, not merely
+/// each pass.
+///
+/// Measured as how far the colors around a ring point APART as directions, not
+/// as how much they differ: a soft core is also a dimmer one, and any measure
+/// of magnitude would read that dimming as a blur and pass on it.
+#[test]
+fn the_color_seams_run_at_one_width_from_the_rim_to_the_centre() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [512, 512];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+
+    let mut pane = 300;
+    let mut shot = |solidity: f32, core_radius: f32| -> Vec<u8> {
+        let mut scene = single_marked_node(0, 0);
+        scene.core_solidity = solidity;
+        // The disc held at one size on screen whatever fraction of the quad it
+        // is, so both cases below are measured at the same pixel scale. What
+        // the seam floor asks for is a fraction of the core radius, so the
+        // profile it produces is the same shape at any size; keeping the disc
+        // big just leaves the `aa` floor — the one absolute term — too small to
+        // be what these readings are about.
+        scene.node_radius *= 0.46 / core_radius;
+        scene.core_radius = core_radius;
+        // Every octave the wheel draws for this pitch class. A single sounding
+        // voice takes the node's own color everywhere (octave_glow_color's solo
+        // fallback), which leaves no seam to measure at all.
+        let layout = scene.octave_layout;
+        let node = &mut scene.nodes[0];
+        let (low, high) = layout.slots(node.cents);
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        for slot in low.max(0)..=high.min(harmonigraph_scene::OCTAVE_SLOTS as i32 - 1) {
+            node.octaves[slot as usize] = 1.0;
+        }
+        let labels = LatticeLabels::default();
+        let cb = LatticeCallback::from_scene(&scene, labels, vec_size, format, pane, None);
+        pane += 1;
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+
+    // The node is alone at the world origin and the camera looks at it, so the
+    // frame's centre is its centre.
+    let c = (SIZE[0] / 2) as i32;
+    let rgb = |px: &[u8], x: i32, y: i32| -> glam::Vec3 {
+        let i = ((y as u32 * SIZE[0] + x as u32) * 4) as usize;
+        glam::Vec3::new(px[i] as f32, px[i + 1] as f32, px[i + 2] as f32) / 255.0
+    };
+    // How far apart, in degrees, the most divergent pair of colors around a
+    // ring of radius `r` point. Zero is one flat color all the way round.
+    let spread = |px: &[u8], r: f32| -> f32 {
+        let dirs: Vec<glam::Vec3> = (0..64)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / 64.0;
+                // Screen y grows downward; the sample angle is negated.
+                rgb(px, c + (r * a.cos()).round() as i32, c - (r * a.sin()).round() as i32)
+            })
+            .filter(|v| v.length() > 0.02)
+            .map(|v| v.normalize())
+            .collect();
+        let lit = dirs.len();
+        assert!(lit > 56, "the ring at r={r:.0} is not on the node: {lit} lit samples of 64");
+        let mut worst = 0.0f32;
+        for (i, a) in dirs.iter().enumerate() {
+            for b in &dirs[i + 1..] {
+                worst = worst.max(a.dot(*b).clamp(-1.0, 1.0).acos().to_degrees());
+            }
+        }
+        worst
+    };
+
+    // The disc's radius in pixels, read off the SOLID end, where its edge is
+    // the first sharp fall from the centre; at the soft end it has dissolved
+    // into the glow and there is no edge to find. It is the same disc either
+    // way, so one reading sizes every ring. Taken as the median of eight rays
+    // rather than one: a single ray's answer depends on which octave's hue
+    // happens to lie along it and how bright that one is, so a fixture whose
+    // colors moved would quietly resize the rings instead of failing.
+    let disc_radius = |px: &[u8]| -> f32 {
+        let ray = |a: f32| -> f32 {
+            let at = |r: f32| rgb(px, c + (r * a.cos()) as i32, c - (r * a.sin()) as i32).length();
+            let centre = at(0.0);
+            (2..c).map(|r| r as f32).find(|r| at(*r) < centre * 0.4).unwrap_or(c as f32)
+        };
+        let mut rs: Vec<f32> = (0..8)
+            .map(|i| ray(std::f32::consts::TAU * i as f32 / 8.0))
+            .collect();
+        rs.sort_by(f32::total_cmp);
+        rs[4]
+    };
+
+    for (name, core_radius) in [("the default core", 0.2f32), ("the classic radius", 0.46)] {
+        // The disc's edge is a matter of COVERAGE, which none of this touches,
+        // so the solid end still has one to find whatever the colors inside it
+        // are doing.
+        let r_disc = disc_radius(&shot(1.0, core_radius));
+        assert!(r_disc > 20.0, "{name}: the disc is too small to sample rings in ({r_disc} px)");
+        let (inner, outer) = (r_disc * 0.2, r_disc * 0.75);
+
+        let mut centres = Vec::new();
+        for solidity in [1.0f32, 0.4, 0.25] {
+            let px = shot(solidity, core_radius);
+            let at_centre = spread(&px, inner);
+            let at_rim = spread(&px, outer);
+            // No cusp: the middle is a blend rather than the point where every
+            // seam meets. This is what fails if the lobes go back to one fixed
+            // concentration — the centre then reads as separated as the rim.
+            assert!(
+                at_centre < at_rim * 0.5,
+                "{name} at solidity {solidity}: the seams still converge — {at_centre:.0} deg \
+                 across the centre against {at_rim:.0} at the rim"
+            );
+            // And what stops the cure being "average the node": the seams are
+            // never held wider than the arc they already span where the disc
+            // ends, so the node still shows its notes as distinct colors.
+            assert!(
+                at_rim > 30.0,
+                "{name} at solidity {solidity}: the colors washed out instead of \
+                 their seams widening — only {at_rim:.0} deg across the rim"
+            );
+            centres.push(at_centre);
+        }
+        // The point of this shape over hanging the cure off the solidity axis:
+        // the seam width is the same whatever solidity is dialed. A reading
+        // that tracked the axis would spread these three apart.
+        let lo = centres.iter().cloned().fold(f32::MAX, f32::min);
+        let hi = centres.iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            hi - lo < 6.0,
+            "{name}: the seam width moved with solidity — the centre reads {lo:.0}..{hi:.0} deg \
+             across the axis, and this shape is meant to be independent of it"
+        );
+    }
+}
+
 #[test]
 fn bloom_adds_light_over_the_plain_composite() {
     let Some((device, queue)) = headless_device() else {
