@@ -799,3 +799,120 @@ fn the_next_pass_destroys_what_the_last_one_retired() {
     let bad: Vec<_> = freed_second.iter().copied().filter(|id| drawn.contains(id)).collect();
     assert!(bad.is_empty(), "the second pass freed {} textures it had drawn: {bad:?}", bad.len());
 }
+
+/// Every label reaches the lattice attached to the node it names, and in the
+/// pane's own space.
+///
+/// Both halves are what the lattice's callback is owed, and neither shows up
+/// in the picture as anything but a name in the wrong place. The NODE is how
+/// the callback decides where in its back-to-front order a name is drawn — it
+/// sorts and culls the nodes itself, so an index off by one hands a name the
+/// depth of its neighbour. And the SPACE is the pane's, because the pass a
+/// name is drawn in is the pane's own: a label collected in screen points and
+/// handed over unshifted lands right in a lattice docked at the window's
+/// corner and further out the further the pane is from it.
+#[test]
+fn every_label_names_its_own_node_in_the_panes_own_space() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.show_labels = true;
+    // Two notes a third apart, so there are two names to tell apart and two
+    // nodes to confuse them between.
+    for note in [60, 64] {
+        state.tracker.handle_event(harmonigraph_core::NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note,
+            kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+        });
+    }
+    let scene = harmonigraph_scene::derive_scene(
+        &state.tracker,
+        &state.tuning,
+        &state.view,
+        &state.frame_params,
+        state.camera,
+        None,
+        0.0,
+    );
+
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0));
+    // The pane, and the same pane sitting at the window's corner: what the
+    // callback is handed has to be the same picture either way.
+    let labels_in = |min: egui::Pos2| -> harmonigraph_render::LatticeLabels {
+        let rect = egui::Rect::from_min_size(min, egui::vec2(600.0, 500.0));
+        let mut batch = crate::text::TextBatch::default();
+        let mut out = None;
+        let _ = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), time: Some(0.0), ..Default::default() },
+            |ui| {
+                panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
+                out = Some(batch.lattice_labels(ui.painter(), rect.min, &state));
+            },
+        );
+        out.expect("the closure runs")
+    };
+    let labels = labels_in(egui::pos2(120.0, 60.0));
+    // Two notes light a node apiece on every sheet the view is showing, so
+    // the count is a floor rather than a number: what is checked below is
+    // that each of them names a node of its own, and the right one.
+    assert!(labels.labels.len() >= 2, "two sounding notes, at least two names");
+    let named: std::collections::HashSet<u32> = labels.labels.iter().map(|l| l.node).collect();
+    assert_eq!(named.len(), labels.labels.len(), "two labels naming one node: {:?}", labels.labels);
+    assert_eq!(
+        labels.labels.iter().map(|l| l.glyphs).sum::<u32>() as usize,
+        labels.glyphs.len(),
+        "the runs have to account for every glyph handed over, or they name the wrong ones",
+    );
+
+    // Each run's glyphs sit on the node its label names. Measured against the
+    // projection the callback's own sort works from, in the pane's space.
+    let projector = harmonigraph_scene::Scene::projector(&scene, glam::Vec2::new(600.0, 500.0));
+    let mut cursor = 0usize;
+    for label in &labels.labels {
+        let node = scene
+            .nodes
+            .get(label.node as usize)
+            .unwrap_or_else(|| panic!("label {label:?} names no node of the scene"));
+        assert!(node.activation > 0.0, "an unlit node has no name to draw: {label:?}");
+        let ink = labels.glyphs[cursor..cursor + label.glyphs as usize]
+            .iter()
+            .map(|g| {
+                egui::Rect::from_min_size(
+                    egui::pos2(g.rect[0], g.rect[1]),
+                    egui::vec2(g.rect[2], g.rect[3]),
+                )
+            })
+            .reduce(|a, b| a.union(b))
+            .expect("a label with no glyphs is not collected");
+        cursor += label.glyphs as usize;
+        let on = projector.project(node.world_pos).expect("the node is in front of the camera");
+        assert!(
+            ink.expand(2.0).contains(egui::pos2(on.x, on.y)),
+            "the name of node {} is drawn at {ink:?}, not on the node at {on:?}",
+            label.node,
+        );
+    }
+
+    // And the same pane at the window's corner draws the same picture: what
+    // the callback is handed is the pane's own space, not the screen's.
+    //
+    // To within the rounding of the subtraction itself, which is what makes
+    // this a tolerance rather than an equality: a label at the far corner is
+    // placed at some hundreds of points and shifted back by the pane's own
+    // origin, and a float carries about five decimal digits there. The
+    // failure this is looking for is the whole pane's offset, a hundred
+    // points of it.
+    let moved = labels_in(egui::Pos2::ZERO);
+    assert_eq!(moved.glyphs.len(), labels.glyphs.len(), "the same pane draws the same glyphs");
+    let off = moved
+        .glyphs
+        .iter()
+        .zip(&labels.glyphs)
+        .find(|(a, b)| a.rect.iter().zip(&b.rect).any(|(a, b)| (a - b).abs() > 1e-3));
+    assert!(
+        off.is_none(),
+        "a label's place in its pane cannot depend on where the pane is: {off:?}",
+    );
+}

@@ -19,6 +19,13 @@
 //! callback when the pane flushes it — flushing where the pane would
 //! otherwise draw something on top, so the paint order the panes had is the
 //! paint order they keep.
+//!
+//! The lattice's node names take the other exit. They are collected here the
+//! same way, but handed to the LATTICE's callback
+//! ([`TextBatch::lattice_labels`]) rather than flushed as a pass of their
+//! own, because a name belongs at its node's place in the scene's own
+//! back-to-front order: a node in front covers the name of the node behind
+//! it, which nothing drawn over the finished picture can reproduce.
 
 use harmonigraph_render::{GlyphInstance, TextRing};
 
@@ -174,19 +181,22 @@ const SIZE_STEP: f32 = 1.04;
 const MAX_GLYPH_PX: f32 = 512.0;
 
 /// Which batch a flush belongs to. Unique per FLUSH drawn in one frame, since
-/// each keeps its own instance buffer — the two picture panes and their
-/// Render-preview copies, plus every pane that flushes more than once to put
-/// something between two groups of text. A pane is not the unit here, which is
-/// what makes adding one a renumbering rather than an append; the ids are
-/// checked for collisions in this module's tests.
-pub(crate) const LATTICE_LABELS: u64 = 0;
-pub(crate) const LATTICE_PREVIEW_LABELS: u64 = 1;
-/// The Lattice pane's second flush: the learn badge, which goes on top of the
-/// node names and so cannot share their buffer.
-pub(crate) const LATTICE_LEARN: u64 = 2;
+/// each keeps its own instance buffer — the analyzer and its Render-preview
+/// copy, plus every pane that flushes more than once to put something between
+/// two groups of text. A pane is not the unit here, which is what makes adding
+/// one a renumbering rather than an append; the ids are checked for collisions
+/// in this module's tests.
+///
+/// The lattice's node names are not among them: they are drawn inside the
+/// lattice's own pass, so that a node in front covers the name of the node
+/// behind it, and they reach it through
+/// [`lattice_labels`](TextBatch::lattice_labels) rather than through a flush.
+/// The learn badge still flushes, being chrome ABOUT the pane rather than
+/// something in the picture.
+pub(crate) const LATTICE_LEARN: u64 = 0;
 /// The analyzer's, one per surface (docked, then the preview).
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
-    3 + surface as u64
+    1 + surface as u64
 }
 
 /// One glyph as the mirror identifies it: its size, its character, and the
@@ -252,6 +262,11 @@ impl Magnify {
 #[derive(Default)]
 pub(crate) struct TextBatch {
     glyphs: Vec<GlyphInstance>,
+    /// Which node each of those glyphs names, for a batch whose text is going
+    /// to the LATTICE's own pass rather than over the finished picture. Filled
+    /// by [`TextBatch::attached_to`] and empty for every other pane, which has
+    /// nothing for a glyph to belong to.
+    labels: Vec<harmonigraph_render::Label>,
     /// Every glyph this batch drew — the probe that decides whether egui has
     /// rasterized something our mirror of its atlas has not seen. See
     /// [`GlyphKey`] and [`AtlasMirror`].
@@ -307,6 +322,29 @@ impl TextBatch {
         let previous = self.magnify.replace(Magnify { origin, factor });
         let out = f(self);
         self.magnify = previous;
+        out
+    }
+
+    /// Everything `f` draws is the name of node `node` — an index into the
+    /// scene's own `nodes`.
+    ///
+    /// Only the lattice has anything to say here, and what it buys is where
+    /// the name is DRAWN: the lattice's callback puts a label at its node's
+    /// place in the back-to-front order, so a nearer node covers the name of
+    /// the node behind it exactly as it covers the node itself. Everything
+    /// else this batch collects is drawn over a finished picture, where there
+    /// is no order to belong to.
+    ///
+    /// Scoped, so a label is one uninterrupted run of glyphs: the runs are
+    /// what say which glyphs are whose, and they carry lengths rather than
+    /// indices.
+    pub(crate) fn attached_to<R>(&mut self, node: u32, f: impl FnOnce(&mut Self) -> R) -> R {
+        let first = self.glyphs.len();
+        let out = f(self);
+        let glyphs = (self.glyphs.len() - first) as u32;
+        if glyphs > 0 {
+            self.labels.push(harmonigraph_render::Label { node, glyphs });
+        }
         out
     }
 
@@ -438,22 +476,80 @@ impl TextBatch {
         }
         #[cfg(test)]
         self.pieces.clear();
-        let atlas = atlas_if_changed(painter.ctx(), state, std::mem::take(&mut self.drawn));
-        let ppp = painter.ctx().pixels_per_point();
-        let rings = RINGS
-            .map(|(radius, alpha, samples)| TextRing { radius: ring_radius(radius, ppp), alpha, samples });
+        let atlas = atlas_if_changed(
+            painter.ctx(),
+            &state.instruments.font_atlas,
+            std::mem::take(&mut self.drawn),
+        );
         painter.add(harmonigraph_render::text_paint_callback(
             rect,
             std::mem::take(&mut self.glyphs),
-            rings,
+            rings(painter.ctx()),
             atlas,
             state.target_format,
             pane_id,
         ));
     }
+
+    /// Hand the node names collected so far to the LATTICE's own callback,
+    /// and start again.
+    ///
+    /// `origin` is the pane's top-left corner: the glyphs were placed in
+    /// screen points, as everything laid out against an `egui::Painter` is,
+    /// and the pass that draws them is the pane's own — where the pane's
+    /// corner is the origin and the render scale decides the pixels.
+    ///
+    /// The atlas comes from a mirror of its own rather than the one
+    /// [`flush`](Self::flush) draws from. Each mirror answers for one
+    /// TEXTURE — "is every glyph this batch points at in the copy that
+    /// renderer holds" — and the lattice has its own, so a single mirror
+    /// would hand each renderer half the publications and leave both holding
+    /// half an atlas.
+    pub(crate) fn lattice_labels(
+        &mut self,
+        painter: &egui::Painter,
+        origin: egui::Pos2,
+        state: &crate::SharedState,
+    ) -> harmonigraph_render::LatticeLabels {
+        #[cfg(test)]
+        self.pieces.clear();
+        let atlas = atlas_if_changed(
+            painter.ctx(),
+            &state.instruments.lattice_atlas,
+            std::mem::take(&mut self.drawn),
+        );
+        let mut glyphs = std::mem::take(&mut self.glyphs);
+        for glyph in &mut glyphs {
+            glyph.rect[0] -= origin.x;
+            glyph.rect[1] -= origin.y;
+        }
+        harmonigraph_render::LatticeLabels {
+            glyphs,
+            labels: std::mem::take(&mut self.labels),
+            rings: rings(painter.ctx()),
+            atlas,
+        }
+    }
 }
 
-/// What the callback's copy of egui's font atlas currently holds.
+/// The halo's rings at this display's scale, as the renderer takes them.
+fn rings(ctx: &egui::Context) -> [TextRing; 2] {
+    let ppp = ctx.pixels_per_point();
+    RINGS.map(|(radius, alpha, samples)| TextRing {
+        radius: ring_radius(radius, ppp),
+        alpha,
+        samples,
+    })
+}
+
+/// What one renderer's copy of egui's font atlas currently holds.
+///
+/// One of these per copy, and there are two: the text callback's, and the
+/// lattice's, which draws its node names inside its own scene pass off a
+/// texture of its own. Each answers for the texture it belongs to, so they
+/// are separate mirrors rather than one shared — a single mirror publishes an
+/// atlas once, and whichever renderer asked second would be told nothing had
+/// changed while holding none of it.
 ///
 /// The callback cannot bind egui's own font texture — `CallbackResources`
 /// holds what WE put there — so the atlas is mirrored, and something has to
@@ -537,11 +633,10 @@ impl AtlasMirror {
 /// rest — which is nearly all of them.
 fn atlas_if_changed(
     ctx: &egui::Context,
-    state: &crate::SharedState,
+    mirror: &std::sync::Mutex<AtlasMirror>,
     drawn: Vec<GlyphKey>,
 ) -> Option<harmonigraph_render::FontAtlas> {
-    let mut mirror =
-        state.instruments.font_atlas.lock().expect("the label mirror is never held across a panic");
+    let mut mirror = mirror.lock().expect("the label mirror is never held across a panic");
     // A resize (or the overflow that clears the atlas and starts over)
     // rearranges everything, so it counts as a change on its own.
     let size = ctx.fonts(|fonts| fonts.font_image_size());
@@ -632,8 +727,6 @@ mod tests {
     #[test]
     fn every_batch_drawn_in_a_frame_has_an_id_of_its_own() {
         let ids = [
-            LATTICE_LABELS,
-            LATTICE_PREVIEW_LABELS,
             LATTICE_LEARN,
             // The docked analyzer, then the Video pane's preview copy.
             spectral_labels(0),
@@ -673,8 +766,9 @@ mod tests {
 
         let state = crate::SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         let first = batch_keys(&ctx, &font, "Ai");
-        assert!(atlas_if_changed(&ctx, &state, first.clone()).is_some(), "the first mirror");
-        assert!(atlas_if_changed(&ctx, &state, first.clone()).is_none(), "nothing has moved");
+        let mirror = &state.instruments.font_atlas;
+        assert!(atlas_if_changed(&ctx, mirror, first.clone()).is_some(), "the first mirror");
+        assert!(atlas_if_changed(&ctx, mirror, first.clone()).is_none(), "nothing has moved");
 
         // The same character at the same size, pushed along by what is now in
         // front of it. Every PAIR here is one the mirror has already seen...
@@ -691,7 +785,7 @@ mod tests {
         // ...so the texel is the whole of what stands between that glyph and a
         // blank rectangle where a digit should be.
         assert!(
-            atlas_if_changed(&ctx, &state, swapped).is_some(),
+            atlas_if_changed(&ctx, mirror, swapped).is_some(),
             "a glyph at an unuploaded texel must refresh the mirror",
         );
     }
@@ -730,8 +824,11 @@ mod tests {
         let ctx = egui::Context::default();
         batch_keys(&ctx, &font, "C4 Eb5 G7");
         let opened = batch_keys(&ctx, &font, "C4 Eb5 G7");
-        assert!(atlas_if_changed(&ctx, &state, opened.clone()).is_some(), "the first mirror");
-        assert!(atlas_if_changed(&ctx, &state, opened.clone()).is_none(), "nothing has moved");
+        {
+            let mirror = &state.instruments.font_atlas;
+            assert!(atlas_if_changed(&ctx, mirror, opened.clone()).is_some(), "the first mirror");
+            assert!(atlas_if_changed(&ctx, mirror, opened.clone()).is_none(), "nothing has moved");
+        }
 
         // The window closes and another opens: a new context, and a new
         // renderer holding no atlas at all.
@@ -742,7 +839,7 @@ mod tests {
         assert_eq!(drawn, opened, "the same labels rasterize to the same texels");
 
         assert!(
-            atlas_if_changed(&reopened, &state, drawn).is_some(),
+            atlas_if_changed(&reopened, &state.instruments.font_atlas, drawn).is_some(),
             "a context that has never been handed the atlas must be handed it",
         );
     }
@@ -960,9 +1057,10 @@ mod tests {
         let font = egui::FontId::proportional(12.0);
 
         let (size_1x, drawn_1x) = draw_at(&ctx, &font, "Ag1", 1.0);
-        assert!(atlas_if_changed(&ctx, &state, drawn_1x.clone()).is_some(), "the first mirror");
+        let mirror = &state.instruments.font_atlas;
+        assert!(atlas_if_changed(&ctx, mirror, drawn_1x.clone()).is_some(), "the first mirror");
         assert!(
-            atlas_if_changed(&ctx, &state, drawn_1x.clone()).is_none(),
+            atlas_if_changed(&ctx, mirror, drawn_1x.clone()).is_none(),
             "an unchanged frame must not re-upload the atlas — that is the point of the mirror"
         );
 
@@ -977,7 +1075,7 @@ mod tests {
         assert_ne!(drawn_2x, drawn_1x, "...and they are rasterized somewhere else entirely");
 
         assert!(
-            atlas_if_changed(&ctx, &state, drawn_2x).is_some(),
+            atlas_if_changed(&ctx, mirror, drawn_2x).is_some(),
             "a scale change must refresh the mirror: the UVs moved, so the pixels must follow"
         );
     }
