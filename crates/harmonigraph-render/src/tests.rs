@@ -2010,7 +2010,8 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
     let (near, hush_a, hush_b, home) = (0u32, 1u32, 2u32, 3u32);
 
     // A glyph per label, told apart by where it claims to be.
-    let glyph = |at: f32| GlyphInstance { rect: [at, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
+    let glyph =
+        |at: f32| GlyphInstance { rect: [at, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
     let call = LatticeCallback::from_scene(
         &scene,
         LatticeLabels {
@@ -2047,3 +2048,132 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
         "the glyphs are regrouped into the order they are drawn in",
     );
 }
+
+/// A label is not in the bloom: the light the bloom adds to a frame is the
+/// same whether the names are drawn or not.
+///
+/// Two halves, and the second is the one that is easy to miss. A name in the
+/// bloom input GLOWS, which is the obvious half — white type well over the
+/// bright pass's threshold, haloed like a lit node. It also takes a BITE out
+/// of the halo of the node it covers, by standing where that node's own
+/// bright pixels were, so a node dims as a name crosses it. Both are what a
+/// second colour attachment buys, and both show up here as the same
+/// difference.
+///
+/// Measured as bloom LIGHT rather than as pixels, since that is the thing
+/// that must not change: the composite adds `bloom * strength` on top of the
+/// scene, so rendering each arrangement with the bloom on and off and
+/// subtracting isolates exactly the term under test. The scene itself does
+/// change with a label in it — that is the feature — so comparing frames
+/// directly would be comparing the label to itself.
+#[test]
+fn a_label_adds_no_light_through_the_bloom() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let scene = one_node_behind_another();
+    let points = egui::vec2(SCENE_SIZE[0] as f32, SCENE_SIZE[1] as f32);
+    let on = scene
+        .projector(glam::Vec2::new(points.x, points.y))
+        .project(scene.nodes[0].world_pos)
+        .expect("the stack is in front of the camera");
+    let (x, y) = (on.x.round(), on.y.round());
+
+    // The near node's name, right on the node — over its brightest pixels,
+    // which is where a label robs a halo of the most light.
+    let label = |on: bool| -> (Vec<GlyphInstance>, Vec<Label>) {
+        if !on {
+            return (Vec::new(), Vec::new());
+        }
+        (
+            vec![GlyphInstance {
+                rect: [x - 6.0, y - 6.0, 12.0, 12.0],
+                ..crate::text::tests::glyph()
+            }],
+            vec![Label { node: 0, glyphs: 1 }],
+        )
+    };
+    let frame = |labelled: bool, bloom: f32| -> Vec<u8> {
+        let (glyphs, labels) = label(labelled);
+        // A fresh fixture per frame: `Scene` is not `Clone`, and the only
+        // thing that varies is the strength the composite reads.
+        let mut scene = one_node_behind_another();
+        scene.bloom_strength = bloom;
+        let cb = LatticeCallback::from_scene(
+            &scene,
+            LatticeLabels {
+                glyphs,
+                labels,
+                rings: [TextRing::default(); 2],
+                atlas: Some(crate::text::tests::atlas()),
+            },
+            points,
+            format,
+            13,
+            None,
+        );
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SCENE_SIZE, pixels_per_point: 1.0 };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let clear = wgpu::Color::TRANSPARENT;
+        let texture =
+            render_to_texture(&device, &queue, SCENE_SIZE, format, clear, |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: SCENE_SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            });
+        readback(&device, &queue, &texture, SCENE_SIZE)
+    };
+    let (lit, plain) = (frame(true, 1.0), frame(true, 0.0));
+    let (bare_lit, bare_plain) = (frame(false, 1.0), frame(false, 0.0));
+
+    // Non-vacuous first: there has to BE bloom, and it has to reach the
+    // pixels the label covers — otherwise this passes on a frame with no
+    // light in it to move.
+    let light = |on: &[u8], off: &[u8], i: usize| on[i] as i32 - off[i] as i32;
+    let near_label = |i: usize| {
+        let row = SCENE_SIZE[0] as usize;
+        let (px, py) = (((i / 4) % row) as f32, ((i / 4) / row) as f32);
+        (px - x).abs() <= 10.0 && (py - y).abs() <= 10.0
+    };
+    let peak = (0..lit.len())
+        .filter(|i| i % 4 != 3 && near_label(*i))
+        .map(|i| light(&bare_lit, &bare_plain, i))
+        .max()
+        .unwrap_or(0);
+    assert!(peak > 8, "the fixture must bloom where the label sits, peak {peak}");
+
+    // And the label changes none of it. Saturated channels are skipped: the
+    // glyph is white, so where it lands the composite is already at 255 with
+    // the bloom off and the added light has nowhere to go — a clamp, not a
+    // reading.
+    let (mut worst, mut at) = (0i32, 0usize);
+    for i in (0..lit.len()).filter(|i| i % 4 != 3) {
+        if lit[i] == 255 || bare_lit[i] == 255 {
+            continue;
+        }
+        let d = light(&lit, &plain, i) - light(&bare_lit, &bare_plain, i);
+        if d.abs() > worst.abs() {
+            (worst, at) = (d, i);
+        }
+    }
+    assert!(
+        worst.abs() <= 1,
+        "a label changed the bloom by {worst}/255 at pixel ({}, {}) — it is in the bright \
+         pass's input, so it glows and eats the halo of the node it covers",
+        (at / 4) % SCENE_SIZE[0] as usize,
+        (at / 4) / SCENE_SIZE[0] as usize,
+    );
+}
+

@@ -449,11 +449,16 @@ pub(crate) fn bind_group(
 /// its own text, so a label composites over the picture identically to the
 /// stamped version it replaces.
 ///
-/// `depth` is the depth format of the pass this will be used in, for the
-/// lattice's scene pass, which carries one. A pipeline's depth state has to
-/// match its pass's attachment, and that is the whole of what it is for here:
-/// glyphs neither test nor write depth, they take their place in the same
-/// back-to-front order the nodes are drawn in.
+/// `scene_depth` says this pipeline draws in the lattice's scene pass, and
+/// carries that pass's depth format. A pipeline has to declare what its pass
+/// carries, and that is the whole of what this is for — twice over:
+///
+///   - the depth attachment, which glyphs neither test nor write; they take
+///     their place in the same back-to-front order the nodes are drawn in;
+///   - the second COLOUR attachment, which glyphs must not write. That one
+///     holds the picture without the labels, and it is what the bloom's
+///     bright pass reads, so leaving it unwritten here is the whole of how a
+///     name stays out of the bloom.
 ///
 /// The alpha blend is egui's own — `src * (1 - dst.a) + dst`, which is the
 /// same arithmetic as premultiplied `over` written from the other side, so a
@@ -463,7 +468,7 @@ pub(crate) fn create_text_pipeline(
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
     fragment: &str,
-    depth: Option<wgpu::TextureFormat>,
+    scene_depth: Option<wgpu::TextureFormat>,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("text_shader"),
@@ -474,6 +479,33 @@ pub(crate) fn create_text_pipeline(
         bind_group_layouts: &[Some(layout)],
         ..Default::default()
     });
+    let mut targets = vec![Some(wgpu::ColorTargetState {
+        format: target_format,
+        blend: Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        }),
+        write_mask: wgpu::ColorWrites::ALL,
+    })];
+    // The pass's nodes-only attachment, declared and never written — an empty
+    // write mask rather than a `None` target, which wgpu rejects: a pipeline's
+    // formats have to match the pass's attachment for attachment, so the way
+    // to write nothing is to say so in the mask.
+    if scene_depth.is_some() {
+        targets.push(Some(wgpu::ColorTargetState {
+            format: target_format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::empty(),
+        }));
+    }
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(fragment),
         layout: Some(&pipeline_layout),
@@ -487,28 +519,13 @@ pub(crate) fn create_text_pipeline(
             module: &shader,
             entry_point: Some(fragment),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: Some(wgpu::BlendState {
-                    color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
-                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                    alpha: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::OneMinusDstAlpha,
-                        dst_factor: wgpu::BlendFactor::One,
-                        operation: wgpu::BlendOperation::Add,
-                    },
-                }),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &targets,
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
             ..Default::default()
         },
-        depth_stencil: depth.map(|format| wgpu::DepthStencilState {
+        depth_stencil: scene_depth.map(|format| wgpu::DepthStencilState {
             format,
             depth_write_enabled: Some(false),
             depth_compare: Some(wgpu::CompareFunction::Always),

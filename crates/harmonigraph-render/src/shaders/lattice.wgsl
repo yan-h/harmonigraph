@@ -1131,8 +1131,9 @@ fn core_layer(
     return vec4<f32>(rgb_core * core_alpha, core_alpha);
 }
 
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+/// What a node paints at this fragment. Both node entry points below return
+/// exactly this; they differ only in how many attachments they write it to.
+fn node_paint(in: VsOut) -> vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
     let activation = in.params.x;
 
@@ -1428,8 +1429,35 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     return out;
 }
 
+/// The two attachments the offscreen scene pass carries.
+///
+/// `picture` is everything, and is what the composite puts on screen.
+/// `nodes` is the same picture with the node LABELS left out — the bright
+/// pass reads it, so a name neither glows nor takes a bite out of the halo
+/// of the node it covers. Every draw that is not a label writes the same
+/// fragment to both, so the two differ in exactly one thing.
+struct SceneOut {
+    @location(0) picture: vec4<f32>,
+    @location(1) nodes: vec4<f32>,
+};
+
+/// The node pipelines. `fs_main` is the single-attachment form, which the
+/// parity test's direct-to-egui-pass reference draws through; `fs_main_scene`
+/// is the one the offscreen pass uses.
 @fragment
-fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    return node_paint(in);
+}
+
+@fragment
+fn fs_main_scene(in: VsOut) -> SceneOut {
+    let paint = node_paint(in);
+    return SceneOut(paint, paint);
+}
+
+/// What a grid line or chord beam paints; see [`node_paint`] for why the
+/// entry points are two.
+fn edge_paint(in: EdgeVsOut) -> vec4<f32> {
     // Screen-constant soft band across the beam (see aa_inside; computed
     // before the branch so the derivative stays in uniform control flow).
     let aa_y = aa_width(fwidth(in.uv.y));
@@ -1465,4 +1493,15 @@ fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
     }
     let rgb = in.color.rgb * (0.55 + 0.45 * across);
     return vec4<f32>(rgb * alpha, alpha);
+}
+
+@fragment
+fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
+    return edge_paint(in);
+}
+
+@fragment
+fn fs_edge_scene(in: EdgeVsOut) -> SceneOut {
+    let paint = edge_paint(in);
+    return SceneOut(paint, paint);
 }

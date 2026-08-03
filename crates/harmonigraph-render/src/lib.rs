@@ -108,9 +108,12 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Clamp on the render-scale view setting, over whatever the UI offers.
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
-/// Entry points a (re)loaded shader must provide.
+/// Entry points a (re)loaded shader must provide. The `_scene` pair is the
+/// two-attachment form the offscreen pass draws through; the bare pair is
+/// the single-attachment one the parity test's reference path uses.
 #[cfg(any(test, feature = "hot-reload"))]
-const REQUIRED_ENTRY_POINTS: &[&str] = &["vs_main", "fs_main", "vs_edge", "fs_edge"];
+const REQUIRED_ENTRY_POINTS: &[&str] =
+    &["vs_main", "fs_main", "fs_main_scene", "vs_edge", "fs_edge", "fs_edge_scene"];
 
 /// Watches the shader source on disk (dev builds only). The first sighting
 /// of the file only records a baseline mtime; edits after launch trigger
@@ -1087,6 +1090,21 @@ struct PaneBuffers {
 /// width doesn't change with the render-scale setting.
 struct Offscreen {
     color_view: wgpu::TextureView,
+    /// The same picture with the node LABELS left out, written beside
+    /// `color_view` by the scene pass's second attachment.
+    ///
+    /// The bright pass reads THIS, so a name is not in the bloom at all: it
+    /// neither glows nor — the half that is easier to miss — takes a bite out
+    /// of the halo of the node it covers, which is what a name in the bloom
+    /// input does by standing where that node's own bright pixels were.
+    ///
+    /// A whole second colour target is what that costs, at the render-scaled
+    /// size. There is no cheaper slot: the bright pass samples a finished
+    /// texture, so "after bloom but still interleaved with the nodes" does not
+    /// exist, and anything short of a second attachment (a stencil, a
+    /// threshold) buys back the memory by punching a hole in the node's own
+    /// halo where the name sits.
+    nodes_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     /// Bloom chain targets: half res (bright pass) and two quarter-res
     /// ping-pong textures for the separable blur.
@@ -1094,8 +1112,8 @@ struct Offscreen {
     quarter_a_view: wgpu::TextureView,
     quarter_b_view: wgpu::TextureView,
     /// Bind groups, named by the pass that USES them (source texture +
-    /// shared sampler): bright samples the scene, downsample the half,
-    /// blur_h quarter A, blur_v quarter B.
+    /// shared sampler): bright samples the scene WITHOUT its labels,
+    /// downsample the half, blur_h quarter A, blur_v quarter B.
     bright_bind_group: wgpu::BindGroup,
     downsample_bind_group: wgpu::BindGroup,
     blur_h_bind_group: wgpu::BindGroup,
@@ -1139,6 +1157,7 @@ impl Offscreen {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
 
         let color = tex("lattice_offscreen_color", size[0], size[1], format, attach_and_sample);
+        let nodes = tex("lattice_offscreen_nodes", size[0], size[1], format, attach_and_sample);
         let depth = tex(
             "lattice_offscreen_depth",
             size[0],
@@ -1153,6 +1172,7 @@ impl Offscreen {
         let quarter_b = tex("lattice_bloom_quarter_b", qw, qh, format, attach_and_sample);
 
         let color_view = color.create_view(&Default::default());
+        let nodes_view = nodes.create_view(&Default::default());
         let half_view = half.create_view(&Default::default());
         let quarter_a_view = quarter_a.create_view(&Default::default());
         let quarter_b_view = quarter_b.create_view(&Default::default());
@@ -1198,12 +1218,15 @@ impl Offscreen {
         });
 
         Offscreen {
-            bright_bind_group: filter_bg("lattice_bright_bind_group", &color_view),
+            // The nodes-only copy, not the picture: the labels are drawn into
+            // the picture and must not reach the bloom.
+            bright_bind_group: filter_bg("lattice_bright_bind_group", &nodes_view),
             downsample_bind_group: filter_bg("lattice_downsample_bind_group", &half_view),
             blur_h_bind_group: filter_bg("lattice_blur_h_bind_group", &quarter_a_view),
             blur_v_bind_group: filter_bg("lattice_blur_v_bind_group", &quarter_b_view),
             composite_bind_group,
             color_view,
+            nodes_view,
             depth_view: depth.create_view(&Default::default()),
             half_view,
             quarter_a_view,
@@ -1219,10 +1242,12 @@ impl Offscreen {
 /// share the module, bind group layout, blending, and topology; only entry
 /// points and vertex layout differ.
 ///
-/// `depth` is true for the production pipelines, which render into the
-/// offscreen pass and must declare its depth attachment. The parity test
-/// builds depthless variants that draw straight into the egui pass, as its
-/// reference.
+/// `offscreen` is true for the production pipelines, which draw into the
+/// offscreen pass and must declare what that pass carries: its depth
+/// attachment, and its second colour attachment — the nodes-only copy the
+/// bloom reads (see [`Offscreen::nodes_view`]). The parity test builds
+/// single-attachment depthless variants that draw straight into the egui
+/// pass, as its reference.
 fn create_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
@@ -1230,7 +1255,7 @@ fn create_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     entry_points: (&str, &str),
     vertex_layout: wgpu::VertexBufferLayout<'_>,
-    depth: bool,
+    offscreen: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
@@ -1242,6 +1267,20 @@ fn create_pipeline(
         bind_group_layouts: &[Some(bind_group_layout)],
         ..Default::default()
     });
+
+    // The offscreen pass's second attachment takes the same fragment under the
+    // same blending: it is the same picture, drawn again without the labels.
+    let color_target = wgpu::ColorTargetState {
+        format: target_format,
+        // Shader outputs premultiplied alpha.
+        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        write_mask: wgpu::ColorWrites::ALL,
+    };
+    let targets: &[Option<wgpu::ColorTargetState>] = if offscreen {
+        &[Some(color_target.clone()), Some(color_target)]
+    } else {
+        &[Some(color_target)]
+    };
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
@@ -1258,12 +1297,7 @@ fn create_pipeline(
             module: &shader,
             entry_point: Some(entry_points.1),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                // Shader outputs premultiplied alpha.
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets,
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -1272,7 +1306,7 @@ fn create_pipeline(
         // The depth buffer is written for future depth-reading effects but
         // never rejects a fragment (`Always`): translucent glows composite
         // by draw order, exactly as they did directly in the egui pass.
-        depth_stencil: depth.then(|| wgpu::DepthStencilState {
+        depth_stencil: offscreen.then(|| wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::Always),
@@ -1285,32 +1319,40 @@ fn create_pipeline(
     })
 }
 
-/// Build both scene pipelines from one source.
+/// Build both scene pipelines from one source. `offscreen` picks the
+/// two-attachment fragment entry points along with the pass state that goes
+/// with them — the pair travels together, since a pipeline whose shader
+/// writes one attachment cannot be used in a pass that carries two.
 fn create_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
     target_format: wgpu::TextureFormat,
     bind_group_layout: &wgpu::BindGroupLayout,
-    depth: bool,
+    offscreen: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let (node, edge) = if offscreen {
+        ("fs_main_scene", "fs_edge_scene")
+    } else {
+        ("fs_main", "fs_edge")
+    };
     (
         create_pipeline(
             device,
             shader_src,
             target_format,
             bind_group_layout,
-            ("vs_main", "fs_main"),
+            ("vs_main", node),
             GpuInstance::LAYOUT,
-            depth,
+            offscreen,
         ),
         create_pipeline(
             device,
             shader_src,
             target_format,
             bind_group_layout,
-            ("vs_edge", "fs_edge"),
+            ("vs_edge", edge),
             GpuEdge::LAYOUT,
-            depth,
+            offscreen,
         ),
     )
 }
@@ -1824,18 +1866,30 @@ impl CallbackTrait for LatticeCallback {
             };
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lattice_scene_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &offscreen.color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        // Transparent black: premultiplied "nothing", so
-                        // compositing over the pane background reproduces
-                        // drawing straight into the egui pass.
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                // The picture, then the same picture without the labels (see
+                // `Offscreen::nodes_view`). Both clear to transparent black:
+                // premultiplied "nothing", so compositing over the pane
+                // background reproduces drawing straight into the egui pass.
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &offscreen.color_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &offscreen.nodes_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &offscreen.depth_view,
                     depth_ops: Some(wgpu::Operations {
