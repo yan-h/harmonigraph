@@ -943,17 +943,47 @@ mod tests {
         }
     }
 
-    /// The default wheel is the register a keyboard part lives in, drawn even:
-    /// five octaves of 72 degrees each, C1..C5 in the DAW's numbering, with
-    /// middle C straight up and no fringe.
+    /// The wheel the plugin actually opens on: five full-size octaves around
+    /// middle C with a two-octave fringe either end, so the ring reaches
+    /// nine octaves while the five in the middle keep most of the turn.
+    ///
+    /// Read off [`ViewConfig`](crate::ViewConfig) rather than
+    /// `OctaveLayout::default()`, which passes a literal `0` for the extras
+    /// and so answers for a wheel nothing ships — it is the fixture most of
+    /// the tests above build on, and asserting the fringe against it is
+    /// asserting a constant against itself.
     #[test]
-    fn the_default_wheel_is_five_even_octaves_around_middle_c() {
-        let l = OctaveLayout::default();
-        assert_eq!((l.count, l.extras), (DEFAULT_COUNT, 0), "the default wheel has a fringe");
-        assert_eq!(l.slots(0.0), (3, 7), "not C1..C5");
+    fn the_wheel_a_fresh_view_opens_on_is_five_octaves_and_a_fringe() {
+        let v = crate::ViewConfig::default();
+        let l = octave_layout(
+            v.octave_count,
+            v.octave_center,
+            v.octave_extras,
+            v.octave_extra_size,
+            v.octave_extra_blend,
+        );
+        assert_eq!((l.count, l.extras), (5, 2), "the wheel a fresh view opens on has moved");
+        assert_eq!(l.slots(0.0), (1, 9), "the fringe is what buys the reach past C1..C5");
         assert_eq!(l.slot_pitch(MIDDLE_C_SLOT as i32, 0.0), 60.0);
+
+        let width = |slot: i32| {
+            let (e0, e1) = l.sector(slot, 0.0);
+            e0 - e1
+        };
+        let full = width(MIDDLE_C_SLOT as i32);
         let (e0, e1) = l.sector(MIDDLE_C_SLOT as i32, 0.0);
-        assert!((e0 - e1 - TAU / 5.0).abs() < 1e-5, "middle C's slice is not a fifth of the turn");
         assert!((0.5 * (e0 + e1) - UP).abs() < 1e-5, "middle C is not straight up");
+        assert!(full < TAU / 5.0, "a fringed wheel spends part of the turn on the fringe");
+
+        // Graded, not two flat tiers: the outermost octave is the narrowest
+        // thing on the wheel and the one inboard of it sits between that and
+        // full size. A blend of 0 would make the two equal.
+        let (outer, inner) = (width(MIDDLE_C_SLOT as i32 + 4), width(MIDDLE_C_SLOT as i32 + 3));
+        assert!(outer < inner, "the fringe is a flat tier, not a ramp");
+        assert!(inner < full, "the inboard extra is not narrower than a full-size octave");
+        assert!(
+            (l.bounds[l.span as usize] - l.bounds[0] - TAU).abs() < 1e-4,
+            "the wheel does not close",
+        );
     }
 }
