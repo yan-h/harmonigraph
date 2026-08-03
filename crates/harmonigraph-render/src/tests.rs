@@ -497,6 +497,82 @@ fn offscreen_composite_matches_direct_draw() {
     );
 }
 
+/// `pulse_octaves` is Off in `parity_scene` and every fixture derived from
+/// it (deliberately — see that scene's own comment), so nothing above ever
+/// takes a `mode != 0u` branch in the shader's pulse code: `pulse_wave`, the
+/// `select` that splits Together from Alternating, and the
+/// `oct_pulse.x`/`.y` multiplies in the octave-glyph loop are validated by
+/// `baked_shader_validates` (parsed, never run) but not actually exercised
+/// by any render. This runs them: Together and Alternating must draw
+/// differently from EACH OTHER at one instant (the near/rest split is the
+/// whole feature), and Alternating must draw differently across time (or it
+/// isn't animating at all). The two times are picked without reference to
+/// the shader's `PULSE_HZ` — the claim is that time matters, not a
+/// particular phase, so retuning the rate can't make this pass by accident.
+#[test]
+fn octave_pulse_alternating_differs_from_together_and_moves_with_time() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+
+    let mut off = parity_scene();
+    off.time = 0.4;
+    let off_a = shot(&off, 70);
+    off.time = 1.1;
+    let off_b = shot(&off, 71);
+    assert_eq!(differs(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
+
+    let mut together = parity_scene();
+    together.pulse_octaves = harmonigraph_scene::Pulse::Together;
+    together.time = 0.4;
+    let together_a = shot(&together, 72);
+
+    let mut alternating = parity_scene();
+    alternating.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
+    alternating.time = 0.4;
+    let alternating_a = shot(&alternating, 73);
+    assert!(
+        differs(&together_a, &alternating_a) > 0,
+        "Together and Alternating must draw differently at the same instant \
+         -- that split is the whole feature"
+    );
+
+    alternating.time = 1.1;
+    let alternating_b = shot(&alternating, 74);
+    assert!(
+        differs(&alternating_a, &alternating_b) > 0,
+        "Alternating did not change between two different times; \
+         pulse_wave is not actually reading the clock"
+    );
+}
+
 /// The slot mask naming middle C's octave — the one the node below sounds
 /// in, and so the one a mark can link back to.
 const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
@@ -645,6 +721,75 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     assert!(
         differs(&split, &melody) > 0 && differs(&split, &bass_only) > 0,
         "a both-ends mark is indistinguishable from a single-ended one"
+    );
+}
+
+/// The mark-ring twin of `octave_pulse_alternating_differs_from_together_and_moves_with_time`
+/// above: `pulse_marks` is Off in every fixture in this file, so
+/// `mark_ring_alpha`'s `near` accumulation and its `mix(pair.y, pair.x,
+/// near)` blend have never run under a mode where `pair.x != pair.y`. Same
+/// two claims, on the ring instead of the glyphs.
+#[test]
+fn mark_pulse_alternating_differs_from_together_and_moves_with_time() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+
+    let mut off = single_marked_node(MIDDLE_C, 0);
+    off.time = 0.4;
+    let off_a = shot(&off, 90);
+    off.time = 1.1;
+    let off_b = shot(&off, 91);
+    assert_eq!(differs(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
+
+    let mut together = single_marked_node(MIDDLE_C, 0);
+    together.pulse_marks = harmonigraph_scene::Pulse::Together;
+    together.time = 0.4;
+    let together_a = shot(&together, 92);
+
+    let mut alternating = single_marked_node(MIDDLE_C, 0);
+    alternating.pulse_marks = harmonigraph_scene::Pulse::Alternating;
+    alternating.time = 0.4;
+    let alternating_a = shot(&alternating, 93);
+    assert!(
+        differs(&together_a, &alternating_a) > 0,
+        "Together and Alternating must draw differently at the same instant \
+         -- that split is the whole feature"
+    );
+
+    alternating.time = 1.1;
+    let alternating_b = shot(&alternating, 94);
+    assert!(
+        differs(&alternating_a, &alternating_b) > 0,
+        "Alternating did not change between two different times; \
+         pulse_wave is not actually reading the clock"
     );
 }
 
