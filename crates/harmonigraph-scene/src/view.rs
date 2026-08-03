@@ -238,13 +238,16 @@ pub struct ViewConfig {
     /// strength — and it is inert without two extras to differ.
     #[serde(default = "default_octave_extra_blend")]
     pub octave_extra_blend: f32,
-    /// Breathe the octave glyph the melody or bass ring is pointing at (see
-    /// [`Pulse`]): that slot's wedge against every other glyph on the node,
-    /// sounding or ghost alike — not every sounding octave, only the one an
-    /// indicator is actually about. [`Pulse::Off`] is the steady look every
-    /// earlier build drew, which is also what a blob predating this field
-    /// was drawn with — so a bare `#[serde(default)]` is both fallbacks at
-    /// once and needs no named `default_*` fn.
+    /// How the octave glyphs animate (see [`Pulse`]). The breathing modes
+    /// take the glyph the melody or bass ring is pointing at — that slot's
+    /// wedge against every other glyph on the node, sounding or ghost alike,
+    /// not every sounding octave but the one an indicator is actually about
+    /// — and so have nothing to work on with both marks off;
+    /// [`Pulse::Shimmer`] sweeps the whole layer and does not.
+    /// [`Pulse::Off`] is the steady look every earlier build drew, which is
+    /// also what a blob predating this field was drawn with — so a bare
+    /// `#[serde(default)]` is both fallbacks at once and needs no named
+    /// `default_*` fn.
     #[serde(default)]
     pub pulse_octaves: Pulse,
     // ---- Idle (unlit) node marker ----------------------------------------
@@ -319,11 +322,13 @@ pub struct ViewConfig {
     /// the band was resized; absolute holds them still.
     #[serde(default = "default_mark_thickness")]
     pub mark_thickness: f32,
-    /// Breathe the melody/bass rings (see [`Pulse`]): the arc directly over
-    /// the marked octave's slice against the rest of the ring. Shares
-    /// [`Pulse`] with [`pulse_octaves`](Self::pulse_octaves) but is its own
-    /// switch — a chord's outer voices and its octave glyphs are read at a
-    /// glance independently, so pulsing one was never a reason to pulse the
+    /// How the melody/bass rings animate (see [`Pulse`]): the breathing
+    /// modes take the arc directly over the marked octave's slice against
+    /// the rest of the ring, and [`Pulse::Shimmer`] sweeps both rings at
+    /// right angles to the octave band's own shimmer. Shares [`Pulse`] with
+    /// [`pulse_octaves`](Self::pulse_octaves) but is its own switch — a
+    /// chord's outer voices and its octave glyphs are read at a glance
+    /// independently, so animating one was never a reason to animate the
     /// other. [`Pulse::Off`] is both the fresh-view and the old-blob
     /// fallback, so a bare `#[serde(default)]` covers it.
     #[serde(default)]

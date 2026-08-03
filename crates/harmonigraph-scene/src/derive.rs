@@ -8,7 +8,7 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, EdgeInstance, NodeInstance, Scene, ATTACK_TIME,
+    lattice_to_world, EdgeInstance, NodeInstance, Pulse, Scene, ATTACK_TIME,
     NODE_RADIUS_FACTOR, OCTAVE_SLOTS,
 };
 use glam::Vec4;
@@ -426,7 +426,23 @@ pub fn derive_scene(
         outer_outer,
         outer_gap,
         octave_layout,
-        pulse_octaves: view.pulse_octaves,
+        // A breathing mode with no mark on either end has no slot to single
+        // out, so its near/rest split collapses and it would breathe the
+        // WHOLE octave layer between the pulse floor and full — a 3x swing on
+        // the node's main feature, driven by a control the pane has grayed
+        // out and that therefore cannot be switched off. Folded to Off here
+        // rather than left to the shader: the modes that need a marked slot
+        // are the ones [`Pulse::needs_a_marked_slot`] names, which is the
+        // same test the pane grays on, so the picture and the control agree
+        // by construction. Shimmer sweeps the layer whole and is untouched.
+        pulse_octaves: if view.pulse_octaves.needs_a_marked_slot()
+            && !view.mark_melody
+            && !view.mark_bass
+        {
+            Pulse::Off
+        } else {
+            view.pulse_octaves
+        },
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,

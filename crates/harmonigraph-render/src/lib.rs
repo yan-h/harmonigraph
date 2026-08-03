@@ -170,7 +170,7 @@ struct Uniforms {
     /// `TrailMark`); misc5 was full, so the trail started its own slot.
     /// z: the sevens knockout's fade width, in the uv of a full-size node
     /// (`Scene::sevens_soft`); w: the melody/bass mark rings' pulse mode
-    /// (0 off, 1 together, 2 alternating — see `Pulse`).
+    /// (0 off, 1 together, 2 alternating, 3 shimmer — see `Pulse`).
     misc6: [f32; 4],
     /// The ground the lattice is drawn onto — the pane fill this pass gets
     /// composited over — as the sevens knockout's target color. Without it
@@ -188,8 +188,8 @@ struct Uniforms {
     /// how far its ring is turned to put them on their pitches — so the shader
     /// derives them per node from these two.
     ///
-    /// z: the octave glyphs' pulse mode (0 off, 1 together, 2 alternating —
-    /// see `Pulse`); w unused.
+    /// z: the octave glyphs' pulse mode (0 off, 1 together, 2 alternating,
+    /// 3 shimmer — see `Pulse`); w unused.
     misc7: [f32; 4],
     /// `OctaveLayout::bounds` — the angle from a ring's seam to each of its
     /// slice boundaries, the same table for every node — four to a row, which

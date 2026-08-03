@@ -92,18 +92,28 @@ impl IdleMarker {
     }
 }
 
-/// A slow breathe on the octave glyphs or the melody/bass rings, applied to
-/// a layer that already has a "near the melody/bass slice" part and a "rest
-/// of it" part — the octave glyph FOR the slot a melody or bass ring is
-/// pointing at, against every other glyph (sounding or ghost alike), or a
-/// mark ring's own arc over that slot against the rest of the ring (see the
-/// octave-glyph loop and [`mark_ring_alpha`] in lattice.wgsl — both key off
-/// the same `melody_slots`/`bass_slots` bitmasks). Deliberately not "every
-/// sounding octave": a chord tone that is neither the highest nor the
-/// lowest held note isn't an indicator this feature is about. One enum for
-/// both layers: the two states mean the same thing wherever they're read,
-/// and reading them off one shared clock keeps a node whose octaves and
-/// marks are both pulsing in step.
+/// How the octave glyphs or the melody/bass rings animate. Two families,
+/// and they animate different things:
+///
+/// [`Together`](Pulse::Together) and [`Alternating`](Pulse::Alternating) are
+/// a slow breathe on a split the layer already has — a "near the melody/bass
+/// slice" part and a "rest of it" part: the octave glyph FOR the slot a
+/// melody or bass ring is pointing at, against every other glyph (sounding
+/// or ghost alike), or a mark ring's own arc over that slot against the rest
+/// of the ring (see the octave-glyph loop and [`mark_ring_alpha`] in
+/// lattice.wgsl — both key off the same `melody_slots`/`bass_slots`
+/// bitmasks). Deliberately not "every sounding octave": a chord tone that is
+/// neither the highest nor the lowest held note isn't an indicator those
+/// modes are about — which is also why they have nothing to say with both
+/// marks switched off.
+///
+/// [`Shimmer`](Pulse::Shimmer) leaves that split alone and sweeps a sheet of
+/// soft white bands across the layer instead, so it works on a node with no
+/// mark at all.
+///
+/// One enum for both layers: the states mean the same thing wherever they're
+/// read, and reading them off one shared clock keeps a node whose octaves
+/// and marks are both animating in step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Pulse {
     /// Steady — no animation, the look every earlier build drew.
@@ -114,6 +124,17 @@ pub enum Pulse {
     /// The two parts breathe a half-cycle apart, so one brightens as the
     /// other dims.
     Alternating,
+    /// Soft white bands, laid diagonally and scrolling: not a breathe but a
+    /// travelling highlight, brightening each part of the layer as it
+    /// crosses.
+    ///
+    /// The bands are ONE field spanning the whole lattice rather than a copy
+    /// per node — every node samples the same sheet at its own place on the
+    /// plane the billboards face — so a band reads as light raking over the
+    /// picture. The octave glyphs' bands and the mark rings' run a quarter
+    /// turn apart, so a node wearing both crosses two textures at right
+    /// angles. Both of those live in `lattice.wgsl`'s Shimmer section.
+    Shimmer,
 }
 
 impl Pulse {
@@ -124,7 +145,18 @@ impl Pulse {
             Pulse::Off => 0,
             Pulse::Together => 1,
             Pulse::Alternating => 2,
+            Pulse::Shimmer => 3,
         }
+    }
+
+    /// Whether this mode animates the layer's "near the melody/bass slice"
+    /// against "the rest" split, which needs a marked slot to have two parts
+    /// at all — with neither mark on, the split collapses and the mode is a
+    /// uniform breathe that singles nothing out. The UI grays exactly these
+    /// out; [`Shimmer`](Pulse::Shimmer) crosses the whole layer and is what
+    /// it is either way, so it stays live.
+    pub fn needs_a_marked_slot(self) -> bool {
+        matches!(self, Pulse::Together | Pulse::Alternating)
     }
 }
 

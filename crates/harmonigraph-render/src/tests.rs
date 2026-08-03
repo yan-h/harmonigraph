@@ -859,6 +859,279 @@ fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
     );
 }
 
+/// `Pulse::Shimmer` is a whole-layer sweep rather than the near/rest breathe
+/// the two modes above are, so the claims that pin it are different ones: it
+/// must draw differently from Off, it must move with the clock, and — the
+/// part `Together`/`Alternating` cannot do — it must do both on a node with
+/// NO mark at all, since the sheet of bands is nothing to do with which
+/// octave a ring points at. Run on both layers, since each reads its own
+/// mode uniform and its own direction.
+///
+/// The instants are picked without reference to `SHIMMER_SPEED` or
+/// `SHIMMER_PERIOD`: the claim is that the clock reaches the layer, not that
+/// a particular phase does, so retuning the sweep cannot make this pass by
+/// accident.
+#[test]
+fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+
+    // No mark on either end: `Together` and `Alternating` would have no
+    // slot to single out here, which is exactly the state Shimmer has to
+    // work in.
+    let mut off = single_marked_node(0, 0);
+    off.time = 0.4;
+    let off_a = shot(&off, 100);
+
+    let mut octaves = single_marked_node(0, 0);
+    octaves.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+    octaves.time = 0.4;
+    let octaves_a = shot(&octaves, 101);
+    assert!(
+        differs(&off_a, &octaves_a) > 0,
+        "the octave layer's Shimmer drew the steady picture on an unmarked \
+         node; the sheet of bands does not depend on a mark"
+    );
+    octaves.time = 1.1;
+    let octaves_b = shot(&octaves, 102);
+    assert!(
+        differs(&octaves_a, &octaves_b) > 0,
+        "the octave layer's Shimmer did not change between two different \
+         times; the bands are not reading the clock"
+    );
+
+    // The rings need a mark to exist at all -- that is the ring, not the
+    // shimmer -- so this half marks one end and leaves the octave layer
+    // steady, which isolates what `pulse_marks` did.
+    let mut ring_off = single_marked_node(MIDDLE_C, 0);
+    ring_off.time = 0.4;
+    let ring_off_a = shot(&ring_off, 103);
+
+    let mut marks = single_marked_node(MIDDLE_C, 0);
+    marks.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
+    marks.time = 0.4;
+    let marks_a = shot(&marks, 104);
+    assert!(
+        differs(&ring_off_a, &marks_a) > 0,
+        "the mark rings' Shimmer drew the steady picture"
+    );
+    marks.time = 1.1;
+    let marks_b = shot(&marks, 105);
+    assert!(
+        differs(&marks_a, &marks_b) > 0,
+        "the mark rings' Shimmer did not change between two different \
+         times; the bands are not reading the clock"
+    );
+}
+
+/// Mirrors `SHIMMER_ANGLE` in lattice.wgsl, as a fraction of a turn from the
+/// camera's right axis toward its up axis — the direction the octave layer's
+/// bands travel, and a quarter turn short of the mark rings'.
+///
+/// Held to the shader's own literal by `the_probe_moves_along_the_angle_the_shader_sweeps`
+/// rather than by a comment asking for it: the probe below moves a node along
+/// this and along the quarter turn from it and reads which layer each move
+/// leaves alone, so an angle that drifted from the shader's would leave the
+/// test comparing two arbitrary directions — passing on its margin while
+/// measuring nothing about squareness.
+const SHIMMER_ANGLE_TURNS: f32 = 0.125;
+
+/// The mirror above, enforced. `SHIMMER_ANGLE` invites retuning in its own
+/// comment ("so the two cannot drift out of square when the diagonal is
+/// retuned"), which is exactly the edit that would strand the probe.
+#[test]
+fn the_probe_moves_along_the_angle_the_shader_sweeps() {
+    let needle = format!("const SHIMMER_ANGLE: f32 = {SHIMMER_ANGLE_TURNS} * TAU;");
+    assert!(
+        SHADER_SRC.contains(&needle),
+        "lattice.wgsl must declare `{needle}` to match SHIMMER_ANGLE_TURNS; the probe in \
+         the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square moves nodes \
+         along that angle to find which layer each move leaves alone, and against a \
+         different one it measures neither layer's direction",
+    );
+}
+
+/// How far that probe moves the node, in world units: about half the
+/// shader's band period, so a move ALONG a layer's own travel lands it on a
+/// very different part of the sweep rather than back where it started.
+const SHIMMER_PROBE_STEP: f32 = 2.5;
+
+/// `scene`'s only node, moved [`SHIMMER_PROBE_STEP`] world units along the
+/// camera-plane direction `turns` of a turn from the camera's right axis.
+fn move_node_across_the_view(scene: &mut Scene, turns: f32) {
+    let (right, up) = scene.camera.right_up();
+    let a = turns * std::f32::consts::TAU;
+    scene.nodes[0].world_pos = (right * a.cos() + up * a.sin()) * SHIMMER_PROBE_STEP;
+}
+
+/// Two claims that are the whole point of the shimmer, and that the test
+/// above would pass without either:
+///
+/// **It is ONE sheet across the lattice, not a copy per node.** The field is
+/// the fragment's place on the plane the billboards face, so a node MOVED
+/// across that plane meets the bands at a different phase and draws with a
+/// different amount of light in it. Read off a per-node coordinate (`in.uv`,
+/// say) every node would run an identical private copy, moving one would
+/// change nothing but where it landed, and both "along" measurements below
+/// would collapse into their own controls.
+///
+/// **The two layers run square to each other.** Moving a node ALONG a band —
+/// perpendicular to the direction that band travels — slides it down a line
+/// the field is constant on, so that layer's picture is the one it was.
+/// Which move is the harmless one is therefore a direct reading of a layer's
+/// direction, and the mark rings' harmless move has to be the octave
+/// glyphs' telling one, and the other way about.
+///
+/// The two directions are mirror images across the camera's up axis, so each
+/// layer's "along" and "across" moves put the node in exactly mirrored
+/// places: whatever the move costs in rasterization and perspective, it
+/// costs both equally, and what is left between them is the shimmer.
+#[test]
+fn the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 200u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    // All the light in the frame. A total rather than a pixel-by-pixel
+    // count, because a moved node lands in different pixels by design: what
+    // is being compared is how much of it the shimmer let through, not
+    // where it went.
+    let light = |px: &[u8]| -> i64 {
+        px.chunks(4).map(|p| p[0] as i64 + p[1] as i64 + p[2] as i64).sum()
+    };
+    // How much the picture's total light changes when `make`'s node moves
+    // `turns` of a turn off the camera's right axis, against leaving it at
+    // the origin.
+    let mut move_cost = |make: &dyn Fn() -> Scene, turns: f32| -> i64 {
+        let still = light(&shot(&make()));
+        let mut moved = make();
+        move_node_across_the_view(&mut moved, turns);
+        (light(&shot(&moved)) - still).abs()
+    };
+
+    let across_the_octave_bands = SHIMMER_ANGLE_TURNS;
+    let along_the_octave_bands = SHIMMER_ANGLE_TURNS + 0.25;
+
+    // The control: with nothing shimmering, a move costs only what moving
+    // costs — a node landing on its own pixel grid, and the perspective at
+    // a place that is not the middle of the frame.
+    let steady = || {
+        let mut scene = single_marked_node(MIDDLE_C, 0);
+        scene.time = 0.4;
+        scene
+    };
+    let steady_across = move_cost(&steady, across_the_octave_bands);
+    let steady_along = move_cost(&steady, along_the_octave_bands);
+
+    let octaves = || {
+        let mut scene = steady();
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene
+    };
+    let octave_across = move_cost(&octaves, across_the_octave_bands);
+    let octave_along = move_cost(&octaves, along_the_octave_bands);
+
+    let marks = || {
+        let mut scene = steady();
+        scene.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
+        scene
+    };
+    // The rings' bands are the quarter turn round, so the two moves swap
+    // roles: what slides the octave glyphs down a band crosses these.
+    let mark_across = move_cost(&marks, along_the_octave_bands);
+    let mark_along = move_cost(&marks, across_the_octave_bands);
+
+    eprintln!(
+        "steady {steady_across}/{steady_along}, octaves {octave_across}/{octave_along}, \
+         marks {mark_across}/{mark_along} (across/along)"
+    );
+    // The control has to STAY small, or the ratios below stop being about the
+    // shimmer. Should a bare node move ever get expensive or lopsided — a new
+    // depth-dependent layer, a cull edge inside the probe's reach, anything
+    // keyed on world position — both figures for a layer would inflate off
+    // the same base, the ratio would collapse, and the failure would be
+    // reported as a shimmer defect it is not. Measured 25/25.
+    let steady = steady_across.max(steady_along);
+    assert!(
+        steady * 10 < octave_across.min(mark_across),
+        "moving a node costs {steady} even with nothing shimmering, which is too near \
+         what the shimmering layers cost ({octave_across} and {mark_across}) for the \
+         difference between them to be the shimmer's"
+    );
+    // A multiple, not a threshold: the claim is that crossing the bands
+    // dominates sliding along them, and the along-figure is the same move
+    // mirrored, so it carries this layer's own share of the control above.
+    assert!(
+        octave_across > octave_along * 4,
+        "moving a node across the octave bands ({octave_across}) barely beat \
+         moving it along them ({octave_along}; the steady control costs \
+         {steady_across}/{steady_along}) -- either the field is per-node \
+         rather than one sheet over the lattice, or the octave layer's bands \
+         are not running the way SHIMMER_ANGLE says"
+    );
+    assert!(
+        mark_across > mark_along * 4,
+        "moving a node across the mark rings' bands ({mark_across}) barely \
+         beat moving it along them ({mark_along}) -- the rings' bands are not \
+         a quarter turn from the octave glyphs', which is the 90 degrees \
+         between the two textures"
+    );
+}
+
 #[test]
 fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     // End to end, exactly how the app runs it: a held chord through
@@ -1529,9 +1802,25 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.core_solidity = 0.5;
         scene
     };
-    for (name, scene) in
-        [("lit", parity_scene()), ("idle", idle_scene()), ("fat core", fat_core())]
-    {
+    // Both layers shimmering, at one fixed instant. `paint_reach` is where
+    // the claim that shimmer keeps every bound exact has to be checked, and
+    // it can only be checked here: the shimmer scales two layers' coverage,
+    // and a term that ever came out ABOVE 1 would push a layer past the reach
+    // the early-out proved it could not cross — visible as a ring clipped
+    // flat in the fast pipeline alone, which no other fixture would catch
+    // because every other one leaves both pulses Off.
+    let shimmering = || {
+        let mut scene = parity_scene();
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
+        scene
+    };
+    for (name, scene) in [
+        ("lit", parity_scene()),
+        ("idle", idle_scene()),
+        ("fat core", fat_core()),
+        ("shimmering", shimmering()),
+    ] {
         let cb = LatticeCallback::from_scene(
             &scene,
             egui::vec2(SIZE[0] as f32, SIZE[1] as f32),

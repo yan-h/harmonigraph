@@ -6,7 +6,9 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
+use crate::widgets::{
+    button_row, choice_row, choice_row_gated, OctaveStrip, RangeBar, ValueBar,
+};
 use crate::SharedState;
 use harmonigraph_scene::{NodeStyle, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
 
@@ -185,32 +187,48 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // is no separate bar the mode would otherwise gray out, so one row says
     // both whether it pulses and how.
     //
-    // Gated on the same flags the Melody/bass section's own Pulse row is,
-    // even though it lives in this section: the octave it breathes is
-    // whichever one a melody or bass ring is pointing at (see
-    // ViewConfig::pulse_octaves), so with both marks off there is no slot
-    // for it to single out and the mode would do nothing.
-    ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
-        choice_row(
-            ui,
-            "Pulse",
-            &mut view.pulse_octaves,
-            &[
-                (Pulse::Off, "Off", ""),
-                (
-                    Pulse::Together,
-                    "Together",
-                    "The melody/bass octave and the rest of the ring breathe together",
-                ),
-                (
-                    Pulse::Alternating,
-                    "Alternating",
-                    "The melody/bass octave and the rest of the ring breathe a \
-                     half-cycle apart, so one brightens as the other dims",
-                ),
-            ],
-        );
-    });
+    // Gated per option rather than as a row: the octave the breathing modes
+    // single out is whichever one a melody or bass ring is pointing at (see
+    // ViewConfig::pulse_octaves), so with both marks off they have no two
+    // parts to play against each other and collapse into one flat breathe —
+    // but Shimmer sweeps the whole layer and is itself on a node with no
+    // mark at all, so taking the row down would hide the one mode that has
+    // lost nothing.
+    let marked = view.mark_melody || view.mark_bass;
+    let live = |pulse: Pulse| !pulse.needs_a_marked_slot() || marked;
+    choice_row_gated(
+        ui,
+        "Pulse",
+        &mut view.pulse_octaves,
+        &[
+            (Pulse::Off, "Off", "", live(Pulse::Off)),
+            (
+                Pulse::Together,
+                "Together",
+                "The melody/bass octave and the rest of the ring breathe \
+                 together. Needs Melody or Bass switched on -- that is what \
+                 picks the octave",
+                live(Pulse::Together),
+            ),
+            (
+                Pulse::Alternating,
+                "Alternating",
+                "The melody/bass octave and the rest of the ring breathe a \
+                 half-cycle apart, so one brightens as the other dims. Needs \
+                 Melody or Bass switched on -- that is what picks the octave",
+                live(Pulse::Alternating),
+            ),
+            (
+                Pulse::Shimmer,
+                "Shimmer",
+                "Soft white bands sweeping diagonally across the band. One \
+                 sheet of them crosses the whole lattice, so the light \
+                 travels from node to node; the mark rings' own Shimmer runs \
+                 at right angles to this one",
+                live(Pulse::Shimmer),
+            ),
+        ],
+    );
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line
@@ -249,22 +267,39 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // marked octave, slit from the rest of the ring -- pulsed instead of
         // left fixed. Same row shape as the Octaves pulse above: Off is a
         // mode rather than a separate checkbox.
-        choice_row(
-            ui,
-            "Pulse",
-            &mut view.pulse_marks,
-            &[
-                (Pulse::Off, "Off", ""),
-                (Pulse::Together, "Together", "The whole ring breathes together"),
-                (
-                    Pulse::Alternating,
-                    "Alternating",
-                    "The arc over the marked octave and the rest of the ring \
-                     breathe a half-cycle apart, so one brightens as the \
-                     other dims",
-                ),
-            ],
-        );
+        // A plain choice_row, not the gated one the Octaves section needs:
+        // every mode here animates the ring itself, so they stand or fall
+        // together — and what they stand on is a ring being drawn at all.
+        // Thickness 0 is the documented off position, where `mark_ring`
+        // returns no coverage and every mode is multiplied away, so the row
+        // grays with the layer it animates (the Core section gates its own
+        // Solidity and Style on a radius of 0 the same way).
+        ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
+            choice_row(
+                ui,
+                "Pulse",
+                &mut view.pulse_marks,
+                &[
+                    (Pulse::Off, "Off", ""),
+                    (Pulse::Together, "Together", "The whole ring breathes together"),
+                    (
+                        Pulse::Alternating,
+                        "Alternating",
+                        "The arc over the marked octave and the rest of the ring \
+                         breathe a half-cycle apart, so one brightens as the \
+                         other dims",
+                    ),
+                    (
+                        Pulse::Shimmer,
+                        "Shimmer",
+                        "Soft white bands sweeping across both rings, at right \
+                         angles to the octave band's own Shimmer. One sheet of \
+                         them crosses the whole lattice, so the light travels \
+                         from node to node",
+                    ),
+                ],
+            );
+        });
     });
 }
 
