@@ -963,7 +963,7 @@ const SHIMMER_ANGLE_TURNS: f32 = 0.125;
 /// How far that probe moves the node, in world units: about half the
 /// shader's band period, so a move ALONG a layer's own travel lands it on a
 /// very different part of the sweep rather than back where it started.
-const SHIMMER_PROBE_STEP: f32 = 1.3;
+const SHIMMER_PROBE_STEP: f32 = 2.5;
 
 /// `scene`'s only node, moved [`SHIMMER_PROBE_STEP`] world units along the
 /// camera-plane direction `turns` of a turn from the camera's right axis.

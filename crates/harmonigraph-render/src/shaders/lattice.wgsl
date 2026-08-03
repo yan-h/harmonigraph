@@ -578,19 +578,28 @@ fn pulse_marks_mode() -> u32 {
 // in each — the same look in the plugin and in the exported video is worth
 // more here than bands that hold still while the camera moves.
 //
-// Distance from one band to the next, in world units — a couple of nodes at
-// the default spacing, so a band is a thing that crosses the lattice rather
-// than a stripe pattern sitting on it.
-const SHIMMER_PERIOD: f32 = 2.6;
+// Distance from one band to the next, in world units — about five nodes at
+// the default spacing, so a band spans several of them and reads as one
+// crossing the lattice.
+//
+// It has to beat the node spacing by a good margin, which is why this is not
+// tighter. At a couple of nodes to the period, neighbours land most of a
+// cycle apart and the picture reads as alternating nodes rather than as a
+// band passing over them — the lattice's own spacing is irregular (the
+// thirds and fifths axes both project onto the screen's x), so "one node
+// bright, the next dark" is exactly the pattern a tight period falls into.
+const SHIMMER_PERIOD: f32 = 5.0;
 // How fast the bands travel along their own normal, in world units per
 // second: about one period every three seconds, which is the calm end of
 // what still reads as moving (PULSE_HZ above is the same kind of choice).
-const SHIMMER_SPEED: f32 = 0.85;
+const SHIMMER_SPEED: f32 = 1.6;
 // Narrows the bright band and widens the dark between it and the next. The
 // raised cosine alone is half-lit everywhere at every instant, which reads
-// as a striped surface; raising it to a power leaves a soft, narrow
-// highlight travelling over a layer that is otherwise at rest.
-const SHIMMER_SHARP: f32 = 3.0;
+// as a striped surface; raising it to a power leaves a soft highlight
+// travelling over a layer that is otherwise at rest. Kept low enough that
+// the band still has shoulders — sharpen it much past this and it stops
+// being a soft band and starts being an edge.
+const SHIMMER_SHARP: f32 = 2.4;
 // How far a band's peak pulls the layer toward white.
 const SHIMMER_WHITE: f32 = 0.85;
 // What the layer's coverage sits at between bands, against 1 under a peak. A
