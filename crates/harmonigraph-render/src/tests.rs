@@ -793,6 +793,72 @@ fn mark_pulse_alternating_differs_from_together_and_moves_with_time() {
     );
 }
 
+/// The bug the fix above two tests replaced: `pulse_octaves` originally
+/// keyed the octave-glyph loop's near/rest split off `level > 0.0` alone,
+/// so ANY sounding octave took the "near" phase under Alternating -- not
+/// just the one a melody or bass ring actually points at. A chord tone
+/// that is neither the highest nor the lowest held note isn't an indicator
+/// this feature is about, and would have pulsed as if it were.
+///
+/// Isolates the octave-glyph layer from the ring itself (`mark_thickness =
+/// 0`, so `mark_ring` returns no coverage regardless of `marks`) and
+/// renders the SAME sounding octave once not marked and once marked as the
+/// melody. Under the old behavior these are pixel-identical -- both are
+/// sounding, so both took the near phase. Under the fix only the marked
+/// one does.
+#[test]
+fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
+        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+
+    let mut not_extreme = single_marked_node(0, 0);
+    not_extreme.mark_thickness = 0.0;
+    not_extreme.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
+    not_extreme.time = 0.4;
+
+    let mut extreme = single_marked_node(MIDDLE_C, 0);
+    extreme.mark_thickness = 0.0;
+    extreme.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
+    extreme.time = 0.4;
+
+    let not_extreme_px = shot(&not_extreme, 95);
+    let extreme_px = shot(&extreme, 96);
+    assert!(
+        differs(&not_extreme_px, &extreme_px) > 0,
+        "a sounding octave that is the melody/bass extreme must pulse \
+         differently from one that merely sounds; keying the split off \
+         level alone lit every sounding octave the same way"
+    );
+}
+
 #[test]
 fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     // End to end, exactly how the app runs it: a held chord through

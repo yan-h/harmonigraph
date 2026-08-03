@@ -496,13 +496,17 @@ fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
 }
 
 // ---- Pulse: a slow breathe on the octave glyphs and the mark rings --------
-// Both layers already split into a part "near" the marked/sounding slice
-// and "the rest" of the shape (the octave loop in `fs_main`: a sounding
-// wedge against its silent-slot ghosts; `mark_ring_alpha`: the arc over the
-// marked sector against the rest of the ring). Pulse animates the balance
-// between those two parts instead of leaving both fixed, and both layers
-// read the same clock (`u.misc.x`) and shape here so a node pulsing both
-// stays in step.
+// Both layers already split into a part "near" the melody/bass slice and
+// "the rest" of the shape (the octave loop in `fs_main`: the glyph for the
+// slot a melody or bass ring points at, against every other glyph on the
+// node -- sounding or ghost alike; `mark_ring_alpha`: the arc over that same
+// slot against the rest of the ring). Both key off the node's own
+// `melody_slots`/`bass_slots` bitmasks (`in.marks`), not off which octaves
+// happen to be sounding -- a chord tone that is neither the highest nor the
+// lowest held note is not an indicator this feature is about. Pulse animates
+// the balance between those two parts instead of leaving both fixed, and
+// both layers read the same clock (`u.misc.x`) and shape here so a node
+// pulsing both stays in step.
 const PULSE_HZ: f32 = 0.5;
 // Never dims all the way to nothing, so the dim half of an alternating pair
 // still reads as there rather than gone — the same reasoning as the record
@@ -1311,11 +1315,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // outside it the loop below can be skipped entirely rather than run to
     // reach zero `span` times over.
     let band = glyph_band(d, band_in, band_out, aa);
-    // The octave pulse's near/rest pair: "near" is a sounding slot's own
-    // bright wedge, "rest" is the ghost backdrop every slot draws (see the
-    // loop below). Taken once outside the loop -- neither side depends on
-    // which slot is being drawn, only on the shared clock and mode.
+    // The octave pulse's near/rest pair: "near" is the octave slot the
+    // melody or bass ring is ALSO pointing at (in.marks, the same bitmasks
+    // `mark_ring` reads below), "rest" is every other slot -- sounding or
+    // ghost alike. Taken once outside the loop -- neither side depends on
+    // which slot is being drawn, only on the shared clock and mode. This is
+    // deliberately NOT "sounding vs silent": a chord tone that is neither
+    // the highest nor the lowest held note is not an indicator this feature
+    // is about, so it stays at the "rest" phase like a ghost would.
     let oct_pulse = pulse_pair(pulse_octaves_mode());
+    let extreme_slots = in.marks.x | in.marks.y;
     for (var i = 0u; i < oct_span() && (!EARLY_OUT || band > 0.0); i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
@@ -1323,19 +1332,22 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             continue;
         }
         let shape = outer_glyph(slot, oct, in.uv, band, aa);
+        let is_extreme = slot >= 0 && slot < i32(OCTAVE_SLOTS)
+            && (extreme_slots & (1u << u32(slot))) != 0u;
+        let pulse_here = select(oct_pulse.y, oct_pulse.x, is_extreme);
         // Ghosts carry the ring's shape in the note's own color; a sounding
         // slot never dips below its ghost, so a fading octave hands off to it
-        // instead of leaving a hole. (At mode 2 the two can cross mid-cycle,
-        // which is the same hand-off: the sounding wedge's own dim phase
-        // still shows its ghost floor rather than going dark.)
-        var cov = shape * GHOST_LEVEL * presence * oct_pulse.y;
+        // instead of leaving a hole. Both terms take the SAME phase -- a slot
+        // is wholly "near" or wholly "rest", not lit at one phase and ghosted
+        // at the other.
+        var cov = shape * GHOST_LEVEL * presence * pulse_here;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
             // Straight off the octave's own envelope, so the glyph eases in
             // over the attack and ends at nothing on release. The max() hands
             // a backdrop slot off to its ghost as the lit coverage sinks
             // through it.
-            cov = max(cov, shape * level * oct_pulse.x);
+            cov = max(cov, shape * level * pulse_here);
             // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this
             // node's pitch class for the glyph's true pitch.
             let pitch = oct_slot_pitch(slot, in.cents);

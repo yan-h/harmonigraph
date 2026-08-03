@@ -238,11 +238,13 @@ pub struct ViewConfig {
     /// strength — and it is inert without two extras to differ.
     #[serde(default = "default_octave_extra_blend")]
     pub octave_extra_blend: f32,
-    /// Breathe the octave glyphs (see [`Pulse`]): the sounding slot's bright
-    /// wedge against the silent slots' ghost backdrop. [`Pulse::Off`] is the
-    /// steady look every earlier build drew, which is also what a blob
-    /// predating this field was drawn with — so a bare `#[serde(default)]`
-    /// is both fallbacks at once and needs no named `default_*` fn.
+    /// Breathe the octave glyph the melody or bass ring is pointing at (see
+    /// [`Pulse`]): that slot's wedge against every other glyph on the node,
+    /// sounding or ghost alike — not every sounding octave, only the one an
+    /// indicator is actually about. [`Pulse::Off`] is the steady look every
+    /// earlier build drew, which is also what a blob predating this field
+    /// was drawn with — so a bare `#[serde(default)]` is both fallbacks at
+    /// once and needs no named `default_*` fn.
     #[serde(default)]
     pub pulse_octaves: Pulse,
     // ---- Idle (unlit) node marker ----------------------------------------

@@ -184,25 +184,33 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Off is its own option rather than a checkbox beside a mode row: there
     // is no separate bar the mode would otherwise gray out, so one row says
     // both whether it pulses and how.
-    choice_row(
-        ui,
-        "Pulse",
-        &mut view.pulse_octaves,
-        &[
-            (Pulse::Off, "Off", ""),
-            (
-                Pulse::Together,
-                "Together",
-                "The sounding wedge and the silent-slot backdrop breathe together",
-            ),
-            (
-                Pulse::Alternating,
-                "Alternating",
-                "The sounding wedge and the silent-slot backdrop breathe a half-cycle \
-                 apart, so one brightens as the other dims",
-            ),
-        ],
-    );
+    //
+    // Gated on the same flags the Melody/bass section's own Pulse row is,
+    // even though it lives in this section: the octave it breathes is
+    // whichever one a melody or bass ring is pointing at (see
+    // ViewConfig::pulse_octaves), so with both marks off there is no slot
+    // for it to single out and the mode would do nothing.
+    ui.add_enabled_ui(view.mark_melody || view.mark_bass, |ui| {
+        choice_row(
+            ui,
+            "Pulse",
+            &mut view.pulse_octaves,
+            &[
+                (Pulse::Off, "Off", ""),
+                (
+                    Pulse::Together,
+                    "Together",
+                    "The melody/bass octave and the rest of the ring breathe together",
+                ),
+                (
+                    Pulse::Alternating,
+                    "Alternating",
+                    "The melody/bass octave and the rest of the ring breathe a \
+                     half-cycle apart, so one brightens as the other dims",
+                ),
+            ],
+        );
+    });
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line

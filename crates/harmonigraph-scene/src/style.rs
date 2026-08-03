@@ -92,14 +92,18 @@ impl IdleMarker {
     }
 }
 
-/// A slow breathe on the octave glyphs or the melody/bass rings, applied
-/// to a layer that already has a "near the marked slice" part and a "rest
-/// of it" part — the octave glyphs' sounding wedge against its silent-slot
-/// ghosts, or a mark ring's arc over its own sector against the rest of the
-/// ring (see the octave-glyph loop and [`mark_ring_alpha`] in
-/// lattice.wgsl). One enum for both layers: the two states mean the same
-/// thing wherever they're read, and reading them off one shared clock
-/// keeps a node whose octaves and marks are both pulsing in step.
+/// A slow breathe on the octave glyphs or the melody/bass rings, applied to
+/// a layer that already has a "near the melody/bass slice" part and a "rest
+/// of it" part — the octave glyph FOR the slot a melody or bass ring is
+/// pointing at, against every other glyph (sounding or ghost alike), or a
+/// mark ring's own arc over that slot against the rest of the ring (see the
+/// octave-glyph loop and [`mark_ring_alpha`] in lattice.wgsl — both key off
+/// the same `melody_slots`/`bass_slots` bitmasks). Deliberately not "every
+/// sounding octave": a chord tone that is neither the highest nor the
+/// lowest held note isn't an indicator this feature is about. One enum for
+/// both layers: the two states mean the same thing wherever they're read,
+/// and reading them off one shared clock keeps a node whose octaves and
+/// marks are both pulsing in step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Pulse {
     /// Steady — no animation, the look every earlier build drew.
