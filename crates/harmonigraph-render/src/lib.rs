@@ -49,8 +49,9 @@ pub use egui_wgpu::wgpu;
 const SHADER_SRC: &str = include_str!("shaders/lattice.wgsl");
 const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 
-/// Depth format of the offscreen pass. Written for future depth-reading
-/// effects; the scene pipelines test `Always` so it never affects output.
+/// Depth format of the offscreen pass. The scene pipelines test `Always`, so
+/// it never rejects a fragment of the lattice itself; what reads it is the
+/// LABEL pass, which asks it what covers a name (see [`text`]).
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Clamp on the render-scale view setting, over whatever the UI offers.
@@ -931,7 +932,18 @@ struct Offscreen {
     composite_bind_group: wgpu::BindGroup,
     size: [u32; 2],
     screen_size: [u32; 2],
+    /// Names the TEXTURES behind these views, so a pane that binds the depth
+    /// buffer elsewhere can tell that a resize has replaced it. A size pair
+    /// nearly says the same thing and is the wrong thing to say it with: a
+    /// pane can be recreated at the size it already had, and a stale bind
+    /// group then names a destroyed texture.
+    epoch: u64,
 }
+
+/// Hands out [`Offscreen::epoch`]. Global rather than per-[`LatticeResources`]
+/// so it can be taken inside `Offscreen::new` without a second borrow of the
+/// resources the shared layouts are being read out of.
+static OFFSCREEN_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The shared, pane-independent objects an [`Offscreen`] binds against.
 struct OffscreenShared<'a> {
@@ -966,13 +978,10 @@ impl Offscreen {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
 
         let color = tex("lattice_offscreen_color", size[0], size[1], format, attach_and_sample);
-        let depth = tex(
-            "lattice_offscreen_depth",
-            size[0],
-            size[1],
-            DEPTH_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-        );
+        // Sampled as well as attached: the label pass reads it to find out
+        // what the lattice drew in front of a name.
+        let depth =
+            tex("lattice_offscreen_depth", size[0], size[1], DEPTH_FORMAT, attach_and_sample);
         let (hw, hh) = (screen_size[0].div_ceil(2).max(1), screen_size[1].div_ceil(2).max(1));
         let (qw, qh) = (screen_size[0].div_ceil(4).max(1), screen_size[1].div_ceil(4).max(1));
         let half = tex("lattice_bloom_half", hw, hh, format, attach_and_sample);
@@ -1037,8 +1046,39 @@ impl Offscreen {
             quarter_b_view,
             size,
             screen_size,
+            epoch: OFFSCREEN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
+}
+
+/// The depth buffer a pane's lattice wrote THIS frame, and the epoch naming
+/// the texture behind it.
+///
+/// What the label pass needs to hide a name behind a nearer node, and the
+/// reason [`Offscreen`]'s depth attachment is sampleable. `None` where there
+/// is nothing to hide behind: no lattice on that pane, no offscreen target
+/// yet, or a frame where the lattice shipped neither a node nor an edge and
+/// so never began the pass that fills it. That last case is the one worth
+/// naming — the texture still holds whatever the last frame drew, and a
+/// silent lattice would otherwise go on cutting labels out of a picture that
+/// is no longer there.
+///
+/// Ordering is egui-wgpu's: every callback's `prepare` runs before any
+/// `paint`, and the panes add their lattice callback before the labels they
+/// draw over it, so the depth read here is this frame's.
+pub(crate) fn lattice_occluder(
+    callback_resources: &CallbackResources,
+    pane_id: u64,
+) -> Option<(wgpu::TextureView, u64)> {
+    let pane = callback_resources
+        .get::<LatticeResources>()?
+        .panes
+        .get(&pane_id)?;
+    if pane.instance_count == 0 && pane.edge_count == 0 {
+        return None;
+    }
+    let offscreen = pane.offscreen.as_ref()?;
+    Some((offscreen.depth_view.clone(), offscreen.epoch))
 }
 
 /// Build one of the scene pipelines from WGSL source (startup uses the
@@ -1046,10 +1086,8 @@ impl Offscreen {
 /// share the module, bind group layout, blending, and topology; only entry
 /// points and vertex layout differ.
 ///
-/// `depth` is true for the production pipelines, which render into the
-/// offscreen pass and must declare its depth attachment. The parity test
-/// builds depthless variants that draw straight into the egui pass, as its
-/// reference.
+/// `depth` says what this pipeline does with the offscreen pass's depth
+/// attachment; see [`Depth`].
 fn create_pipeline(
     device: &wgpu::Device,
     shader_src: &str,
@@ -1057,7 +1095,7 @@ fn create_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     entry_points: (&str, &str),
     vertex_layout: wgpu::VertexBufferLayout<'_>,
-    depth: bool,
+    depth: Depth,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("lattice_shader"),
@@ -1096,12 +1134,16 @@ fn create_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleStrip,
             ..Default::default()
         },
-        // The depth buffer is written for future depth-reading effects but
-        // never rejects a fragment (`Always`): translucent glows composite
-        // by draw order, exactly as they did directly in the egui pass.
-        depth_stencil: depth.then(|| wgpu::DepthStencilState {
+        // The depth buffer never rejects a fragment of the lattice itself
+        // (`Always`): translucent glows composite by draw order, exactly as
+        // they did directly in the egui pass. What `Always` plus a write
+        // leaves behind is the depth of whatever was drawn LAST at each
+        // pixel, which under this pass's back-to-front order is the thing
+        // that covers — and that is precisely the question the label pass
+        // asks it.
+        depth_stencil: (depth != Depth::None).then(|| wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
+            depth_write_enabled: Some(depth == Depth::Write),
             depth_compare: Some(wgpu::CompareFunction::Always),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
@@ -1112,7 +1154,42 @@ fn create_pipeline(
     })
 }
 
+/// What a scene pipeline does with the offscreen pass's depth attachment.
+///
+/// A pipeline that writes is one whose fragments can hide a label, so this
+/// is a statement about the LABELS rather than about the lattice: nothing
+/// here changes a pixel of the lattice, whose fragments composite by draw
+/// order under `Always` whatever this says.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Depth {
+    /// No attachment at all. The parity test builds depthless variants that
+    /// draw straight into the egui pass, as its reference.
+    None,
+    /// Declares the attachment and writes to it, so these fragments cover a
+    /// label behind them.
+    Write,
+    /// Declares the attachment and leaves it alone: drawn, but never in the
+    /// way of a name.
+    Keep,
+}
+
 /// Build both scene pipelines from one source.
+///
+/// The nodes write depth and the GRID does not, which is the whole of what
+/// decides that a name can be covered by a node in front of it and never by
+/// a lattice line. Two reasons, and the second is the load-bearing one:
+///
+///   - a hairline through a note name reads as a rendering fault, where a
+///     disc over it reads as depth;
+///   - the depth test is binary and the grid is faint. Depth carries no
+///     alpha, so a line at a few percent opacity would take a fully opaque
+///     bite out of a label — a hole where the picture shows almost nothing.
+///
+/// The same arithmetic is why the node's own fade is a known limit rather
+/// than a settled question: a note released almost to nothing goes on
+/// cutting a name behind it until the scene culls it. That needs the
+/// COVERAGE of the frontmost fragment, which is a second attachment, not a
+/// threshold here.
 fn create_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
@@ -1120,6 +1197,11 @@ fn create_pipelines(
     bind_group_layout: &wgpu::BindGroupLayout,
     depth: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+    let (nodes, edges) = if depth {
+        (Depth::Write, Depth::Keep)
+    } else {
+        (Depth::None, Depth::None)
+    };
     (
         create_pipeline(
             device,
@@ -1128,7 +1210,7 @@ fn create_pipelines(
             bind_group_layout,
             ("vs_main", "fs_main"),
             GpuInstance::LAYOUT,
-            depth,
+            nodes,
         ),
         create_pipeline(
             device,
@@ -1137,7 +1219,7 @@ fn create_pipelines(
             bind_group_layout,
             ("vs_edge", "fs_edge"),
             GpuEdge::LAYOUT,
-            depth,
+            edges,
         ),
     )
 }

@@ -799,3 +799,90 @@ fn the_next_pass_destroys_what_the_last_one_retired() {
     let bad: Vec<_> = freed_second.iter().copied().filter(|id| drawn.contains(id)).collect();
     assert!(bad.is_empty(), "the second pass freed {} textures it had drawn: {bad:?}", bad.len());
 }
+
+/// A label stands where its node stands, so that a node in FRONT of that one
+/// covers the name as well as the node.
+///
+/// The depth is the whole of what the label pass has to go on
+/// (`harmonigraph_render::GlyphInstance::depth`), and three things have to be
+/// true of it at once. It has to be the depth of the node this piece of text
+/// belongs to — not the pane's, not the last node's. It has to be a HAIR IN
+/// FRONT of that node, or the name fights the disc it is written on. And it
+/// has to separate the sheets, which is the arrangement the whole feature is
+/// about: a name on the far sheet must read as deeper than one on the near
+/// sheet, or nothing can be covered by anything.
+#[test]
+fn every_label_carries_the_depth_of_the_node_it_names() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.show_labels = true;
+    // A sheet either side of the home one, seen face-on: the sevens axis then
+    // runs straight into the screen, which is where a node can be squarely
+    // behind another. Cabinet shears it sideways instead, so the same nodes
+    // are at the same depths but no longer stacked.
+    state.view.extent_sevens = 1;
+    state.camera.projection = harmonigraph_scene::Projection::Orthographic;
+    state.camera.yaw = 0.0;
+    state.camera.pitch = 0.0;
+    state.tracker.handle_event(harmonigraph_core::NoteEvent {
+        time: 0.0,
+        channel: 0,
+        note: 60,
+        kind: harmonigraph_core::NoteEventKind::On { velocity: 1.0 },
+    });
+    let scene = harmonigraph_scene::derive_scene(
+        &state.tracker,
+        &state.tuning,
+        &state.view,
+        &state.frame_params,
+        state.camera,
+        None,
+        0.0,
+    );
+
+    let ctx = egui::Context::default();
+    theme::apply_theme(&ctx);
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+    let mut batch = crate::text::TextBatch::default();
+    let _ = ctx.run_ui(
+        egui::RawInput { screen_rect: Some(rect), time: Some(0.0), ..Default::default() },
+        |ui| panes::lattice::draw_node_labels(ui, rect, &scene, &state.view, &mut batch),
+    );
+    assert!(!batch.pieces().is_empty(), "the held C should be labeled");
+
+    // What every labeled node offers: the depth of the node itself, and the
+    // depth its label should have been given.
+    let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+    let lit: Vec<(f32, f32)> = scene
+        .nodes
+        .iter()
+        .filter(|n| n.is_visible() && n.activation > 0.0)
+        .filter_map(|n| {
+            let (_, node) = projector.project_with_depth(n.world_pos)?;
+            Some((node, scene.label_depth(&projector, n.world_pos)?))
+        })
+        .collect();
+    assert!(lit.len() > 1, "the fixture needs several lit nodes, got {}", lit.len());
+
+    for (node, label) in &lit {
+        assert!(
+            label < node,
+            "a label must stand in front of its own node: {label} against {node}",
+        );
+    }
+    // Every piece drawn is at one of those depths and no other. Compared
+    // exactly: the pane reads the same number off the same projector, so
+    // anything else is a label wearing another node's depth.
+    for piece in batch.pieces() {
+        assert!(
+            lit.iter().any(|(_, label)| *label == piece.depth),
+            "{:?} was drawn at depth {}, which belongs to no lit node",
+            piece.text,
+            piece.depth,
+        );
+    }
+    // And the sheets are told apart, which is what there is to cover.
+    let (near, far) = lit
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(lo, hi), (_, d)| (lo.min(*d), hi.max(*d)));
+    assert!(near < far, "the sheets must sit at different depths: {near} against {far}");
+}

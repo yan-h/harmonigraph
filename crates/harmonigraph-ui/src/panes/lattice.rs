@@ -7,6 +7,13 @@ use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
 use harmonigraph_scene::{derive_scene, Camera, Projection, SevensLabel, TrailMark};
 
+/// This pane's lattice, in `harmonigraph_render`'s per-pane bookkeeping. The
+/// Video tab's preview is a second live lattice under an id of its own
+/// (`panes::render::PREVIEW_PANE_ID`); the names have to differ, and the
+/// labels have to name the same one their picture was drawn under, or a name
+/// would be hidden by whatever stands in front of the OTHER view's nodes.
+const PANE_ID: u64 = 0;
+
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64) {
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
@@ -85,7 +92,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
             rect,
             &scene,
             state.target_format,
-            0,
+            PANE_ID,
             Some(state.instruments.lattice_stats.clone()),
         ));
 
@@ -110,7 +117,7 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
     // this pane's text. That it is only a saving is worth knowing before moving
     // it — the ordering is cheap, and the alternative is not free either.
     let badge = state.learn_active.then(|| learn_badge(ui, rect, now));
-    batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
+    batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS, Some(PANE_ID));
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, &mut badge);
     }
@@ -146,7 +153,9 @@ fn draw_learn_overlay(
         egui::Stroke::new(2.0, theme::armed().gamma_multiply(learn_pulse(now))),
         egui::StrokeKind::Inside,
     );
-    badge.flush(&painter, rect, state, crate::text::LATTICE_LEARN);
+    // No occluder: the badge names a MODE, and a node drifting in front of
+    // the corner must not take a bite out of the word.
+    badge.flush(&painter, rect, state, crate::text::LATTICE_LEARN, None);
 }
 
 /// The badge's word, laid out into a batch of its own and drawn by
@@ -268,6 +277,12 @@ pub(crate) fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
+        // Where this label stands among the nodes, so that a node in FRONT
+        // of this one covers its name the way it covers the node itself.
+        // Read off the same camera the picture is drawn with — see
+        // `Scene::label_depth`, which is also where the label is lifted clear
+        // of its own disc.
+        let depth = scene.label_depth(&projector, node.world_pos).unwrap_or(0.0);
         let strength = label_strength(node, trailed, keeps_names);
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
@@ -307,57 +322,63 @@ pub(crate) fn draw_node_labels(
         // off-sheet node rather than the one thing every sheet repeats.
         // See SevensLabel.
         let sevens = if node.on_home { SevensLabel::Name } else { view.sevens_label };
-        let name_bottom = match sevens {
-            SevensLabel::None => 0.0,
-            SevensLabel::Cents => draw_plain_name(
-                batch,
-                ui.painter(),
-                center,
-                &format!("{:.0}", node.cents),
-                theme::text().gamma_multiply(strength),
-                outline,
-                scale,
-                magnify,
-            ),
-            SevensLabel::Name => {
-                let name = display_note_name(node.lattice_pos, view.tempered());
-                draw_stacked_name(
+        // Every piece of this node's label at the node's own depth — the
+        // name, whatever number goes with it, and the cents line under them
+        // are ONE label standing at one place in the picture, and a node in
+        // front covers all of it or none.
+        batch.at_depth(depth, |batch| {
+            let name_bottom = match sevens {
+                SevensLabel::None => 0.0,
+                SevensLabel::Cents => draw_plain_name(
                     batch,
                     ui.painter(),
                     center,
-                    name,
+                    &format!("{:.0}", node.cents),
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
                     magnify,
-                )
+                ),
+                SevensLabel::Name => {
+                    let name = display_note_name(node.lattice_pos, view.tempered());
+                    draw_stacked_name(
+                        batch,
+                        ui.painter(),
+                        center,
+                        name,
+                        theme::text().gamma_multiply(strength),
+                        outline,
+                        scale,
+                        magnify,
+                    )
+                }
+            };
+            // The cents line is the home sheet's business: off the home sheet
+            // the scheme above has already chosen what number (if any) belongs
+            // under the name, and stacking a second one would bury the node.
+            if view.show_cents && (node.on_home || sevens == SevensLabel::Name) {
+                let text = format!("{:.2}", node.cents);
+                let font = egui::FontId::monospace(CENTS_SIZE * scale);
+                // Hang the readout off the name's INK, not its galley box: a
+                // monospace box carries enough leading above and below the glyphs
+                // that box-to-box spacing left the two floating far apart.
+                let top = painter_ink(ui.painter(), &text, &font).min.y;
+                // Magnified about the node with the name above it -- `name_bottom`
+                // and the gap are both measured at the rasterized size, so the
+                // readout hangs off the name by the same proportion at any zoom.
+                batch.magnified(center, magnify, |batch| {
+                    batch.text(
+                        ui.painter(),
+                        center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
+                        egui::Align2::CENTER_TOP,
+                        text,
+                        font,
+                        theme::text_dim().gamma_multiply(strength),
+                        outline,
+                    );
+                });
             }
-        };
-        // The cents line is the home sheet's business: off the home sheet
-        // the scheme above has already chosen what number (if any) belongs
-        // under the name, and stacking a second one would bury the node.
-        if view.show_cents && (node.on_home || sevens == SevensLabel::Name) {
-            let text = format!("{:.2}", node.cents);
-            let font = egui::FontId::monospace(CENTS_SIZE * scale);
-            // Hang the readout off the name's INK, not its galley box: a
-            // monospace box carries enough leading above and below the glyphs
-            // that box-to-box spacing left the two floating far apart.
-            let top = painter_ink(ui.painter(), &text, &font).min.y;
-            // Magnified about the node with the name above it -- `name_bottom`
-            // and the gap are both measured at the rasterized size, so the
-            // readout hangs off the name by the same proportion at any zoom.
-            batch.magnified(center, magnify, |batch| {
-                batch.text(
-                    ui.painter(),
-                    center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
-                    egui::Align2::CENTER_TOP,
-                    text,
-                    font,
-                    theme::text_dim().gamma_multiply(strength),
-                    outline,
-                );
-            });
-        }
+        });
     }
 }
 

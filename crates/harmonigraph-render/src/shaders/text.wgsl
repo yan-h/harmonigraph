@@ -30,11 +30,20 @@ struct Locals {
     /// Zero samples is a ring that isn't drawn.
     ring0: vec4<f32>,
     ring1: vec4<f32>,
+    /// The pane the `occluder` depth buffer covers, in points: min, then
+    /// size. A zero size is a batch with nothing to be hidden behind, and
+    /// the only thing that stops `occluder` from being read.
+    pane: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
+/// Depth of whatever the lattice drew last at each pixel of `locals.pane`,
+/// which under that pass's back-to-front order is what covers there. A 1x1
+/// stand-in cleared to the far plane stands in for batches with no lattice
+/// under them, so this is always bound and never conditional.
+@group(0) @binding(3) var occluder: texture_depth_2d;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -48,6 +57,10 @@ struct VertexOut {
     /// Premultiplied sRGB, as egui carries `Color32`.
     @location(3) @interpolate(flat) fill: vec4<f32>,
     @location(4) @interpolate(flat) rim: vec4<f32>,
+    /// Where this glyph sits among the lattice's nodes, in the clip depth
+    /// `occluder` holds. Flat: a label is a flat thing standing at one
+    /// depth, not a surface leaning through the picture.
+    @location(5) @interpolate(flat) depth: f32,
 };
 
 /// How far outside its own rect a glyph's rim can reach, in points.
@@ -67,6 +80,7 @@ fn vs_glyph(
     @location(1) uv: vec4<f32>,
     @location(2) fill: vec4<f32>,
     @location(3) rim: vec4<f32>,
+    @location(4) depth: f32,
 ) -> VertexOut {
     let corner = vec2<f32>(
         select(0.0, 1.0, (vertex & 1u) == 1u),
@@ -108,7 +122,44 @@ fn vs_glyph(
     out.uv_max = uv.zw;
     out.fill = fill;
     out.rim = rim;
+    out.depth = depth;
     return out;
+}
+
+/// Whether the lattice drew something in FRONT of this fragment's glyph.
+///
+/// The one thing that makes a label part of the picture rather than a layer
+/// over it: a node nearer the camera hides the name of a node behind it, the
+/// same way it hides the node itself. Per pixel, so a name is cut by the
+/// shape that covers it rather than dropped whole.
+///
+/// The test is strict, and a label is handed a depth slightly in FRONT of
+/// its own node (see `GlyphInstance::depth`) — the two together are what
+/// keeps a name off the disc it is written on, where the depths are equal
+/// to within the difference between a matrix multiplied on the CPU and the
+/// same one multiplied on the GPU.
+///
+/// Anything the depth buffer does not cover reads as unoccluded: a batch
+/// with no lattice under it, and a glyph that has wandered outside the pane
+/// the buffer describes, which happens where a pane's own clip has already
+/// decided the pixel is not drawn.
+fn occluded(in: VertexOut) -> bool {
+    if locals.pane.z <= 0.0 || locals.pane.w <= 0.0 {
+        return false;
+    }
+    // `position` is in physical pixels of the whole surface; the pane is in
+    // points, as the glyph rects are.
+    let point = in.position.xy / max(locals.pixels_per_point, 1e-6);
+    let uv = (point - locals.pane.xy) / locals.pane.zw;
+    if uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0 {
+        return false;
+    }
+    // The buffer is the pane at the render scale, which is neither the
+    // pane's points nor its pixels — so it is asked for its own size rather
+    // than told one.
+    let size = vec2<f32>(textureDimensions(occluder));
+    let texel = vec2<i32>(clamp(uv * size, vec2<f32>(0.0), size - 1.0));
+    return textureLoad(occluder, texel, 0) < in.depth;
 }
 
 /// The glyph's coverage at `texel`, and zero outside its own patch of the
@@ -151,7 +202,7 @@ fn ring(in: VertexOut, spec: vec4<f32>, acc: f32) -> f32 {
 /// other's ink where their rims overlap.
 @fragment
 fn fs_rim(in: VertexOut) -> @location(0) vec4<f32> {
-    if in.rim.a <= 0.0 {
+    if in.rim.a <= 0.0 || occluded(in) {
         discard;
     }
     var alpha = ring(in, locals.ring0, 0.0);
@@ -169,7 +220,7 @@ fn fs_rim(in: VertexOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_fill(in: VertexOut) -> @location(0) vec4<f32> {
     let cov = coverage(in, in.texel);
-    if cov <= 0.0 {
+    if cov <= 0.0 || occluded(in) {
         discard;
     }
     return in.fill * cov;

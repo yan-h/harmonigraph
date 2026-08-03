@@ -253,6 +253,18 @@ impl Projector {
     /// Project a world position into viewport pixels (origin top-left).
     /// `None` when behind the camera.
     pub fn project(&self, world: Vec3) -> Option<Vec2> {
+        self.project_with_depth(world).map(|(px, _)| px)
+    }
+
+    /// [`project`](Self::project), and the CLIP DEPTH alongside it: 0 at the
+    /// near plane, 1 at the far one.
+    ///
+    /// That is the number wgpu's depth buffer holds, and it is the same one
+    /// the lattice's own vertex stage arrives at for the node at `world` —
+    /// same matrix, same divide — which is what lets a label say where it
+    /// sits among the nodes rather than only where it sits on screen. See
+    /// `harmonigraph_render::GlyphInstance::depth`.
+    pub fn project_with_depth(&self, world: Vec3) -> Option<(Vec2, f32)> {
         let clip = self.view_proj * world.extend(1.0);
         // Behind the camera (or nearer than the near plane): perspective
         // flips w negative there; orthographic keeps w at 1 and instead
@@ -262,14 +274,50 @@ impl Projector {
             return None;
         }
         let ndc = clip.truncate() / clip.w;
-        Some(Vec2::new(
-            (ndc.x * 0.5 + 0.5) * self.viewport_px.x,
-            (1.0 - (ndc.y * 0.5 + 0.5)) * self.viewport_px.y,
+        Some((
+            Vec2::new(
+                (ndc.x * 0.5 + 0.5) * self.viewport_px.x,
+                (1.0 - (ndc.y * 0.5 + 0.5)) * self.viewport_px.y,
+            ),
+            ndc.z,
         ))
     }
 }
 
+/// How far in front of its own node a label stands, as a share of the node
+/// radius.
+///
+/// A label is written ON its node, so at the node's own depth it is fighting
+/// that node's disc for its pixels, and which wins is the difference between
+/// a matrix multiplied on the CPU here and the same one multiplied on the GPU
+/// — a name that flickers against itself. Lifting it settles that by saying
+/// the thing that is true: the writing sits in front of the disc.
+///
+/// Bounded on both sides, and the window is wide. Below, by that float gap,
+/// which is parts in ten million of a clip depth. Above, by the step to the
+/// next sheet, which is what has to go on covering the label: a radius is a
+/// quarter of the lattice spacing (`NODE_RADIUS_FACTOR`), so this is a tenth
+/// of the way to the neighbouring sheet.
+const LABEL_LIFT: f32 = 0.4;
+
 impl Scene {
+    /// The clip depth to draw the LABEL of the node at `world` at: its own
+    /// depth, lifted [`LABEL_LIFT`] toward the camera.
+    ///
+    /// `None` where the node itself does not project. See
+    /// [`Projector::project_with_depth`], and
+    /// `harmonigraph_render::GlyphInstance::depth`, which is what receives
+    /// this.
+    pub fn label_depth(&self, projector: &Projector, world: Vec3) -> Option<f32> {
+        // Toward the eye rather than along the view axis: under perspective
+        // those differ everywhere but the center of the picture, and it is
+        // the eye the depth is measured from.
+        let toward = (self.camera.eye() - world).normalize_or_zero();
+        projector
+            .project_with_depth(world + toward * self.node_radius * LABEL_LIFT)
+            .map(|(_, depth)| depth)
+    }
+
     pub fn projector(&self, viewport_px: Vec2) -> Projector {
         Projector {
             view_proj: self.camera.view_proj(viewport_px.x / viewport_px.y.max(1.0)),

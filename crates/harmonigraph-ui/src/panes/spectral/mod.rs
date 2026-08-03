@@ -351,7 +351,9 @@ pub(crate) fn spectral_pane(
     names::draw(&painter, &note_names, text.names, &mut labels);
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.
-    labels.flush(&painter, rect, state, crate::text::spectral_labels(surface));
+    // No occluder: the pictures here are drawn in two dimensions, so there is
+    // nothing a name could be behind.
+    labels.flush(&painter, rect, state, crate::text::spectral_labels(surface), None);
 
     // The divider, over the plots so it stays findable against a loud
     // spectrogram. Nothing at rest — the roll's now-line already marks where

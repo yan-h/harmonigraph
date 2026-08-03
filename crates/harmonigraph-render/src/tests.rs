@@ -174,7 +174,7 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 /// A scene exercising every draw path: lit + idle + outlined + hovered
 /// nodes with octave indicators, a chord beam, and solid + dashed grid
 /// lines, all overlapping so blend order matters.
-fn parity_scene() -> Scene {
+pub(crate) fn parity_scene() -> Scene {
     use glam::{Vec3, Vec4};
     use harmonigraph_core::LatticePos;
 

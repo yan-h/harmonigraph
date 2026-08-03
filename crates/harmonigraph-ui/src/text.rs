@@ -258,6 +258,11 @@ pub(crate) struct TextBatch {
     drawn: Vec<GlyphKey>,
     /// In force for the piece being drawn, if any. See [`Magnify`].
     magnify: Option<Magnify>,
+    /// Where the piece being drawn stands among the nodes of the picture
+    /// under it. See [`TextBatch::at_depth`]; 0 — nothing can hide this — is
+    /// what a batch draws at until told otherwise, and the whole of what the
+    /// panes with no picture under them ever say.
+    depth: f32,
     /// Test-only: which glyphs came from which piece of text. The glyphs
     /// alone carry no text — they are rects and atlas coordinates — so without
     /// this a test could see WHERE a label was drawn but not WHAT, and the
@@ -273,6 +278,9 @@ pub(crate) struct TextBatch {
 pub(crate) struct TextPiece {
     pub text: String,
     pub font_size: f32,
+    /// The depth every glyph of this piece was collected at. See
+    /// [`TextBatch::at_depth`].
+    pub depth: f32,
     /// Tight to the glyphs — what the eye reads, and what the label's own
     /// stacking is measured against.
     pub ink: egui::Rect,
@@ -307,6 +315,29 @@ impl TextBatch {
         let previous = self.magnify.replace(Magnify { origin, factor });
         let out = f(self);
         self.magnify = previous;
+        out
+    }
+
+    /// Collect everything `f` emits at `depth` — where it stands among the
+    /// nodes of the picture the batch is drawn over, as a clip depth (see
+    /// [`harmonigraph_scene::Scene::label_depth`], which is where a caller
+    /// gets one). What the lattice drew nearer than that covers it.
+    ///
+    /// Scoped for the same reason [`TextBatch::magnified`] is, and it is the
+    /// worse of the two left switched on: a depth belongs to one node, so a
+    /// label that inherited the previous label's would be hidden by whatever
+    /// happens to stand in front of a node it has nothing to do with — and
+    /// the picture it made would look like a plausible one.
+    ///
+    /// Nonsense in is treated as "in front of everything", which is where
+    /// every piece of text here sat before any of this.
+    pub(crate) fn at_depth<R>(&mut self, depth: f32, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = std::mem::replace(
+            &mut self.depth,
+            if depth.is_finite() { depth } else { 0.0 },
+        );
+        let out = f(self);
+        self.depth = previous;
         out
     }
 
@@ -385,6 +416,7 @@ impl TextBatch {
                     ],
                     fill: color.to_array(),
                     rim: outline.to_array(),
+                    depth: self.depth,
                 });
             }
         }
@@ -404,7 +436,13 @@ impl TextBatch {
                 // would be comparing two different spaces.
                 let min = self.magnify.map_or(pos, |m| m.point(pos));
                 let galley = egui::Rect::from_min_size(min, galley.size() * k);
-                self.pieces.push(TextPiece { text: said, font_size, ink, galley });
+                self.pieces.push(TextPiece {
+                    text: said,
+                    font_size,
+                    depth: self.depth,
+                    ink,
+                    galley,
+                });
             }
         }
     }
@@ -426,12 +464,18 @@ impl TextBatch {
     /// `pane_id` must be unique per batch drawn in one frame — a pane that
     /// flushes twice (to put something between two groups of labels) needs
     /// an id for each, since each keeps its own buffer.
+    ///
+    /// `occluder` names the LATTICE pane whose nodes may cover this text,
+    /// and `rect` is then that pane's own rect. `None` for text that is not
+    /// standing in a picture — the analyzer's names, the learn badge — which
+    /// is drawn over everything however deep the glyphs claim to be.
     pub(crate) fn flush(
         &mut self,
         painter: &egui::Painter,
         rect: egui::Rect,
         state: &crate::SharedState,
         pane_id: u64,
+        occluder: Option<u64>,
     ) {
         if self.glyphs.is_empty() {
             return;
@@ -449,6 +493,7 @@ impl TextBatch {
             atlas,
             state.target_format,
             pane_id,
+            occluder,
         ));
     }
 }
