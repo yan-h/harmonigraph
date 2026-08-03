@@ -1312,20 +1312,20 @@ fn core_layer(
     //
     // Those hues are laid in lobes fixed in ANGLE, so the arc a seam spans is
     // d/sqrt(kappa) — it shrinks with the radius, and every seam converges to a
-    // cusp at the centre. The disc's own softening (CORE_EDGE_SOFT) works on the
-    // rim and cannot reach that, which is why a core dialed soft otherwise blurs
-    // at its outside and stays razor-sharp in the middle, the more so the more
-    // colors are sounding.
+    // cusp at the node's centre. That is a property of the KERNEL, not of any
+    // setting: the cusp is there at every solidity, and the glow skirt, which
+    // has no solidity of its own, carries the same blend. So the cure is not
+    // hung off the solidity axis (whose business is the disc's opacity and its
+    // rim, and which is at its widest exactly where there is no disc left to
+    // soften) — one width, everywhere.
     //
-    // So hold the seams to a width, and pick the concentration that gives it:
+    // Hold the seams to that width and pick the concentration that gives it:
     // k = (d/seam)^2, capped at GLOW_LOBE_KAPPA so this only ever loosens the
-    // blend, never tightens it. The width is the lobe's own arc at the rim,
-    // radius/sqrt(GLOW_LOBE_KAPPA), faded in as the core dissolves — the widest
-    // it can ask for is what the node ALREADY reads as at its rim, so a soft
-    // core cannot wash its chord flatter than its own outside. The `aa` floor
-    // holds at solidity 1, where it antialiases the cusp to the same width as
-    // every other edge here and the orb otherwise keeps its crisp partition.
-    let seam = max(aa, (1.0 - solidity) * radius * inverseSqrt(GLOW_LOBE_KAPPA));
+    // blend, never tightens it. The width is the lobe's own arc where the disc
+    // ends, radius/sqrt(GLOW_LOBE_KAPPA), carried inward unchanged: the seams
+    // then run at one screen width from rim to centre instead of tapering to a
+    // point, and no pixel is ever blurrier than the rim already was.
+    let seam = radius * inverseSqrt(GLOW_LOBE_KAPPA);
     let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
     let octave_mix = octave_glow_color(
         in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, in.color.rgb,

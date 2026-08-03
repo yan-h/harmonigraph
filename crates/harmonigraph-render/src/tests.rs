@@ -1661,23 +1661,27 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     }
 }
 
-/// The seams between a chord's colors have to soften WITH the core. They are
-/// laid down as lobes of fixed ANGULAR width, so the arc each one spans shrinks
-/// with the radius and they meet in a cusp at the node's centre — a core dialed
-/// soft would otherwise blur at its rim and stay knife-sharp in the middle,
-/// which is the one place its edge softening cannot reach.
+/// The seams between a chord's colors run at ONE width from the rim to the
+/// centre. They are laid down as lobes of fixed ANGULAR width, so the arc each
+/// spans shrinks with the radius and they would otherwise converge to a cusp at
+/// the node's centre — sharpest exactly where the node has the fewest pixels to
+/// say it with.
 ///
 /// Both halves of the bargain, because either alone has a trivial cheat: the
 /// centre has to lose its seam, AND the rim has to keep its colors, which is
-/// what stops the cure from being "average the whole node". Run over the
-/// shipped default view as well as a deliberately soft one, so a retune cannot
-/// move the out-of-the-box look with the suite green.
+/// what stops the cure from being "average the whole node".
+///
+/// Taken at both ends of the solidity axis and at the shipped default, because
+/// the claim of this shape is that the width does NOT depend on solidity — the
+/// cusp belongs to the kernel, and the glow skirt that carries the same blend
+/// has no solidity of its own. So the three readings have to AGREE, not merely
+/// each pass.
 ///
 /// Measured as how far the colors around a ring point APART as directions, not
 /// as how much they differ: a soft core is also a dimmer one, and any measure
 /// of magnitude would read that dimming as a blur and pass on it.
 #[test]
-fn a_soft_core_blurs_the_seams_between_its_colors_at_the_centre() {
+fn the_color_seams_run_at_one_width_from_the_rim_to_the_centre() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
@@ -1781,37 +1785,46 @@ fn a_soft_core_blurs_the_seams_between_its_colors_at_the_centre() {
         rs[4]
     };
 
-    for (name, solidity, core_radius) in
-        [("the shipped default view", 0.4f32, 0.2f32), ("a core dialed soft", 0.25, 0.46)]
-    {
-        let solid = shot(1.0, core_radius);
-        let soft = shot(solidity, core_radius);
-        let r_disc = disc_radius(&solid);
+    for (name, core_radius) in [("the default core", 0.2f32), ("the classic radius", 0.46)] {
+        // The disc's edge is a matter of COVERAGE, which none of this touches,
+        // so the solid end still has one to find whatever the colors inside it
+        // are doing.
+        let r_disc = disc_radius(&shot(1.0, core_radius));
         assert!(r_disc > 20.0, "{name}: the disc is too small to sample rings in ({r_disc} px)");
-
         let (inner, outer) = (r_disc * 0.2, r_disc * 0.75);
-        let solid_in = spread(&solid, inner);
-        let solid_out = spread(&solid, outer);
-        let soft_in = spread(&soft, inner);
-        let soft_out = spread(&soft, outer);
-        // The cusp this is about: at full solidity the hues stay fully
-        // separated right into the middle. Without it the rest measures
-        // nothing.
-        assert!(solid_in > 30.0, "{name}: no seam at the centre to soften: {solid_in:.0} deg");
+
+        let mut centres = Vec::new();
+        for solidity in [1.0f32, 0.4, 0.25] {
+            let px = shot(solidity, core_radius);
+            let at_centre = spread(&px, inner);
+            let at_rim = spread(&px, outer);
+            // No cusp: the middle is a blend rather than the point where every
+            // seam meets. This is what fails if the lobes go back to one fixed
+            // concentration — the centre then reads as separated as the rim.
+            assert!(
+                at_centre < at_rim * 0.5,
+                "{name} at solidity {solidity}: the seams still converge — {at_centre:.0} deg \
+                 across the centre against {at_rim:.0} at the rim"
+            );
+            // And what stops the cure being "average the node": the seams are
+            // never held wider than the arc they already span where the disc
+            // ends, so the node still shows its notes as distinct colors.
+            assert!(
+                at_rim > 30.0,
+                "{name} at solidity {solidity}: the colors washed out instead of \
+                 their seams widening — only {at_rim:.0} deg across the rim"
+            );
+            centres.push(at_centre);
+        }
+        // The point of this shape over hanging the cure off the solidity axis:
+        // the seam width is the same whatever solidity is dialed. A reading
+        // that tracked the axis would spread these three apart.
+        let lo = centres.iter().cloned().fold(f32::MAX, f32::min);
+        let hi = centres.iter().cloned().fold(0.0f32, f32::max);
         assert!(
-            soft_in < solid_in * 0.5,
-            "{name}: a soft core's centre is still a hard seam: {soft_in:.0} deg across, \
-             against {solid_in:.0} at full solidity"
-        );
-        // And what stops the cure being "average the node": the seams are never
-        // held wider than the arc they already span at the rim, so out there
-        // the colors are as separated as the solid orb's — measured against
-        // THAT, not against the blurred centre, which would pass a node washed
-        // to one color.
-        assert!(
-            soft_out > solid_out * 0.8,
-            "{name}: the soft core lost the colors it should only have blurred: \
-             {soft_out:.0} deg at the rim against the solid orb's {solid_out:.0}"
+            hi - lo < 6.0,
+            "{name}: the seam width moved with solidity — the centre reads {lo:.0}..{hi:.0} deg \
+             across the axis, and this shape is meant to be independent of it"
         );
     }
 }
