@@ -322,6 +322,113 @@ fn parity_scene() -> Scene {
     }
 }
 
+/// The GPU harness the pixel tests share: a headless device, the callback
+/// resources one lattice pass keeps between frames, and the offscreen target
+/// a scene is drawn into.
+///
+/// It exists because the alternative had spread. Turning a `Scene` into a
+/// buffer of pixels is twenty-seven lines that never vary — build the
+/// callback, encode, submit, render to a texture, read it back — and every
+/// test that wanted pixels carried its own copy of them, fourteen in this
+/// file by the time they were counted, byte-identical but for where the pane
+/// id came from. Nothing was wrong with any copy; what is wrong is the
+/// arithmetic on the next change to that sequence, which then has to land in
+/// fourteen places and silently keeps testing something else in the one it
+/// misses. #112's mark-cache fix — a resource-lifetime correction between
+/// `prepare` and `paint` — is exactly that shape of edit.
+///
+/// Each test owns its own `Shooter`, and so its own `CallbackResources`:
+/// nothing here is shared between tests, which is what lets the pane counter
+/// below start from the same place in all of them.
+struct Shooter {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    resources: CallbackResources,
+    format: wgpu::TextureFormat,
+    size: [u32; 2],
+    /// Bumped per shot, because a pane id keys the per-pane buffers inside
+    /// `resources`, and a test comparing two pictures wants two of them
+    /// rather than one reused. The tests that used to name these by hand all
+    /// counted up the same way, and none ever asked for a repeat.
+    pane: u64,
+}
+
+impl Shooter {
+    /// `None` where the machine has no usable GPU — CI containers, mostly.
+    /// Every caller returns on it, which is what each did with
+    /// `headless_device` before.
+    fn new(size: [u32; 2]) -> Option<Shooter> {
+        let (device, queue) = headless_device()?;
+        Some(Shooter {
+            device,
+            queue,
+            resources: CallbackResources::default(),
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            size,
+            pane: 1,
+        })
+    }
+
+    /// `scene` drawn to a fresh texture over black, read back as RGBA8.
+    fn shot(&mut self, scene: &Scene) -> Vec<u8> {
+        self.shot_with(scene, LatticeLabels::default())
+    }
+
+    /// [`shot`](Self::shot), with labels — the layer that carries its own
+    /// atlas, and its own reasons to be tested.
+    fn shot_with(&mut self, scene: &Scene, labels: LatticeLabels) -> Vec<u8> {
+        self.pane += 1;
+        let size = self.size;
+        let vec_size = egui::vec2(size[0] as f32, size[1] as f32);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+        let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
+        let cb =
+            LatticeCallback::from_scene(scene, labels, vec_size, self.format, self.pane, None);
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let bufs =
+            cb.prepare(&self.device, &self.queue, &screen, &mut encoder, &mut self.resources);
+        self.queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let resources = &self.resources;
+        let tex = render_to_texture(
+            &self.device,
+            &self.queue,
+            size,
+            self.format,
+            wgpu::Color::BLACK,
+            |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: size,
+                    },
+                    pass,
+                    resources,
+                );
+            },
+        );
+        readback(&self.device, &self.queue, &tex, size)
+    }
+}
+
+/// How many pixels of two shots of one size differ at all.
+fn differing_pixels(a: &[u8], b: &[u8]) -> usize {
+    a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
+}
+
+/// One pixel's brightness, as the plain sum of its channels — a reading
+/// rather than a colorimetric luminance, and every caller compares two of
+/// them rather than asking what the number means on its own.
+fn brightness(px: &[u8]) -> i64 {
+    px[0] as i64 + px[1] as i64 + px[2] as i64
+}
+
+/// All the light in one shot (see [`brightness`]).
+fn total_light(px: &[u8]) -> i64 {
+    px.chunks(4).map(brightness).sum()
+}
+
 /// Render into a fresh texture cleared to `clear`, handing the pass to
 /// `draw`, and return the texture for readback.
 pub(crate) fn render_to_texture(
@@ -537,70 +644,37 @@ fn offscreen_composite_matches_direct_draw() {
 /// particular phase, so retuning the rate can't make this pass by accident.
 #[test]
 fn octave_pulse_alternating_differs_from_together_and_moves_with_time() {
-    let Some((device, queue)) = headless_device() else {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-    };
-    let differs =
-        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
 
     let mut off = parity_scene();
     off.time = 0.4;
-    let off_a = shot(&off, 70);
+    let off_a = gpu.shot(&off);
     off.time = 1.1;
-    let off_b = shot(&off, 71);
-    assert_eq!(differs(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
+    let off_b = gpu.shot(&off);
+    assert_eq!(differing_pixels(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
 
     let mut together = parity_scene();
     together.pulse_octaves = harmonigraph_scene::Pulse::Together;
     together.time = 0.4;
-    let together_a = shot(&together, 72);
+    let together_a = gpu.shot(&together);
 
     let mut alternating = parity_scene();
     alternating.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
     alternating.time = 0.4;
-    let alternating_a = shot(&alternating, 73);
+    let alternating_a = gpu.shot(&alternating);
     assert!(
-        differs(&together_a, &alternating_a) > 0,
+        differing_pixels(&together_a, &alternating_a) > 0,
         "Together and Alternating must draw differently at the same instant \
          -- that split is the whole feature"
     );
 
     alternating.time = 1.1;
-    let alternating_b = shot(&alternating, 74);
+    let alternating_b = gpu.shot(&alternating);
     assert!(
-        differs(&alternating_a, &alternating_b) > 0,
+        differing_pixels(&alternating_a, &alternating_b) > 0,
         "Alternating did not change between two different times; \
          pulse_wave is not actually reading the clock"
     );
@@ -660,54 +734,12 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
 
 #[test]
 fn melody_bass_marks_are_visible_as_rings_around_the_band() {
-    let Some((device, queue)) = headless_device() else {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
 
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor {
-        size_in_pixels: SIZE,
-        pixels_per_point: 1.0,
-    };
-    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(
-            &device,
-            &queue,
-            SIZE,
-            format,
-            wgpu::Color::BLACK,
-            |pass| {
-                cb.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: rect,
-                        clip_rect: rect,
-                        pixels_per_point: 1.0,
-                        screen_size_px: SIZE,
-                    },
-                    pass,
-                    &resources,
-                );
-            },
-        );
-        readback(&device, &queue, &tex, SIZE)
-    };
-
-    let unmarked = shot(&single_marked_node(0, 0), 40);
+    let unmarked = gpu.shot(&single_marked_node(0, 0));
     let changed_px = |other: &[u8]| -> usize {
         unmarked
             .chunks(4)
@@ -720,7 +752,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     // count: what matters is that the mark claims a real share of the
     // thing it is marking, at whatever size it happens to be drawn.
     let node_px = unmarked.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
-    let melody = shot(&single_marked_node(MIDDLE_C, 0), 41);
+    let melody = gpu.shot(&single_marked_node(MIDDLE_C, 0));
     let both_px = changed_px(&melody);
     eprintln!("node {node_px} px; mark {both_px}");
     // A floor, not a target, measured against the node's whole lit
@@ -735,7 +767,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     );
 
     // Nothing marked draws no mark at all.
-    let off = shot(&single_marked_node(0, 0), 44);
+    let off = gpu.shot(&single_marked_node(0, 0));
     assert_eq!(changed_px(&off), 0, "an unmarked node must draw no mark");
 
     // A note claimed by BOTH ends -- a lone held note, or a chord whose top
@@ -743,7 +775,7 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     // the mark exactly when two things are true at once. The two ends are
     // rings at DIFFERENT radii, so both simply draw: the result must cover
     // at least as much as one end alone. This guards that.
-    let split = shot(&single_marked_node(MIDDLE_C, MIDDLE_C), 45);
+    let split = gpu.shot(&single_marked_node(MIDDLE_C, MIDDLE_C));
     let split_px = changed_px(&split);
     eprintln!("split mark {split_px} px of {node_px}");
     assert!(
@@ -754,12 +786,9 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
 
     // ...and it really is BOTH rings, not one end quietly winning: the
     // melody-only and bass-only pictures must each differ from it.
-    let bass_only = shot(&single_marked_node(0, MIDDLE_C), 46);
-    let differs = |a: &[u8], b: &[u8]| {
-        a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()
-    };
+    let bass_only = gpu.shot(&single_marked_node(0, MIDDLE_C));
     assert!(
-        differs(&split, &melody) > 0 && differs(&split, &bass_only) > 0,
+        differing_pixels(&split, &melody) > 0 && differing_pixels(&split, &bass_only) > 0,
         "a both-ends mark is indistinguishable from a single-ended one"
     );
 }
@@ -771,70 +800,37 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
 /// two claims, on the ring instead of the glyphs.
 #[test]
 fn mark_pulse_alternating_differs_from_together_and_moves_with_time() {
-    let Some((device, queue)) = headless_device() else {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-    };
-    let differs =
-        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
 
     let mut off = single_marked_node(MIDDLE_C, 0);
     off.time = 0.4;
-    let off_a = shot(&off, 90);
+    let off_a = gpu.shot(&off);
     off.time = 1.1;
-    let off_b = shot(&off, 91);
-    assert_eq!(differs(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
+    let off_b = gpu.shot(&off);
+    assert_eq!(differing_pixels(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
 
     let mut together = single_marked_node(MIDDLE_C, 0);
     together.pulse_marks = harmonigraph_scene::Pulse::Together;
     together.time = 0.4;
-    let together_a = shot(&together, 92);
+    let together_a = gpu.shot(&together);
 
     let mut alternating = single_marked_node(MIDDLE_C, 0);
     alternating.pulse_marks = harmonigraph_scene::Pulse::Alternating;
     alternating.time = 0.4;
-    let alternating_a = shot(&alternating, 93);
+    let alternating_a = gpu.shot(&alternating);
     assert!(
-        differs(&together_a, &alternating_a) > 0,
+        differing_pixels(&together_a, &alternating_a) > 0,
         "Together and Alternating must draw differently at the same instant \
          -- that split is the whole feature"
     );
 
     alternating.time = 1.1;
-    let alternating_b = shot(&alternating, 94);
+    let alternating_b = gpu.shot(&alternating);
     assert!(
-        differs(&alternating_a, &alternating_b) > 0,
+        differing_pixels(&alternating_a, &alternating_b) > 0,
         "Alternating did not change between two different times; \
          pulse_wave is not actually reading the clock"
     );
@@ -855,43 +851,10 @@ fn mark_pulse_alternating_differs_from_together_and_moves_with_time() {
 /// one does.
 #[test]
 fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
-    let Some((device, queue)) = headless_device() else {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-    };
-    let differs =
-        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
 
     let mut not_extreme = single_marked_node(0, 0);
     not_extreme.mark_thickness = 0.0;
@@ -903,10 +866,10 @@ fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
     extreme.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
     extreme.time = 0.4;
 
-    let not_extreme_px = shot(&not_extreme, 95);
-    let extreme_px = shot(&extreme, 96);
+    let not_extreme_px = gpu.shot(&not_extreme);
+    let extreme_px = gpu.shot(&extreme);
     assert!(
-        differs(&not_extreme_px, &extreme_px) > 0,
+        differing_pixels(&not_extreme_px, &extreme_px) > 0,
         "a sounding octave that is the melody/bass extreme must pulse \
          differently from one that merely sounds; keying the split off \
          level alone lit every sounding octave the same way"
@@ -930,64 +893,31 @@ fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
 /// whether they move at all does not.)
 #[test]
 fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
-    let Some((device, queue)) = headless_device() else {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-    };
-    let differs =
-        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
 
     // No mark on either end: `Together` and `Alternating` would have no
     // slot to single out here, which is exactly the state Shimmer has to
     // work in.
     let mut off = single_marked_node(0, 0);
     off.time = 0.4;
-    let off_a = shot(&off, 100);
+    let off_a = gpu.shot(&off);
 
     let mut octaves = single_marked_node(0, 0);
     octaves.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
     octaves.time = 0.4;
-    let octaves_a = shot(&octaves, 101);
+    let octaves_a = gpu.shot(&octaves);
     assert!(
-        differs(&off_a, &octaves_a) > 0,
+        differing_pixels(&off_a, &octaves_a) > 0,
         "the octave layer's Shimmer drew the steady picture on an unmarked \
          node; the sheet of bands does not depend on a mark"
     );
     octaves.time = 1.1;
-    let octaves_b = shot(&octaves, 102);
+    let octaves_b = gpu.shot(&octaves);
     assert!(
-        differs(&octaves_a, &octaves_b) > 0,
+        differing_pixels(&octaves_a, &octaves_b) > 0,
         "the octave layer's Shimmer did not change between two different \
          times; the bands are not reading the clock"
     );
@@ -997,20 +927,20 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
     // steady, which isolates what `pulse_marks` did.
     let mut ring_off = single_marked_node(MIDDLE_C, 0);
     ring_off.time = 0.4;
-    let ring_off_a = shot(&ring_off, 103);
+    let ring_off_a = gpu.shot(&ring_off);
 
     let mut marks = single_marked_node(MIDDLE_C, 0);
     marks.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
     marks.time = 0.4;
-    let marks_a = shot(&marks, 104);
+    let marks_a = gpu.shot(&marks);
     assert!(
-        differs(&ring_off_a, &marks_a) > 0,
+        differing_pixels(&ring_off_a, &marks_a) > 0,
         "the mark rings' Shimmer drew the steady picture"
     );
     marks.time = 1.1;
-    let marks_b = shot(&marks, 105);
+    let marks_b = gpu.shot(&marks);
     assert!(
-        differs(&marks_a, &marks_b) > 0,
+        differing_pixels(&marks_a, &marks_b) > 0,
         "the mark rings' Shimmer did not change between two different \
          times; the bands are not reading the clock"
     );
@@ -1028,45 +958,10 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
 /// the clock runs, whatever the width is set to.
 #[test]
 fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clock() {
-    let Some((device, queue)) = headless_device() else {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut pane = 400u64;
-    let mut shot = |scene: &Scene| -> Vec<u8> {
-        pane += 1;
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-    };
-    let differs =
-        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
     // The octave layer, which sweeps whole and needs no mark: this is about
     // the sheet's own shape and pace, not about what it crosses.
     let sweep = |speed: f32, width: f32, time: f32| -> Scene {
@@ -1079,22 +974,23 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
     };
 
     // A time well off zero, or the speed would have nothing to multiply.
-    let base = shot(&sweep(1.6, 5.0, 0.4));
+    let base = gpu.shot(&sweep(1.6, 5.0, 0.4));
     assert!(
-        differs(&base, &shot(&sweep(3.2, 5.0, 0.4))) > 0,
+        differing_pixels(&base, &gpu.shot(&sweep(3.2, 5.0, 0.4))) > 0,
         "the Speed bar did not move the bands: at a fixed instant it is what \
          says how far along their normal they have travelled",
     );
     assert!(
-        differs(&base, &shot(&sweep(1.6, 2.5, 0.4))) > 0,
+        differing_pixels(&base, &gpu.shot(&sweep(1.6, 2.5, 0.4))) > 0,
         "the Width bar did not resize the bands",
     );
 
     // Held still: the sheet is where it started at every instant, and stays
     // there through a width the bar can reach either side of the default.
     for width in [2.5, 5.0, 12.0] {
+        let (early, late) = (gpu.shot(&sweep(0.0, width, 0.4)), gpu.shot(&sweep(0.0, width, 9.7)));
         assert_eq!(
-            differs(&shot(&sweep(0.0, width, 0.4)), &shot(&sweep(0.0, width, 9.7))),
+            differing_pixels(&early, &late),
             0,
             "at speed 0 the bands still moved between two instants at width \
              {width}; the clock is reaching the sweep by some route other than \
@@ -1125,42 +1021,9 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
 /// way `the_mark_shimmer_reaches_the_octave_slice_it_points_at` finds them.
 #[test]
 fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
     const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut pane = 700u64;
-    let mut shot = |scene: &Scene| -> Vec<u8> {
-        pane += 1;
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
     };
     // Getting the two sheets to DISAGREE over the marked slice is the whole
     // setup, and where they disagree is not free to choose. They share one
@@ -1194,7 +1057,6 @@ fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
     };
     let off = harmonigraph_scene::Pulse::Off;
     let shimmer = harmonigraph_scene::Pulse::Shimmer;
-    let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
 
     // A cycle's worth of instants: the sheets run square to each other, so
     // which one is ahead over the slice turns over as the clock runs.
@@ -1203,16 +1065,16 @@ fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
         let time = 0.2 + step as f32 * 0.45;
         // The rings, from the node that wears none: everything else is the
         // glyph layer, which is what this is about.
-        let bare = shot(&scene(0, off, time));
-        let octaves_only = shot(&scene(MIDDLE_C, off, time));
-        let both = shot(&scene(MIDDLE_C, shimmer, time));
+        let bare = gpu.shot(&scene(0, off, time));
+        let octaves_only = gpu.shot(&scene(MIDDLE_C, off, time));
+        let both = gpu.shot(&scene(MIDDLE_C, shimmer, time));
         for i in 0..both.len() / 4 {
             let px = i * 4..i * 4 + 4;
             let on_ring = bare[px.clone()] != octaves_only[px.clone()];
             if on_ring {
                 continue;
             }
-            let (before, after) = (lum(&octaves_only[px.clone()]), lum(&both[px]));
+            let (before, after) = (brightness(&octaves_only[px.clone()]), brightness(&both[px]));
             // One count of rounding either way: the two shots run the same
             // arithmetic to a different answer only where the sheets differ,
             // and a term that lands on a channel boundary can round down.
@@ -1261,42 +1123,9 @@ fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
 /// operand of one max, and covering only the first leaves the second.
 #[test]
 fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
     const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut pane = 800u64;
-    let mut shot = |scene: &Scene| -> Vec<u8> {
-        pane += 1;
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
     };
     // Tight enough that a band and the gap after it both fall across the
     // node, so one instant of the cycle has the slice in a trough rather
@@ -1316,7 +1145,6 @@ fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
     };
     let off = harmonigraph_scene::Pulse::Off;
     let shimmer = harmonigraph_scene::Pulse::Shimmer;
-    let lum = |p: &[u8]| p[0] as i32 + p[1] as i32 + p[2] as i32;
 
     // One cycle, walked: the trough has to pass over the slice somewhere in
     // it whatever phase the fixture happens to start at.
@@ -1325,13 +1153,13 @@ fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
         let time = 0.2 + step as f32 * (WIDTH / SPEED) / 8.0;
         // The rings, from the node that wears none — the same mask the
         // crossing test above takes, so what is left is the glyph layer.
-        let bare = shot(&scene(0, off, time));
-        let steady = shot(&scene(MIDDLE_C, off, time));
-        let swept = shot(&scene(MIDDLE_C, shimmer, time));
+        let bare = gpu.shot(&scene(0, off, time));
+        let steady = gpu.shot(&scene(MIDDLE_C, off, time));
+        let swept = gpu.shot(&scene(MIDDLE_C, shimmer, time));
         for i in 0..swept.len() / 4 {
             let px = i * 4..i * 4 + 4;
             let on_ring = bare[px.clone()] != steady[px.clone()];
-            let (before, after) = (lum(&steady[px.clone()]), lum(&swept[px]));
+            let (before, after) = (brightness(&steady[px.clone()]), brightness(&swept[px]));
             // The same one-count-per-channel rounding margin the crossing
             // test allows, in the other direction.
             if after < before - 3 {
@@ -1377,47 +1205,9 @@ fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
 /// steady dimming with no shimmer in it at all.
 #[test]
 fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
     const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut pane = 500u64;
-    let mut shot = |scene: &Scene| -> Vec<u8> {
-        pane += 1;
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
-    };
-    let differs =
-        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
-    let light = |px: &[u8]| -> i64 {
-        px.chunks(4).map(|p| p[0] as i64 + p[1] as i64 + p[2] as i64).sum()
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
     };
     // An instant with a band actually over the node: an intensity bar cannot
     // be read at a moment when there is nothing to scale.
@@ -1432,26 +1222,26 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
     let off = harmonigraph_scene::Pulse::Off;
     let shimmer = harmonigraph_scene::Pulse::Shimmer;
 
-    let steady = shot(&at(1.0, off));
+    let steady = gpu.shot(&at(1.0, off));
     assert_eq!(
-        differs(&steady, &shot(&at(0.0, shimmer))),
+        differing_pixels(&steady, &gpu.shot(&at(0.0, shimmer))),
         0,
         "intensity 0 did not draw the steady layer: the sweep still has one of \
          its two terms running, which at the bottom of the bar is a standing \
          dimming rather than a shimmer",
     );
 
-    let full = shot(&at(1.0, shimmer));
-    let half = shot(&at(0.5, shimmer));
-    assert!(differs(&steady, &full) > 0, "intensity 1 drew the steady layer");
+    let full = gpu.shot(&at(1.0, shimmer));
+    let half = gpu.shot(&at(0.5, shimmer));
+    assert!(differing_pixels(&steady, &full) > 0, "intensity 1 drew the steady layer");
     assert!(
-        differs(&half, &full) > 0 && differs(&half, &steady) > 0,
+        differing_pixels(&half, &full) > 0 && differing_pixels(&half, &steady) > 0,
         "half intensity is indistinguishable from full or from off; the bar is \
          a switch rather than a depth",
     );
     // ...and it is a depth in the direction the name says: with the band over
     // the node, more intensity is more light.
-    let (dim, mid, bright) = (light(&steady), light(&half), light(&full));
+    let (dim, mid, bright) = (total_light(&steady), total_light(&half), total_light(&full));
     eprintln!("light at intensity 0/0.5/1: {dim}/{mid}/{bright}");
     assert!(
         dim < mid && mid < bright,
@@ -1477,42 +1267,9 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
 /// as a crossing; bins with little paint in them are dropped outright.
 #[test]
 fn a_tight_width_puts_several_bands_across_one_node() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
     const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut pane = 600u64;
-    let mut shot = |scene: &Scene| -> Vec<u8> {
-        pane += 1;
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
     };
     let sweeping = |width: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
@@ -1527,7 +1284,7 @@ fn a_tight_width_puts_several_bands_across_one_node() {
     let steady = {
         let mut scene = sweeping(5.0);
         scene.pulse_octaves = harmonigraph_scene::Pulse::Off;
-        shot(&scene)
+        gpu.shot(&scene)
     };
 
     // The octave layer's bands run SHIMMER_ANGLE_TURNS (an eighth of a turn)
@@ -1538,7 +1295,7 @@ fn a_tight_width_puts_several_bands_across_one_node() {
     // the bar reaches at this node size, coarse enough that a bin holds a
     // real sample.
     let mut bands_crossing = |width: f32| -> usize {
-        let swept = shot(&sweeping(width));
+        let swept = gpu.shot(&sweeping(width));
         let bins = 2 * SIZE[0] as usize / 4;
         let mut lit = vec![0i64; bins];
         let mut here = vec![0i64; bins];
@@ -1615,42 +1372,9 @@ fn a_tight_width_puts_several_bands_across_one_node() {
 /// draws.
 #[test]
 fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
     const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut pane = 300u64;
-    let mut shot = |scene: &Scene| -> Vec<u8> {
-        pane += 1;
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
     };
     // One instant, held across all four shots: the sweep moves, so anything
     // compared across two clocks would differ whatever it drew.
@@ -1666,19 +1390,17 @@ fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
     // No mark: no ring to sweep and no slice to reach, so the mode changes
     // nothing at all. This is the containment half of the claim — the mark
     // layer's sweep must not have become a second octave-layer sweep.
-    let bare = shot(&at(0, off));
-    let bare_shimmer = shot(&at(0, shimmer));
-    let differs =
-        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    let bare = gpu.shot(&at(0, off));
+    let bare_shimmer = gpu.shot(&at(0, shimmer));
     assert_eq!(
-        differs(&bare, &bare_shimmer),
+        differing_pixels(&bare, &bare_shimmer),
         0,
         "an unmarked node changed under the mark rings' Shimmer; the sweep has \
          escaped the slices a ring points at and is crossing the whole octave layer",
     );
 
-    let steady = shot(&at(MIDDLE_C, off));
-    let swept = shot(&at(MIDDLE_C, shimmer));
+    let steady = gpu.shot(&at(MIDDLE_C, off));
+    let swept = gpu.shot(&at(MIDDLE_C, shimmer));
     // Where the rings draw, from the node that wears none.
     let ring = |i: usize| bare[i * 4..i * 4 + 4] != steady[i * 4..i * 4 + 4];
     let (mut on_ring, mut past_ring) = (0usize, 0usize);
@@ -1776,58 +1498,22 @@ fn move_node_across_the_view(scene: &mut Scene, turns: f32) {
 /// costs both equally, and what is left between them is the shimmer.
 #[test]
 fn the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square() {
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
     const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut pane = 200u64;
-    let mut shot = |scene: &Scene| -> Vec<u8> {
-        pane += 1;
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
     };
     // All the light in the frame. A total rather than a pixel-by-pixel
     // count, because a moved node lands in different pixels by design: what
     // is being compared is how much of it the shimmer let through, not
     // where it went.
-    let light = |px: &[u8]| -> i64 {
-        px.chunks(4).map(|p| p[0] as i64 + p[1] as i64 + p[2] as i64).sum()
-    };
     // How much the picture's total light changes when `make`'s node moves
     // `turns` of a turn off the camera's right axis, against leaving it at
     // the origin.
     let mut move_cost = |make: &dyn Fn() -> Scene, turns: f32| -> i64 {
-        let still = light(&shot(&make()));
+        let still = total_light(&gpu.shot(&make()));
         let mut moved = make();
         move_node_across_the_view(&mut moved, turns);
-        (light(&shot(&moved)) - still).abs()
+        (total_light(&gpu.shot(&moved)) - still).abs()
     };
 
     let across_the_octave_bands = SHIMMER_ANGLE_TURNS;
@@ -1906,16 +1592,13 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
     // above pins the shader down but would happily pass while the
     // tracker -> view -> node-mask path was broken, which is the half
     // that actually reaches a user.
-    let Some((device, queue)) = headless_device() else {
+    let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, Tuning};
     use harmonigraph_scene::{derive_scene, Camera, FrameParams, ViewConfig};
 
     const SIZE: [u32; 2] = [256, 256];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
 
     let mut tracker = NoteTracker::new();
     for note in [60u8, 64, 67] {
@@ -1948,45 +1631,6 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         )
     };
 
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor {
-        size_in_pixels: SIZE,
-        pixels_per_point: 1.0,
-    };
-    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(
-            &device,
-            &queue,
-            SIZE,
-            format,
-            wgpu::Color::BLACK,
-            |pass| {
-                cb.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: rect,
-                        clip_rect: rect,
-                        pixels_per_point: 1.0,
-                        screen_size_px: SIZE,
-                    },
-                    pass,
-                    &resources,
-                );
-            },
-        );
-        readback(&device, &queue, &tex, SIZE)
-    };
-
     // The masks must survive derive_scene in the first place.
     let marked = scene_for(true);
     let melody_nodes = marked.nodes.iter().filter(|n| n.melody_slots != 0).count();
@@ -1996,8 +1640,8 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         "derive_scene marked nothing: {melody_nodes} melody, {bass_nodes} bass nodes"
     );
 
-    let off = shot(&scene_for(false), 50);
-    let on = shot(&marked, 51);
+    let off = gpu.shot(&scene_for(false));
+    let on = gpu.shot(&marked);
     let lit = off.chunks(4).filter(|px| px[..3] != [0, 0, 0]).count();
     let changed = off
         .chunks(4)
@@ -2152,40 +1796,9 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     use harmonigraph_scene::octave_layout;
 
-    let Some((device, queue)) = headless_device() else {
-        return;
-    };
     const SIZE: [u32; 2] = [512, 512];
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
-    let mut resources = CallbackResources::default();
-    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(
-            scene,
-            LatticeLabels::default(),
-            vec_size,
-            format,
-            pane_id,
-            None,
-        );
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-        queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
-            cb.paint(
-                egui::PaintCallbackInfo {
-                    viewport: rect,
-                    clip_rect: rect,
-                    pixels_per_point: 1.0,
-                    screen_size_px: SIZE,
-                },
-                pass,
-                &resources,
-            );
-        });
-        readback(&device, &queue, &tex, SIZE)
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
     };
 
     // The widest wheel, the default, an even count — where the ring reaches an
@@ -2201,7 +1814,6 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     // An even wheel, a flat fringe, a graded one, and then a fringe thin
     // enough to be eaten by the Gap.
     const FRINGES: [(f32, f32); 4] = [(1.0, 0.0), (0.6, 0.0), (0.6, 1.0), (0.15, 0.0)];
-    let mut pane = 60;
     for (count, extras, center) in [
         (11u32, 0u32, 60.0f32),
         (5, 0, 60.0),
@@ -2219,8 +1831,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
             }
             for cents in [0.0, 350.0, 600.0, 1150.0] {
                 let layout = octave_layout(count, center, extras, size, blend);
-                let px = shot(&octave_wheel_scene(layout, cents), pane);
-                pane += 1;
+                let px = gpu.shot(&octave_wheel_scene(layout, cents));
                 let profile = band_profile(&px, SIZE[0]);
                 let case = format!(
                     "{count}+2x{extras} at {center}, size {size} blend {blend}, {cents}c"
@@ -2603,18 +2214,6 @@ fn bloom_adds_light_over_the_plain_composite() {
          plain {plain} vs bloomed {bloomed}"
     );
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 /// A sheet in FRONT of the home sheet is drawn over it; a sheet BEHIND it
 /// is drawn under. Both directions matter, and only one of them is obvious:
