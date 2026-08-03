@@ -1269,6 +1269,55 @@ pub fn choice_row<T: Copy + PartialEq>(
     });
 }
 
+/// [`choice_row`] where the options are not all live at once: each carries
+/// its own enabled flag as a fourth field, and a disabled one grays out in
+/// place.
+///
+/// For a row whose modes have DIFFERENT preconditions — the Octaves section's
+/// Pulse row, where two modes single out the octave a melody or bass ring
+/// points at and have nothing to single out with both marks off, while
+/// Shimmer crosses the whole layer and works either way. Wrapping the whole
+/// row in `add_enabled_ui` hides the mode that still works; leaving it all
+/// live leaves two that silently do nothing. Per option is the only one of
+/// the three that tells the truth.
+///
+/// The hint shows in both states (egui splits the two), since a grayed
+/// option's tooltip is exactly where "and here is what would switch it on"
+/// belongs.
+///
+/// Spelled out as `add_enabled` around one button rather than wrapped in
+/// `add_enabled_ui`, which is the shorter way to gray something: the scope
+/// that helper opens is a nested layout, and a nested layout inside
+/// `button_row`'s `horizontal_wrapped` does not wrap — the row runs off the
+/// pane instead of folding onto a second line, and takes the section's
+/// separators out past the edge with it
+/// (`no_settings_pane_overruns_a_narrow_column`). The body below is
+/// `Ui::selectable_value`'s, which is a `Button::selectable` and a click
+/// test, with the enabled flag threaded through.
+pub fn choice_row_gated<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut T,
+    options: &[(T, &str, &str, bool)],
+) {
+    button_row(ui, |ui| {
+        ui.label(name);
+        for (option, label, hint, enabled) in options {
+            let mut response = ui.add_enabled(
+                *enabled,
+                egui::Button::selectable(*value == *option, option_label(label)),
+            );
+            if response.clicked() && *value != *option {
+                *value = *option;
+                response.mark_changed();
+            }
+            if !hint.is_empty() {
+                response.on_hover_text(*hint).on_disabled_hover_text(*hint);
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
