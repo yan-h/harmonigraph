@@ -14,9 +14,10 @@ use harmonigraph_scene::{NodeStyle, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEI
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
-/// on the outer notes, and then the settings that are not about any one of
-/// those layers but about all of them at once. Scrolls so the full list is
-/// reachable in a short pane.
+/// on the outer notes, the sweep either of those two layers can be set to
+/// run, and then the settings that are not about any one of those layers but
+/// about all of them at once. Scrolls so the full list is reachable in a
+/// short pane.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -24,6 +25,7 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
             core_section(ui, &mut state.view);
             octaves_section(ui, &mut state.view);
             melody_bass_section(ui, &mut state.view);
+            shimmer_section(ui, &mut state.view);
             every_layer_section(ui, &mut state.view, params);
         });
 }
@@ -291,14 +293,70 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                     (
                         Pulse::Shimmer,
                         "Shimmer",
-                        "Soft white bands sweeping across both rings, at right \
-                         angles to the octave band's own Shimmer. One sheet of \
-                         them crosses the whole lattice, so the light travels \
-                         from node to node",
+                        "Soft white bands sweeping across both rings AND the \
+                         octave slice each one points at, at right angles to \
+                         the octave band's own Shimmer. One sheet of them \
+                         crosses the whole lattice, so the light travels from \
+                         node to node",
                     ),
                 ],
             );
         });
+    });
+}
+
+/// Shimmer: how the sweep both Pulse rows above can be set to run is sized
+/// and paced.
+///
+/// Its own section rather than a pair of bars under either Pulse row, because
+/// the two settings are ONE sheet of bands crossing the whole lattice —
+/// shared by the octave glyphs and the mark rings, whatever mix of the two is
+/// running it. Under the Octaves row they would look like the octave layer's,
+/// and a user who reached Shimmer from the Melody/bass row would be hunting
+/// for them in a section about something else; duplicated under both they
+/// would be two controls for one value.
+///
+/// Grayed until something is actually shimmering, on the same grounds every
+/// other gate in this pane uses: the bars do nothing at all in the other
+/// three modes.
+fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    section(ui, "Shimmer");
+    let shimmering = view.pulse_octaves == Pulse::Shimmer || view.pulse_marks == Pulse::Shimmer;
+    ui.add_enabled_ui(shimmering, |ui| {
+        ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed")
+            .show(ui)
+            .on_hover_text(
+                "How fast the bands travel, in lattice units a second -- so \
+                 the plugin window and an exported video sweep at the same \
+                 rate over the same nodes, whatever size either is drawn at. \
+                 0 freezes the sheet where it stands",
+            );
+        // Eased, because the range is three orders wide and the useful
+        // settings are not spread evenly over it: the tight end is a
+        // different picture every few hundredths (0.05 to 0.1 halves the
+        // bands on a node), where the wide end changes little between 8 and
+        // 15. Geometric travel gives each end the same share of the bar.
+        ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Width")
+            .eased(true)
+            .show(ui)
+            .on_hover_text(
+                "How wide the bands are, in lattice units from one to the \
+                 next -- about five nodes at the default spacing. Wider bands \
+                 are also further apart: it is one shape, sized. Around one \
+                 node to a band the light reads as alternating nodes rather \
+                 than as a sweep; below that several bands cross each node at \
+                 once and it becomes a texture on the nodes",
+            );
+        ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity")
+            .show(ui)
+            .on_hover_text(
+                "How strong the light in a band is: how far it pulls the \
+                 layer toward white, and how far the layer dims between \
+                 bands, together. 0 draws the layer exactly as it is \
+                 unshimmered; 1 is the tuned depth. Past 1 the band reaches \
+                 full white -- an indicator under it says an octave sounds \
+                 without saying which",
+            );
     });
 }
 

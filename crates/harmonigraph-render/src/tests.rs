@@ -263,6 +263,14 @@ fn parity_scene() -> Scene {
         // Off, on the same grounds as pulse_octaves below: a single-instant
         // parity image can't depend on which moment of a cycle it lands on.
         pulse_marks: Default::default(),
+        // The sweep's own settings, at the fresh view's values (see
+        // `ViewConfig::shimmer_speed`). Inert while both modes above are Off,
+        // and stated rather than defaulted because a test that turns a mode
+        // ON — every shimmer test builds on this fixture — has to be sweeping
+        // something a reader can size against SHIMMER_PROBE_STEP.
+        shimmer_speed: 1.6,
+        shimmer_width: 5.0,
+        shimmer_intensity: 1.0,
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -993,6 +1001,431 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
         differs(&marks_a, &marks_b) > 0,
         "the mark rings' Shimmer did not change between two different \
          times; the bands are not reading the clock"
+    );
+}
+
+/// The sweep's two settings reach the picture, and the clock reaches it only
+/// THROUGH the speed.
+///
+/// The last part is what makes this more than two "something changed"
+/// probes. Speed and width both scale the same phase (`travel / period`,
+/// with the clock inside `travel`), so a width that had quietly taken the
+/// clock's term with it, or a speed read as a frequency in the band count,
+/// would still move the picture on both bars and still animate — and would
+/// have made the two knobs one. At speed 0 the bands must stand still while
+/// the clock runs, whatever the width is set to.
+#[test]
+fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clock() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 400u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    // The octave layer, which sweeps whole and needs no mark: this is about
+    // the sheet's own shape and pace, not about what it crosses.
+    let sweep = |speed: f32, width: f32, time: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.shimmer_speed = speed;
+        scene.shimmer_width = width;
+        scene.time = time;
+        scene
+    };
+
+    // A time well off zero, or the speed would have nothing to multiply.
+    let base = shot(&sweep(1.6, 5.0, 0.4));
+    assert!(
+        differs(&base, &shot(&sweep(3.2, 5.0, 0.4))) > 0,
+        "the Speed bar did not move the bands: at a fixed instant it is what \
+         says how far along their normal they have travelled",
+    );
+    assert!(
+        differs(&base, &shot(&sweep(1.6, 2.5, 0.4))) > 0,
+        "the Width bar did not resize the bands",
+    );
+
+    // Held still: the sheet is where it started at every instant, and stays
+    // there through a width the bar can reach either side of the default.
+    for width in [2.5, 5.0, 12.0] {
+        assert_eq!(
+            differs(&shot(&sweep(0.0, width, 0.4)), &shot(&sweep(0.0, width, 9.7))),
+            0,
+            "at speed 0 the bands still moved between two instants at width \
+             {width}; the clock is reaching the sweep by some route other than \
+             the speed, and the two bars are not the independent pair they read as",
+        );
+    }
+}
+
+/// Intensity is the DEPTH of the sweep, and its bottom end is the identity:
+/// at 0 the layer draws exactly as it does with the mode Off, byte for byte.
+///
+/// That last claim is the one worth pinning. The two terms a band carries
+/// (the pull toward white and the dip in coverage) are scaled off separate
+/// constants, so an intensity that scaled only one of them would still look
+/// like a working bar at every setting a reader would try — and would leave
+/// the layer a permanent 0.82 of its coverage at the bottom of the bar, a
+/// steady dimming with no shimmer in it at all.
+#[test]
+fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 500u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    let light = |px: &[u8]| -> i64 {
+        px.chunks(4).map(|p| p[0] as i64 + p[1] as i64 + p[2] as i64).sum()
+    };
+    // An instant with a band actually over the node: an intensity bar cannot
+    // be read at a moment when there is nothing to scale.
+    let at = |intensity: f32, pulse: harmonigraph_scene::Pulse| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.pulse_octaves = pulse;
+        scene.shimmer_intensity = intensity;
+        scene.shimmer_speed = 0.0;
+        scene.time = 0.4;
+        scene
+    };
+    let off = harmonigraph_scene::Pulse::Off;
+    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+
+    let steady = shot(&at(1.0, off));
+    assert_eq!(
+        differs(&steady, &shot(&at(0.0, shimmer))),
+        0,
+        "intensity 0 did not draw the steady layer: the sweep still has one of \
+         its two terms running, which at the bottom of the bar is a standing \
+         dimming rather than a shimmer",
+    );
+
+    let full = shot(&at(1.0, shimmer));
+    let half = shot(&at(0.5, shimmer));
+    assert!(differs(&steady, &full) > 0, "intensity 1 drew the steady layer");
+    assert!(
+        differs(&half, &full) > 0 && differs(&half, &steady) > 0,
+        "half intensity is indistinguishable from full or from off; the bar is \
+         a switch rather than a depth",
+    );
+    // ...and it is a depth in the direction the name says: with the band over
+    // the node, more intensity is more light.
+    let (dim, mid, bright) = (light(&steady), light(&half), light(&full));
+    eprintln!("light at intensity 0/0.5/1: {dim}/{mid}/{bright}");
+    assert!(
+        dim < mid && mid < bright,
+        "light did not climb with intensity ({dim}, {mid}, {bright}): a band over \
+         the node has to brighten it more the deeper the sweep is",
+    );
+}
+
+/// The tight end of the Width bar puts SEVERAL bands across one node at once
+/// — a texture on the node rather than a sheet passing between nodes — which
+/// is a different picture from the wide end and not just a smaller number.
+///
+/// Counted rather than eyeballed, from a profile taken along the bands' own
+/// normal. Each pixel's shimmer is read as the RATIO of its light to the same
+/// pixel's light with the mode Off, which cancels everything the node draws —
+/// the gaps between sectors, the rings, the glow falling off — and leaves the
+/// sweep alone. That ratio crosses 1 exactly where a band's edge is: above it
+/// under a band (whitened), below it between bands (the coverage trough). So
+/// counting crossings counts band edges, with no threshold picked to suit the
+/// answer.
+///
+/// A deadband either side of 1 keeps a bin that is merely quiet from reading
+/// as a crossing; bins with little paint in them are dropped outright.
+#[test]
+fn a_tight_width_puts_several_bands_across_one_node() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 600u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    let sweeping = |width: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.shimmer_width = width;
+        // Held still, so the profile is one instant of the sheet and not a
+        // smear of where it was going.
+        scene.shimmer_speed = 0.0;
+        scene.time = 0.4;
+        scene
+    };
+    let steady = {
+        let mut scene = sweeping(5.0);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Off;
+        shot(&scene)
+    };
+
+    // The octave layer's bands run SHIMMER_ANGLE_TURNS (an eighth of a turn)
+    // off the camera's right axis, toward its up axis — which is up the
+    // screen, against the row index running down it. So a fragment's place
+    // along the bands' normal is x - y, and binning by it is binning by band
+    // phase. Four pixels to a bin: fine enough to resolve the tightest width
+    // the bar reaches at this node size, coarse enough that a bin holds a
+    // real sample.
+    let mut bands_crossing = |width: f32| -> usize {
+        let swept = shot(&sweeping(width));
+        let bins = 2 * SIZE[0] as usize / 4;
+        let mut lit = vec![0i64; bins];
+        let mut here = vec![0i64; bins];
+        for (i, (a, b)) in steady.chunks(4).zip(swept.chunks(4)).enumerate() {
+            let (x, y) = (i % SIZE[0] as usize, i / SIZE[0] as usize);
+            let bin = (x + SIZE[0] as usize - y) / 4;
+            lit[bin] += a[0] as i64 + a[1] as i64 + a[2] as i64;
+            here[bin] += b[0] as i64 + b[1] as i64 + b[2] as i64;
+        }
+        // A bin needs real paint in it before its ratio means anything; the
+        // node covers a fraction of the frame, and the empty ground either
+        // side of it would otherwise contribute a ratio of 0/0.
+        let floor = lit.iter().max().copied().unwrap_or(0) / 8;
+        let mut crossings = 0;
+        let mut above: Option<bool> = None;
+        for (l, h) in lit.iter().zip(&here) {
+            if *l < floor.max(1) {
+                continue;
+            }
+            let ratio = *h as f64 / *l as f64;
+            let now = if ratio > 1.01 {
+                Some(true)
+            } else if ratio < 0.99 {
+                Some(false)
+            } else {
+                None
+            };
+            if let (Some(was), Some(is)) = (above, now) {
+                if was != is {
+                    crossings += 1;
+                }
+            }
+            above = now.or(above);
+        }
+        crossings
+    };
+
+    // At the default width the node is a fraction of one band, so its whole
+    // paint sits on one side of the sweep or slides across at most one edge
+    // of it.
+    let wide = bands_crossing(5.0);
+    // At a tight one the node is several bands across. The fixture's node is
+    // 1.1 world units in radius against a width of 0.35, so the octave band
+    // alone spans about five. Measured 1 edge wide against 15 tight.
+    let tight = bands_crossing(0.35);
+    eprintln!("band edges across the node: {wide} wide, {tight} tight");
+    assert!(
+        wide <= 2,
+        "the default width already puts {wide} band edges across one node; the \
+         wide end is supposed to be a sheet crossing the lattice, and the two \
+         ends of the bar are then the same picture",
+    );
+    assert!(
+        tight >= 6,
+        "a width of 0.35 put only {tight} band edges across the node (the default \
+         puts {wide}); the tight end of the bar is not reaching the several-bands\
+         -per-node look it exists for",
+    );
+}
+
+/// The mark rings' shimmer also sweeps the octave SLICE each ring points at,
+/// which is drawn by the glyph layer — a mark is the ring together with the
+/// octave it names, and light crossing the one has to cross the other or it
+/// cuts the mark in half at the gap between them.
+///
+/// The claim is about paint OUTSIDE the rings, so the rings are masked off
+/// rather than switched off: `mark_thickness = 0` would take the rings and
+/// the slice sweep with them (`the_mark_pulse_folds_off_when_the_rings_are_off`
+/// in harmonigraph-scene folds the mode there, and a fixture the app cannot
+/// build is not a reading of what it draws). The mask is measured instead —
+/// an unmarked node wears no rings, so the pixels a marked one differs from
+/// it at ARE the rings, fringe and all, whatever radii the band setting put
+/// them at. What is left is the rest of the node, where only the glyph layer
+/// draws.
+#[test]
+fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    const SIZE: [u32; 2] = [256, 256];
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let vec_size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec_size);
+    let mut resources = CallbackResources::default();
+    let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
+    let mut pane = 300u64;
+    let mut shot = |scene: &Scene| -> Vec<u8> {
+        pane += 1;
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+        let tex = render_to_texture(&device, &queue, SIZE, format, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(&device, &queue, &tex, SIZE)
+    };
+    // One instant, held across all four shots: the sweep moves, so anything
+    // compared across two clocks would differ whatever it drew.
+    let at = |melody: u32, pulse: harmonigraph_scene::Pulse| -> Scene {
+        let mut scene = single_marked_node(melody, 0);
+        scene.time = 0.4;
+        scene.pulse_marks = pulse;
+        scene
+    };
+    let off = harmonigraph_scene::Pulse::Off;
+    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+
+    // No mark: no ring to sweep and no slice to reach, so the mode changes
+    // nothing at all. This is the containment half of the claim — the mark
+    // layer's sweep must not have become a second octave-layer sweep.
+    let bare = shot(&at(0, off));
+    let bare_shimmer = shot(&at(0, shimmer));
+    let differs =
+        |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    assert_eq!(
+        differs(&bare, &bare_shimmer),
+        0,
+        "an unmarked node changed under the mark rings' Shimmer; the sweep has \
+         escaped the slices a ring points at and is crossing the whole octave layer",
+    );
+
+    let steady = shot(&at(MIDDLE_C, off));
+    let swept = shot(&at(MIDDLE_C, shimmer));
+    // Where the rings draw, from the node that wears none.
+    let ring = |i: usize| bare[i * 4..i * 4 + 4] != steady[i * 4..i * 4 + 4];
+    let (mut on_ring, mut past_ring) = (0usize, 0usize);
+    for i in 0..steady.len() / 4 {
+        if steady[i * 4..i * 4 + 4] == swept[i * 4..i * 4 + 4] {
+            continue;
+        }
+        if ring(i) {
+            on_ring += 1;
+        } else {
+            past_ring += 1;
+        }
+    }
+    eprintln!("mark shimmer moved {on_ring} px of ring and {past_ring} px past it");
+    // A floor rather than a share of the rings: the slice is one wedge of the
+    // band against two full annuli, and how much of the band the fixture
+    // shows is a setting. Measured 599 px past the ring, against 940 on it.
+    assert!(
+        past_ring > 200,
+        "the mark rings' Shimmer moved only {past_ring} px outside the rings \
+         ({on_ring} on them): it is sweeping the annulus alone and stopping at \
+         the gap, leaving the octave slice the mark names unlit",
     );
 }
 

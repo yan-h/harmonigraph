@@ -252,6 +252,15 @@ struct Uniforms {
     /// z: the octave glyphs' pulse mode (0 off, 1 together, 2 alternating,
     /// 3 shimmer — see `Pulse`); w unused.
     misc7: [f32; 4],
+    /// The shimmer's knobs, shared by both layers that can run it (see
+    /// `Scene::shimmer_speed`). x: band travel in world units per second;
+    /// y: band width in world units, strictly positive; z: how deep the
+    /// light is (0 none, 1 the tuned depth); w unused.
+    ///
+    /// One slot for the set rather than the free `misc7.w` plus a new one:
+    /// they are read together in one function, and splitting them across the
+    /// seam between two vec4s buys nothing but a second place to look.
+    misc8: [f32; 4],
     /// `OctaveLayout::bounds` — the angle from a ring's seam to each of its
     /// slice boundaries, the same table for every node — four to a row, which
     /// is how a uniform array is laid out anyway.
@@ -757,6 +766,12 @@ impl LatticeCallback {
                     scene.octave_layout.span as f32,
                     scene.octave_layout.center,
                     scene.pulse_octaves.shader_index() as f32,
+                    0.0,
+                ],
+                misc8: [
+                    scene.shimmer_speed,
+                    scene.shimmer_width,
+                    scene.shimmer_intensity,
                     0.0,
                 ],
                 // Straight indexing: the table is exactly as long as the

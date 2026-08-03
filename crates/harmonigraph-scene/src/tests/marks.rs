@@ -377,6 +377,99 @@ fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
 }
 
 
+/// The mark rings' pulse folds off with the rings themselves.
+///
+/// Every mode animates the ring, so a thickness of 0 — the rings' documented
+/// off position, where `mark_ring` returns no coverage — leaves all of them
+/// with nothing to animate, and the pane grays the row there.
+///
+/// [`Pulse::Shimmer`] is the one that needs the fold: it also sweeps the
+/// octave SLICE a ring points at, which the glyph layer draws and no ring
+/// coverage multiplies away, so without this, switching the rings off leaves
+/// the marked octaves sweeping from a control the user can no longer reach to
+/// stop. The other modes are folded on the same grounds rather than because
+/// they misbehave — which mode is safe to leave standing is a fact about
+/// where each one draws, and pinning that to today's answer would make a mode
+/// reaching past the ring later a silent bug rather than an edit here.
+#[test]
+fn the_mark_pulse_folds_off_when_the_rings_are_off() {
+    let pulse = |mark_thickness: f32, pulse_marks: Pulse| {
+        let view = ViewConfig { mark_thickness, pulse_marks, ..ViewConfig::default() };
+        scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        )
+        .pulse_marks
+    };
+
+    for mode in [Pulse::Together, Pulse::Alternating, Pulse::Shimmer] {
+        assert_eq!(
+            pulse(0.0, mode),
+            Pulse::Off,
+            "{mode:?} survived the rings being switched off, and Shimmer at least \
+             keeps drawing there -- on the marked octave's own slice",
+        );
+        assert_eq!(pulse(0.09, mode), mode, "{mode:?} must survive a ring it can animate");
+    }
+}
+
+/// The shimmer's three settings reach the scene, and the width arrives
+/// strictly positive however the view is set: the shader divides the band
+/// phase by it, so a 0 here is a whole lattice of NaN rather than a
+/// stationary sweep. (Speed 0 IS the stationary sweep, and passes through, as
+/// intensity 0 is the layer drawn unshimmered.)
+///
+/// The width's FLOOR is the second claim, and it is a look rather than a
+/// safety margin: it has to leave room for several bands across one node, so
+/// it is checked against the node's own world size (`spacing` ×
+/// `NODE_RADIUS_FACTOR`) rather than against a bare "> 0".
+#[test]
+fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
+    let sweep = |shimmer_speed: f32, shimmer_width: f32, shimmer_intensity: f32| {
+        let view = ViewConfig {
+            shimmer_speed,
+            shimmer_width,
+            shimmer_intensity,
+            ..ViewConfig::default()
+        };
+        let scene = scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        );
+        (scene.shimmer_speed, scene.shimmer_width, scene.shimmer_intensity)
+    };
+
+    assert_eq!(sweep(3.0, 8.0, 0.5), (3.0, 8.0, 0.5), "a settable set passes through untouched");
+    assert_eq!(sweep(0.0, 5.0, 0.0).0, 0.0, "speed 0 is a look -- the sheet, held still");
+    assert_eq!(sweep(1.6, 5.0, 0.0).2, 0.0, "and intensity 0 is the layer, unshimmered");
+    assert!(sweep(1.6, 0.0, 1.0).1 > 0.0, "a width of 0 divides by zero in the band phase");
+    assert!(sweep(1.6, -4.0, 1.0).1 > 0.0, "and so does a negative one, having flipped it first");
+
+    // Several bands across ONE node is the tight end's whole point, so the
+    // floor has to sit a good way under a node's diameter rather than merely
+    // above zero.
+    let node = ViewConfig::default().spacing * crate::NODE_RADIUS_FACTOR;
+    let floor = sweep(1.6, 0.0, 1.0).1;
+    assert!(
+        floor * 4.0 < node * 2.0,
+        "the width floor is {floor} against a node {} across: too coarse for the \
+         bands to cross one several at a time",
+        node * 2.0,
+    );
+
+    let (speed, width, intensity) = sweep(1e9, 1e9, 1e9);
+    assert!(
+        speed <= 40.0 && width <= 40.0 && intensity <= 4.0,
+        "got {speed} / {width} / {intensity}",
+    );
+}
+
 /// Only ALTERNATING needs a marked slot. It is the mode whose two phases
 /// differ, so with neither mark on `extreme_slots` is 0, every glyph takes
 /// the "rest" phase, and what was a half-cycle split becomes a UNIFORM
