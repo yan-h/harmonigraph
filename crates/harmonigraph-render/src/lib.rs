@@ -181,7 +181,7 @@ struct Uniforms {
     background: [f32; 4],
     /// The wheel's pitch axis. x: octaves one turn is cut into
     /// (`OctaveLayout::span`); y: the MIDI pitch at the top of every node
-    /// (`OctaveLayout::center`); z, w unused.
+    /// (`OctaveLayout::center`).
     ///
     /// No slot range and no per-node angle: both depend on the node's own
     /// pitch class — which of its octaves are the ones nearest the center, and
