@@ -1665,7 +1665,13 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
 /// laid down as lobes of fixed ANGULAR width, so the arc each one spans shrinks
 /// with the radius and they meet in a cusp at the node's centre — a core dialed
 /// soft would otherwise blur at its rim and stay knife-sharp in the middle,
-/// which is the one place its edge softening cannot reach (see CORE_SEAM_SOFT).
+/// which is the one place its edge softening cannot reach.
+///
+/// Both halves of the bargain, because either alone has a trivial cheat: the
+/// centre has to lose its seam, AND the rim has to keep its colors, which is
+/// what stops the cure from being "average the whole node". Run over the
+/// shipped default view as well as a deliberately soft one, so a retune cannot
+/// move the out-of-the-box look with the suite green.
 ///
 /// Measured as how far the colors around a ring point APART as directions, not
 /// as how much they differ: a soft core is also a dimmer one, and any measure
@@ -1683,9 +1689,17 @@ fn a_soft_core_blurs_the_seams_between_its_colors_at_the_centre() {
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
 
     let mut pane = 300;
-    let mut shot = |solidity: f32| -> Vec<u8> {
+    let mut shot = |solidity: f32, core_radius: f32| -> Vec<u8> {
         let mut scene = single_marked_node(0, 0);
         scene.core_solidity = solidity;
+        // The disc held at one size on screen whatever fraction of the quad it
+        // is, so both cases below are measured at the same pixel scale. What
+        // the seam floor asks for is a fraction of the core radius, so the
+        // profile it produces is the same shape at any size; keeping the disc
+        // big just leaves the `aa` floor — the one absolute term — too small to
+        // be what these readings are about.
+        scene.node_radius *= 0.46 / core_radius;
+        scene.core_radius = core_radius;
         // Every octave the wheel draws for this pitch class. A single sounding
         // voice takes the node's own color everywhere (octave_glow_color's solo
         // fallback), which leaves no seam to measure at all.
@@ -1747,37 +1761,59 @@ fn a_soft_core_blurs_the_seams_between_its_colors_at_the_centre() {
         worst
     };
 
-    let solid = shot(1.0);
     // The disc's radius in pixels, read off the SOLID end, where its edge is
-    // the first sharp fall from the centre — at the soft end it has dissolved
+    // the first sharp fall from the centre; at the soft end it has dissolved
     // into the glow and there is no edge to find. It is the same disc either
-    // way, so one reading sizes both rings.
-    let centre = rgb(&solid, c, c).length();
-    let r_disc = (2..c)
-        .find(|r| rgb(&solid, c + r, c).length() < centre * 0.4)
-        .expect("a disc edge to find at full solidity") as f32;
-    assert!(r_disc > 20.0, "the disc is too small to sample rings inside ({r_disc} px)");
+    // way, so one reading sizes every ring. Taken as the median of eight rays
+    // rather than one: a single ray's answer depends on which octave's hue
+    // happens to lie along it and how bright that one is, so a fixture whose
+    // colors moved would quietly resize the rings instead of failing.
+    let disc_radius = |px: &[u8]| -> f32 {
+        let ray = |a: f32| -> f32 {
+            let at = |r: f32| rgb(px, c + (r * a.cos()) as i32, c - (r * a.sin()) as i32).length();
+            let centre = at(0.0);
+            (2..c).map(|r| r as f32).find(|r| at(*r) < centre * 0.4).unwrap_or(c as f32)
+        };
+        let mut rs: Vec<f32> = (0..8)
+            .map(|i| ray(std::f32::consts::TAU * i as f32 / 8.0))
+            .collect();
+        rs.sort_by(f32::total_cmp);
+        rs[4]
+    };
 
-    let soft = shot(0.25);
-    let (inner, outer) = (r_disc * 0.2, r_disc * 0.75);
-    let solid_in = spread(&solid, inner);
-    let soft_in = spread(&soft, inner);
-    let soft_out = spread(&soft, outer);
-    // The cusp this is about: at full solidity the hues stay fully separated
-    // right into the middle. Without it the rest of the test measures nothing.
-    assert!(solid_in > 30.0, "no sharp seam at the centre to soften: {solid_in:.0} deg");
-    assert!(
-        soft_in < solid_in * 0.5,
-        "a soft core's centre is still a hard seam: {soft_in:.0} deg across, \
-         against {solid_in:.0} at full solidity"
-    );
-    // And the softening is local to the centre: further out the node still
-    // shows its notes as distinct colors rather than one averaged wash.
-    assert!(
-        soft_out > soft_in * 2.0,
-        "the soft core lost its colors instead of blurring their seams: \
-         {soft_out:.0} deg out at the rim against {soft_in:.0} at the centre"
-    );
+    for (name, solidity, core_radius) in
+        [("the shipped default view", 0.4f32, 0.2f32), ("a core dialed soft", 0.25, 0.46)]
+    {
+        let solid = shot(1.0, core_radius);
+        let soft = shot(solidity, core_radius);
+        let r_disc = disc_radius(&solid);
+        assert!(r_disc > 20.0, "{name}: the disc is too small to sample rings in ({r_disc} px)");
+
+        let (inner, outer) = (r_disc * 0.2, r_disc * 0.75);
+        let solid_in = spread(&solid, inner);
+        let solid_out = spread(&solid, outer);
+        let soft_in = spread(&soft, inner);
+        let soft_out = spread(&soft, outer);
+        // The cusp this is about: at full solidity the hues stay fully
+        // separated right into the middle. Without it the rest measures
+        // nothing.
+        assert!(solid_in > 30.0, "{name}: no seam at the centre to soften: {solid_in:.0} deg");
+        assert!(
+            soft_in < solid_in * 0.5,
+            "{name}: a soft core's centre is still a hard seam: {soft_in:.0} deg across, \
+             against {solid_in:.0} at full solidity"
+        );
+        // And what stops the cure being "average the node": the seams are never
+        // held wider than the arc they already span at the rim, so out there
+        // the colors are as separated as the solid orb's — measured against
+        // THAT, not against the blurred centre, which would pass a node washed
+        // to one color.
+        assert!(
+            soft_out > solid_out * 0.8,
+            "{name}: the soft core lost the colors it should only have blurred: \
+             {soft_out:.0} deg at the rim against the solid orb's {solid_out:.0}"
+        );
+    }
 }
 
 #[test]

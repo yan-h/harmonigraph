@@ -708,16 +708,6 @@ const CORE_R_CLASSIC: f32 = 0.46;
 // classic orb), at 0 it has spread this far and the disc has faded out
 // into the glow skirt. Tunes how "soft" a mid-solidity core reads.
 const CORE_EDGE_SOFT: f32 = 0.30;
-// The companion to that, acting INSIDE the disc rather than at its rim: the
-// width the seams between a chord's colors are held to as solidity drops to
-// 0, as a fraction of the core radius. Those colors are laid in lobes of fixed
-// ANGULAR width (GLOW_LOBE_KAPPA), so the arc a seam spans shrinks with the
-// radius and the seams meet in a cusp at the node's centre — the one place
-// the edge softening above cannot reach, which is why a soft core otherwise
-// reads blurred at its rim and razor-sharp in the middle. A lobe's own width
-// at the rim is radius/sqrt(GLOW_LOBE_KAPPA) = 0.5 R, so this carries the
-// rim's softness inward and a little past it.
-const CORE_SEAM_SOFT: f32 = 0.6;
 // Radius below which the whole core fades to nothing, so a radius of 0 is
 // the off state and the core grows in smoothly (no pop) as the bar leaves
 // the bottom.
@@ -906,10 +896,14 @@ fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32
     return csum / wsum;
 }
 
-// Concentration of each octave's angular color lobe in the glow (a von
-// Mises-like falloff): higher is tighter, more separated arcs. Tuned so
-// neighbouring octaves blend softly rather than banding at the widest span,
-// where they sit closest together.
+// The TIGHTEST each octave's angular color lobe is drawn at (a von Mises-like
+// falloff): higher is tighter, more separated arcs. Tuned so neighbouring
+// octaves blend softly rather than banding at the widest span, where they sit
+// closest together. A ceiling rather than the concentration itself — a pixel
+// near the node's centre is blended at less, so that the seams, which are
+// fixed in ANGLE and would otherwise converge to a cusp there, keep the arc
+// width they have at the rim (`core_layer`, and note that the rim width is
+// 1/sqrt of this, so the two move together).
 const GLOW_LOBE_KAPPA: f32 = 4.0;
 
 // The glow's color when a chord sounds: every sounding octave's hue laid
@@ -922,23 +916,14 @@ const GLOW_LOBE_KAPPA: f32 = 4.0;
 // single voice keeps its exact color (fixed channel hues included, which the
 // pitch ramp would not reproduce).
 //
-// `d` is the radius this pixel sits at and `seam` the narrowest the seams
-// between those hues may get there, both in quad UV units: the lobes are fixed
-// in ANGLE, so without a floor their seams narrow with `d` into a cusp at the
-// centre (see CORE_SEAM_SOFT, which is where the caller's floor comes from).
+// `kappa` is how tightly to pack those hues — at most GLOW_LOBE_KAPPA, and
+// less where the caller wants their seams held open (see `core_layer`). At 0
+// every weight collapses to the octave's own level and the hues average into
+// one color.
 fn octave_glow_color(
-    octaves: vec3<u32>, cents: f32, ring: OctRing, angle: f32, d: f32, seam: f32,
+    octaves: vec3<u32>, cents: f32, ring: OctRing, angle: f32, kappa: f32,
     fallback: vec3<f32>,
 ) -> vec3<f32> {
-    // The concentration that puts a `seam`-wide seam at this radius. A lobe of
-    // concentration k falls off as exp(-k*dtheta^2/2) about its centre, so it
-    // is 1/sqrt(k) wide in angle and spans d/sqrt(k) on screen; holding that at
-    // `seam` asks for k = (d/seam)^2. Capped at GLOW_LOBE_KAPPA, which is what
-    // it stays out where the arc is already wider than the floor — so this only
-    // ever loosens the blend, never tightens it. At the centre it reaches 0,
-    // every weight collapses to the octave's level, and the hues merge into one
-    // averaged color: no cusp left to be sharp.
-    let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
     var count = 0u;
     var wsum = 0.0;
     var csum = vec3<f32>(0.0);
@@ -1325,15 +1310,25 @@ fn core_layer(
     // carries the same blend, so disc and halo read as one colored field. A
     // solo note falls back to its single color.
     //
-    // The seams between those hues are held open toward the centre, where the
-    // fixed-angle lobes would otherwise converge to a cusp: only to the edge's
-    // own anti-alias width at solidity 1, where the classic orb keeps its crisp
-    // partition, widening to CORE_SEAM_SOFT of the radius as the core dissolves
-    // — the middle of a soft core then goes soft WITH its rim rather than
-    // staying sharp inside it.
-    let seam = max(aa, (1.0 - solidity) * radius * CORE_SEAM_SOFT);
+    // Those hues are laid in lobes fixed in ANGLE, so the arc a seam spans is
+    // d/sqrt(kappa) — it shrinks with the radius, and every seam converges to a
+    // cusp at the centre. The disc's own softening (CORE_EDGE_SOFT) works on the
+    // rim and cannot reach that, which is why a core dialed soft otherwise blurs
+    // at its outside and stays razor-sharp in the middle, the more so the more
+    // colors are sounding.
+    //
+    // So hold the seams to a width, and pick the concentration that gives it:
+    // k = (d/seam)^2, capped at GLOW_LOBE_KAPPA so this only ever loosens the
+    // blend, never tightens it. The width is the lobe's own arc at the rim,
+    // radius/sqrt(GLOW_LOBE_KAPPA), faded in as the core dissolves — the widest
+    // it can ask for is what the node ALREADY reads as at its rim, so a soft
+    // core cannot wash its chord flatter than its own outside. The `aa` floor
+    // holds at solidity 1, where it antialiases the cusp to the same width as
+    // every other edge here and the orb otherwise keeps its crisp partition.
+    let seam = max(aa, (1.0 - solidity) * radius * inverseSqrt(GLOW_LOBE_KAPPA));
+    let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
     let octave_mix = octave_glow_color(
-        in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), d, seam, in.color.rgb,
+        in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, in.color.rgb,
     ) * brightness;
     var rgb = octave_mix;
 
