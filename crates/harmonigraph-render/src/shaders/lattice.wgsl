@@ -601,6 +601,19 @@ const SHIMMER_SPEED: f32 = 1.6;
 // being a soft band and starts being an edge.
 const SHIMMER_SHARP: f32 = 2.4;
 // How far a band's peak pulls the layer toward white.
+//
+// This is the setting that costs something real, and it is the ask: a band
+// that only went half way to white would not read as a WHITE band. Where the
+// band crosses a sounding glyph it leaves an eighth of that octave's pitch
+// color, so under the peak an indicator says "an octave sounds here" without
+// saying which — the layer's whole message, spent for the sweep. What keeps
+// it payable is that the band is narrow (SHIMMER_SHARP) and moving, so any
+// given indicator is legible again a second later. Dial it down if the
+// register matters more than the light; that is a trade, not a bug.
+//
+// Note it is NOT the bound SHIMMER_TROUGH is held to below. That one keeps
+// every indicator VISIBLE at every instant; this one gives up their colors
+// under a passing band and nothing else.
 const SHIMMER_WHITE: f32 = 0.85;
 // What the layer's coverage sits at between bands, against 1 under a peak. A
 // shallow dip on purpose: it is the trough that gives the sweep a body to
@@ -617,11 +630,6 @@ const SHIMMER_ANGLE: f32 = 0.125 * TAU;
 // angle rather than as a second literal, so the two cannot drift out of
 // square when the diagonal is retuned.
 const SHIMMER_QUARTER: f32 = 0.25 * TAU;
-// The travel direction for a layer `quarter_turns` off the base diagonal.
-fn shimmer_dir(quarter_turns: f32) -> vec2<f32> {
-    let a = SHIMMER_ANGLE + SHIMMER_QUARTER * quarter_turns;
-    return vec2<f32>(cos(a), sin(a));
-}
 // What the shimmer does to a layer here, as (white mix, coverage scale):
 // how far to pull its color toward white at this fragment, and what to scale
 // its coverage by. Both terms and not just one — an octave ghost is already
@@ -634,10 +642,19 @@ fn shimmer_dir(quarter_turns: f32) -> vec2<f32> {
 // term is never ABOVE 1 either, which is what keeps `paint_reach` exact: a
 // shimmering layer can only cover less than it did, so no bound out there
 // moves.
-fn shimmer_terms(mode: u32, field: vec2<f32>, dir: vec2<f32>) -> vec2<f32> {
+//
+// The layer's direction arrives as `quarter_turns` off the base diagonal
+// rather than as the vector itself, so the cos/sin that build it sit AFTER
+// the early return. Passed as a vector they would be evaluated at the call
+// site in every mode, and Off would be free only if the backend inlined this
+// and folded the constant — which is the sort of thing that holds on one
+// driver and not the next.
+fn shimmer_terms(mode: u32, field: vec2<f32>, quarter_turns: f32) -> vec2<f32> {
     if mode != 3u {
         return vec2<f32>(0.0, 1.0);
     }
+    let a = SHIMMER_ANGLE + SHIMMER_QUARTER * quarter_turns;
+    let dir = vec2<f32>(cos(a), sin(a));
     // Distance along the bands' normal, with the clock sliding it: a
     // fragment sees the same band a moment later than one behind it.
     let travel = dot(field, dir) - u.misc.x * SHIMMER_SPEED;
@@ -1483,7 +1500,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // belongs to has nothing to say about it. After the loop for that
     // reason, and after the margin taper so a band cannot push the layer
     // back out past the fade the taper just closed.
-    let oct_shimmer = shimmer_terms(pulse_octaves_mode(), in.field, shimmer_dir(0.0));
+    let oct_shimmer = shimmer_terms(pulse_octaves_mode(), in.field, 0.0);
     glyph_rgb = mix(glyph_rgb, vec3<f32>(1.0), oct_shimmer.x);
     glyph = glyph * oct_shimmer.y;
 
@@ -1509,7 +1526,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // one each: they are concentric and never overlap, so a single sweep
     // crossing both reads as light passing over the node, where two would
     // read as two unrelated animations stacked at different radii.
-    let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, shimmer_dir(1.0));
+    let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, 1.0);
     let mark_rgb = mix(
         select(in.bass_color.rgb, in.melody_color.rgb, melody_cov > bass_cov),
         vec3<f32>(1.0),

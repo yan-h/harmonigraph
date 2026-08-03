@@ -954,11 +954,30 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
 
 /// Mirrors `SHIMMER_ANGLE` in lattice.wgsl, as a fraction of a turn from the
 /// camera's right axis toward its up axis — the direction the octave layer's
-/// bands travel, and a quarter turn short of the mark rings'. Keep in sync:
-/// the probe below moves a node along each and reads which layer the move
-/// leaves alone, so an angle that drifted from the shader's would stop
-/// pointing at the thing being measured.
+/// bands travel, and a quarter turn short of the mark rings'.
+///
+/// Held to the shader's own literal by `the_probe_moves_along_the_angle_the_shader_sweeps`
+/// rather than by a comment asking for it: the probe below moves a node along
+/// this and along the quarter turn from it and reads which layer each move
+/// leaves alone, so an angle that drifted from the shader's would leave the
+/// test comparing two arbitrary directions — passing on its margin while
+/// measuring nothing about squareness.
 const SHIMMER_ANGLE_TURNS: f32 = 0.125;
+
+/// The mirror above, enforced. `SHIMMER_ANGLE` invites retuning in its own
+/// comment ("so the two cannot drift out of square when the diagonal is
+/// retuned"), which is exactly the edit that would strand the probe.
+#[test]
+fn the_probe_moves_along_the_angle_the_shader_sweeps() {
+    let needle = format!("const SHIMMER_ANGLE: f32 = {SHIMMER_ANGLE_TURNS} * TAU;");
+    assert!(
+        SHADER_SRC.contains(&needle),
+        "lattice.wgsl must declare `{needle}` to match SHIMMER_ANGLE_TURNS; the probe in \
+         the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square moves nodes \
+         along that angle to find which layer each move leaves alone, and against a \
+         different one it measures neither layer's direction",
+    );
+}
 
 /// How far that probe moves the node, in world units: about half the
 /// shader's band period, so a move ALONG a layer's own travel lands it on a
@@ -1080,6 +1099,19 @@ fn the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square() {
         "steady {steady_across}/{steady_along}, octaves {octave_across}/{octave_along}, \
          marks {mark_across}/{mark_along} (across/along)"
     );
+    // The control has to STAY small, or the ratios below stop being about the
+    // shimmer. Should a bare node move ever get expensive or lopsided — a new
+    // depth-dependent layer, a cull edge inside the probe's reach, anything
+    // keyed on world position — both figures for a layer would inflate off
+    // the same base, the ratio would collapse, and the failure would be
+    // reported as a shimmer defect it is not. Measured 25/25.
+    let steady = steady_across.max(steady_along);
+    assert!(
+        steady * 10 < octave_across.min(mark_across),
+        "moving a node costs {steady} even with nothing shimmering, which is too near \
+         what the shimmering layers cost ({octave_across} and {mark_across}) for the \
+         difference between them to be the shimmer's"
+    );
     // A multiple, not a threshold: the claim is that crossing the bands
     // dominates sliding along them, and the along-figure is the same move
     // mirrored, so it carries this layer's own share of the control above.
@@ -1089,7 +1121,7 @@ fn the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square() {
          moving it along them ({octave_along}; the steady control costs \
          {steady_across}/{steady_along}) -- either the field is per-node \
          rather than one sheet over the lattice, or the octave layer's bands \
-         are not running the way shimmer_dir says"
+         are not running the way SHIMMER_ANGLE says"
     );
     assert!(
         mark_across > mark_along * 4,
@@ -1770,9 +1802,25 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         scene.core_solidity = 0.5;
         scene
     };
-    for (name, scene) in
-        [("lit", parity_scene()), ("idle", idle_scene()), ("fat core", fat_core())]
-    {
+    // Both layers shimmering, at one fixed instant. `paint_reach` is where
+    // the claim that shimmer keeps every bound exact has to be checked, and
+    // it can only be checked here: the shimmer scales two layers' coverage,
+    // and a term that ever came out ABOVE 1 would push a layer past the reach
+    // the early-out proved it could not cross — visible as a ring clipped
+    // flat in the fast pipeline alone, which no other fixture would catch
+    // because every other one leaves both pulses Off.
+    let shimmering = || {
+        let mut scene = parity_scene();
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
+        scene
+    };
+    for (name, scene) in [
+        ("lit", parity_scene()),
+        ("idle", idle_scene()),
+        ("fat core", fat_core()),
+        ("shimmering", shimmering()),
+    ] {
         let cb = LatticeCallback::from_scene(
             &scene,
             egui::vec2(SIZE[0] as f32, SIZE[1] as f32),

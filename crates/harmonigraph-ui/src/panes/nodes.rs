@@ -201,7 +201,7 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Pulse",
         &mut view.pulse_octaves,
         &[
-            (Pulse::Off, "Off", "", true),
+            (Pulse::Off, "Off", "", live(Pulse::Off)),
             (
                 Pulse::Together,
                 "Together",
@@ -268,32 +268,38 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // left fixed. Same row shape as the Octaves pulse above: Off is a
         // mode rather than a separate checkbox.
         // A plain choice_row, not the gated one the Octaves section needs:
-        // this whole section is already inside the marks' own gate, so every
-        // mode here has the slot it wants.
-        choice_row(
-            ui,
-            "Pulse",
-            &mut view.pulse_marks,
-            &[
-                (Pulse::Off, "Off", ""),
-                (Pulse::Together, "Together", "The whole ring breathes together"),
-                (
-                    Pulse::Alternating,
-                    "Alternating",
-                    "The arc over the marked octave and the rest of the ring \
-                     breathe a half-cycle apart, so one brightens as the \
-                     other dims",
-                ),
-                (
-                    Pulse::Shimmer,
-                    "Shimmer",
-                    "Soft white bands sweeping across both rings, at right \
-                     angles to the octave band's own Shimmer. One sheet of \
-                     them crosses the whole lattice, so the light travels \
-                     from node to node",
-                ),
-            ],
-        );
+        // every mode here animates the ring itself, so they stand or fall
+        // together — and what they stand on is a ring being drawn at all.
+        // Thickness 0 is the documented off position, where `mark_ring`
+        // returns no coverage and every mode is multiplied away, so the row
+        // grays with the layer it animates (the Core section gates its own
+        // Solidity and Style on a radius of 0 the same way).
+        ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
+            choice_row(
+                ui,
+                "Pulse",
+                &mut view.pulse_marks,
+                &[
+                    (Pulse::Off, "Off", ""),
+                    (Pulse::Together, "Together", "The whole ring breathes together"),
+                    (
+                        Pulse::Alternating,
+                        "Alternating",
+                        "The arc over the marked octave and the rest of the ring \
+                         breathe a half-cycle apart, so one brightens as the \
+                         other dims",
+                    ),
+                    (
+                        Pulse::Shimmer,
+                        "Shimmer",
+                        "Soft white bands sweeping across both rings, at right \
+                         angles to the octave band's own Shimmer. One sheet of \
+                         them crosses the whole lattice, so the light travels \
+                         from node to node",
+                    ),
+                ],
+            );
+        });
     });
 }
 

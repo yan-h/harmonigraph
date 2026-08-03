@@ -376,3 +376,54 @@ fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
     assert_ne!(node.color, node.melody_color, "the disc keeps the channel's own color");
 }
 
+
+/// The octave breathe needs a marked slot to have two parts. With neither
+/// mark on there is none, `extreme_slots` is 0 for every node, and every
+/// glyph takes the "rest" phase — which is not a no-op but a UNIFORM breathe
+/// of the whole octave layer between the shader's pulse floor and full, on
+/// the node's main feature.
+///
+/// The pane grays those modes out when both marks are off, so the state is
+/// one a person reaches by switching a mark back off with a mode already
+/// chosen — and then cannot switch the animation off, because the control
+/// causing it is disabled. Folding the mode here is what keeps the picture
+/// and the grayed control agreeing.
+///
+/// Shimmer sweeps the layer whole and never wanted a slot, so it has to
+/// survive the same state.
+#[test]
+fn a_breathing_octave_mode_folds_away_when_neither_end_is_marked() {
+    let breathe = |mark_melody: bool, mark_bass: bool, pulse: Pulse| {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(NoteEvent {
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        let view = ViewConfig {
+            mark_melody,
+            mark_bass,
+            pulse_octaves: pulse,
+            ..ViewConfig::default()
+        };
+        scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0).pulse_octaves
+    };
+
+    for mode in [Pulse::Together, Pulse::Alternating] {
+        assert_eq!(
+            breathe(false, false, mode),
+            Pulse::Off,
+            "{mode:?} has no slot to single out with neither end marked, and would \
+             breathe the whole octave layer from a control the pane has grayed out",
+        );
+        // ...and one mark is enough to give it its two parts back.
+        assert_eq!(breathe(true, false, mode), mode, "the melody mark alone is a slot");
+        assert_eq!(breathe(false, true, mode), mode, "so is the bass mark alone");
+    }
+    assert_eq!(
+        breathe(false, false, Pulse::Shimmer),
+        Pulse::Shimmer,
+        "Shimmer crosses the whole layer and never asked for a marked slot",
+    );
+}
