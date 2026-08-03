@@ -275,6 +275,12 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // returns no coverage and every mode is multiplied away, so the row
         // grays with the layer it animates (the Core section gates its own
         // Solidity and Style on a radius of 0 the same way).
+        //
+        // The enclosing block already grays this on both marks being off, so
+        // what the row is gated on either way is `mark_rings_draw` — the same
+        // predicate `derive_scene` folds the mode on, and the one the Shimmer
+        // section reads. Written as the thickness alone because that is the
+        // half this row adds; the pair is what has to agree.
         ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
             choice_row(
                 ui,
@@ -319,9 +325,17 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// Grayed until something is actually shimmering, on the same grounds every
 /// other gate in this pane uses: the bars do nothing at all in the other
 /// three modes.
+///
+/// "Actually" is the load-bearing word, and it is why the mark side is not
+/// just a mode check: `derive_scene` folds `pulse_marks` off with the ring
+/// layer itself ([`ViewConfig::mark_rings_draw`]), so a view carrying Shimmer
+/// with no end marked, or no ring thickness, is not shimmering — and these
+/// bars would otherwise be live with nothing to move. The octave side has no
+/// such gate: its layer always draws, and its Shimmer never folds.
 fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Shimmer");
-    let shimmering = view.pulse_octaves == Pulse::Shimmer || view.pulse_marks == Pulse::Shimmer;
+    let shimmering = view.pulse_octaves == Pulse::Shimmer
+        || (view.pulse_marks == Pulse::Shimmer && view.mark_rings_draw());
     ui.add_enabled_ui(shimmering, |ui| {
         ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed")
             .show(ui)
