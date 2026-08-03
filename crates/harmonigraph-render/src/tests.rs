@@ -151,12 +151,20 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
     // stats sink; the Video preview is a second view with neither.
     let docked = LatticeCallback::from_scene(
         &scene,
+        LatticeLabels::default(),
         size,
         format,
         0,
         Some(std::sync::Arc::new(LatticeStats::default())),
     );
-    let preview = LatticeCallback::from_scene(&scene, size, format, 1, None);
+    let preview = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels::default(),
+        size,
+        format,
+        1,
+        None,
+    );
 
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
@@ -394,6 +402,7 @@ fn offscreen_composite_matches_direct_draw() {
     let scene = parity_scene();
     let cb = LatticeCallback::from_scene(
         &scene,
+        LatticeLabels::default(),
         egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
         format,
         7,
@@ -558,7 +567,14 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
         pixels_per_point: 1.0,
     };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -696,7 +712,14 @@ fn a_real_held_chord_shows_its_melody_and_bass_marks() {
         pixels_per_point: 1.0,
     };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -897,7 +920,14 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -1043,7 +1073,14 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             scene.nodes[0].octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
             scene.nodes[0].octaves[slot as usize] = 1.0;
 
-            let cb = LatticeCallback::from_scene(&scene, vec_size, format, pane, None);
+            let cb = LatticeCallback::from_scene(
+                &scene,
+                LatticeLabels::default(),
+                vec_size,
+                format,
+                pane,
+                None,
+            );
             pane += 1;
             let mut encoder = device.create_command_encoder(&Default::default());
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
@@ -1119,7 +1156,14 @@ fn bloom_adds_light_over_the_plain_composite() {
         pixels_per_point: 1.0,
     };
     let mut total = |scene: &Scene, pane_id: u64| -> u64 {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -1209,6 +1253,7 @@ fn sheets_draw_back_to_front_along_the_sevens_axis() {
         }
         let call = LatticeCallback::from_scene(
             &scene,
+            LatticeLabels::default(),
             egui::vec2(800.0, 600.0),
             wgpu::TextureFormat::Bgra8Unorm,
             0,
@@ -1316,6 +1361,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     {
         let cb = LatticeCallback::from_scene(
             &scene,
+            LatticeLabels::default(),
             egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
             format,
             11,
@@ -1390,6 +1436,7 @@ fn a_silent_lattice_ships_no_nodes_and_still_draws_its_grid() {
     assert!(!scene.grid.is_empty(), "the fixture has to carry a grid");
     let cb = LatticeCallback::from_scene(
         &scene,
+        LatticeLabels::default(),
         egui::vec2(256.0, 256.0),
         wgpu::TextureFormat::Rgba8Unorm,
         31,
@@ -1453,6 +1500,7 @@ fn an_idle_marker_or_a_trail_ring_keeps_its_nodes() {
     let ships = |scene: &Scene| {
         let kept = LatticeCallback::from_scene(
             scene,
+            LatticeLabels::default(),
             egui::vec2(256.0, 256.0),
             wgpu::TextureFormat::Rgba8Unorm,
             32,
@@ -1562,6 +1610,7 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     let ships = |scene: &Scene| {
         LatticeCallback::from_scene(
             scene,
+            LatticeLabels::default(),
             egui::vec2(256.0, 256.0),
             wgpu::TextureFormat::Rgba8Unorm,
             33,
@@ -1643,6 +1692,7 @@ fn the_grid_seam_counts_the_nodes_that_ship() {
 
     let call = LatticeCallback::from_scene(
         &scene,
+        LatticeLabels::default(),
         egui::vec2(256.0, 256.0),
         wgpu::TextureFormat::Rgba8Unorm,
         34,
@@ -1690,6 +1740,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     // Idle -> Recorded -> Mapping -> Idle, so it takes a few frames.
     let lit = LatticeCallback::from_scene(
         &parity_scene(),
+        LatticeLabels::default(),
         size,
         format,
         40,
@@ -1715,7 +1766,14 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     empty.idle_marker = harmonigraph_scene::IdleMarker::None;
     empty.trail_mark = harmonigraph_scene::TrailMark::Off;
     empty.grid.clear();
-    let blank = LatticeCallback::from_scene(&empty, size, format, 40, Some(stats.clone()));
+    let blank = LatticeCallback::from_scene(
+        &empty,
+        LatticeLabels::default(),
+        size,
+        format,
+        40,
+        Some(stats.clone()),
+    );
     assert!(blank.instances.is_empty() && blank.edges.is_empty(), "nothing to draw");
     frame(&blank);
     assert_eq!(
@@ -1723,5 +1781,269 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
         GPU_TIME_PENDING,
         "a pane that encodes no pass must not keep reporting the time it took \
          when it last drew",
+    );
+}
+
+/// Where the pair of nodes below stands, in world units. Off-center in both
+/// axes on purpose: a label is drawn into the pane's own pass, and a mapping
+/// that flipped or transposed that pane would still land on the right pixel
+/// in the middle of the picture.
+const STACK_AT: glam::Vec2 = glam::Vec2::new(0.7, -0.5);
+
+/// The pane this scene is drawn into. Bigger than the text fixtures, because
+/// this one is about a node's DISC rather than about a glyph: at the real
+/// ratio of node radius to lattice spacing, 64 points across puts the whole
+/// disc inside a couple of pixels.
+const SCENE_SIZE: [u32; 2] = [256, 256];
+
+/// Two nodes on the same pixels, one sevens step apart, and nothing else.
+/// Face-on and orthographic, which is the arrangement that puts one node
+/// squarely behind another; a sheared or orbited view only spreads the same
+/// overlap out.
+///
+/// Node 0 is the NEARER of the two, so it is the one drawn last.
+fn one_node_behind_another() -> Scene {
+    let mut scene = parity_scene();
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.node_radius = 0.25;
+    let mut near = scene.nodes[0];
+    near.world_pos = STACK_AT.extend(0.0);
+    near.activation = 1.0;
+    near.scale = 1.0;
+    near.gutter = 0.0;
+    near.hovered = false;
+    near.on_home = true;
+    let mut far = near;
+    far.world_pos = STACK_AT.extend(-1.0);
+    far.on_home = false;
+    scene.nodes = vec![near, far];
+    // The grid would draw across the same pixels, and whether IT covers a
+    // label is a separate question that this fixture cannot answer twice.
+    scene.grid.clear();
+    scene
+}
+
+/// A node in front covers the label of the node behind it, the way it covers
+/// that node itself.
+///
+/// This is the whole feature in one picture, and it is end to end on purpose:
+/// the name is drawn inside the lattice's own scene pass, at its node's place
+/// in the back-to-front order, so what covers a name is whatever the pass
+/// draws after it. Nothing short of running that pass checks it.
+///
+/// Read as three renders of one scene — the picture with no label, with the
+/// FAR node's name, and with the same glyph on the NEAR node, which puts it
+/// after everything. The third is what makes the first assertion mean
+/// something: a mapping that put the glyph anywhere but on the node would
+/// leave the "covered" picture looking exactly right and this one looking
+/// blank.
+#[test]
+fn a_nearer_node_covers_the_label_of_the_node_behind() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let scene = one_node_behind_another();
+    let points = egui::vec2(SCENE_SIZE[0] as f32, SCENE_SIZE[1] as f32);
+    let projector = scene.projector(glam::Vec2::new(points.x, points.y));
+
+    // The pixel both discs are painted on, which is where the labels go and
+    // where they are read back.
+    let on = projector
+        .project(scene.nodes[0].world_pos)
+        .expect("the stack is in front of the camera");
+    let (x, y) = (on.x.round(), on.y.round());
+    assert!(
+        (x - points.x / 2.0).abs() > 8.0 && (y - points.y / 2.0).abs() > 8.0,
+        "the fixture's nodes must sit off-center, at ({x}, {y}) of {points:?}",
+    );
+
+    // One glyph, `off` points to the right of that pixel, named by `node`. No
+    // rim: the fill alone answers the question, and a rim would spread the
+    // reading over pixels nothing is being asked about.
+    let bare = [TextRing::default(); 2];
+    let picture = |off: f32, label: Option<u32>| -> Vec<u8> {
+        let (glyphs, labels) = match label {
+            Some(node) => (
+                vec![GlyphInstance {
+                    rect: [x + off - 4.0, y - 4.0, 8.0, 8.0],
+                    ..crate::text::tests::glyph()
+                }],
+                vec![Label { node, glyphs: 1 }],
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        let cb = LatticeCallback::from_scene(
+            &scene,
+            LatticeLabels {
+                glyphs,
+                labels,
+                rings: bare,
+                atlas: Some(crate::text::tests::atlas()),
+            },
+            points,
+            format,
+            9,
+            None,
+        );
+        let mut resources = CallbackResources::default();
+        let screen = ScreenDescriptor { size_in_pixels: SCENE_SIZE, pixels_per_point: 1.0 };
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+        queue.submit(bufs.into_iter().chain([encoder.finish()]));
+
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+        let texture = render_to_texture(
+            &device,
+            &queue,
+            SCENE_SIZE,
+            format,
+            wgpu::Color::TRANSPARENT,
+            |pass| {
+                cb.paint(
+                    egui::PaintCallbackInfo {
+                        viewport: rect,
+                        clip_rect: rect,
+                        pixels_per_point: 1.0,
+                        screen_size_px: SCENE_SIZE,
+                    },
+                    pass,
+                    &resources,
+                );
+            },
+        );
+        readback(&device, &queue, &texture, SCENE_SIZE)
+    };
+    // What the probe pixel reads. The glyph is white and everything under it
+    // is not, so one channel is the whole of what "how much name is here"
+    // means.
+    const NEAR: u32 = 0;
+    const FAR: u32 = 1;
+    let at = |off: f32, label: Option<u32>| -> u8 {
+        let frame = picture(off, label);
+        let i = (((y as u32) * SCENE_SIZE[0] + (x + off) as u32) * 4) as usize;
+        frame[i + 1]
+    };
+
+    // On the disc, which is opaque: the far node's name is gone, exactly
+    // gone — this is compositing, not a mask, so "under an opaque disc" is
+    // the picture with no label in it at all.
+    let (bare_disc, under, over) = (at(0.0, None), at(0.0, Some(FAR)), at(0.0, Some(NEAR)));
+    assert_eq!(under, bare_disc, "a name under an opaque disc must leave no trace of itself");
+    assert!(
+        over.abs_diff(bare_disc) > 32,
+        "the same glyph drawn after the disc must be plainly visible on it, \
+         got {over} against a bare disc's {bare_disc} — if these agree the \
+         glyph is not landing on the node and the assertion above is vacuous",
+    );
+
+    // Across the disc's own fading edge, where the difference between
+    // covering and cutting shows: the name dims by exactly what the disc
+    // took, rather than being taken out whole or left alone.
+    let (bare_edge, under_edge, over_edge) =
+        (at(6.0, None), at(6.0, Some(FAR)), at(6.0, Some(NEAR)));
+    assert!(
+        under_edge > bare_edge && under_edge < over_edge,
+        "over the disc's fading edge a name must dim rather than vanish: \
+         {under_edge} against {bare_edge} bare and {over_edge} drawn on top",
+    );
+
+    // And out in the glow — inside the node's quad, a percent or two of
+    // opacity, nothing a reader can see — a name is left alone.
+    let (bare_halo, under_halo, over_halo) =
+        (at(16.0, None), at(16.0, Some(FAR)), at(16.0, Some(NEAR)));
+    assert!(
+        over_halo.abs_diff(bare_halo) > 32,
+        "the halo probe must be somewhere a glyph shows at all: {over_halo} \
+         against {bare_halo}",
+    );
+    assert!(
+        under_halo.abs_diff(over_halo) <= 3,
+        "out in the invisible glow a name must be left alone: {under_halo} \
+         against {over_halo} drawn on top",
+    );
+}
+
+/// A label is drawn immediately after the node it names, counted over the
+/// instances that actually SHIP.
+///
+/// Two things that are easy to get right by accident and wrong in the
+/// picture. The cull drops a node that can paint nothing, and such a node can
+/// still carry a name — a hovered idle one draws no disc and is named all the
+/// same — so a label's place is not its node's index in the sorted list. And
+/// the labels arrive in the scene's order, which is not the order they are
+/// drawn in.
+#[test]
+fn a_label_takes_its_own_nodes_place_in_the_order() {
+    let mut scene = parity_scene();
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.grid.clear();
+    scene.idle_marker = harmonigraph_scene::IdleMarker::None;
+    scene.trail_mark = harmonigraph_scene::TrailMark::Off;
+    let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
+        world_pos: glam::Vec3::new(0.0, 0.0, z),
+        activation,
+        octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
+        melody_slots: 0,
+        bass_slots: 0,
+        melody_level: 0.0,
+        bass_level: 0.0,
+        trail: 0.0,
+        on_home: z == 0.0,
+        ..scene.nodes[0]
+    };
+    // In the scene's own order: the near sheet first, then two silent nodes
+    // behind everything, then the home sheet. Drawn back to front that is
+    // hush, hush, home, near — so nothing here is in the order it is drawn,
+    // and the two silent ones ship no instance at all.
+    scene.nodes = vec![node(1.0, 1.0), node(-1.0, 0.0), node(-1.0, 0.0), node(0.0, 1.0)];
+    let (near, hush_a, hush_b, home) = (0u32, 1u32, 2u32, 3u32);
+
+    // A glyph per label, told apart by where it claims to be.
+    let glyph = |at: f32| GlyphInstance { rect: [at, 0.0, 1.0, 1.0], ..crate::text::tests::glyph() };
+    let call = LatticeCallback::from_scene(
+        &scene,
+        LatticeLabels {
+            glyphs: vec![glyph(0.0), glyph(1.0), glyph(2.0), glyph(3.0)],
+            labels: [near, hush_a, hush_b, home]
+                .map(|node| Label { node, glyphs: 1 })
+                .to_vec(),
+            rings: [TextRing::default(); 2],
+            atlas: Some(crate::text::tests::atlas()),
+        },
+        egui::vec2(256.0, 256.0),
+        wgpu::TextureFormat::Rgba8Unorm,
+        11,
+        None,
+    );
+
+    assert_eq!(call.instances.len(), 2, "only the two sounding nodes ship an instance");
+    assert_eq!(
+        call.seams,
+        vec![
+            // Both silent nodes: nothing has been drawn yet, and two labels
+            // at one seam are one uninterrupted draw.
+            GlyphSeam { at: 0, start: 0, count: 2 },
+            // The home sheet's own name, after its disc.
+            GlyphSeam { at: 1, start: 2, count: 1 },
+            // And the near sheet's, after everything.
+            GlyphSeam { at: 2, start: 3, count: 1 },
+        ],
+        "a label goes after its own node, over the instances that ship",
+    );
+    assert_eq!(
+        call.glyphs.iter().map(|g| g.rect[0]).collect::<Vec<_>>(),
+        vec![1.0, 2.0, 3.0, 0.0],
+        "the glyphs are regrouped into the order they are drawn in",
     );
 }

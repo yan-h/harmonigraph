@@ -18,6 +18,13 @@
 //! anything. `offscreen_composite_matches_direct_draw` in the tests pins
 //! down that this path matches drawing straight into the egui pass.
 //!
+//! The node NAMES are drawn in that same pass, each at its own node's place
+//! in the order (see [`LatticeLabels`]) — so a nearer node covers the name of
+//! the node behind it by ordinary alpha blending, exactly as it covers the
+//! sheet behind it. They arrive as glyphs, from the same collector the rest
+//! of the UI's text goes through; what differs is only which pass they land
+//! in, and that they inherit its render scale and its bloom.
+//!
 //! With the `hot-reload` feature (enabled by the standalone harness), the
 //! .wgsl file is watched on disk and the pipeline rebuilds on save —
 //! validated first, so a broken edit logs an error and keeps the old
@@ -41,6 +48,51 @@ pub use roll::{roll_paint_callback, RollAxes, RollInstance};
 /// stamp.
 mod text;
 pub use text::{text_paint_callback, FontAtlas, GlyphInstance, TextRing};
+
+/// The lattice's own labels: the glyphs of every node name it wants drawn,
+/// and which node each of them belongs to.
+///
+/// These do NOT go through [`text_paint_callback`]. A node name is drawn
+/// inside the lattice's own scene pass, at its node's place in the back-to-
+/// front order, so a nearer node covers a name behind it by ordinary alpha
+/// blending — the same way it covers the sheet behind it. That is the whole
+/// reason this arrives here rather than as a pass of its own over the
+/// finished picture, where no amount of masking can reconstruct what is
+/// BEHIND a name at a pixel.
+///
+/// Two things follow from the pass it lands in, and both are visible:
+/// the offscreen target is sized at `Scene::render_scale`, so text drawn into
+/// it is rasterized at that size and resampled by the composite; and the
+/// bright pass samples that target, so a label blooms with everything else.
+#[derive(Default)]
+pub struct LatticeLabels {
+    /// Every glyph of every label, one label's glyphs contiguous, in the
+    /// order [`labels`](Self::labels) names them.
+    ///
+    /// Rects are in the PANE's own points — the callback rect's top-left
+    /// corner is the origin — because the pass they are drawn in is the
+    /// pane's, not the screen's.
+    pub glyphs: Vec<GlyphInstance>,
+    /// One entry per label, naming its node and how many of `glyphs` are
+    /// its own.
+    pub labels: Vec<Label>,
+    /// The halo's two rings, as [`text_paint_callback`] takes them.
+    pub rings: [TextRing; 2],
+    /// egui's font atlas, on the frames the renderer's mirror of it is
+    /// stale. `None` on the rest, which is nearly all of them.
+    pub atlas: Option<FontAtlas>,
+}
+
+/// One label: which node it names, and how many glyphs it is.
+///
+/// The node is an index into `Scene::nodes` rather than a position, because
+/// what a label needs from its node is its place in the DRAW ORDER — which
+/// the callback works out for itself, sorting and culling as it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Label {
+    pub node: u32,
+    pub glyphs: u32,
+}
 
 // Shells name texture formats through this re-export so every crate agrees
 // on the wgpu version.
@@ -331,8 +383,10 @@ pub struct LatticeStats {
     /// measure.
     pub poll_ms: std::sync::atomic::AtomicU32,
     /// Of that, staging this frame's data: sizing the offscreen targets,
-    /// recreating them when the size moved, and the three `queue.write_buffer`
-    /// calls for instances, edges and uniforms.
+    /// recreating them when the size moved, the `queue.write_buffer` calls for
+    /// instances, edges, labels and both sets of uniforms, and — on the rare
+    /// frame that brings one — the copy of egui's font atlas the labels are
+    /// read out of.
     pub write_ms: std::sync::atomic::AtomicU32,
     /// Of that, encoding the scene pass and the bloom chain — five
     /// `begin_render_pass` calls and the draws inside them. No GPU work
@@ -351,13 +405,14 @@ pub struct LatticeStats {
 pub fn lattice_paint_callback(
     rect: egui::Rect,
     scene: &Scene,
+    labels: LatticeLabels,
     target_format: wgpu::TextureFormat,
     pane_id: u64,
     stats: Option<std::sync::Arc<LatticeStats>>,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        LatticeCallback::from_scene(scene, rect.size(), target_format, pane_id, stats),
+        LatticeCallback::from_scene(scene, labels, rect.size(), target_format, pane_id, stats),
     )
 }
 
@@ -366,6 +421,13 @@ struct LatticeCallback {
     instances: Vec<GpuInstance>,
     /// Index into `instances` where the grid is drawn (see `from_scene`).
     grid_at: u32,
+    /// Every label's glyphs, in the order the pass draws them, and where each
+    /// label falls in the node run (see [`GlyphSeam`]).
+    glyphs: Vec<GlyphInstance>,
+    seams: Vec<GlyphSeam>,
+    /// The halo's rings, and egui's atlas on the frames it has moved.
+    rings: [TextRing; 2],
+    atlas: Option<FontAtlas>,
     edges: Vec<GpuEdge>,
     uniforms: Uniforms,
     target_format: wgpu::TextureFormat,
@@ -384,9 +446,73 @@ struct LatticeCallback {
 /// texture it renders into. See [`LatticeCallback::run_bloom_chain`].
 type BloomStep<'a> = (&'a wgpu::RenderPipeline, &'a wgpu::BindGroup, &'a wgpu::TextureView);
 
+/// One label's glyphs, and where they are drawn: `at` is how many node
+/// instances go in front of them.
+///
+/// A label sits immediately after the node it names, so the nodes drawn
+/// after it — everything nearer — cover it exactly as they cover each other.
+/// Labels sharing a seam are one entry, since they are one uninterrupted
+/// draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GlyphSeam {
+    at: u32,
+    start: u32,
+    count: u32,
+}
+
+/// Put every label at its node's place in the draw order: the glyphs
+/// regrouped into the order the pass wants them, and the seams that say
+/// where each group goes.
+///
+/// `seam_of` is per node of the scene, as `from_scene` counted it. A label
+/// naming a node that is not in the scene is dropped rather than guessed at,
+/// and its glyphs go with it — the caller and the scene disagreeing about
+/// how many nodes there are is a bug in the caller, and drawing the name
+/// somewhere arbitrary would hide it.
+fn place_labels(
+    glyphs: Vec<GlyphInstance>,
+    labels: &[Label],
+    seam_of: &[u32],
+) -> (Vec<GlyphInstance>, Vec<GlyphSeam>) {
+    // Where each label's glyphs sit in what the caller handed over, paired
+    // with the seam they are going to. The cursor advances over labels the
+    // scene has no node for as much as over the rest: the run lengths are
+    // what say which glyphs are whose.
+    let mut cursor = 0usize;
+    let mut runs: Vec<(u32, usize, usize)> = Vec::with_capacity(labels.len());
+    for label in labels {
+        let start = cursor;
+        let count = label.glyphs as usize;
+        cursor = (cursor + count).min(glyphs.len());
+        if let Some(&at) = seam_of.get(label.node as usize) {
+            runs.push((at, start, cursor - start));
+        }
+    }
+    // Stable, so two labels at one seam keep the order they were drawn in —
+    // which is the order the nodes are in, and the only thing that decides
+    // between two names sharing a pixel.
+    runs.sort_by_key(|&(at, _, _)| at);
+
+    let mut placed = Vec::with_capacity(glyphs.len());
+    let mut seams: Vec<GlyphSeam> = Vec::new();
+    for (at, start, count) in runs {
+        if count == 0 {
+            continue;
+        }
+        let first = placed.len() as u32;
+        placed.extend_from_slice(&glyphs[start..start + count]);
+        match seams.last_mut() {
+            Some(last) if last.at == at => last.count += count as u32,
+            _ => seams.push(GlyphSeam { at, start: first, count: count as u32 }),
+        }
+    }
+    (placed, seams)
+}
+
 impl LatticeCallback {
     fn from_scene(
         scene: &Scene,
+        labels: LatticeLabels,
         size_points: egui::Vec2,
         target_format: wgpu::TextureFormat,
         pane_id: u64,
@@ -431,10 +557,13 @@ impl LatticeCallback {
         let eye = camera.eye();
         let forward = (camera.target - eye).normalize_or_zero();
         let sheet_depth = |n: &harmonigraph_scene::NodeInstance| n.world_pos.z * forward.z;
-        let mut order: Vec<(f32, f32, &harmonigraph_scene::NodeInstance)> = scene
+        // Carrying the node's INDEX rather than the node itself, because a
+        // label names one and has to be put back beside it after the sort.
+        let mut order: Vec<(f32, f32, usize)> = scene
             .nodes
             .iter()
-            .map(|n| (sheet_depth(n), (n.world_pos - eye).dot(forward), n))
+            .enumerate()
+            .map(|(i, n)| (sheet_depth(n), (n.world_pos - eye).dot(forward), i))
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
@@ -515,17 +644,33 @@ impl LatticeCallback {
                 && (g.home >= 0.5 || trail > 0.0);
             marked || (scene.trail_mark == harmonigraph_scene::TrailMark::Ring && trail > 0.0)
         };
+        // Where a node's own label goes, per node: after everything drawn up
+        // to and including that node, counted over the KEPT instances. Not its
+        // index in the sorted list — the cull above drops a node that can paint
+        // nothing, and such a node can still carry a label (a hovered idle one
+        // draws no disc and is named all the same), so the two part company at
+        // the first culled node.
+        let mut seam_of = vec![0u32; scene.nodes.len()];
         let drawn = |out: &mut Vec<GpuInstance>,
-                     ns: &[(f32, f32, &harmonigraph_scene::NodeInstance)]| {
-            out.extend(ns.iter().map(|(_, _, n)| to_gpu(n, n.gutter)).filter(&paints));
+                     seam_of: &mut [u32],
+                     ns: &[(f32, f32, usize)]| {
+            for &(_, _, i) in ns {
+                let node = &scene.nodes[i];
+                let instance = to_gpu(node, node.gutter);
+                if paints(&instance) {
+                    out.push(instance);
+                }
+                seam_of[i] = out.len() as u32;
+            }
         };
         let mut instances = Vec::with_capacity(order.len());
-        drawn(&mut instances, &order[..split]);
+        drawn(&mut instances, &mut seam_of, &order[..split]);
         // Where the grid is drawn inside that run: after the sheets BEHIND the
         // home one, counted over the kept instances rather than over `split`,
         // which indexes the list before the cull.
         let grid_at = instances.len() as u32;
-        drawn(&mut instances, &order[split..]);
+        drawn(&mut instances, &mut seam_of, &order[split..]);
+        let (glyphs, seams) = place_labels(labels.glyphs, &labels.labels, &seam_of);
 
         // The grid draws under the nodes.
         let edges = scene
@@ -542,6 +687,10 @@ impl LatticeCallback {
         LatticeCallback {
             instances,
             grid_at,
+            glyphs,
+            seams,
+            rings: labels.rings,
+            atlas: labels.atlas,
             edges,
             uniforms: Uniforms {
                 view_proj: view_proj.to_cols_array(),
@@ -687,6 +836,17 @@ struct LatticeResources {
     /// One sampled texture + the shared sampler (bloom chain passes).
     filter_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// The node labels: the same glyph shader the rest of the UI's text
+    /// draws through (`crate::text`), built for THIS pass — its format and
+    /// its depth attachment — so a name takes its place in the scene's own
+    /// back-to-front order instead of being laid over the finished picture.
+    glyph_rim_pipeline: wgpu::RenderPipeline,
+    glyph_fill_pipeline: wgpu::RenderPipeline,
+    glyph_layout: wgpu::BindGroupLayout,
+    glyph_sampler: wgpu::Sampler,
+    /// This renderer's copy of egui's font atlas. Its own, not the text
+    /// callback's: a mirror answers for one texture, and these are two.
+    atlas: text::MirroredAtlas,
     target_format: wgpu::TextureFormat,
     panes: HashMap<u64, PaneBuffers>,
     /// GPU-side timing of the lattice passes. `None` when the device didn't
@@ -903,6 +1063,19 @@ struct PaneBuffers {
     edge_buffer: wgpu::Buffer,
     edge_capacity: usize,
     edge_count: u32,
+    /// This pane's labels: the glyphs, and where each label falls in the node
+    /// run above (see [`GlyphSeam`]).
+    glyph_buffer: wgpu::Buffer,
+    glyph_capacity: usize,
+    glyph_count: u32,
+    seams: Vec<GlyphSeam>,
+    /// What the glyph shader is told about this pane: its size in points,
+    /// the atlas's, and the rim's rings.
+    glyph_uniform_buffer: wgpu::Buffer,
+    /// Names the mirrored atlas, so it is rebuilt whenever a fresh one has
+    /// been uploaded — and `glyph_atlas_key` is which upload it names.
+    glyph_bind_group: Option<wgpu::BindGroup>,
+    glyph_atlas_key: u64,
     offscreen: Option<Offscreen>,
 }
 
@@ -1275,6 +1448,21 @@ impl LatticeResources {
             ..Default::default()
         });
 
+        // The label pipelines draw into the scene pass, so they are built
+        // against its depth attachment as well as its format.
+        let glyph_layout = text::glyph_bind_group_layout(device);
+        let glyph_pipeline = |fragment| {
+            text::create_text_pipeline(
+                device,
+                target_format,
+                &glyph_layout,
+                fragment,
+                Some(DEPTH_FORMAT),
+            )
+        };
+        let glyph_rim_pipeline = glyph_pipeline("fs_rim");
+        let glyph_fill_pipeline = glyph_pipeline("fs_fill");
+
         LatticeResources {
             pipeline,
             edge_pipeline,
@@ -1287,6 +1475,11 @@ impl LatticeResources {
             composite_layout,
             filter_layout,
             sampler,
+            glyph_rim_pipeline,
+            glyph_fill_pipeline,
+            glyph_layout,
+            glyph_sampler: text::glyph_sampler(device),
+            atlas: text::MirroredAtlas::default(),
             target_format,
             panes: HashMap::new(),
             timer: GpuTimer::new(device, queue),
@@ -1308,6 +1501,12 @@ impl LatticeResources {
         screen_size: [u32; 2],
     ) -> &mut PaneBuffers {
         let layout = &self.bind_group_layout;
+        // Taken before the pane is borrowed: the view is a fresh handle onto
+        // whatever the mirror holds right now, which is this frame's atlas —
+        // `prepare` uploads before it gets here.
+        let (glyph_layout, glyph_sampler) = (&self.glyph_layout, &self.glyph_sampler);
+        let atlas_view = self.atlas.view();
+        let atlas_key = self.atlas.key();
         let shared = OffscreenShared {
             format: self.target_format,
             composite_layout: &self.composite_layout,
@@ -1347,9 +1546,43 @@ impl LatticeResources {
                 edge_capacity: INITIAL_EDGE_CAPACITY,
                 edge_count: 0,
                 grid_at: 0,
+                glyph_buffer: create_vertex_buffer::<GlyphInstance>(
+                    device,
+                    "lattice_glyphs",
+                    INITIAL_GLYPH_CAPACITY,
+                ),
+                glyph_capacity: INITIAL_GLYPH_CAPACITY,
+                glyph_count: 0,
+                seams: Vec::new(),
+                glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("lattice_glyph_uniforms"),
+                    size: std::mem::size_of::<text::TextUniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                glyph_bind_group: None,
+                glyph_atlas_key: u64::MAX,
                 offscreen: None,
             }
         });
+        // A bind group names one texture, and an atlas that GREW is a new
+        // one — so a pane that prepared against the old texture has to be
+        // handed the new one before it draws again. Rebuilt on the key rather
+        // than on the size, which is the cheap way to be right about the
+        // same-size re-upload too: nothing is stale there, and one bind group
+        // per publication is nothing.
+        if let Some(view) = &atlas_view {
+            if pane.glyph_bind_group.is_none() || pane.glyph_atlas_key != atlas_key {
+                pane.glyph_bind_group = Some(text::bind_group(
+                    device,
+                    glyph_layout,
+                    glyph_sampler,
+                    view,
+                    &pane.glyph_uniform_buffer,
+                ));
+                pane.glyph_atlas_key = atlas_key;
+            }
+        }
         if let Some(size) = offscreen_size {
             if pane
                 .offscreen
@@ -1368,6 +1601,9 @@ impl LatticeResources {
 /// both grow by `next_power_of_two` when a frame overflows them.
 const INITIAL_INSTANCE_CAPACITY: usize = 256;
 const INITIAL_EDGE_CAPACITY: usize = 64;
+/// And for its labels. Only sounding, hovered and remembered nodes are named,
+/// so a lattice's glyph count is a fraction of a text pane's.
+const INITIAL_GLYPH_CAPACITY: usize = 512;
 
 /// A `capacity`-element vertex buffer (VERTEX | COPY_DST) sized for `T`.
 /// Used for both the instance and edge buffers, which differ only in label
@@ -1450,10 +1686,21 @@ impl CallbackTrait for LatticeCallback {
             }
         }
 
+        // The labels' atlas, before anything is encoded: the glyphs are drawn
+        // inside the scene pass below, so the texture they read has to be the
+        // current one by the time that pass is recorded.
+        let write_start = std::time::Instant::now();
+        if let Some(atlas) = self.atlas.as_ref().filter(|a| !resources.atlas.holds(a)) {
+            resources.atlas.upload(device, queue, atlas);
+        }
+        // Nothing has ever been uploaded: the first frames of a session arrive
+        // before any pane has drawn a glyph, and the labels wait for the frame
+        // that brings one.
+        let atlas_size = (!resources.atlas.is_empty()).then(|| resources.atlas.size());
+
         // Offscreen pixel size: the callback rect at native resolution,
         // scaled by the render-scale view setting (clamped in from_scene).
         // The unscaled screen size drives the bloom chain.
-        let write_start = std::time::Instant::now();
         let max_dim = device.limits().max_texture_dimension_2d;
         let px_size = |scale: f32| {
             let px = screen_descriptor.pixels_per_point * scale;
@@ -1469,8 +1716,11 @@ impl CallbackTrait for LatticeCallback {
         // `from_scene` drops nodes that can paint nothing, so a still lattice
         // with the idle marker off is exactly a frame of grid and no
         // instances, and keying this on the instances alone would take the
-        // grid down with them.
-        let anything = !self.instances.is_empty() || !self.edges.is_empty();
+        // grid down with them. So do the LABELS, for the same reason from the
+        // other end: a hovered idle node paints nothing and is named, so a
+        // lattice can be a frame of one label and nothing else.
+        let anything =
+            !self.instances.is_empty() || !self.edges.is_empty() || !self.glyphs.is_empty();
         let offscreen_size = anything.then_some(size);
 
         let pane = resources.pane_buffers(device, self.pane_id, offscreen_size, screen_size);
@@ -1503,6 +1753,51 @@ impl CallbackTrait for LatticeCallback {
             queue.write_buffer(&pane.edge_buffer, 0, bytemuck::cast_slice(&self.edges));
         }
 
+        // The labels. With no atlas there is nothing to sample, so the pass
+        // draws none of them rather than sampling a texture that isn't there.
+        if let Some(atlas_size) = atlas_size {
+            // The glyphs are a VERTEX buffer, so growing it leaves the bind
+            // group — uniforms, atlas, sampler — naming everything it named
+            // before. Dropping it here would blank this pane's labels for the
+            // frame the buffer grows on, since nothing rebuilds one until the
+            // next `pane_buffers`.
+            if self.glyphs.len() > pane.glyph_capacity {
+                pane.glyph_capacity = self.glyphs.len().next_power_of_two();
+                pane.glyph_buffer = create_vertex_buffer::<GlyphInstance>(
+                    device,
+                    "lattice_glyphs",
+                    pane.glyph_capacity,
+                );
+            }
+            pane.glyph_count = self.glyphs.len() as u32;
+            pane.seams.clear();
+            pane.seams.extend_from_slice(&self.seams);
+            if !self.glyphs.is_empty() {
+                queue.write_buffer(&pane.glyph_buffer, 0, bytemuck::cast_slice(&self.glyphs));
+                // The glyphs' own points, not the screen's: the rects arrive
+                // in this pane's space because the pass they are drawn in is
+                // this pane's. `pixels_per_point` stays the DEVICE's — it is
+                // what the atlas was rasterized at, and so what turns the
+                // rim's radius in points into a texel offset, whatever the
+                // render scale does to the target's pixels.
+                queue.write_buffer(
+                    &pane.glyph_uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&text::TextUniforms {
+                        screen_points: self.size_points,
+                        atlas_size: [atlas_size[0] as f32, atlas_size[1] as f32],
+                        pixels_per_point: screen_descriptor.pixels_per_point.max(f32::EPSILON),
+                        _pad: [0.0; 3],
+                        ring0: text::TextUniforms::ring(self.rings[0]),
+                        ring1: text::TextUniforms::ring(self.rings[1]),
+                    }),
+                );
+            }
+        } else {
+            pane.glyph_count = 0;
+            pane.seams.clear();
+        }
+
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&self.uniforms));
         let write_ms = write_start.elapsed().as_secs_f32() * 1000.0;
 
@@ -1514,7 +1809,7 @@ impl CallbackTrait for LatticeCallback {
             .panes
             .get(&self.pane_id)
             .expect("created by pane_buffers above");
-        let draws = pane.instance_count > 0 || pane.edge_count > 0;
+        let draws = pane.instance_count > 0 || pane.edge_count > 0 || pane.glyph_count > 0;
         if let Some(offscreen) = pane.offscreen.as_ref().filter(|_| draws) {
             // Bracket the scene pass and the bloom chain together: what the
             // overlay wants is the cost of drawing THE LATTICE, which is both.
@@ -1572,14 +1867,62 @@ impl CallbackTrait for LatticeCallback {
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.draw(0..4, range);
             };
-            nodes(&mut pass, 0..pane.grid_at);
-            if pane.edge_count > 0 {
+            let grid = |pass: &mut wgpu::RenderPass<'_>| {
+                if pane.edge_count == 0 {
+                    return;
+                }
                 pass.set_pipeline(&resources.edge_pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.edge_buffer.slice(..));
                 pass.draw(0..4, 0..pane.edge_count);
+            };
+            // One label, at its own place in the order: every rim, then every
+            // fill. Stamping had that order for free and the shader keeps it,
+            // because two neighbouring letters otherwise darken each other's
+            // ink where their rims overlap. Per LABEL rather than over the
+            // whole frame, which is what interleaving costs and all it costs:
+            // two names on different nodes overlapping is two labels at
+            // different depths, and the nearer one is meant to sit on the
+            // other.
+            let label = |pass: &mut wgpu::RenderPass<'_>, seam: &GlyphSeam| {
+                let Some(bind_group) = pane.glyph_bind_group.as_ref() else {
+                    return;
+                };
+                let range = seam.start..seam.start + seam.count;
+                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.glyph_buffer.slice(..));
+                pass.set_pipeline(&resources.glyph_rim_pipeline);
+                pass.draw(0..4, range.clone());
+                pass.set_pipeline(&resources.glyph_fill_pipeline);
+                pass.draw(0..4, range);
+            };
+
+            // The nodes, in order, with each label spliced in right after the
+            // node it names — so what covers a name is exactly what covers
+            // its node. The seams are sorted, so this walks forward once.
+            //
+            // A label at the grid's own seam draws BEFORE the grid, since its
+            // node did: the grid covers a name if and only if it is drawn
+            // after it, which is the same rule everything else in this pass
+            // follows.
+            let mut cursor = 0u32;
+            let mut grid_drawn = false;
+            for seam in &pane.seams {
+                if !grid_drawn && seam.at > pane.grid_at {
+                    nodes(&mut pass, cursor..pane.grid_at);
+                    grid(&mut pass);
+                    (cursor, grid_drawn) = (pane.grid_at, true);
+                }
+                nodes(&mut pass, cursor..seam.at);
+                cursor = seam.at;
+                label(&mut pass, seam);
             }
-            nodes(&mut pass, pane.grid_at..pane.instance_count);
+            if !grid_drawn {
+                nodes(&mut pass, cursor..pane.grid_at);
+                grid(&mut pass);
+                cursor = pane.grid_at;
+            }
+            nodes(&mut pass, cursor..pane.instance_count);
             drop(pass);
 
             // Skipped entirely at strength 0: the composite multiplies the
@@ -1635,10 +1978,10 @@ impl CallbackTrait for LatticeCallback {
         let Some(pane) = resources.panes.get(&self.pane_id) else {
             return;
         };
-        // Nothing was rendered into the offscreen target. The edges count as
-        // much as the nodes here — see `prepare`, where the same test decides
-        // whether the target exists at all.
-        if pane.instance_count == 0 && pane.edge_count == 0 {
+        // Nothing was rendered into the offscreen target. The edges and the
+        // labels count as much as the nodes here — see `prepare`, where the
+        // same test decides whether the target exists at all.
+        if pane.instance_count == 0 && pane.edge_count == 0 && pane.glyph_count == 0 {
             return;
         }
         let Some(offscreen) = &pane.offscreen else {

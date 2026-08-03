@@ -341,29 +341,40 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &SharedState, now
         Layout::split(state.take.render_config.frame.lattice, state.take.render_config.frame.split)
             .background,
     );
-    // No GPU-time slot: the Video pane's preview is a second lattice on
-    // screen, and reporting its cost as THE lattice cost would be wrong.
-    ui.painter().add(lattice_paint_callback(
-        rect,
-        &scene,
-        state.target_format,
-        PREVIEW_PANE_ID,
-        None,
-    ));
+    // The lattice's place in the shape list, claimed now and filled in below:
+    // the node names are drawn inside its own pass, and are not known until
+    // they have been laid out. The drawn marks still go on top of it, which is
+    // what the order of these two is about — see the Lattice pane, which does
+    // the same for the same reason.
+    let lattice = ui.painter().add(egui::Shape::Noop);
     // Node names/cents, exactly as the Lattice pane and the render draw them:
     // sized off this rect, so a preview a third of the render's size draws
     // them a third of the size, which is what makes it a preview. Clipped
     // to the lattice rect: a node near the frame edge would otherwise paint its
-    // label out past the preview box, since draw_node_labels uses an unclipped
-    // painter (harmless in the docked pane, which owns its whole rect and is
-    // clipped by the dock; here the rect is only a sub-region of the pane).
+    // MARKS out past the preview box, since draw_node_labels puts those on an
+    // unclipped painter (harmless in the docked pane, which owns its whole rect
+    // and is clipped by the dock; here the rect is only a sub-region of the
+    // pane). The names themselves are clipped by the lattice's own target,
+    // which is the rect.
+    let mut batch = crate::text::TextBatch::default();
     if state.view.show_labels {
         let mut clipped = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         clipped.set_clip_rect(rect);
-        let mut batch = crate::text::TextBatch::default();
         super::lattice::draw_node_labels(&clipped, rect, &scene, &state.view, &mut batch);
-        batch.flush(clipped.painter(), rect, state, crate::text::LATTICE_PREVIEW_LABELS);
     }
+    // No GPU-time slot: the Video pane's preview is a second lattice on
+    // screen, and reporting its cost as THE lattice cost would be wrong.
+    ui.painter().set(
+        lattice,
+        lattice_paint_callback(
+            rect,
+            &scene,
+            batch.lattice_labels(ui.painter(), rect.min, state),
+            state.target_format,
+            PREVIEW_PANE_ID,
+            None,
+        ),
+    );
 }
 
 /// Recording and render-output settings. Lives here, in the Video tab, so that

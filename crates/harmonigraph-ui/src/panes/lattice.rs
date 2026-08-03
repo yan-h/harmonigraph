@@ -80,37 +80,43 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut SharedState, now: f64)
         state.hovered = None;
     }
 
-    ui.painter()
-        .add(lattice_paint_callback(
-            rect,
-            &scene,
-            state.target_format,
-            0,
-            Some(state.instruments.lattice_stats.clone()),
-        ));
+    // The lattice's own place in the shape list, claimed before the labels are
+    // laid out and filled in after. The names go INTO that callback — they are
+    // drawn inside its scene pass, so that a node in front covers the name of
+    // the node behind it — and they are not known until they have been drawn.
+    // What still has to land on top of the callback is the drawn comma and
+    // septimal marks, which `draw_node_labels` puts straight on this painter
+    // (see #207), so the order the shapes are added in is not free to change.
+    let lattice = ui.painter().add(egui::Shape::Noop);
 
-    // One batch for the node labels, flushed before the overlay: a batch draws
-    // in the order it collected, so anything meant to sit ON TOP of the names
-    // has to be a second flush rather than a later call into this one.
+    // One batch for the node labels: a batch draws in the order it collected,
+    // so anything meant to sit ON TOP of the names has to be a second batch
+    // rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
     if state.view.show_labels {
         draw_node_labels(ui, rect, &scene, &state.view, &mut batch);
     }
-    // The badge is laid out here, before the names are flushed, though it is
-    // DRAWN after them. Laying text out is what rasterizes glyphs into egui's
-    // font atlas, and an atlas that changes size between two flushes of one
-    // frame recreates the shared texture. Growing it before the first flush
-    // makes that first flush the one carrying the new size, so the second is a
-    // texture write and nothing more.
+    // The badge is laid out here, before the names are handed over, though it
+    // is DRAWN after them. Laying text out is what rasterizes glyphs into
+    // egui's font atlas, and an atlas that changes size between the two
+    // recreates the texture behind whichever renderer went first. Growing it
+    // before the names go is what keeps that to one recreate.
     //
-    // A saving now, not a correctness requirement:
-    // `harmonigraph_render::TextResources::mirror_atlas` carries every pane it
-    // has already prepared onto the recreated texture, so laying the badge out
-    // at its natural site below would cost a recreate-and-recarry rather than
-    // this pane's text. That it is only a saving is worth knowing before moving
-    // it — the ordering is cheap, and the alternative is not free either.
+    // A saving now, not a correctness requirement: each renderer holds a
+    // mirror of its own (see `crate::text::AtlasMirror`), and each is handed
+    // the atlas on the frame its own glyphs move.
     let badge = state.learn_active.then(|| learn_badge(ui, rect, now));
-    batch.flush(ui.painter(), rect, state, crate::text::LATTICE_LABELS);
+    ui.painter().set(
+        lattice,
+        lattice_paint_callback(
+            rect,
+            &scene,
+            batch.lattice_labels(ui.painter(), rect.min, state),
+            state.target_format,
+            0,
+            Some(state.instruments.lattice_stats.clone()),
+        ),
+    );
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, &mut badge);
     }
@@ -211,9 +217,21 @@ fn label_strength(node: &harmonigraph_scene::NodeInstance, trailed: bool, keeps_
 }
 
 /// Labels on hovered, sounding, and -- with the trail's "Keep note names"
-/// on -- already-visited nodes, drawn as egui text over the 3D view
-/// (projected with the same camera as the nodes): the note name centered on
-/// the node, optionally its pitch class in cents just below.
+/// on -- already-visited nodes, projected with the same camera as the nodes:
+/// the note name centered on the node, optionally its pitch class in cents
+/// just below.
+///
+/// Collected here and drawn by the lattice's own callback, inside its scene
+/// pass, each name at its node's place in the back-to-front order — so a node
+/// in front covers the name of the node behind it. The batch carries which
+/// node each glyph belongs to (`TextBatch::attached_to`); the caller hands the
+/// finished batch to `lattice_paint_callback`.
+///
+/// The DRAWN marks are the exception, and the one thing here that still goes
+/// straight onto the painter: the syntonic `+`/`-` and the septimal chevron
+/// are egui image quads, so they are drawn over the whole picture and float
+/// on a node that has covered the name beside them. See #207, which is about
+/// putting them in the same instance stream as the glyphs.
 ///
 /// Every factor a label's size answers to is gathered here rather than by the
 /// callers -- the pane's own size, the camera's zoom and the user's Size bar --
@@ -255,7 +273,7 @@ pub(crate) fn draw_node_labels(
     // so a fading name has nothing to settle onto and should ease all the way
     // out (the pre-existing behavior).
     let keeps_names = view.trail_labels && view.trail_mark != TrailMark::Off;
-    for node in &scene.nodes {
+    for (index, node) in scene.nodes.iter().enumerate() {
         let trailed = view.trail_labels && node.trail > 0.0;
         // `is_visible` re-checks what `Scene::pick` already enforces, and
         // `hovered` is picking's alone, so this is a second lock on one door.
@@ -281,83 +299,89 @@ pub(crate) fn draw_node_labels(
             continue;
         }
         let outline = theme::well().gamma_multiply(strength);
-        // Off-sheet nodes draw at their own size (ViewConfig::sevens_size),
-        // and their text goes with them — a full-size label on a half-size
-        // node reads as a label with a node attached. Floored so the
-        // smallest sheet is still legible rather than merely present.
-        // Per NODE, because an off-sheet node draws at its own size and so
-        // does its label: the rasterized size has to be snapped for the size
-        // it will really be set at, not for the pane's. `magnify` is the
-        // little that is left over, and it is what the ladder would otherwise
-        // have thrown away.
-        //
-        // Through `ladder` rather than a `snap_scale` and a division, so the
-        // ceiling on the raster is a ceiling on the DRAWN size too. Dividing
-        // the raw request by the clamped raster absorbs everything past
-        // `MAX_GLYPH_PX` into the magnification, which is a bitmap stretched
-        // rather than type set larger — and on a 2x display the ceiling is
-        // crossed at half the zoom, so the same camera reads sharp on an
-        // external monitor and soft on the laptop panel.
-        let want = want * node.scale.max(0.6);
-        let (scale, magnify) = crate::text::ladder(want, NAME_SIZE, ppp);
-        // What an off-sheet node says, and whether it says anything: its
-        // name shares a LETTER and an accidental with the node two fifths
-        // down, but not the whole string — the septimal mark is the column
-        // that tells the two apart, so the name is what distinguishes an
-        // off-sheet node rather than the one thing every sheet repeats.
-        // See SevensLabel.
-        let sevens = if node.on_home { SevensLabel::Name } else { view.sevens_label };
-        let name_bottom = match sevens {
-            SevensLabel::None => 0.0,
-            SevensLabel::Cents => draw_plain_name(
-                batch,
-                ui.painter(),
-                center,
-                &format!("{:.0}", node.cents),
-                theme::text().gamma_multiply(strength),
-                outline,
-                scale,
-                magnify,
-            ),
-            SevensLabel::Name => {
-                let name = display_note_name(node.lattice_pos, view.tempered());
-                draw_stacked_name(
+        // Everything below is this node's name, and is collected as such: the
+        // lattice draws a label at its own node's place in the back-to-front
+        // order, so a nearer node covers it the way it covers the node behind
+        // it. See `crate::text::TextBatch::attached_to`.
+        batch.attached_to(index as u32, |batch| {
+            // Off-sheet nodes draw at their own size (ViewConfig::sevens_size),
+            // and their text goes with them — a full-size label on a half-size
+            // node reads as a label with a node attached. Floored so the
+            // smallest sheet is still legible rather than merely present.
+            // Per NODE, because an off-sheet node draws at its own size and so
+            // does its label: the rasterized size has to be snapped for the size
+            // it will really be set at, not for the pane's. `magnify` is the
+            // little that is left over, and it is what the ladder would otherwise
+            // have thrown away.
+            //
+            // Through `ladder` rather than a `snap_scale` and a division, so the
+            // ceiling on the raster is a ceiling on the DRAWN size too. Dividing
+            // the raw request by the clamped raster absorbs everything past
+            // `MAX_GLYPH_PX` into the magnification, which is a bitmap stretched
+            // rather than type set larger — and on a 2x display the ceiling is
+            // crossed at half the zoom, so the same camera reads sharp on an
+            // external monitor and soft on the laptop panel.
+            let want = want * node.scale.max(0.6);
+            let (scale, magnify) = crate::text::ladder(want, NAME_SIZE, ppp);
+            // What an off-sheet node says, and whether it says anything: its
+            // name shares a LETTER and an accidental with the node two fifths
+            // down, but not the whole string — the septimal mark is the column
+            // that tells the two apart, so the name is what distinguishes an
+            // off-sheet node rather than the one thing every sheet repeats.
+            // See SevensLabel.
+            let sevens = if node.on_home { SevensLabel::Name } else { view.sevens_label };
+            let name_bottom = match sevens {
+                SevensLabel::None => 0.0,
+                SevensLabel::Cents => draw_plain_name(
                     batch,
                     ui.painter(),
                     center,
-                    name,
+                    &format!("{:.0}", node.cents),
                     theme::text().gamma_multiply(strength),
                     outline,
                     scale,
                     magnify,
-                )
+                ),
+                SevensLabel::Name => {
+                    let name = display_note_name(node.lattice_pos, view.tempered());
+                    draw_stacked_name(
+                        batch,
+                        ui.painter(),
+                        center,
+                        name,
+                        theme::text().gamma_multiply(strength),
+                        outline,
+                        scale,
+                        magnify,
+                    )
+                }
+            };
+            // The cents line is the home sheet's business: off the home sheet
+            // the scheme above has already chosen what number (if any) belongs
+            // under the name, and stacking a second one would bury the node.
+            if view.show_cents && (node.on_home || sevens == SevensLabel::Name) {
+                let text = format!("{:.2}", node.cents);
+                let font = egui::FontId::monospace(CENTS_SIZE * scale);
+                // Hang the readout off the name's INK, not its galley box: a
+                // monospace box carries enough leading above and below the glyphs
+                // that box-to-box spacing left the two floating far apart.
+                let top = painter_ink(ui.painter(), &text, &font).min.y;
+                // Magnified about the node with the name above it -- `name_bottom`
+                // and the gap are both measured at the rasterized size, so the
+                // readout hangs off the name by the same proportion at any zoom.
+                batch.magnified(center, magnify, |batch| {
+                    batch.text(
+                        ui.painter(),
+                        center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
+                        egui::Align2::CENTER_TOP,
+                        text,
+                        font,
+                        theme::text_dim().gamma_multiply(strength),
+                        outline,
+                    );
+                });
             }
-        };
-        // The cents line is the home sheet's business: off the home sheet
-        // the scheme above has already chosen what number (if any) belongs
-        // under the name, and stacking a second one would bury the node.
-        if view.show_cents && (node.on_home || sevens == SevensLabel::Name) {
-            let text = format!("{:.2}", node.cents);
-            let font = egui::FontId::monospace(CENTS_SIZE * scale);
-            // Hang the readout off the name's INK, not its galley box: a
-            // monospace box carries enough leading above and below the glyphs
-            // that box-to-box spacing left the two floating far apart.
-            let top = painter_ink(ui.painter(), &text, &font).min.y;
-            // Magnified about the node with the name above it -- `name_bottom`
-            // and the gap are both measured at the rasterized size, so the
-            // readout hangs off the name by the same proportion at any zoom.
-            batch.magnified(center, magnify, |batch| {
-                batch.text(
-                    ui.painter(),
-                    center + egui::vec2(0.0, name_bottom + CENTS_GAP * scale - top),
-                    egui::Align2::CENTER_TOP,
-                    text,
-                    font,
-                    theme::text_dim().gamma_multiply(strength),
-                    outline,
-                );
-            });
-        }
+        });
     }
 }
 

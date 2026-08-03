@@ -313,6 +313,11 @@ pub struct Instruments {
     /// What the label callback's copy of egui's font atlas holds (see
     /// [`text::AtlasMirror`]). Taken once per flush, uncontended.
     pub(crate) font_atlas: std::sync::Mutex<text::AtlasMirror>,
+    /// And what the LATTICE's copy holds. Its node names are drawn inside its
+    /// own scene pass, off a texture of its own, and a mirror answers for one
+    /// texture — see [`text::AtlasMirror`] for why that makes it a second
+    /// mirror rather than a second reader of the first.
+    pub(crate) lattice_atlas: std::sync::Mutex<text::AtlasMirror>,
     /// What the shell measured about the previous frame. Written by the shell
     /// before `root_ui` and read once, by `perf::FrameCosts::assemble`; no pane
     /// touches it. The one field here a shell outside this crate writes, which
@@ -341,6 +346,7 @@ impl Default for Instruments {
             },
             roll_notes: std::sync::atomic::AtomicU32::new(0),
             font_atlas: Default::default(),
+            lattice_atlas: Default::default(),
             timings: perf::ShellTimings::default(),
             perf: PerfStats::default(),
         }
@@ -544,11 +550,15 @@ impl SharedState {
     /// asks for a refresh, because the mirror IS what asks.
     pub fn release_context_resources(&mut self) {
         self.spectrum.release_textures();
-        self.instruments
-            .font_atlas
-            .get_mut()
-            .expect("the label mirror is never held across a panic")
-            .forget_context();
+        // Both mirrors: the lattice's names are drawn off a texture of their
+        // own, and a mirror left answering for the window that closed strands
+        // its renderer exactly the same way.
+        for mirror in [&mut self.instruments.font_atlas, &mut self.instruments.lattice_atlas] {
+            mirror
+                .get_mut()
+                .expect("the label mirror is never held across a panic")
+                .forget_context();
+        }
     }
 
     /// Restore state saved by [`save_persist`](Self::save_persist). Unknown or
