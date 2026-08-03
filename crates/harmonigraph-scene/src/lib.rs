@@ -40,7 +40,7 @@ pub use octaves::{
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
 pub use style::{
-    HighlightExtremes, IdleMarker, NodeStyle, SevensLabel,
+    HighlightExtremes, IdleMarker, NodeStyle, Pulse, SevensLabel,
 };
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
@@ -278,6 +278,9 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
+    /// Breathe the octave glyphs (see [`Pulse`] and
+    /// [`ViewConfig::pulse_octaves`]).
+    pub pulse_octaves: Pulse,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and
     /// composited under any active note. See [`ViewConfig::idle_marker`].
@@ -322,6 +325,9 @@ pub struct Scene {
     /// Melody/bass ring thickness in quad UV units, 0 = off (see
     /// [`ViewConfig::mark_thickness`]). Already clamped.
     pub mark_thickness: f32,
+    /// Breathe the melody/bass rings (see [`Pulse`] and
+    /// [`ViewConfig::pulse_marks`]).
+    pub pulse_marks: Pulse,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],

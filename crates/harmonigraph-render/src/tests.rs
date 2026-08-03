@@ -252,6 +252,7 @@ fn parity_scene() -> Scene {
         sevens_soft: 0.24,
         node_radius: 0.34,
         mark_thickness: 0.09,
+        pulse_marks: Default::default(),
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -262,6 +263,10 @@ fn parity_scene() -> Scene {
         // paths composite, so the indicators are the ones every other
         // setting is a departure from.
         octave_layout: harmonigraph_scene::OctaveLayout::default(),
+        // Off, on the same grounds as trail_mark below: the parity image is
+        // about how a note draws at a single instant, and a pulse would make
+        // that instant depend on which one the fixture happened to land on.
+        pulse_octaves: Default::default(),
         idle_marker: harmonigraph_scene::IdleMarker::None,
         idle_radius: 0.0,
         grid,

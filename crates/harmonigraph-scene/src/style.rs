@@ -92,6 +92,38 @@ impl IdleMarker {
     }
 }
 
+/// A slow breathe on the octave glyphs or the melody/bass rings, applied
+/// to a layer that already has a "near the marked slice" part and a "rest
+/// of it" part — the octave glyphs' sounding wedge against its silent-slot
+/// ghosts, or a mark ring's arc over its own sector against the rest of the
+/// ring (see the octave-glyph loop and [`mark_ring_alpha`] in
+/// lattice.wgsl). One enum for both layers: the two states mean the same
+/// thing wherever they're read, and reading them off one shared clock
+/// keeps a node whose octaves and marks are both pulsing in step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Pulse {
+    /// Steady — no animation, the look every earlier build drew.
+    #[default]
+    Off,
+    /// Both parts breathe together, in phase.
+    Together,
+    /// The two parts breathe a half-cycle apart, so one brightens as the
+    /// other dims.
+    Alternating,
+}
+
+impl Pulse {
+    /// Index the shader reads (`misc6.w` for the mark rings, `misc7.z` for
+    /// the octave glyphs — see `Uniforms` in harmonigraph-render).
+    pub fn shader_index(self) -> u32 {
+        match self {
+            Pulse::Off => 0,
+            Pulse::Together => 1,
+            Pulse::Alternating => 2,
+        }
+    }
+}
+
 /// Legacy load-only spelling of the melody/bass marks, from before they
 /// became the two independent flags they always were:
 /// [`ViewConfig::mark_melody`](crate::ViewConfig::mark_melody) and
