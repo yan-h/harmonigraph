@@ -54,6 +54,11 @@ const BLIT_SRC: &str = include_str!("shaders/blit.wgsl");
 /// LABEL pass, which asks it what covers a name (see [`text`]).
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+/// Format of the offscreen pass's cover mask — how much of each pixel the
+/// frontmost fragment painted. One byte, which is the precision the picture
+/// itself is composited at.
+const COVER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+
 /// Clamp on the render-scale view setting, over whatever the UI offers.
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
@@ -916,6 +921,9 @@ struct PaneBuffers {
 struct Offscreen {
     color_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
+    /// How much of each pixel the frontmost fragment covered — the label
+    /// pass's other half. See `Covered` in lattice.wgsl.
+    cover_view: wgpu::TextureView,
     /// Bloom chain targets: half res (bright pass) and two quarter-res
     /// ping-pong textures for the separable blur.
     half_view: wgpu::TextureView,
@@ -978,10 +986,12 @@ impl Offscreen {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
 
         let color = tex("lattice_offscreen_color", size[0], size[1], format, attach_and_sample);
-        // Sampled as well as attached: the label pass reads it to find out
-        // what the lattice drew in front of a name.
+        // Sampled as well as attached: the label pass reads the pair to find
+        // out what the lattice drew in front of a name, and how much of it.
         let depth =
             tex("lattice_offscreen_depth", size[0], size[1], DEPTH_FORMAT, attach_and_sample);
+        let cover =
+            tex("lattice_offscreen_cover", size[0], size[1], COVER_FORMAT, attach_and_sample);
         let (hw, hh) = (screen_size[0].div_ceil(2).max(1), screen_size[1].div_ceil(2).max(1));
         let (qw, qh) = (screen_size[0].div_ceil(4).max(1), screen_size[1].div_ceil(4).max(1));
         let half = tex("lattice_bloom_half", hw, hh, format, attach_and_sample);
@@ -1041,6 +1051,7 @@ impl Offscreen {
             composite_bind_group,
             color_view,
             depth_view: depth.create_view(&Default::default()),
+            cover_view: cover.create_view(&Default::default()),
             half_view,
             quarter_a_view,
             quarter_b_view,
@@ -1051,25 +1062,30 @@ impl Offscreen {
     }
 }
 
-/// The depth buffer a pane's lattice wrote THIS frame, and the epoch naming
-/// the texture behind it.
+/// What a pane's lattice drew THIS frame, as the label pass needs it: the
+/// depth of the frontmost fragment at each pixel, how much of that pixel it
+/// covered, and the epoch naming the textures behind the pair.
 ///
-/// What the label pass needs to hide a name behind a nearer node, and the
-/// reason [`Offscreen`]'s depth attachment is sampleable. `None` where there
-/// is nothing to hide behind: no lattice on that pane, no offscreen target
-/// yet, or a frame where the lattice shipped neither a node nor an edge and
-/// so never began the pass that fills it. That last case is the one worth
-/// naming — the texture still holds whatever the last frame drew, and a
-/// silent lattice would otherwise go on cutting labels out of a picture that
-/// is no longer there.
+/// `None` where there is nothing to hide behind: no lattice on that pane, no
+/// offscreen target yet, or a frame where the lattice shipped neither a node
+/// nor an edge and so never began the pass that fills them. That last case is
+/// the one worth naming — the textures still hold whatever the last frame
+/// drew, and a silent lattice would otherwise go on cutting labels out of a
+/// picture that is no longer there.
 ///
 /// Ordering is egui-wgpu's: every callback's `prepare` runs before any
 /// `paint`, and the panes add their lattice callback before the labels they
-/// draw over it, so the depth read here is this frame's.
+/// draw over it, so what is read here is this frame's.
+pub(crate) struct Occluder {
+    pub depth: wgpu::TextureView,
+    pub cover: wgpu::TextureView,
+    pub epoch: u64,
+}
+
 pub(crate) fn lattice_occluder(
     callback_resources: &CallbackResources,
     pane_id: u64,
-) -> Option<(wgpu::TextureView, u64)> {
+) -> Option<Occluder> {
     let pane = callback_resources
         .get::<LatticeResources>()?
         .panes
@@ -1078,7 +1094,11 @@ pub(crate) fn lattice_occluder(
         return None;
     }
     let offscreen = pane.offscreen.as_ref()?;
-    Some((offscreen.depth_view.clone(), offscreen.epoch))
+    Some(Occluder {
+        depth: offscreen.depth_view.clone(),
+        cover: offscreen.cover_view.clone(),
+        epoch: offscreen.epoch,
+    })
 }
 
 /// Build one of the scene pipelines from WGSL source (startup uses the
@@ -1108,6 +1128,27 @@ fn create_pipeline(
         ..Default::default()
     });
 
+    // The picture, and — in the offscreen pass only — the cover mask beside
+    // it. No blending on the mask: each pixel keeps the LAST fragment drawn
+    // on it, which is the one whose depth the buffer above is holding.
+    let picture = Some(wgpu::ColorTargetState {
+        format: target_format,
+        // Shader outputs premultiplied alpha.
+        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        write_mask: wgpu::ColorWrites::ALL,
+    });
+    let cover = Some(wgpu::ColorTargetState {
+        format: COVER_FORMAT,
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    });
+    let offscreen = [picture.clone(), cover];
+    let direct = [picture];
+    let color_targets: &[Option<wgpu::ColorTargetState>] = match depth {
+        Depth::None => &direct,
+        _ => &offscreen,
+    };
+
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
         // can tell the node and edge passes apart.
@@ -1123,12 +1164,7 @@ fn create_pipeline(
             module: &shader,
             entry_point: Some(entry_points.1),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: target_format,
-                // Shader outputs premultiplied alpha.
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: color_targets,
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -1160,13 +1196,17 @@ fn create_pipeline(
 /// is a statement about the LABELS rather than about the lattice: nothing
 /// here changes a pixel of the lattice, whose fragments composite by draw
 /// order under `Always` whatever this says.
+///
+/// It also decides which fragment entry point a pipeline can use, since a
+/// pipeline that has the depth attachment has the cover mask beside it and
+/// must write both — see [`create_pipelines`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Depth {
-    /// No attachment at all. The parity test builds depthless variants that
+    /// Neither attachment. The parity test builds depthless variants that
     /// draw straight into the egui pass, as its reference.
     None,
     /// Declares the attachment and writes to it, so these fragments cover a
-    /// label behind them.
+    /// label behind them by as much as they cover the background.
     Write,
     /// Declares the attachment and leaves it alone: drawn, but never in the
     /// way of a name.
@@ -1177,19 +1217,11 @@ enum Depth {
 ///
 /// The nodes write depth and the GRID does not, which is the whole of what
 /// decides that a name can be covered by a node in front of it and never by
-/// a lattice line. Two reasons, and the second is the load-bearing one:
-///
-///   - a hairline through a note name reads as a rendering fault, where a
-///     disc over it reads as depth;
-///   - the depth test is binary and the grid is faint. Depth carries no
-///     alpha, so a line at a few percent opacity would take a fully opaque
-///     bite out of a label — a hole where the picture shows almost nothing.
-///
-/// The same arithmetic is why the node's own fade is a known limit rather
-/// than a settled question: a note released almost to nothing goes on
-/// cutting a name behind it until the scene culls it. That needs the
-/// COVERAGE of the frontmost fragment, which is a second attachment, not a
-/// threshold here.
+/// a lattice line: a hairline through a note name reads as a rendering
+/// fault, where a disc over it reads as depth. The grid also draws across
+/// every node behind the home sheet, so it would be cutting at every label
+/// rather than at a few. `fs_edge_cover` says the same thing in the other
+/// half of the pair, by writing no coverage.
 fn create_pipelines(
     device: &wgpu::Device,
     shader_src: &str,
@@ -1197,10 +1229,14 @@ fn create_pipelines(
     bind_group_layout: &wgpu::BindGroupLayout,
     depth: bool,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    let (nodes, edges) = if depth {
-        (Depth::Write, Depth::Keep)
+    // The `_cover` entry points write the mask beside the picture, and are
+    // the only ones the offscreen pass can use — a fragment stage's outputs
+    // and a pipeline's targets have to agree. The plain pair is what draws
+    // into a single-attachment pass.
+    let (nodes, edges, node_fs, edge_fs) = if depth {
+        (Depth::Write, Depth::Keep, "fs_main_cover", "fs_edge_cover")
     } else {
-        (Depth::None, Depth::None)
+        (Depth::None, Depth::None, "fs_main", "fs_edge")
     };
     (
         create_pipeline(
@@ -1208,7 +1244,7 @@ fn create_pipelines(
             shader_src,
             target_format,
             bind_group_layout,
-            ("vs_main", "fs_main"),
+            ("vs_main", node_fs),
             GpuInstance::LAYOUT,
             nodes,
         ),
@@ -1217,7 +1253,7 @@ fn create_pipelines(
             shader_src,
             target_format,
             bind_group_layout,
-            ("vs_edge", "fs_edge"),
+            ("vs_edge", edge_fs),
             GpuEdge::LAYOUT,
             edges,
         ),
@@ -1611,18 +1647,31 @@ impl CallbackTrait for LatticeCallback {
             };
             let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("lattice_scene_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &offscreen.color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        // Transparent black: premultiplied "nothing", so
-                        // compositing over the pane background reproduces
-                        // drawing straight into the egui pass.
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &offscreen.color_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            // Transparent black: premultiplied "nothing", so
+                            // compositing over the pane background reproduces
+                            // drawing straight into the egui pass.
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    // Nothing covered until something paints. See `Covered`
+                    // in lattice.wgsl for what the labels do with it.
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &offscreen.cover_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &offscreen.depth_view,
                     depth_ops: Some(wgpu::Operations {

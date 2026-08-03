@@ -321,7 +321,8 @@ impl TextBatch {
     /// Collect everything `f` emits at `depth` — where it stands among the
     /// nodes of the picture the batch is drawn over, as a clip depth (see
     /// [`harmonigraph_scene::Scene::label_depth`], which is where a caller
-    /// gets one). What the lattice drew nearer than that covers it.
+    /// gets one). What the lattice drew nearer than that covers it, by as
+    /// much of each pixel as it covered.
     ///
     /// Scoped for the same reason [`TextBatch::magnified`] is, and it is the
     /// worse of the two left switched on: a depth belongs to one node, so a

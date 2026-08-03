@@ -1131,8 +1131,13 @@ fn core_layer(
     return vec4<f32>(rgb_core * core_alpha, core_alpha);
 }
 
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+// What one node paints at this fragment, premultiplied.
+//
+// A plain function rather than the entry point, so the OFFSCREEN pass can
+// take a second output off the same paint (see [`fs_main_cover`]) while the
+// parity and early-out tests go on drawing through `fs_main`, which is the
+// shape they have always compared.
+fn node_paint(in: VsOut) -> vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
     let activation = in.params.x;
 
@@ -1428,8 +1433,9 @@ fn vs_edge(@builtin(vertex_index) vertex_index: u32, inst: EdgeInstance) -> Edge
     return out;
 }
 
-@fragment
-fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
+// What one edge paints at this fragment, premultiplied. Split out for the
+// same reason [`node_paint`] is.
+fn edge_paint(in: EdgeVsOut) -> vec4<f32> {
     // Screen-constant soft band across the beam (see aa_inside; computed
     // before the branch so the derivative stays in uniform control flow).
     let aa_y = aa_width(fwidth(in.uv.y));
@@ -1465,4 +1471,57 @@ fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
     }
     let rgb = in.color.rgb * (0.55 + 0.45 * across);
     return vec4<f32>(rgb * alpha, alpha);
+}
+
+// ---- Entry points ----------------------------------------------------------
+// Two of each, over one body. The plain pair writes colour and nothing else,
+// and is what draws straight into a single-attachment pass — the parity test's
+// reference path, and the early-out comparison. The `_cover` pair is what the
+// offscreen pass uses, and carries the second output below.
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    return node_paint(in);
+}
+
+@fragment
+fn fs_edge(in: EdgeVsOut) -> @location(0) vec4<f32> {
+    return edge_paint(in);
+}
+
+// The offscreen pass's two outputs: the picture, and HOW MUCH OF THE PIXEL
+// the fragment covers.
+//
+// The cover mask is written with no blending, so each pixel keeps the last
+// fragment drawn on it — which, under that pass's back-to-front order, is
+// the frontmost thing painted there, and pairs with the depth buffer, which
+// records the same fragment's depth for the same reason.
+//
+// It exists because depth carries no alpha. A label hidden on the strength
+// of depth alone is hidden by ANY fragment in front of it, and a node's
+// paint reaches far past what a reader can see: the glow, and the sevens
+// knockout's fade, both run out to a percent of opacity, which is where
+// `node_paint` finally discards. Cutting a name at that boundary removes it
+// under a halo nobody can see, along an edge that is nowhere in the picture.
+// With the coverage in hand the label pass can take the same fraction of the
+// name that the picture takes of the background — so a name goes under a
+// disc, and merely dims where a glow passes over it.
+struct Covered {
+    @location(0) color: vec4<f32>,
+    @location(1) cover: f32,
+}
+
+@fragment
+fn fs_main_cover(in: VsOut) -> Covered {
+    let paint = node_paint(in);
+    return Covered(paint, paint.a);
+}
+
+// Zero cover, deliberately: the lattice's own lines never hide a name. A
+// hairline through a note name reads as a rendering fault where a disc over
+// it reads as depth, and the grid is drawn across every node behind the home
+// sheet — so it would be cutting at every label rather than at a few.
+@fragment
+fn fs_edge_cover(in: EdgeVsOut) -> Covered {
+    return Covered(edge_paint(in), 0.0);
 }

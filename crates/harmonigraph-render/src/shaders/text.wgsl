@@ -40,10 +40,12 @@ struct Locals {
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
 /// Depth of whatever the lattice drew last at each pixel of `locals.pane`,
-/// which under that pass's back-to-front order is what covers there. A 1x1
-/// stand-in cleared to the far plane stands in for batches with no lattice
-/// under them, so this is always bound and never conditional.
+/// which under that pass's back-to-front order is what covers there, and how
+/// much of the pixel that fragment covered. 1x1 stand-ins — the far plane and
+/// no coverage — stand in for batches with no lattice under them, so both are
+/// always bound and never conditional.
 @group(0) @binding(3) var occluder: texture_depth_2d;
+@group(0) @binding(4) var occluder_cover: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -126,40 +128,54 @@ fn vs_glyph(
     return out;
 }
 
-/// Whether the lattice drew something in FRONT of this fragment's glyph.
+/// How much of this fragment survives what the lattice drew in FRONT of it:
+/// 1 where nothing does, 0 under something opaque, and the fraction the
+/// picture left of the background in between.
 ///
-/// The one thing that makes a label part of the picture rather than a layer
-/// over it: a node nearer the camera hides the name of a node behind it, the
-/// same way it hides the node itself. Per pixel, so a name is cut by the
-/// shape that covers it rather than dropped whole.
+/// This is what makes a label part of the picture rather than a layer over
+/// it: a node nearer the camera hides the name of a node behind it, the same
+/// way it hides the node itself. Per pixel, so a name goes under the shape
+/// that covers it rather than being dropped whole.
 ///
-/// The test is strict, and a label is handed a depth slightly in FRONT of
-/// its own node (see `GlyphInstance::depth`) — the two together are what
-/// keeps a name off the disc it is written on, where the depths are equal
-/// to within the difference between a matrix multiplied on the CPU and the
-/// same one multiplied on the GPU.
+/// It is a FRACTION rather than a yes or no because depth carries no alpha,
+/// and a node paints a long way past what a reader can see — the glow, and
+/// the sevens knockout's fade, both run out to a percent of opacity. Cut on
+/// depth alone, a name loses whole letters to a halo that is not visibly
+/// there, along an edge that is nowhere in the picture. The coverage the
+/// lattice pass records beside the depth (see `Covered` in lattice.wgsl) is
+/// exactly the fraction to take.
 ///
-/// Anything the depth buffer does not cover reads as unoccluded: a batch
-/// with no lattice under it, and a glyph that has wandered outside the pane
-/// the buffer describes, which happens where a pane's own clip has already
-/// decided the pixel is not drawn.
-fn occluded(in: VertexOut) -> bool {
+/// The depth test is strict, and a label is handed a depth slightly in FRONT
+/// of its own node (see `GlyphInstance::depth`) — the two together are what
+/// keeps a name off the disc it is written on, where the depths are equal to
+/// within the difference between a matrix multiplied on the CPU and the same
+/// one multiplied on the GPU.
+///
+/// Anything the buffers do not cover survives whole: a batch with no lattice
+/// under it, and a glyph that has wandered outside the pane they describe,
+/// which happens where a pane's own clip has already decided the pixel is
+/// not drawn.
+fn visible(in: VertexOut) -> f32 {
     if locals.pane.z <= 0.0 || locals.pane.w <= 0.0 {
-        return false;
+        return 1.0;
     }
     // `position` is in physical pixels of the whole surface; the pane is in
     // points, as the glyph rects are.
     let point = in.position.xy / max(locals.pixels_per_point, 1e-6);
     let uv = (point - locals.pane.xy) / locals.pane.zw;
     if uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0 {
-        return false;
+        return 1.0;
     }
-    // The buffer is the pane at the render scale, which is neither the
-    // pane's points nor its pixels — so it is asked for its own size rather
-    // than told one.
+    // The buffers are the pane at the render scale, which is neither the
+    // pane's points nor its pixels — so they are asked for their own size
+    // rather than told one. Both are that size, being one pass's
+    // attachments.
     let size = vec2<f32>(textureDimensions(occluder));
     let texel = vec2<i32>(clamp(uv * size, vec2<f32>(0.0), size - 1.0));
-    return textureLoad(occluder, texel, 0) < in.depth;
+    if textureLoad(occluder, texel, 0) >= in.depth {
+        return 1.0;
+    }
+    return 1.0 - clamp(textureLoad(occluder_cover, texel, 0).r, 0.0, 1.0);
 }
 
 /// The glyph's coverage at `texel`, and zero outside its own patch of the
@@ -202,11 +218,13 @@ fn ring(in: VertexOut, spec: vec4<f32>, acc: f32) -> f32 {
 /// other's ink where their rims overlap.
 @fragment
 fn fs_rim(in: VertexOut) -> @location(0) vec4<f32> {
-    if in.rim.a <= 0.0 || occluded(in) {
+    let survives = visible(in);
+    if in.rim.a <= 0.0 || survives <= 0.0 {
         discard;
     }
     var alpha = ring(in, locals.ring0, 0.0);
     alpha = ring(in, locals.ring1, alpha);
+    alpha = alpha * survives;
     if alpha <= 0.0 {
         discard;
     }
@@ -219,9 +237,11 @@ fn fs_rim(in: VertexOut) -> @location(0) vec4<f32> {
 /// The glyphs themselves, over the rim.
 @fragment
 fn fs_fill(in: VertexOut) -> @location(0) vec4<f32> {
-    let cov = coverage(in, in.texel);
-    if cov <= 0.0 || occluded(in) {
+    let cov = coverage(in, in.texel) * visible(in);
+    if cov <= 0.0 {
         discard;
     }
+    // Premultiplied throughout, so one factor dims the ink and thins it by
+    // the same amount — which is what going under something translucent is.
     return in.fill * cov;
 }

@@ -62,8 +62,8 @@ pub struct GlyphInstance {
     /// as a clip depth: 0 at the near plane, 1 at the far one, which is what
     /// the lattice's depth buffer holds
     /// ([`harmonigraph_scene::Projector::project_with_depth`] is where a
-    /// caller gets one). Anything the lattice drew NEARER than this covers
-    /// the glyph.
+    /// caller gets one). What the lattice drew NEARER than this covers the
+    /// glyph, by as much of the pixel as it covered.
     ///
     /// 0 is a glyph nothing can hide, and is what text with no lattice under
     /// it — the analyzer's names, the learn badge — is drawn at. That is the
@@ -146,8 +146,8 @@ pub fn text_paint_callback(
 }
 
 struct TextCallback {
-    /// Where the text is drawn, which is also the rect the `occluder` depth
-    /// buffer covers. Kept rather than read back off `PaintCallbackInfo`,
+    /// Where the text is drawn, which is also the rect the `occluder`
+    /// buffers cover. Kept rather than read back off `PaintCallbackInfo`,
     /// since the uniforms carrying it are written in `prepare`.
     rect: egui::Rect,
     glyphs: Vec<GlyphInstance>,
@@ -170,9 +170,9 @@ struct TextUniforms {
     _pad: [f32; 3],
     ring0: [f32; 4],
     ring1: [f32; 4],
-    /// The rect the occluding depth buffer covers, in points: min, then
-    /// size. A zero size means there is no occluder, and is what the shader
-    /// reads before it touches the texture.
+    /// The rect the occluding buffers cover, in points: min, then size. A
+    /// zero size means there is no occluder, and is what the shader reads
+    /// before it touches either texture.
     pane: [f32; 4],
 }
 
@@ -189,11 +189,12 @@ struct TextResources {
     atlas: Option<wgpu::Texture>,
     atlas_size: [u32; 2],
     atlas_key: u64,
-    /// Stands in for a lattice depth buffer where there is none: one texel
-    /// at the far plane, so every glyph reads as unoccluded. The binding is
-    /// unconditional — a bind group layout cannot have a hole in it — and
-    /// this is what fills it.
+    /// Stand in for a lattice's depth and cover buffers where there is none:
+    /// one texel at the far plane, covering nothing, so every glyph reads as
+    /// unoccluded. The bindings are unconditional — a bind group layout
+    /// cannot have a hole in it — and these are what fill them.
     fallback_depth: wgpu::TextureView,
+    fallback_cover: wgpu::TextureView,
     panes: HashMap<u64, TextPane>,
 }
 
@@ -203,11 +204,12 @@ struct TextPane {
     instance_buffer: wgpu::Buffer,
     capacity: usize,
     count: u32,
-    /// The depth buffer this pane's bind group names, and the epoch of the
-    /// texture behind it — [`NO_OCCLUDER`] for the fallback. A pane resize
-    /// builds a fresh offscreen target, and a bind group still naming the
-    /// old one is a destroyed texture.
+    /// The buffers this pane's bind group names, and the epoch of the
+    /// textures behind them — [`NO_OCCLUDER`] for the fallbacks. A pane
+    /// resize builds a fresh offscreen target, and a bind group still naming
+    /// the old one is a destroyed texture.
     depth: wgpu::TextureView,
+    cover: wgpu::TextureView,
     depth_epoch: u64,
 }
 
@@ -226,6 +228,7 @@ impl TextResources {
     /// on every pane with no lattice under it, gone.
     fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target_format: wgpu::TextureFormat,
     ) -> Self {
@@ -258,14 +261,24 @@ impl TextResources {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // Read with `textureLoad` at a whole texel, so it needs no
-                // sampler of its own — which is just as well, since a depth
-                // format is not filterable and the one above is.
+                // Both read with `textureLoad` at a whole texel, so neither
+                // needs a sampler of its own — which is just as well, since a
+                // depth format is not filterable and the one above is.
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -297,6 +310,7 @@ impl TextResources {
             atlas_size: [0, 0],
             atlas_key: u64::MAX,
             fallback_depth: far_texel(device, encoder),
+            fallback_cover: uncovered_texel(device, queue),
             panes: HashMap::new(),
         }
     }
@@ -426,6 +440,31 @@ fn far_texel(device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) -> wgpu:
     view
 }
 
+/// A 1x1 cover mask holding no coverage — [`TextResources`]'s other stand-in
+/// for a lattice that is not there.
+///
+/// A plain colour format, so unlike the depth beside it this one takes a
+/// write and needs no pass.
+fn uncovered_texel(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("text_no_cover"),
+        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: crate::COVER_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        &[0u8],
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: Some(1) },
+        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+    );
+    texture.create_view(&Default::default())
+}
+
 /// Where [`TextUniforms::atlas_size`] sits, for the partial write above.
 /// Taken from the type rather than counted, so reordering the struct cannot
 /// leave this pointing at `screen_points`.
@@ -457,6 +496,10 @@ fn bind_group(
             wgpu::BindGroupEntry {
                 binding: 3,
                 resource: wgpu::BindingResource::TextureView(&pane.depth),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&pane.cover),
             },
         ],
     })
@@ -534,7 +577,12 @@ impl CallbackTrait for TextCallback {
             .get::<TextResources>()
             .is_none_or(|r| r.target_format != self.target_format);
         if recreate {
-            callback_resources.insert(TextResources::new(device, egui_encoder, self.target_format));
+            callback_resources.insert(TextResources::new(
+                device,
+                queue,
+                egui_encoder,
+                self.target_format,
+            ));
         }
         // Taken while the lattice's resources are borrowed, and finished with
         // before this batch's own are: two entries of one map cannot be held
@@ -585,13 +633,18 @@ impl CallbackTrait for TextCallback {
             .as_ref()
             .expect("checked above")
             .create_view(&Default::default());
-        let (depth, epoch) = match occluder {
-            Some((view, epoch)) => (view, epoch),
-            None => (resources.fallback_depth.clone(), NO_OCCLUDER),
+        let (depth, cover, epoch) = match occluder {
+            Some(o) => (o.depth, o.cover, o.epoch),
+            None => (
+                resources.fallback_depth.clone(),
+                resources.fallback_cover.clone(),
+                NO_OCCLUDER,
+            ),
         };
         let (layout, sampler) = (&resources.layout, &resources.sampler);
         let pane = resources.panes.entry(self.pane_id).or_insert_with(|| TextPane {
             depth: depth.clone(),
+            cover: cover.clone(),
             depth_epoch: epoch,
             uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("text_uniforms"),
@@ -614,6 +667,7 @@ impl CallbackTrait for TextCallback {
         // than by the view, which carries no identity to compare.
         if pane.depth_epoch != epoch {
             pane.depth = depth;
+            pane.cover = cover;
             pane.depth_epoch = epoch;
             pane.bind_group = None;
         }
@@ -710,7 +764,7 @@ mod tests {
             return;
         };
         let mut encoder = device.create_command_encoder(&Default::default());
-        let _resources = TextResources::new(&device, &mut encoder, FORMAT);
+        let _resources = TextResources::new(&device, &_queue, &mut encoder, FORMAT);
     }
 
     /// A stand-in atlas: one opaque 8x8 "glyph" at (8, 8), with nothing
@@ -1045,16 +1099,17 @@ mod tests {
             "the fixture's nodes must sit off-center, at ({x}, {y}) of {points:?}",
         );
 
-        // One glyph on that pixel. No rim: the fill alone answers the
-        // question, and a rim would spread the reading over pixels the
-        // discard is not being asked about.
+        // One glyph on that pixel, or `off` points to the right of it. No
+        // rim: the fill alone answers the question, and a rim would spread
+        // the reading over pixels nothing is being asked about.
         let bare = [
             TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
             TextRing { radius: 0.0, alpha: 0.0, samples: 0 },
         ];
-        let at = [x - 4.0, y - 4.0, 8.0, 8.0];
         const LATTICE: u64 = 3;
-        let label = |depth: f32, occluder: Option<u64>| -> [u8; 4] {
+        let label_at = |off: f32, depth: f32, occluder: Option<u64>| -> [u8; 4] {
+            let x = x + off;
+            let at = [x - 4.0, y - 4.0, 8.0, 8.0];
             let lattice = crate::LatticeCallback::from_scene(&scene, points, FORMAT, LATTICE, None);
             let text = TextCallback {
                 rect: egui::Rect::from_min_size(egui::Pos2::ZERO, points),
@@ -1103,6 +1158,7 @@ mod tests {
             let i = ((y as u32 * SCENE_SIZE[0] + x as u32) * 4) as usize;
             [frame[i], frame[i + 1], frame[i + 2], frame[i + 3]]
         };
+        let label = |depth: f32, occluder: Option<u64>| label_at(0.0, depth, occluder);
 
         assert_eq!(
             label(far, Some(LATTICE)),
@@ -1121,6 +1177,26 @@ mod tests {
             label(far, None),
             [255, 255, 255, 255],
             "a batch with no occluder must draw over everything, as it always has",
+        );
+
+        // ...and it goes UNDER the node rather than being cut out of the
+        // frame by it. Read across the disc's own edge, which is where the
+        // difference between the two shows.
+        //
+        // The node's paint reaches roughly eighteen pixels here (the quad's
+        // margin), its visible disc about nine. Between them is glow: a
+        // percent or two of opacity, which is nothing to look at and
+        // everything to a test that asks only "did anything paint here".
+        let edge = label_at(6.0, far, Some(LATTICE))[3];
+        assert!(
+            edge > 0 && edge < 255,
+            "over the disc's fading edge a name must dim rather than vanish, got {edge}",
+        );
+        let halo = label_at(16.0, far, Some(LATTICE))[3];
+        assert!(
+            halo >= 250,
+            "out in the glow — inside the node's quad, but nothing a reader can see — a \
+             name must be left alone, got {halo}",
         );
     }
 
