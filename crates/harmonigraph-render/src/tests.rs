@@ -530,7 +530,14 @@ fn octave_pulse_alternating_differs_from_together_and_moves_with_time() {
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -757,7 +764,14 @@ fn mark_pulse_alternating_differs_from_together_and_moves_with_time() {
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -834,7 +848,14 @@ fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -899,7 +920,14 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
     let mut shot = |scene: &Scene, pane_id: u64| -> Vec<u8> {
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane_id, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane_id,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
@@ -1044,7 +1072,14 @@ fn the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square() {
     let mut pane = 200u64;
     let mut shot = |scene: &Scene| -> Vec<u8> {
         pane += 1;
-        let cb = LatticeCallback::from_scene(scene, vec_size, format, pane, None);
+        let cb = LatticeCallback::from_scene(
+            scene,
+            LatticeLabels::default(),
+            vec_size,
+            format,
+            pane,
+            None,
+        );
         let mut encoder = device.create_command_encoder(&Default::default());
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
