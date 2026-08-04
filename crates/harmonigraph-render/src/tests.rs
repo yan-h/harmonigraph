@@ -221,7 +221,6 @@ fn parity_scene() -> Scene {
             color: Vec4::new(0.25 + f * 0.12, 0.55 - f * 0.05, 0.95 - f * 0.1, 1.0),
             activation: if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 },
             octaves,
-            seed: f * 0.13,
             outlined: i == 4,
             hovered: i == 1,
             on_home: i % 2 == 0,
@@ -281,7 +280,6 @@ fn parity_scene() -> Scene {
         shimmer_width: PARITY_SHIMMER_WIDTH,
         shimmer_intensity: 1.0,
         shimmer_softness: 0.8,
-        node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
         outer_inner: 0.545,
@@ -798,7 +796,6 @@ fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         color: Vec4::new(0.35, 0.55, 0.85, 1.0),
         activation: 1.0,
         octaves,
-        seed: 0.0,
         outlined: false,
         hovered: false,
         on_home: true,
@@ -1744,9 +1741,9 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.mark_thickness = 0.0;
     // Every octave the wheel draws for THIS pitch class, and only those: a
     // level on a slot no sector draws is a state `derive_scene` cannot reach,
-    // and the swirl and the glow would still take a color from it. Slots
-    // outside the packing are what a ring near the pitch limits reaches for,
-    // and no note can light one.
+    // and the glow would still take a color from it. Slots outside the packing
+    // are what a ring near the pitch limits reaches for, and no note can light
+    // one.
     let (low, high) = layout.slots(cents);
     let node = &mut scene.nodes[0];
     node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];

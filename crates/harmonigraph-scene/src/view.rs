@@ -3,9 +3,7 @@
 //! [`FrameParams`] mirror of the host-automatable appearance parameters.
 
 use crate::skin;
-use crate::style::{
-    HighlightExtremes, IdleMarker, NodeStyle, PitchGradient, Pulse, SevensLabel,
-};
+use crate::style::{HighlightExtremes, IdleMarker, PitchGradient, Pulse, SevensLabel};
 use crate::trail::TrailMark;
 use harmonigraph_core::{coords, Comma, LatticePos, Tempered};
 
@@ -127,9 +125,13 @@ pub struct ViewConfig {
     /// cents. Only meaningful while `show_labels` is on.
     #[serde(default = "default_true")]
     pub show_cents: bool,
-    /// How held notes are rendered (see NodeStyle).
-    #[serde(default)]
-    pub node_style: NodeStyle,
+    // How a sounding node's core is painted has no field here: the core is
+    // the steady disc-and-glow, and nothing switches it. The field styles
+    // that stood beside it (Vortex, Checker, Spiral, and the eleven trimmed
+    // before them) are gone, and with them the `node_style` key and the
+    // per-node seed that animated them. Saved blobs still carry that key,
+    // naming any of the fifteen; serde ignores unknown keys, so such a blob
+    // loads intact and drops it on the next save.
     /// The curve the low-to-high pitch gradient follows, as its four knobs
     /// (see [`PitchGradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.
@@ -1040,7 +1042,6 @@ impl Default for ViewConfig {
             show_labels: true,
             label_scale: default_label_scale(),
             show_cents: true,
-            node_style: NodeStyle::Steady,
             pitch_gradient: PitchGradient::default(),
             // A small, soft core inside the octave band, with the band's
             // silent slots ghosted in: the pitch class reads as a compact

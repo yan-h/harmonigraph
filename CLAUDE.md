@@ -90,9 +90,10 @@ filter".
 
 The exception is where the past tense is load-bearing, and it is a real
 category rather than an escape hatch. Comments about **blobs still sitting
-in saved projects** must stay historical — the `default_*` block and what
-`sanitize` folds in `view.rs`, the serde aliases for deleted palettes and
-node styles, `legacy_stacked` and `legacy_extra_args` in
+in saved projects** must stay historical — the `default_*` block, what
+`sanitize` folds and the note standing where the retired `node_style` key
+was, all in `view.rs`, the serde aliases for deleted palettes and sweep
+modes, `legacy_stacked` and `legacy_extra_args` in
 `harmonigraph-take`'s `render.rs`, and the `legacy_*` fields read through
 `bare_as_some` (`legacy_octave_low`, `legacy_octave_high`,
 `legacy_octave_span`, `legacy_highlight_extremes`), where the bare token a

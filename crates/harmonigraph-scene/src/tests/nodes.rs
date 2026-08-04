@@ -1,5 +1,5 @@
-//! What a sounding note puts on its node: the pitch gradient, the fades
-//! each layer runs on, and the seed that keeps them from moving together.
+//! What a sounding note puts on its node: the pitch gradient, and the fades
+//! each layer runs on.
 
 use crate::*;
 use glam::Vec3;
@@ -396,36 +396,6 @@ fn releasing_a_chord_leaves_no_fading_marks() {
         assert_eq!(n.melody_slots, 0, "no melody ring on a released chord");
         assert_eq!(n.bass_slots, 0, "no bass ring on a released chord");
     }
-}
-
-#[test]
-fn seed_derives_from_the_note_on_time() {
-    let mut tracker = NoteTracker::new();
-    tracker.handle_event(NoteEvent {
-        time: 10.0,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    // Steady seeds each node from its note-on time; field styles seed
-    // from position instead, so pin the style this test is about.
-    let view = ViewConfig { node_style: NodeStyle::Steady, ..ViewConfig::default() };
-    let scene = scene_of(
-        &tracker,
-        &Tuning::default(),
-        &view,
-        &FrameParams::default(),
-        12.5,
-    );
-    let origin = origin_node(&scene);
-    assert!((origin.seed - 10.0).abs() < 1e-6);
-    // Idle nodes carry neutral animation inputs.
-    let idle = scene
-        .nodes
-        .iter()
-        .find(|n| n.lattice_pos == LatticePos::new(1, 1, 0))
-        .unwrap();
-    assert_eq!(idle.seed, 0.0);
 }
 
 #[test]

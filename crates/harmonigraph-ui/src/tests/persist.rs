@@ -528,6 +528,28 @@ fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
     assert_eq!(restored.view.extent_sevens, 3, "an unknown field must not sink the blob");
 }
 
+/// The same rule, for the key every project above the version floor carries:
+/// the core's paint was a choice of styles, and `node_style` names whichever
+/// of the fifteen the enum ever held that project was drawn with. It gets its
+/// own blob because what it carries is an ENUM TOKEN and not a number — the
+/// shape that would need a type to parse into if the reader were strict about
+/// what it has no field for.
+#[test]
+fn a_persist_blob_naming_a_retired_node_style_still_loads() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.view.extent_sevens = 3;
+    let saved = state.save_persist();
+    // Where the key sat, written as those builds wrote it. `Vortex` is a
+    // style that survived to the end; `Pinwheel` is one only an alias kept
+    // loading, and both are equally unknown now.
+    let stale = saved.replace("pitch_gradient:", "node_style:Vortex,pitch_gradient:");
+    assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&stale);
+    assert_eq!(restored.view.extent_sevens, 3, "a retired style must not sink the blob");
+}
+
 /// The mirror of the case above: a field the blob is MISSING must not sink it
 /// either, and must come back as what a fresh install has rather than as a bare
 /// `0`/`false`.

@@ -215,7 +215,6 @@ pub fn derive_scene(
         let mut octaves = [0f32; OCTAVE_SLOTS];
         let mut color = node_idle;
         let mut outlined = false;
-        let mut seed = 0.0f32;
         let mut melody = Mark::default();
         let mut bass = Mark::default();
 
@@ -228,7 +227,6 @@ pub fn derive_scene(
                     activation = envelope;
                     color = voice_color;
                     outlined = ChannelRole::of(voice.channel) == ChannelRole::Outline;
-                    seed = (voice.on_time % 256.0) as f32;
                 }
                 // The slot whose own pitch on THIS node is the one sounding —
                 // `slot_pitch` solved for the slot, which is what keeps the
@@ -312,13 +310,6 @@ pub fn derive_scene(
             }
         }
 
-        // Field styles animate one continuous field per node — global time
-        // as the clock plus a stable per-node seed — so pressing,
-        // retriggering, or stacking notes lights the flow up without ever
-        // restarting or reshuffling it. Steady ignores the seed entirely,
-        // so its per-note value below is written and never read.
-        let seed = if view.node_style.is_field_style() { node_seed(pos) } else { seed };
-
         // World positions are relative to the window center, keeping the
         // displayed region under the camera wherever the window pans.
         let centered = pos - center;
@@ -377,7 +368,6 @@ pub fn derive_scene(
             color,
             activation,
             octaves,
-            seed,
             outlined,
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
@@ -423,7 +413,6 @@ pub fn derive_scene(
         camera,
         time: (now % 3600.0) as f32,
         node_radius: view.spacing * NODE_RADIUS_FACTOR,
-        node_style: view.node_style,
         core_radius,
         core_solidity,
         outer_inner,
@@ -630,17 +619,3 @@ pub(crate) fn derive_grid(view: &ViewConfig, nodes: &[NodeInstance]) -> Vec<Edge
     }
     grid
 }
-
-/// Stable per-node animation seed for the field styles: a hash of the
-/// lattice position folded into the same small range as the per-note
-/// seed. A node's gas pattern becomes part of its identity — the same
-/// every time it lights, decorrelated from its neighbors'.
-pub(crate) fn node_seed(pos: LatticePos) -> f32 {
-    let h = pos
-        .threes
-        .wrapping_mul(731)
-        .wrapping_add(pos.fives.wrapping_mul(2683))
-        .wrapping_add(pos.sevens.wrapping_mul(9461));
-    (h as f32 * 0.618_034).rem_euclid(256.0)
-}
-
