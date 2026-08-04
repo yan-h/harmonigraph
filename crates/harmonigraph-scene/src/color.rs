@@ -1,5 +1,22 @@
-//! Node color: the LCh pitch ramp shared by the CPU and the shader LUT,
-//! plus channel and idle colors.
+//! Node color: the pitch ramp shared by the CPU and the shader LUT, plus
+//! channel and idle colors.
+//!
+//! The ramp is authored in two spaces at once, which is the whole design:
+//! its LIGHTNESS is CIELAB's `L*` and its HUE and CHROMA are Oklab's. `L*`
+//! is a function of luminance alone, so one `L*` is one screen brightness
+//! exactly and a flat ramp is flat to the pixel; Oklab's hue is the one that
+//! holds still when only the chroma knob moves, where a CIELAB hue angle
+//! drifts up to 19 degrees toward purple through the blues the default arc
+//! opens on. Neither space delivers both.
+//!
+//! Google's HCT is the same structure over CAM16 rather than Oklab, for a
+//! different reason (predictable WCAG contrast between tones). Oklab is the
+//! cheaper half of that trade and the whole of it that matters here — see
+//! `tests/hue_space.rs`, which measures both and prices them.
+//!
+//! The fixed per-channel colors below stay hand-written CIELAB LCh. They name
+//! voices rather than pitches, nothing about them is swept, and re-authoring
+//! them in another space would move colors for no gain.
 
 use crate::view::ViewConfig;
 use crate::style::PitchGradient;
@@ -12,10 +29,9 @@ fn lch(l: f64, c: f64, h: f64) -> Vec4 {
     // outside 0..255 (v1's graphics stack clamped downstream; we must do it
     // ourselves before handing colors to the shader).
     //
-    // The pitch gradient never needs it — its chroma is a fraction of what
-    // [`max_chroma`] says fits, so its colors are inside the gamut by
-    // construction. The fixed channel colors below are hand-written LCh and
-    // this is what keeps a mistyped one drawable.
+    // Only the fixed channel colors come through here, and they are
+    // hand-written LCh — this is what keeps a mistyped one drawable. The pitch
+    // gradient has its own path and is inside the gamut by construction.
     let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
     Vec4::new(
         (rgb.r.clamp(0.0, 255.0) / 255.0) as f32,
@@ -49,49 +65,128 @@ fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
     )
 }
 
-/// Whether an LCh color is one sRGB can actually show, allowing each channel
-/// `slack` past either end of 0..255.
-fn in_gamut_within(l: f64, c: f64, h: f64, slack: f64) -> bool {
-    let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
-    let ok = |v: f64| (-slack..=255.0 + slack).contains(&v);
-    ok(rgb.r) && ok(rgb.g) && ok(rgb.b)
+/// The luminance one `L*` names, CIE's own piecewise inverse.
+///
+/// This function is the entire reason the ramp can mix two spaces: `L*`
+/// depends on Y and nothing else, so a lightness stated in `L*` survives being
+/// carried into a space that has its own idea of lightness. Oklab's `L` does
+/// not have this property — it is a nonlinear combination of cube-rooted LMS,
+/// and a constant Oklab `L` is not a constant luminance.
+fn luminance_of_lightness(l_star: f64) -> f64 {
+    let fy = (l_star + 16.0) / 116.0;
+    if fy > 6.0 / 29.0 {
+        fy.powi(3)
+    } else {
+        3.0 * (6.0 / 29.0f64).powi(2) * (fy - 4.0 / 29.0)
+    }
 }
 
-/// Whether an LCh color is one sRGB can actually show. STRICT: a channel a
-/// hair outside 0..255 is out, so a chroma this accepts survives
-/// [`lch`]'s clamp untouched and the color drawn is the color asked for.
-fn in_gamut(l: f64, c: f64, h: f64) -> bool {
-    in_gamut_within(l, c, h, 0.0)
+/// Linear sRGB from Oklab, by Ottosson's matrices.
+///
+/// Linear and not encoded, deliberately: the gamut test below runs on this,
+/// and the 0..1 box is the same box either side of the transfer function, so
+/// testing here skips a gamma encode on every bisection step.
+fn linear_srgb_of_oklab(ok_l: f64, ok_a: f64, ok_b: f64) -> (f64, f64, f64) {
+    let l = (ok_l + 0.3963377774 * ok_a + 0.2158037573 * ok_b).powi(3);
+    let m = (ok_l - 0.1055613458 * ok_a - 0.0638541728 * ok_b).powi(3);
+    let s = (ok_l - 0.0894841775 * ok_a - 1.2914855480 * ok_b).powi(3);
+    (
+        4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+        -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+        -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+    )
+}
+
+/// Newton steps [`oklab_lightness_at`] spends. Five, because the function it
+/// inverts is a cubic and the initial guess is already close; the sweep in
+/// `the_hybrid_at_the_edges` puts the worst relative luminance error over the
+/// whole knob space at 3e-7, which is four orders under the 1/255 the answer
+/// is quantized to.
+const LUMINANCE_STEPS: u32 = 5;
+
+/// The Oklab `L` that puts a given Oklab hue and chroma at a given luminance —
+/// the join between the two spaces, and where `L*`'s promise is actually kept.
+///
+/// Newton and not a second bisection, which is what makes the whole design
+/// affordable. At a FIXED hue the three cube roots are each linear in `L`, so
+/// luminance is a cubic in `L` with a derivative in closed form; a nested
+/// bisection would spend twenty steps where this spends five, and turn a
+/// rebuild from free into a visible hitch on every frame of a knob drag.
+fn oklab_lightness_at(h: f64, c: f64, target_y: f64) -> f64 {
+    let (cos_h, sin_h) = (h.to_radians().cos(), h.to_radians().sin());
+    // How far each cube root runs from `L` at this hue, per unit of chroma.
+    let k = [
+        0.3963377774 * cos_h + 0.2158037573 * sin_h,
+        -0.1055613458 * cos_h - 0.0638541728 * sin_h,
+        -0.0894841775 * cos_h - 1.2914855480 * sin_h,
+    ];
+    // Luminance as a weighted sum of the three cubed roots: sRGB's luminance
+    // row folded through the LMS->linear-RGB matrix, so this never builds an
+    // RGB triple it would only collapse again.
+    let w = [
+        0.2126 * 4.0767416621 + 0.7152 * -1.2684380046 + 0.0722 * -0.0041960863,
+        0.2126 * -3.3077115913 + 0.7152 * 2.6097574011 + 0.0722 * -0.7034186147,
+        0.2126 * 0.2309699292 + 0.7152 * -0.3413193965 + 0.0722 * 1.7076147010,
+    ];
+    // The grey of this luminance, which is exact at chroma 0 and near it
+    // everywhere else — Oklab `L` IS the cube root of luminance on the
+    // neutral axis.
+    let mut ok_l = target_y.cbrt().clamp(0.0, 1.0);
+    for _ in 0..LUMINANCE_STEPS {
+        let r = [ok_l + k[0] * c, ok_l + k[1] * c, ok_l + k[2] * c];
+        let y: f64 = (0..3).map(|i| w[i] * r[i].powi(3)).sum();
+        let dy: f64 = (0..3).map(|i| 3.0 * w[i] * r[i].powi(2)).sum();
+        // A flat derivative means black, where every `L` is the answer and the
+        // step would be a division by nothing.
+        if dy.abs() < 1e-12 {
+            break;
+        }
+        // Clamped past 1 rather than to it: an overshoot on the way to a
+        // bright color is a legal intermediate, and pinning it at 1 would
+        // stall the iteration instead of letting it come back.
+        ok_l = (ok_l - (y - target_y) / dy).clamp(0.0, 1.5);
+    }
+    ok_l
+}
+
+/// Whether the color this ramp asks for is one sRGB can show, allowing each
+/// linear channel `slack` past either end of 0..1.
+fn in_gamut_within(l_star: f64, h: f64, c: f64, slack: f64) -> bool {
+    let ok_l = oklab_lightness_at(h, c, luminance_of_lightness(l_star));
+    let (cos_h, sin_h) = (h.to_radians().cos(), h.to_radians().sin());
+    let (r, g, b) = linear_srgb_of_oklab(ok_l, c * cos_h, c * sin_h);
+    let ok = |v: f64| (-slack..=1.0 + slack).contains(&v);
+    ok(r) && ok(g) && ok(b)
 }
 
 /// Bisection steps [`max_chroma`] spends. Each halves the bracket, so 20 over
-/// `0..MAX_SEARCH_CHROMA` settles to well under a thousandth of a chroma unit
-/// — far finer than the 1/255 the answer is eventually quantized to, and the
+/// `0..MAX_SEARCH_CHROMA` settles to well under a millionth of a chroma unit —
+/// far finer than the 1/255 the answer is eventually quantized to, and the
 /// whole search runs only when the gradient changes.
 const GAMUT_BISECTIONS: u32 = 20;
 
-/// Chroma the search brackets from above. sRGB's most saturated color reaches
-/// about 133 (blue, near `L*` 32), so nothing is ever cut off by this; it is
-/// the bracket rather than a limit.
-const MAX_SEARCH_CHROMA: f64 = 200.0;
+/// Chroma the search brackets from above. Oklab's most saturated sRGB color
+/// reaches about 0.32, so nothing is ever cut off by this; it is the bracket
+/// rather than a limit.
+const MAX_SEARCH_CHROMA: f64 = 0.4;
 
-/// The largest chroma sRGB can show at this lightness and hue.
+/// The largest Oklab chroma sRGB can show at this `L*` and hue.
 ///
-/// Bisection, which needs the in-gamut chromas at a fixed `L*` and hue to be
-/// one interval running out from the neutral axis. They are: the gamut is a
-/// convex solid in linear RGB and the map into Lab is monotone per channel, so
-/// it stays star-shaped about the `L*` axis — every ray out from a neutral
-/// crosses the boundary once.
+/// Bisection, which needs the in-gamut chromas at a fixed lightness and hue to
+/// be one interval running out from the neutral axis. They are: the gamut is a
+/// convex solid in linear RGB, and holding luminance fixed cuts it with a
+/// plane, leaving a convex section that the neutral of that luminance sits
+/// inside — so every ray out from that neutral crosses the boundary once.
 ///
 /// Bisection is what makes the chroma knob possible at all: the answer varies
 /// with BOTH lightness and hue, over a boundary with no closed form, so a
 /// gradient free to move either one cannot carry a chroma figure that was
 /// worked out in advance.
-fn max_chroma(l: f64, h: f64) -> f64 {
+fn max_chroma(l_star: f64, h: f64) -> f64 {
     let (mut lo, mut hi) = (0.0f64, MAX_SEARCH_CHROMA);
     for _ in 0..GAMUT_BISECTIONS {
         let mid = 0.5 * (lo + hi);
-        if in_gamut(l, mid, h) {
+        if in_gamut_within(l_star, h, mid, 0.0) {
             lo = mid;
         } else {
             hi = mid;
@@ -101,6 +196,24 @@ fn max_chroma(l: f64, h: f64) -> f64 {
     // actually accepted, so what comes back is in gamut rather than within a
     // bisection step of it.
     lo
+}
+
+/// One color of the ramp: `L*` for lightness, an Oklab hue, and an ABSOLUTE
+/// Oklab chroma (the fraction is resolved by [`pitch_ramp_coords`]).
+///
+/// The clamp is a safety net over a path that should not need it — every
+/// chroma reaching here is under what [`max_chroma`] granted — and it is what
+/// keeps a color drawable if the Newton solve is ever handed a target it
+/// cannot reach.
+fn oklab_srgb(l_star: f64, h: f64, c: f64) -> Vec4 {
+    let ok_l = oklab_lightness_at(h, c, luminance_of_lightness(l_star));
+    let (cos_h, sin_h) = (h.to_radians().cos(), h.to_radians().sin());
+    let (r, g, b) = linear_srgb_of_oklab(ok_l, c * cos_h, c * sin_h);
+    let encode = |v: f64| {
+        let v = v.clamp(0.0, 1.0);
+        (if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }) as f32
+    };
+    Vec4::new(encode(r), encode(g), encode(b), 1.0)
 }
 
 /// The DESIGNED pitch-gradient curve as a function of normalized height `t`
@@ -116,17 +229,18 @@ fn max_chroma(l: f64, h: f64) -> f64 {
 /// [`PitchGradient::chroma`] for why an absolute chroma cannot be, and
 /// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is` for what holds this to
 /// it.
-fn pitch_ramp_lch(t: f64, gradient: PitchGradient) -> Vec4 {
-    let (l, c, h) = pitch_ramp_lch_coords(t, gradient);
-    lch(l, c, h)
+fn pitch_ramp_color(t: f64, gradient: PitchGradient) -> Vec4 {
+    let (l, h, c) = pitch_ramp_coords(t, gradient);
+    oklab_srgb(l, h, c)
 }
 
-/// The three coordinates [`pitch_ramp_lch`] converts, before the conversion.
+/// The three coordinates [`pitch_ramp_color`] converts, before the conversion:
+/// `L*`, an Oklab hue, and an absolute Oklab chroma.
 ///
 /// Split out for [`ramp_sample_in_gamut`], which has to ask about the color
-/// that was REQUESTED: [`lch`] clamps, so a color read back out of the table is
-/// inside sRGB whatever was asked for, and a clamp cannot also be the check on
-/// whether it was needed.
+/// that was REQUESTED: [`oklab_srgb`] clamps, so a color read back out of the
+/// table is inside sRGB whatever was asked for, and a clamp cannot also be the
+/// check on whether it was needed.
 ///
 /// Takes an already-sanitized gradient and does not re-sanitize. The invariant
 /// has boundaries rather than a scattering of owners — [`with_lut`] applies it
@@ -135,9 +249,9 @@ fn pitch_ramp_lch(t: f64, gradient: PitchGradient) -> Vec4 {
 /// [`PitchGradient::lightness_and_hue`] holds up its own public end. Only
 /// `chroma` is read raw here, which is what lets the gamut test hand in the
 /// out-of-range fraction a control cannot produce.
-fn pitch_ramp_lch_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
+fn pitch_ramp_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
     let (l, h) = gradient.lightness_and_hue(t);
-    (l, f64::from(gradient.chroma) * max_chroma(l, h), h)
+    (l, h, f64::from(gradient.chroma) * max_chroma(l, h))
 }
 
 /// Whether the curve's ask at `t` is a color sRGB can actually show, put to the
@@ -152,16 +266,18 @@ fn pitch_ramp_lch_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
 ///
 /// Half a quantization step of slack, where [`max_chroma`]'s own predicate
 /// takes none. The strictness there is what keeps the clamp idle: a bisection
-/// that stopped a hair OUTSIDE would hand back a chroma [`lch`] then has to
-/// clip. Asked the other question — was the clamp needed? — that same
-/// strictness reads pure white as out of gamut, since `Lch(100, 0, h)` converts
-/// a whisker past 255 and the sweep reaches `L*` 100 wherever a steep ramp
-/// flattens against the top of the axis. A clamp that moves a channel by less
-/// than half a byte moves no byte at all.
+/// that stopped a hair OUTSIDE would hand back a chroma [`oklab_srgb`] then has
+/// to clip. Asked the other question — was the clamp needed? — that same
+/// strictness reads the ends of the `L*` axis as out of gamut, since the
+/// Newton solve lands a whisker either side of exactly white or exactly black
+/// and the sweep reaches both wherever a steep ramp flattens against the top or
+/// bottom. A clamp that moves a channel by less than half a byte moves no byte
+/// at all — measured in LINEAR light here, where the slack is generous at the
+/// dark end and tight at the bright one, which is the way round that matters.
 #[cfg(test)]
 pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: PitchGradient) -> bool {
-    let (l, c, h) = pitch_ramp_lch_coords(t, gradient);
-    in_gamut_within(l, c, h, 0.5)
+    let (l, h, c) = pitch_ramp_coords(t, gradient);
+    in_gamut_within(l, h, c, 0.5 / 255.0)
 }
 
 /// The designed curve, for the test that pins how closely [`pitch_ramp_lut`]
@@ -169,7 +285,7 @@ pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: PitchGradient) -> bool {
 /// direct is precisely the mismatch the shared table exists to prevent.
 #[cfg(test)]
 pub(crate) fn designed_pitch_ramp(t: f64, gradient: PitchGradient) -> Vec4 {
-    pitch_ramp_lch(t, gradient.sanitized())
+    pitch_ramp_color(t, gradient.sanitized())
 }
 
 /// Run `read` over one gradient's table, without copying it.
@@ -205,7 +321,7 @@ fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) 
             let mut memo = memo.borrow_mut();
             if memo.as_ref().is_none_or(|(key, _)| *key != gradient) {
                 let lut = std::array::from_fn(|k| {
-                    pitch_ramp_lch(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
+                    pitch_ramp_color(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
                 });
                 *memo = Some((gradient, lut));
             }
@@ -284,7 +400,7 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
             let (l, c) = (f64::from(key.0), f64::from(key.1));
             let circle = std::array::from_fn(|k| {
                 let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
-                lch(l, c * max_chroma(l, h), h)
+                oklab_srgb(l, h, c * max_chroma(l, h))
             });
             *memo = Some((key, circle));
         }
@@ -321,7 +437,7 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// color match there is, and structural agreement passes it at any table size.
 ///
 /// What the table's size buys is therefore fidelity to the DESIGNED curve
-/// ([`pitch_ramp_lch`]), never agreement between shapes — see [`PITCH_LUT_N`]
+/// ([`pitch_ramp_color`]), never agreement between shapes — see [`PITCH_LUT_N`]
 /// for why that fidelity is worth far less per entry than it looks.
 pub fn pitch_lut_color(
     pitch: f32,
@@ -374,6 +490,13 @@ pub fn channel_color(
         // signal). Ignored never reaches here — the tracker drops it.
         ChannelRole::Outline | ChannelRole::Ignored => Vec4::new(0.85, 0.85, 0.88, 1.0),
     }
+}
+
+/// [`max_chroma`], for the test that keeps [`PitchGradient`]'s quoted figures
+/// honest. Nothing outside a test may reach the gamut search direct.
+#[cfg(test)]
+pub(crate) fn max_chroma_for_docs(l_star: f64, h: f64) -> f64 {
+    max_chroma(l_star, h)
 }
 
 /// The idle layer's color: the grid color's RGB at full alpha. The grid's

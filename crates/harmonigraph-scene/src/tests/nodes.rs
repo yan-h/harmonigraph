@@ -243,13 +243,13 @@ fn the_table_tracks_the_curve_it_samples() {
     // Pin that separately so a future cut to the constant shows up as the
     // gradient drifting off its design rather than as nothing at all.
     //
-    // 2.2/255 against the 1.8 the constant currently measures on the default
+    // 4.2/255 against the 3.4 the constant currently measures on the default
     // gradient. The slack is there because the worst case is governed by where
     // a sample lands relative to a corner in the gamut's own boundary, so a
     // change to the default's four knobs moves those corners and swings the
     // number without anything being wrong — but it is drawn tight enough to
-    // fail every cut a person would actually make: 48 measures 2.5/255, 32
-    // measures 4.0, 24 measures 5.4, and 16 measures 7.9.
+    // fail every cut a person would actually make: 48 measures 5.6/255, 32
+    // measures 7.5, 24 measures 7.0, and 16 measures 8.0.
     let (dark, bright) = (24.0f32, 108.0f32);
     let mut worst = 0.0f32;
     let mut worst_pitch = 0.0f32;
@@ -266,7 +266,7 @@ fn the_table_tracks_the_curve_it_samples() {
         pitch += 0.01;
     }
     assert!(
-        worst * 255.0 < 2.2,
+        worst * 255.0 < 4.2,
         "table strays {:.1}/255 from the designed curve at MIDI {worst_pitch:.2}",
         worst * 255.0
     );
@@ -763,4 +763,3 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         "the ring is coloured for a slot the indicator is not drawn at",
     );
 }
-
