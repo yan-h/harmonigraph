@@ -191,6 +191,11 @@ struct Uniforms {
     view_proj: [f32; 16],
     cam_right: [f32; 4],
     cam_up: [f32; 4],
+    /// x: scene time in seconds; y: base node radius (world units); z unused;
+    /// w unused — it carried the node style, the core orb's paint, back when
+    /// the core had more than one. A retired slot rather than a repack, which
+    /// would renumber the ones around it for nothing (as with `misc3.w` and
+    /// `misc4.y`).
     misc: [f32; 4],
     /// x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     /// (the shader converts its screen-pixel AA softness to render
@@ -221,14 +226,19 @@ struct Uniforms {
     /// trailing fields are safe to add here.)
     misc4: [f32; 4],
     /// x: grid line thickness as a multiple of the shader's built-in grid
-    /// width; y: draw the melody/bass mark on the core (pitch class
-    /// indicator); z: draw it on the octave glyphs; w unused. Every
-    /// earlier misc slot is spoken for, so the grid's knob starts a new
-    /// one — safe per the note on `misc4`.
+    /// width; y unused (a retired slot rather than a repack, like `misc3.w`);
+    /// z: padding inside the octave layer in quad UV units — the gap between
+    /// neighbouring sectors AND between the band and the mark rings;
+    /// w: the melody/bass mark rings' thickness, same units, where 0 means no
+    /// rings (so this slot is NOT free — `mark_ring_thickness` reads it, and
+    /// the octave layer gates the rings on it). Every earlier misc slot is
+    /// spoken for, so the grid's knob starts a new one — safe per the note on
+    /// `misc4`.
     misc5: [f32; 4],
     /// x: trail mark style (0 off, 1 lift, 2 ring, 3 tint); y: trail
     /// strength 0..1 — both feed the idle-marker branch alone (see
-    /// `TrailMark`); misc5 was full, so the trail started its own slot.
+    /// `TrailMark`); misc5 carried no room the trail could take without a
+    /// repack, so it started its own slot.
     /// z: the sevens knockout's fade width, in the uv of a full-size node
     /// (`Scene::sevens_soft`); w: the melody/bass mark rings' shimmer pattern
     /// (0 off, then one index per pattern — see `Pulse::shader_index`).
@@ -298,8 +308,6 @@ struct GpuInstance {
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
     octaves: [u32; 3],
-    /// Per-note animation seed (small constant, not a timestamp).
-    seed: f32,
     /// The node's pitch class in cents (0..1200). It both PLACES the octave
     /// indicators and COLORS them, off the one quantity: an indicator's
     /// octave has a pitch, that octave's C plus this, and the indicator sits
@@ -334,9 +342,9 @@ impl GpuInstance {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3, 4 => Float32,
-            5 => Float32, 6 => Float32, 7 => Uint32x2,
-            8 => Float32x4, 9 => Float32x4, 10 => Float32, 11 => Float32x2
+            0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Uint32x3,
+            4 => Float32, 5 => Float32, 6 => Uint32x2,
+            7 => Float32x4, 8 => Float32x4, 9 => Float32, 10 => Float32x2
         ],
     };
 }
@@ -630,7 +638,6 @@ impl LatticeCallback {
                     if n.outlined { 1.0 } else { 0.0 },
                 ],
                 octaves: pack_octaves(&n.octaves),
-                seed: n.seed,
                 cents: n.cents,
                 home: if n.on_home { 1.0 } else { 0.0 },
                 marks: [n.melody_slots, n.bass_slots],
@@ -734,12 +741,7 @@ impl LatticeCallback {
                 view_proj: view_proj.to_cols_array(),
                 cam_right: right.extend(0.0).to_array(),
                 cam_up: up.extend(0.0).to_array(),
-                misc: [
-                    scene.time,
-                    scene.node_radius,
-                    0.0,
-                    scene.node_style.shader_index() as f32,
-                ],
+                misc: [scene.time, scene.node_radius, 0.0, 0.0],
                 misc2: [
                     scene.darkest_pitch,
                     scene.brightest_pitch,

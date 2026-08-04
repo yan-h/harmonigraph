@@ -8,7 +8,7 @@ use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, ValueBar};
 use crate::SharedState;
-use harmonigraph_scene::{NodeStyle, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
+use harmonigraph_scene::{Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -30,8 +30,9 @@ pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dy
 
 /// Core: the mark at a sounding node's center. One continuous shape sized by
 /// the radius (0 = off, like Bloom) and morphed by Solidity from a soft glow
-/// (0) to the classic solid orb (1), painted per the Style row. Independent
-/// of the Octaves layer.
+/// (0) to the classic solid orb (1), painted as one calm disc that blends the
+/// sounding octaves' colors. Two bars and no style row: the paint is not a
+/// choice. Independent of the Octaves layer.
 fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.heading("Core");
     ValueBar::new(&mut view.core_radius, 0.0..=0.9, "Radius")
@@ -48,22 +49,6 @@ fn core_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  between the disc fades in over its glow and its \
                  edge crisps",
             );
-        // Switchable paints (idle nodes look the same in all).
-        // Steady is a calm solid disc blending the sounding octaves'
-        // colors; the rest are field styles — Vortex the gas look,
-        // Checker and Spiral patterns on the sphere. The paint
-        // dissolves with the disc toward the glow end.
-        choice_row(
-            ui,
-            "Style",
-            &mut view.node_style,
-            &[
-                (NodeStyle::Steady, "Steady", ""),
-                (NodeStyle::Vortex, "Vortex", ""),
-                (NodeStyle::Checker, "Checker", ""),
-                (NodeStyle::Spiral, "Spiral", ""),
-            ],
-        );
     });
 }
 

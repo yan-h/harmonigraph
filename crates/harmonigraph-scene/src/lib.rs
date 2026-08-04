@@ -40,9 +40,7 @@ pub use octaves::{
     DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
-pub use style::{
-    HighlightExtremes, IdleMarker, NodeStyle, PitchGradient, Pulse, SevensLabel,
-};
+pub use style::{HighlightExtremes, IdleMarker, PitchGradient, Pulse, SevensLabel};
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
 
@@ -64,8 +62,8 @@ const NODE_RADIUS_FACTOR: f32 = 0.25;
 
 /// Seconds an indicator on the outer layer eases in — the octave sectors
 /// and the melody/bass rings alike. Keeps a fresh octave's color GROWING
-/// into the gas swirl instead of instantly repainting its share of the disc
-/// (and softens glyph pop-in); short enough to still feel immediate.
+/// into the node's blend instead of instantly repainting its share of the
+/// disc (and softens glyph pop-in); short enough to still feel immediate.
 ///
 /// ONE time for both, because a ring and the sector it links back to belong
 /// to the same note: easing them in at different rates would have the two
@@ -136,10 +134,6 @@ pub struct NodeInstance {
     /// range lights the outermost indicator on its side rather than
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
-    /// Small constant seeding animation variety. NOT a timestamp — only
-    /// ever used as a seed. A stable per-node hash for the field styles
-    /// (see [`NodeStyle::is_field_style`]); Steady ignores it.
-    pub seed: f32,
     /// Render as an outline instead of a filled disc (channel 14, v1's
     /// "channel 15" in MIDI convention).
     pub outlined: bool,
@@ -271,13 +265,13 @@ pub struct Scene {
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
     /// Seconds for global shader animation, wrapped hourly so f32
-    /// precision holds in long sessions. The field styles clock on this so
-    /// their fields keep flowing across note events (at worst the pattern
-    /// jumps once an hour at the wrap).
+    /// precision holds in long sessions. The shimmer clocks on this: its
+    /// sheet is one field spanning the whole lattice, so every node must
+    /// read the same clock (at worst the sheet jumps once an hour at the
+    /// wrap).
     pub time: f32,
     /// Base node radius in world units (scales with lattice spacing).
     pub node_radius: f32,
-    pub node_style: NodeStyle,
     /// The core's radius in quad UV units; `0` turns the core off (nothing
     /// at all). Sizes both the disc and its glow; the shader reads solidity
     /// separately (`core_solidity`).

@@ -2,7 +2,7 @@
 
 Items that were evaluated and consciously parked — not abandoned. Each entry
 carries enough context (state, the actual work, the catch, and a value/effort
-read) to pick it up cold later. Neither blocks anything today.
+read) to pick it up cold later. Nothing here blocks anything today.
 
 ## Depth-buffer sorting
 
@@ -18,9 +18,9 @@ infrastructure — the header comment flags it as "written but not yet read."
 so overlapping nodes resolve per-pixel by true depth instead of draw order.
 
 **The catch — why it isn't a one-line flag flip.** The nodes aren't opaque
-spheres. They're soft, semi-transparent discs with glows; the field node
-styles (Vortex / Spiral / Checker) and the envelope fades are
-translucent. Depth testing + alpha blending is order-dependent:
+spheres. They're soft, semi-transparent discs with glows, and both the glow
+skirt and the envelope fades are translucent. Depth testing + alpha blending
+is order-dependent:
 
 - if transparent fragments *write* depth, a faint glow halo starts occluding
   nodes behind it → visible haloes / hard edges;
@@ -39,36 +39,18 @@ glow-based aesthetic doesn't obviously benefit. **Do it only if a specific
 overlap artifact shows up in practice** — otherwise the infrastructure can
 keep sitting there unused at zero cost.
 
-## Render-style final trim
-
-**State.** Most of the "prune the experiments" work is already done — see the
-enum comments in `crates/harmonigraph-scene/src/lib.rs`:
-
-- **`NodeStyle`**: trimmed from a 15-style set down to **4** — Steady,
-  Vortex, Checker, Spiral. (Breathe, Sparks, Wire, Corona, Plasma, Aurora,
-  Marble, Lava, Filament, Stripes, Tiles and Pinwheel were removed, kept only
-  as `serde` aliases onto Steady so old projects still load.)
-- **`OuterStyle`**: gone. The glyph shapes settled on slices and the layer
-  became unconditional, so the enum and its persisted key were dropped; an
-  old blob's `outer_style` is now an ignored unknown field.
-- **`CoreStyle`**: gone. It was replaced by a `core_radius` +
-  `core_solidity` slider pair and kept as a load-only enum for a while; the
-  version floor made that fold unreachable and the enum went with it, so an
-  old blob's `core_style` is now an ignored unknown field.
-
-**The work.** A final aesthetic pass on the 4 surviving node styles: decide
-whether Vortex, Checker and Spiral all earn their keep. Each cut
-removes one shader branch (`lattice.wgsl`, indexed by
-`NodeStyle::shader_index`) and one enum variant, keeping a `serde` alias onto
-the survivor so persisted views still load (the established pattern).
-
-**Value / effort.** Low effort — removal is mechanical. The gate is a human
-aesthetic judgment on the *live, rendered* styles, which can't be automated.
-The natural first step is an inventory of what each surviving style does (from
-the shader) and where they visually overlap, then a pick of which to cut.
-
 ## Not deferred — closed
 
+- **Render-style final trim.** **Done.** The aesthetic pass the entry asked
+  for was made, and none of the animated paints was kept: Vortex, Checker and
+  Spiral are gone along with the field machinery behind them (the noise, the
+  sphere mapping, the per-node seed and the swirl gradient), and the core is
+  the steady disc-and-glow alone. `NodeStyle` went with them rather than
+  surviving as a one-variant enum, the way `OuterStyle` and `CoreStyle` did
+  before it: a blob's `node_style` is now an ignored unknown field, held by
+  `a_persist_blob_naming_a_retired_node_style_still_loads`. What the core IS
+  is two bars — `core_radius` and `core_solidity` — and the octave-color
+  blend `octave_glow_color` lays around it.
 - **The piano roll's geometry** (was two entries here: baking settled notes
   into cached meshes, then superseding that with a wgpu callback). **Built.**
   The roll now draws as one instanced quad per note segment through

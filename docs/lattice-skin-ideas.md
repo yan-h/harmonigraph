@@ -4,12 +4,13 @@ Brainstorm springboard for alternative lattice looks (BACKLOG `[lattice]`
 "brainstorm some more skins"). **Ideas only — nothing here is implemented
 or scheduled.** Pick whatever's appealing and it can be built later.
 
-Two independent axes today:
+Two places a skin reaches, and only one of them is an axis today:
 
-- **Node body** — `NodeStyle` enum (`harmonigraph-scene`) → shader index →
-  a branch in `lattice.wgsl` `fs_main`. Adding a look = enum variant +
-  shader branch. Current set: Steady + three field styles
-  (Vortex/Checker/Spiral).
+- **Node body** — ONE paint, in `lattice.wgsl`'s `core_layer`: the steady
+  disc and its glow, sized by `core_radius` / `core_solidity` and colored by
+  the octave blend `octave_glow_color` lays around the node. There is no
+  style enum to add a variant to — a second paint means a branch there and a
+  setting to pick it, which is what the retired `NodeStyle` was.
 - **Chrome** — grid lines and chord beams live in `fs_edge` /
   `derive_grid` / `derive_edges`; all colors (node idle, grid line, accent)
   live in one `Skin` struct (`harmonigraph-scene::skin`).
@@ -19,10 +20,10 @@ new node shapes are cheap: change the coverage math, keep the compositing.
 
 ## Node bodies
 
-- **Solid fill** — a matte filled disc, no glow, no gas. The literal
+- **Solid fill** — a matte filled disc, no glow at all. The literal
   "filled circle instead of empty"; calmest possible look, pitch/channel
-  color at full. Good default candidate for people who find the field
-  styles busy.
+  color at full — a step past what solidity 1 already gives, which keeps its
+  skirt.
 - **Outline-only (rings for everything)** — what channel-14 already does,
   promoted to a style: every note a hollow colored ring, stroke weight
   tracking activation. A clean "wireframe lattice".
@@ -32,9 +33,8 @@ new node shapes are cheap: change the coverage math, keep the compositing.
   octave or velocity without needing the separate octave glyphs.
 - **Halftone fill** — disc filled with a dot screen whose density = level
   (print/comic feel); pairs well with a light skin.
-- **Calm orb** — a smooth radial-gradient sphere with limb darkening but
-  *without* the turbulent field, for a quieter 3-D read than the gas
-  styles.
+- **Calm orb** — a smooth radial-gradient sphere with limb darkening, for a
+  3-D read the flat disc has no way to give.
 - **Polygon nodes** — hex/triangle fills instead of circles, leaning into
   the lattice-as-tiling geometry (hex especially suits the triangular
   just-intonation grid).
@@ -78,8 +78,9 @@ centralizes this) plus a matching node/line choice:
 
 ## Cheapest first steps, if any of this gets picked up
 
-1. **Solid fill** node style — one enum variant + a two-line shader branch;
-   immediately gives the "filled circles" the backlog asked about.
+1. **Solid fill** node body — a two-line branch in `core_layer` and a
+   setting to reach it; immediately gives the "filled circles" the backlog
+   asked about.
 2. **Filled-dot idle placeholder** — swap the placeholder ring mask for a
    small disc; tiny change, and it removes the disc/ring shape mismatch at
    the root of the fade issues.

@@ -502,30 +502,72 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
     assert!(!restored.spectrum_config.show_spectrogram);
 }
 
-/// A field that has since been REMOVED must not take the whole blob down with
-/// it. A blob that fails to parse loses the entire UI state, not just the stale
-/// key — so every settings removal rides on serde ignoring what it has no field
-/// for, and this is where that is held.
+/// Splice `spliced` in ahead of the `anchor` key of a real blob and check the
+/// blob still comes through BOTH doors. A key that has since been removed must
+/// not take the whole blob down with it: a blob that fails to parse loses the
+/// entire UI state, not just the stale key, so every settings removal rides on
+/// serde ignoring what it has no field for, and this is where that is held.
 ///
-/// `spectrogram_fine_levels` existed only while the heatmap's stored precision
-/// was being judged by eye; the other four are the heatmap's opacity, contrast
-/// and private dB window, which every project saved before they were dropped
-/// still carries.
-#[test]
-fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
+/// Both doors, because only one of them is the editor's. An offline take reads
+/// the same blob through `render_config_from_persist`, and
+/// `both_doors_into_a_blob_agree_about_the_version_floor` is what keeps the two
+/// in step. They parse the same `UiPersist` today, so a stale key is skipped
+/// identically and the second assertion is redundant — but narrowing the
+/// offline door to a partial struct is the obvious optimization (it wants only
+/// `render`), and that is exactly what would let a key it has no field for sink
+/// a take while the editor went on loading.
+fn a_spliced_blob_survives_both_doors(anchor: &str, spliced: &str) {
     let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    // Non-defaults on both sides of the splice, so "the blob survived" is
+    // distinguishable from "it sank and everything reverted": the view is what
+    // the editor door restores, the lead-in what the offline door reads.
     state.view.extent_sevens = 3;
+    state.take.render_config.lead_in = 2.5;
     let saved = state.save_persist();
-    // Put the departed fields back, exactly as those builds wrote them.
-    let gone = "spectrogram_fine_levels:true,spectrogram_opacity:0.85,\
-                spectrogram_own_range:true,spectrogram_floor_db:-60.0,\
-                spectrogram_ceiling_db:-20.0,spectrogram_gamma:1.6,";
-    let stale = saved.replace("spectrogram_color:", &format!("{gone}spectrogram_color:"));
+    let stale = saved.replace(anchor, &format!("{spliced}{anchor}"));
     assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
 
     let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
     restored.load_persist(&stale);
-    assert_eq!(restored.view.extent_sevens, 3, "an unknown field must not sink the blob");
+    assert_eq!(restored.view.extent_sevens, 3, "an unknown key must not sink the blob");
+
+    let offline = crate::render_config_from_persist(&stale)
+        .expect("an unknown key must not sink the offline door either");
+    assert_eq!(offline.lead_in, 2.5, "the offline door must read past an unknown key");
+}
+
+/// The numeric case. `spectrogram_fine_levels` existed only while the heatmap's
+/// stored precision was being judged by eye; the other five are the heatmap's
+/// opacity, contrast and private dB window, which every project saved before
+/// they were dropped still carries.
+#[test]
+fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
+    // Put the departed fields back, exactly as those builds wrote them.
+    a_spliced_blob_survives_both_doors(
+        "spectrogram_color:",
+        "spectrogram_fine_levels:true,spectrogram_opacity:0.85,\
+         spectrogram_own_range:true,spectrogram_floor_db:-60.0,\
+         spectrogram_ceiling_db:-20.0,spectrogram_gamma:1.6,",
+    );
+}
+
+/// The same rule, for the key every project above the version floor carries:
+/// the core's paint was a choice of styles, and `node_style` names whichever of
+/// the seventeen the enum answered to that project was drawn with. It gets its
+/// own case because what it carries is an ENUM TOKEN and not a number — the
+/// shape that would need a type to parse into if the reader were strict about
+/// what it has no field for.
+///
+/// Both tokens run. `Vortex` is a style that survived to the end; `Pinwheel` is
+/// one only an alias kept loading. They are equally unknown now, which is a
+/// claim the pair has to make by BEING run — asserting it in a comment over a
+/// body that splices one of them is how the two drift apart.
+#[test]
+fn a_persist_blob_naming_a_retired_node_style_still_loads() {
+    // Where the key sat, written as those builds wrote it.
+    for token in ["Vortex", "Pinwheel"] {
+        a_spliced_blob_survives_both_doors("pitch_gradient:", &format!("node_style:{token},"));
+    }
 }
 
 /// The mirror of the case above: a field the blob is MISSING must not sink it

@@ -9,17 +9,14 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     cam_right: vec4<f32>,
     cam_up: vec4<f32>,
-    // x: global time (s, wraps hourly). The gas styles clock on this so
-    //    their fields keep flowing across note events (at worst the pattern
-    //    jumps once an hour at the wrap); the other styles animate on the
-    //    instance age/seed, which stay small and precise however long the
-    //    session runs.
+    // x: global time (s, wraps hourly). The shimmer clocks on this: its
+    //    sheet spans the whole lattice, so every node has to read one clock
+    //    (at worst the sheet jumps once an hour at the wrap).
     // y: base node radius (world units),
     // z: unused,
-    // w: node style — the core orb's paint (0 steady, 3 vortex, 12 spiral,
-    //    13 checker). Indices are sparse: they are preserved from the
-    //    original 15-style set so the kept styles' branches below stay
-    //    unchanged (see NodeStyle::shader_index in harmonigraph-scene).
+    // w: unused — it carried the node style, the core orb's paint, back
+    //    when the core had more than one. A retired slot rather than a
+    //    repack, which would renumber the ones around it for nothing.
     misc: vec4<f32>,
     // x: darkest_pitch, y: brightest_pitch (MIDI notes); z: render scale
     // (offscreen pixels per screen pixel — converts the screen-pixel
@@ -56,10 +53,12 @@ struct Uniforms {
     // x: trail mark style — how a node the music has already visited is
     //    marked (0 off, 1 lift, 2 ring, 3 tint; see TrailMark). y: trail
     //    strength 0..1. z: the sevens knockout's fade width, read below by
-    //    the vertex stage. w unused.
-    // Read ONLY by idle_marker: a memory must never be mistakable for a
-    // sounding note, and confining it to the idle layer is what guarantees
-    // that rather than merely intending it.
+    //    the vertex stage. w: the melody/bass mark rings' shimmer pattern
+    //    (0 off, then one index per pattern; see Pulse::shader_index), read
+    //    by mark_pulse — NOT a free slot.
+    // x and y are read ONLY by idle_marker: a memory must never be mistakable
+    // for a sounding note, and confining them to the idle layer is what
+    // guarantees that rather than merely intending it.
     misc6: vec4<f32>,
     // The ground the lattice is painted onto (the pane fill this pass is
     // composited over). Only the sevens knockout reads it: without it the
@@ -198,38 +197,34 @@ struct Instance {
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed.
     @location(3) octaves: vec3<u32>,
-    // Animation seed: a small constant, NOT a timestamp. A stable per-NODE
-    // hash for the field styles (the scene picks — see node_seed in
-    // harmonigraph-scene); Steady ignores it.
-    @location(4) seed: f32,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
     // indicators and COLORS them, off the one quantity: each indicator's
     // octave has a pitch, that octave's C plus this, and the indicator sits
     // at that pitch's angle on the shared axis (see oct_sector) in that
     // pitch's color.
-    @location(5) cents: f32,
+    @location(4) cents: f32,
     // 1 on the home (center sevens) sheet: idle home nodes draw a blank
     // placeholder ring where their disc would be.
-    @location(6) home: f32,
+    @location(5) home: f32,
     // Melody/bass marks: x = melody slots, y = bass slots, one bit per
     // octave slot. Which SECTOR each mark's ring links back to (see
     // mark_ring); the ring itself is per node, and its fade level rides
     // params.y/params.z.
-    @location(7) marks: vec2<u32>,
+    @location(6) marks: vec2<u32>,
     // Each mark's own color: its own sector's pitch off the ramp, with no lift
     // on top of it (see NodeInstance::melody_color), so a ring reads as
     // belonging to the indicator it points at rather than as a fixed livery.
-    @location(8) melody_color: vec4<f32>,
-    @location(9) bass_color: vec4<f32>,
+    @location(7) melody_color: vec4<f32>,
+    @location(8) bass_color: vec4<f32>,
     // How strongly the music is remembered at this node, 0..1 (see
     // NodeInstance::trail). Feeds the idle marker and nothing else.
-    @location(10) visited: f32,
+    @location(9) visited: f32,
     // The sevens layer: x = billboard size factor (1 on the home sheet,
     // smaller with every step off it), y = knockout gutter width, in the uv
     // units of a FULL-SIZE node — the vertex shader divides by the size
     // factor so the gap comes out the same width whatever the node's size.
     // 0 means no gutter. See ViewConfig::sevens_size / _gutter.
-    @location(11) sevens: vec2<f32>,
+    @location(10) sevens: vec2<f32>,
 };
 
 struct VsOut {
@@ -238,20 +233,19 @@ struct VsOut {
     @location(1) color: vec4<f32>,
     @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
-    @location(4) seed: f32,
-    @location(5) @interpolate(flat) cents: f32,
-    @location(6) @interpolate(flat) home: f32,
-    @location(7) @interpolate(flat) marks: vec2<u32>,
-    @location(8) @interpolate(flat) melody_color: vec4<f32>,
-    @location(9) @interpolate(flat) bass_color: vec4<f32>,
-    @location(10) @interpolate(flat) visited: f32,
+    @location(4) @interpolate(flat) cents: f32,
+    @location(5) @interpolate(flat) home: f32,
+    @location(6) @interpolate(flat) marks: vec2<u32>,
+    @location(7) @interpolate(flat) melody_color: vec4<f32>,
+    @location(8) @interpolate(flat) bass_color: vec4<f32>,
+    @location(9) @interpolate(flat) visited: f32,
     // Already converted to THIS node's uv (see vs_main).
-    @location(11) @interpolate(flat) gutter: f32,
+    @location(10) @interpolate(flat) gutter: f32,
     // The node's own outermost feature and the clearing's fade width, both
     // in this node's uv — computed once in the vertex shader because both
     // depend on the instance's size and its mark state.
-    @location(12) @interpolate(flat) rim: f32,
-    @location(13) @interpolate(flat) soft: f32,
+    @location(11) @interpolate(flat) rim: f32,
+    @location(12) @interpolate(flat) soft: f32,
     // Where this fragment sits on the plane the billboards face, in world
     // units: its world position resolved onto the camera's own right/up
     // axes. Every billboard faces that same plane, so this is ONE coordinate
@@ -259,7 +253,7 @@ struct VsOut {
     // a single sheet of bands crossing node after node instead of a copy per
     // node. Interpolated rather than flat for the same reason: a band has to
     // cross a node, not step from one to the next.
-    @location(14) field: vec2<f32>,
+    @location(13) field: vec2<f32>,
 };
 
 @vertex
@@ -307,7 +301,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsOut {
     out.color = inst.color;
     out.params = inst.params;
     out.octaves = inst.octaves;
-    out.seed = inst.seed;
     out.cents = inst.cents;
     out.home = inst.home;
     out.marks = inst.marks;
@@ -348,8 +341,8 @@ const PITCH_LUT_N: u32 = 64u;
 // the call site — taken at the top of the fragment fn, outside any
 // non-uniform control flow). Fixed-width smoothstep edges blur as a
 // quad grows on screen and alias as it shrinks; this keeps every shape
-// edge equally soft at all zooms. Glows and gas interiors deliberately
-// keep their proportional falloffs.
+// edge equally soft at all zooms. The glow deliberately keeps its
+// proportional falloff.
 fn aa_inside(edge: f32, x: f32, w: f32) -> f32 {
     return 1.0 - smoothstep(edge - w, edge + w, x);
 }
@@ -913,114 +906,10 @@ fn pitch_lut_color(pitch: f32) -> vec3<f32> {
     return mix(u.pitch_lut[i0].rgb, u.pitch_lut[i1].rgb, f - floor(f));
 }
 
-// ---- Style helpers ---------------------------------------------------------
-
-fn hash21(p: vec2<f32>) -> f32 {
-    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
-}
-
-// Smooth value noise; cheap and good enough for flame flicker.
-fn vnoise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let w = f * f * (3.0 - 2.0 * f);
-    return mix(
-        mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), w.x),
-        mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), w.x),
-        w.y,
-    );
-}
-
-// Three octaves of value noise: enough turbulence to read as gas without
-// eating fill-rate. Normalized back to ~0..1.
-fn fbm(p: vec2<f32>) -> f32 {
-    var v = 0.0;
-    var amp = 0.5;
-    var q = p;
-    for (var i = 0u; i < 3u; i = i + 1u) {
-        v = v + amp * vnoise(q);
-        q = q * 2.03 + vec2<f32>(1.7, -4.3);
-        amp = amp * 0.5;
-    }
-    return v * (1.0 / 0.875);
-}
-
-fn rot2(a: f32) -> mat2x2<f32> {
-    let c = cos(a);
-    let s = sin(a);
-    return mat2x2<f32>(vec2<f32>(c, s), vec2<f32>(-s, c));
-}
-
-// ---- Field styles ----------------------------------------------------------
-// Everything except Steady: an active disc is painted by a FIELD — a
-// function of position that drives BOTH a brightness profile and a position
-// along the octave color gradient below, so every sounding octave's color is
-// present somewhere in the disc — in its own patches, bands, or cells,
-// interpolated where they meet, never averaged into a single hue. Vortex
-// drives the field with noise (the gas look); the pattern styles
-// (checker/spiral/pinwheel) with deterministic geometry mapped onto a
-// sphere and softened by the same noise wobble, so they share the gassy
-// look while staying recognizably structured.
-//
-// All fields are functions of GLOBAL time and a stable per-node seed (never
-// the per-note age/seed): the field at a node is one continuous flow that a
-// note lights up, so pressing, retriggering, or stacking octaves never
-// restarts or reshuffles the pattern.
-
-// Mirrors NodeStyle::is_field_style in harmonigraph-scene; keep the two in sync.
-// Steady is index 0; every kept field style has a nonzero index.
-fn is_field_style(style: u32) -> bool {
-    return style != 0u;
-}
-
-// Color at position `t` (0..1) along the gradient of SOUNDING octaves: the
-// sounding slots' pitch colors in pitch order, each owning a span of t
-// proportional to its level, blending linearly between span centers. A gas
-// pixel's noise value picks its t, so patch area tracks octave loudness.
-// Falls back to the node color when every octave envelope has faded (the
-// disc can outlive them when the note fade is longer).
-fn octave_swirl_color(octaves: vec3<u32>, cents: f32, t: f32, fallback: vec3<f32>) -> vec3<f32> {
-    var total = 0.0;
-    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-        total = total + octave_level(octaves, i);
-    }
-    if total < 1e-3 {
-        return fallback;
-    }
-    let pick = clamp(t, 0.0, 1.0) * total;
-    // Kernel-weighted blend: each octave contributes its color weighted by
-    // its level times a bump centered on its span, so pixels inside a span
-    // show ~pure color and seams crossfade narrowly. The level factor is
-    // the point: a releasing octave's color influence fades out WITH its
-    // envelope. (The previous span-center interpolation handed the
-    // outermost octaves full-color ownership of the gradient ends no
-    // matter how faded they were, so their color vanished with a snap the
-    // instant the level reached zero.)
-    var acc = 0.0;
-    var wsum = 0.0;
-    var csum = vec3<f32>(0.0);
-    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-        let level = octave_level(octaves, i);
-        if level <= 0.0 {
-            continue;
-        }
-        let center = acc + level * 0.5;
-        acc = acc + level;
-        // Bump width tracks the span (+ a small floor so it never hits
-        // zero); at full level a neighbor's kernel is ~exp(-4) inside this
-        // span, keeping patches pure rather than averaged.
-        let x = (pick - center) / (level * 0.5 + 0.02);
-        let w = level * exp(-x * x);
-        // Slot i is MIDI octave i - 1, whose C is MIDI i*12; fold in this
-        // node's pitch class for the octave's true pitch.
-        wsum = wsum + w;
-        csum = csum + pitch_lut_color(f32(i) * 12.0 + cents / 100.0) * w;
-    }
-    if wsum < 1e-5 {
-        return fallback;
-    }
-    return csum / wsum;
-}
+// ---- The core's color ------------------------------------------------------
+// An active disc is one calm shape carrying every sounding octave's color at
+// once, laid around it by angle. There is no second paint to switch to: the
+// core is this blend, at whatever solidity the disc is set to.
 
 // The TIGHTEST each octave's angular color lobe is drawn at (a von Mises-like
 // falloff): higher is tighter, more separated arcs. Tuned so neighbouring
@@ -1072,95 +961,6 @@ fn octave_glow_color(
         return fallback;
     }
     return csum / wsum;
-}
-
-// Orthographic sphere mapping for the pattern styles: the unit-sphere
-// point under this pixel. uv is clamped just inside the disc rim, so the
-// glow region beyond the disc keeps sampling the limb color instead of
-// hitting the degenerate z=0 edge. Feeding patterns angles from here
-// (longitude/latitude/polar) instead of raw uv is what makes them read
-// as painted ON a ball: equal angular steps compress toward the limb.
-fn sphere_point(uv: vec2<f32>) -> vec3<f32> {
-    let r = length(uv);
-    let p = uv * (min(r, 0.495) / max(r, 1e-5));
-    return vec3<f32>(p * 2.0, 2.0 * sqrt(max(0.25 - dot(p, p), 0.0)));
-}
-
-// A field style's scalar fields at one pixel: x picks the color along the
-// octave swirl gradient, y modulates brightness (billows / streaks / cells).
-// `time` is global (u.misc.x), `seed` the stable per-node hash.
-fn field_pattern(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> vec2<f32> {
-    if style == 3u {
-        // Vortex: differential rotation shears the colors into spiral
-        // streaks, like paint stirred with a spoon. Only integer multiples
-        // of the angle go through cos(), so there is no seam at +-pi.
-        let ang = atan2(uv.y, uv.x);
-        let spin = 2.0 * ang + 4.0 * d - time * 1.1 + seed;
-        let wob = (fbm(uv * 3.1 + vec2<f32>(seed * 5.1, time * 0.16)) - 0.5) * 2.6;
-        let t = 0.5 + 0.5 * cos(spin + wob);
-        // Brightness streaks rotate rigidly with the swirl (rotated-domain
-        // noise stays seam-free where angle-domain noise would not).
-        let q = rot2(time * 0.5) * uv;
-        let lum = 0.74 + 0.5 * fbm(q * 3.0 + vec2<f32>(seed * 5.0, 0.0));
-        return vec2<f32>(t, lum);
-    } else if style == 12u {
-        // Spiral: two-armed spiral of color waves winding out from the
-        // face center; the polar-angle radial term keeps the arms hugging
-        // the sphere. Integer angular harmonic, so no atan2 seam.
-        let q = sphere_point(uv);
-        let rho = acos(clamp(q.z, -1.0, 1.0));
-        let ang = atan2(uv.y, uv.x);
-        let wob = (fbm(uv * 2.5 + vec2<f32>(seed * 5.9, time * 0.12)) - 0.5) * 2.4;
-        let lum = 0.78 + 0.4 * fbm(uv * 3.0 + vec2<f32>(seed * 3.3, -time * 0.10));
-        return vec2<f32>(0.5 + 0.5 * cos(rho * 7.0 - 2.0 * ang - time * 0.5 + seed + wob), lum);
-    }
-    // Checker (the only remaining field style): soft cells on the globe
-    // graticule (longitude x latitude), tilted per node and slowly
-    // revolving, so the cells foreshorten toward the limb like a painted
-    // ball. cos*cos keeps the borders soft; middle octave colors seep
-    // through them.
-    let q = sphere_point(rot2(seed * 0.7) * uv);
-    let lon = atan2(q.x, q.z);
-    let lat = asin(clamp(q.y, -1.0, 1.0));
-    let wob = (fbm(uv * 2.7 + vec2<f32>(seed * 4.9, time * 0.12)) - 0.5) * 1.2;
-    let v = cos(lon * 4.0 + time * 0.22 + seed + wob) * cos(lat * 4.0 - wob);
-    let lum = 0.78 + 0.35 * fbm(uv * 3.1 + vec2<f32>(seed * 2.7, time * 0.10));
-    return vec2<f32>(0.5 + 0.5 * v, lum);
-}
-
-// Halo density (0..~1.5) at this pixel: turbulent gas wafting off the
-// star, replacing the old smooth exponential fringe (which read as a
-// halo pasted behind the disc). Three ingredients sell the motion:
-// - plume: a slowly evolving per-direction strength choosing WHERE the
-//   surface vents, so the fringe is plumes and gaps, not an even rim;
-// - waft: turbulence whose noise domain slides along the radial axis
-//   over time, so the detail visibly streams OUTWARD, and whose sample
-//   direction rotates with height so wisps curl sideways as they rise
-//   (curl direction/strength is per-node);
-// - reach: the decay length itself follows plume and waft, giving an
-//   irregular, filamentous outer edge instead of a level exp() falloff.
-// Everything is sampled on the direction circle (never atan2), so there
-// is no angular seam. Same clock and seed rules as field_pattern.
-fn field_halo(style: u32, uv: vec2<f32>, d: f32, time: f32, seed: f32) -> f32 {
-    // The direction clamp keeps samples smooth near the disc center,
-    // where the halo shows through outlined (ring) nodes.
-    let dir = uv / max(d, 0.30);
-    let h = max(d - 0.42, 0.0);
-
-    // Style character: where and how strongly the surface vents.
-    var plume_dir = dir;
-    if style == 3u {
-        // Vortex: plumes trail around with the rotation.
-        plume_dir = rot2(time * 0.55) * dir;
-    }
-    let plume = fbm(plume_dir * 2.3 + vec2<f32>(seed * 3.1, time * 0.16));
-
-    // Outward-streaming turbulence, curling as it rises.
-    let curl = (fract(seed * 0.618034) - 0.5) * 3.0;
-    let waft = fbm(rot2(h * curl) * dir * 1.6 + vec2<f32>(seed * 7.7, d * 3.5 - time * 0.35));
-
-    let reach = 0.5 + 1.4 * plume * plume + 0.6 * (waft - 0.5);
-    return exp(-h * 9.0 / max(reach, 0.15)) * (0.30 + 0.70 * waft) * (0.35 + 0.65 * plume);
 }
 
 // ---- Trail marks -----------------------------------------------------------
@@ -1360,18 +1160,13 @@ fn gutter_coverage(d: f32, rim: f32, reach: f32, soft: f32) -> f32 {
 // its reach is SHORT: the mark rings live out at QUAD_MARGIN and the glyph
 // fade runs to GLYPH_FADE_LIMIT, so the outer half of a lit node's billboard
 // is past it -- an atan2 and an 11-slot color blend for a coverage of zero.
-fn core_layer(
-    in: VsOut, d: f32, aa: f32, oct: OctRing, style: u32, seed: f32,
-) -> vec4<f32> {
+fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let activation = in.params.x;
     let outlined = in.params.w;
-    let presence = activation;
     let radius = max(u.misc3.x, 0.0);  // core radius; 0 = off
     let solidity = u.misc4.x;          // 0 glow .. 1 orb
     // Radius 0 is off; fade the whole core in over the first sliver of the
-    // bar so it grows from nothing with no pop. `on` gates the (skippable)
-    // field work; core_on scales everything the core draws.
-    let on = radius > 0.0;
+    // bar so it grows from nothing with no pop.
     let core_on = smoothstep(0.0, CORE_FADE_IN, radius);
 
     let core_reach = max(GLOW_LIMIT, radius + CORE_EDGE_SOFT + aa);
@@ -1389,40 +1184,28 @@ fn core_layer(
     let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
     let core_cov = 1.0 - smoothstep(radius - edge, radius + edge, d);
     let filled = core_cov * solidity;
-    let disc = mix(filled, ring, outlined) * presence * core_on;
+    let disc = mix(filled, ring, outlined) * activation * core_on;
 
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
     // window it so it fades to exactly zero (with zero slope) inside the
     // quad edge.
     let window = 1.0 - smoothstep(0.5, GLOW_LIMIT, d);
-    // Field/glow domain scale: the paint and falloff were authored for the
-    // classic 0.46 orb, so scale their coordinates to the sized core (a
-    // bigger radius spreads the glow with it; at the default radius this is
-    // 1). The glow dims toward the soft end of the solidity axis (an
-    // under-glow) and brightens toward the orb; it drops to zero when None.
+    // Glow domain scale: the falloff is authored for the classic 0.46 orb,
+    // so scale its coordinates to the sized core (a bigger radius spreads
+    // the glow with it; at the default radius this is 1). The glow dims
+    // toward the soft end of the solidity axis (an under-glow) and brightens
+    // toward the orb.
     let fs = CORE_R_CLASSIC / max(radius, 0.1);
     let glow_base = mix(0.35, 0.6, solidity);
-    var glow = glow_base * activation * exp(-3.0 * d * fs) * window;
+    let glow = glow_base * activation * exp(-3.0 * d * fs) * window * core_on;
 
-    // Field styles waft turbulent gas off the surface instead of a smooth
-    // halo (see field_halo — venting plumes, outward-streaming curl, ragged
-    // reach). Crossfade it in with solidity, so a solid gas orb gets its
-    // wisps while the glow end stays a clean under-glow; clocked on global
-    // time so a retrigger never restarts the motion.
-    if on && is_field_style(style) && activation > 0.0 {
-        let gassy = activation * field_halo(style, in.uv * fs, d * fs, u.misc.x, seed) * window;
-        glow = mix(glow, gassy, solidity);
-    }
-    glow = glow * core_on;
-
-    let brightness = activation;
     // Every sounding octave's color, blended by angle — each hue laid in
     // its dot's direction (see octave_glow_color). This is the node's
-    // multi-color fill: Steady shows it directly on the disc (so a chord's
-    // disc mixes ALL its notes, not just the loudest), and the glow skirt
-    // carries the same blend, so disc and halo read as one colored field. A
-    // solo note falls back to its single color.
+    // multi-color fill: the disc shows it directly (so a chord's disc mixes
+    // ALL its notes, not just the loudest), and the glow skirt carries the
+    // same blend, so disc and halo read as one colored field. A solo note
+    // falls back to its single color.
     //
     // Those hues are laid in lobes fixed in ANGLE, so the arc a seam spans is
     // d/sqrt(kappa) — it shrinks with the radius, and every seam converges to a
@@ -1443,36 +1226,18 @@ fn core_layer(
     let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
     let octave_mix = octave_glow_color(
         in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, in.color.rgb,
-    ) * brightness;
-    var rgb = octave_mix;
+    ) * activation;
 
-    // Field styles instead paint the disc as a ball of gas or patterned
-    // light. The field sweeps each pixel through the sounding octaves'
-    // colors (patches, bands, or cells — never averaged), modulates
-    // brightness, and a limb-darkened profile keeps it reading as a sphere.
-    // Only the solid part shows it (the disc coverage weights it into the
-    // composite below), so it dissolves with the disc toward the glow end.
-    if on && is_field_style(style) && activation > 0.0 {
-        let field = field_pattern(style, in.uv * fs, d * fs, u.misc.x, seed);
-        let gas = octave_swirl_color(in.octaves, in.cents, field.x, in.color.rgb);
-        let limb = 1.12 - 0.35 * smoothstep(0.0, 0.5, d * fs);
-        rgb = mix(in.color.rgb * brightness, gas * brightness * field.y * limb, activation);
-    }
-    let disc_rgb = rgb;
-
-    // Composite disc OVER glow: the disc keeps its own color, the multi-
-    // color glow reads only where the disc doesn't reach (the halo). `f` is
-    // the share of this pixel's coverage that is glow-beyond-disc; where
-    // disc and glow are the same color it collapses to a no-op, so combined
-    // alpha and brightness are exactly the old additive glow.
-    let glow_rgb = octave_mix;
-    let f = glow * (1.0 - disc) / max(disc + glow, 1e-4);
-    let rgb_core = mix(disc_rgb, glow_rgb, f);
-
+    // Disc and glow carry the SAME blend, so there is nothing to composite
+    // between them: the color of the pixel is that blend, and its coverage is
+    // the two summed — exactly the additive glow. (A disc painted some other
+    // way would need the halo held out of it, which is a mix weighted by the
+    // share of the coverage that is glow-beyond-disc.)
+    //
     // Premultiplied: the idle marker is composited UNDER this, so a sounding
     // note draws over its own marker and reveals it again as it fades.
     let core_alpha = clamp(disc + glow, 0.0, 1.0);
-    return vec4<f32>(rgb_core * core_alpha, core_alpha);
+    return vec4<f32>(octave_mix * core_alpha, core_alpha);
 }
 
 /// What a node paints at this fragment. Both node entry points below return
@@ -1480,9 +1245,6 @@ fn core_layer(
 fn node_paint(in: VsOut) -> vec4<f32> {
     let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
     let activation = in.params.x;
-
-    let style = u32(u.misc.w + 0.5);
-    let seed = in.seed;
 
     // Screen-constant soft-band width: uv units per pixel (uv.x is linear
     // across the billboard, so fwidth is uniform over the quad and safe to
@@ -1507,7 +1269,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     }
 
     // An idle node paints its marker and nothing else — no disc (presence
-    // gates it), no glow, no field, no glyphs (a ghost needs presence too),
+    // gates it), no glow, no glyphs (a ghost needs presence too),
     // no mark rings (their own levels gate them), no knockout (it fades with
     // the note). Everything below still computes all of it and multiplies it
     // away, which on a lattice where most nodes are idle most of the time is
@@ -1549,7 +1311,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // The disc and its glow, premultiplied. Everything the layer needs is on
     // the instance or the uniforms, and nothing below reads its internals --
     // see `core_layer`, which is also where it stops being computed at all.
-    let core = core_layer(in, d, aa, oct, style, seed);
+    let core = core_layer(in, d, aa, oct);
     var base_alpha = core.w;
     var base_rgb = core.xyz;
 

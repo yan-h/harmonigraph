@@ -1592,7 +1592,6 @@ mod tests {
             color: glam::Vec4::ONE,
             activation,
             octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
-            seed: 0.0,
             outlined: false,
             hovered: false,
             on_home,
