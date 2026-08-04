@@ -49,13 +49,19 @@ fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
     )
 }
 
+/// Whether an LCh color is one sRGB can actually show, allowing each channel
+/// `slack` past either end of 0..255.
+fn in_gamut_within(l: f64, c: f64, h: f64, slack: f64) -> bool {
+    let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
+    let ok = |v: f64| (-slack..=255.0 + slack).contains(&v);
+    ok(rgb.r) && ok(rgb.g) && ok(rgb.b)
+}
+
 /// Whether an LCh color is one sRGB can actually show. STRICT: a channel a
 /// hair outside 0..255 is out, so a chroma this accepts survives
 /// [`lch`]'s clamp untouched and the color drawn is the color asked for.
 fn in_gamut(l: f64, c: f64, h: f64) -> bool {
-    let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
-    let ok = |v: f64| (0.0..=255.0).contains(&v);
-    ok(rgb.r) && ok(rgb.g) && ok(rgb.b)
+    in_gamut_within(l, c, h, 0.0)
 }
 
 /// Bisection steps [`max_chroma`] spends. Each halves the bracket, so 20 over
@@ -111,9 +117,51 @@ fn max_chroma(l: f64, h: f64) -> f64 {
 /// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is` for what holds this to
 /// it.
 fn pitch_ramp_lch(t: f64, gradient: PitchGradient) -> Vec4 {
-    let gradient = gradient.sanitized();
+    let (l, c, h) = pitch_ramp_lch_coords(t, gradient);
+    lch(l, c, h)
+}
+
+/// The three coordinates [`pitch_ramp_lch`] converts, before the conversion.
+///
+/// Split out for [`ramp_sample_in_gamut`], which has to ask about the color
+/// that was REQUESTED: [`lch`] clamps, so a color read back out of the table is
+/// inside sRGB whatever was asked for, and a clamp cannot also be the check on
+/// whether it was needed.
+///
+/// Takes an already-sanitized gradient and does not re-sanitize. The invariant
+/// has boundaries rather than a scattering of owners — [`with_lut`] applies it
+/// once for a whole table (and keys the memo on the result),
+/// [`designed_pitch_ramp`] does it for the test path, and
+/// [`PitchGradient::lightness_and_hue`] holds up its own public end. Only
+/// `chroma` is read raw here, which is what lets the gamut test hand in the
+/// out-of-range fraction a control cannot produce.
+fn pitch_ramp_lch_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
     let (l, h) = gradient.lightness_and_hue(t);
-    lch(l, f64::from(gradient.chroma) * max_chroma(l, h), h)
+    (l, f64::from(gradient.chroma) * max_chroma(l, h), h)
+}
+
+/// Whether the curve's ask at `t` is a color sRGB can actually show, put to the
+/// strict predicate instead of to the clamped result. For
+/// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is`, which cannot learn
+/// anything by reading the table back: every entry there has already been
+/// clamped into range by [`lch`].
+///
+/// Deliberately NOT sanitizing, so the test can hand in a chroma past 1.0 and
+/// watch this say no — a check whose failing case is unreachable is not a
+/// check.
+///
+/// Half a quantization step of slack, where [`max_chroma`]'s own predicate
+/// takes none. The strictness there is what keeps the clamp idle: a bisection
+/// that stopped a hair OUTSIDE would hand back a chroma [`lch`] then has to
+/// clip. Asked the other question — was the clamp needed? — that same
+/// strictness reads pure white as out of gamut, since `Lch(100, 0, h)` converts
+/// a whisker past 255 and the sweep reaches `L*` 100 wherever a steep ramp
+/// flattens against the top of the axis. A clamp that moves a channel by less
+/// than half a byte moves no byte at all.
+#[cfg(test)]
+pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: PitchGradient) -> bool {
+    let (l, c, h) = pitch_ramp_lch_coords(t, gradient);
+    in_gamut_within(l, c, h, 0.5)
 }
 
 /// The designed curve, for the test that pins how closely [`pitch_ramp_lut`]
@@ -121,7 +169,7 @@ fn pitch_ramp_lch(t: f64, gradient: PitchGradient) -> Vec4 {
 /// direct is precisely the mismatch the shared table exists to prevent.
 #[cfg(test)]
 pub(crate) fn designed_pitch_ramp(t: f64, gradient: PitchGradient) -> Vec4 {
-    pitch_ramp_lch(t, gradient)
+    pitch_ramp_lch(t, gradient.sanitized())
 }
 
 /// Run `read` over one gradient's table, without copying it.
@@ -147,16 +195,24 @@ fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) 
     // same picture are one cache entry rather than two.
     let gradient = gradient.sanitized();
     MEMO.with(|memo| {
-        let mut memo = memo.borrow_mut();
-        let fresh = memo.as_ref().is_none_or(|(key, _)| *key != gradient);
-        if fresh {
-            let lut = std::array::from_fn(|k| {
-                pitch_ramp_lch(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
-            });
-            *memo = Some((gradient, lut));
+        // The rebuild takes its mutable borrow and gives it back BEFORE `read`
+        // runs, which then holds a shared one. `read` is a caller's closure
+        // over a table this hands it, so the natural next one asks for another
+        // pitch color partway through — and a mutable borrow still standing
+        // there turns that into a BorrowMutError on the draw path rather than
+        // into a second read of the same table.
+        {
+            let mut memo = memo.borrow_mut();
+            if memo.as_ref().is_none_or(|(key, _)| *key != gradient) {
+                let lut = std::array::from_fn(|k| {
+                    pitch_ramp_lch(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
+                });
+                *memo = Some((gradient, lut));
+            }
         }
-        // The `else` branch cannot be reached with `memo` empty: the block
-        // above fills it whenever the key misses.
+        // The block above fills the slot whenever the key misses, so it is
+        // filled here whatever happened.
+        let memo = memo.borrow();
         read(&memo.as_ref().expect("memo filled above").1)
     })
 }
@@ -197,8 +253,21 @@ pub const HUE_CIRCLE_N: usize = 96;
 ///
 /// Keyed on the two knobs it actually depends on rather than on a whole
 /// gradient: the hue arc is the one being dragged while this is on screen, and
-/// keying on it would rebuild the circle every frame of a drag that cannot
-/// change it.
+/// keying on the gradient would rebuild the circle every frame of a drag that
+/// cannot change it.
+///
+/// What the key does NOT buy is a free Brightness or Chroma drag. Those move
+/// the circle, so every frame of one is a real miss here and another in the
+/// pitch table beside it — the two together are (`HUE_CIRCLE_N` +
+/// [`PITCH_LUT_N`]) x [`GAMUT_BISECTIONS`] LCh->sRGB conversions, measuring
+/// 454us on the UI thread per frame of such a drag.
+///
+/// That is the standing price of a chroma that follows the gamut instead of a
+/// figure worked out in advance (see [`max_chroma`]), and it is paid only while
+/// one of those two knobs is actually moving. Cutting it means either
+/// coarsening the bisection, which MOVES THE COLORS every pixel test is pinned
+/// to, or caching `max_chroma` against a quantized lightness — a second table
+/// with its own staleness to keep honest, for a cost nothing but a drag pays.
 pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
     /// The circle and the lightness/chroma pair it was built for.
     type Memo = Option<((f32, f32), [Vec4; HUE_CIRCLE_N])>;

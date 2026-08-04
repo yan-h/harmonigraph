@@ -426,13 +426,12 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
             )
             .clicked()
         {
-            let g = &mut view.pitch_gradient;
-            // The far end becomes the near one, so the arc keeps its place on
-            // the circle and only its direction changes. Negating the span
-            // alone would hold the START still and swing the arc off into hues
-            // the gradient never had.
-            g.hue_start = (g.hue_start + g.hue_span).rem_euclid(360.0);
-            g.hue_span = -g.hue_span;
+            // The arithmetic lives on the gradient rather than here: what a
+            // flip IS — the far end becoming the near one, so the arc keeps its
+            // place on the circle — is a property of the gradient that the bar
+            // beside this button previews and a test pins, and a second
+            // spelling of it here is the one that would drift.
+            view.pitch_gradient = view.pitch_gradient.flipped();
         }
     });
     SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(

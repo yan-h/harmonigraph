@@ -287,8 +287,9 @@ pub fn derive_scene(
                     // brackets a ramp-colored sector. Only the lit glyph —
                     // the band's ghosts wear the whitened node color, and a
                     // solo voice's glow keeps the channel hue, both of them
-                    // on purpose. The ramp is already lightened, so there is
-                    // no extra lift here.
+                    // on purpose. No extra lift on top of the ramp here: the
+                    // sector's glyph wears it as it comes, and a lightened
+                    // ring would read a shade off the one it brackets.
                     //
                     // Strongest marking voice wins the color; the slots still
                     // collect every one of them, since a release crossfades

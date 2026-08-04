@@ -205,11 +205,18 @@ impl PitchGradient {
     /// gradient assembled in code too.
     pub fn sanitized(self) -> PitchGradient {
         let finite = |v: f32, fallback: f32| if v.is_finite() { v } else { fallback };
+        let hue_span = finite(self.hue_span, default_hue_span())
+            .clamp(-Self::MAX_HUE_SPAN, Self::MAX_HUE_SPAN);
         PitchGradient {
             // Wrapped rather than clamped: it names a point on a circle.
             hue_start: finite(self.hue_start, default_hue_start()).rem_euclid(360.0),
-            hue_span: finite(self.hue_span, default_hue_span())
-                .clamp(-Self::MAX_HUE_SPAN, Self::MAX_HUE_SPAN),
+            // A span of zero has no direction, so it is written with the one
+            // sign that reads as none. `-0.0` is the sign that lies: it is not
+            // `< 0.0`, so everything that asks which way the arc runs takes it
+            // for positive, while `{:+}` prints it as "-0" — a bar that says
+            // one direction and behaves as the other. Flipping a zero span and
+            // dragging a flipped one down to nothing both produce it.
+            hue_span: if hue_span == 0.0 { 0.0 } else { hue_span },
             lightness: finite(self.lightness, default_lightness()).clamp(0.0, 100.0),
             // The ends of the ramp are clamped into 0..100 where they are
             // computed, so a ramp steeper than the `L*` axis is a legal
@@ -218,6 +225,27 @@ impl PitchGradient {
                 .clamp(-100.0, 100.0),
             chroma: finite(self.chroma, default_chroma()).clamp(0.0, 1.0),
         }
+    }
+
+    /// The same arc, run the other way round the circle: the same colors and
+    /// the same width, low and high swapped.
+    ///
+    /// The far end becomes the near one, which is what keeps the arc where it
+    /// was. Negating the span alone would hold the START still and swing the
+    /// arc off into hues the gradient never had — the same picture the Flip
+    /// button promises is emphatically not that, so the two cannot be left as
+    /// separate spellings of "flip" in the pane and in a test.
+    ///
+    /// Sanitized on the way out, which is what stops a flipped zero span coming
+    /// back as `-0.0`: a span of nothing has no direction to be flipped.
+    pub fn flipped(self) -> PitchGradient {
+        let g = self.sanitized();
+        PitchGradient {
+            hue_start: (g.hue_start + g.hue_span).rem_euclid(360.0),
+            hue_span: -g.hue_span,
+            ..g
+        }
+        .sanitized()
     }
 
     /// `L*` and hue at normalized height `t` (0 at the bottom of the pitch

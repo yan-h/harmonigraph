@@ -203,9 +203,10 @@ pub struct NodeInstance {
     /// of that slot on this node, through [`color::pitch_lut_color`] — so a
     /// ring reads as belonging to the indicator it points at rather than as a
     /// fixed livery. Taken from the strongest marking voice (they can differ
-    /// mid-crossfade). The ramp already bakes in the lift the disc/roll/glyphs
-    /// carry (see `color::NOTE_LIGHTEN`), so the ring inherits it and adds
-    /// nothing; a second one would leave the ring a shade whiter than the band.
+    /// mid-crossfade). No lift on top of the ramp: the disc, the roll and the
+    /// glyphs all wear it as the table hands it over, whatever the gradient's
+    /// brightness is dialled to, so a ring that lightened its own copy would
+    /// sit a shade whiter than the band it brackets.
     ///
     /// The slot's pitch rather than the marking VOICE's: a note past either end
     /// of the ring folds onto the outermost slot, and a ring carrying the
