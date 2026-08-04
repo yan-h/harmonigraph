@@ -294,7 +294,7 @@ fn lone_mark(channel: u8, note: u8, count: u32, center: f32) -> (NodeInstance, F
 /// two call sites agree.
 fn sector_color(node: &NodeInstance, slot: u32, frame: &FrameParams) -> Vec4 {
     let pitch = slot as f32 * 12.0 + node.cents / 100.0;
-    let lut = pitch_ramp_lut();
+    let lut = pitch_ramp_lut(PitchGradient::default());
     let t = ((pitch - frame.darkest_pitch) / (frame.brightest_pitch - frame.darkest_pitch))
         .clamp(0.0, 1.0);
     let f = t * (PITCH_LUT_N - 1) as f32;
@@ -372,7 +372,10 @@ fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
     let (node, frame) = lone_mark(0, 60, 5, 60.0); // channel 0 is red
     let slot = node.melody_slots.trailing_zeros();
     assert_eq!(node.melody_color, sector_color(&node, slot, &frame));
-    assert_eq!(node.color, channel_color(0, 60.0, frame.darkest_pitch, frame.brightest_pitch));
+    assert_eq!(
+        node.color,
+        channel_color(0, 60.0, frame.darkest_pitch, frame.brightest_pitch, PitchGradient::default())
+    );
     assert_ne!(node.color, node.melody_color, "the disc keeps the channel's own color");
 }
 

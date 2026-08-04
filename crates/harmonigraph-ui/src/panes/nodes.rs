@@ -6,7 +6,7 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
+use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, SpectrumBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{NodeStyle, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
 
@@ -376,6 +376,85 @@ fn pitch_readout(midi: f32) -> String {
     format!("{name}{}", harmonigraph_core::notes::display_octave_of(n))
 }
 
+/// The pitch gradient: the spectrum bar, and the three knobs that shape what
+/// it draws. One column of full-width bars, like every other settings group —
+/// which here is a budget as much as a habit, and the reason the spectrum is a
+/// bar rather than the hue WHEEL a circular value naturally asks for.
+///
+/// Two measured limits rule the wheel out, and both are pinned by tests. The
+/// settings column must not grow a scroll bar at the window this UI was
+/// dialled against
+/// (`the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`),
+/// and a wheel large enough to grab — 148pt, six bars of height — puts the
+/// Nodes pane 140pt past that. Setting the wheel BESIDE these three knobs
+/// recovers the height, and breaks the other rule instead: every bar in a
+/// settings pane is the width of its column, so that dragging the column
+/// narrower narrows all of them together
+/// (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`), and knobs beside
+/// a wheel are 284pt of a 400pt column.
+///
+/// A bar costs one row and says the same thing — see [`SpectrumBar`] for how a
+/// circle fits on one.
+fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    button_row(ui, |ui| {
+        ui.label("Spectrum");
+        // Direction is a button rather than a gesture on the bar, and the bar
+        // is the reason: it lays the arc out from its own start, so both
+        // directions draw the same stretch of color in the same place and
+        // there is nothing on it to drag the other way. Which is the right
+        // division — a flip changes only the direction, and the arc it lands
+        // on is exactly the arc it left, read backwards.
+        if ui
+            .button("Flip")
+            .on_hover_text(
+                "Run the spectrum the other way round the circle — the same \
+                 colors, low and high swapped",
+            )
+            .clicked()
+        {
+            // The arithmetic lives on the gradient rather than here: what a
+            // flip IS — the far end becoming the near one, so the arc keeps its
+            // place on the circle — is a property of the gradient that the bar
+            // beside this button previews and a test pins, and a second
+            // spelling of it here is the one that would drift.
+            view.pitch_gradient = view.pitch_gradient.flipped();
+        }
+    });
+    SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
+        "How far round the color circle the pitch range walks, out of the \
+         whole turn the bar stands for: the colors it takes fill from the \
+         left, the ones it does not are dimmed. Drag the handle to widen or \
+         narrow it, drag the track to turn the circle under it, double-click \
+         to reset. The strip beneath is the same gradient in pitch order, low \
+         note on the left.",
+    );
+    ValueBar::new(&mut view.pitch_gradient.lightness, 0.0..=100.0, "Brightness")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "Brightness at the MIDDLE of the pitch range, in CIELab L*. The \
+             ramp opens either side of it, so this stays the picture's overall \
+             brightness at any ramp",
+        );
+    ValueBar::new(&mut view.pitch_gradient.lightness_ramp, -100.0..=100.0, "Brightness ramp")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "How much brightness separates the bottom of the pitch range from \
+             the top. 0 makes every note exactly as bright as every other and \
+             leaves hue to carry the pitch alone; negative puts the bright end \
+             at the bottom",
+        );
+    ValueBar::new(&mut view.pitch_gradient.chroma, 0.0..=1.0, "Chroma")
+        .display(|v| format!("{:.0}%", v * 100.0))
+        .show(ui)
+        .on_hover_text(
+            "How much color, as a share of the most this brightness and hue \
+             can hold. 100% is as vivid as the screen goes without distorting \
+             the color; 0 is grey",
+        );
+}
+
 /// What every layer of the node shares: the pitch->color gradient it is
 /// tinted through, the time it takes to fade on release, the halo it carries
 /// while lit, and the gap it clears around the whole of itself.
@@ -392,6 +471,12 @@ fn every_layer_section(
     params: &dyn ParamBackend,
 ) {
     section(ui, "Every layer");
+    // The gradient above the range because it is the coarser of the two: it
+    // says what the colors ARE, the range says which pitches they are spread
+    // over. Both feed the one table every pitch-colored shape reads, so a
+    // change here repaints the discs, the octave glyphs, the trail and the
+    // piano roll together.
+    spectrum_group(ui, view);
     ui.label("Color range");
     super::param_range_bar(
         ui,
@@ -404,8 +489,8 @@ fn every_layer_section(
     )
     .on_hover_text(
         "The pitch span the color gradient covers: the low end takes the \
-         darkest color, the high end the brightest. Drag either end, or drag \
-         between them to slide the whole range.",
+         gradient's first color, the high end its last. Drag either end, or \
+         drag between them to slide the whole range.",
     );
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a released note keeps fading — the pitch class core, \

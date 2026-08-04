@@ -197,6 +197,7 @@ pub fn derive_scene(
                 voice.pitch,
                 frame.darkest_pitch,
                 frame.brightest_pitch,
+                view.pitch_gradient,
             );
             (voice, color)
         })
@@ -286,8 +287,9 @@ pub fn derive_scene(
                     // brackets a ramp-colored sector. Only the lit glyph —
                     // the band's ghosts wear the whitened node color, and a
                     // solo voice's glow keeps the channel hue, both of them
-                    // on purpose. The ramp is already lightened, so there is
-                    // no extra lift here.
+                    // on purpose. No extra lift on top of the ramp here: the
+                    // sector's glyph wears it as it comes, and a lightened
+                    // ring would read a shade off the one it brackets.
                     //
                     // Strongest marking voice wins the color; the slots still
                     // collect every one of them, since a release crossfades
@@ -298,6 +300,7 @@ pub fn derive_scene(
                         octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,
                         frame.brightest_pitch,
+                        view.pitch_gradient,
                     );
                     if is_melody {
                         melody.add(slot, envelope * melody_attack, mark_color);
@@ -466,7 +469,7 @@ pub fn derive_scene(
         shimmer_softness: view.shimmer_softness.clamp(0.0, 1.0),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),
-        pitch_lut: pitch_ramp_lut(),
+        pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,

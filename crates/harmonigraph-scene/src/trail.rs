@@ -109,6 +109,7 @@ impl TrailField {
                         visit.pitch,
                         frame.darkest_pitch,
                         frame.brightest_pitch,
+                        view.pitch_gradient,
                     );
                     (visit.pitch_class, level, color)
                 })
