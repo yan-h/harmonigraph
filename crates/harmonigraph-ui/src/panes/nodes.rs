@@ -381,13 +381,13 @@ fn pitch_readout(midi: f32) -> String {
 /// which here is a budget as much as a habit, and the reason the spectrum is a
 /// bar rather than the hue WHEEL a circular value naturally asks for.
 ///
-/// Two measured limits rule the wheel out, and both are pinned by tests. The
-/// settings column must not grow a scroll bar at the window this UI was
-/// dialled against
-/// (`the_settings_column_needs_no_scroll_bar_at_the_window_it_was_dialled_in`),
-/// and a wheel large enough to grab — 148pt, six bars of height — puts the
-/// Nodes pane 140pt past that. Setting the wheel BESIDE these three knobs
-/// recovers the height, and breaks the other rule instead: every bar in a
+/// Two measured limits rule the wheel out. A wheel large enough to grab is
+/// 148pt — six bars of height — and this pane has none to spare: it already
+/// runs past the column at the window this UI was dialled against (1512x886),
+/// so a wheel would add 140pt on top of a list that has started to scroll,
+/// and every knob under it would be that much further down. Setting the wheel
+/// BESIDE these three knobs recovers the height, and breaks the other rule
+/// instead — the one still pinned by a test: every bar in a
 /// settings pane is the width of its column, so that dragging the column
 /// narrower narrows all of them together
 /// (`every_bar_in_a_settings_pane_is_the_width_of_the_pane`), and knobs beside
