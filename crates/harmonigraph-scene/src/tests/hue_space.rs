@@ -422,3 +422,103 @@ fn the_hybrid_at_the_edges() {
         hybrid_us / cielab_us,
     );
 }
+
+/// Whether the Oklab hybrid above and Google's HCT are the same picture.
+///
+/// They are the same STRUCTURE — tone from CIELAB `L*`, hue and chroma from a
+/// space with good hue constancy — and differ only in which space that is:
+/// CAM16 for HCT (`cam16_hue_chroma_from_argb` + `lstar_from_argb`, read off
+/// the crate), Oklab here. So the question is not which is better designed but
+/// whether their hue axes agree, since one costs a CAM16 conversion per
+/// bisection step and the other does not.
+///
+/// Measured through CAM16's own eyes, which is the harshest way round: if a
+/// hybrid that never mentions CAM16 holds a CAM16 hue still, the two agree.
+/// Only the crate's HUE is leaned on here, and
+/// [`the_crate_222_names_does_not_work`] is why — its chroma is broken, but
+/// hue falls out of `atan2` on the opponent signals before the chroma formula
+/// runs, so the two failures are not the same failure.
+///
+/// Neither column is ground truth. A space measured in its own coordinates
+/// always reads perfect (the hybrid drifts 0.0001 degrees in Oklch, by
+/// construction), so what this can settle is whether the two DISAGREE, not
+/// which is right.
+#[test]
+#[ignore = "a probe: prints measurements, asserts nothing"]
+fn the_oklab_hybrid_against_googles_hct() {
+    let cam16_hue = |c: Vec4| {
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        hct_cam16::Hct::from_rgb(q(c.x), q(c.y), q(c.z)).hue()
+    };
+    let arc = PitchGradient::default();
+
+    println!("\n=== CAM16 hue drift over the chroma knob (20% -> 100%) ===");
+    println!("   t   L*    CIELAB (shipped)   Oklab hybrid");
+    let (mut w_lab, mut w_ok) = (0.0f64, 0.0f64);
+    for t in deciles() {
+        let (l, _) = arc.lightness_and_hue(t);
+        // The shipped path, whose hue is a CIELAB angle held fixed.
+        let lab = |f: f32| cam16_hue(sample(t, PitchGradient { chroma: f, ..arc }));
+        // The hybrid, whose hue is an Oklab angle held fixed.
+        let h_ok = oklch(sample(t, arc)).2;
+        let hyb = |f: f64| cam16_hue(hybrid_color(l, h_ok, f));
+        let d_lab = hue_delta(lab(0.2), lab(1.0));
+        let d_ok = hue_delta(hyb(0.2), hyb(1.0));
+        w_lab = w_lab.max(d_lab.abs());
+        w_ok = w_ok.max(d_ok.abs());
+        println!("{t:4.1} {l:5.1} {d_lab:+16.2} {d_ok:+15.2}");
+    }
+    println!("worst: CIELAB {w_lab:.2} deg, Oklab hybrid {w_ok:.2} deg");
+
+    println!("\n=== where the two hue axes sit, around the circle at L* 64 ===");
+    println!("  ok h    CAM16 h    difference");
+    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+    for step in 0..24 {
+        let h_ok = f64::from(step) * 15.0;
+        let gap = hue_delta(h_ok, cam16_hue(hybrid_color(64.0, h_ok, 0.6)));
+        lo = lo.min(gap);
+        hi = hi.max(gap);
+        println!("{h_ok:6.1} {:10.1} {gap:13.1}", h_ok + gap);
+    }
+    // The VARIATION and not the gap itself: a constant rotation between two hue
+    // axes renames every hue and bends no arc, so only the spread can change a
+    // picture.
+    println!("gap runs {lo:.1}..{hi:.1} deg — a spread of {:.1}", hi - lo);
+}
+
+/// Why the crate #222 names as "the exact piece `max_chroma` hand-rolls"
+/// cannot play that part: `hct-cam16` 0.1.0's chroma is wrong, and its
+/// HCT->sRGB solver does not round-trip.
+///
+/// Three checks that need no reference values to read. Tone is fine and hue
+/// looks right; it is chroma and the solver that fail, which matters here
+/// because chroma and the solver are precisely the piece the issue proposes to
+/// take from it.
+#[test]
+#[ignore = "a probe: prints measurements, asserts nothing"]
+fn the_crate_222_names_does_not_work() {
+    println!("\n=== hct-cam16 0.1.0: the most colorful colors sRGB has ===");
+    println!("(the crate documents chroma as [0, ~150]; CAM16 puts sRGB red near 110)");
+    for (name, hex) in [
+        ("red", "#FF0000"), ("green", "#00FF00"), ("blue", "#0000FF"),
+        ("magenta", "#FF00FF"), ("cyan", "#00FFFF"), ("yellow", "#FFFF00"),
+        ("mid grey", "#808080"), ("M3 seed", "#6750A4"),
+    ] {
+        let c = hct_cam16::Hct::from_hex(hex).expect("literal hex");
+        println!("  {name:9} {hex}  h {:6.2}  c {:6.2}  t {:6.2}", c.hue(), c.chroma(), c.tone());
+    }
+
+    println!("\n=== and asking for a color's own coordinates does not return it ===");
+    for hex in ["#FF0000", "#00FF00", "#6750A4"] {
+        let a = hct_cam16::Hct::from_hex(hex).expect("literal hex");
+        let b = hct_cam16::Hct::new(a.hue(), a.chroma(), a.tone());
+        println!(
+            "  {hex} reads h{:.1} c{:.1} t{:.1}, and that asked for again is {} (c{:.1})",
+            a.hue(), a.chroma(), a.tone(), b.to_hex(), b.chroma(),
+        );
+    }
+    println!(
+        "\nTone is right and hue is plausible: hue is atan2 on the opponent signals,\n\
+         computed before the chroma formula, so the two do not fail together.",
+    );
+}

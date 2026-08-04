@@ -10,3 +10,9 @@ harmonigraph-core = { workspace = true }
 glam = { workspace = true }
 color_space = { workspace = true }
 serde = { workspace = true }
+
+# A probe's dependency, not the plugin's: `tests/hue_space.rs` measures the
+# Oklab hybrid it prices against Google's HCT, which is the same structure
+# over CAM16. Nothing outside `#[cfg(test)]` reaches it.
+[dev-dependencies]
+hct-cam16 = "0.1.0"
