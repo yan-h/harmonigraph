@@ -216,9 +216,9 @@ struct Instance {
     // mark_ring); the ring itself is per node, and its fade level rides
     // params.y/params.z.
     @location(7) marks: vec2<u32>,
-    // Each mark's own color: its own sector's pitch off the ramp, already
-    // lightened (see NodeInstance::melody_color), so a ring reads as belonging
-    // to the indicator it points at rather than as a fixed livery.
+    // Each mark's own color: its own sector's pitch off the ramp, with no lift
+    // on top of it (see NodeInstance::melody_color), so a ring reads as
+    // belonging to the indicator it points at rather than as a fixed livery.
     @location(8) melody_color: vec4<f32>,
     @location(9) bass_color: vec4<f32>,
     // How strongly the music is remembered at this node, 0..1 (see
@@ -1555,10 +1555,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
             // node's pitch class for the glyph's true pitch.
             let pitch = oct_slot_pitch(slot, in.cents);
             // Exactly the color that pitch lights everywhere else. The LUT is
-            // the pitch ramp, which is defined already lightened
-            // (pitch_ramp_lch / NOTE_LIGHTEN in harmonigraph-scene), and the core
-            // disc and the piano roll sample that same ramp — so all three
-            // read as one color. No separate white mix here anymore.
+            // the pitch ramp (pitch_ramp_lch in harmonigraph-scene), and the
+            // core disc and the piano roll sample that same table — so all
+            // three read as one color. A white mix here would be a second
+            // definition of what a lit pitch looks like, and it would drift
+            // off the disc the moment the gradient's brightness moved.
             slot_rgb = pitch_lut_color(pitch);
         }
         if cov > glyph {
