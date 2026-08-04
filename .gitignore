@@ -12,3 +12,6 @@ __pycache__/
 # file has been committed by accident once already, into what is now a public
 # repo.
 .task-complete
+
+# No longer tracked in git; kept locally per-clone.
+BACKLOG.md
