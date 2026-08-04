@@ -278,7 +278,7 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// Breathe the octave glyphs (see [`Pulse`] and
+    /// Which shimmer sweeps the octave glyphs (see [`Pulse`] and
     /// [`ViewConfig::pulse_octaves`]).
     pub pulse_octaves: Pulse,
     /// The idle (unlit home-sheet node) marker, independent of the active
@@ -325,7 +325,7 @@ pub struct Scene {
     /// Melody/bass ring thickness in quad UV units, 0 = off (see
     /// [`ViewConfig::mark_thickness`]). Already clamped.
     pub mark_thickness: f32,
-    /// Breathe the melody/bass rings (see [`Pulse`] and
+    /// Which shimmer sweeps the melody/bass rings (see [`Pulse`] and
     /// [`ViewConfig::pulse_marks`]).
     ///
     /// Folded to [`Pulse::Off`] when the rings are off
@@ -333,14 +333,17 @@ pub struct Scene {
     /// to animate and the mark's own octave slice must not go on shimmering
     /// under a control the pane has grayed out.
     pub pulse_marks: Pulse,
-    /// How fast [`Pulse::Shimmer`]'s bands travel (world units per second),
-    /// how wide they are (world units), and how deep the light they carry is
-    /// (0 none, 1 the tuned depth) — see [`ViewConfig::shimmer_speed`]. ONE
-    /// set for both layers that can run the sweep, it being a single sheet
-    /// crossing the lattice. Already clamped, the width to strictly positive.
+    /// How fast the shimmer travels (world units per second), how wide its
+    /// period is (world units), how deep the light it carries is (0 none, 1
+    /// the tuned depth) and how gradually that light arrives across the
+    /// period (0 a crest, 1 a cosine) — see [`ViewConfig::shimmer_speed`].
+    /// ONE set for both layers that can run the sweep, it being a single
+    /// sheet crossing the lattice. Already clamped, the width to strictly
+    /// positive.
     pub shimmer_speed: f32,
     pub shimmer_width: f32,
     pub shimmer_intensity: f32,
+    pub shimmer_softness: f32,
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],

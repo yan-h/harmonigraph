@@ -1266,73 +1266,33 @@ pub fn option_label(label: &str) -> egui::RichText {
 ///
 /// Number labels come out monospace — see [`option_label`], which the rows
 /// built by hand out of `selectable_value` call for themselves.
+///
+/// A row is live or grayed as a WHOLE, and from an `add_enabled_ui` at the
+/// call site rather than anything in here: an option that would do nothing is
+/// a property of the section's state, not of the option, and a row whose
+/// options disagree about it has no honest label to put on the row. That the
+/// gate is outside is also what keeps the row wrapping — the scope
+/// `add_enabled_ui` opens is a nested layout, and a nested layout inside
+/// `button_row`'s `horizontal_wrapped` does not wrap, so a gate reached for
+/// per option in here would run the row off the pane and take the section's
+/// separators past the edge with it
+/// (`no_settings_pane_overruns_a_narrow_column`).
+///
+/// The body is `Ui::selectable_value`'s: a `Button::selectable` and a click
+/// test. The hint shows in both states (egui splits the two), since a grayed
+/// option's tooltip is exactly where "and here is what would switch it on"
+/// belongs.
 pub fn choice_row<T: Copy + PartialEq>(
     ui: &mut Ui,
     name: &str,
     value: &mut T,
     options: &[(T, &str, &str)],
 ) {
-    row_of_choices(ui, name, value, options.len(), |i| {
-        let (option, label, hint) = options[i];
-        (option, label, hint, true)
-    });
-}
-
-/// [`choice_row`] where the options are not all live at once: each carries
-/// its own enabled flag as a fourth field, and a disabled one grays out in
-/// place.
-///
-/// For a row whose modes have DIFFERENT preconditions — the Octaves section's
-/// Pulse row, where two modes single out the octave a melody or bass ring
-/// points at and have nothing to single out with both marks off, while
-/// Shimmer crosses the whole layer and works either way. Wrapping the whole
-/// row in `add_enabled_ui` hides the mode that still works; leaving it all
-/// live leaves two that silently do nothing. Per option is the only one of
-/// the three that tells the truth.
-///
-/// The hint shows in both states (egui splits the two), since a grayed
-/// option's tooltip is exactly where "and here is what would switch it on"
-/// belongs.
-pub fn choice_row_gated<T: Copy + PartialEq>(
-    ui: &mut Ui,
-    name: &str,
-    value: &mut T,
-    options: &[(T, &str, &str, bool)],
-) {
-    row_of_choices(ui, name, value, options.len(), |i| options[i]);
-}
-
-/// The one body both rows above are: a labelled row of `count` options, each
-/// looked up by index as `(value, label, hint, enabled)`.
-///
-/// By index and through a closure rather than over a slice, because the two
-/// public rows carry different tuples — a gate the caller supplies against one
-/// this fills in — and the alternative is either a second copy of this body
-/// or an allocation per row per frame to widen the shorter tuple.
-///
-/// Graying is `add_enabled` around one button rather than the shorter
-/// `add_enabled_ui` wrapper: the scope that helper opens is a nested layout,
-/// and a nested layout inside `button_row`'s `horizontal_wrapped` does not
-/// wrap — the row runs off the pane instead of folding onto a second line,
-/// and takes the section's separators out past the edge with it
-/// (`no_settings_pane_overruns_a_narrow_column`). What is left is
-/// `Ui::selectable_value`'s own body — a `Button::selectable` and a click
-/// test — with the enabled flag threaded through.
-fn row_of_choices<'a, T: Copy + PartialEq>(
-    ui: &mut Ui,
-    name: &str,
-    value: &mut T,
-    count: usize,
-    option: impl Fn(usize) -> (T, &'a str, &'a str, bool),
-) {
     button_row(ui, |ui| {
         ui.label(name);
-        for i in 0..count {
-            let (choice, label, hint, enabled) = option(i);
-            let mut response = ui.add_enabled(
-                enabled,
-                egui::Button::selectable(*value == choice, option_label(label)),
-            );
+        for &(choice, label, hint) in options {
+            let mut response =
+                ui.add(egui::Button::selectable(*value == choice, option_label(label)));
             if response.clicked() && *value != choice {
                 *value = choice;
                 response.mark_changed();

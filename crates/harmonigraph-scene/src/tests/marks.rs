@@ -377,27 +377,26 @@ fn a_fixed_color_channel_keeps_its_disc_and_marks_the_lit_sector_on_the_ramp() {
 }
 
 
-/// The mark rings' pulse folds off with the rings themselves.
+/// The mark rings' shimmer folds off with the rings themselves.
 ///
-/// Every mode animates the ring, so a thickness of 0 — the rings' documented
-/// off position, where `mark_ring` returns no coverage — leaves all of them
-/// with nothing to animate, and the pane grays the row there.
+/// A thickness of 0 is the rings' documented off position, where `mark_ring`
+/// returns no coverage, and the pane grays the row there.
 ///
-/// [`Pulse::Shimmer`] is the one that needs the fold: it also sweeps the
-/// octave SLICE a ring points at, which the glyph layer draws and no ring
-/// coverage multiplies away, so without this, switching the rings off leaves
-/// the marked octaves sweeping from a control the user can no longer reach to
-/// stop. The other modes are folded on the same grounds rather than because
-/// they misbehave — which mode is safe to leave standing is a fact about
-/// where each one draws, and pinning that to today's answer would make a mode
-/// reaching past the ring later a silent bug rather than an edit here.
+/// The fold is needed because a mark sheet also sweeps the octave SLICE a
+/// ring points at, which the glyph layer draws and no ring coverage
+/// multiplies away: without it, switching the rings off leaves the marked
+/// octaves sweeping from a control the user can no longer reach to stop.
+/// Every pattern is folded, not only the ones that reach furthest — which
+/// pattern is safe to leave standing is a fact about where it draws, and
+/// pinning that to today's answer would make a pattern reaching past the ring
+/// later a silent bug rather than an edit here.
 /// The rings go off two ways, and BOTH have to fold the mode: no thickness to
 /// draw one with, and no end marked for one to belong to
 /// ([`ViewConfig::mark_rings_draw`], which the pane grays the row on). The
 /// marks-off half is the easier one to leave out, because nothing is visibly
-/// wrong when it is: no slot is marked, so `in.marks` is 0 and every term the
-/// mode drives collapses to zero on its own. That is the accident this fold
-/// exists not to depend on.
+/// wrong when it is: no slot is marked, so `in.marks` is 0 and the slice the
+/// sheet would reach collapses to zero on its own. That is the accident this
+/// fold exists not to depend on.
 #[test]
 fn the_mark_pulse_folds_off_when_the_rings_are_off() {
     let pulse = |mark_thickness: f32, marked: bool, pulse_marks: Pulse| {
@@ -418,12 +417,12 @@ fn the_mark_pulse_folds_off_when_the_rings_are_off() {
         .pulse_marks
     };
 
-    for mode in [Pulse::Together, Pulse::Alternating, Pulse::Shimmer] {
+    for mode in [Pulse::Bands, Pulse::Checker, Pulse::Hex, Pulse::Weave, Pulse::Rings] {
         assert_eq!(
             pulse(0.0, true, mode),
             Pulse::Off,
-            "{mode:?} survived the ring thickness going to 0, and Shimmer at least \
-             keeps drawing there -- on the marked octave's own slice",
+            "{mode:?} survived the ring thickness going to 0, where it keeps \
+             drawing -- on the marked octave's own slice",
         );
         assert_eq!(
             pulse(0.09, false, mode),
@@ -439,16 +438,21 @@ fn the_mark_pulse_folds_off_when_the_rings_are_off() {
     }
 }
 
-/// The shimmer's three settings reach the scene, and the width arrives
-/// strictly positive however the view is set: the shader divides the band
-/// phase by it, so a 0 here is a whole lattice of NaN rather than a
+/// The shimmer's four settings reach the scene, and the width arrives
+/// strictly positive however the view is set: the shader divides the
+/// pattern's phase by it, so a 0 here is a whole lattice of NaN rather than a
 /// stationary sweep. (Speed 0 IS the stationary sweep, and passes through, as
 /// intensity 0 is the layer drawn unshimmered.)
 ///
 /// The width's FLOOR is the second claim, and it is a look rather than a
-/// safety margin: it has to leave room for several bands across one node, so
-/// it is checked against the node's own world size (`spacing` ×
+/// safety margin: it has to leave room for several periods across one node,
+/// so it is checked against the node's own world size (`spacing` ×
 /// `NODE_RADIUS_FACTOR`) rather than against a bare "> 0".
+///
+/// Softness is the one clamped to exactly its bar, both ends. It drives an
+/// exponent, and either side of 0..1 is a different shape rather than more of
+/// this one — past 1 the lit part widens past the dark and the pattern reads
+/// as rifts in a lit layer instead of light crossing a clear one.
 #[test]
 fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
     let sweep = |shimmer_speed: f32, shimmer_width: f32, shimmer_intensity: f32| {
@@ -467,14 +471,25 @@ fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
         );
         (scene.shimmer_speed, scene.shimmer_width, scene.shimmer_intensity)
     };
+    let softness = |shimmer_softness: f32| {
+        let view = ViewConfig { shimmer_softness, ..ViewConfig::default() };
+        scene_of(
+            &NoteTracker::new(),
+            &Tuning::default(),
+            &view,
+            &FrameParams::default(),
+            0.0,
+        )
+        .shimmer_softness
+    };
 
     assert_eq!(sweep(3.0, 8.0, 0.5), (3.0, 8.0, 0.5), "a settable set passes through untouched");
     assert_eq!(sweep(0.0, 5.0, 0.0).0, 0.0, "speed 0 is a look -- the sheet, held still");
     assert_eq!(sweep(1.6, 5.0, 0.0).2, 0.0, "and intensity 0 is the layer, unshimmered");
-    assert!(sweep(1.6, 0.0, 1.0).1 > 0.0, "a width of 0 divides by zero in the band phase");
+    assert!(sweep(1.6, 0.0, 1.0).1 > 0.0, "a width of 0 divides by zero in the phase");
     assert!(sweep(1.6, -4.0, 1.0).1 > 0.0, "and so does a negative one, having flipped it first");
 
-    // Several bands across ONE node is the tight end's whole point, so the
+    // Several periods across ONE node is the tight end's whole point, so the
     // floor has to sit a good way under a node's diameter rather than merely
     // above zero.
     let node = ViewConfig::default().spacing * crate::NODE_RADIUS_FACTOR;
@@ -482,7 +497,7 @@ fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
     assert!(
         floor * 4.0 < node * 2.0,
         "the width floor is {floor} against a node {} across: too coarse for the \
-         bands to cross one several at a time",
+         pattern to cross one several times over",
         node * 2.0,
     );
 
@@ -491,27 +506,25 @@ fn the_shimmer_settings_reach_the_scene_and_the_width_stays_positive() {
         speed <= 40.0 && width <= 40.0 && intensity <= 4.0,
         "got {speed} / {width} / {intensity}",
     );
+
+    assert_eq!(softness(0.35), 0.35, "a settable softness passes through untouched");
+    assert_eq!(softness(4.0), 1.0, "and both ends stop at the bar: this one is an exponent");
+    assert_eq!(softness(-1.0), 0.0, "including the low end, which would flatten the shape");
 }
 
-/// Only ALTERNATING needs a marked slot. It is the mode whose two phases
-/// differ, so with neither mark on `extreme_slots` is 0, every glyph takes
-/// the "rest" phase, and what was a half-cycle split becomes a UNIFORM
-/// breathe of the whole octave layer between the shader's pulse floor and
-/// full — a mode doing something other than what it says, from a control the
-/// pane has grayed out and that therefore cannot be switched off. Folding it
-/// here is what keeps the picture and the grayed control agreeing.
+/// The octave layer's shimmer stands on nothing but its own switch — no fold
+/// of any kind, whatever the marks are doing.
 ///
-/// Together is NOT that mode, however much the pairing of the two names
-/// suggests it is. `pulse_pair` gives it `near == rest` (both phases are
-/// `pulse_wave(0.0)`), so its picture is a uniform breathe of the whole layer
-/// whether or not anything is marked — the marked slot changes nothing to
-/// collapse. Folding it would take away a look that is reachable and steady,
-/// on the grounds that a split it never had has gone.
-///
-/// Shimmer sweeps the layer whole and never wanted a slot either.
+/// The mark side folds because a mark sheet reaches a layer that can be
+/// switched off (the test above). This one is the opposite claim, and it is
+/// worth pinning because the two rows look alike in the pane: a sheet over
+/// the octave glyphs covers the whole layer, the octave layer always draws,
+/// and so there is no state of the view where an octave pattern animates
+/// something other than what it says. A fold added here "for symmetry" would
+/// silently take a live look away.
 #[test]
-fn only_the_alternating_octave_breathe_needs_a_marked_end() {
-    let breathe = |mark_melody: bool, mark_bass: bool, pulse: Pulse| {
+fn the_octave_shimmer_needs_no_marked_end() {
+    let sweep = |mark_melody: bool, mark_bass: bool, pulse: Pulse| {
         let mut tracker = NoteTracker::new();
         tracker.handle_event(NoteEvent {
             time: 0.0,
@@ -528,26 +541,13 @@ fn only_the_alternating_octave_breathe_needs_a_marked_end() {
         scene_of(&tracker, &Tuning::default(), &view, &FrameParams::default(), 0.0).pulse_octaves
     };
 
-    assert_eq!(
-        breathe(false, false, Pulse::Alternating),
-        Pulse::Off,
-        "Alternating has no slot to single out with neither end marked, and would \
-         breathe the whole octave layer from a control the pane has grayed out",
-    );
-    // ...and one mark is enough to give it its two parts back.
-    let alt = Pulse::Alternating;
-    assert_eq!(breathe(true, false, alt), alt, "the melody mark alone is a slot");
-    assert_eq!(breathe(false, true, alt), alt, "so is the bass mark alone");
-
-    // The two modes that draw the same picture marked or not have to reach
-    // that picture either way.
-    for whole_layer in [Pulse::Together, Pulse::Shimmer] {
+    for pattern in [Pulse::Bands, Pulse::Checker, Pulse::Hex, Pulse::Weave, Pulse::Rings] {
         assert_eq!(
-            breathe(false, false, whole_layer),
-            whole_layer,
-            "{whole_layer:?} animates the layer as one and never asked for a marked \
+            sweep(false, false, pattern),
+            pattern,
+            "{pattern:?} covers the whole octave layer and never asked for a marked \
              slot, so nothing about it collapses when both marks come off",
         );
-        assert_eq!(breathe(true, true, whole_layer), whole_layer, "and it survives marks too");
+        assert_eq!(sweep(true, true, pattern), pattern, "and it survives marks too");
     }
 }

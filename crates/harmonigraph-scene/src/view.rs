@@ -238,12 +238,10 @@ pub struct ViewConfig {
     /// strength — and it is inert without two extras to differ.
     #[serde(default = "default_octave_extra_blend")]
     pub octave_extra_blend: f32,
-    /// How the octave glyphs animate (see [`Pulse`]). The breathing modes
-    /// take the glyph the melody or bass ring is pointing at — that slot's
-    /// wedge against every other glyph on the node, sounding or ghost alike,
-    /// not every sounding octave but the one an indicator is actually about
-    /// — and so have nothing to work on with both marks off;
-    /// [`Pulse::Shimmer`] sweeps the whole layer and does not.
+    /// Which shimmer sweeps the octave glyphs (see [`Pulse`]) — the pattern
+    /// alone, sized and paced by the shared knobs below. It reaches the whole
+    /// layer whatever is playing and whatever is marked, so this switch
+    /// stands on nothing but itself.
     /// [`Pulse::Off`] is the steady look every earlier build drew, which is
     /// also what a blob predating this field was drawn with — so a bare
     /// `#[serde(default)]` is both fallbacks at once and needs no named
@@ -310,11 +308,7 @@ pub struct ViewConfig {
     /// A ring is a whole circle, slit at the two sector boundaries of the
     /// octave responsible for it — the slit IS the gap between two octaves,
     /// continued outward, so the ring says which octave without giving up
-    /// the shape. (An `Unlinked` opacity used to fade everything but that
-    /// arc as a static split; [`pulse_marks`](Self::pulse_marks) is the same
-    /// split resurrected as an animation instead — the two parts still both
-    /// draw at full ring thickness, just breathing rather than one of them
-    /// fixed dim.) A [`outer_gap`](Self::outer_gap) of 0 leaves no slit to
+    /// the shape. A [`outer_gap`](Self::outer_gap) of 0 leaves no slit to
     /// draw.
     ///
     /// 0 turns the rings off, as a radius of 0 turns the core off. Was
@@ -322,14 +316,11 @@ pub struct ViewConfig {
     /// the band was resized; absolute holds them still.
     #[serde(default = "default_mark_thickness")]
     pub mark_thickness: f32,
-    /// How the melody/bass rings animate (see [`Pulse`]): the breathing
-    /// modes take the arc directly over the marked octave's slice against
-    /// the rest of the ring, and [`Pulse::Shimmer`] sweeps both rings —
-    /// AND the octave slice each one points at — at right angles to the
-    /// octave band's own shimmer. That reach into the other layer is what
-    /// the breathing modes have too, from the other side: the mark is the
-    /// ring together with the slice it names, so the light crossing one
-    /// crosses the other. Shares [`Pulse`] with
+    /// Which shimmer sweeps the melody/bass rings (see [`Pulse`]): the sheet
+    /// takes both rings AND the octave slice each one points at, a quarter
+    /// turn from the octave band's own. That reach into the other layer is
+    /// the mark being the ring together with the slice it names, so light
+    /// crossing one crosses the other. Shares [`Pulse`] with
     /// [`pulse_octaves`](Self::pulse_octaves) but is its own switch — a
     /// chord's outer voices and its octave glyphs are read at a glance
     /// independently, so animating one was never a reason to animate the
@@ -339,27 +330,32 @@ pub struct ViewConfig {
     pub pulse_marks: Pulse,
 
     // ---- Shimmer ---------------------------------------------------------
-    // The Shimmer pulse mode's two knobs, and ONE pair for both layers that
-    // can run it. The mode is per layer because a chord's outer voices and
-    // its octave glyphs are read independently; the sweep itself is not,
-    // because it is one sheet of bands crossing the whole lattice — two
-    // layers sweeping at different sizes or rates would read as two
-    // animations stacked on one picture rather than as light passing over it.
-    // What the layers do differ in is direction, a quarter turn apart, which
-    // is the shader's own constant and not a setting.
+    // The sweep's knobs, and ONE set for both layers that can run it. The
+    // pattern is per layer because a chord's outer voices and its octave
+    // glyphs are read independently; the sizing is not, because it is one
+    // sheet of light crossing the whole lattice — two layers sweeping at
+    // different sizes or rates would read as two animations stacked on one
+    // picture rather than as light passing over it. What the layers do differ
+    // in is where the sheet is laid — a quarter turn apart, which is the
+    // shader's own constant and not a setting.
     //
-    // Both are inert unless a layer is in that mode.
-    /// How fast the shimmer's bands travel along their own normal, in world
-    /// units per second — the lattice's own units, so the DAW window and an
-    /// exported video sweep at the same rate across the same nodes, where a
-    /// rate in screen pixels would not. 0 freezes the sheet where it stands,
-    /// which is a look rather than an off switch (the mode is the switch).
+    // All four are inert while both layers are Off.
+    /// How fast the shimmer travels, in world units per second — the
+    /// lattice's own units, so the DAW window and an exported video sweep at
+    /// the same rate across the same nodes, where a rate in screen pixels
+    /// would not. Which WAY it travels is the pattern's own: along the bands'
+    /// normal for the gratings, outward from the origin for
+    /// [`Pulse::Rings`]. 0 freezes the sheet where it stands, which is a look
+    /// rather than an off switch (the mode is the switch).
     #[serde(default = "default_shimmer_speed")]
     pub shimmer_speed: f32,
-    /// How wide the bands are, in the same world units: the distance from one
-    /// band's peak to the next, which sizes the bright band and the dark
+    /// How wide the pattern is, in the same world units: the distance from one
+    /// bright peak to the next, which sizes the lit part and the dark
     /// between it and its neighbour together — the shimmer is one shape,
-    /// scaled, rather than a width and a spacing that could disagree.
+    /// scaled, rather than a width and a spacing that could disagree. Every
+    /// pattern is built out of gratings of exactly this period, so the bar
+    /// means the same thing in all of them (a hex cell comes out about 15%
+    /// wider than this, three gratings at sixty degrees being what makes it).
     ///
     /// The range spans three ORDERS of it, and the two ends are different
     /// pictures rather than more and less of one:
@@ -379,14 +375,18 @@ pub struct ViewConfig {
     /// A node is [`spacing`](Self::spacing) × 0.25 in world radius, so the
     /// count of bands across one is roughly its diameter over this.
     ///
-    /// The tight end is a resolution trade as well as a look. The bands are a
-    /// sine of a world coordinate sampled once per fragment, with no
-    /// derivative term damping them, so a period small enough to approach a
-    /// pixel — a tight setting seen from far enough out — aliases into moire
-    /// that shifts as the camera moves, and the DAW window and a render at a
-    /// different size will not shimmer the same way there. The setting is
-    /// still the size it says it is on the lattice; it is the SAMPLING that
-    /// runs out. Frame the shot at the zoom the tight end is chosen for.
+    /// The tight end is a resolution trade as well as a look, and the shader
+    /// spends it deliberately. A pattern is sines of a world coordinate
+    /// sampled once per fragment, so a period approaching a pixel — a tight
+    /// setting seen from far enough out — has no samples left to carry it and
+    /// would alias into moire that crawls as the camera moves. Rather than
+    /// draw that, `shimmer_terms` fades the sheet's amplitude out as its
+    /// period closes on the pixel footprint, so the layer settles to its
+    /// unshimmered self instead of to a shifting texture. The setting is
+    /// still the size it says it is on the lattice; what runs out is the
+    /// SAMPLING, and the fade is what makes running out look like an ending
+    /// rather than a fault. Frame the shot at the zoom the tight end is
+    /// chosen for.
     #[serde(default = "default_shimmer_width")]
     pub shimmer_width: f32,
     /// How strong the sweep is where it passes, 0..1 being none to the full
@@ -409,6 +409,28 @@ pub struct ViewConfig {
     /// without saying which.
     #[serde(default = "default_shimmer_intensity")]
     pub shimmer_intensity: f32,
+    /// How the light is shared out ACROSS one period, 0..1 — where
+    /// [`shimmer_intensity`](Self::shimmer_intensity) says how much light
+    /// there is, this says how gradually it arrives.
+    ///
+    /// The pattern is a raised cosine raised to a power, and this is the
+    /// power, log-spaced from 8 at 0 to 1 at 1:
+    ///
+    /// - Toward 0 the peak is a narrow crest on a layer that is otherwise at
+    ///   rest — a hard white band with a dark field around it, which at a
+    ///   tight width is a stripe pattern more than a sweep.
+    /// - Toward 1 the exponent reaches 1 and the pattern IS the cosine: every
+    ///   point of the period is on its way somewhere, so the brightest part
+    ///   fades into the clearest across the whole of the gap rather than at
+    ///   an edge. Nothing is at rest, which is the cost — the layer is lit
+    ///   somewhere at every instant.
+    ///
+    /// One number for both halves of the shape, like Intensity: the bright
+    /// part narrows exactly as the dark part widens, so a period always adds
+    /// up to itself and no setting can leave the sheet mostly-lit and
+    /// mostly-dark at once.
+    #[serde(default = "default_shimmer_softness")]
+    pub shimmer_softness: f32,
 
     // ---- Home grid -------------------------------------------------------
     // The faint structural grid between node positions (see `derive_grid`).
@@ -674,6 +696,19 @@ fn default_shimmer_intensity() -> f32 {
     1.0
 }
 
+/// Well up the gradual half of the bar (an exponent of about 1.5): the peak
+/// reads as one place the light is brightest rather than as a band with
+/// edges, and the fall from it takes most of the period.
+///
+/// The alternative is a crest — anywhere below about 0.6, where the exponent
+/// passes 2.4 and the lit part narrows to a fraction of the period. That
+/// reads as white stripes laid ON the layer rather than as light crossing it,
+/// the more so the tighter the width, and it is the whole reason this is a
+/// setting rather than a constant.
+fn default_shimmer_softness() -> f32 {
+    0.8
+}
+
 /// Nine octaves, which is what a blob written before the wheel was a setting
 /// at all was drawn with: ten fixed 45-degree sectors covering MIDI octaves
 /// 0..9. Nine of them is the nearest honest reading of that, and unlike the
@@ -921,6 +956,36 @@ impl ViewConfig {
         } else {
             default_octave_extra_blend()
         };
+
+        // The shimmer's four knobs, on the same grounds and against the same
+        // hole in `clamp`. `derive_scene` clamps all four into their ranges
+        // every frame, which is what the shader trusts — and a NaN walks
+        // through a clamp untouched, because every comparison against it is
+        // false. From there it is a divide (the period), a `pow` exponent
+        // (the softness) and two mixes, so ONE non-finite number in a
+        // hand-edited blob NaNs the sheet, and a NaN sheet takes the whole
+        // octave layer with it wherever the mode is on. Repaired here rather
+        // than in `derive_scene` because this is the blob's own door: the bars
+        // cannot reach these values, so a view that holds one got it from a
+        // file.
+        self.shimmer_speed = finite_or(self.shimmer_speed, default_shimmer_speed());
+        self.shimmer_width = finite_or(self.shimmer_width, default_shimmer_width());
+        self.shimmer_intensity = finite_or(self.shimmer_intensity, default_shimmer_intensity());
+        self.shimmer_softness = finite_or(self.shimmer_softness, default_shimmer_softness());
+    }
+}
+
+/// `value` if it is a real number, and `fallback` if it is a NaN or an
+/// infinity — the guard `clamp` cannot be, NaN being its own answer to every
+/// comparison a clamp makes.
+///
+/// No range: the caller's own clamp is the range, and this only has to hand
+/// it something a clamp can act on.
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
     }
 }
 
@@ -1013,13 +1078,13 @@ impl Default for ViewConfig {
             // Steady here too, for the same reason as pulse_octaves above:
             // an option to reach for, not the out-of-the-box look.
             pulse_marks: Pulse::Off,
-            // The sweep opens at exactly what it was fixed at before the two
-            // bars existed, so switching a layer to Shimmer lands on the look
-            // the mode was tuned as — the bars are then a departure from it,
-            // not a setting to find first.
+            // The sweep opens on the size and pace the mode was tuned at, so
+            // switching a layer to a pattern lands on a look rather than on a
+            // setting to find first; the bars are then a departure from it.
             shimmer_speed: default_shimmer_speed(),
             shimmer_width: default_shimmer_width(),
             shimmer_intensity: default_shimmer_intensity(),
+            shimmer_softness: default_shimmer_softness(),
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,

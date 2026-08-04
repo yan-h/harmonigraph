@@ -280,6 +280,7 @@ fn parity_scene() -> Scene {
         shimmer_speed: 1.6,
         shimmer_width: PARITY_SHIMMER_WIDTH,
         shimmer_intensity: 1.0,
+        shimmer_softness: 0.8,
         node_style: Default::default(),
         core_radius: 0.46,
         core_solidity: 1.0,
@@ -630,53 +631,145 @@ fn offscreen_composite_matches_direct_draw() {
     );
 }
 
-/// `pulse_octaves` is Off in `parity_scene` and every fixture derived from
-/// it (deliberately — see that scene's own comment), so nothing above ever
-/// takes a `mode != 0u` branch in the shader's pulse code: `pulse_wave`, the
-/// `select` that splits Together from Alternating, and the
-/// `oct_pulse.x`/`.y` multiplies in the octave-glyph loop are validated by
-/// `baked_shader_validates` (parsed, never run) but not actually exercised
-/// by any render. This runs them: Together and Alternating must draw
-/// differently from EACH OTHER at one instant (the near/rest split is the
-/// whole feature), and Alternating must draw differently across time (or it
-/// isn't animating at all). The two times are picked without reference to
-/// the shader's `PULSE_HZ` — the claim is that time matters, not a
-/// particular phase, so retuning the rate can't make this pass by accident.
+/// Every pattern in the row draws its OWN picture — pairwise, at one instant,
+/// on each layer.
+///
+/// `pulse_octaves` is Off in `parity_scene` and every fixture derived from it
+/// (deliberately — see that scene's own comment), so nothing else in this file
+/// takes a `mode != 0u` branch in the shader: each arm of `shimmer_pattern` is
+/// validated by `baked_shader_validates` (parsed, never run) but not otherwise
+/// exercised by any render. This runs all of them.
+///
+/// Pairwise rather than each-against-Off, because "it changed something" is
+/// the weaker half of the claim and the one an accident passes: two patterns
+/// that fell through to the same arm of the shader, or a mode index off by one
+/// anywhere along `Pulse::shader_index` -> misc7.z -> `shimmer_pattern`, would
+/// each differ from Off perfectly well while being the same picture as each
+/// other. The row is only a row if its options are distinguishable.
+///
+/// It is a single INSTANT for the same reason: two patterns compared across
+/// their own frames would differ merely by having moved.
+///
+/// Run on BOTH layers, because they are not one code path arriving twice: the
+/// octave layer takes its sheet over the whole layer, where the mark layer's
+/// arrives through the crossing and the slice weight, off its own mode
+/// uniform and its own quarter turn. A pattern that came out right on the one
+/// row and collapsed on the other would be a picture nobody looking at the
+/// Octaves row could see.
 #[test]
-fn octave_pulse_alternating_differs_from_together_and_moves_with_time() {
+fn every_shimmer_pattern_draws_a_different_picture() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    use harmonigraph_scene::Pulse;
+
+    // Off first, so each loop below has the steady picture to measure against
+    // as well as the other patterns.
+    let modes = [
+        Pulse::Off,
+        Pulse::Bands,
+        Pulse::Checker,
+        Pulse::Hex,
+        Pulse::Weave,
+        Pulse::Rings,
+    ];
+    // The octave layer over the parity scene's whole lattice; the mark layer
+    // over one node with an end marked, its sheet needing a ring to belong to.
+    let mut all_distinct = |layer: &str, on_marks: bool| {
+        let shots: Vec<(Pulse, Vec<u8>)> = modes
+            .iter()
+            .map(|&mode| {
+                let mut scene =
+                    if on_marks { single_marked_node(MIDDLE_C, 0) } else { parity_scene() };
+                if on_marks {
+                    scene.pulse_marks = mode;
+                } else {
+                    scene.pulse_octaves = mode;
+                }
+                scene.time = 0.4;
+                (mode, gpu.shot(&scene))
+            })
+            .collect();
+
+        for (i, (mode, px)) in shots.iter().enumerate() {
+            for (other, other_px) in &shots[i + 1..] {
+                assert!(
+                    differing_pixels(px, other_px) > 0,
+                    "on {layer}, {mode:?} and {other:?} drew the same picture at the \
+                     same instant; they are one option wearing two labels",
+                );
+            }
+        }
+    };
+    all_distinct("the octave layer", false);
+    all_distinct("the mark layer", true);
+}
+
+/// The Softness bar reaches the picture, and it is the SHAPE it moves rather
+/// than the amount of light.
+///
+/// Held still (speed 0) and at one instant, so what is compared is two
+/// profiles of the same sheet in the same place rather than two moments of
+/// one. Three claims, and it takes all three to say "shape":
+///
+/// - the two ends draw differently, which is the bar working at all;
+/// - the gradual end lights MORE over the layer as a whole, the fall from the
+///   peak taking most of the period instead of a narrow crest;
+/// - and it does that without going any BRIGHTER at its brightest. That last
+///   is what rules out the wiring this could otherwise have — a bar on
+///   `SHIMMER_WHITE`, raising the peak rather than widening the fall from it,
+///   passes the first two and fails this one. The peak is Intensity's to
+///   move, and the shape's own crest is pinned wherever it lands: `pow(1, n)`
+///   is 1 for every exponent, so however the profile is dialled the brightest
+///   pixel is the same pixel at the same value.
+#[test]
+fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
     const SIZE: [u32; 2] = [256, 256];
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
 
-    let mut off = parity_scene();
-    off.time = 0.4;
-    let off_a = gpu.shot(&off);
-    off.time = 1.1;
-    let off_b = gpu.shot(&off);
-    assert_eq!(differing_pixels(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
+    let at = |softness: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Bands;
+        scene.shimmer_softness = softness;
+        scene.shimmer_speed = 0.0;
+        scene.time = 0.4;
+        scene
+    };
+    let light = |px: &[u8]| -> u64 {
+        px.chunks(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum()
+    };
+    let peak = |px: &[u8]| -> u32 {
+        px.chunks(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).max().unwrap_or(0)
+    };
 
-    let mut together = parity_scene();
-    together.pulse_octaves = harmonigraph_scene::Pulse::Together;
-    together.time = 0.4;
-    let together_a = gpu.shot(&together);
-
-    let mut alternating = parity_scene();
-    alternating.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
-    alternating.time = 0.4;
-    let alternating_a = gpu.shot(&alternating);
+    let crisp = gpu.shot(&at(0.0));
+    let gradual = gpu.shot(&at(1.0));
     assert!(
-        differing_pixels(&together_a, &alternating_a) > 0,
-        "Together and Alternating must draw differently at the same instant \
-         -- that split is the whole feature"
+        differing_pixels(&crisp, &gradual) > 0,
+        "the Softness bar did not reach the picture at all",
+    );
+    let (crisp_light, gradual_light) = (light(&crisp), light(&gradual));
+    assert!(
+        gradual_light > crisp_light,
+        "the gradual end lit {gradual_light} against the crisp end's {crisp_light}: \
+         softening the profile is supposed to spread the light over more of the \
+         period, not to dim it",
     );
 
-    alternating.time = 1.1;
-    let alternating_b = gpu.shot(&alternating);
+    // A hair of tolerance, and only for the rounding two paths through the
+    // same arithmetic can land either side of: the claim is that the crest
+    // does not MOVE, which a peak-wired bar would break by whole channel
+    // steps. Measured dead equal at both ends.
+    let (crisp_peak, gradual_peak) = (peak(&crisp), peak(&gradual));
+    eprintln!("brightest pixel: {crisp_peak} crisp, {gradual_peak} gradual");
     assert!(
-        differing_pixels(&alternating_a, &alternating_b) > 0,
-        "Alternating did not change between two different times; \
-         pulse_wave is not actually reading the clock"
+        gradual_peak <= crisp_peak + 2,
+        "the gradual end's brightest pixel is {gradual_peak} against the crisp \
+         end's {crisp_peak}: Softness is raising the peak rather than widening the \
+         fall from it, which is Intensity's job and not this bar's",
     );
 }
 
@@ -793,96 +886,14 @@ fn melody_bass_marks_are_visible_as_rings_around_the_band() {
     );
 }
 
-/// The mark-ring twin of `octave_pulse_alternating_differs_from_together_and_moves_with_time`
-/// above: `pulse_marks` is Off in every fixture in this file, so
-/// `mark_ring_alpha`'s `near` accumulation and its `mix(pair.y, pair.x,
-/// near)` blend have never run under a mode where `pair.x != pair.y`. Same
-/// two claims, on the ring instead of the glyphs.
-#[test]
-fn mark_pulse_alternating_differs_from_together_and_moves_with_time() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut gpu) = Shooter::new(SIZE) else {
-        return;
-    };
-
-    let mut off = single_marked_node(MIDDLE_C, 0);
-    off.time = 0.4;
-    let off_a = gpu.shot(&off);
-    off.time = 1.1;
-    let off_b = gpu.shot(&off);
-    assert_eq!(differing_pixels(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
-
-    let mut together = single_marked_node(MIDDLE_C, 0);
-    together.pulse_marks = harmonigraph_scene::Pulse::Together;
-    together.time = 0.4;
-    let together_a = gpu.shot(&together);
-
-    let mut alternating = single_marked_node(MIDDLE_C, 0);
-    alternating.pulse_marks = harmonigraph_scene::Pulse::Alternating;
-    alternating.time = 0.4;
-    let alternating_a = gpu.shot(&alternating);
-    assert!(
-        differing_pixels(&together_a, &alternating_a) > 0,
-        "Together and Alternating must draw differently at the same instant \
-         -- that split is the whole feature"
-    );
-
-    alternating.time = 1.1;
-    let alternating_b = gpu.shot(&alternating);
-    assert!(
-        differing_pixels(&alternating_a, &alternating_b) > 0,
-        "Alternating did not change between two different times; \
-         pulse_wave is not actually reading the clock"
-    );
-}
-
-/// The bug the fix above two tests replaced: `pulse_octaves` originally
-/// keyed the octave-glyph loop's near/rest split off `level > 0.0` alone,
-/// so ANY sounding octave took the "near" phase under Alternating -- not
-/// just the one a melody or bass ring actually points at. A chord tone
-/// that is neither the highest nor the lowest held note isn't an indicator
-/// this feature is about, and would have pulsed as if it were.
+/// A sheet must draw differently from Off, must move with the clock, and must
+/// do both on a node with NO mark at all — the sheet is nothing to do with
+/// which octave a ring points at. Run on both layers, since each reads its own
+/// mode uniform and lays its sheet in its own place.
 ///
-/// Isolates the octave-glyph layer from the ring itself (`mark_thickness =
-/// 0`, so `mark_ring` returns no coverage regardless of `marks`) and
-/// renders the SAME sounding octave once not marked and once marked as the
-/// melody. Under the old behavior these are pixel-identical -- both are
-/// sounding, so both took the near phase. Under the fix only the marked
-/// one does.
-#[test]
-fn octave_pulse_only_lights_the_melody_or_bass_slot_not_every_sounding_one() {
-    const SIZE: [u32; 2] = [256, 256];
-    let Some(mut gpu) = Shooter::new(SIZE) else {
-        return;
-    };
-
-    let mut not_extreme = single_marked_node(0, 0);
-    not_extreme.mark_thickness = 0.0;
-    not_extreme.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
-    not_extreme.time = 0.4;
-
-    let mut extreme = single_marked_node(MIDDLE_C, 0);
-    extreme.mark_thickness = 0.0;
-    extreme.pulse_octaves = harmonigraph_scene::Pulse::Alternating;
-    extreme.time = 0.4;
-
-    let not_extreme_px = gpu.shot(&not_extreme);
-    let extreme_px = gpu.shot(&extreme);
-    assert!(
-        differing_pixels(&not_extreme_px, &extreme_px) > 0,
-        "a sounding octave that is the melody/bass extreme must pulse \
-         differently from one that merely sounds; keying the split off \
-         level alone lit every sounding octave the same way"
-    );
-}
-
-/// `Pulse::Shimmer` is a whole-layer sweep rather than the near/rest breathe
-/// the two modes above are, so the claims that pin it are different ones: it
-/// must draw differently from Off, it must move with the clock, and — the
-/// part `Together`/`Alternating` cannot do — it must do both on a node with
-/// NO mark at all, since the sheet of bands is nothing to do with which
-/// octave a ring points at. Run on both layers, since each reads its own
-/// mode uniform and its own direction.
+/// Off must ALSO be steady across the clock, which is the half that keeps the
+/// rest honest: a picture that moved with time in every mode would pass the
+/// two "it changed" claims below without the sheet doing anything.
 ///
 /// The instants are picked without reference to the fixture's own speed or
 /// width: the claim is that the clock reaches the layer, not that a
@@ -898,28 +909,30 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
         return;
     };
 
-    // No mark on either end: `Together` and `Alternating` would have no
-    // slot to single out here, which is exactly the state Shimmer has to
-    // work in.
+    // No mark on either end, which is the state a sheet has to work in: it
+    // covers the layer rather than a slot.
     let mut off = single_marked_node(0, 0);
     off.time = 0.4;
     let off_a = gpu.shot(&off);
+    off.time = 1.1;
+    let off_b = gpu.shot(&off);
+    assert_eq!(differing_pixels(&off_a, &off_b), 0, "Pulse::Off must not depend on scene.time");
 
     let mut octaves = single_marked_node(0, 0);
-    octaves.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+    octaves.pulse_octaves = harmonigraph_scene::Pulse::Bands;
     octaves.time = 0.4;
     let octaves_a = gpu.shot(&octaves);
     assert!(
         differing_pixels(&off_a, &octaves_a) > 0,
-        "the octave layer's Shimmer drew the steady picture on an unmarked \
-         node; the sheet of bands does not depend on a mark"
+        "the octave layer's sheet drew the steady picture on an unmarked \
+         node; it does not depend on a mark"
     );
     octaves.time = 1.1;
     let octaves_b = gpu.shot(&octaves);
     assert!(
         differing_pixels(&octaves_a, &octaves_b) > 0,
-        "the octave layer's Shimmer did not change between two different \
-         times; the bands are not reading the clock"
+        "the octave layer's sheet did not change between two different \
+         times; it is not reading the clock"
     );
 
     // The rings need a mark to exist at all -- that is the ring, not the
@@ -930,19 +943,19 @@ fn shimmer_sweeps_an_unmarked_layer_and_moves_with_time() {
     let ring_off_a = gpu.shot(&ring_off);
 
     let mut marks = single_marked_node(MIDDLE_C, 0);
-    marks.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
+    marks.pulse_marks = harmonigraph_scene::Pulse::Bands;
     marks.time = 0.4;
     let marks_a = gpu.shot(&marks);
     assert!(
         differing_pixels(&ring_off_a, &marks_a) > 0,
-        "the mark rings' Shimmer drew the steady picture"
+        "the mark rings' sheet drew the steady picture"
     );
     marks.time = 1.1;
     let marks_b = gpu.shot(&marks);
     assert!(
         differing_pixels(&marks_a, &marks_b) > 0,
-        "the mark rings' Shimmer did not change between two different \
-         times; the bands are not reading the clock"
+        "the mark rings' sheet did not change between two different \
+         times; it is not reading the clock"
     );
 }
 
@@ -966,7 +979,7 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
     // the sheet's own shape and pace, not about what it crosses.
     let sweep = |speed: f32, width: f32, time: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
-        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Bands;
         scene.shimmer_speed = speed;
         scene.shimmer_width = width;
         scene.time = time;
@@ -1000,7 +1013,7 @@ fn the_shimmers_speed_and_width_reach_the_picture_and_only_speed_carries_the_clo
 }
 
 /// Two sheets crossing a marked slice take the BRIGHTER of the two, so
-/// switching the mark rings' Shimmer on can only ADD light to the octave
+/// switching the mark rings' shimmer on can only ADD light to the octave
 /// glyphs — never take any away.
 ///
 /// The two terms a sheet carries pull opposite ways under a naive combine:
@@ -1047,7 +1060,7 @@ fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
     let offset = WIDTH / (2.0 * std::f32::consts::SQRT_2);
     let scene = |melody: u32, marks: harmonigraph_scene::Pulse, time: f32| -> Scene {
         let mut scene = single_marked_node(melody, 0);
-        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Bands;
         scene.pulse_marks = marks;
         scene.shimmer_width = WIDTH;
         scene.time = time;
@@ -1056,7 +1069,7 @@ fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
         scene
     };
     let off = harmonigraph_scene::Pulse::Off;
-    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+    let shimmer = harmonigraph_scene::Pulse::Bands;
 
     // A cycle's worth of instants: the sheets run square to each other, so
     // which one is ahead over the slice turns over as the clock runs.
@@ -1081,7 +1094,7 @@ fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
             assert!(
                 after >= before - 3,
                 "at t={time} a glyph pixel lost light ({before} -> {after}) when the \
-                 mark rings' Shimmer came on: the two sheets are being combined so \
+                 mark rings' shimmer came on: the two sheets are being combined so \
                  that one can darken what the other lit, which singles the marked \
                  slice out DIMMER than the plain slices beside it",
             );
@@ -1095,7 +1108,7 @@ fn a_slice_under_both_sheets_takes_the_brighter_and_never_the_dimmer() {
     // Measured 1970, the brightest of them 407 counts of luminance up.
     assert!(
         lifted > 500,
-        "only {lifted} glyph pixels were lifted by the mark rings' Shimmer over a \
+        "only {lifted} glyph pixels were lifted by the mark rings' shimmer over a \
          whole cycle; the never-darker claim above is passing on a sweep that \
          isn't reaching the slice at all",
     );
@@ -1144,7 +1157,7 @@ fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
         scene
     };
     let off = harmonigraph_scene::Pulse::Off;
-    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+    let shimmer = harmonigraph_scene::Pulse::Bands;
 
     // One cycle, walked: the trough has to pass over the slice somewhere in
     // it whatever phase the fixture happens to start at.
@@ -1177,7 +1190,7 @@ fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
     // could be zero because nothing was sweeping at all.
     assert!(
         dimmed_ring > 0,
-        "the mark rings' Shimmer never dimmed a ring pixel across a whole cycle; \
+        "the mark rings' shimmer never dimmed a ring pixel across a whole cycle; \
          the sweep has no trough at these instants and the slice claim below is \
          measuring nothing",
     );
@@ -1187,7 +1200,7 @@ fn the_mark_sheet_reaches_the_slice_whole_when_the_octave_layer_is_steady() {
     // 0 of slice against 2548 before the combine kept both absences exact.
     assert!(
         dimmed_slice > 200,
-        "the mark rings' Shimmer dimmed {dimmed_ring} px of ring but only \
+        "the mark rings' shimmer dimmed {dimmed_ring} px of ring but only \
          {dimmed_slice} px of the slice those rings point at: the sheet's trough \
          stops at the ring's edge, so the wedge only ever brightens and the one \
          mark is lit by two different lights",
@@ -1220,7 +1233,7 @@ fn shimmer_intensity_scales_the_sweep_and_bottoms_out_at_the_steady_layer() {
         scene
     };
     let off = harmonigraph_scene::Pulse::Off;
-    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+    let shimmer = harmonigraph_scene::Pulse::Bands;
 
     let steady = gpu.shot(&at(1.0, off));
     assert_eq!(
@@ -1273,7 +1286,7 @@ fn a_tight_width_puts_several_bands_across_one_node() {
     };
     let sweeping = |width: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
-        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Bands;
         scene.shimmer_width = width;
         // Held still, so the profile is one instant of the sheet and not a
         // smear of where it was going.
@@ -1356,6 +1369,64 @@ fn a_tight_width_puts_several_bands_across_one_node() {
     );
 }
 
+/// Past the tight end the sheet runs out of PIXELS to be drawn in, and what
+/// it does there is fade out rather than alias.
+///
+/// A sine sampled once per fragment stops meaning anything at half a period
+/// to the pixel: past that the pattern does not get finer, it turns into a
+/// moire of the sampling grid, which crawls as the camera moves and lands
+/// differently at every render size — the one thing the sweep's world units
+/// exist to avoid. `shimmer_terms` fades the depth out over
+/// SHIMMER_RESOLVE_FULL..GONE instead, so the layer settles back onto exactly
+/// the picture Off draws.
+///
+/// The two claims are a pair and neither means much alone: a width the frame
+/// CAN resolve has to still sweep (or the fade is just a broken sheet), and
+/// the finest width the bar reaches has to be pixel-identical to Off (or the
+/// fade stops somewhere short of the identity and leaves a haze that no
+/// setting can clear).
+#[test]
+fn a_width_finer_than_the_pixels_fades_out_instead_of_aliasing() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+
+    let at = |width: f32| -> Scene {
+        let mut scene = single_marked_node(0, 0);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Bands;
+        scene.shimmer_width = width;
+        // Held still: a fade measured across two instants would be measuring
+        // the travel as well.
+        scene.shimmer_speed = 0.0;
+        scene.time = 0.4;
+        scene
+    };
+    let steady = {
+        let mut scene = at(0.35);
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Off;
+        gpu.shot(&scene)
+    };
+
+    // The same width the test above counts fifteen band edges at, which this
+    // node's pixels carry comfortably.
+    let resolvable = differing_pixels(&steady, &gpu.shot(&at(0.35)));
+    // The floor `derive_scene` clamps the Width bar to.
+    let finest = differing_pixels(&steady, &gpu.shot(&at(0.02)));
+    eprintln!("pixels swept: {resolvable} at a resolvable width, {finest} at the floor");
+    assert!(
+        resolvable > 0,
+        "a width the frame can resolve swept nothing; the fade is eating the sheet \
+         well before the pixels run out",
+    );
+    assert_eq!(
+        finest, 0,
+        "the finest width the bar reaches still moved {finest} px against the steady \
+         layer, so what it is drawing there is a moire of the pixel grid rather \
+         than the picture Off draws",
+    );
+}
+
 /// The mark rings' shimmer also sweeps the octave SLICE each ring points at,
 /// which is drawn by the glyph layer — a mark is the ring together with the
 /// octave it names, and light crossing the one has to cross the other or it
@@ -1385,7 +1456,7 @@ fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
         scene
     };
     let off = harmonigraph_scene::Pulse::Off;
-    let shimmer = harmonigraph_scene::Pulse::Shimmer;
+    let shimmer = harmonigraph_scene::Pulse::Bands;
 
     // No mark: no ring to sweep and no slice to reach, so the mode changes
     // nothing at all. This is the containment half of the claim — the mark
@@ -1395,7 +1466,7 @@ fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
     assert_eq!(
         differing_pixels(&bare, &bare_shimmer),
         0,
-        "an unmarked node changed under the mark rings' Shimmer; the sweep has \
+        "an unmarked node changed under the mark rings' shimmer; the sweep has \
          escaped the slices a ring points at and is crossing the whole octave layer",
     );
 
@@ -1420,7 +1491,7 @@ fn the_mark_shimmer_reaches_the_octave_slice_it_points_at() {
     // shows is a setting. Measured 599 px past the ring, against 940 on it.
     assert!(
         past_ring > 200,
-        "the mark rings' Shimmer moved only {past_ring} px outside the rings \
+        "the mark rings' shimmer moved only {past_ring} px outside the rings \
          ({on_ring} on them): it is sweeping the annulus alone and stopping at \
          the gap, leaving the octave slice the mark names unlit",
     );
@@ -1532,7 +1603,7 @@ fn the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square() {
 
     let octaves = || {
         let mut scene = steady();
-        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Bands;
         scene
     };
     let octave_across = move_cost(&octaves, across_the_octave_bands);
@@ -1540,7 +1611,7 @@ fn the_shimmer_is_one_field_across_the_lattice_and_the_layers_run_square() {
 
     let marks = || {
         let mut scene = steady();
-        scene.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_marks = harmonigraph_scene::Pulse::Bands;
         scene
     };
     // The rings' bands are the quarter turn round, so the two moves swap
@@ -2374,8 +2445,8 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // because every other one leaves both pulses Off.
     let shimmering = || {
         let mut scene = parity_scene();
-        scene.pulse_octaves = harmonigraph_scene::Pulse::Shimmer;
-        scene.pulse_marks = harmonigraph_scene::Pulse::Shimmer;
+        scene.pulse_octaves = harmonigraph_scene::Pulse::Bands;
+        scene.pulse_marks = harmonigraph_scene::Pulse::Bands;
         scene
     };
     for (name, scene) in [
