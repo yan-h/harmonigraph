@@ -9,9 +9,11 @@ use std::ops::RangeInclusive;
 
 use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
-    clamp_wheel, octave_layout, ViewConfig, DEFAULT_CENTER, DEFAULT_COUNT, MAX_SPAN, MIN_SPAN,
+    clamp_wheel, hue_circle, octave_layout, pitch_ramp_lut, PitchGradient, ViewConfig,
+    DEFAULT_CENTER, DEFAULT_COUNT, HUE_CIRCLE_N, MAX_SPAN, MIN_SPAN, PITCH_LUT_N,
 };
 
+use crate::panes::scene_color;
 use crate::theme;
 
 /// Track size of a [`toggle_switch`] pill.
@@ -1193,6 +1195,350 @@ impl<'a> OctaveStrip<'a> {
     }
 }
 
+/// Segments the spectrum bar's track is drawn in. Twice [`HUE_CIRCLE_N`], so
+/// every sample of the hue circle lands on a segment BOUNDARY where it is
+/// drawn exactly, and only the vertices between two samples are interpolated.
+const SPECTRUM_SEGMENTS: usize = HUE_CIRCLE_N * 2;
+
+/// One turn of the hue circle, in degrees, and so the whole width of a
+/// [`SpectrumBar`]'s track.
+///
+/// The bar can stand for the span knob's entire travel only because
+/// [`PitchGradient::MAX_HUE_SPAN`] is exactly this. Widen that constant and
+/// `sanitized` would accept spans the bar cannot draw: the handle would park at
+/// the right edge and stop answering while the value went on growing, with
+/// nothing to fail at compile time.
+/// `the_spectrum_bar_track_is_a_whole_turn_of_the_span_knob` is what catches it.
+const FULL_TURN: f32 = 360.0;
+
+/// How far back the hues a gradient does not reach are held. Through alpha over
+/// the well rather than a blend toward a fixed grey, so the bar sits on
+/// whatever the pane is instead of ringing itself in a slightly wrong color.
+const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
+
+/// Height of the pitch-order strip under the spectrum bar, and the gap above
+/// it. Shorter than a bar, because it is a picture and not a control: nothing
+/// on it can be grabbed, and a full-height second bar would say otherwise.
+const STRIP_H: f32 = 11.0;
+const STRIP_GAP: f32 = 3.0;
+
+/// Which part of a [`SpectrumBar`] a drag took hold of. Decided once, at
+/// drag-start, and remembered for the gesture, exactly as [`Grab`] is: a span
+/// dragged to nothing would otherwise hand the rest of the gesture to the
+/// rotate branch the moment the handle reached the left edge.
+#[derive(Clone, Copy, Default)]
+enum SpectrumGrab {
+    /// The far end of the arc — how far round the circle the gradient walks.
+    #[default]
+    Span,
+    /// The circle itself, sliding under a fixed left edge. `held` is the hue
+    /// that was under the pointer when the gesture started, and the whole
+    /// gesture is "keep that hue under the pointer"; fixed for the gesture, so
+    /// a turn never reads back the circle it is itself moving.
+    Rotate { held: f32 },
+    /// A press that landed off the track — on the pitch-order strip, or in the
+    /// gap between the two. The widget senses one rectangle covering both, so
+    /// this is what keeps [`STRIP_H`]'s promise that the strip is a picture:
+    /// without it a sideways drag begun on the strip turns the whole circle.
+    ///
+    /// Remembered for the gesture like the other two, so a drag that started
+    /// off the track does not catch hold the moment the pointer crosses onto
+    /// it.
+    Outside,
+}
+
+/// The pitch gradient's hue arc: a full turn of the color circle laid along a
+/// bar, CUT at the arc's own start, with the stretch the gradient walks filled
+/// from the left edge and the hues it does not reach dimmed beyond it. Under
+/// it, the gradient itself in pitch order, low note on the left.
+///
+/// Drag the handle to set how far round the circle the range walks; drag the
+/// track to turn the whole circle under it; double-click to reset. Which
+/// DIRECTION it runs is the Flip button beside it, not a gesture — see below.
+///
+/// **Cut at the start, which is what makes a circle fit on a bar.** Hue wraps,
+/// so an arc laid on a fixed 0..360 track is drawn in two pieces whenever it
+/// crosses the seam — and the default arc does, running 260 through 0 to 90,
+/// which would put its two halves at opposite ends of the bar with the colors
+/// it never uses in between. Pinning the START to the left edge instead means
+/// the arc is one piece at every setting and always reads low-to-high, left to
+/// right; what moves is the circle behind it. The cost is that the bar cannot
+/// say where on the circle it is in absolute terms, which is a number nobody
+/// reads a color off anyway — the track is painted in the colors themselves.
+///
+/// **It previews all four knobs, not just the one it sets.** The claimed
+/// stretch is painted straight out of [`pitch_ramp_lut`], the same table the
+/// lattice draws from, so brightness and chroma show up in it too and the
+/// preview cannot drift from the picture. A swatch drawn from the widget's own
+/// idea of the gradient would be a second definition of the color, wrong the
+/// first time either changed. The dimmed remainder comes from [`hue_circle`]
+/// at the gradient's BASE lightness and chroma — the middle of its brightness
+/// ramp — so it reads as the same gradient continued rather than as decoration.
+///
+/// Which means it meets the claimed arc flush only when the ramp is FLAT: the
+/// arc ends at the top of the ramp, and the remainder carries on from the
+/// middle of it, so a steep ramp puts a step at the handle. Continuing the ramp
+/// instead would close that step and pay for it at the top of the knob, where
+/// an arc reaching `L*` 100 would dim out into a white band saying nothing
+/// about which hues are left — and the remainder's whole job is to say that.
+///
+/// **The strip is not redundant with the track.** They agree wherever both say
+/// anything — the claimed stretch IS the gradient — but the claimed stretch is
+/// as wide as the span, so at a span of zero it has no width at all, and a
+/// single-hue gradient with a brightness ramp is a real setting that the track
+/// alone would draw as nothing. The strip is also what makes a flip visible:
+/// the arc keeps its colors and its width, and only the strip reverses.
+pub struct SpectrumBar<'a> {
+    gradient: &'a mut PitchGradient,
+}
+
+impl<'a> SpectrumBar<'a> {
+    pub fn new(gradient: &'a mut PitchGradient) -> Self {
+        SpectrumBar { gradient }
+    }
+
+    pub fn show(self, ui: &mut Ui) -> Response {
+        let scale = theme::ui_scale(ui.ctx());
+        let width = bar_width(ui);
+        let strip_h = STRIP_H * scale;
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, BAR_HEIGHT * scale + STRIP_GAP * scale + strip_h),
+            Sense::click_and_drag(),
+        );
+        let track_rect = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.right(), rect.top() + BAR_HEIGHT * scale),
+        );
+        // The handle sits ON a position rather than between two, so the track
+        // is inset by half of one at each end and both limits — a span of zero
+        // and a whole turn — are places it can stand rather than edges it
+        // merges into. Same reason as HANDLE_INSET.
+        let track = track_rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
+        // Where a gradient puts itself on this track: which way round the
+        // circle it runs, how much of the turn it claims, and where that leaves
+        // the handle. A function rather than three bindings because the answer
+        // is wanted TWICE — once for the gradient a gesture is aimed at, and
+        // again for the one that gesture just wrote.
+        let laid_out = |g: PitchGradient| {
+            // A span of zero has no direction of its own, and opening rightward
+            // is the useful reading: dragging the handle out of nothing then
+            // grows an arc rather than needing the sign set first. `sanitized`
+            // is what makes the test sound, by keeping -0.0 out of the field.
+            let winding = if g.hue_span < 0.0 { -1.0f32 } else { 1.0 };
+            let claimed = (g.hue_span / FULL_TURN).abs().clamp(0.0, 1.0);
+            (winding, claimed, track.left() + track.width() * claimed)
+        };
+        // Whether a point is on the control at all, as opposed to on the
+        // picture below it. One rectangle is sensed for both, so this is the
+        // only thing standing between a press on the strip and a gesture.
+        let on_track = |p: &egui::Pos2| track_rect.contains(*p);
+
+        // ---- Interaction ----------------------------------------------------
+        let aimed = self.gradient.sanitized();
+        let (winding, _, handle_x) = laid_out(aimed);
+        // Where a point across the track sits on the circle, as a signed
+        // offset in degrees from the hue at the left edge.
+        let offset_at = |x: f32| {
+            ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * FULL_TURN * winding
+        };
+        let grab_id = response.id.with("spectrum_grab");
+        let clicked_track = response.interact_pointer_pos().is_some_and(|p| on_track(&p));
+        if response.double_clicked() && clicked_track {
+            let home = PitchGradient::default();
+            self.gradient.hue_start = home.hue_start;
+            self.gradient.hue_span = home.hue_span;
+            response.mark_changed();
+        }
+        if response.dragged() {
+            if let Some(p) = response.interact_pointer_pos() {
+                // Read and write as separate statements: nesting a `data_mut`
+                // inside a `data` closure takes the context lock twice.
+                let stored = ui.data(|d| d.get_temp::<SpectrumGrab>(grab_id));
+                let grab = match stored {
+                    Some(grab) => grab,
+                    None => {
+                        // Whether the gesture is ours is asked of where the
+                        // press LANDED, and which grab it is of where the
+                        // pointer has reached. Two positions on purpose: egui
+                        // only calls a press a drag once it has moved past a
+                        // threshold, so by this frame a press that began on the
+                        // strip may already be over the track — while the
+                        // handle-or-track question is settled on the first live
+                        // frame exactly as [`Grab`]'s is, so the two bars answer
+                        // a mid-gesture jump the same way.
+                        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
+                        let grab = if !on_track(&origin) {
+                            SpectrumGrab::Outside
+                        } else if (p.x - handle_x).abs() <= GRAB_PX * scale {
+                            SpectrumGrab::Span
+                        } else {
+                            SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(p.x) }
+                        };
+                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
+                        grab
+                    }
+                };
+                let next = match grab {
+                    // The magnitude only. Its SIGN is the Flip button's, and
+                    // leaving it there is what lets the handle reach zero
+                    // without the arc turning inside out on the way past.
+                    SpectrumGrab::Span => Some(PitchGradient {
+                        hue_span: winding * offset_at(p.x).abs(),
+                        ..aimed
+                    }),
+                    SpectrumGrab::Rotate { held } => Some(PitchGradient {
+                        hue_start: (held - offset_at(p.x)).rem_euclid(FULL_TURN),
+                        ..aimed
+                    }),
+                    SpectrumGrab::Outside => None,
+                };
+                if let Some(next) = next.filter(|next| *next != *self.gradient) {
+                    *self.gradient = next;
+                    response.mark_changed();
+                }
+            }
+        }
+        if response.drag_stopped() {
+            ui.data_mut(|d| d.remove_temp::<SpectrumGrab>(grab_id));
+        }
+
+        // ---- Paint ----------------------------------------------------------
+        // The gradient read BACK, not the snapshot the gesture was aimed at. A
+        // drag has just written it, and painting the value from before that
+        // write leaves the handle, the arc, the strip and the readout a whole
+        // frame behind the pointer for the length of the gesture — a step of
+        // one value and about 17px at a brisk drag. ValueBar and RangeBar both
+        // re-read their values here for the same reason.
+        let g = self.gradient.sanitized();
+        let (winding, claimed, handle_x) = laid_out(g);
+        let lut = pitch_ramp_lut(g);
+        let circle = hue_circle(g.lightness, g.chroma);
+        let radius = CornerRadius::same(bar_radius(scale));
+        let painter = ui.painter();
+        painter.rect_filled(track_rect, radius, theme::well());
+        // The colors go inside that well, which is what rounds them: a mesh
+        // has square corners, and the ring of well left showing reads as the
+        // track's own border rather than as a gap.
+        gradient_strip(painter, track_rect.shrink(scale.max(1.0)), SPECTRUM_SEGMENTS, |_, p| {
+            if claimed > 0.0 && p <= claimed {
+                // Along the gradient, not around the circle: the two agree by
+                // construction here, and reading the table is what keeps them
+                // agreeing if they ever stop.
+                let f = (p / claimed).clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+                let i0 = f.floor() as usize;
+                scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
+            } else {
+                // The hues the gradient does not reach, held back far enough to
+                // read as ground.
+                let hue = g.hue_start + p * FULL_TURN * winding;
+                let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
+                let i0 = f.floor() as usize % HUE_CIRCLE_N;
+                scene_color(
+                    circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()),
+                    UNCLAIMED_ALPHA,
+                )
+            }
+        });
+
+        // How far round the circle the arc reaches, read out on the dimmed
+        // side of the handle where it sits on flat color — and on the claimed
+        // side when the arc has grown too wide to leave room there, which is
+        // the same bargain a RangeBar's ends make. The sign is the direction,
+        // and it is spelled out because the track cannot show it: an arc and
+        // its flip claim exactly the same colors.
+        let font = TextStyle::Monospace.resolve(ui.style());
+        let text_color = if response.hovered() || response.dragged() {
+            theme::text()
+        } else {
+            theme::text_dim()
+        };
+        let galley =
+            painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), font, text_color);
+        let gap = TEXT_GAP * scale;
+        let reach = HANDLE_W * 0.5 * scale + gap;
+        let outside = handle_x + reach;
+        let left = if outside + galley.size().x <= track_rect.right() - gap {
+            outside
+        } else {
+            handle_x - reach - galley.size().x
+        };
+        let left = left.clamp(
+            track_rect.left() + gap,
+            (track_rect.right() - gap - galley.size().x).max(track_rect.left() + gap),
+        );
+        let y = track_rect.center().y - galley.size().y * 0.5;
+        painter.galley(egui::pos2(left, y), galley, text_color);
+
+        // The handle on top of everything, readout included: it is the part
+        // you operate, and a digit sliding under it beats it disappearing
+        // behind one.
+        painter.rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(handle_x, track_rect.center().y),
+                Vec2::new(HANDLE_W * scale, track_rect.height() - 3.0 * scale),
+            ),
+            CornerRadius::same(theme::scaled_points(2, scale)),
+            theme::text(),
+        );
+
+        // ---- The same gradient, in pitch order ------------------------------
+        let strip = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - strip_h),
+            egui::pos2(rect.right(), rect.bottom()),
+        );
+        painter.rect_filled(strip, CornerRadius::same(bar_radius(scale)), theme::well());
+        // One entry per segment, so every color in the table is drawn where it
+        // falls and only the vertices between two of them are interpolated.
+        gradient_strip(painter, strip.shrink(scale.max(1.0)), PITCH_LUT_N - 1, |i, _| {
+            scene_color(lut[i], 1.0)
+        });
+
+        // The cursor says which gesture a press would start before committing
+        // to a drag, as a RangeBar's does: the handle resizes the arc, the
+        // track turns the circle under it. Off the track it says neither,
+        // because a press there starts nothing — see [`SpectrumGrab::Outside`].
+        match response.hover_pos().filter(on_track) {
+            Some(p) if (p.x - handle_x).abs() <= GRAB_PX * scale => {
+                response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+            }
+            Some(_) => response.on_hover_cursor(egui::CursorIcon::Grab),
+            None => response,
+        }
+    }
+}
+
+/// A band of `segments + 1` colored columns across `rect`, each column's color
+/// taken from `color` at its own index and at its position along the band (0 at
+/// the left edge, 1 at the right), and interpolated between columns.
+///
+/// One builder for a [`SpectrumBar`]'s two bands — the track, whose color comes
+/// off the hue circle and the pitch ramp either side of the handle, and the
+/// pitch-order strip below it, which is the ramp end to end. A quad strip
+/// written out twice is two places to get the vertex order or the first-column
+/// case wrong, and the second copy is the one that quietly keeps the older
+/// answer.
+fn gradient_strip(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    segments: usize,
+    color: impl Fn(usize, f32) -> egui::Color32,
+) {
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=segments {
+        let p = i as f32 / segments as f32;
+        let x = rect.left() + rect.width() * p;
+        let c = color(i, p);
+        let v = mesh.vertices.len() as u32;
+        mesh.colored_vertex(egui::pos2(x, rect.top()), c);
+        mesh.colored_vertex(egui::pos2(x, rect.bottom()), c);
+        if i > 0 {
+            mesh.add_triangle(v - 2, v - 1, v);
+            mesh.add_triangle(v - 1, v + 1, v);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// A horizontal row of controls in a settings column, sized up front to
 /// framed-button height and wrapping onto further lines when the column is too
 /// narrow to hold it.
@@ -1636,6 +1982,351 @@ mod tests {
         assert_eq!(grab.apply(-500.0, squished, AXIS, OCTAVE), squished);
         // Back to where it was grabbed: the original width comes back.
         assert_eq!(grab.apply(60.0, squished, AXIS, OCTAVE), (30.0, 90.0));
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// A [`SpectrumBar`] alone in a 300pt context, driven one frame at a time.
+    ///
+    /// Real events through a real context, because nothing less reaches the
+    /// widget: what a gesture has hold of is decided on the first frame egui
+    /// calls the press a drag and then remembered in context data, so a single
+    /// synthetic call would exercise neither the decision nor the memory. A
+    /// bare context is the design scale, 1.0, which is why the geometry below
+    /// reads the constants unmultiplied.
+    struct Spectrum {
+        ctx: egui::Context,
+        screen: egui::Rect,
+        rect: egui::Rect,
+        /// Where the pointer was on the frame egui first called the press a
+        /// drag — the frame the widget settles what it has hold of, and so the
+        /// position a gesture's own arithmetic is anchored to.
+        live_at: egui::Pos2,
+        t: f64,
+    }
+
+    impl Spectrum {
+        /// Laid out once before anything is aimed at it: egui resolves the
+        /// pointer against the PREVIOUS pass's rects, so a press cannot land on
+        /// a bar that has never been drawn.
+        fn settled(g: &mut PitchGradient) -> Spectrum {
+            let ctx = egui::Context::default();
+            crate::theme::apply_theme(&ctx);
+            let mut h = Spectrum {
+                ctx,
+                screen: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0)),
+                rect: egui::Rect::NOTHING,
+                live_at: egui::Pos2::ZERO,
+                t: 0.0,
+            };
+            h.frame(g, vec![]);
+            h
+        }
+
+        fn frame(&mut self, g: &mut PitchGradient, events: Vec<egui::Event>) -> Vec<egui::Shape> {
+            self.t += 1.0 / 60.0;
+            let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+            let out = self.ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(self.screen),
+                    time: Some(self.t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| rect.set(SpectrumBar::new(g).show(ui).rect),
+            );
+            self.rect = rect.get();
+            out.shapes.into_iter().map(|s| s.shape).collect()
+        }
+
+        /// The track a handle actually travels: the bar's own rect above the
+        /// gap and the pitch strip, less the inset at either end.
+        fn track(&self) -> egui::Rect {
+            egui::Rect::from_min_max(
+                self.rect.min,
+                egui::pos2(self.rect.right(), self.rect.top() + BAR_HEIGHT),
+            )
+            .shrink2(Vec2::new(HANDLE_INSET, 0.0))
+        }
+
+        /// Where a span of `span` degrees stands the handle.
+        fn at_span(&self, span: f32) -> egui::Pos2 {
+            let track = self.track();
+            let across = (span / FULL_TURN).abs().clamp(0.0, 1.0);
+            egui::pos2(track.left() + track.width() * across, track.center().y)
+        }
+
+        /// A point across the pitch-order strip under the bar.
+        fn on_strip(&self, across: f32) -> egui::Pos2 {
+            let x = self.rect.left() + self.rect.width() * across;
+            egui::pos2(x, self.rect.bottom() - STRIP_H * 0.5)
+        }
+
+        /// Press at `from` and drag to `to`, answering what the arriving frame
+        /// painted. A step clear of egui's drag threshold comes first, since
+        /// a gesture that jumps straight to its target settles its grab there.
+        fn drag(
+            &mut self,
+            g: &mut PitchGradient,
+            from: egui::Pos2,
+            to: egui::Pos2,
+        ) -> Vec<egui::Shape> {
+            self.frame(g, vec![egui::Event::PointerMoved(from)]);
+            self.frame(g, vec![egui::Event::PointerMoved(from), press(from, true)]);
+            self.live_at = from + (to - from).normalized() * 12.0;
+            self.frame(g, vec![egui::Event::PointerMoved(self.live_at)]);
+            self.frame(g, vec![egui::Event::PointerMoved(to)])
+        }
+
+        /// Two clicks at one spot, close enough together to be one gesture.
+        fn double_click(&mut self, g: &mut PitchGradient, at: egui::Pos2) {
+            self.frame(g, vec![egui::Event::PointerMoved(at)]);
+            for _ in 0..2 {
+                self.frame(g, vec![press(at, true)]);
+                self.frame(g, vec![press(at, false)]);
+            }
+        }
+    }
+
+    /// The one text run a spectrum bar paints: its span, signed.
+    fn spectrum_readout(shapes: &[egui::Shape]) -> String {
+        let texts: Vec<String> = text_boxes(shapes).into_iter().map(|(_, s)| s).collect();
+        assert_eq!(texts.len(), 1, "a spectrum bar draws one readout, not {texts:?}");
+        texts.into_iter().next().expect("checked just above")
+    }
+
+    /// Where the bar drew its handle.
+    fn spectrum_handle_x(shapes: &[egui::Shape]) -> f32 {
+        let hs = handles(shapes);
+        assert_eq!(hs.len(), 1, "a spectrum bar draws one handle, not {hs:?}");
+        hs[0].center().x
+    }
+
+    /// The hue the bar paints at `p`, worked out the way the bar lays a circle
+    /// on a track: cut at the arc's own start, one whole turn across.
+    fn hue_under(g: PitchGradient, track: egui::Rect, p: egui::Pos2) -> f32 {
+        let across = ((p.x - track.left()) / track.width()).clamp(0.0, 1.0);
+        let winding = if g.hue_span < 0.0 { -1.0 } else { 1.0 };
+        (g.hue_start + across * FULL_TURN * winding).rem_euclid(FULL_TURN)
+    }
+
+    /// The track stands for the span knob's whole travel, which holds only
+    /// while the two numbers are the same one.
+    #[test]
+    fn the_spectrum_bar_track_is_a_whole_turn_of_the_span_knob() {
+        assert_eq!(
+            FULL_TURN,
+            PitchGradient::MAX_HUE_SPAN,
+            "the track draws one turn while the span reaches {}, so the handle \
+             parks at the right edge with the value still growing",
+            PitchGradient::MAX_HUE_SPAN,
+        );
+    }
+
+    /// The handle stands at the fraction of the turn the arc claims, and says
+    /// so in the same picture.
+    #[test]
+    fn the_spectrum_handle_stands_where_its_readout_says() {
+        for span in [0.0f32, 45.0, 190.0, 360.0, -190.0, -360.0] {
+            let mut g = PitchGradient { hue_span: span, ..PitchGradient::default() };
+            let mut h = Spectrum::settled(&mut g);
+            let shapes = h.frame(&mut g, vec![]);
+            let track = h.track();
+            let want = track.left() + track.width() * (span / FULL_TURN).abs();
+            let drawn = spectrum_handle_x(&shapes);
+            assert!(
+                (drawn - want).abs() < 0.51,
+                "a span of {span} put the handle at {drawn} rather than {want}",
+            );
+            assert_eq!(spectrum_readout(&shapes), format!("{span:+.0}°"));
+        }
+
+        // Both limits are places the handle can STAND rather than edges it
+        // merges into, which is the whole of what the inset buys: at neither
+        // one does it hang off the bar or disappear under the rounding.
+        let mut nothing = PitchGradient { hue_span: 0.0, ..PitchGradient::default() };
+        let mut h = Spectrum::settled(&mut nothing);
+        let shapes = h.frame(&mut nothing, vec![]);
+        assert!(handles(&shapes)[0].left() >= h.rect.left(), "a zero span hangs the handle off");
+        let mut whole = PitchGradient { hue_span: 360.0, ..PitchGradient::default() };
+        let mut h = Spectrum::settled(&mut whole);
+        let shapes = h.frame(&mut whole, vec![]);
+        assert!(handles(&shapes)[0].right() <= h.rect.right(), "a whole turn hangs the handle off");
+    }
+
+    /// The frame that moves the arc is the frame that DRAWS it moved.
+    ///
+    /// A bar that snapshots its value before the interaction block and paints
+    /// from the snapshot is right in the end and wrong the whole way through:
+    /// the handle, the arc, the strip and the readout all show the previous
+    /// frame's value for the length of the gesture. Only a live drag catches
+    /// it — a settled bar draws the same picture either way, which is why every
+    /// other test here would pass against the lag.
+    #[test]
+    fn a_spectrum_drag_draws_the_arc_it_just_set() {
+        let mut g = PitchGradient { hue_span: 90.0, ..PitchGradient::default() };
+        let mut h = Spectrum::settled(&mut g);
+        let (from, to) = (h.at_span(90.0), h.at_span(270.0));
+        let shapes = h.drag(&mut g, from, to);
+        assert!(
+            (g.hue_span - 270.0).abs() < 2.0,
+            "the drag left the span at {} rather than near 270",
+            g.hue_span,
+        );
+        let drawn = spectrum_handle_x(&shapes);
+        assert!(
+            (drawn - to.x).abs() < 1.0,
+            "the pointer is at {} and the handle was drawn at {drawn}, a frame behind",
+            to.x,
+        );
+        assert_eq!(
+            spectrum_readout(&shapes),
+            format!("{:+.0}°", g.hue_span),
+            "the readout names a span other than the one the drag just set",
+        );
+    }
+
+    /// The pitch-order strip is a picture, and a press on it starts nothing.
+    ///
+    /// One rectangle is sensed for the bar and the strip together, so the only
+    /// thing separating them is where a press LANDED — and asking where the
+    /// pointer has since reached would not do, because egui calls a press a drag
+    /// only once it has moved, by which time it can be over the track.
+    #[test]
+    fn the_pitch_strip_is_a_picture_and_not_a_control() {
+        let home = PitchGradient::default();
+
+        // A drag begun on the strip and run up into the track.
+        let mut g = home;
+        let mut h = Spectrum::settled(&mut g);
+        let (from, to) = (h.on_strip(0.2), egui::pos2(h.on_strip(0.8).x, h.track().center().y));
+        h.drag(&mut g, from, to);
+        assert_eq!(g, home, "a drag begun on the pitch strip turned the circle under it");
+
+        // The same gesture one bar higher does move it, so the harness is
+        // delivering something the widget can act on.
+        let mut g = home;
+        let mut h = Spectrum::settled(&mut g);
+        let from = egui::pos2(h.on_strip(0.2).x, h.track().center().y);
+        h.drag(&mut g, from, to);
+        assert_ne!(g, home, "the same drag on the track moved nothing, so this proves nothing");
+
+        // And a double-click on the strip does not reset the arc, while the
+        // same pair one bar up does. A fresh bar for each: run back to back on
+        // one, the second pair lands inside the first's double-click window and
+        // arrives as the third click of a sequence, which is a different
+        // gesture and would make the strip's half of this vacuous.
+        let dialled = PitchGradient { hue_start: 12.0, hue_span: 33.0, ..home };
+        let mut g = dialled;
+        let mut h = Spectrum::settled(&mut g);
+        let at = h.on_strip(0.5);
+        h.double_click(&mut g, at);
+        assert_eq!(g, dialled, "a double-click on the pitch strip reset the arc");
+
+        let mut g = dialled;
+        let mut h = Spectrum::settled(&mut g);
+        let at = egui::pos2(h.on_strip(0.5).x, h.track().center().y);
+        h.double_click(&mut g, at);
+        assert_eq!(
+            (g.hue_start, g.hue_span),
+            (home.hue_start, home.hue_span),
+            "a double-click on the track did not reset, so the strip half proves nothing",
+        );
+    }
+
+    /// A turn slides the circle under a fixed left edge, and the hue the
+    /// gesture took hold of stays under the pointer for the length of it.
+    #[test]
+    fn turning_the_spectrum_keeps_the_grabbed_hue_under_the_pointer() {
+        let mut g = PitchGradient { hue_start: 0.0, hue_span: 90.0, ..PitchGradient::default() };
+        let before = g;
+        let mut h = Spectrum::settled(&mut g);
+        // Well clear of the handle, which a quarter-turn arc stands at 0.25.
+        let (from, to) = (h.at_span(300.0), h.at_span(200.0));
+        h.drag(&mut g, from, to);
+        let track = h.track();
+        let held = hue_under(before, track, h.live_at);
+        let now = hue_under(g, track, to);
+        // Within a degree either side, the far side being the seam: two hues a
+        // whisker apart across 0 are 359 apart by subtraction.
+        let apart = (now - held).abs();
+        assert!(
+            !(1.0..=FULL_TURN - 1.0).contains(&apart),
+            "the hue under the pointer went from {held} to {now} during the turn",
+        );
+        assert_ne!(g.hue_start, before.hue_start, "the turn moved nothing");
+        assert_eq!(g.hue_span, before.hue_span, "a turn changed how wide the arc is");
+    }
+
+    /// A flip lands on the same arc read backwards — the promise the Flip
+    /// button beside the bar makes, and the reason the bar draws the same
+    /// stretch of color either way round.
+    #[test]
+    fn a_flip_is_the_same_arc_read_backwards() {
+        for (start, span) in [(260.0f32, 190.0f32), (0.0, 360.0), (95.0, -45.0), (12.0, 0.0)] {
+            let before =
+                PitchGradient { hue_start: start, hue_span: span, ..PitchGradient::default() }
+                    .sanitized();
+            let after = before.flipped();
+            let ends = |g: PitchGradient| (g.lightness_and_hue(0.0).1, g.lightness_and_hue(1.0).1);
+            let (low, high) = ends(before);
+            let (flipped_low, flipped_high) = ends(after);
+            assert!(
+                (flipped_low - high).abs() < 1e-3 && (flipped_high - low).abs() < 1e-3,
+                "{start}/{span}: {low}..{high} came back as {flipped_low}..{flipped_high}",
+            );
+            assert_eq!(
+                after.hue_span.abs(),
+                before.hue_span.abs(),
+                "{start}/{span}: a flip changed how much of the circle the arc claims",
+            );
+            assert_eq!(
+                after.flipped(),
+                before,
+                "{start}/{span}: flipping twice is not the identity",
+            );
+        }
+    }
+
+    /// A span of nothing is written with the one sign that reads as no
+    /// direction.
+    ///
+    /// `-0.0` is the sign that lies: it is not `< 0.0`, so everything asking
+    /// which way the arc runs takes it for rightward, while `{:+}` prints it as
+    /// running left — a bar that says one direction and behaves as the other.
+    /// Flipping a zero span makes one, and so does dragging a flipped arc down
+    /// to nothing.
+    #[test]
+    fn a_span_of_nothing_reads_out_with_no_direction() {
+        let flipped = PitchGradient { hue_span: 0.0, ..PitchGradient::default() }.flipped();
+        assert!(
+            flipped.hue_span.is_sign_positive(),
+            "flipping a span of nothing left it at {}",
+            flipped.hue_span,
+        );
+
+        let mut g = PitchGradient { hue_span: -120.0, ..PitchGradient::default() };
+        let mut h = Spectrum::settled(&mut g);
+        let from = h.at_span(-120.0);
+        let to = egui::pos2(h.track().left() - 40.0, h.track().center().y);
+        let shapes = h.drag(&mut g, from, to);
+        assert_eq!(g.hue_span, 0.0, "the drag left the span at {}", g.hue_span);
+        assert!(
+            g.sanitized().hue_span.is_sign_positive(),
+            "a flipped arc dragged to nothing kept a direction it cannot have",
+        );
+        assert_eq!(
+            spectrum_readout(&shapes),
+            "+0°",
+            "a span of nothing read out as running left",
+        );
     }
 
     fn round_trips(range: RangeInclusive<f32>, eased: bool) {

@@ -10,7 +10,8 @@
 //!   + tuning -> node/edge lists. Envelope and animation policy.
 //! - [`view`] — [`ViewConfig`] (persisted visual settings, serde defaults,
 //!   legacy-blob migration) and [`FrameParams`].
-//! - [`style`] — the visual-style enums and their shader indices.
+//! - [`style`] — the visual-style enums and their shader indices, and the
+//!   pitch gradient's knobs.
 //! - [`octaves`] — where the octave indicators sit around a node: how many,
 //!   how wide, and the boundary angles the shader draws them between.
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
@@ -32,7 +33,7 @@ pub mod trail;
 pub mod view;
 
 pub use camera::{Camera, Projection, Projector};
-pub use color::{channel_color, pitch_lut_color, pitch_ramp_lut};
+pub use color::{channel_color, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N};
 pub use derive::derive_scene;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
@@ -40,7 +41,7 @@ pub use octaves::{
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
 pub use style::{
-    HighlightExtremes, IdleMarker, NodeStyle, Pulse, SevensLabel,
+    HighlightExtremes, IdleMarker, NodeStyle, PitchGradient, Pulse, SevensLabel,
 };
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
@@ -84,17 +85,25 @@ const ATTACK_TIME: f64 = 0.15;
 /// Because all of them read this one table, its size is not what makes two
 /// shapes agree — that is structural (see `color::pitch_lut_color`). It buys
 /// only the table's own fidelity to the designed curve, and it buys that
-/// badly: the ramp's dark end rides the sRGB gamut boundary, where the LCh the
-/// curve asks for is unrepresentable and the red channel sits pinned at 0
-/// until t is about 0.2205 and then leaves it with a jump in slope. Linear
-/// interpolation across a corner like that converges linearly at best, and
-/// erratically in practice, since what dominates is whether a sample happens
-/// to land near the corner rather than how many samples there are. Sweeping
-/// the whole gradient range in 0.01-semitone steps, worst channel error is
-/// 14.9/255 at 16 entries, 9.6 at 32, 3.6 at 64, 1.5 at 128 — but 4.9 at 130,
-/// and still 2.4 at 256, four kilobytes in. So 64 is the knee: past it the
-/// spend stops buying anything reliable, and the curve is already tracked far
-/// closer than a viewer can see.
+/// unevenly, because the curve is not smooth. Its chroma follows the sRGB
+/// gamut's own boundary (see [`PitchGradient::chroma`]), and that boundary is
+/// the surface of a CUBE: where the widest chroma at a lightness passes from
+/// one face of it to another, the maximum has a corner, and so does the curve
+/// riding at a fixed fraction of it. Linear interpolation across a corner
+/// converges linearly at best, and a little erratically, since what dominates
+/// is whether a sample happens to land near one rather than how many samples
+/// there are.
+///
+/// Sweeping the default gradient's whole range in 0.01-semitone steps, worst
+/// channel error is 7.9/255 at 16 entries, 4.0 at 32, 1.8 at 64, 0.6 at 128 —
+/// but 0.9 at 130, and still 0.4 at 256, four kilobytes in. So 64 is the knee:
+/// past it the spend buys a fraction of a level that no display step can
+/// show, and the curve is already tracked far closer than a viewer can see.
+///
+/// A gradient can be dialled to a harsher curve than the default — chroma at
+/// 1.0 rides the boundary itself, corners and all, rather than half way in —
+/// which is the case for leaving headroom here rather than trimming to what
+/// the default alone needs.
 ///
 /// Do NOT read that error as a mismatch between shapes. It is the difference
 /// between the table and an ideal nothing draws.
@@ -194,9 +203,10 @@ pub struct NodeInstance {
     /// of that slot on this node, through [`color::pitch_lut_color`] — so a
     /// ring reads as belonging to the indicator it points at rather than as a
     /// fixed livery. Taken from the strongest marking voice (they can differ
-    /// mid-crossfade). The ramp already bakes in the lift the disc/roll/glyphs
-    /// carry (see `color::NOTE_LIGHTEN`), so the ring inherits it and adds
-    /// nothing; a second one would leave the ring a shade whiter than the band.
+    /// mid-crossfade). No lift on top of the ramp: the disc, the roll and the
+    /// glyphs all wear it as the table hands it over, whatever the gradient's
+    /// brightness is dialled to, so a ring that lightened its own copy would
+    /// sit a shade whiter than the band it brackets.
     ///
     /// The slot's pitch rather than the marking VOICE's: a note past either end
     /// of the ring folds onto the outermost slot, and a ring carrying the

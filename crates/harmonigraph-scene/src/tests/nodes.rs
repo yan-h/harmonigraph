@@ -8,11 +8,160 @@ use super::harness::*;
 
 #[test]
 fn pitch_colored_channels_vary_with_pitch() {
-    let low = channel_color(9, 24.0, 24.0, 108.0);
-    let high = channel_color(9, 108.0, 24.0, 108.0);
+    let g = PitchGradient::default();
+    let low = channel_color(9, 24.0, 24.0, 108.0, g);
+    let high = channel_color(9, 108.0, 24.0, 108.0, g);
     assert_ne!(low, high);
-    // Brightest pitch should be, well, brighter.
+    // The default gradient spends brightness on pitch, so the top of the
+    // range is, well, brighter. A property of the DEFAULT and not of the
+    // gradient: a zero ramp deliberately breaks exactly this, which
+    // `the_gradient_is_in_gamut_and_flat_when_its_ramp_is` pins from the other
+    // side, and a negative one inverts it.
     assert!(high.truncate().length() > low.truncate().length());
+}
+
+/// sRGB relative luminance — what "brightness" means once a color is on
+/// screen, and the thing a zero brightness ramp holds still. Not `L*`: the
+/// curve is DEFINED by its `L*`, so measuring `L*` back would only restate the
+/// definition. This goes the whole way to the pixel, through the gamut clamp
+/// included, which is where a chroma past what the gamut holds would show up.
+fn luminance(c: glam::Vec4) -> f32 {
+    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * lin(c.x) + 0.7152 * lin(c.y) + 0.0722 * lin(c.z)
+}
+
+/// A spread of gradients wide enough to cover what the controls can reach:
+/// each knob at both limits and somewhere in between, including the
+/// degenerate settings — no hue arc at all, a full turn, no color, all the
+/// color there is, and a ramp steeper than the `L*` axis so it flattens
+/// against black and white.
+fn gradient_sweep() -> Vec<PitchGradient> {
+    let mut out = Vec::new();
+    for hue_start in [0.0, 95.0, 260.0, 359.0] {
+        for hue_span in [0.0, 45.0, 190.0, 360.0, -190.0, -360.0] {
+            for lightness in [10.0, 50.0, 64.0, 92.0] {
+                for lightness_ramp in [0.0, 44.0, 100.0, -70.0] {
+                    for chroma in [0.0, 0.45, 1.0] {
+                        out.push(PitchGradient {
+                            hue_start,
+                            hue_span,
+                            lightness,
+                            lightness_ramp,
+                            chroma,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The promise that lets all four knobs be free: whatever they are set to,
+/// the curve stays inside sRGB, and its brightness ramp is the ONLY thing that
+/// moves its luminance.
+///
+/// Both halves are one check. A clipped channel does not announce itself — the
+/// color simply stops being the LCh that was asked for — but clipping cannot
+/// happen without moving the luminance, so a gradient asked for a flat ramp
+/// that clips anywhere is one whose luminance is no longer flat, and the ratio
+/// below rises off 1.0 the moment it does. That is what
+/// [`chroma`](PitchGradient::chroma) being a fraction of the gamut's own
+/// maximum buys, and this is what holds it to the claim.
+///
+/// The gamut half goes to the predicate rather than to the table, and the
+/// difference is the whole of it: `lch` clamps every channel into range on the
+/// way in, so a LUT entry read back is inside 0..1 whatever was asked for, and
+/// an assertion on the entry would pass against a gradient that clips right
+/// across the sweep. The clamp is a safety net, and a net cannot report its own
+/// catches — hence `ramp_sample_in_gamut`, and the negative case at the end
+/// that proves the two are not the same question.
+#[test]
+fn the_gradient_is_in_gamut_and_flat_when_its_ramp_is() {
+    for gradient in gradient_sweep() {
+        let lut = pitch_ramp_lut(gradient);
+        let (mut lo, mut hi) = (f32::MAX, 0.0f32);
+        for (k, entry) in lut.into_iter().enumerate() {
+            // In gamut whatever the ramp: the LUT is what the shader indexes,
+            // so a sample the gamut cannot hold would be drawn as some other
+            // color than the one the curve designed.
+            let t = k as f64 / (PITCH_LUT_N - 1) as f64;
+            assert!(
+                crate::color::ramp_sample_in_gamut(t, gradient.sanitized()),
+                "{gradient:?} at t {t:.3}: {entry:?} was asked for outside sRGB",
+            );
+            let y = luminance(entry);
+            lo = lo.min(y);
+            hi = hi.max(y);
+        }
+        if gradient.lightness_ramp != 0.0 {
+            continue;
+        }
+        // "Flat" is 1.0 up to 1.01, not bit-exact: the LCh->sRGB conversion
+        // rounds, and it rounds differently at different chroma, so an arc
+        // whose chroma follows the gamut across a whole turn of hue comes out
+        // a shade off dead level. That is far under a step anyone can see, and
+        // a real design tilt would be worth percent, not tenths of one.
+        //
+        // At `L*` 0 there is no color to be off level about and the ratio is
+        // exactly 1; the guard is against the 0/0 that a black gradient's
+        // luminance ratio would otherwise be.
+        let ratio = if lo > 0.0 { hi / lo } else { 1.0 };
+        assert!(
+            ratio <= 1.01,
+            "{gradient:?} asks for a flat ramp but spans {ratio:.4}x in luminance",
+        );
+    }
+
+    // And the gamut half has teeth. Five times the chroma that fits is exactly
+    // what `sanitized` exists to make unreachable from a control, so nothing in
+    // the sweep above can reach it — which is also why nothing in the sweep
+    // above would notice if the check had quietly stopped asking.
+    let past_the_gamut = PitchGradient { chroma: 5.0, ..PitchGradient::default() };
+    assert!(
+        !crate::color::ramp_sample_in_gamut(0.5, past_the_gamut),
+        "a chroma five times what the gamut holds passed the in-gamut check, \
+         so the check is reading something other than what was asked for",
+    );
+}
+
+/// The chroma knob does what it says across its whole travel, and what it says
+/// is "a fraction of what is available here" — so more chroma is always more
+/// color, and 0 is exactly grey.
+///
+/// The monotonicity is the part worth pinning. It is what a control with no
+/// dead zone means, and it is the thing an absolute chroma could not offer:
+/// past the gamut boundary, more asked for is the same drawn (or worse, a
+/// different hue at a different luminance).
+#[test]
+fn more_chroma_is_more_color_at_every_setting() {
+    // Away from the ends of the `L*` axis, where the gamut pinches to nothing
+    // and every chroma is the same grey.
+    for gradient in gradient_sweep().into_iter().filter(|g| (25.0..=80.0).contains(&g.lightness)) {
+        let grey = pitch_ramp_lut(PitchGradient { chroma: 0.0, ..gradient });
+        for entry in grey {
+            let (lo, hi) = (entry.x.min(entry.y).min(entry.z), entry.x.max(entry.y).max(entry.z));
+            assert!(hi - lo < 1.5 / 255.0, "{gradient:?}: chroma 0 left a color, {entry:?}");
+        }
+        // Distance from that grey is chroma made visible, and it has to grow
+        // with the knob at every step of it. Sampled at the entry NEAREST the
+        // middle of the range — [`PITCH_LUT_N`] is even, so no entry sits on
+        // the midpoint where the brightness ramp would contribute exactly
+        // nothing: index 32 of 64 is t = 0.508, which the steepest ramp in the
+        // sweep moves `L*` by eight tenths of a point. All the sample needs is
+        // to stay clear of both ends of the `L*` axis, where the gamut pinches
+        // to nothing and every chroma is the same grey, and the filter above
+        // holds it 25 points clear at either end.
+        let mid = PITCH_LUT_N / 2;
+        let mut last = -1.0f32;
+        for step in 0..=8 {
+            let chroma = step as f32 / 8.0;
+            let entry = pitch_ramp_lut(PitchGradient { chroma, ..gradient })[mid].truncate();
+            let spread = entry.max_element() - entry.min_element();
+            assert!(spread > last, "{gradient:?} at chroma {chroma}: {spread} is not past {last}");
+            last = spread;
+        }
+    }
 }
 
 #[test]
@@ -28,22 +177,62 @@ fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
     // table can deliver. What a disc and a glyph are each FED can still differ
     // — derive clamps a voice outside the wheel's Range onto the outermost
     // slot — and that is a different pitch, not a disagreement about a color.
-    let lut = pitch_ramp_lut();
+    //
+    // A spread of gradients, because agreement is structural — one table read
+    // by both walks — and a setting that broke it would be one that reached a
+    // color some other way than through the table. Every fifth of the sweep:
+    // the property does not vary with the knobs at all, so this is a net cast
+    // across them rather than coverage of them.
+    //
+    // Five, and the arithmetic is the point. A stride over a flattened nested
+    // loop walks each dimension by stride/(product of the ones inside it), so a
+    // stride sharing a factor with that product lands on a SUBGROUP of the
+    // dimension and never leaves it. Four is exactly that trap here: three
+    // chroma values sit inside four brightness ramps, so a stride of 4 advances
+    // the ramp index by 4/3 and reaches only three of its four values —
+    // the inverted ramp, -70, would never be selected at all. Three is no
+    // better, taking every gradient at chroma 0. A stride coprime with the
+    // sweep's whole length walks all of it, which 5 is; the check below is what
+    // notices if a knob is ever added or a stride retuned into a subgroup.
     let (dark, bright) = (24.0f32, 108.0f32);
-    // The sweep is insurance rather than coverage: both sides reduce to the
-    // same arithmetic today, so it can only fail once someone changes one
-    // walk's interpolation form and not the other's — which is precisely the
-    // edit that would put the gamut corner back between two shapes.
-    let mut pitch = dark;
-    while pitch <= bright {
-        let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
-        let f = t * (PITCH_LUT_N - 1) as f32;
-        let i0 = f.floor() as usize;
-        let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
-        let glyph = lut[i0].lerp(lut[i1], f - f.floor());
-        let disc = channel_color(9, pitch, dark, bright);
-        assert_eq!(glyph, disc, "pitch {pitch}: glyph {glyph:?} vs disc {disc:?}");
-        pitch += 0.01;
+    let full = gradient_sweep();
+    let cast: Vec<PitchGradient> = full.iter().copied().step_by(5).collect();
+    /// One knob of the sweep: its name, and the way to read it off a gradient.
+    type Knob = (&'static str, fn(&PitchGradient) -> f32);
+    let knobs: [Knob; 5] = [
+        ("hue_start", |g| g.hue_start),
+        ("hue_span", |g| g.hue_span),
+        ("lightness", |g| g.lightness),
+        ("lightness_ramp", |g| g.lightness_ramp),
+        ("chroma", |g| g.chroma),
+    ];
+    for (knob, of) in knobs {
+        for wanted in full.iter().map(of) {
+            assert!(
+                cast.iter().map(of).any(|v| v == wanted),
+                "the every-fifth net never selects {knob} {wanted}, so this test \
+                 does not cast across the knob it says it does",
+            );
+        }
+    }
+    for gradient in cast {
+        let lut = pitch_ramp_lut(gradient);
+        // The sweep is insurance rather than coverage: both sides reduce to
+        // the same arithmetic today, so it can only fail once someone changes
+        // one walk's interpolation form and not the other's — which is
+        // precisely the edit that would put the gamut corner back between two
+        // shapes.
+        let mut pitch = dark;
+        while pitch <= bright {
+            let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
+            let f = t * (PITCH_LUT_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
+            let glyph = lut[i0].lerp(lut[i1], f - f.floor());
+            let disc = channel_color(9, pitch, dark, bright, gradient);
+            assert_eq!(glyph, disc, "{gradient:?} pitch {pitch}: glyph {glyph:?} vs disc {disc:?}");
+            pitch += 0.01;
+        }
     }
 }
 
@@ -54,21 +243,21 @@ fn the_table_tracks_the_curve_it_samples() {
     // Pin that separately so a future cut to the constant shows up as the
     // gradient drifting off its design rather than as nothing at all.
     //
-    // 4.5/255 against the 3.6 the constant currently measures. The slack is
-    // there because the worst case is governed by where a sample lands
-    // relative to the gamut corner near MIDI 43, so a tweak to the ramp's own
-    // constants moves that corner and swings the number without anything being
-    // wrong — but it is drawn tight enough to fail every cut a person would
-    // actually make: 48 measures 9.0/255, 32 measures 9.6, 24 measures 6.2,
-    // and 16 — where this started — measures 14.9.
+    // 2.2/255 against the 1.8 the constant currently measures on the default
+    // gradient. The slack is there because the worst case is governed by where
+    // a sample lands relative to a corner in the gamut's own boundary, so a
+    // change to the default's four knobs moves those corners and swings the
+    // number without anything being wrong — but it is drawn tight enough to
+    // fail every cut a person would actually make: 48 measures 2.5/255, 32
+    // measures 4.0, 24 measures 5.4, and 16 measures 7.9.
     let (dark, bright) = (24.0f32, 108.0f32);
     let mut worst = 0.0f32;
     let mut worst_pitch = 0.0f32;
     let mut pitch = dark;
     while pitch <= bright {
         let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
-        let table = pitch_lut_color(pitch, dark, bright);
-        let curve = crate::color::designed_pitch_ramp(f64::from(t));
+        let table = pitch_lut_color(pitch, dark, bright, PitchGradient::default());
+        let curve = crate::color::designed_pitch_ramp(f64::from(t), PitchGradient::default());
         let e = (table - curve).truncate().abs().max_element();
         if e > worst {
             worst = e;
@@ -77,7 +266,7 @@ fn the_table_tracks_the_curve_it_samples() {
         pitch += 0.01;
     }
     assert!(
-        worst * 255.0 < 4.5,
+        worst * 255.0 < 2.2,
         "table strays {:.1}/255 from the designed curve at MIDI {worst_pitch:.2}",
         worst * 255.0
     );
@@ -489,12 +678,12 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
     };
     for (dark, bright) in [(24.0f32, 108.0f32), (60.0, 60.0), (110.0, 108.0), (108.0, 24.0)] {
         for pitch in [0.0f32, 36.0, 60.0, 72.0, 108.0, 120.0] {
-            let lut = pitch_ramp_lut();
+            let lut = pitch_ramp_lut(PitchGradient::default());
             let f = shader_t(pitch, dark, bright) * (PITCH_LUT_N - 1) as f32;
             let i0 = f.floor() as usize;
             let want = lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor());
             assert_eq!(
-                pitch_lut_color(pitch, dark, bright),
+                pitch_lut_color(pitch, dark, bright, PitchGradient::default()),
                 want,
                 "pitch {pitch} over range {dark}..{bright}"
             );
@@ -562,9 +751,16 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
     assert_eq!(marked, lit, "the melody ring marks the octave that sounds");
     let frame = FrameParams::default();
-    let want = pitch_lut_color(drawn, frame.darkest_pitch, frame.brightest_pitch);
+    let want =
+        pitch_lut_color(
+            drawn,
+            frame.darkest_pitch,
+            frame.brightest_pitch,
+            PitchGradient::default(),
+        );
     assert!(
         (origin.melody_color - want).length() < 1e-5,
         "the ring is coloured for a slot the indicator is not drawn at",
     );
 }
+

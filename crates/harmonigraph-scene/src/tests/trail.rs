@@ -117,7 +117,10 @@ fn tint_puts_the_remembered_color_on_a_silent_node_only() {
     ))
     .color;
     assert_ne!(remembered, idle);
-    assert_eq!(remembered, channel_color(0, 60.0, frame.darkest_pitch, frame.brightest_pitch));
+    assert_eq!(
+        remembered,
+        channel_color(0, 60.0, frame.darkest_pitch, frame.brightest_pitch, PitchGradient::default())
+    );
 
     // Sounding again: the live note owns `color`, memory or not.
     tracker.handle_event(NoteEvent {
@@ -132,7 +135,13 @@ fn tint_puts_the_remembered_color_on_a_silent_node_only() {
     assert_eq!(node.trail, 1.0, "still remembered");
     assert_eq!(
         node.color,
-        channel_color(4, 60.0, frame.darkest_pitch, frame.brightest_pitch),
+        channel_color(
+            4,
+            60.0,
+            frame.darkest_pitch,
+            frame.brightest_pitch,
+            PitchGradient::default(),
+        ),
         "the sounding voice's own color, not the memory's"
     );
 }

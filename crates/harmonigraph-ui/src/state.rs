@@ -366,21 +366,24 @@ pub struct CameraPreset {
 /// Where the pictures end and the settings column begins, as a fraction of
 /// the window's width. The settings column gets what is left.
 ///
-/// It is a named constant because two things have to agree on it: the layout,
-/// and the test that holds the settings column to fitting its own content
-/// without a scroll bar. What the column has to clear is the widest thing in
-/// it, which is its own TAB BAR — six tab names need 347.5pt laid across it,
+/// It is a named constant because the layout is not the only thing that
+/// depends on it. What the column has to clear is the widest thing in it,
+/// which is its own TAB BAR — six tab names need 347.5pt laid across it,
 /// measured — so this fraction and the window width together decide whether
 /// egui_dock draws a scroll bar over the settings.
 ///
-/// Widening the column is what a scroll bar over the settings costs, and the
+/// Widening the column is what a scroll bar over the TAB BAR costs, and the
 /// price is charged to the picture twice over: 0.68 would carry the tab bar
 /// down to a window about 1090pt wide instead of 1240, but it also takes 8pt
 /// off the Spectral pane, which is already within a few points of being
 /// narrower than the perf HUD it has to contain. So the column is not widened
-/// on account of a bar that does not appear at the window this is dialled in
-/// for — see `the_settings_column_needs_no_scroll_bar_at_the_window_it_was_
-/// dialled_in`, which is what would notice if that stopped being true.
+/// on account of a bar that does not appear at 1240pt and wider.
+///
+/// Nothing checks that automatically. The test that did held the whole column
+/// — tab bar and pane content together — to needing no scroll bar of either
+/// kind, and it came out when the Nodes pane was allowed to scroll. A pane
+/// scrolling is now a normal thing; the TAB BAR overflowing is still not, and
+/// it is a figure to re-measure by hand rather than a guarantee.
 pub(crate) const SETTINGS_SPLIT: f32 = 0.72;
 
 /// The default pane arrangement: big lattice with the Spectral pane
