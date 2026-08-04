@@ -230,8 +230,8 @@ struct Uniforms {
     /// strength 0..1 — both feed the idle-marker branch alone (see
     /// `TrailMark`); misc5 was full, so the trail started its own slot.
     /// z: the sevens knockout's fade width, in the uv of a full-size node
-    /// (`Scene::sevens_soft`); w: the melody/bass mark rings' pulse mode
-    /// (0 off, 1 together, 2 alternating, 3 shimmer — see `Pulse`).
+    /// (`Scene::sevens_soft`); w: the melody/bass mark rings' shimmer pattern
+    /// (0 off, then one index per pattern — see `Pulse::shader_index`).
     misc6: [f32; 4],
     /// The ground the lattice is drawn onto — the pane fill this pass gets
     /// composited over — as the sevens knockout's target color. Without it
@@ -249,13 +249,14 @@ struct Uniforms {
     /// how far its ring is turned to put them on their pitches — so the shader
     /// derives them per node from these two.
     ///
-    /// z: the octave glyphs' pulse mode (0 off, 1 together, 2 alternating,
-    /// 3 shimmer — see `Pulse`); w unused.
+    /// z: the octave glyphs' shimmer pattern (0 off, then one index per
+    /// pattern — see `Pulse::shader_index`); w unused.
     misc7: [f32; 4],
     /// The shimmer's knobs, shared by both layers that can run it (see
-    /// `Scene::shimmer_speed`). x: band travel in world units per second;
-    /// y: band width in world units, strictly positive; z: how deep the
-    /// light is (0 none, 1 the tuned depth); w unused.
+    /// `Scene::shimmer_speed`). x: travel in world units per second;
+    /// y: the pattern's period in world units, strictly positive; z: how deep
+    /// the light is (0 none, 1 the tuned depth); w: how gradually it arrives
+    /// across the period (0 a crest, 1 a cosine).
     ///
     /// One slot for the set rather than the free `misc7.w` plus a new one:
     /// they are read together in one function, and splitting them across the
@@ -772,7 +773,7 @@ impl LatticeCallback {
                     scene.shimmer_speed,
                     scene.shimmer_width,
                     scene.shimmer_intensity,
-                    0.0,
+                    scene.shimmer_softness,
                 ],
                 // Straight indexing: the table is exactly as long as the
                 // rows are wide (the const assert above is what keeps it so),

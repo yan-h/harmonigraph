@@ -514,124 +514,94 @@ fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
     return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
 }
 
-// ---- Pulse: a slow breathe on the octave glyphs and the mark rings --------
-// Both layers already split into a part "near" the melody/bass slice and
-// "the rest" of the shape (the octave loop in `fs_main`: the glyph for the
-// slot a melody or bass ring points at, against every other glyph on the
-// node -- sounding or ghost alike; `mark_ring_alpha`: the arc over that same
-// slot against the rest of the ring). Both key off the node's own
-// `melody_slots`/`bass_slots` bitmasks (`in.marks`), not off which octaves
-// happen to be sounding -- a chord tone that is neither the highest nor the
-// lowest held note is not an indicator this feature is about. Pulse animates
-// the balance between those two parts instead of leaving both fixed, and
-// both layers read the same clock (`u.misc.x`) and shape here so a node
-// pulsing both stays in step.
-const PULSE_HZ: f32 = 0.5;
-// Never dims all the way to nothing, so the dim half of an alternating pair
-// still reads as there rather than gone — the same reasoning as the record
-// button's and the learn pulse's breathe in harmonigraph-ui (`widgets.rs`,
-// `panes/mod.rs::learn_pulse`), just calmer: this runs continuously behind
-// whatever is playing rather than only while something is armed.
-const PULSE_FLOOR: f32 = 0.3;
-fn pulse_wave(phase_offset: f32) -> f32 {
-    let phase = TAU * PULSE_HZ * u.misc.x + phase_offset;
-    return PULSE_FLOOR + (1.0 - PULSE_FLOOR) * (0.5 + 0.5 * sin(phase));
-}
-// The near/rest pair for a pulse mode: x is the level the "near" part
-// breathes at, y the "rest" part's. Mode 0 (off) is both pinned to 1, which
-// is exactly today's fixed-at-full look; mode 1 (together) breathes both by
-// the same wave; mode 2 (alternating) puts them a half cycle apart, so one
-// brightens as the other dims (sin(x + TAU/2) = -sin(x)). Mode 3 (shimmer)
-// is pinned to 1 like off: it animates the layer as a whole (see the Shimmer
-// section below) and leaves this split at rest, so a node with no mark at
-// all still shimmers.
-fn pulse_pair(mode: u32) -> vec2<f32> {
-    if mode == 0u || mode == 3u {
-        return vec2<f32>(1.0, 1.0);
-    }
-    let near = pulse_wave(0.0);
-    let rest = select(near, pulse_wave(TAU * 0.5), mode == 2u);
-    return vec2<f32>(near, rest);
-}
-// The octave glyphs' pulse mode (u.misc7.z — see `Pulse`).
+// The octave glyphs' shimmer pattern (u.misc7.z — see `Pulse`).
 fn pulse_octaves_mode() -> u32 {
     return u32(u.misc7.z + 0.5);
 }
-// The melody/bass mark rings' pulse mode (u.misc6.w — see `Pulse`).
+// The melody/bass mark rings' shimmer pattern (u.misc6.w — see `Pulse`).
 fn pulse_marks_mode() -> u32 {
     return u32(u.misc6.w + 0.5);
 }
 
-// ---- Shimmer: one sheet of soft white bands over the whole lattice --------
-// Pulse mode 3, and a different KIND of animation from the two above: they
-// breathe a split the layer already has, where this leaves the split alone
-// and runs a travelling highlight across the layer.
+// ---- Shimmer: one sheet of soft white light over the whole lattice --------
+// Every pulse mode but 0, and the same animation in each: a pattern of light
+// laid over the layer, travelling. What the mode picks is its SHAPE.
 //
-// WHICH layer is also not quite the same question here. The breathing modes
-// stay inside the layer whose switch they are; the mark rings' sweep also
-// takes the octave slices those rings point at (`mark_slice` in `fs_main`),
-// because a mark is the ring together with the octave it names rather than
-// the annulus alone. The octave layer's sweep stays the whole octave layer.
+// WHICH layer it covers is not quite the same question. The octave layer's
+// sheet stays the whole octave layer; the mark rings' also takes the octave
+// slices those rings point at (`mark_slice` in `fs_main`), because a mark is
+// the ring together with the octave it names rather than the annulus alone.
 //
-// The field is SHARED. Every node samples the same bands at its own place on
-// `in.field` — the plane the billboards face, in world units — so a band
-// crosses the lattice as one sheet of light rather than each node running a
-// copy of it inside its own uv, which would read as many small identical
-// animations rather than one big one.
+// The field is SHARED. Every node samples the same sheet at its own place on
+// `in.field` — the plane the billboards face, in world units — so the light
+// crosses the lattice as one thing rather than each node running a copy of it
+// inside its own uv, which would read as many small identical animations
+// rather than one big one.
 //
-// There is no texture, for the same reason there is no per-node phase: a
-// band is one dot product, a sine and a power, so the shared texture is four
-// lines of arithmetic instead of an upload, a sampler and a bind group. It
-// is also seamless and resolution-free, which a scrolled image is not.
+// There is no texture, for the same reason there is no per-node phase: every
+// pattern here is a handful of dot products, sines and one power, so the
+// shared sheet is a few lines of arithmetic instead of an upload, a sampler
+// and a bind group. It is also seamless and resolution-free, which a scrolled
+// image is not — and being built from sines rather than sampled is what lets
+// it be band-limited honestly below.
 //
 // World units rather than screen pixels: the DAW window and a 1080p offline
-// render then draw the same bands at the same size ON THE LATTICE, where a
-// period in pixels would lay a different number of them across the picture
+// render then draw the same pattern at the same size ON THE LATTICE, where a
+// period in pixels would lay a different number of cells across the picture
 // in each — the same look in the plugin and in the exported video is worth
-// more here than bands that hold still while the camera moves. Both the
+// more here than a pattern that holds still while the camera moves. Both the
 // settings below are in those units for that reason.
 //
-// Distance from one band to the next (u.misc8.y, the view's Width bar), and
-// how fast they travel along their own normal (u.misc8.x, the Speed bar).
-// The pair sizes and moves ONE shape: the sharpness below is what shares the
-// period out between the bright band and the dark, so a wider setting widens
-// both together rather than spacing out bands of a fixed size. See
-// `ViewConfig::shimmer_width` for what a setting under the node spacing
-// costs.
+// Distance from one bright peak to the next (u.misc8.y, the view's Width
+// bar), and how fast the sheet travels (u.misc8.x, the Speed bar). The pair
+// sizes and moves ONE shape: the softness below is what shares the period out
+// between the lit part and the dark, so a wider setting widens both together
+// rather than spacing out peaks of a fixed size. See `ViewConfig::shimmer_width`
+// for what a setting under the node spacing costs.
 fn shimmer_period() -> f32 {
     // The scene clamps this well clear of zero; the floor is here so a hand-
     // built Scene in a test cannot divide by it either.
     return max(u.misc8.y, 0.01);
 }
-// Narrows the bright band and widens the dark between it and the next. The
-// raised cosine alone is half-lit everywhere at every instant, which reads
-// as a striped surface; raising it to a power leaves a soft highlight
-// travelling over a layer that is otherwise at rest. Kept low enough that
-// the band still has shoulders — sharpen it much past this and it stops
-// being a soft band and starts being an edge.
-const SHIMMER_SHARP: f32 = 2.4;
-// How far a band's peak pulls the layer toward white, at intensity 1.
+// The exponent the raised cosine is taken to, from the Softness bar
+// (u.misc8.w): 8 at 0, 1 at 1, log-spaced so equal drags are equal RATIOS of
+// sharpness rather than equal steps of an exponent, which is not a scale
+// anyone reads by eye.
 //
-// This is the term that costs something real, and it is the ask: a band that
-// only went half way to white would not read as a WHITE band. Where the band
-// crosses a sounding glyph it leaves an eighth of that octave's pitch color,
-// so under the peak an indicator says "an octave sounds here" without saying
-// which — the layer's whole message, spent for the sweep. What keeps it
-// payable is that the band is narrow (SHIMMER_SHARP) and moving, so any given
-// indicator is legible again a second later. The Intensity bar is where that
-// trade is made rather than here: this is where the full-strength end of it
-// sits.
+// It is the whole of what the bar means, and the two ends are different
+// pictures. High up, the pattern IS the cosine: every point of the period is
+// on its way somewhere and the brightest part fades into the clearest across
+// the whole gap, which is the gradual sweep. Low down the peak narrows to a
+// crest on a layer otherwise at rest — a hard band with edges, and at a tight
+// width a stripe laid on the layer rather than light crossing it.
+//
+// Clamped rather than trusted to the scene's clamp, because the range is what
+// keeps the shape a shape: below 1 the exponent would widen the lit part past
+// the dark and invert the pattern into holes.
+const SHIMMER_SHARP_MAX: f32 = 3.0;
+fn shimmer_sharpness() -> f32 {
+    return exp2(SHIMMER_SHARP_MAX * (1.0 - clamp(u.misc8.w, 0.0, 1.0)));
+}
+// How far a peak pulls the layer toward white, at intensity 1.
+//
+// This is the term that costs something real, and it is the ask: light that
+// only went half way to white would not read as WHITE light. Where it crosses
+// a sounding glyph it leaves an eighth of that octave's pitch color, so under
+// a peak an indicator says "an octave sounds here" without saying which — the
+// layer's whole message, spent for the sweep. What keeps it payable is that
+// the peak is a small part of the period and moving, so any given indicator
+// is legible again a second later. The Intensity bar is where that trade is
+// made rather than here: this is where the full-strength end of it sits.
 //
 // Note it is NOT the bound SHIMMER_TROUGH is held to below. That one keeps
 // every indicator VISIBLE at every instant; this one gives up their colors
-// under a passing band and nothing else.
+// under a passing peak and nothing else.
 const SHIMMER_WHITE: f32 = 0.85;
-// What the layer's coverage sits at between bands at intensity 1, against 1
-// under a peak. A shallow dip on purpose: it is the trough that gives the
-// sweep a body to travel through, but the indicators still have to be
-// readable at every moment of the cycle, so this is nothing like
-// PULSE_FLOOR's depth. Intensity past 1 deepens it, which is that promise
-// being spent — deliberately, by the bar.
+// What the layer's coverage sits at between peaks at intensity 1, against 1
+// under one. A shallow dip on purpose: it is the trough that gives the sweep
+// a body to travel through, but the indicators still have to be readable at
+// every moment of the cycle. Intensity past 1 deepens it, which is that
+// promise being spent — deliberately, by the bar.
 const SHIMMER_TROUGH: f32 = 0.82;
 // How much of that tuned depth this view asks for (u.misc8.z, the Intensity
 // bar). It scales the pair above TOGETHER, so the shimmer is one shape at
@@ -641,16 +611,86 @@ const SHIMMER_TROUGH: f32 = 0.82;
 fn shimmer_depth() -> f32 {
     return max(u.misc8.z, 0.0);
 }
-// Which way the octave layer's bands travel. A diagonal because the lattice's
-// own structure is upright — its rows of fifths and thirds — so bands along
-// either axis would run parallel to something already in the picture and
-// read as part of it.
+// Which way the octave layer's sheet is laid and travels. A diagonal because
+// the lattice's own structure is upright — its rows of fifths and thirds — so
+// a pattern along either axis would run parallel to something already in the
+// picture and read as part of it.
 const SHIMMER_ANGLE: f32 = 0.125 * TAU;
-// The mark rings' bands travel a QUARTER TURN from the octaves', which is the
+// The mark rings' sheet is laid a QUARTER TURN from the octaves', which is the
 // 90 degrees between the two textures. Written as an offset from the one
 // angle rather than as a second literal, so the two cannot drift out of
 // square when the diagonal is retuned.
 const SHIMMER_QUARTER: f32 = 0.25 * TAU;
+// Where one fragment's shimmer stops being resolvable: how much of a period
+// a single pixel spans. Below the first the sheet is drawn at full strength;
+// past the second it is gone, and between them it fades.
+//
+// The upper bound is Nyquist — half a period to a pixel is the tightest a
+// sampled sine can mean anything at all, and past it the pattern does not get
+// finer, it gets WRONG: a moire of the sampling grid, which crawls as the
+// camera moves and lands differently in the DAW window than in a render of
+// another size. So the sheet is faded to nothing rather than aliased, and a
+// width dialed past what the zoom can carry settles to the layer's own steady
+// look. The lower bound sits well short of Nyquist so the fade is finishing
+// where the moire would be starting, rather than racing it.
+//
+// This is the one screen-space term in a section that is otherwise all world
+// units, and it has to be: what is running out is pixels, not lattice.
+const SHIMMER_RESOLVE_FULL: f32 = 0.2;
+const SHIMMER_RESOLVE_GONE: f32 = 0.5;
+// Turn a unit vector by `angle`, for the gratings below.
+fn rotated(v: vec2<f32>, angle: f32) -> vec2<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2<f32>(v.x * c - v.y * s, v.x * s + v.y * c);
+}
+// The signed pattern at `p`, in -1..1 — mode by mode, and every one of them
+// built out of gratings of the SAME period, so the Width bar means one thing
+// across the row. `d` is the direction the sheet is laid along and `n` its
+// perpendicular; `radius` is the distance from the lattice's origin, already
+// carrying the travel for the one pattern that moves radially.
+//
+// The three that cross gratings are the tessellating family the checkerboard
+// belongs to: multiply two and you get its cells, take the brighter of two
+// and you get the lines between them instead, sum three at sixty degrees and
+// the cells come out hexagonal — which lands on the lattice better than
+// squares do, its rows running three ways rather than two.
+fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>, radius: f32) -> f32 {
+    let k = TAU / shimmer_period();
+    if mode == 2u {
+        // Checker: two gratings at right angles, multiplied. The product is
+        // +1 where both crests meet AND where both troughs do, which is the
+        // checkerboard's two colors of cell; it crosses zero along the lines
+        // between them.
+        return sin(k * dot(p, d)) * sin(k * dot(p, n));
+    }
+    if mode == 3u {
+        // Hex: three gratings sixty degrees apart, summed. The sum runs
+        // -1.5..3 — bright cells rarer and sharper than the dark between
+        // them, which is the honeycomb — so it is mapped through its own
+        // range rather than divided by the count, which would leave the
+        // pattern unable to reach either end.
+        let a = sin(k * dot(p, d));
+        let b = sin(k * dot(p, rotated(d, TAU / 6.0)));
+        let c = sin(k * dot(p, rotated(d, TAU / 3.0)));
+        return (a + b + c - 0.75) / 2.25;
+    }
+    if mode == 4u {
+        // Weave: the same two crossed gratings as Checker with the BRIGHTER
+        // taken instead of the product, which lights the lines where Checker
+        // lights the cells, and brightest where two lines cross.
+        return max(sin(k * dot(p, d)), sin(k * dot(p, n)));
+    }
+    if mode == 5u {
+        // Rings: one grating of the distance from the origin. `p` is not read
+        // — a translating field would slide the center off the lattice, where
+        // what this pattern is FOR is having one, so its travel is in the
+        // radius instead.
+        return sin(k * radius);
+    }
+    // Bands (mode 1): one grating along the sheet's own direction.
+    return sin(k * dot(p, d));
+}
 // What the shimmer does to a layer here, as (white mix, coverage scale):
 // how far to pull its color toward white at this fragment, and what to scale
 // its coverage by. Both terms and not just one — an octave ghost is already
@@ -658,11 +698,15 @@ const SHIMMER_QUARTER: f32 = 0.25 * TAU;
 // coverage is an opacity that cannot go past 1, so the brightening has to be
 // the color's job and the dip has to be the coverage's.
 //
-// The identity (0, 1) in every mode but shimmer, so a caller applies it
-// unconditionally and Off stays byte-for-byte the look it was. The coverage
-// term is never ABOVE 1 either, which is what keeps `paint_reach` exact: a
-// shimmering layer can only cover less than it did, so no bound out there
-// moves.
+// The identity (0, 1) in mode 0, so a caller applies it unconditionally and
+// Off stays byte-for-byte the look it was. The coverage term is never ABOVE 1
+// either, which is what keeps `paint_reach` exact: a shimmering layer can only
+// cover less than it did, so no bound out there moves.
+//
+// `footprint` is how much of the field one pixel spans, in the field's own
+// world units, taken with the other derivatives at the top of the fragment
+// body — derivatives have to be in uniform control flow, and by here the
+// shader has already been free to discard.
 //
 // The layer's direction arrives as `quarter_turns` off the base diagonal
 // rather than as the vector itself, so the cos/sin that build it sit AFTER
@@ -670,21 +714,46 @@ const SHIMMER_QUARTER: f32 = 0.25 * TAU;
 // site in every mode, and Off would be free only if the backend inlined this
 // and folded the constant — which is the sort of thing that holds on one
 // driver and not the next.
-fn shimmer_terms(mode: u32, field: vec2<f32>, quarter_turns: f32) -> vec2<f32> {
-    if mode != 3u {
+fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32, quarter_turns: f32) -> vec2<f32> {
+    if mode == 0u {
         return vec2<f32>(0.0, 1.0);
     }
+    let period = shimmer_period();
     let a = SHIMMER_ANGLE + SHIMMER_QUARTER * quarter_turns;
     let dir = vec2<f32>(cos(a), sin(a));
-    // Distance along the bands' normal, with the clock sliding it: a
-    // fragment sees the same band a moment later than one behind it.
-    let travel = dot(field, dir) - u.misc.x * u.misc8.x;
+    let norm = vec2<f32>(-dir.y, dir.x);
+    // How far the sheet has slid, and the second layer's offset along with
+    // it. A quarter turn alone would leave the two layers' sheets IDENTICAL
+    // wherever the pattern is square — a checkerboard turned ninety degrees
+    // about a cell is the same checkerboard — and then a marked slice under
+    // both would be under one, with nothing for the crossing below to take
+    // the brighter of. Half a period puts this layer's peaks over the other's
+    // troughs instead, which for Bands is the same picture (its peaks were
+    // already perpendicular) and for the rest is what keeps two sheets two.
+    let slide = u.misc.x * u.misc8.x + 0.5 * period * quarter_turns;
+    // The field slid along the sheet's own direction, and the radius slid
+    // outward from the origin: one of the two is what a pattern travels by.
+    let p = field - dir * slide;
+    let radius = length(field) - slide;
+    let pattern = shimmer_pattern(mode, p, dir, norm, radius);
     // Clamped because the power below is `pow`, which is undefined for a
     // negative base — and sin is only promised to land NEAR its range, so a
     // wave of -1e-8 at a trough would put a NaN into the node's color.
-    let wave = clamp(0.5 + 0.5 * sin(TAU * travel / shimmer_period()), 0.0, 1.0);
-    let band = pow(wave, SHIMMER_SHARP);
-    let depth = shimmer_depth();
+    let wave = clamp(0.5 + 0.5 * pattern, 0.0, 1.0);
+    let band = pow(wave, shimmer_sharpness());
+    // Fade the sheet out as its period closes on the pixel — see
+    // SHIMMER_RESOLVE_*. It rides on the DEPTH rather than on the pattern's
+    // amplitude, so what a sheet running out of resolution settles onto is
+    // the identity below — the layer's own steady look. Damping the amplitude
+    // instead would leave `wave` at a half and the layer under a flat white
+    // haze at a flat coverage dip: the average of a sheet nobody can see, and
+    // a picture that never returns to the one Off draws.
+    let resolve = 1.0 - smoothstep(
+        SHIMMER_RESOLVE_FULL,
+        SHIMMER_RESOLVE_GONE,
+        footprint / period,
+    );
+    let depth = shimmer_depth() * resolve;
     // Both clamped into what each term can mean rather than trusted to the
     // bar's range: a mix past 1 would overshoot white into whatever the
     // blend does with it, and a coverage scale below 0 would take the layer
@@ -1174,15 +1243,10 @@ const MARK_RING_MIN_AA: f32 = 1.5;
 // would scale both the width and the blur by the ring's radius over the
 // band's, which reads as a wider, softer cut.
 //
-// The slits are the whole of the link at rest. An `Unlinked` opacity used to
-// fade the stretch of ring on the far side of them, down to just the arc over
-// the marked sector, as a fixed split; that split is pinned at full by
-// default, so the ring is a whole circle that the slits merely break -- which
-// is what says which octave without spending the shape to say it.
-// `pulse_marks_mode` reopens the same split, animated instead of fixed --
-// see the Pulse section above -- so the two ends of a chord's rings can
-// still be told apart by eye if the fixed split isn't wanted, without
-// bringing back an opacity that just sits there.
+// The slits are the whole of the link. An `Unlinked` opacity would fade the
+// stretch of ring on the far side of them, down to just the arc over the
+// marked sector; the ring being a whole circle that the slits merely break is
+// what says which octave WITHOUT spending the shape to say it.
 //
 // The facing gate throws away the antipode: a boundary line runs through the
 // origin, so it passes just as close on the far side of the node and would
@@ -1198,10 +1262,6 @@ fn mark_ring_alpha(slots: u32, ring: OctRing, uv: vec2<f32>, aa: f32) -> f32 {
     let half = slice_gap_half();
     let top = ring.base + i32(oct_span()) - 1;
     var slit = 0.0;
-    // How much of THIS pixel's arc coverage belongs to the marked sector(s)
-    // -- the pulse's "near the slice" part, over the same slots the slit
-    // loop above already walks -- rather than "the rest" of the ring.
-    var near = 0.0;
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) != 0u && s >= ring.base && s <= top {
@@ -1215,12 +1275,9 @@ fn mark_ring_alpha(slots: u32, ring: OctRing, uv: vec2<f32>, aa: f32) -> f32 {
                 aa_inside(half, abs(c2), aa) * smoothstep(-aa, aa, dot(uv, b2)),
             );
             slit = max(slit, cut);
-            near = max(near, oct_arc_coverage(edges, uv, aa));
         }
     }
-    let pair = pulse_pair(pulse_marks_mode());
-    let breathe = mix(pair.y, pair.x, near);
-    return (1.0 - slit) * breathe;
+    return 1.0 - slit;
 }
 
 // Coverage of one mark ring, `r_in..r_out`. Radii are passed rather than
@@ -1404,6 +1461,15 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // take before any branching), scaled to the softness knob. Shape edges
     // below use this instead of fixed-uv smoothsteps.
     let aa = aa_width(fwidth(in.uv.x));
+    // How much of the shimmer's shared field one pixel spans, in that field's
+    // own world units — what tells `shimmer_terms` when a pattern has run out
+    // of pixels to be drawn in. Taken here, beside `aa` and for the same
+    // reason: it is a derivative, and by the time the sheet is wanted the
+    // shader has already been free to discard. The field's axes are the
+    // camera's own right and up, which the screen's x and y run along, so the
+    // larger of the two steps IS the world size of a pixel.
+    let field_fw = fwidth(in.field);
+    let field_step = max(field_fw.x, field_fw.y);
 
     // Outside everything this node can paint. `fwidth` above is taken first
     // and in uniform control flow, as its comment requires; from here on the
@@ -1499,15 +1565,9 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // outside it the loop below can be skipped entirely rather than run to
     // reach zero `span` times over.
     let band = glyph_band(d, band_in, band_out, aa);
-    // The octave pulse's near/rest pair: "near" is the octave slot the
-    // melody or bass ring is ALSO pointing at (in.marks, the same bitmasks
-    // `mark_ring` reads below), "rest" is every other slot -- sounding or
-    // ghost alike. Taken once outside the loop -- neither side depends on
-    // which slot is being drawn, only on the shared clock and mode. This is
-    // deliberately NOT "sounding vs silent": a chord tone that is neither
-    // the highest nor the lowest held note is not an indicator this feature
-    // is about, so it stays at the "rest" phase like a ghost would.
-    let oct_pulse = pulse_pair(pulse_octaves_mode());
+    // The slots a melody or bass ring is pointing at (in.marks, the same
+    // bitmasks `mark_ring` reads below), which is where the MARK layer's
+    // sheet reaches into this one.
     let extreme_slots = in.marks.x | in.marks.y;
     // How much of this pixel is a slice a melody or bass ring points at, and
     // how strongly that ring is drawing there: the weight the MARK layer's
@@ -1537,20 +1597,17 @@ fn node_paint(in: VsOut) -> vec4<f32> {
                 select(0.0, in.params.z, (in.marks.y & bit) != 0u),
             ));
         }
-        let pulse_here = select(oct_pulse.y, oct_pulse.x, is_extreme);
         // Ghosts carry the ring's shape in the note's own color; a sounding
         // slot never dips below its ghost, so a fading octave hands off to it
-        // instead of leaving a hole. Both terms take the SAME phase -- a slot
-        // is wholly "near" or wholly "rest", not lit at one phase and ghosted
-        // at the other.
-        var cov = shape * GHOST_LEVEL * presence * pulse_here;
+        // instead of leaving a hole.
+        var cov = shape * GHOST_LEVEL * presence;
         var slot_rgb = node_glyph_rgb;
         if level > 0.0 {
             // Straight off the octave's own envelope, so the glyph eases in
             // over the attack and ends at nothing on release. The max() hands
             // a backdrop slot off to its ghost as the lit coverage sinks
             // through it.
-            cov = max(cov, shape * level * pulse_here);
+            cov = max(cov, shape * level);
             // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this
             // node's pitch class for the glyph's true pitch.
             let pitch = oct_slot_pitch(slot, in.cents);
@@ -1573,11 +1630,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // eased to zero by GLYPH_FADE_LIMIT.
     glyph = glyph * (1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d));
     // The octave layer's shimmer, on the whole layer at once rather than per
-    // slot: a band is a sheet crossing the lattice, so which octave a pixel
-    // belongs to has nothing to say about it. After the loop for that
-    // reason, and after the margin taper so a band cannot push the layer
+    // slot: the pattern is a sheet crossing the lattice, so which octave a
+    // pixel belongs to has nothing to say about it. After the loop for that
+    // reason, and after the margin taper so a peak cannot push the layer
     // back out past the fade the taper just closed.
-    let oct_shimmer = shimmer_terms(pulse_octaves_mode(), in.field, 0.0);
+    let oct_shimmer = shimmer_terms(pulse_octaves_mode(), in.field, field_step, 0.0);
     // The MARK layer's sheet, which the glyphs take too -- over the slices a
     // melody or bass ring points at, and nowhere else. A mark is the ring
     // TOGETHER with the octave it names (the ring is slit at that slice's own
@@ -1587,7 +1644,7 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     // where the glyph layer is finished, and it is the same terms the rings
     // themselves use -- one sheet, read twice, not two sweeps that could
     // disagree.
-    let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, 1.0);
+    let mark_shimmer = shimmer_terms(pulse_marks_mode(), in.field, field_step, 1.0);
     // Where BOTH layers shimmer, a marked slice is under two sheets running
     // square to each other, and it takes the BRIGHTER of the two: max on the
     // white mix, and max on the coverage as well, that term being 1 under a
@@ -1622,11 +1679,11 @@ fn node_paint(in: VsOut) -> vec4<f32> {
     //    goes on dipping between bands, lighting one mark by two different
     //    lights. `crossed` is the guard: two sheets cross only where there
     //    are two, and where there is one the slice takes it whole.
-    let mark_sheet = select(0.0, mark_slice, pulse_marks_mode() == 3u);
+    let mark_sheet = select(0.0, mark_slice, pulse_marks_mode() != 0u);
     let crossed = select(
         mark_shimmer,
         max(oct_shimmer, mark_shimmer),
-        pulse_octaves_mode() == 3u,
+        pulse_octaves_mode() != 0u,
     );
     let glyph_shimmer = mix(oct_shimmer, crossed, mark_sheet);
     glyph_rgb = mix(glyph_rgb, vec3<f32>(1.0), glyph_shimmer.x);

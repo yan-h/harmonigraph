@@ -92,28 +92,25 @@ impl IdleMarker {
     }
 }
 
-/// How the octave glyphs or the melody/bass rings animate. Two families,
-/// and they animate different things:
+/// Which shimmer a layer — the octave glyphs, or the melody/bass rings —
+/// runs: one sheet of soft white light laid over the whole lattice, in the
+/// pattern this names, or [`Off`](Pulse::Off) for the steady picture.
 ///
-/// [`Together`](Pulse::Together) and [`Alternating`](Pulse::Alternating) are
-/// a slow breathe on a split the layer already has — a "near the melody/bass
-/// slice" part and a "rest of it" part: the octave glyph FOR the slot a
-/// melody or bass ring is pointing at, against every other glyph (sounding
-/// or ghost alike), or a mark ring's own arc over that slot against the rest
-/// of the ring (see the octave-glyph loop and [`mark_ring_alpha`] in
-/// lattice.wgsl — both key off the same `melody_slots`/`bass_slots`
-/// bitmasks). Deliberately not "every sounding octave": a chord tone that is
-/// neither the highest nor the lowest held note isn't an indicator those
-/// modes are about — which is also why they have nothing to say with both
-/// marks switched off.
+/// Every live mode is the same animation with a different shape to it, which
+/// is what lets one set of knobs size all of them
+/// ([`ViewConfig::shimmer_speed`](crate::ViewConfig::shimmer_speed) and the
+/// three beside it). They share more than the knobs: the sheet is ONE field
+/// spanning the whole lattice rather than a copy per node — every node
+/// samples it at its own place on the plane the billboards face — so the
+/// light reads as raking over the picture instead of as many small identical
+/// animations. A mode works on a node with no mark on it at all.
 ///
-/// [`Shimmer`](Pulse::Shimmer) leaves that split alone and sweeps a sheet of
-/// soft white bands across the layer instead, so it works on a node with no
-/// mark at all. It is also the one mode that reaches OUT of its own layer:
-/// the mark rings' sweep takes the octave slice each ring points at, a mark
-/// being the ring together with the octave it names. How fast, how wide and
-/// how deep that sweep is are settings shared by both layers
-/// ([`ViewConfig::shimmer_speed`](crate::ViewConfig::shimmer_speed)).
+/// The two layers run their sheets a quarter turn apart and half a period
+/// offset, so a node wearing both crosses two of them and the brighter wins
+/// the pixel. The mark rings' sheet also reaches OUT of its own layer, onto
+/// the octave slice each ring points at — a mark being the ring together
+/// with the octave it names. All of that lives in `lattice.wgsl`'s Shimmer
+/// section.
 ///
 /// One enum for both layers: the states mean the same thing wherever they're
 /// read, and reading them off one shared clock keeps a node whose octaves
@@ -123,55 +120,61 @@ pub enum Pulse {
     /// Steady — no animation, the look every earlier build drew.
     #[default]
     Off,
-    /// Both parts breathe together, in phase.
-    Together,
-    /// The two parts breathe a half-cycle apart, so one brightens as the
-    /// other dims.
-    Alternating,
-    /// Soft white bands, laid diagonally and scrolling: not a breathe but a
-    /// travelling highlight, brightening each part of the layer as it
-    /// crosses.
+    /// Parallel bands laid diagonally, travelling along their own normal: one
+    /// grating, and the plainest reading of light passing over the lattice.
     ///
-    /// The bands are ONE field spanning the whole lattice rather than a copy
-    /// per node — every node samples the same sheet at its own place on the
-    /// plane the billboards face — so a band reads as light raking over the
-    /// picture. The octave glyphs' bands and the mark rings' run a quarter
-    /// turn apart, so a node wearing both crosses two textures at right
-    /// angles, and where they cross the brighter of the two wins the pixel.
-    /// The mark rings' sweep covers the octave slice each ring points at as
-    /// well as the ring. All of that lives in `lattice.wgsl`'s Shimmer
-    /// section.
-    Shimmer,
+    /// Persisted blobs carry three older tokens that land here. `Shimmer` is
+    /// this exact pattern under its former name, from before there was more
+    /// than one. `Together` and `Alternating` were a different animation
+    /// altogether — a slow breathe playing the octave a melody or bass ring
+    /// pointed at against the rest of the layer — and they are gone; a view
+    /// that asked for one of them asked for the layer to move, so it loads as
+    /// the sweep rather than as [`Off`](Pulse::Off).
+    #[serde(alias = "Shimmer", alias = "Together", alias = "Alternating")]
+    Bands,
+    /// Two gratings crossed at right angles and multiplied, which is a
+    /// checkerboard with the corners rounded off: cells of light and cells of
+    /// dark, swapping as the sheet slides a half cell.
+    Checker,
+    /// Three gratings sixty degrees apart and summed — the hexagonal answer
+    /// to [`Checker`](Pulse::Checker), a honeycomb of bright cells.
+    ///
+    /// It tessellates where a checkerboard fights the picture: the lattice's
+    /// own rows run along three directions, not two, so a hex sheet lands
+    /// with them instead of across them, and a hexagon's neighbours are all
+    /// edge-to-edge where a square's touch at the corners.
+    Hex,
+    /// The same two crossed gratings as [`Checker`](Pulse::Checker) with the
+    /// BRIGHTER taken instead of the product: a lattice of light lines rather
+    /// than of cells, crossing at bright knots.
+    Weave,
+    /// Concentric rings travelling outward from the lattice's origin — the
+    /// one pattern with a center, and so the one that says where the light is
+    /// coming from rather than only which way it goes.
+    Rings,
 }
 
 impl Pulse {
     /// Index the shader reads (`misc6.w` for the mark rings, `misc7.z` for
-    /// the octave glyphs — see `Uniforms` in harmonigraph-render).
+    /// the octave glyphs — see `Uniforms` in harmonigraph-render). 0 is the
+    /// steady layer and every other value picks a pattern out of
+    /// `shimmer_terms`.
     pub fn shader_index(self) -> u32 {
         match self {
             Pulse::Off => 0,
-            Pulse::Together => 1,
-            Pulse::Alternating => 2,
-            Pulse::Shimmer => 3,
+            Pulse::Bands => 1,
+            Pulse::Checker => 2,
+            Pulse::Hex => 3,
+            Pulse::Weave => 4,
+            Pulse::Rings => 5,
         }
     }
 
-    /// Whether this mode DRIVES the layer's "near the melody/bass slice"
-    /// against "the rest" split apart, and so needs a marked slot to have two
-    /// parts to drive — with neither mark on, the split collapses and the
-    /// mode animates something other than what it says. The UI grays exactly
-    /// these out, and `derive_scene` folds them to [`Off`](Pulse::Off) so the
-    /// picture agrees with the grayed control.
-    ///
-    /// [`Alternating`](Pulse::Alternating) is the only one. The test is what
-    /// the shader's `pulse_pair` does, NOT which modes are named for the
-    /// split: [`Together`](Pulse::Together) is the mode that deliberately
-    /// does not drive it apart — its two phases are the same wave, so it
-    /// breathes the layer as one whether or not anything is marked, and has
-    /// nothing to collapse. [`Shimmer`](Pulse::Shimmer) crosses the whole
-    /// layer and never touches the split either.
-    pub fn needs_a_marked_slot(self) -> bool {
-        matches!(self, Pulse::Alternating)
+    /// Whether this mode lays a sheet over its layer at all — everything but
+    /// [`Off`](Pulse::Off). What the UI grays the shared Shimmer knobs on,
+    /// and what the shader's identity return tests.
+    pub fn sweeps(self) -> bool {
+        self != Pulse::Off
     }
 }
 

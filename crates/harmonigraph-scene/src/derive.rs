@@ -427,30 +427,12 @@ pub fn derive_scene(
         outer_outer,
         outer_gap,
         octave_layout,
-        // Alternating with no mark on either end has no slot to single out,
-        // so the half-cycle split it exists for collapses and every glyph
-        // takes the "rest" phase — the WHOLE octave layer breathing between
-        // the pulse floor and full, a 3x swing on the node's main feature
-        // from a control the pane has grayed out and that therefore cannot be
-        // switched off. Folded to Off here rather than left to the shader:
-        // the modes that need a marked slot are the ones
-        // [`Pulse::needs_a_marked_slot`] names, which is the same test the
-        // pane grays on, so the picture and the control agree by
-        // construction.
-        //
-        // Together and Shimmer both animate the layer as one and are
-        // untouched. Together looks like it belongs with Alternating and does
-        // not: `pulse_pair` gives it the same wave for both phases, so a
-        // marked slot changes nothing about its picture and there is no split
-        // to lose when the marks come off.
-        pulse_octaves: if view.pulse_octaves.needs_a_marked_slot()
-            && !view.mark_melody
-            && !view.mark_bass
-        {
-            Pulse::Off
-        } else {
-            view.pulse_octaves
-        },
+        // Straight through, with no fold of its own: every pattern lays a
+        // sheet over the whole octave layer, which always draws, so there is
+        // no state of the view in which one of them animates something other
+        // than what it says. The mark side below is the one that needs the
+        // fold, its sheet reaching a layer that can be switched off.
+        pulse_octaves: view.pulse_octaves,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,
@@ -459,25 +441,29 @@ pub fn derive_scene(
         trail_mark: view.trail_mark,
         trail_strength: view.trail_strength.clamp(0.0, 1.0),
         mark_thickness,
-        // Every mark mode animates the ring itself, so with the layer off —
-        // no end marked, or no thickness to draw one with, which is
-        // `mark_rings_draw` and is exactly what the pane grays the row on —
-        // none of them has anything left to work on. For the three that stop
-        // at the ring's own edge the fold is belt and braces, the shader
-        // multiplying each of them away by a coverage of zero; Shimmer also
-        // sweeps the octave slice a ring points at, which the glyph layer
-        // draws and no ring coverage multiplies away, so without this it
-        // would go on animating from a control the user can no longer reach.
-        // Folded here so the picture and the control agree by construction,
-        // as `pulse_octaves` above is.
+        // A mark sheet reaches the ring AND the octave slice that ring points
+        // at, so with the ring layer off — no end marked, or no thickness to
+        // draw one with, which is `mark_rings_draw` and is exactly what the
+        // pane grays the row on — the ring half is multiplied away by a
+        // coverage of zero and the SLICE half is not: the glyph layer draws
+        // that either way, so without this fold the sheet would go on
+        // sweeping from a control the user can no longer reach. Folded here
+        // so the picture and the control agree by construction.
         pulse_marks: if view.mark_rings_draw() { view.pulse_marks } else { Pulse::Off },
         shimmer_speed: view.shimmer_speed.clamp(0.0, 40.0),
-        // Strictly positive: the band phase divides by this. The floor is a
-        // small fraction of a node (radius `spacing` × NODE_RADIUS_FACTOR),
-        // not a fraction of the lattice — several bands crossing one node at
+        // Strictly positive: the pattern's phase divides by this. The floor is
+        // a small fraction of a node (radius `spacing` × NODE_RADIUS_FACTOR),
+        // not a fraction of the lattice — several periods crossing one node at
         // once is a look the bar reaches on purpose.
         shimmer_width: view.shimmer_width.clamp(0.02, 40.0),
         shimmer_intensity: view.shimmer_intensity.clamp(0.0, 4.0),
+        // Unlike the three above, this one is clamped to exactly its bar,
+        // because it is a SHAPE rather than an amount and the bar's ends are
+        // the shape's: past 1 the shader's exponent drops below 1 and the lit
+        // part widens past the dark, so the pattern reads as thin rifts in a
+        // lit layer rather than as light crossing a clear one, and below 0 the
+        // crest narrows away to a spike too fine for any pixel to catch.
+        shimmer_softness: view.shimmer_softness.clamp(0.0, 1.0),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),
         pitch_lut: pitch_ramp_lut(),

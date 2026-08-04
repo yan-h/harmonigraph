@@ -6,9 +6,7 @@
 
 use super::{param_bar, section};
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{
-    button_row, choice_row, choice_row_gated, OctaveStrip, RangeBar, ValueBar,
-};
+use crate::widgets::{button_row, choice_row, OctaveStrip, RangeBar, ValueBar};
 use crate::SharedState;
 use harmonigraph_scene::{NodeStyle, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
 
@@ -185,51 +183,14 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // in behind the sounding ones — that backdrop is what completes the
     // ring, so a lone octave still reads as a whole note.
 
-    // Off is its own option rather than a checkbox beside a mode row: there
-    // is no separate bar the mode would otherwise gray out, so one row says
-    // both whether it pulses and how.
+    // Off is its own option rather than a checkbox beside a pattern row:
+    // there is no separate bar the pattern would otherwise gray out, so one
+    // row says both whether the layer shimmers and how.
     //
-    // Gated per option rather than as a row: the octave Alternating plays
-    // against the rest of the ring is whichever one a melody or bass ring is
-    // pointing at (see ViewConfig::pulse_octaves), so with both marks off it
-    // has no two parts to put a half-cycle between and collapses into one
-    // flat breathe. Together and Shimmer both animate the layer as one to
-    // begin with, so taking the row down would hide the two modes that have
-    // lost nothing.
-    let marked = view.mark_melody || view.mark_bass;
-    let live = |pulse: Pulse| !pulse.needs_a_marked_slot() || marked;
-    choice_row_gated(
-        ui,
-        "Pulse",
-        &mut view.pulse_octaves,
-        &[
-            (Pulse::Off, "Off", "", live(Pulse::Off)),
-            (
-                Pulse::Together,
-                "Together",
-                "The whole octave ring breathes as one, marked octave and \
-                 rest alike -- so it needs no mark to point at",
-                live(Pulse::Together),
-            ),
-            (
-                Pulse::Alternating,
-                "Alternating",
-                "The melody/bass octave and the rest of the ring breathe a \
-                 half-cycle apart, so one brightens as the other dims. Needs \
-                 Melody or Bass switched on -- that is what picks the octave",
-                live(Pulse::Alternating),
-            ),
-            (
-                Pulse::Shimmer,
-                "Shimmer",
-                "Soft white bands sweeping diagonally across the band. One \
-                 sheet of them crosses the whole lattice, so the light \
-                 travels from node to node; the mark rings' own Shimmer runs \
-                 at right angles to this one",
-                live(Pulse::Shimmer),
-            ),
-        ],
-    );
+    // Ungated, and the whole row live whatever else the view holds: every
+    // pattern lays a sheet over the octave layer, and the octave layer always
+    // draws. The Melody/bass row below is the one with a precondition.
+    choice_row(ui, "Shimmer", &mut view.pulse_octaves, SHIMMER_PATTERNS);
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line
@@ -264,112 +225,137 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  values grow the bass ring in over the core, so raise \
                  Band inner to make room",
             );
-        // The two-part split a ring already has -- the arc over its own
-        // marked octave, slit from the rest of the ring -- pulsed instead of
-        // left fixed. Same row shape as the Octaves pulse above: Off is a
-        // mode rather than a separate checkbox.
-        // A plain choice_row, not the gated one the Octaves section needs:
-        // every mode here animates the ring itself, so they stand or fall
-        // together — and what they stand on is a ring being drawn at all.
-        // Thickness 0 is the documented off position, where `mark_ring`
-        // returns no coverage and every mode is multiplied away, so the row
-        // grays with the layer it animates (the Core section gates its own
-        // Solidity and Style on a radius of 0 the same way).
+        // The same pattern row as the Octaves section above, on the layer this
+        // section is about — the sheet takes both rings and the octave slice
+        // each one points at. Off is a pattern rather than a separate
+        // checkbox, as it is up there.
         //
+        // Gated where the Octaves row is not: a ring has to be DRAWN for a
+        // sheet over it to mean anything. Thickness 0 is the documented off
+        // position, where `mark_ring` returns no coverage (the Core section
+        // gates its own Solidity and Style on a radius of 0 the same way).
         // The enclosing block already grays this on both marks being off, so
         // what the row is gated on either way is `mark_rings_draw` — the same
-        // predicate `derive_scene` folds the mode on, and the one the Shimmer
-        // section reads. Written as the thickness alone because that is the
-        // half this row adds; the pair is what has to agree.
+        // predicate `derive_scene` folds the pattern on, and the one the
+        // Shimmer section reads. Written as the thickness alone because that
+        // is the half this row adds; the pair is what has to agree.
         ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
-            choice_row(
-                ui,
-                "Pulse",
-                &mut view.pulse_marks,
-                &[
-                    (Pulse::Off, "Off", ""),
-                    (Pulse::Together, "Together", "The whole ring breathes together"),
-                    (
-                        Pulse::Alternating,
-                        "Alternating",
-                        "The arc over the marked octave and the rest of the ring \
-                         breathe a half-cycle apart, so one brightens as the \
-                         other dims",
-                    ),
-                    (
-                        Pulse::Shimmer,
-                        "Shimmer",
-                        "Soft white bands sweeping across both rings AND the \
-                         octave slice each one points at, at right angles to \
-                         the octave band's own Shimmer. One sheet of them \
-                         crosses the whole lattice, so the light travels from \
-                         node to node",
-                    ),
-                ],
-            );
+            choice_row(ui, "Shimmer", &mut view.pulse_marks, SHIMMER_PATTERNS);
         });
     });
 }
 
-/// Shimmer: how the sweep both Pulse rows above can be set to run is sized
-/// and paced.
+/// The patterns a layer's sheet can be laid in, for both rows above.
 ///
-/// Its own section rather than a pair of bars under either Pulse row, because
-/// the two settings are ONE sheet of bands crossing the whole lattice —
-/// shared by the octave glyphs and the mark rings, whatever mix of the two is
-/// running it. Under the Octaves row they would look like the octave layer's,
-/// and a user who reached Shimmer from the Melody/bass row would be hunting
-/// for them in a section about something else; duplicated under both they
-/// would be two controls for one value.
+/// ONE table, not one per layer: a pattern is a shape the light takes, and it
+/// is the same shape wherever it is laid — a row per layer would be two
+/// places to describe a checkerboard, which is two places for the
+/// descriptions to drift apart. What differs BETWEEN the layers is which
+/// pixels the sheet reaches, and that belongs to the sections, not to the
+/// patterns.
+const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
+    (Pulse::Off, "Off", "Steady — no sweep on this layer"),
+    (
+        Pulse::Bands,
+        "Bands",
+        "Parallel bands laid diagonally, travelling along their own normal. \
+         The plainest reading of light crossing the lattice",
+    ),
+    (
+        Pulse::Checker,
+        "Checker",
+        "Two crossed gratings multiplied: a checkerboard with the corners \
+         rounded off, its light and dark cells swapping as the sheet slides",
+    ),
+    (
+        Pulse::Hex,
+        "Hex",
+        "Three gratings sixty degrees apart: a honeycomb of bright cells. \
+         Tessellates with the lattice where a checkerboard fights it — the \
+         rows here run three ways, not two",
+    ),
+    (
+        Pulse::Weave,
+        "Weave",
+        "The same crossed gratings as Checker with the brighter taken: a \
+         lattice of light LINES rather than cells, brightest where two cross",
+    ),
+    (
+        Pulse::Rings,
+        "Rings",
+        "Concentric rings travelling outward from the lattice's origin — the \
+         one pattern with a center, so the light has somewhere it comes from",
+    ),
+];
+
+/// Shimmer: how the sheet both rows above can lay is sized and paced.
+///
+/// Its own section rather than a set of bars under either row, because these
+/// are ONE sheet crossing the whole lattice — shared by the octave glyphs and
+/// the mark rings, whatever mix of the two is running it. Under the Octaves
+/// row they would look like the octave layer's, and a user who reached a
+/// pattern from the Melody/bass row would be hunting for them in a section
+/// about something else; duplicated under both they would be two controls for
+/// one value.
 ///
 /// Grayed until something is actually shimmering, on the same grounds every
-/// other gate in this pane uses: the bars do nothing at all in the other
-/// three modes.
+/// other gate in this pane uses: the bars do nothing at all with both layers
+/// Off.
 ///
 /// "Actually" is the load-bearing word, and it is why the mark side is not
 /// just a mode check: `derive_scene` folds `pulse_marks` off with the ring
-/// layer itself ([`ViewConfig::mark_rings_draw`]), so a view carrying Shimmer
-/// with no end marked, or no ring thickness, is not shimmering — and these
-/// bars would otherwise be live with nothing to move. The octave side has no
-/// such gate: its layer always draws, and its Shimmer never folds.
+/// layer itself ([`ViewConfig::mark_rings_draw`]), so a view carrying a
+/// pattern with no end marked, or no ring thickness, is not shimmering — and
+/// these bars would otherwise be live with nothing to move. The octave side
+/// has no such gate: its layer always draws, and its pattern never folds.
 fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Shimmer");
-    let shimmering = view.pulse_octaves == Pulse::Shimmer
-        || (view.pulse_marks == Pulse::Shimmer && view.mark_rings_draw());
+    let shimmering =
+        view.pulse_octaves.sweeps() || (view.pulse_marks.sweeps() && view.mark_rings_draw());
     ui.add_enabled_ui(shimmering, |ui| {
         ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed")
             .show(ui)
             .on_hover_text(
-                "How fast the bands travel, in lattice units a second -- so \
+                "How fast the sheet travels, in lattice units a second -- so \
                  the plugin window and an exported video sweep at the same \
                  rate over the same nodes, whatever size either is drawn at. \
-                 0 freezes the sheet where it stands",
+                 Which way it travels is the pattern's own. 0 freezes the \
+                 sheet where it stands",
             );
         // Eased, because the range is three orders wide and the useful
         // settings are not spread evenly over it: the tight end is a
         // different picture every few hundredths (0.05 to 0.1 halves the
-        // bands on a node), where the wide end changes little between 8 and
+        // periods on a node), where the wide end changes little between 8 and
         // 15. Geometric travel gives each end the same share of the bar.
         ValueBar::new(&mut view.shimmer_width, 0.05..=15.0, "Width")
             .eased(true)
             .show(ui)
             .on_hover_text(
-                "How wide the bands are, in lattice units from one to the \
-                 next -- about five nodes at the default spacing. Wider bands \
-                 are also further apart: it is one shape, sized. Around one \
-                 node to a band the light reads as alternating nodes rather \
-                 than as a sweep; below that several bands cross each node at \
-                 once and it becomes a texture on the nodes",
+                "How wide the pattern is, in lattice units from one bright \
+                 peak to the next -- about five nodes at the default spacing. \
+                 Wider peaks are also further apart: it is one shape, sized. \
+                 Around one node to a period the light reads as alternating \
+                 nodes rather than as a sweep; below that several periods \
+                 cross each node at once and it becomes a texture on them",
             );
         ValueBar::new(&mut view.shimmer_intensity, 0.0..=2.0, "Intensity")
             .show(ui)
             .on_hover_text(
-                "How strong the light in a band is: how far it pulls the \
-                 layer toward white, and how far the layer dims between \
-                 bands, together. 0 draws the layer exactly as it is \
-                 unshimmered; 1 is the tuned depth. Past 1 the band reaches \
-                 full white -- an indicator under it says an octave sounds \
-                 without saying which",
+                "How strong the light is: how far a peak pulls the layer \
+                 toward white, and how far the layer dims between peaks, \
+                 together. 0 draws the layer exactly as it is unshimmered; 1 \
+                 is the tuned depth. Past 1 a peak reaches full white -- an \
+                 indicator under it says an octave sounds without saying which",
+            );
+        ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness")
+            .show(ui)
+            .on_hover_text(
+                "How gradually the light arrives, where Intensity is how much \
+                 of it there is. High, the brightest part fades into the \
+                 clearest across the whole period and nothing is at rest; low, \
+                 the peak narrows to a hard band with a dark field around it, \
+                 which at a tight Width reads as stripes laid on the layer \
+                 rather than as light crossing it",
             );
     });
 }
