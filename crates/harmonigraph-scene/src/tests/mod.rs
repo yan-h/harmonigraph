@@ -10,3 +10,4 @@ mod marks;
 mod sheet;
 mod camera;
 mod trail;
+mod hue_space;

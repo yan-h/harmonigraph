@@ -1421,6 +1421,7 @@ dependencies = [
  "color_space",
  "glam",
  "harmonigraph-core",
+ "hct-cam16",
  "serde",
 ]
 
@@ -1491,6 +1492,12 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "foldhash 0.2.0",
 ]
+
+[[package]]
+name = "hct-cam16"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca0a3a885db36209256935456d4d8a6f420e34ce7a155ad16be3bd9c8ef94e3e"
 
 [[package]]
 name = "heck"

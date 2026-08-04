@@ -10,3 +10,18 @@ harmonigraph-core = { workspace = true }
 glam = { workspace = true }
 color_space = { workspace = true }
 serde = { workspace = true }
+
+# A probe's dependency, not the plugin's: `tests/hue_space.rs` measures the
+# Oklab hybrid it prices against Google's HCT, which is the same structure
+# over CAM16. Nothing outside `#[cfg(test)]` reaches it.
+#
+# Kept even though `the_crate_222_names_does_not_work` establishes that this
+# crate cannot be USED — its chroma is compressed about 5x and its HCT->sRGB
+# solver does not round-trip — because the two probes that lean on its hue are
+# the only reproducible pricing of a move to CAM16, and a measurement that
+# cannot be re-run is one nobody can check. `the_hybrid_at_the_edges` is the
+# worked example of what the alternative costs: a constant whose only stated
+# evidence was a scratch sweep that never landed. The price of keeping it is a
+# leaf crate with no transitive dependencies, built once per worktree.
+[dev-dependencies]
+hct-cam16 = "0.1.0"

@@ -70,18 +70,19 @@ impl NodeStyle {
 
 
 /// The low-to-high pitch gradient, as four things a reader of the picture can
-/// name: WHICH colors it walks through (an arc of the LCh hue circle), how
+/// name: WHICH colors it walks through (an arc of the OKLAB hue circle), how
 /// bright the middle of the range sits, how much brightness separates the ends
 /// of it, and how much color the whole thing carries. The curve those describe
-/// is in [`color::pitch_ramp_lch`](crate::color).
+/// is in [`color`](crate::color), which authors it in two spaces at once and
+/// says why.
 ///
 /// The four are independent on purpose, and that is the point of shaping the
 /// setting this way rather than as a list of named palettes: brightness is a
 /// far stronger cue than hue, so how much of it a gradient SPENDS on pitch is
 /// the decision worth having a knob for. At
 /// [`lightness_ramp`](Self::lightness_ramp) 0 the gradient is exactly
-/// isoluminant — in CIELab `L*` is a function of luminance alone, so one `L*`
-/// is one screen brightness, and a bass note then reads as loud as a treble
+/// isoluminant — `L*` is a function of luminance alone, so one `L*` is one
+/// screen brightness, and a bass note then reads as loud as a treble
 /// one with hue carrying the pitch by itself. Wind the ramp up and brightness
 /// takes over; wind it negative and the picture inverts.
 ///
@@ -95,9 +96,22 @@ impl NodeStyle {
 /// any of it exists.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PitchGradient {
-    /// LCh hue the BOTTOM of the pitch range takes, in degrees. Wrapped into
+    /// OKLAB hue the BOTTOM of the pitch range takes, in degrees. Wrapped into
     /// 0..360 by [`sanitized`](Self::sanitized), since it names a point on a
     /// circle and every value is therefore a legal one.
+    ///
+    /// Oklab and not CIELAB: a CIELAB hue angle does not hold its hue as the
+    /// other knobs turn, and drifts hardest through the blues this opens on.
+    ///
+    /// A blob saved before the ramp took its hue from Oklab holds a CIELAB
+    /// angle in this field, and loads unchanged — there is no version tag to
+    /// migrate on, and the two spaces disagree by up to 13 degrees, so such a
+    /// view opens on a hue that near neighbour rather than the one it stored.
+    /// Deliberate, and the reason there is no `legacy_` shim here: the arc is a
+    /// look someone dialled by eye, a hue that far off is a nudge back rather
+    /// than a broken project, and a shim would owe every future reader an
+    /// answer about which space an unmarked angle is in. Anything ADDED here
+    /// still owes a default (see [`default_hue_start`]).
     #[serde(default = "default_hue_start")]
     pub hue_start: f32,
     /// How far round the hue circle the range walks, in degrees — SIGNED, so
@@ -109,6 +123,9 @@ pub struct PitchGradient {
     /// which one is meant, and neither can they reach past a full turn. A
     /// signed span says both, and 0 collapses the gradient to a single hue —
     /// a legal setting, where chroma and brightness carry the pitch alone.
+    ///
+    /// Oklab degrees, for the reason [`hue_start`](Self::hue_start) gives —
+    /// including what that means for a span sitting in an already-saved blob.
     #[serde(default = "default_hue_span")]
     pub hue_span: f32,
     /// `L*` at the CENTRE of the pitch range, 0..100 — the middle of the
@@ -126,9 +143,9 @@ pub struct PitchGradient {
     /// each point of the curve — NOT an absolute chroma.
     ///
     /// The gamut is the reason. At a fixed `L*` sRGB admits a different
-    /// maximum chroma at every hue (49.9 at the tightest point of the default
-    /// arc, 89.8 at its widest), and that maximum collapses toward 0 as `L*`
-    /// approaches either end of its own range. An absolute chroma would
+    /// maximum Oklab chroma at every hue (0.115 at the tightest point of the
+    /// default arc, 0.320 at its widest), and that maximum collapses toward 0
+    /// as `L*` approaches either end of its own range. An absolute chroma would
     /// therefore be a number whose meaning changes under the other three
     /// knobs: past what the gamut holds a channel clips, which bends the hue
     /// and MOVES THE LUMINANCE — so the isoluminance promised above would
@@ -142,15 +159,25 @@ pub struct PitchGradient {
 }
 
 /// The hue the bottom of the range opens on: a deep blue-violet.
+///
+/// Oklab 246.9 is the angle that names the color CIELAB 260 draws at this arc's
+/// own bottom (`L*` 42, half chroma) — the two spaces disagree by 13 degrees
+/// here, so this is the same opening color under a different name rather than a
+/// different one. `the_defaults_are_the_retired_arc_converted` holds it to that.
 fn default_hue_start() -> f32 {
-    260.0
+    246.9
 }
 
 /// Just over half a turn, running blue-violet up through magenta and red to
 /// yellow-green. Wide enough that no two octaves of the range share a hue, and
 /// short of the full circle so the two ends cannot be confused for each other.
+///
+/// The SAME ARC that CIELAB names as a span of 190: it ends on Oklab 89.7,
+/// which CIELAB calls 90 at `L*` 86, and Oklab simply spends more degrees
+/// crossing the blues than CIELAB does. The extra 12.8 degrees are that
+/// disagreement between the two axes and not a wider sweep.
 fn default_hue_span() -> f32 {
-    190.0
+    202.8
 }
 
 /// Mid-range brightness, placed with [`default_lightness_ramp`] so the

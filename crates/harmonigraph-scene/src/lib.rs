@@ -16,7 +16,7 @@
 //!   how wide, and the boundary angles the shader draws them between.
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
 //!   for label placement and picking.
-//! - [`color`] — the LCh pitch ramp and channel/idle colors.
+//! - [`color`] — the pitch ramp and channel/idle colors.
 //! - [`skin`] — the static palette the UI and renderer share.
 //! - [`trail`] — a quiet mark on the nodes the music has already been to.
 //!
@@ -94,11 +94,22 @@ const ATTACK_TIME: f64 = 0.15;
 /// is whether a sample happens to land near one rather than how many samples
 /// there are.
 ///
-/// Sweeping the default gradient's whole range in 0.01-semitone steps, worst
-/// channel error is 7.9/255 at 16 entries, 4.0 at 32, 1.8 at 64, 0.6 at 128 —
-/// but 0.9 at 130, and still 0.4 at 256, four kilobytes in. So 64 is the knee:
-/// past it the spend buys a fraction of a level that no display step can
-/// show, and the curve is already tracked far closer than a viewer can see.
+/// Sweeping the default gradient's whole range, worst channel error is 8.0/255
+/// at 16 entries, 7.5 at 32, 5.6 at 48, 3.4 at 64, 1.3 at 96 — but 2.4 at 128,
+/// and 1.4 at 192 before 0.3 at 256, four kilobytes in. The sequence is not
+/// monotone and that is the point: the worst case is set by where a sample
+/// lands relative to a CORNER of the gamut's own boundary, not by how many
+/// samples there are, so more entries can measure worse. Past 64 the spend
+/// buys a fraction of a level that no display step can show, and the curve is
+/// already tracked far closer than a viewer can see.
+///
+/// 3.4/255 is what 64 entries buy on THIS curve, and a curve authored in
+/// CIELAB rather than Oklab would put the same table at 1.8: the arc is long
+/// in Oklab degrees and its chroma ceiling turns fast along it, so what a
+/// table of any size is chasing simply bends more. 3.4/255 is 1.3% of a
+/// channel, on a gradient whose neighbouring entries differ by more than that
+/// — and it is a distance from an IDEAL, not a disagreement between two
+/// shapes, which stays exact at every table size.
 ///
 /// A gradient can be dialled to a harsher curve than the default — chroma at
 /// 1.0 rides the boundary itself, corners and all, rather than half way in —

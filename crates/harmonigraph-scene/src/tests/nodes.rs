@@ -35,11 +35,18 @@ fn luminance(c: glam::Vec4) -> f32 {
 /// degenerate settings — no hue arc at all, a full turn, no color, all the
 /// color there is, and a ramp steeper than the `L*` axis so it flattens
 /// against black and white.
+///
+/// `L*` 0 and 100 are in the list rather than only reachable through a steep
+/// ramp, and the difference is what a FLAT ramp there can be asked: the two
+/// ends of the axis are where the gamut collapses to a point, where the Newton
+/// solve starts on the answer instead of near it, and where a solve that walks
+/// off it still lands somewhere the sRGB box will happily accept. The Brightness
+/// bar reaches both exactly.
 fn gradient_sweep() -> Vec<PitchGradient> {
     let mut out = Vec::new();
     for hue_start in [0.0, 95.0, 260.0, 359.0] {
         for hue_span in [0.0, 45.0, 190.0, 360.0, -190.0, -360.0] {
-            for lightness in [10.0, 50.0, 64.0, 92.0] {
+            for lightness in [0.0, 10.0, 50.0, 64.0, 92.0, 100.0] {
                 for lightness_ramp in [0.0, 44.0, 100.0, -70.0] {
                     for chroma in [0.0, 0.45, 1.0] {
                         out.push(PitchGradient {
@@ -58,59 +65,58 @@ fn gradient_sweep() -> Vec<PitchGradient> {
 }
 
 /// The promise that lets all four knobs be free: whatever they are set to,
-/// the curve stays inside sRGB, and its brightness ramp is the ONLY thing that
-/// moves its luminance.
+/// the curve stays inside sRGB, and its `L*` — hence its luminance — is
+/// exactly what was asked for at every point.
 ///
-/// Both halves are one check. A clipped channel does not announce itself — the
-/// color simply stops being the LCh that was asked for — but clipping cannot
-/// happen without moving the luminance, so a gradient asked for a flat ramp
-/// that clips anywhere is one whose luminance is no longer flat, and the ratio
-/// below rises off 1.0 the moment it does. That is what
+/// Both halves are one check, put from the two sides a single assertion cannot
+/// cover. A clipped channel does not announce itself — the color simply stops
+/// being the one that was asked for — but clipping cannot happen without
+/// moving the luminance off the `L*` that named it, so the luminance assertion
+/// catches every clip as well as every solve that failed to land. That is what
 /// [`chroma`](PitchGradient::chroma) being a fraction of the gamut's own
 /// maximum buys, and this is what holds it to the claim.
 ///
+/// Against the `L*` each entry names, rather than against the SPREAD of the
+/// entries: a ratio between the ends only says a flat ramp came out flat, so it
+/// has nothing to ask of the four ramps in five that are not flat, and a curve
+/// uniformly wrong about its own luminance would read as perfectly level. The
+/// promise is per-entry, so the check is too.
+///
 /// The gamut half goes to the predicate rather than to the table, and the
-/// difference is the whole of it: `lch` clamps every channel into range on the
-/// way in, so a LUT entry read back is inside 0..1 whatever was asked for, and
-/// an assertion on the entry would pass against a gradient that clips right
-/// across the sweep. The clamp is a safety net, and a net cannot report its own
-/// catches — hence `ramp_sample_in_gamut`, and the negative case at the end
-/// that proves the two are not the same question.
+/// difference is the whole of it: `oklab_srgb` clamps every channel into range
+/// on the way in, so a LUT entry read back is inside 0..1 whatever was asked
+/// for, and an assertion on the entry would pass against a gradient that clips
+/// right across the sweep. The clamp is a safety net, and a net cannot report
+/// its own catches — hence `ramp_sample_in_gamut`, and the negative case at the
+/// end that proves the two are not the same question.
 #[test]
 fn the_gradient_is_in_gamut_and_flat_when_its_ramp_is() {
     for gradient in gradient_sweep() {
-        let lut = pitch_ramp_lut(gradient);
-        let (mut lo, mut hi) = (f32::MAX, 0.0f32);
-        for (k, entry) in lut.into_iter().enumerate() {
+        let sane = gradient.sanitized();
+        for (k, entry) in pitch_ramp_lut(gradient).into_iter().enumerate() {
             // In gamut whatever the ramp: the LUT is what the shader indexes,
             // so a sample the gamut cannot hold would be drawn as some other
             // color than the one the curve designed.
             let t = k as f64 / (PITCH_LUT_N - 1) as f64;
             assert!(
-                crate::color::ramp_sample_in_gamut(t, gradient.sanitized()),
+                crate::color::ramp_sample_in_gamut(t, sane),
                 "{gradient:?} at t {t:.3}: {entry:?} was asked for outside sRGB",
             );
-            let y = luminance(entry);
-            lo = lo.min(y);
-            hi = hi.max(y);
+            // And it is the color the curve designed at the brightness the
+            // curve designed. A tenth of a percent of the luminance asked for,
+            // plus a floor of 1e-7 for the dark end where a relative tolerance
+            // shrinks to nothing: the entries are f32 sRGB, so the encode and
+            // its rounding are inside this, and anything a viewer could see is
+            // orders outside it.
+            let l_star = sane.lightness_and_hue(t).0;
+            let target = crate::color::luminance_of(l_star);
+            let got = f64::from(luminance(entry));
+            assert!(
+                (got - target).abs() <= 1e-3 * target + 1e-7,
+                "{gradient:?} at t {t:.3}: L* {l_star:.1} asks for luminance {target:.6} \
+                 and {entry:?} draws {got:.6}",
+            );
         }
-        if gradient.lightness_ramp != 0.0 {
-            continue;
-        }
-        // "Flat" is 1.0 up to 1.01, not bit-exact: the LCh->sRGB conversion
-        // rounds, and it rounds differently at different chroma, so an arc
-        // whose chroma follows the gamut across a whole turn of hue comes out
-        // a shade off dead level. That is far under a step anyone can see, and
-        // a real design tilt would be worth percent, not tenths of one.
-        //
-        // At `L*` 0 there is no color to be off level about and the ratio is
-        // exactly 1; the guard is against the 0/0 that a black gradient's
-        // luminance ratio would otherwise be.
-        let ratio = if lo > 0.0 { hi / lo } else { 1.0 };
-        assert!(
-            ratio <= 1.01,
-            "{gradient:?} asks for a flat ramp but spans {ratio:.4}x in luminance",
-        );
     }
 
     // And the gamut half has teeth. Five times the chroma that fits is exactly
@@ -243,13 +249,13 @@ fn the_table_tracks_the_curve_it_samples() {
     // Pin that separately so a future cut to the constant shows up as the
     // gradient drifting off its design rather than as nothing at all.
     //
-    // 2.2/255 against the 1.8 the constant currently measures on the default
+    // 4.2/255 against the 3.4 the constant currently measures on the default
     // gradient. The slack is there because the worst case is governed by where
     // a sample lands relative to a corner in the gamut's own boundary, so a
     // change to the default's four knobs moves those corners and swings the
     // number without anything being wrong — but it is drawn tight enough to
-    // fail every cut a person would actually make: 48 measures 2.5/255, 32
-    // measures 4.0, 24 measures 5.4, and 16 measures 7.9.
+    // fail every cut a person would actually make: 48 measures 5.6/255, 32
+    // measures 7.5, 24 measures 7.0, and 16 measures 8.0.
     let (dark, bright) = (24.0f32, 108.0f32);
     let mut worst = 0.0f32;
     let mut worst_pitch = 0.0f32;
@@ -266,7 +272,7 @@ fn the_table_tracks_the_curve_it_samples() {
         pitch += 0.01;
     }
     assert!(
-        worst * 255.0 < 2.2,
+        worst * 255.0 < 4.2,
         "table strays {:.1}/255 from the designed curve at MIDI {worst_pitch:.2}",
         worst * 255.0
     );
@@ -763,4 +769,3 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         "the ring is coloured for a slot the indicator is not drawn at",
     );
 }
-
