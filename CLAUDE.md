@@ -114,18 +114,6 @@ code is weird, and it acts as a tripwire against plausible-but-wrong
 "simplifications". New PRs keep regenerating the pattern, so this is a habit
 to maintain rather than a one-time cleanup.
 
-## Review, and what a session may not invoke
-
-`ci.sh` via `.githooks/pre-push` is the only automatic gate, and it checks
-clippy and tests — not judgement. So: **sessions run `/self-review` before
-opening a PR**; Yan runs `/audit-merges` after a batch of merges lands.
-
-**`/code-review` and `/code-review ultra` are Yan's to run — a session must
-not try to invoke them.** They are billed, and the built-in sets
-`disable-model-invocation`, which the harness treats as locked. There is no
-Bash route either. Details of both halves, and the squash rule, are in the
-`pr-hygiene` skill.
-
 ## What you could not finish goes to an ISSUE, not the backlog
 
 A session that measures a bug and does not fix it is holding the most
