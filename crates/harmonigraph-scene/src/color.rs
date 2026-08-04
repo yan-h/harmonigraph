@@ -85,7 +85,8 @@ fn luminance_of_lightness(l_star: f64) -> f64 {
 ///
 /// Linear and not encoded, deliberately: the gamut test below runs on this,
 /// and the 0..1 box is the same box either side of the transfer function, so
-/// testing here skips a gamma encode on every bisection step.
+/// testing here skips a gamma encode on every bisection step. That argument
+/// carries for the BOX and not for a tolerance around it — see [`gamut_box`].
 fn linear_srgb_of_oklab(ok_l: f64, ok_a: f64, ok_b: f64) -> (f64, f64, f64) {
     let l = (ok_l + 0.3963377774 * ok_a + 0.2158037573 * ok_b).powi(3);
     let m = (ok_l - 0.1055613458 * ok_a - 0.0638541728 * ok_b).powi(3);
@@ -97,66 +98,200 @@ fn linear_srgb_of_oklab(ok_l: f64, ok_a: f64, ok_b: f64) -> (f64, f64, f64) {
     )
 }
 
-/// Newton steps [`oklab_lightness_at`] spends. Five, because the function it
-/// inverts is a cubic and the initial guess is already close; the sweep in
-/// `the_hybrid_at_the_edges` puts the worst relative luminance error over the
-/// whole knob space at 3e-7, which is four orders under the 1/255 the answer
-/// is quantized to.
+/// sRGB's own luminance row, folded through the LMS->linear-RGB matrix: the
+/// weight each CUBED Oklab root carries in the luminance of the color.
+///
+/// Folded rather than applied in two steps so the Newton solve below never
+/// builds an RGB triple it would only collapse again. What matters about the
+/// numbers is their SIGNS: the first and third are negative (-0.0408 and
+/// -0.0717) against a positive 1.1125 in the middle, which is the whole reason
+/// luminance is not monotone in `L` and the solve needs a guard.
+const LUMINANCE_OF_ROOTS: [f64; 3] = [
+    0.2126 * 4.0767416621 + 0.7152 * -1.2684380046 + 0.0722 * -0.0041960863,
+    0.2126 * -3.3077115913 + 0.7152 * 2.6097574011 + 0.0722 * -0.7034186147,
+    0.2126 * 0.2309699292 + 0.7152 * -0.3413193965 + 0.0722 * 1.7076147010,
+];
+
+/// Newton steps [`RampHue::lightness_at`] spends. Five, because the function it
+/// inverts is a cubic and the initial guess is already close: over `L*` 0..100
+/// x 360 hues x five chroma fractions, every solve the gamut search grants
+/// lands within a relative 2.2e-15 of the luminance it was asked for, which is
+/// the double's own resolution there and a dozen orders under the quantization
+/// the answer is heading for.
+///
+/// A coverage knob and NOT a correctness one, which is the whole point of
+/// [`LUMINANCE_MISS`] sitting beside it: a solve that fails to land is read as
+/// "no color here" by [`RampHue::in_gamut`] rather than trusted, so this
+/// changes how much of the gamut the search can reach and cannot move a drawn
+/// color off its luminance. Measured across the same sweep, 4, 5, 6, 8 and 20
+/// steps all land at that same resolution and grant the identical gamut; at 3
+/// the worst granted solve sits exactly ON the tolerance, with the guard the
+/// only thing still holding. One step of margin over that is what five is, and
+/// `the_hybrid_at_the_edges` is where both ends were measured.
 const LUMINANCE_STEPS: u32 = 5;
 
-/// The Oklab `L` that puts a given Oklab hue and chroma at a given luminance —
-/// the join between the two spaces, and where `L*`'s promise is actually kept.
+/// How far a solve may land from the luminance it was asked for and still count
+/// as having found it, as a FRACTION of that luminance.
 ///
-/// Newton and not a second bisection, which is what makes the whole design
-/// affordable. At a FIXED hue the three cube roots are each linear in `L`, so
-/// luminance is a cubic in `L` with a derivative in closed form; a nested
-/// bisection would spend twenty steps where this spends five, and turn a
-/// rebuild from free into a visible hitch on every frame of a knob drag.
-fn oklab_lightness_at(h: f64, c: f64, target_y: f64) -> f64 {
-    let (cos_h, sin_h) = (h.to_radians().cos(), h.to_radians().sin());
-    // How far each cube root runs from `L` at this hue, per unit of chroma.
-    let k = [
-        0.3963377774 * cos_h + 0.2158037573 * sin_h,
-        -0.1055613458 * cos_h - 0.0638541728 * sin_h,
-        -0.0894841775 * cos_h - 1.2914855480 * sin_h,
-    ];
-    // Luminance as a weighted sum of the three cubed roots: sRGB's luminance
-    // row folded through the LMS->linear-RGB matrix, so this never builds an
-    // RGB triple it would only collapse again.
-    let w = [
-        0.2126 * 4.0767416621 + 0.7152 * -1.2684380046 + 0.0722 * -0.0041960863,
-        0.2126 * -3.3077115913 + 0.7152 * 2.6097574011 + 0.0722 * -0.7034186147,
-        0.2126 * 0.2309699292 + 0.7152 * -0.3413193965 + 0.0722 * 1.7076147010,
-    ];
-    // The grey of this luminance, which is exact at chroma 0 and near it
-    // everywhere else — Oklab `L` IS the cube root of luminance on the
-    // neutral axis.
-    let mut ok_l = target_y.cbrt().clamp(0.0, 1.0);
-    for _ in 0..LUMINANCE_STEPS {
-        let r = [ok_l + k[0] * c, ok_l + k[1] * c, ok_l + k[2] * c];
-        let y: f64 = (0..3).map(|i| w[i] * r[i].powi(3)).sum();
-        let dy: f64 = (0..3).map(|i| 3.0 * w[i] * r[i].powi(2)).sum();
-        // A flat derivative means black, where every `L` is the answer and the
-        // step would be a division by nothing.
-        if dy.abs() < 1e-12 {
-            break;
+/// The distinction this draws is convergence, not rounding — which is why it
+/// can afford to sit six orders above the worst converged miss. Newton on a
+/// cubic from a start this good either lands at the double's own resolution or
+/// does not land at all, and a solve that did not land is not a near miss but
+/// an unrelated color, whose channels are perfectly capable of sitting inside
+/// the box. That is the failure it exists to catch: the search reads such an
+/// `L` as a drawable color and grants chroma the ramp then paints, which at
+/// `L*` 0 puts a bright pixel where the curve asked for black.
+///
+/// Relative and not absolute, because the luminance it is a tolerance ON spans
+/// the whole 0..1 range and reaches 0 exactly. Any absolute figure is nothing
+/// but noise at the black end — every color is within 1e-9 of luminance 0,
+/// diverged ones included, so an absolute test stops discriminating exactly
+/// where the failure lives. At `L*` 0 this asks for luminance 0 exactly, which
+/// is the right question: black is the only color at that luminance, and a
+/// solve that reached any other has not found it.
+const LUMINANCE_MISS: f64 = 1e-9;
+
+/// One hue, with everything a gamut search at that hue needs worked out once.
+///
+/// A struct because [`max_chroma`] asks about twenty chromas at a FIXED hue and
+/// a fixed luminance: the trig pair and the three offsets are invariant across
+/// all twenty, and re-deriving them per step is the difference between a free
+/// LUT rebuild and a visible one on every frame of a Brightness or Chroma drag.
+#[derive(Clone, Copy)]
+struct RampHue {
+    cos_h: f64,
+    sin_h: f64,
+    /// How far each LMS cube root runs from `L` at this hue, per unit of
+    /// chroma. Oklab's `a` and `b` enter [`linear_srgb_of_oklab`] linearly, so
+    /// a fixed hue makes each root an affine function of `L` and `c` alone.
+    k: [f64; 3],
+}
+
+impl RampHue {
+    fn at(h: f64) -> RampHue {
+        let (sin_h, cos_h) = h.to_radians().sin_cos();
+        RampHue {
+            cos_h,
+            sin_h,
+            k: [
+                0.3963377774 * cos_h + 0.2158037573 * sin_h,
+                -0.1055613458 * cos_h - 0.0638541728 * sin_h,
+                -0.0894841775 * cos_h - 1.2914855480 * sin_h,
+            ],
         }
-        // Clamped past 1 rather than to it: an overshoot on the way to a
-        // bright color is a legal intermediate, and pinning it at 1 would
-        // stall the iteration instead of letting it come back.
-        ok_l = (ok_l - (y - target_y) / dy).clamp(0.0, 1.5);
     }
-    ok_l
+
+    /// The Oklab `L` that puts this hue and chroma at `target_y` — the join
+    /// between the two spaces, and where `L*`'s promise is actually kept.
+    ///
+    /// Newton and not a second bisection, which is what makes the whole design
+    /// affordable. At a FIXED hue the three cube roots are each linear in `L`,
+    /// so luminance is a cubic in `L` with a derivative in closed form; a
+    /// nested bisection would spend twenty steps where this spends five, and
+    /// turn a rebuild from free into a visible hitch on every frame of a knob
+    /// drag.
+    ///
+    /// May return an `L` that does NOT reach `target_y`, and says so only by
+    /// the luminance of what it hands back — see [`in_gamut`](Self::in_gamut),
+    /// which is where that answer is read. Every ask reaching the draw path has
+    /// been through the gamut search first and does land.
+    fn lightness_at(&self, c: f64, target_y: f64) -> f64 {
+        let w = &LUMINANCE_OF_ROOTS;
+        // The grey of this luminance, which is exact at chroma 0 and near it
+        // everywhere else — Oklab `L` IS the cube root of luminance on the
+        // neutral axis.
+        let mut ok_l = target_y.cbrt().clamp(0.0, 1.0);
+        for _ in 0..LUMINANCE_STEPS {
+            let r = [ok_l + self.k[0] * c, ok_l + self.k[1] * c, ok_l + self.k[2] * c];
+            let y: f64 = (0..3).map(|i| w[i] * r[i].powi(3)).sum();
+            let dy: f64 = (0..3).map(|i| 3.0 * w[i] * r[i].powi(2)).sum();
+            // Only a RISING luminance carries the step toward the answer, and
+            // this one does not always rise: two of the three weights are
+            // negative, so the derivative goes negative wherever the middle
+            // root is small beside the other two — which is where the bottom of
+            // the `L*` axis meets a saturated hue. A step taken there walks away
+            // from the root and the clamp below parks it at a bright color, so
+            // stopping is the only move that keeps the miss legible.
+            //
+            // At chroma 0 the same guard catches the one case where stopping IS
+            // the answer: black, where `L` is 0, the luminance asked for has
+            // already been reached, and a step would divide by nothing.
+            if dy <= 1e-12 {
+                break;
+            }
+            // Clamped past 1 rather than to it: an overshoot on the way to a
+            // bright color is a legal intermediate, and pinning it at 1 would
+            // stall the iteration instead of letting it come back.
+            ok_l = (ok_l - (y - target_y) / dy).clamp(0.0, 1.5);
+        }
+        ok_l
+    }
+
+    /// Linear sRGB of one point of the ramp: solve for the `L` that hits
+    /// `target_y`, then convert. The two questions asked of a ramp color —
+    /// is it drawable, and what bytes is it — differ only in what they do with
+    /// this, so the solve and the conversion live here once rather than twice.
+    fn linear_srgb(&self, c: f64, target_y: f64) -> (f64, f64, f64) {
+        let ok_l = self.lightness_at(c, target_y);
+        linear_srgb_of_oklab(ok_l, c * self.cos_h, c * self.sin_h)
+    }
+
+    /// Whether this hue at this chroma is a color sRGB can show at `target_y`,
+    /// with each linear channel allowed anywhere inside `box_` (see
+    /// [`gamut_box`]).
+    ///
+    /// Two conditions and not one. The channels have to be in the box, and the
+    /// solve has to have LANDED on the luminance that was asked for — a
+    /// diverged `L` is an unrelated color rather than a near miss, and its
+    /// channels sit comfortably inside the box for a band of hues at the black
+    /// end of the `L*` axis. Read off the same linear RGB the box test runs on,
+    /// so what is checked is the luminance of the color that would actually be
+    /// drawn rather than of the coordinates it came from.
+    fn in_gamut(&self, c: f64, target_y: f64, box_: (f64, f64)) -> bool {
+        let (r, g, b) = self.linear_srgb(c, target_y);
+        let reached = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let inside = |v: f64| (box_.0..=box_.1).contains(&v);
+        (reached - target_y).abs() <= LUMINANCE_MISS * target_y
+            && inside(r)
+            && inside(g)
+            && inside(b)
+    }
+}
+
+/// The sRGB transfer function's inverse: the linear light an encoded value
+/// names. Extends past 1 by simply being evaluated there, which is what lets
+/// [`gamut_box`] ask how far outside the box half a byte reaches.
+fn linear_of_encoded(v: f64) -> f64 {
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
+/// The linear-light box a channel must land in, widened by `slack` steps of
+/// 1/255 past either end.
+///
+/// The slack is stated in ENCODED steps because that is the only place it means
+/// anything: the answer is quantized to a byte, so "less than half a step"
+/// is a claim about bytes. The SAME figure in linear light is not one tolerance
+/// but two — half a byte spans 1.5e-4 of linear light at the black end and
+/// 4.5e-3 at the white end, a factor of 29 — so any single linear slack is
+/// generous at one end and absent at the other. Converting once here, per
+/// search rather than per bisection step, keeps the meaning and the cost.
+///
+/// A zero slack costs nothing and changes nothing: the transfer function fixes
+/// both 0 and 1, so the box comes back exactly 0..1 and [`max_chroma`]'s strict
+/// predicate is the same predicate it was in linear light.
+fn gamut_box(slack: f64) -> (f64, f64) {
+    (-linear_of_encoded(slack / 255.0), linear_of_encoded(1.0 + slack / 255.0))
 }
 
 /// Whether the color this ramp asks for is one sRGB can show, allowing each
-/// linear channel `slack` past either end of 0..1.
+/// channel `slack` steps of 1/255 past either end of the box.
+///
+/// The whole-coordinates form of [`RampHue::in_gamut`], which is what
+/// [`max_chroma`] wants instead: a search at a fixed hue and lightness derives
+/// all three of these once and asks about twenty chromas.
+#[cfg(test)]
 fn in_gamut_within(l_star: f64, h: f64, c: f64, slack: f64) -> bool {
-    let ok_l = oklab_lightness_at(h, c, luminance_of_lightness(l_star));
-    let (cos_h, sin_h) = (h.to_radians().cos(), h.to_radians().sin());
-    let (r, g, b) = linear_srgb_of_oklab(ok_l, c * cos_h, c * sin_h);
-    let ok = |v: f64| (-slack..=1.0 + slack).contains(&v);
-    ok(r) && ok(g) && ok(b)
+    RampHue::at(h).in_gamut(c, luminance_of_lightness(l_star), gamut_box(slack))
 }
 
 /// Bisection steps [`max_chroma`] spends. Each halves the bracket, so 20 over
@@ -183,10 +318,13 @@ const MAX_SEARCH_CHROMA: f64 = 0.4;
 /// gradient free to move either one cannot carry a chroma figure that was
 /// worked out in advance.
 fn max_chroma(l_star: f64, h: f64) -> f64 {
+    let hue = RampHue::at(h);
+    let target_y = luminance_of_lightness(l_star);
+    let box_ = gamut_box(0.0);
     let (mut lo, mut hi) = (0.0f64, MAX_SEARCH_CHROMA);
     for _ in 0..GAMUT_BISECTIONS {
         let mid = 0.5 * (lo + hi);
-        if in_gamut_within(l_star, h, mid, 0.0) {
+        if hue.in_gamut(mid, target_y, box_) {
             lo = mid;
         } else {
             hi = mid;
@@ -202,13 +340,11 @@ fn max_chroma(l_star: f64, h: f64) -> f64 {
 /// Oklab chroma (the fraction is resolved by [`pitch_ramp_coords`]).
 ///
 /// The clamp is a safety net over a path that should not need it — every
-/// chroma reaching here is under what [`max_chroma`] granted — and it is what
-/// keeps a color drawable if the Newton solve is ever handed a target it
-/// cannot reach.
+/// chroma reaching here is under what [`max_chroma`] granted, and the search
+/// grants only chromas whose solve lands — and it is what keeps a color
+/// drawable if the Newton solve is ever handed a target it cannot reach.
 fn oklab_srgb(l_star: f64, h: f64, c: f64) -> Vec4 {
-    let ok_l = oklab_lightness_at(h, c, luminance_of_lightness(l_star));
-    let (cos_h, sin_h) = (h.to_radians().cos(), h.to_radians().sin());
-    let (r, g, b) = linear_srgb_of_oklab(ok_l, c * cos_h, c * sin_h);
+    let (r, g, b) = RampHue::at(h).linear_srgb(c, luminance_of_lightness(l_star));
     let encode = |v: f64| {
         let v = v.clamp(0.0, 1.0);
         (if v <= 0.0031308 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }) as f32
@@ -258,7 +394,7 @@ fn pitch_ramp_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
 /// strict predicate instead of to the clamped result. For
 /// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is`, which cannot learn
 /// anything by reading the table back: every entry there has already been
-/// clamped into range by [`lch`].
+/// clamped into range by [`oklab_srgb`].
 ///
 /// Deliberately NOT sanitizing, so the test can hand in a chroma past 1.0 and
 /// watch this say no — a check whose failing case is unreachable is not a
@@ -272,12 +408,16 @@ fn pitch_ramp_coords(t: f64, gradient: PitchGradient) -> (f64, f64, f64) {
 /// Newton solve lands a whisker either side of exactly white or exactly black
 /// and the sweep reaches both wherever a steep ramp flattens against the top or
 /// bottom. A clamp that moves a channel by less than half a byte moves no byte
-/// at all — measured in LINEAR light here, where the slack is generous at the
-/// dark end and tight at the bright one, which is the way round that matters.
+/// at all, and [`gamut_box`] is where that half-byte keeps its meaning at both
+/// ends rather than at one.
+///
+/// The luminance half of the predicate takes no slack in either caller, and
+/// wants none: it separates a solve that converged from one that did not, which
+/// is not a question of a hair either way.
 #[cfg(test)]
 pub(crate) fn ramp_sample_in_gamut(t: f64, gradient: PitchGradient) -> bool {
     let (l, h, c) = pitch_ramp_coords(t, gradient);
-    in_gamut_within(l, h, c, 0.5 / 255.0)
+    in_gamut_within(l, h, c, 0.5)
 }
 
 /// The designed curve, for the test that pins how closely [`pitch_ramp_lut`]
@@ -294,7 +434,7 @@ pub(crate) fn designed_pitch_ramp(t: f64, gradient: PitchGradient) -> Vec4 {
 /// knobs hold still except while a control is being dragged, so a single slot
 /// hits on essentially every call, and a map keyed on five floats would spend
 /// more on hashing than the hit saves. A miss rebuilds — [`PITCH_LUT_N`]
-/// entries, each a gamut bisection and an LCh->sRGB conversion — which is why
+/// entries, each a gamut bisection and an Oklab->sRGB conversion — which is why
 /// this is worth caching at all: the per-node draw path asks for a color
 /// hundreds of times a frame.
 ///
@@ -375,8 +515,9 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// What the key does NOT buy is a free Brightness or Chroma drag. Those move
 /// the circle, so every frame of one is a real miss here and another in the
 /// pitch table beside it — the two together are (`HUE_CIRCLE_N` +
-/// [`PITCH_LUT_N`]) x [`GAMUT_BISECTIONS`] LCh->sRGB conversions, measuring
-/// 454us on the UI thread per frame of such a drag.
+/// [`PITCH_LUT_N`]) x [`GAMUT_BISECTIONS`] gamut probes, each a Newton solve
+/// and an Oklab->sRGB conversion, measuring 412us on the UI thread per frame of
+/// such a drag.
 ///
 /// That is the standing price of a chroma that follows the gamut instead of a
 /// figure worked out in advance (see [`max_chroma`]), and it is paid only while
@@ -430,7 +571,7 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// `derive`. They differ there because they are naming different pitches, not
 /// because two definitions of one pitch's color disagree.)
 ///
-/// The shader can only afford a lookup — an LCh->sRGB conversion per fragment
+/// The shader can only afford a lookup — a gamut search per fragment
 /// is out of reach, and the glow loops call this several times over — so the
 /// choice is not "table vs. exact curve" but "one table vs. a table and a
 /// curve that disagree". Two shapes sharing an edge is the harshest test of a
@@ -456,7 +597,7 @@ pub fn pitch_lut_color(
 
 /// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
 /// lives in [`ChannelRole`]. Gradient channels are colored by pitch height on
-/// the `gradient`'s LCh ramp, spread between `darkest_pitch` and
+/// the `gradient`'s ramp, spread between `darkest_pitch` and
 /// `brightest_pitch` (MIDI note numbers). The fixed per-channel colors below
 /// are NOT on that ramp and no gradient setting touches them: a channel color
 /// names a voice, and it has to keep meaning the same voice whatever the pitch
@@ -497,6 +638,29 @@ pub fn channel_color(
 #[cfg(test)]
 pub(crate) fn max_chroma_for_docs(l_star: f64, h: f64) -> f64 {
     max_chroma(l_star, h)
+}
+
+/// The luminance an `L*` names, for the tests that hold a DRAWN color to the
+/// curve's own promise rather than to another drawn color. The promise is the
+/// whole of what the two-space design buys, and only this side of it is a
+/// definition — the other side has a gamut search and a Newton solve in it.
+#[cfg(test)]
+pub(crate) fn luminance_of(l_star: f64) -> f64 {
+    luminance_of_lightness(l_star)
+}
+
+/// The luminance one point of the ramp actually reaches, beside the one its
+/// `L*` asked for — both in linear light.
+///
+/// For `the_hybrid_at_the_edges`, which prices [`LUMINANCE_MISS`] against
+/// [`LUMINANCE_STEPS`] and cannot do it through the drawn color: an f32 sRGB
+/// triple resolves relative luminance to about 1e-7, four orders coarser than
+/// the gap between a converged solve and a diverged one.
+#[cfg(test)]
+pub(crate) fn ramp_luminance(l_star: f64, h: f64, c: f64) -> (f64, f64) {
+    let target_y = luminance_of_lightness(l_star);
+    let (r, g, b) = RampHue::at(h).linear_srgb(c, target_y);
+    (target_y, 0.2126 * r + 0.7152 * g + 0.0722 * b)
 }
 
 /// The idle layer's color: the grid color's RGB at full alpha. The grid's

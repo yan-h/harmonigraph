@@ -100,9 +100,18 @@ pub struct PitchGradient {
     /// 0..360 by [`sanitized`](Self::sanitized), since it names a point on a
     /// circle and every value is therefore a legal one.
     ///
-    /// Oklab and not CIELAB, which is the one axis of this struct that moved:
-    /// a CIELAB hue angle does not hold its hue as the other knobs turn, and
-    /// drifts hardest through the blues this opens on.
+    /// Oklab and not CIELAB: a CIELAB hue angle does not hold its hue as the
+    /// other knobs turn, and drifts hardest through the blues this opens on.
+    ///
+    /// A blob saved before the ramp took its hue from Oklab holds a CIELAB
+    /// angle in this field, and loads unchanged — there is no version tag to
+    /// migrate on, and the two spaces disagree by up to 13 degrees, so such a
+    /// view opens on a hue that near neighbour rather than the one it stored.
+    /// Deliberate, and the reason there is no `legacy_` shim here: the arc is a
+    /// look someone dialled by eye, a hue that far off is a nudge back rather
+    /// than a broken project, and a shim would owe every future reader an
+    /// answer about which space an unmarked angle is in. Anything ADDED here
+    /// still owes a default (see [`default_hue_start`]).
     #[serde(default = "default_hue_start")]
     pub hue_start: f32,
     /// How far round the hue circle the range walks, in degrees — SIGNED, so
@@ -115,7 +124,8 @@ pub struct PitchGradient {
     /// signed span says both, and 0 collapses the gradient to a single hue —
     /// a legal setting, where chroma and brightness carry the pitch alone.
     ///
-    /// Oklab degrees, for the reason [`hue_start`](Self::hue_start) gives.
+    /// Oklab degrees, for the reason [`hue_start`](Self::hue_start) gives —
+    /// including what that means for a span sitting in an already-saved blob.
     #[serde(default = "default_hue_span")]
     pub hue_span: f32,
     /// `L*` at the CENTRE of the pitch range, 0..100 — the middle of the
@@ -146,16 +156,14 @@ pub struct PitchGradient {
     /// since the hues that can hold more are given more.
     #[serde(default = "default_chroma")]
     pub chroma: f32,
-
-
 }
 
 /// The hue the bottom of the range opens on: a deep blue-violet.
 ///
-/// Oklab 246.9 is the angle that names the color CIELAB 260 drew at this arc's
+/// Oklab 246.9 is the angle that names the color CIELAB 260 draws at this arc's
 /// own bottom (`L*` 42, half chroma) — the two spaces disagree by 13 degrees
-/// here, and this is the arc the defaults have always opened on rather than a
-/// new one. `the_defaults_are_the_retired_arc_converted` holds it to that.
+/// here, so this is the same opening color under a different name rather than a
+/// different one. `the_defaults_are_the_retired_arc_converted` holds it to that.
 fn default_hue_start() -> f32 {
     246.9
 }
@@ -164,10 +172,10 @@ fn default_hue_start() -> f32 {
 /// yellow-green. Wide enough that no two octaves of the range share a hue, and
 /// short of the full circle so the two ends cannot be confused for each other.
 ///
-/// Wider than the 190 the CIELAB arc carried, and the SAME ARC: it ends where
-/// that one ended (Oklab 89.7, which CIELAB called 90 at `L*` 86), and Oklab
-/// simply spends more degrees crossing the blues than CIELAB does. The extra
-/// 12.8 degrees are that difference and not a widening.
+/// The SAME ARC that CIELAB names as a span of 190: it ends on Oklab 89.7,
+/// which CIELAB calls 90 at `L*` 86, and Oklab simply spends more degrees
+/// crossing the blues than CIELAB does. The extra 12.8 degrees are that
+/// disagreement between the two axes and not a wider sweep.
 fn default_hue_span() -> f32 {
     202.8
 }

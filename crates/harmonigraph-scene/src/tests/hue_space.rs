@@ -1,5 +1,6 @@
-//! The hue axis: one real check that the chroma knob leaves it alone, and the
-//! probes behind #222's decision to move the ramp onto Oklab.
+//! The two spaces the ramp is authored in: real checks that the chroma knob
+//! leaves the hue alone and that the join keeps `L*`'s promise at the edges,
+//! plus the probes behind #222's decision to move the ramp onto Oklab.
 //!
 //! Everything `#[ignore]`d here asserts nothing and prints measurements. Run
 //! them with
@@ -34,10 +35,25 @@ fn hue_delta(a: f64, b: f64) -> f64 {
     (b - a + 540.0).rem_euclid(360.0) - 180.0
 }
 
+/// CAM16's name for a drawn color's hue, read off `hct-cam16` through the same
+/// byte quantization a screen applies. Only the crate's HUE is ever leaned on —
+/// [`the_crate_222_names_does_not_work`] is why.
+fn cam16_hue(c: Vec4) -> f64 {
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    hct_cam16::Hct::from_rgb(q(c.x), q(c.y), q(c.z)).hue()
+}
+
 /// The eleven deciles of `t`, which is where every table below samples.
 fn deciles() -> impl Iterator<Item = f64> {
     (0..=10).map(|k| f64::from(k) / 10.0)
 }
+
+/// The CIELAB arc the shipped defaults are a conversion OF, in CIELAB degrees.
+/// Named once because three things below have to agree about it: the test that
+/// holds the defaults to it, and the two probes that measure what the
+/// conversion does to a sweep.
+const RETIRED_ARC_START: f64 = 260.0;
+const RETIRED_ARC_SPAN: f64 = 190.0;
 
 /// The color the shipped path draws at `t` for this gradient, off the curve
 /// rather than the table, so table resolution is not in the measurement.
@@ -83,10 +99,25 @@ fn the_chroma_knob_does_not_move_the_hue() {
         PitchGradient { hue_start: 20.0, hue_span: 60.0, ..PitchGradient::default() },
         PitchGradient { hue_start: 120.0, hue_span: 60.0, ..PitchGradient::default() },
         PitchGradient { lightness: 30.0, lightness_ramp: 0.0, ..PitchGradient::default() },
-        PitchGradient { lightness: 88.0, lightness_ramp: -60.0, ..PitchGradient::default() },
+        // Steep and inverted, but stopping short of `L*` 100: a ramp that
+        // clamps against the top pins several deciles at pure white, where the
+        // assertion below has nothing to measure (see the guard).
+        PitchGradient { lightness: 65.0, lightness_ramp: -60.0, ..PitchGradient::default() },
     ];
     for arc in arcs {
         for t in deciles() {
+            let (l, h) = arc.lightness_and_hue(t);
+            // Hue exists here at all. Where the gamut closes to a point — the
+            // two ends of the `L*` axis — every chroma setting draws the same
+            // neutral and `atan2` on (0, 0) answers 0 for each, so the
+            // assertion below would compare white to white and pass without
+            // asking anything. Asserted rather than skipped, so an arc added to
+            // the list cannot quietly stop testing.
+            assert!(
+                crate::color::max_chroma_for_docs(l, h) > 1e-3,
+                "{arc:?} at t {t:.1}: L* {l:.1} leaves no chroma to carry a hue, \
+                 so this sample would assert nothing",
+            );
             let hue_at = |c: f32| oklch(sample(t, PitchGradient { chroma: c, ..arc })).2;
             let anchor = hue_at(0.15);
             for chroma in [0.3, 0.5, 0.75, 1.0] {
@@ -102,18 +133,110 @@ fn the_chroma_knob_does_not_move_the_hue() {
     }
 }
 
-/// The evenness the move was also meant to buy: equal steps of hue ANGLE
-/// should be equal steps of the picture. Measured as how far each decile has
-/// come along the arc, against the share of the arc it names — the retired
-/// CIELAB curve ran 1.7x uneven at the default chroma and 3.0x at full.
+/// The other half of the two-space design, and the harder half: that the join
+/// between them keeps `L*`'s promise everywhere, including at the two edges
+/// where the gamut closes to a point.
+///
+/// `L*` is a function of luminance alone, so the ramp's whole claim is that a
+/// color it draws sits at exactly the luminance its `L*` names. Between the ask
+/// and the pixel are a gamut bisection and a Newton solve, and this is what
+/// says they deliver it.
+///
+/// The edges are where it is hard, and specifically the black one. The solve
+/// starts from the grey of the target luminance, which at `L*` 0 is `L` 0 —
+/// where the luminance curve is not flat but FALLING for a band of hues, since
+/// two of its three weights are negative. An unguarded step there walks away
+/// from the root and parks at a bright color whose channels are all inside the
+/// sRGB box, so the gamut search grants chroma and the ramp paints a blazing
+/// pixel where the curve asked for black. Only the luminance it missed says so,
+/// which is why that is what this measures.
+///
+/// This is also the evidence for both constants the solve is built on. The gap
+/// it reports between a converged solve and the tolerance is what makes
+/// `LUMINANCE_STEPS` a coverage knob rather than a correctness one.
+#[test]
+fn the_hybrid_at_the_edges() {
+    // Everything the gamut search grants, over the whole knob space: every one
+    // of these is a color the shipped path will actually draw.
+    let (mut worst, mut worst_at) = (0.0f64, (0.0, 0.0, 0.0));
+    for l_step in 0..=100 {
+        let l = f64::from(l_step);
+        for h_step in 0..360 {
+            let h = f64::from(h_step);
+            let ceiling = crate::color::max_chroma_for_docs(l, h);
+            for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                let c = fraction * ceiling;
+                let (target, reached) = crate::color::ramp_luminance(l, h, c);
+                // Relative, for the reason `LUMINANCE_MISS` is: at the black
+                // end an absolute miss is small however wrong the answer.
+                // `L*` 0 is the one place the ratio has no denominator, and
+                // there the only right answer is black exactly.
+                let miss =
+                    if target > 0.0 { (reached - target).abs() / target } else { reached.abs() };
+                if miss > worst {
+                    worst = miss;
+                    worst_at = (l, h, c);
+                }
+            }
+        }
+    }
+    // Four orders under `LUMINANCE_MISS`, which is the gap the design turns on:
+    // a converged solve lands at the double's own resolution and a diverged one
+    // misses by enough to see, so the tolerance between them separates the two
+    // rather than trading one off against the other.
+    assert!(
+        worst < 1e-13,
+        "the solve missed its target luminance by a relative {worst:.3e} at L* {:.0}, \
+         hue {:.0}, chroma {:.4} — at that size it is no longer rounding",
+        worst_at.0,
+        worst_at.1,
+        worst_at.2,
+    );
+
+    // And the two edges themselves. Black and white are the only colors at
+    // their luminances, so the only honest answer at either end of the axis is
+    // that there is no chroma to be had — the failure this guards against
+    // reported up to 0.21 at `L*` 0, over a band of greens.
+    for h_step in 0..3600 {
+        let h = f64::from(h_step) * 0.1;
+        for l in [0.0, 100.0] {
+            let ceiling = crate::color::max_chroma_for_docs(l, h);
+            assert!(
+                ceiling == 0.0,
+                "L* {l:.0} is {} and has no hue, but the gamut search grants \
+                 {ceiling:.4} chroma at hue {h:.1}",
+                if l == 0.0 { "black" } else { "white" },
+            );
+        }
+    }
+}
+
+/// The evenness the move to Oklab buys: equal steps of hue ANGLE should be
+/// equal steps of the picture. Measured as how far each decile has come along
+/// the arc, against the share of the arc it names.
+///
+/// The angles stepped through here are CIELAB's, over the arc the defaults were
+/// converted from (260, span 190) — which is the only way the question has an
+/// answer. Stepping Oklab angles and reading Oklab hues back measures a space
+/// against itself and reports 1.0x by construction, whatever either space is
+/// like; what can be compared is one space's even steps seen through the other.
 #[test]
 #[ignore = "a probe: prints measurements, asserts nothing"]
 fn equal_lab_steps_are_uneven_in_oklch() {
     for chroma in [0.2, 0.5, 1.0] {
         let arc = PitchGradient { chroma, ..PitchGradient::default() };
         println!("\n=== default arc at chroma {:.0}%: evenness of the sweep ===", chroma * 100.0);
-        println!("   t   ask h   ok h     step   share of arc   (even would be)");
-        let hues: Vec<f64> = deciles().map(|t| oklch(sample(t, arc)).2).collect();
+        println!("   t  Lab h   ok h     step   share of arc   (even would be)");
+        // The retired arc's own angles, at the lightness this ramp puts each
+        // decile at — a CIELAB hue's color moves with lightness, so the two
+        // have to be read together.
+        let lab_hue = |t: f64| RETIRED_ARC_START + t * RETIRED_ARC_SPAN;
+        let hues: Vec<f64> = deciles()
+            .map(|t| {
+                let l = arc.lightness_and_hue(t).0;
+                f64::from(oklab_hue_of_retired_lab_hue(l, lab_hue(t), f64::from(chroma)))
+            })
+            .collect();
         // Unwrapped as it goes, so an arc crossing 0 stays monotone and the
         // shares below are cumulative distance rather than an angle.
         let mut walked = vec![0.0];
@@ -124,7 +247,7 @@ fn equal_lab_steps_are_uneven_in_oklch() {
         let total = *walked.last().expect("eleven samples");
         let (mut min_step, mut max_step) = (f64::MAX, f64::MIN);
         for (k, t) in deciles().enumerate() {
-            let (_, lab_h) = arc.lightness_and_hue(t);
+            let lab_h = lab_hue(t);
             let step = if k == 0 { 0.0 } else { walked[k] - walked[k - 1] };
             if k > 0 {
                 min_step = min_step.min(step);
@@ -144,20 +267,26 @@ fn equal_lab_steps_are_uneven_in_oklch() {
     }
 }
 
-/// What the retired CIELAB axis made of the circle the ramp now walks
-/// directly, so the compression and stretch it introduced have somewhere to be
-/// read off. The default arc's own region is what #222 was about.
+/// What the CIELAB axis makes of the circle the ramp now walks directly, so the
+/// compression and stretch it introduces have somewhere to be read off. The
+/// retired arc's own region (CIELAB 260 round to 90) is what #222 was about.
+///
+/// A stretch of 1.0 everywhere would mean the two axes name the same circle and
+/// the move bought nothing; the reason this is worth printing is that they do
+/// not. Both columns must therefore come from different spaces — feeding an
+/// Oklab hue in and reading an Oklab hue back is the identity function, and
+/// would print 1.000 down the page whatever the spaces were like.
 #[test]
 #[ignore = "a probe: prints measurements, asserts nothing"]
 fn the_hue_circle_in_both_spaces() {
-    let base = PitchGradient { lightness: 64.0, lightness_ramp: 0.0, ..PitchGradient::default() };
     println!("\n=== CIELAB hue -> Oklch hue at L* 64, chroma 50% ===");
     println!("  Lab h   ok h    local stretch (deg ok per deg Lab)");
-    let hue_of = |h: f64| oklch(at(f64::from(base.lightness), h, 0.5)).2;
+    let hue_of = |h: f64| f64::from(oklab_hue_of_retired_lab_hue(64.0, h, 0.5));
     for step in 0..36 {
         let h = f64::from(step) * 10.0;
         let stretch = hue_delta(hue_of(h - 5.0), hue_of(h + 5.0)) / 10.0;
-        let marker = if (260.0..=360.0).contains(&h) || h <= 90.0 { " <- default arc" } else { "" };
+        let on_arc = h >= RETIRED_ARC_START || h <= RETIRED_ARC_START + RETIRED_ARC_SPAN - 360.0;
+        let marker = if on_arc { " <- retired arc" } else { "" };
         println!("{h:7.1}  {:6.1}  {stretch:8.3}{marker}", hue_of(h));
     }
 }
@@ -185,10 +314,6 @@ fn the_hue_circle_in_both_spaces() {
 #[test]
 #[ignore = "a probe: prints measurements, asserts nothing"]
 fn the_oklab_hybrid_against_googles_hct() {
-    let cam16_hue = |c: Vec4| {
-        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        hct_cam16::Hct::from_rgb(q(c.x), q(c.y), q(c.z)).hue()
-    };
     let arc = PitchGradient::default();
 
     println!("\n=== CAM16 hue drift over the shipped chroma knob (20% -> 100%) ===");
@@ -285,19 +410,13 @@ fn oklab_hue_of_retired_lab_hue(l_star: f64, lab_hue: f64, chroma_fraction: f64)
         }
     }
     let rgb = color_space::Rgb::from(color_space::Lch::new(l_star, chroma_fraction * lo, lab_hue));
-    // Through the pixel and back out, which is the one conversion that cannot
-    // disagree with what the old build actually put on screen.
-    let linear = |v: f64| {
-        let v = (v / 255.0).clamp(0.0, 1.0);
-        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
-    };
-    let (r, g, b) = (linear(rgb.r), linear(rgb.g), linear(rgb.b));
-    let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
-    let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
-    let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
-    let ok_a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
-    let ok_b = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
-    ok_b.atan2(ok_a).to_degrees().rem_euclid(360.0) as f32
+    // Through the pixel and back out with [`oklch`], which is the one
+    // conversion that cannot disagree with what a CIELAB-authored ramp actually
+    // puts on screen — and the same one every other measurement here reads
+    // through, so the two columns of a table cannot be in different spaces by
+    // accident.
+    let byte = |v: f64| (v.clamp(0.0, 255.0) / 255.0) as f32;
+    oklch(Vec4::new(byte(rgb.r), byte(rgb.g), byte(rgb.b), 1.0)).2 as f32
 }
 
 /// The `L*` and Oklab hue the retired CIELAB arc drew at the two ends of the
@@ -324,7 +443,7 @@ fn retired_arc(lab_start: f64, lab_span: f64, g: PitchGradient) -> (f32, f32) {
 #[test]
 fn the_defaults_are_the_retired_arc_converted() {
     let now = PitchGradient::default();
-    let (start, span) = retired_arc(260.0, 190.0, now);
+    let (start, span) = retired_arc(RETIRED_ARC_START, RETIRED_ARC_SPAN, now);
     // A tenth of a degree, which is what the defaults are rounded to. Tighter
     // would only pin the rounding; looser would stop noticing a real move.
     assert!(
@@ -370,10 +489,6 @@ fn the_default_arcs_chroma_ceiling_is_what_the_docs_say() {
 #[test]
 #[ignore = "a probe: prints measurements, asserts nothing"]
 fn what_going_on_to_cam16_would_buy() {
-    let cam16_hue = |c: Vec4| {
-        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        hct_cam16::Hct::from_rgb(q(c.x), q(c.y), q(c.z)).hue()
-    };
     let arc = PitchGradient::default();
     // Unwrapped as it goes, so an arc crossing 0 stays monotone and the shares
     // below are cumulative distance rather than an angle.

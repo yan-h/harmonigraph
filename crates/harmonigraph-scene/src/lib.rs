@@ -16,7 +16,7 @@
 //!   how wide, and the boundary angles the shader draws them between.
 //! - [`camera`] — [`Camera`], [`Projection`], and the [`Projector`] used
 //!   for label placement and picking.
-//! - [`color`] — the LCh pitch ramp and channel/idle colors.
+//! - [`color`] — the pitch ramp and channel/idle colors.
 //! - [`skin`] — the static palette the UI and renderer share.
 //! - [`trail`] — a quiet mark on the nodes the music has already been to.
 //!
@@ -103,13 +103,13 @@ const ATTACK_TIME: f64 = 0.15;
 /// buys a fraction of a level that no display step can show, and the curve is
 /// already tracked far closer than a viewer can see.
 ///
-/// 64 held its place when the ramp's hue and chroma moved to Oklab, where the
-/// same table measures 3.4/255 against the 1.8 it measured on the CIELAB
-/// curve. The arc is longer in Oklab degrees and its chroma ceiling turns
-/// faster along it, so the curve a table of any size is chasing simply bends
-/// more. 3.4/255 is 1.3% of a channel, on a gradient whose neighbouring
-/// entries differ by more than that — and it is a distance from an IDEAL, not
-/// a disagreement between two shapes, which stays exact at every table size.
+/// 3.4/255 is what 64 entries buy on THIS curve, and a curve authored in
+/// CIELAB rather than Oklab would put the same table at 1.8: the arc is long
+/// in Oklab degrees and its chroma ceiling turns fast along it, so what a
+/// table of any size is chasing simply bends more. 3.4/255 is 1.3% of a
+/// channel, on a gradient whose neighbouring entries differ by more than that
+/// — and it is a distance from an IDEAL, not a disagreement between two
+/// shapes, which stays exact at every table size.
 ///
 /// A gradient can be dialled to a harsher curve than the default — chroma at
 /// 1.0 rides the boundary itself, corners and all, rather than half way in —
