@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    HighlightExtremes, IdleMarker, NodeStyle, Pulse, SevensLabel,
+    HighlightExtremes, IdleMarker, NodeStyle, PitchPalette, Pulse, SevensLabel,
 };
 use crate::trail::TrailMark;
 use harmonigraph_core::{coords, Comma, LatticePos, Tempered};
@@ -130,6 +130,11 @@ pub struct ViewConfig {
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
+    /// Which curve the low-to-high pitch gradient follows (see
+    /// [`PitchPalette`]). Every pitch-colored shape in the scene reads it
+    /// through one table, so this is the only place the choice is made.
+    #[serde(default)]
+    pub pitch_palette: PitchPalette,
     /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
     /// to the classic solid orb at 1 (the disc fades in over its glow
     /// skirt and its edge crisps). Inert while the core is off.
@@ -965,6 +970,7 @@ impl Default for ViewConfig {
             label_scale: default_label_scale(),
             show_cents: true,
             node_style: NodeStyle::Steady,
+            pitch_palette: PitchPalette::Ramp,
             // A small, soft core inside the octave band, with the band's
             // silent slots ghosted in: the pitch class reads as a compact
             // center and the octaves carry the node's outline. (The band's

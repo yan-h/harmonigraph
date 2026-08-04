@@ -40,7 +40,7 @@ pub use octaves::{
     MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
 pub use style::{
-    HighlightExtremes, IdleMarker, NodeStyle, Pulse, SevensLabel,
+    HighlightExtremes, IdleMarker, NodeStyle, PitchPalette, Pulse, SevensLabel,
 };
 pub use trail::TrailMark;
 pub use view::{FrameParams, ViewConfig};
@@ -84,9 +84,13 @@ const ATTACK_TIME: f64 = 0.15;
 /// Because all of them read this one table, its size is not what makes two
 /// shapes agree — that is structural (see `color::pitch_lut_color`). It buys
 /// only the table's own fidelity to the designed curve, and it buys that
-/// badly: the ramp's dark end rides the sRGB gamut boundary, where the LCh the
-/// curve asks for is unrepresentable and the red channel sits pinned at 0
-/// until t is about 0.2205 and then leaves it with a jump in slope. Linear
+/// badly: [`PitchPalette::Ramp`]'s dark end rides the sRGB gamut boundary,
+/// where the LCh the curve asks for is unrepresentable and the red channel
+/// sits pinned at 0 until t is about 0.2205 and then leaves it with a jump in
+/// slope. (Ramp is the worst case and the reason the size was settled here.
+/// The other palettes are inside the gamut the whole way — see
+/// `every_flat_palette_is_in_gamut_and_isoluminant` — so they have no corner
+/// and the table tracks them more closely than the numbers below.) Linear
 /// interpolation across a corner like that converges linearly at best, and
 /// erratically in practice, since what dominates is whether a sample happens
 /// to land near the corner rather than how many samples there are. Sweeping

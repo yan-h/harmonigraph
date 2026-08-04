@@ -8,11 +8,75 @@ use super::harness::*;
 
 #[test]
 fn pitch_colored_channels_vary_with_pitch() {
-    let low = channel_color(9, 24.0, 24.0, 108.0);
-    let high = channel_color(9, 108.0, 24.0, 108.0);
+    let p = PitchPalette::Ramp;
+    let low = channel_color(9, 24.0, 24.0, 108.0, p);
+    let high = channel_color(9, 108.0, 24.0, 108.0, p);
     assert_ne!(low, high);
-    // Brightest pitch should be, well, brighter.
+    // On Ramp — the palette where brightness is what carries the pitch — the
+    // top of the range is, well, brighter. Scoped to Ramp on purpose: the
+    // fixed-lightness palettes deliberately break exactly this, which
+    // `every_flat_palette_is_in_gamut_and_isoluminant` pins from the other
+    // side.
     assert!(high.truncate().length() > low.truncate().length());
+}
+
+/// sRGB relative luminance — what "brightness" means once a color is on
+/// screen, and the thing the flat palettes hold still. Not `L*`: holding `L*`
+/// is how they are DEFINED, so measuring `L*` back would only restate the
+/// definition. This goes the whole way to the pixel, through the gamut clamp
+/// included, which is where a chroma set too high would show up.
+fn luminance(c: glam::Vec4) -> f32 {
+    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * lin(c.x) + 0.7152 * lin(c.y) + 0.0722 * lin(c.z)
+}
+
+/// Each palette's whole reason for existing, as a number: how far its
+/// luminance moves from the bottom of the gradient to the top.
+///
+/// This is the test that catches a chroma nudged past what the sRGB gamut
+/// holds. A clipped channel does not announce itself — the color simply stops
+/// being the LCh that was asked for — but clipping cannot happen without
+/// moving the luminance, so a flat palette that clips anywhere is a flat
+/// palette whose luminance is no longer flat, and the ratio below rises off
+/// 1.0 the moment it does.
+#[test]
+fn every_flat_palette_is_in_gamut_and_isoluminant() {
+    // The three fixed-`L*` palettes are exactly flat (1.0); Lift and Ramp are
+    // the tilted ones, and the gap between their two spans is the choice
+    // being offered. Ember leans hardest of all.
+    //
+    // "Flat" is 1.0 up to 1.01, not bit-exact: the LCh->sRGB conversion
+    // rounds, and it rounds differently at different chroma, so a fixed-`L*`
+    // arc comes out within 1.0014 (Ink, the widest chroma swing) rather than
+    // dead level. That is four hundred times under a step anyone can see, and
+    // a real design tilt would be worth percent, not tenths of one.
+    for (palette, lo_bound, hi_bound) in [
+        (PitchPalette::Even, 1.0, 1.01),
+        (PitchPalette::Neon, 1.0, 1.01),
+        (PitchPalette::Ink, 1.0, 1.01),
+        (PitchPalette::Lift, 2.0, 3.5),
+        (PitchPalette::Ramp, 5.0, 6.0),
+        (PitchPalette::Ember, 6.5, 8.0),
+    ] {
+        let lut = pitch_ramp_lut(palette);
+        let (mut lo, mut hi) = (f32::MAX, 0.0f32);
+        for entry in lut {
+            // In gamut on both sides for every palette, flat or not: the LUT
+            // is what the shader indexes, so an entry outside 0..1 would be a
+            // color no pass can draw.
+            for ch in [entry.x, entry.y, entry.z] {
+                assert!((0.0..=1.0).contains(&ch), "{palette:?}: {entry:?} is outside sRGB");
+            }
+            let y = luminance(entry);
+            lo = lo.min(y);
+            hi = hi.max(y);
+        }
+        let ratio = hi / lo;
+        assert!(
+            ratio >= lo_bound - 1e-3 && ratio <= hi_bound + 1e-3,
+            "{palette:?} spans {ratio:.4}x in luminance, wanted {lo_bound}..{hi_bound}",
+        );
+    }
 }
 
 #[test]
@@ -28,22 +92,29 @@ fn one_pitch_gives_the_disc_and_the_glyph_one_color() {
     // table can deliver. What a disc and a glyph are each FED can still differ
     // — derive clamps a voice outside the wheel's Range onto the outermost
     // slot — and that is a different pitch, not a disagreement about a color.
-    let lut = pitch_ramp_lut();
+    //
+    // Every palette, because agreement is structural — one table read by both
+    // walks — and a palette that broke it would be one that reached a color
+    // some other way than through the table.
     let (dark, bright) = (24.0f32, 108.0f32);
-    // The sweep is insurance rather than coverage: both sides reduce to the
-    // same arithmetic today, so it can only fail once someone changes one
-    // walk's interpolation form and not the other's — which is precisely the
-    // edit that would put the gamut corner back between two shapes.
-    let mut pitch = dark;
-    while pitch <= bright {
-        let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
-        let f = t * (PITCH_LUT_N - 1) as f32;
-        let i0 = f.floor() as usize;
-        let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
-        let glyph = lut[i0].lerp(lut[i1], f - f.floor());
-        let disc = channel_color(9, pitch, dark, bright);
-        assert_eq!(glyph, disc, "pitch {pitch}: glyph {glyph:?} vs disc {disc:?}");
-        pitch += 0.01;
+    for palette in PitchPalette::ALL {
+        let lut = pitch_ramp_lut(palette);
+        // The sweep is insurance rather than coverage: both sides reduce to
+        // the same arithmetic today, so it can only fail once someone changes
+        // one walk's interpolation form and not the other's — which is
+        // precisely the edit that would put the gamut corner back between two
+        // shapes.
+        let mut pitch = dark;
+        while pitch <= bright {
+            let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
+            let f = t * (PITCH_LUT_N - 1) as f32;
+            let i0 = f.floor() as usize;
+            let i1 = (i0 + 1).min(PITCH_LUT_N - 1);
+            let glyph = lut[i0].lerp(lut[i1], f - f.floor());
+            let disc = channel_color(9, pitch, dark, bright, palette);
+            assert_eq!(glyph, disc, "{palette:?} pitch {pitch}: glyph {glyph:?} vs disc {disc:?}");
+            pitch += 0.01;
+        }
     }
 }
 
@@ -67,8 +138,8 @@ fn the_table_tracks_the_curve_it_samples() {
     let mut pitch = dark;
     while pitch <= bright {
         let t = ((pitch - dark) / (bright - dark)).clamp(0.0, 1.0);
-        let table = pitch_lut_color(pitch, dark, bright);
-        let curve = crate::color::designed_pitch_ramp(f64::from(t));
+        let table = pitch_lut_color(pitch, dark, bright, PitchPalette::Ramp);
+        let curve = crate::color::designed_pitch_ramp(f64::from(t), PitchPalette::Ramp);
         let e = (table - curve).truncate().abs().max_element();
         if e > worst {
             worst = e;
@@ -489,12 +560,12 @@ fn a_degenerate_color_range_lands_where_the_shader_lands() {
     };
     for (dark, bright) in [(24.0f32, 108.0f32), (60.0, 60.0), (110.0, 108.0), (108.0, 24.0)] {
         for pitch in [0.0f32, 36.0, 60.0, 72.0, 108.0, 120.0] {
-            let lut = pitch_ramp_lut();
+            let lut = pitch_ramp_lut(PitchPalette::Ramp);
             let f = shader_t(pitch, dark, bright) * (PITCH_LUT_N - 1) as f32;
             let i0 = f.floor() as usize;
             let want = lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor());
             assert_eq!(
-                pitch_lut_color(pitch, dark, bright),
+                pitch_lut_color(pitch, dark, bright, PitchPalette::Ramp),
                 want,
                 "pitch {pitch} over range {dark}..{bright}"
             );
@@ -562,7 +633,8 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
     assert_eq!(marked, lit, "the melody ring marks the octave that sounds");
     let frame = FrameParams::default();
-    let want = pitch_lut_color(drawn, frame.darkest_pitch, frame.brightest_pitch);
+    let want =
+        pitch_lut_color(drawn, frame.darkest_pitch, frame.brightest_pitch, PitchPalette::Ramp);
     assert!(
         (origin.melody_color - want).length() < 1e-5,
         "the ring is coloured for a slot the indicator is not drawn at",

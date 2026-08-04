@@ -67,6 +67,81 @@ impl NodeStyle {
 }
 
 
+/// Which curve the low-to-high pitch gradient follows. The curves themselves
+/// are in [`color::pitch_ramp_lch`](crate::color); this is the choice, and
+/// what separates the choices is WHICH channel of the color carries pitch.
+///
+/// [`Ramp`](PitchPalette::Ramp) spends brightness on it: low notes are dark
+/// and high notes are pale, a 5.4x span in screen luminance. That is a strong
+/// cue, and it costs the low register — a bass note is dim wherever it is
+/// drawn, and its color is nearly flat over the bottom fifth of the range,
+/// where the LCh curve leaves the sRGB gamut and clips (see
+/// [`PITCH_LUT_N`](crate::PITCH_LUT_N)).
+///
+/// The rest spend something else, so every note gets the same weight on
+/// screen. [`Even`](PitchPalette::Even), [`Neon`](PitchPalette::Neon) and
+/// [`Ink`](PitchPalette::Ink) hold `L*` fixed, which in CIELab is not an
+/// approximation of equal brightness but exactly it: `L*` is a function of
+/// luminance alone, so a fixed `L*` is a fixed `Y`. What varies instead is
+/// hue (Even), hue and saturation together (Neon), or saturation alone (Ink).
+/// [`Lift`](PitchPalette::Lift) keeps a brightness tilt but a gentle one, and
+/// [`Ember`](PitchPalette::Ember) leans the other way from Even and spends
+/// MORE brightness than Ramp.
+///
+/// A palette is a view setting rather than a param: it changes what the
+/// picture means, not a value to automate. It reaches the shader as the
+/// contents of the pitch LUT (see [`pitch_ramp_lut`](crate::pitch_ramp_lut)),
+/// so `lattice.wgsl` never learns the palettes exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum PitchPalette {
+    /// Dark blue-violet up through magenta and salmon to a pale cream.
+    /// Brightness carries the pitch.
+    #[default]
+    Ramp,
+    /// The same hue arc as [`Ramp`](PitchPalette::Ramp) at one fixed
+    /// lightness: hue alone carries the pitch, and low notes read as loud as
+    /// high ones.
+    Even,
+    /// [`Even`](PitchPalette::Even) with a gentle brightness tilt left in —
+    /// enough to tell up from down without the dim low register.
+    Lift,
+    /// Equal brightness at the strongest chroma the gamut holds, over a wider
+    /// hue arc: the most separation between neighbouring pitches.
+    Neon,
+    /// One hue at one lightness, with saturation carrying the pitch: near
+    /// neutral in the low register, deep blue at the top.
+    Ink,
+    /// Heat: a deep ember through orange to white-hot. Spends more brightness
+    /// on pitch than [`Ramp`](PitchPalette::Ramp), not less.
+    Ember,
+}
+
+impl PitchPalette {
+    /// Every palette, in the order the Nodes pane offers them. The LUT cache
+    /// indexes by position in this array, so the array is also what says how
+    /// many tables that cache holds.
+    pub const ALL: [PitchPalette; 6] = [
+        PitchPalette::Ramp,
+        PitchPalette::Even,
+        PitchPalette::Lift,
+        PitchPalette::Neon,
+        PitchPalette::Ink,
+        PitchPalette::Ember,
+    ];
+
+    /// Position in [`ALL`](PitchPalette::ALL) — the LUT cache's index.
+    pub fn index(self) -> usize {
+        match self {
+            PitchPalette::Ramp => 0,
+            PitchPalette::Even => 1,
+            PitchPalette::Lift => 2,
+            PitchPalette::Neon => 3,
+            PitchPalette::Ink => 4,
+            PitchPalette::Ember => 5,
+        }
+    }
+}
+
 /// The idle-node marker: a minimal grey mark shown at each home-sheet node
 /// at all times, independent of the active appearance and of whether a note
 /// is playing. Sized by [`ViewConfig::idle_radius`].

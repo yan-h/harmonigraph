@@ -10,7 +10,9 @@ use crate::widgets::{
     button_row, choice_row, choice_row_gated, OctaveStrip, RangeBar, ValueBar,
 };
 use crate::SharedState;
-use harmonigraph_scene::{NodeStyle, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR};
+use harmonigraph_scene::{
+    NodeStyle, PitchPalette, Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+};
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
@@ -406,6 +408,53 @@ fn every_layer_section(
     params: &dyn ParamBackend,
 ) {
     section(ui, "Every layer");
+    // The palette above the range because it is the coarser of the two: it
+    // says what the gradient IS, the range says which pitches it is spread
+    // over. Both feed the one table every pitch-colored shape reads, so
+    // switching here repaints the discs, the octave glyphs, the trail and the
+    // piano roll together.
+    choice_row(
+        ui,
+        "Palette",
+        &mut view.pitch_palette,
+        &[
+            (
+                PitchPalette::Ramp,
+                "Ramp",
+                "Dark violet up to pale cream: brightness carries the pitch",
+            ),
+            (
+                PitchPalette::Even,
+                "Even",
+                "The same colors at ONE brightness — hue alone carries the \
+                 pitch, so a bass note reads as loud as a treble one",
+            ),
+            (
+                PitchPalette::Lift,
+                "Lift",
+                "Between the two: a gentle brightness rise, without the dim \
+                 low register",
+            ),
+            (
+                PitchPalette::Neon,
+                "Neon",
+                "Equal brightness at full saturation over a wider hue arc — \
+                 the most separation between neighbouring pitches",
+            ),
+            (
+                PitchPalette::Ink,
+                "Ink",
+                "One hue at one brightness, saturation carrying the pitch: \
+                 near-neutral low notes, deep blue high ones",
+            ),
+            (
+                PitchPalette::Ember,
+                "Ember",
+                "Heat — a deep ember through orange to white-hot. Leans on \
+                 brightness harder than Ramp",
+            ),
+        ],
+    );
     ui.label("Color range");
     super::param_range_bar(
         ui,
@@ -418,8 +467,8 @@ fn every_layer_section(
     )
     .on_hover_text(
         "The pitch span the color gradient covers: the low end takes the \
-         darkest color, the high end the brightest. Drag either end, or drag \
-         between them to slide the whole range.",
+         palette's first color, the high end its last. Drag either end, or \
+         drag between them to slide the whole range.",
     );
     param_bar(ui, params, ParamKey::Fade).on_hover_text(
         "Seconds a released note keeps fading — the pitch class core, \

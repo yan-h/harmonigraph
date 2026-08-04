@@ -197,6 +197,7 @@ pub fn derive_scene(
                 voice.pitch,
                 frame.darkest_pitch,
                 frame.brightest_pitch,
+                view.pitch_palette,
             );
             (voice, color)
         })
@@ -298,6 +299,7 @@ pub fn derive_scene(
                         octave_layout.slot_pitch(slot as i32, node_cents),
                         frame.darkest_pitch,
                         frame.brightest_pitch,
+                        view.pitch_palette,
                     );
                     if is_melody {
                         melody.add(slot, envelope * melody_attack, mark_color);
@@ -480,7 +482,7 @@ pub fn derive_scene(
         shimmer_intensity: view.shimmer_intensity.clamp(0.0, 4.0),
         sevens_soft: view.sevens_gutter_soft.clamp(0.0, 0.5),
         background: crate::skin::panel_color(),
-        pitch_lut: pitch_ramp_lut(),
+        pitch_lut: pitch_ramp_lut(view.pitch_palette),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
         render_scale: view.render_scale,
