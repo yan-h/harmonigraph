@@ -354,3 +354,59 @@ fn the_default_arcs_chroma_ceiling_is_what_the_docs_say() {
         "PitchGradient::chroma quotes 0.115..0.320 across the default arc; it is {lo:.4}..{hi:.4}",
     );
 }
+
+/// What moving on again — from Oklab to CAM16, i.e. to Google's HCT proper —
+/// would actually change about the default arc.
+///
+/// Not the hue NAMES, which differ by up to 5.3 degrees around the circle and
+/// cost nothing: a constant rotation between two hue axes renames every hue
+/// and bends no arc. What a viewer could see is the SHAPE — whether the sweep
+/// that is even in Oklab arrives somewhere else at the same fraction of the
+/// pitch range under CAM16.
+///
+/// Measured as: how far along the arc each decile has come by each space's
+/// reckoning, differenced. Leans only on the crate's hue, for the reason
+/// [`the_crate_222_names_does_not_work`] gives.
+#[test]
+#[ignore = "a probe: prints measurements, asserts nothing"]
+fn what_going_on_to_cam16_would_buy() {
+    let cam16_hue = |c: Vec4| {
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        hct_cam16::Hct::from_rgb(q(c.x), q(c.y), q(c.z)).hue()
+    };
+    let arc = PitchGradient::default();
+    // Unwrapped as it goes, so an arc crossing 0 stays monotone and the shares
+    // below are cumulative distance rather than an angle.
+    let samples: Vec<f64> = (0..=100)
+        .map(|k| {
+            let (l, h) = arc.lightness_and_hue(f64::from(k) / 100.0);
+            cam16_hue(at(l, h, f64::from(arc.chroma)))
+        })
+        .collect();
+    let mut walked = vec![0.0f64];
+    for k in 1..samples.len() {
+        let step = hue_delta(samples[k - 1], samples[k]);
+        walked.push(walked[k - 1] + step);
+    }
+    let total = *walked.last().expect("101 samples");
+
+    println!("\n=== the default arc, walked by each space's own hue ===");
+    println!("   t   share of arc: Oklab   CAM16    difference (of the pitch range)");
+    let mut worst = 0.0f64;
+    for k in (0..=100).step_by(10) {
+        // Oklab's own reckoning is `t` exactly: the sweep is linear in the hue
+        // the curve names, which is what makes it even.
+        let t = k as f64 / 100.0;
+        let share = walked[k] / total;
+        let diff = share - t;
+        worst = worst.max(diff.abs());
+        println!("{t:4.1} {t:23.3} {share:8.3} {:13.1}%", diff * 100.0);
+    }
+    println!(
+        "worst disagreement about where a pitch sits in the sweep: {:.1}% of the range\n\
+         (the retired CIELAB curve was off by 4.8% at this chroma and 5.8% at full,\n\
+         so what is left is about a third of what the move to Oklab already fixed —\n\
+         and unlike that, it is two good spaces disagreeing rather than a defect)",
+        worst * 100.0,
+    );
+}
