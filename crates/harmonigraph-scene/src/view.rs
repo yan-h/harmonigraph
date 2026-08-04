@@ -127,11 +127,15 @@ pub struct ViewConfig {
     pub show_cents: bool,
     // How a sounding node's core is painted has no field here: the core is
     // the steady disc-and-glow, and nothing switches it. The field styles
-    // that stood beside it (Vortex, Checker, Spiral, and the eleven trimmed
-    // before them) are gone, and with them the `node_style` key and the
-    // per-node seed that animated them. Saved blobs still carry that key,
-    // naming any of the fifteen; serde ignores unknown keys, so such a blob
-    // loads intact and drops it on the next save.
+    // that stood beside it (Vortex, Checker and Spiral) are gone, and with
+    // them the `node_style` key and the per-node seed that animated them.
+    // Saved blobs still carry that key, naming any of the SEVENTEEN the enum
+    // answered to — those three, the Steady it defaulted to, and the thirteen
+    // trimmed before them that its serde aliases went on loading (Breathe,
+    // Sparks, Wire, Corona, Plasma, Aurora, Marble, Lava, Filament, Stripes,
+    // Rings, Tiles, Pinwheel). Serde ignores unknown keys, so such a blob
+    // loads intact and drops the key on the next save. This is the only
+    // surviving record of that set, which is why it names it in full.
     /// The curve the low-to-high pitch gradient follows, as its four knobs
     /// (see [`PitchGradient`]). Every pitch-colored shape in the scene reads
     /// it through one table, so this is the only place the gradient is set.

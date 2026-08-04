@@ -53,10 +53,12 @@ struct Uniforms {
     // x: trail mark style — how a node the music has already visited is
     //    marked (0 off, 1 lift, 2 ring, 3 tint; see TrailMark). y: trail
     //    strength 0..1. z: the sevens knockout's fade width, read below by
-    //    the vertex stage. w unused.
-    // Read ONLY by idle_marker: a memory must never be mistakable for a
-    // sounding note, and confining it to the idle layer is what guarantees
-    // that rather than merely intending it.
+    //    the vertex stage. w: the melody/bass mark rings' shimmer pattern
+    //    (0 off, then one index per pattern; see Pulse::shader_index), read
+    //    by mark_pulse — NOT a free slot.
+    // x and y are read ONLY by idle_marker: a memory must never be mistakable
+    // for a sounding note, and confining them to the idle layer is what
+    // guarantees that rather than merely intending it.
     misc6: vec4<f32>,
     // The ground the lattice is painted onto (the pane fill this pass is
     // composited over). Only the sevens knockout reads it: without it the
@@ -1161,7 +1163,6 @@ fn gutter_coverage(d: f32, rim: f32, reach: f32, soft: f32) -> f32 {
 fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let activation = in.params.x;
     let outlined = in.params.w;
-    let presence = activation;
     let radius = max(u.misc3.x, 0.0);  // core radius; 0 = off
     let solidity = u.misc4.x;          // 0 glow .. 1 orb
     // Radius 0 is off; fade the whole core in over the first sliver of the
@@ -1183,7 +1184,7 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let edge = aa + (1.0 - solidity) * CORE_EDGE_SOFT;
     let core_cov = 1.0 - smoothstep(radius - edge, radius + edge, d);
     let filled = core_cov * solidity;
-    let disc = mix(filled, ring, outlined) * presence * core_on;
+    let disc = mix(filled, ring, outlined) * activation * core_on;
 
     // Soft additive-looking glow for active nodes. The exponential alone
     // never reaches zero, so the quad boundary showed as a boxy halo;
@@ -1199,7 +1200,6 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let glow_base = mix(0.35, 0.6, solidity);
     let glow = glow_base * activation * exp(-3.0 * d * fs) * window * core_on;
 
-    let brightness = activation;
     // Every sounding octave's color, blended by angle — each hue laid in
     // its dot's direction (see octave_glow_color). This is the node's
     // multi-color fill: the disc shows it directly (so a chord's disc mixes
@@ -1226,7 +1226,7 @@ fn core_layer(in: VsOut, d: f32, aa: f32, oct: OctRing) -> vec4<f32> {
     let kappa = min(GLOW_LOBE_KAPPA, (d * d) / max(seam * seam, 1e-8));
     let octave_mix = octave_glow_color(
         in.octaves, in.cents, oct, atan2(in.uv.y, in.uv.x), kappa, in.color.rgb,
-    ) * brightness;
+    ) * activation;
 
     // Disc and glow carry the SAME blend, so there is nothing to composite
     // between them: the color of the pixel is that blend, and its coverage is

@@ -319,7 +319,7 @@ mod tests {
 
     /// The order `voices()` hands the held voices back in is part of the
     /// picture rather than an implementation detail. Every held voice sits
-    /// at activation 1.0, and the lattice gives a node's color and seed to
+    /// at activation 1.0, and the lattice gives a node's color and outline to
     /// the FIRST voice at the winning envelope — so which of two voices
     /// lighting one node (an octave doubling, say) wins is settled by this
     /// order alone. Off a hashed map it is settled per process instead, and

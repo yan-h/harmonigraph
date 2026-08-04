@@ -51,7 +51,6 @@ keep sitting there unused at zero cost.
   `a_persist_blob_naming_a_retired_node_style_still_loads`. What the core IS
   is two bars — `core_radius` and `core_solidity` — and the octave-color
   blend `octave_glow_color` lays around it.
-
 - **The piano roll's geometry** (was two entries here: baking settled notes
   into cached meshes, then superseding that with a wgpu callback). **Built.**
   The roll now draws as one instanced quad per note segment through

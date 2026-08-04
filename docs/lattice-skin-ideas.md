@@ -4,9 +4,9 @@ Brainstorm springboard for alternative lattice looks (BACKLOG `[lattice]`
 "brainstorm some more skins"). **Ideas only — nothing here is implemented
 or scheduled.** Pick whatever's appealing and it can be built later.
 
-Two independent axes today:
+Two places a skin reaches, and only one of them is an axis today:
 
-- **Node body** — one paint, in `lattice.wgsl`'s `core_layer`: the steady
+- **Node body** — ONE paint, in `lattice.wgsl`'s `core_layer`: the steady
   disc and its glow, sized by `core_radius` / `core_solidity` and colored by
   the octave blend `octave_glow_color` lays around the node. There is no
   style enum to add a variant to — a second paint means a branch there and a
