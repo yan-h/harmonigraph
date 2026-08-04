@@ -634,10 +634,18 @@ const SHIMMER_QUARTER: f32 = 0.25 * TAU;
 // look. The lower bound sits well short of Nyquist so the fade is finishing
 // where the moire would be starting, rather than racing it.
 //
-// This is the one screen-space term in a section that is otherwise all world
-// units, and it has to be: what is running out is pixels, not lattice.
-const SHIMMER_RESOLVE_FULL: f32 = 0.2;
-const SHIMMER_RESOLVE_GONE: f32 = 0.5;
+// Both are scaled by a ROOT TWO the Width bar never sees, because the period
+// the bar sets is not every pattern's finest feature. Crossing two gratings
+// multiplies into their sum and difference frequencies (Checker literally so,
+// Weave with a crease along the same diagonals), and those run at k*sqrt(2) —
+// so a Checker at the bar's Nyquist is already half a period past its own.
+// The row is faded on its tightest member rather than per pattern: one fade
+// for one sheet, and what Bands gives up for it is a slightly earlier finish
+// at a width no shot is framed for anyway. Weave's crease has no band limit
+// at all, being a corner rather than a sine; the scaling is what keeps its
+// gratings honest, and the crease is one line rather than a field.
+const SHIMMER_RESOLVE_FULL: f32 = 0.14;
+const SHIMMER_RESOLVE_GONE: f32 = 0.35;
 // Turn a unit vector by `angle`, for the gratings below.
 fn rotated(v: vec2<f32>, angle: f32) -> vec2<f32> {
     let c = cos(angle);
@@ -647,15 +655,18 @@ fn rotated(v: vec2<f32>, angle: f32) -> vec2<f32> {
 // The signed pattern at `p`, in -1..1 — mode by mode, and every one of them
 // built out of gratings of the SAME period, so the Width bar means one thing
 // across the row. `d` is the direction the sheet is laid along and `n` its
-// perpendicular; `radius` is the distance from the lattice's origin, already
-// carrying the travel for the one pattern that moves radially.
+// perpendicular; `field` and `slide` are the unslid position and how far the
+// sheet has travelled, which only the radial pattern needs apart.
 //
 // The three that cross gratings are the tessellating family the checkerboard
 // belongs to: multiply two and you get its cells, take the brighter of two
 // and you get the lines between them instead, sum three at sixty degrees and
 // the cells come out hexagonal — which lands on the lattice better than
 // squares do, its rows running three ways rather than two.
-fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>, radius: f32) -> f32 {
+fn shimmer_pattern(
+    mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>,
+    field: vec2<f32>, slide: f32,
+) -> f32 {
     let k = TAU / shimmer_period();
     if mode == 2u {
         // Checker: two gratings at right angles, multiplied. The product is
@@ -665,14 +676,23 @@ fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>, radius: 
         return sin(k * dot(p, d)) * sin(k * dot(p, n));
     }
     if mode == 3u {
-        // Hex: three gratings sixty degrees apart, summed. The sum runs
-        // -1.5..3 — bright cells rarer and sharper than the dark between
-        // them, which is the honeycomb — so it is mapped through its own
+        // Hex: three gratings sixty degrees apart, summed. Their wavevectors
+        // close a triangle (the middle one is the sum of the outer two), so
+        // the three crests can meet, and where they do the sum reaches 3
+        // against a floor of -1.5 — bright cells rarer and sharper than the
+        // dark between them, which IS the honeycomb. Mapped through that
         // range rather than divided by the count, which would leave the
         // pattern unable to reach either end.
-        let a = sin(k * dot(p, d));
-        let b = sin(k * dot(p, rotated(d, TAU / 6.0)));
-        let c = sin(k * dot(p, rotated(d, TAU / 3.0)));
+        //
+        // COSINES, where every other pattern here takes sines, and the
+        // asymmetry is the whole point: sin(A) + sin(C) + sin(A+C) is an odd
+        // function, so it runs a symmetric ±3sqrt(3)/2 with as many dark
+        // blobs as bright and no crest that ever reaches full. Only the
+        // cosine form has the crest the honeycomb is made of, and it is the
+        // one the -1.5..3 above is the range of.
+        let a = cos(k * dot(p, d));
+        let b = cos(k * dot(p, rotated(d, TAU / 6.0)));
+        let c = cos(k * dot(p, rotated(d, TAU / 3.0)));
         return (a + b + c - 0.75) / 2.25;
     }
     if mode == 4u {
@@ -682,11 +702,13 @@ fn shimmer_pattern(mode: u32, p: vec2<f32>, d: vec2<f32>, n: vec2<f32>, radius: 
         return max(sin(k * dot(p, d)), sin(k * dot(p, n)));
     }
     if mode == 5u {
-        // Rings: one grating of the distance from the origin. `p` is not read
-        // — a translating field would slide the center off the lattice, where
-        // what this pattern is FOR is having one, so its travel is in the
-        // radius instead.
-        return sin(k * radius);
+        // Rings: one grating of the distance from the origin, which is why
+        // this is the arm that takes `field` and `slide` apart. A translated
+        // field would slide the center off the lattice, where having one is
+        // what this pattern is FOR, so the travel goes into the radius. The
+        // `length` sits inside this arm rather than at the call site so the
+        // four patterns that never look at it do not pay for a square root.
+        return sin(k * (length(field) - slide));
     }
     // Bands (mode 1): one grating along the sheet's own direction.
     return sin(k * dot(p, d));
@@ -722,20 +744,26 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32, quarter_turns: f32
     let a = SHIMMER_ANGLE + SHIMMER_QUARTER * quarter_turns;
     let dir = vec2<f32>(cos(a), sin(a));
     let norm = vec2<f32>(-dir.y, dir.x);
-    // How far the sheet has slid, and the second layer's offset along with
-    // it. A quarter turn alone would leave the two layers' sheets IDENTICAL
-    // wherever the pattern is square — a checkerboard turned ninety degrees
-    // about a cell is the same checkerboard — and then a marked slice under
-    // both would be under one, with nothing for the crossing below to take
-    // the brighter of. Half a period puts this layer's peaks over the other's
-    // troughs instead, which for Bands is the same picture (its peaks were
-    // already perpendicular) and for the rest is what keeps two sheets two.
-    let slide = u.misc.x * u.misc8.x + 0.5 * period * quarter_turns;
-    // The field slid along the sheet's own direction, and the radius slid
-    // outward from the origin: one of the two is what a pattern travels by.
+    // How far the sheet has slid, plus the one layer separation the quarter
+    // turn cannot supply.
+    //
+    // The turn is what keeps the two layers' sheets two, and for four of the
+    // five patterns it is enough on its own: it lands Bands square, and it is
+    // not a symmetry of Checker, Weave or Hex, so each comes out somewhere
+    // its other copy is not. RINGS has no orientation for a turn to act on —
+    // a circle turned a quarter is the same circle — so without something
+    // else the mark layer would sit exactly under the octave layer, and a
+    // marked slice under two sheets would be under one, with nothing for the
+    // crossing below to take the brighter of. Half a period is that
+    // something, and it goes ONLY here: added to the square patterns it
+    // cancels the turn's own inversion rather than adding to it, and puts
+    // their two sheets back into lockstep twice a cycle.
+    let slide = u.misc.x * u.misc8.x
+        + select(0.0, 0.5 * period * quarter_turns, mode == 5u);
+    // The field slid along the sheet's own direction. The radial pattern
+    // takes `field` and `slide` apart for itself, inside `shimmer_pattern`.
     let p = field - dir * slide;
-    let radius = length(field) - slide;
-    let pattern = shimmer_pattern(mode, p, dir, norm, radius);
+    let pattern = shimmer_pattern(mode, p, dir, norm, field, slide);
     // Clamped because the power below is `pow`, which is undefined for a
     // negative base — and sin is only promised to land NEAR its range, so a
     // wave of -1e-8 at a trough would put a NaN into the node's color.

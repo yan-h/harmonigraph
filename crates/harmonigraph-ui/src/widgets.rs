@@ -1267,18 +1267,19 @@ pub fn option_label(label: &str) -> egui::RichText {
 /// Number labels come out monospace — see [`option_label`], which the rows
 /// built by hand out of `selectable_value` call for themselves.
 ///
-/// A row is live or grayed as a whole, from an `add_enabled_ui` at the CALL
-/// site: an option that would do nothing is a property of the section's
-/// state, not of the option. Graying inside is `add_enabled` around one
-/// button rather than the shorter wrapper for a layout reason — the scope
-/// that helper opens is a nested layout, and a nested layout inside
-/// `button_row`'s `horizontal_wrapped` does not wrap, so the row runs off the
-/// pane instead of folding onto a second line and takes the section's
-/// separators out past the edge with it
-/// (`no_settings_pane_overruns_a_narrow_column`). What is left is
-/// `Ui::selectable_value`'s own body: a `Button::selectable` and a click test.
+/// A row is live or grayed as a WHOLE, and from an `add_enabled_ui` at the
+/// call site rather than anything in here: an option that would do nothing is
+/// a property of the section's state, not of the option, and a row whose
+/// options disagree about it has no honest label to put on the row. That the
+/// gate is outside is also what keeps the row wrapping — the scope
+/// `add_enabled_ui` opens is a nested layout, and a nested layout inside
+/// `button_row`'s `horizontal_wrapped` does not wrap, so a gate reached for
+/// per option in here would run the row off the pane and take the section's
+/// separators past the edge with it
+/// (`no_settings_pane_overruns_a_narrow_column`).
 ///
-/// The hint shows in both states (egui splits the two), since a grayed
+/// The body is `Ui::selectable_value`'s: a `Button::selectable` and a click
+/// test. The hint shows in both states (egui splits the two), since a grayed
 /// option's tooltip is exactly where "and here is what would switch it on"
 /// belongs.
 pub fn choice_row<T: Copy + PartialEq>(

@@ -632,7 +632,7 @@ fn offscreen_composite_matches_direct_draw() {
 }
 
 /// Every pattern in the row draws its OWN picture — pairwise, at one instant,
-/// on one layer.
+/// on each layer.
 ///
 /// `pulse_octaves` is Off in `parity_scene` and every fixture derived from it
 /// (deliberately — see that scene's own comment), so nothing else in this file
@@ -649,6 +649,13 @@ fn offscreen_composite_matches_direct_draw() {
 ///
 /// It is a single INSTANT for the same reason: two patterns compared across
 /// their own frames would differ merely by having moved.
+///
+/// Run on BOTH layers, because they are not one code path arriving twice: the
+/// octave layer takes its sheet over the whole layer, where the mark layer's
+/// arrives through the crossing and the slice weight, off its own mode
+/// uniform and its own quarter turn. A pattern that came out right on the one
+/// row and collapsed on the other would be a picture nobody looking at the
+/// Octaves row could see.
 #[test]
 fn every_shimmer_pattern_draws_a_different_picture() {
     const SIZE: [u32; 2] = [256, 256];
@@ -657,7 +664,7 @@ fn every_shimmer_pattern_draws_a_different_picture() {
     };
     use harmonigraph_scene::Pulse;
 
-    // Off first, so the loop below has the steady picture to measure against
+    // Off first, so each loop below has the steady picture to measure against
     // as well as the other patterns.
     let modes = [
         Pulse::Off,
@@ -667,25 +674,36 @@ fn every_shimmer_pattern_draws_a_different_picture() {
         Pulse::Weave,
         Pulse::Rings,
     ];
-    let shots: Vec<(Pulse, Vec<u8>)> = modes
-        .iter()
-        .map(|&mode| {
-            let mut scene = parity_scene();
-            scene.pulse_octaves = mode;
-            scene.time = 0.4;
-            (mode, gpu.shot(&scene))
-        })
-        .collect();
+    // The octave layer over the parity scene's whole lattice; the mark layer
+    // over one node with an end marked, its sheet needing a ring to belong to.
+    let mut all_distinct = |layer: &str, on_marks: bool| {
+        let shots: Vec<(Pulse, Vec<u8>)> = modes
+            .iter()
+            .map(|&mode| {
+                let mut scene =
+                    if on_marks { single_marked_node(MIDDLE_C, 0) } else { parity_scene() };
+                if on_marks {
+                    scene.pulse_marks = mode;
+                } else {
+                    scene.pulse_octaves = mode;
+                }
+                scene.time = 0.4;
+                (mode, gpu.shot(&scene))
+            })
+            .collect();
 
-    for (i, (mode, px)) in shots.iter().enumerate() {
-        for (other, other_px) in &shots[i + 1..] {
-            assert!(
-                differing_pixels(px, other_px) > 0,
-                "{mode:?} and {other:?} drew the same picture at the same instant; \
-                 they are one option wearing two labels",
-            );
+        for (i, (mode, px)) in shots.iter().enumerate() {
+            for (other, other_px) in &shots[i + 1..] {
+                assert!(
+                    differing_pixels(px, other_px) > 0,
+                    "on {layer}, {mode:?} and {other:?} drew the same picture at the \
+                     same instant; they are one option wearing two labels",
+                );
+            }
         }
-    }
+    };
+    all_distinct("the octave layer", false);
+    all_distinct("the mark layer", true);
 }
 
 /// The Softness bar reaches the picture, and it is the SHAPE it moves rather
@@ -693,13 +711,18 @@ fn every_shimmer_pattern_draws_a_different_picture() {
 ///
 /// Held still (speed 0) and at one instant, so what is compared is two
 /// profiles of the same sheet in the same place rather than two moments of
-/// one. The crisp end must differ from the gradual end — that is the bar
-/// working at all — and the gradual end must be the BRIGHTER of the two over
-/// the layer as a whole, which is what "gradual" means here: the peak is no
-/// higher (Intensity owns that), but the fall from it takes most of the
-/// period instead of a narrow crest, so more of the layer is lit at any
-/// instant. A bar wired to the peak instead of to the falloff would move the
-/// picture and fail this.
+/// one. Three claims, and it takes all three to say "shape":
+///
+/// - the two ends draw differently, which is the bar working at all;
+/// - the gradual end lights MORE over the layer as a whole, the fall from the
+///   peak taking most of the period instead of a narrow crest;
+/// - and it does that without going any BRIGHTER at its brightest. That last
+///   is what rules out the wiring this could otherwise have — a bar on
+///   `SHIMMER_WHITE`, raising the peak rather than widening the fall from it,
+///   passes the first two and fails this one. The peak is Intensity's to
+///   move, and the shape's own crest is pinned wherever it lands: `pow(1, n)`
+///   is 1 for every exponent, so however the profile is dialled the brightest
+///   pixel is the same pixel at the same value.
 #[test]
 fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
     const SIZE: [u32; 2] = [256, 256];
@@ -718,6 +741,9 @@ fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
     let light = |px: &[u8]| -> u64 {
         px.chunks(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum()
     };
+    let peak = |px: &[u8]| -> u32 {
+        px.chunks(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).max().unwrap_or(0)
+    };
 
     let crisp = gpu.shot(&at(0.0));
     let gradual = gpu.shot(&at(1.0));
@@ -731,6 +757,19 @@ fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
         "the gradual end lit {gradual_light} against the crisp end's {crisp_light}: \
          softening the profile is supposed to spread the light over more of the \
          period, not to dim it",
+    );
+
+    // A hair of tolerance, and only for the rounding two paths through the
+    // same arithmetic can land either side of: the claim is that the crest
+    // does not MOVE, which a peak-wired bar would break by whole channel
+    // steps. Measured dead equal at both ends.
+    let (crisp_peak, gradual_peak) = (peak(&crisp), peak(&gradual));
+    eprintln!("brightest pixel: {crisp_peak} crisp, {gradual_peak} gradual");
+    assert!(
+        gradual_peak <= crisp_peak + 2,
+        "the gradual end's brightest pixel is {gradual_peak} against the crisp \
+         end's {crisp_peak}: Softness is raising the peak rather than widening the \
+         fall from it, which is Intensity's job and not this bar's",
     );
 }
 

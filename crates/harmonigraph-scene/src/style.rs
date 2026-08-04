@@ -105,12 +105,13 @@ impl IdleMarker {
 /// light reads as raking over the picture instead of as many small identical
 /// animations. A mode works on a node with no mark on it at all.
 ///
-/// The two layers run their sheets a quarter turn apart and half a period
-/// offset, so a node wearing both crosses two of them and the brighter wins
-/// the pixel. The mark rings' sheet also reaches OUT of its own layer, onto
-/// the octave slice each ring points at — a mark being the ring together
-/// with the octave it names. All of that lives in `lattice.wgsl`'s Shimmer
-/// section.
+/// The two layers run their sheets a quarter turn apart, so a node wearing
+/// both crosses two of them and the brighter wins the pixel.
+/// ([`Rings`](Pulse::Rings) is the one a turn cannot separate, a circle
+/// turned being the same circle, and takes half a period instead.) The mark
+/// rings' sheet also reaches OUT of its own layer, onto the octave slice each
+/// ring points at — a mark being the ring together with the octave it names.
+/// All of that lives in `lattice.wgsl`'s Shimmer section.
 ///
 /// One enum for both layers: the states mean the same thing wherever they're
 /// read, and reading them off one shared clock keeps a node whose octaves

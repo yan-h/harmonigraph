@@ -336,8 +336,8 @@ pub struct ViewConfig {
     // sheet of light crossing the whole lattice — two layers sweeping at
     // different sizes or rates would read as two animations stacked on one
     // picture rather than as light passing over it. What the layers do differ
-    // in is where the sheet is laid — a quarter turn and half a period apart,
-    // which is the shader's own constant and not a setting.
+    // in is where the sheet is laid — a quarter turn apart, which is the
+    // shader's own constant and not a setting.
     //
     // All four are inert while both layers are Off.
     /// How fast the shimmer travels, in world units per second — the
@@ -698,11 +698,13 @@ fn default_shimmer_intensity() -> f32 {
 
 /// Well up the gradual half of the bar (an exponent of about 1.5): the peak
 /// reads as one place the light is brightest rather than as a band with
-/// edges, and the fall from it takes most of the period. The alternative
-/// default is the crest the shape was fixed at before the bar (an exponent of
-/// 2.4, around 0.6 here), which at a tight width reads as white stripes laid
-/// on the layer rather than as light crossing it — the whole reason this is a
-/// setting.
+/// edges, and the fall from it takes most of the period.
+///
+/// The alternative is a crest — anywhere below about 0.6, where the exponent
+/// passes 2.4 and the lit part narrows to a fraction of the period. That
+/// reads as white stripes laid ON the layer rather than as light crossing it,
+/// the more so the tighter the width, and it is the whole reason this is a
+/// setting rather than a constant.
 fn default_shimmer_softness() -> f32 {
     0.8
 }
@@ -954,6 +956,36 @@ impl ViewConfig {
         } else {
             default_octave_extra_blend()
         };
+
+        // The shimmer's four knobs, on the same grounds and against the same
+        // hole in `clamp`. `derive_scene` clamps all four into their ranges
+        // every frame, which is what the shader trusts — and a NaN walks
+        // through a clamp untouched, because every comparison against it is
+        // false. From there it is a divide (the period), a `pow` exponent
+        // (the softness) and two mixes, so ONE non-finite number in a
+        // hand-edited blob NaNs the sheet, and a NaN sheet takes the whole
+        // octave layer with it wherever the mode is on. Repaired here rather
+        // than in `derive_scene` because this is the blob's own door: the bars
+        // cannot reach these values, so a view that holds one got it from a
+        // file.
+        self.shimmer_speed = finite_or(self.shimmer_speed, default_shimmer_speed());
+        self.shimmer_width = finite_or(self.shimmer_width, default_shimmer_width());
+        self.shimmer_intensity = finite_or(self.shimmer_intensity, default_shimmer_intensity());
+        self.shimmer_softness = finite_or(self.shimmer_softness, default_shimmer_softness());
+    }
+}
+
+/// `value` if it is a real number, and `fallback` if it is a NaN or an
+/// infinity — the guard `clamp` cannot be, NaN being its own answer to every
+/// comparison a clamp makes.
+///
+/// No range: the caller's own clamp is the range, and this only has to hand
+/// it something a clamp can act on.
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
     }
 }
 
