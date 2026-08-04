@@ -2,7 +2,7 @@
 //! plus channel and idle colors.
 
 use crate::view::ViewConfig;
-use crate::style::PitchPalette;
+use crate::style::PitchGradient;
 use harmonigraph_core::ChannelRole;
 use crate::PITCH_LUT_N;
 use glam::Vec4;
@@ -11,6 +11,11 @@ fn lch(l: f64, c: f64, h: f64) -> Vec4 {
     // The conversion is unclamped and out-of-gamut LCH inputs yield values
     // outside 0..255 (v1's graphics stack clamped downstream; we must do it
     // ourselves before handing colors to the shader).
+    //
+    // The pitch gradient never needs it — its chroma is a fraction of what
+    // [`max_chroma`] says fits, so its colors are inside the gamut by
+    // construction. The fixed channel colors below are hand-written LCh and
+    // this is what keeps a mistyped one drawable.
     let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
     Vec4::new(
         (rgb.r.clamp(0.0, 255.0) / 255.0) as f32,
@@ -44,127 +49,178 @@ fn pitch_ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
     )
 }
 
-/// How far [`PitchPalette::Ramp`] is nudged toward white. The octave
-/// indicators always carried this lift (a 30%-toward-white mix in the
-/// shader); baking it into the ramp itself puts the core disc and the piano
-/// roll — which sample the same ramp — at the same lightness, so a note reads
-/// as one color across all three instead of the indicators sitting a shade
-/// lighter.
-///
-/// Only Ramp takes it. The lift is a correction for a curve that runs to
-/// `L* = 0`, and the palettes that do not run there have no black end to
-/// rescue — mixing toward white would only wash their hues out and, on the
-/// fixed-`L*` ones, break the equal brightness that is their whole point.
-/// Nothing downstream re-applies it either way: every shape reads one table
-/// (see [`pitch_lut_color`]), so they agree whatever is baked in.
-const NOTE_LIGHTEN: f32 = 0.30;
+/// Whether an LCh color is one sRGB can actually show. STRICT: a channel a
+/// hair outside 0..255 is out, so a chroma this accepts survives
+/// [`lch`]'s clamp untouched and the color drawn is the color asked for.
+fn in_gamut(l: f64, c: f64, h: f64) -> bool {
+    let rgb = color_space::Rgb::from(color_space::Lch::new(l, c, h));
+    let ok = |v: f64| (0.0..=255.0).contains(&v);
+    ok(rgb.r) && ok(rgb.g) && ok(rgb.b)
+}
 
-/// The hue arc the pitch gradient sweeps, in LCh degrees: blue-violet through
-/// magenta and red to yellow-green. Shared by [`PitchPalette::Ramp`],
-/// [`Even`](PitchPalette::Even) and [`Lift`](PitchPalette::Lift), which is
-/// what makes those three an A/B on brightness alone — the same colors in the
-/// same order, differing only in how much luminance separates the ends.
-fn classic_hue(t: f64) -> f64 {
-    (-100.0 + t * 190.0).rem_euclid(360.0)
+/// Bisection steps [`max_chroma`] spends. Each halves the bracket, so 20 over
+/// `0..MAX_SEARCH_CHROMA` settles to well under a thousandth of a chroma unit
+/// — far finer than the 1/255 the answer is eventually quantized to, and the
+/// whole search runs only when the gradient changes.
+const GAMUT_BISECTIONS: u32 = 20;
+
+/// Chroma the search brackets from above. sRGB's most saturated color reaches
+/// about 133 (blue, near `L*` 32), so nothing is ever cut off by this; it is
+/// the bracket rather than a limit.
+const MAX_SEARCH_CHROMA: f64 = 200.0;
+
+/// The largest chroma sRGB can show at this lightness and hue.
+///
+/// Bisection, which needs the in-gamut chromas at a fixed `L*` and hue to be
+/// one interval running out from the neutral axis. They are: the gamut is a
+/// convex solid in linear RGB and the map into Lab is monotone per channel, so
+/// it stays star-shaped about the `L*` axis — every ray out from a neutral
+/// crosses the boundary once.
+///
+/// Bisection is what makes the chroma knob possible at all: the answer varies
+/// with BOTH lightness and hue, over a boundary with no closed form, so a
+/// gradient free to move either one cannot carry a chroma figure that was
+/// worked out in advance.
+fn max_chroma(l: f64, h: f64) -> f64 {
+    let (mut lo, mut hi) = (0.0f64, MAX_SEARCH_CHROMA);
+    for _ in 0..GAMUT_BISECTIONS {
+        let mid = 0.5 * (lo + hi);
+        if in_gamut(l, mid, h) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    // `lo` and never `hi`: the low side of the bracket is the one the test has
+    // actually accepted, so what comes back is in gamut rather than within a
+    // bisection step of it.
+    lo
 }
 
 /// The DESIGNED pitch-gradient curve as a function of normalized height `t`
-/// (0..1) and the palette in force. Nothing draws this directly: it is the
+/// (0..1) and the gradient in force. Nothing draws this directly: it is the
 /// curve [`pitch_ramp_lut`] samples, and that table is what every consumer
 /// reads (see [`pitch_lut_color`]). Keeping one caller means the table and
 /// the curve can never drift into two different answers for one pitch.
 ///
-/// Every chroma here is a measured number, not a taste: at a fixed `L*` the
-/// sRGB gamut admits a different maximum chroma at every hue, so each of the
-/// fixed-`L*` palettes takes the largest chroma that stays inside the gamut
-/// across its WHOLE arc. Going past that would not raise the saturation, it
-/// would clip a channel — which bends the hue and, worse, changes the
-/// luminance, so the palette would stop being the equal-brightness thing it
-/// claims to be. `every_flat_palette_is_in_gamut_and_isoluminant` is what
-/// holds the numbers to that.
-fn pitch_ramp_lch(t: f64, palette: PitchPalette) -> Vec4 {
-    match palette {
-        // Brightness carries the pitch: `L*` runs the full 0..80. The dark
-        // end asks for a chroma the gamut cannot hold at that lightness and
-        // clips, which is why the bottom fifth of the range is nearly one
-        // flat blue — a known cost of this curve, and the reason the palettes
-        // below exist.
-        PitchPalette::Ramp => {
-            let base = lch(t * 80.0, 85.0 - t * 60.0, classic_hue(t));
-            base.lerp(Vec4::new(1.0, 1.0, 1.0, base.w), NOTE_LIGHTEN)
-        }
-        // Ramp's arc, flattened. `L*` is a function of luminance alone, so
-        // one fixed `L*` is one fixed screen brightness exactly — pitch is
-        // carried by hue and nothing else. 68 is high enough to sit near the
-        // bright half of what Ramp spans (a note gets brighter far more often
-        // than it gets dimmer) and still leave chroma to work with: the arc's
-        // tightest hue holds 49.9 at that lightness, so 46 clears it.
-        PitchPalette::Even => lch(68.0, 46.0, classic_hue(t)),
-        // The middle reading of "more similar brightness": a tilt, not a
-        // flat. 55..83 is a 2.7x luminance span against Ramp's 5.4x, so up is
-        // still visibly up while the low register keeps its presence. Chroma
-        // is fixed at 40 — the arc's tightest point under a MOVING lightness
-        // is 41.7 — rather than Ramp's 85..25 fall, which is what leaves
-        // Ramp's top end a washed cream.
-        PitchPalette::Lift => lch(55.0 + t * 28.0, 40.0, classic_hue(t)),
-        // Equal brightness spent on separation instead of restraint: a wider
-        // arc (280 -> 120, magenta through the warms into green) at the
-        // chroma the gamut holds all the way along it. `L* = 60` is where
-        // that chroma is largest — 63.6 at the tightest hue, so 60 clears it
-        // — and it also keeps the ramp dark enough to read as color rather
-        // than as light against the dark lattice.
-        PitchPalette::Neon => lch(60.0, 60.0, (-80.0 + t * 200.0).rem_euclid(360.0)),
-        // Saturation carries the pitch: one hue, one lightness, chroma
-        // 8..47. The bottom is a near-neutral rather than a true grey so a
-        // low note still reads as a note and not as an idle marker, and the
-        // hue is the skin's own accent blue, which puts the lattice and the
-        // UI chrome in one family.
-        PitchPalette::Ink => lch(70.0, 8.0 + t * 39.0, 275.0),
-        // The other direction from Even, kept as the contrast: brightness
-        // carries pitch HARDER than Ramp (a 42..96 `L*` span), on the
-        // incandescence reading — a deep ember, through orange, to a
-        // white-hot top. Chroma falls as the lightness climbs because that is
-        // both what heat does and all the gamut has up there.
-        PitchPalette::Ember => lch(42.0 + t * 54.0, 62.0 - t * 54.0, 30.0 + t * 60.0),
-    }
+/// Chroma is the only one of the four knobs that is not simply read off
+/// [`PitchGradient`]: it arrives as a FRACTION of what the gamut holds here,
+/// so the curve stays inside sRGB at every setting of the other three and
+/// `L*` — hence the luminance — is exactly what was asked for. See
+/// [`PitchGradient::chroma`] for why an absolute chroma cannot be, and
+/// `the_gradient_is_in_gamut_and_flat_when_its_ramp_is` for what holds this to
+/// it.
+fn pitch_ramp_lch(t: f64, gradient: PitchGradient) -> Vec4 {
+    let gradient = gradient.sanitized();
+    let (l, h) = gradient.lightness_and_hue(t);
+    lch(l, f64::from(gradient.chroma) * max_chroma(l, h), h)
 }
 
 /// The designed curve, for the test that pins how closely [`pitch_ramp_lut`]
 /// tracks it. Nothing in the draw path may call this — going off the curve
 /// direct is precisely the mismatch the shared table exists to prevent.
 #[cfg(test)]
-pub(crate) fn designed_pitch_ramp(t: f64, palette: PitchPalette) -> Vec4 {
-    pitch_ramp_lch(t, palette)
+pub(crate) fn designed_pitch_ramp(t: f64, gradient: PitchGradient) -> Vec4 {
+    pitch_ramp_lch(t, gradient)
 }
 
-/// One palette's ramp, sampled into [`PITCH_LUT_N`] colors evenly spaced over
+/// Run `read` over one gradient's table, without copying it.
+///
+/// The table is memoized on the gradient that built it, in ONE slot: the four
+/// knobs hold still except while a control is being dragged, so a single slot
+/// hits on essentially every call, and a map keyed on five floats would spend
+/// more on hashing than the hit saves. A miss rebuilds — [`PITCH_LUT_N`]
+/// entries, each a gamut bisection and an LCh->sRGB conversion — which is why
+/// this is worth caching at all: the per-node draw path asks for a color
+/// hundreds of times a frame.
+///
+/// Thread-local rather than a lock, since the CPU color walk and the scene
+/// derive are not the only callers (the offline renderer has its own thread),
+/// and a table is small enough that a second thread rebuilding its own copy
+/// costs less than either would pay contending for one.
+fn with_lut<R>(gradient: PitchGradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) -> R) -> R {
+    thread_local! {
+        static MEMO: std::cell::RefCell<Option<(PitchGradient, [Vec4; PITCH_LUT_N])>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    // Sanitized FIRST, so the key is finite and two gradients that draw the
+    // same picture are one cache entry rather than two.
+    let gradient = gradient.sanitized();
+    MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        let fresh = memo.as_ref().is_none_or(|(key, _)| *key != gradient);
+        if fresh {
+            let lut = std::array::from_fn(|k| {
+                pitch_ramp_lch(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
+            });
+            *memo = Some((gradient, lut));
+        }
+        // The `else` branch cannot be reached with `memo` empty: the block
+        // above fills it whenever the key misses.
+        read(&memo.as_ref().expect("memo filled above").1)
+    })
+}
+
+/// One gradient's ramp, sampled into [`PITCH_LUT_N`] colors evenly spaced over
 /// the full `t` range. Both sides read it: the renderer uploads it for the
 /// shader to index, and [`pitch_lut_color`] walks it on the CPU.
 ///
 /// Each side maps a pitch to a `t` FIRST and indexes with that, so the
 /// gradient's endpoints never reach the table and it stays range-independent.
-/// The palette is the only thing it varies with — which is why the memo below
-/// is keyed on the palette and NOT on the range. A change that folded
-/// `darkest_pitch`/`brightest_pitch` into the entries would make this cache
+/// The four knobs are the only thing it varies with — which is why the memo is
+/// keyed on those and NOT on the range. A change that folded
+/// `darkest_pitch`/`brightest_pitch` into the entries would make that cache
 /// wrong, not just stale.
-pub fn pitch_ramp_lut(palette: PitchPalette) -> [Vec4; PITCH_LUT_N] {
-    // Each entry costs several transcendentals through the LCH->sRGB
-    // conversion, and a table is read once per animating frame (~66/s).
-    // Compute them once and copy out the cached array — same value, none of
-    // the per-frame color math.
-    //
-    // ALL the palettes at once, rather than one slot filled on demand:
-    // the whole set is six tables of 64 vectors, the build is a few hundred
-    // conversions, and a single `OnceLock` over the lot cannot be left half
-    // initialized or fall out of step with the enum the way a per-variant
-    // array of locks could.
-    static LUTS: std::sync::OnceLock<[[Vec4; PITCH_LUT_N]; PitchPalette::ALL.len()]> =
-        std::sync::OnceLock::new();
-    LUTS.get_or_init(|| {
-        PitchPalette::ALL.map(|palette| {
-            std::array::from_fn(|k| pitch_ramp_lch(k as f64 / (PITCH_LUT_N - 1) as f64, palette))
-        })
-    })[palette.index()]
+///
+/// Hands back a copy, for the renderer, which needs the table as a value to
+/// upload. The per-node draw path wants two entries rather than a kilobyte and
+/// goes through [`with_lut`] instead.
+pub fn pitch_ramp_lut(gradient: PitchGradient) -> [Vec4; PITCH_LUT_N] {
+    with_lut(gradient, |lut| *lut)
+}
+
+/// Samples in [`hue_circle`], evenly spaced around the hue wheel. The ring
+/// that reads it interpolates between entries, so this is how finely the
+/// circle's own shape is resolved rather than how many bands are drawn: 96
+/// puts a sample every 3.75 degrees, which is under the width of one segment
+/// of the ring at the size the pane draws it.
+pub const HUE_CIRCLE_N: usize = 96;
+
+/// The whole hue circle at one lightness and chroma — what a gradient's four
+/// knobs would give at every hue, not just the arc it takes.
+///
+/// This is what lets the pane draw the spectrum a gradient has NOT claimed
+/// beside the part it has, from the same curve, so the two cannot disagree
+/// about what a hue looks like. `chroma` is a fraction of the gamut's maximum
+/// exactly as [`PitchGradient::chroma`] is, so the circle is in gamut at every
+/// hue for the same reason the ramp is.
+///
+/// Keyed on the two knobs it actually depends on rather than on a whole
+/// gradient: the hue arc is the one being dragged while this is on screen, and
+/// keying on it would rebuild the circle every frame of a drag that cannot
+/// change it.
+pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
+    /// The circle and the lightness/chroma pair it was built for.
+    type Memo = Option<((f32, f32), [Vec4; HUE_CIRCLE_N])>;
+    thread_local! {
+        static MEMO: std::cell::RefCell<Memo> = const { std::cell::RefCell::new(None) };
+    }
+    let key = (
+        if lightness.is_finite() { lightness.clamp(0.0, 100.0) } else { 0.0 },
+        if chroma.is_finite() { chroma.clamp(0.0, 1.0) } else { 0.0 },
+    );
+    MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.as_ref().is_none_or(|(k, _)| *k != key) {
+            let (l, c) = (f64::from(key.0), f64::from(key.1));
+            let circle = std::array::from_fn(|k| {
+                let h = k as f64 * 360.0 / HUE_CIRCLE_N as f64;
+                lch(l, c * max_chroma(l, h), h)
+            });
+            *memo = Some((key, circle));
+        }
+        memo.as_ref().expect("memo filled above").1
+    })
 }
 
 /// The pitch gradient, evaluated: [`pitch_ramp_lut`] sampled at `pitch` and
@@ -202,29 +258,30 @@ pub fn pitch_lut_color(
     pitch: f32,
     darkest_pitch: f32,
     brightest_pitch: f32,
-    palette: PitchPalette,
+    gradient: PitchGradient,
 ) -> Vec4 {
-    let lut = pitch_ramp_lut(palette);
     let f = pitch_ramp_t(pitch, darkest_pitch, brightest_pitch) as f32 * (PITCH_LUT_N - 1) as f32;
     // `pitch_ramp_t` clamps into 0..1, so the floor lands inside the table and
     // the last entry pairs with itself at a lerp weight of 0.
     let i0 = f.floor() as usize;
-    lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
+    with_lut(gradient, |lut| {
+        lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
+    })
 }
 
 /// Ported verbatim from v1 (`editor/color.rs`); the channel policy itself
 /// lives in [`ChannelRole`]. Gradient channels are colored by pitch height on
-/// the `palette`'s LCh ramp, spread between `darkest_pitch` and
+/// the `gradient`'s LCh ramp, spread between `darkest_pitch` and
 /// `brightest_pitch` (MIDI note numbers). The fixed per-channel colors below
-/// are NOT on that ramp and no palette touches them: a channel color names a
-/// voice, and it has to keep meaning the same voice whatever the pitch
+/// are NOT on that ramp and no gradient setting touches them: a channel color
+/// names a voice, and it has to keep meaning the same voice whatever the pitch
 /// gradient is set to.
 pub fn channel_color(
     channel: u8,
     pitch: f32,
     darkest_pitch: f32,
     brightest_pitch: f32,
-    palette: PitchPalette,
+    gradient: PitchGradient,
 ) -> Vec4 {
     match ChannelRole::of(channel) {
         ChannelRole::FixedColor => match channel {
@@ -242,7 +299,7 @@ pub fn channel_color(
         // table, so this is what puts a disc and the octave glyph drawn on top
         // of it in the same color exactly (see [`pitch_lut_color`]).
         ChannelRole::PitchGradient => {
-            pitch_lut_color(pitch, darkest_pitch, brightest_pitch, palette)
+            pitch_lut_color(pitch, darkest_pitch, brightest_pitch, gradient)
         }
         // Outline voices get a bright neutral (the ring shape is the
         // signal). Ignored never reaches here — the tracker drops it.

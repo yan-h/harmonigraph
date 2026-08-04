@@ -4,7 +4,7 @@
 
 use crate::skin;
 use crate::style::{
-    HighlightExtremes, IdleMarker, NodeStyle, PitchPalette, Pulse, SevensLabel,
+    HighlightExtremes, IdleMarker, NodeStyle, PitchGradient, Pulse, SevensLabel,
 };
 use crate::trail::TrailMark;
 use harmonigraph_core::{coords, Comma, LatticePos, Tempered};
@@ -130,11 +130,11 @@ pub struct ViewConfig {
     /// How held notes are rendered (see NodeStyle).
     #[serde(default)]
     pub node_style: NodeStyle,
-    /// Which curve the low-to-high pitch gradient follows (see
-    /// [`PitchPalette`]). Every pitch-colored shape in the scene reads it
-    /// through one table, so this is the only place the choice is made.
+    /// The curve the low-to-high pitch gradient follows, as its four knobs
+    /// (see [`PitchGradient`]). Every pitch-colored shape in the scene reads
+    /// it through one table, so this is the only place the gradient is set.
     #[serde(default)]
-    pub pitch_palette: PitchPalette,
+    pub pitch_gradient: PitchGradient,
     /// The core's solidity, 0..1: a soft glow at 0, morphing continuously
     /// to the classic solid orb at 1 (the disc fades in over its glow
     /// skirt and its edge crisps). Inert while the core is off.
@@ -871,6 +871,12 @@ impl ViewConfig {
             default_label_scale()
         };
 
+        // The pitch gradient's four knobs, for the same reason as the label
+        // scale above and one more: they are the memo key of the color table
+        // every pitch-colored shape reads, so a non-finite one would miss the
+        // cache on every lookup as well as drawing a NaN.
+        self.pitch_gradient = self.pitch_gradient.sanitized();
+
         // The melody/bass marks' pre-split enum, which was exactly these two
         // bits packed into four names.
         if let Some(which) = self.legacy_highlight_extremes.take() {
@@ -970,7 +976,7 @@ impl Default for ViewConfig {
             label_scale: default_label_scale(),
             show_cents: true,
             node_style: NodeStyle::Steady,
-            pitch_palette: PitchPalette::Ramp,
+            pitch_gradient: PitchGradient::default(),
             // A small, soft core inside the octave band, with the band's
             // silent slots ghosted in: the pitch class reads as a compact
             // center and the octaves carry the node's outline. (The band's

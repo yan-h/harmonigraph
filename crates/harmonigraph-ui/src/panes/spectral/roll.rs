@@ -418,7 +418,7 @@ fn note_color(note: &RollNote, state: &SharedState, pitch: f32, alpha: f32) -> C
     let (darkest, brightest) =
         (state.frame_params.darkest_pitch, state.frame_params.brightest_pitch);
     scene_color(
-        channel_color(note.channel, pitch, darkest, brightest, state.view.pitch_palette),
+        channel_color(note.channel, pitch, darkest, brightest, state.view.pitch_gradient),
         alpha,
     )
 }

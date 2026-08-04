@@ -9,7 +9,8 @@ use std::ops::RangeInclusive;
 
 use egui::{CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
-    clamp_wheel, octave_layout, ViewConfig, DEFAULT_CENTER, DEFAULT_COUNT, MAX_SPAN, MIN_SPAN,
+    clamp_wheel, hue_circle, octave_layout, pitch_ramp_lut, PitchGradient, ViewConfig,
+    DEFAULT_CENTER, DEFAULT_COUNT, HUE_CIRCLE_N, MAX_SPAN, MIN_SPAN, PITCH_LUT_N,
 };
 
 use crate::theme;
@@ -1191,6 +1192,279 @@ impl<'a> OctaveStrip<'a> {
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
+}
+
+/// Segments the spectrum bar's track is drawn in. Twice [`HUE_CIRCLE_N`], so
+/// every sample of the hue circle lands on a segment BOUNDARY where it is
+/// drawn exactly, and only the vertices between two samples are interpolated.
+const SPECTRUM_SEGMENTS: usize = HUE_CIRCLE_N * 2;
+
+/// Height of the pitch-order strip under the spectrum bar, and the gap above
+/// it. Shorter than a bar, because it is a picture and not a control: nothing
+/// on it can be grabbed, and a full-height second bar would say otherwise.
+const STRIP_H: f32 = 11.0;
+const STRIP_GAP: f32 = 3.0;
+
+/// Which part of a [`SpectrumBar`] a drag took hold of. Decided once, at
+/// drag-start, and remembered for the gesture, exactly as [`Grab`] is: a span
+/// dragged to nothing would otherwise hand the rest of the gesture to the
+/// rotate branch the moment the handle reached the left edge.
+#[derive(Clone, Copy, Default)]
+enum SpectrumGrab {
+    /// The far end of the arc — how far round the circle the gradient walks.
+    #[default]
+    Span,
+    /// The circle itself, sliding under a fixed left edge. `held` is the hue
+    /// that was under the pointer when the gesture started, and the whole
+    /// gesture is "keep that hue under the pointer"; fixed for the gesture, so
+    /// a turn never reads back the circle it is itself moving.
+    Rotate { held: f32 },
+}
+
+/// The pitch gradient's hue arc: a full turn of the color circle laid along a
+/// bar, CUT at the arc's own start, with the stretch the gradient walks filled
+/// from the left edge and the hues it does not reach dimmed beyond it. Under
+/// it, the gradient itself in pitch order, low note on the left.
+///
+/// Drag the handle to set how far round the circle the range walks; drag the
+/// track to turn the whole circle under it; double-click to reset. Which
+/// DIRECTION it runs is the Flip button beside it, not a gesture — see below.
+///
+/// **Cut at the start, which is what makes a circle fit on a bar.** Hue wraps,
+/// so an arc laid on a fixed 0..360 track is drawn in two pieces whenever it
+/// crosses the seam — and the default arc does, running 260 through 0 to 90,
+/// which would put its two halves at opposite ends of the bar with the colors
+/// it never uses in between. Pinning the START to the left edge instead means
+/// the arc is one piece at every setting and always reads low-to-high, left to
+/// right; what moves is the circle behind it. The cost is that the bar cannot
+/// say where on the circle it is in absolute terms, which is a number nobody
+/// reads a color off anyway — the track is painted in the colors themselves.
+///
+/// **It previews all four knobs, not just the one it sets.** The claimed
+/// stretch is painted straight out of [`pitch_ramp_lut`], the same table the
+/// lattice draws from, so brightness and chroma show up in it too and the
+/// preview cannot drift from the picture. A swatch drawn from the widget's own
+/// idea of the gradient would be a second definition of the color, wrong the
+/// first time either changed. The dimmed remainder comes from [`hue_circle`]
+/// at the same lightness and chroma, so it reads as the same gradient
+/// continued rather than as decoration.
+///
+/// **The strip is not redundant with the track.** They agree wherever both say
+/// anything — the claimed stretch IS the gradient — but the claimed stretch is
+/// as wide as the span, so at a span of zero it has no width at all, and a
+/// single-hue gradient with a brightness ramp is a real setting that the track
+/// alone would draw as nothing. The strip is also what makes a flip visible:
+/// the arc keeps its colors and its width, and only the strip reverses.
+pub struct SpectrumBar<'a> {
+    gradient: &'a mut PitchGradient,
+}
+
+impl<'a> SpectrumBar<'a> {
+    pub fn new(gradient: &'a mut PitchGradient) -> Self {
+        SpectrumBar { gradient }
+    }
+
+    pub fn show(self, ui: &mut Ui) -> Response {
+        let scale = theme::ui_scale(ui.ctx());
+        let width = bar_width(ui);
+        let strip_h = STRIP_H * scale;
+        let (rect, mut response) = ui.allocate_exact_size(
+            Vec2::new(width, BAR_HEIGHT * scale + STRIP_GAP * scale + strip_h),
+            Sense::click_and_drag(),
+        );
+        let track_rect = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(rect.right(), rect.top() + BAR_HEIGHT * scale),
+        );
+        // The handle sits ON a position rather than between two, so the track
+        // is inset by half of one at each end and both limits — a span of zero
+        // and a whole turn — are places it can stand rather than edges it
+        // merges into. Same reason as HANDLE_INSET.
+        let track = track_rect.shrink2(Vec2::new(HANDLE_INSET * scale, 0.0));
+        let g = self.gradient.sanitized();
+        // Which way round the circle the bar runs. A span of zero has no
+        // direction of its own, and opening rightward is the useful reading:
+        // dragging the handle out of nothing then grows an arc rather than
+        // needing the sign set first.
+        let winding = if g.hue_span < 0.0 { -1.0f32 } else { 1.0 };
+        // Where a point across the track sits on the circle, as a signed
+        // offset in degrees from the hue at the left edge.
+        let offset_at = |x: f32| {
+            ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * 360.0 * winding
+        };
+        let claimed = (g.hue_span / 360.0).abs().clamp(0.0, 1.0);
+        let handle_x = track.left() + track.width() * claimed;
+
+        // ---- Interaction ----------------------------------------------------
+        let grab_id = response.id.with("spectrum_grab");
+        if response.double_clicked() {
+            let home = PitchGradient::default();
+            self.gradient.hue_start = home.hue_start;
+            self.gradient.hue_span = home.hue_span;
+            response.mark_changed();
+        }
+        if response.dragged() {
+            if let Some(p) = response.interact_pointer_pos() {
+                // Read and write as separate statements: nesting a `data_mut`
+                // inside a `data` closure takes the context lock twice.
+                let stored = ui.data(|d| d.get_temp::<SpectrumGrab>(grab_id));
+                let grab = match stored {
+                    Some(grab) => grab,
+                    None => {
+                        let grab = if (p.x - handle_x).abs() <= GRAB_PX * scale {
+                            SpectrumGrab::Span
+                        } else {
+                            SpectrumGrab::Rotate { held: g.hue_start + offset_at(p.x) }
+                        };
+                        ui.data_mut(|d| d.insert_temp(grab_id, grab));
+                        grab
+                    }
+                };
+                let next = match grab {
+                    // The magnitude only. Its SIGN is the Flip button's, and
+                    // leaving it there is what lets the handle reach zero
+                    // without the arc turning inside out on the way past.
+                    SpectrumGrab::Span => PitchGradient {
+                        hue_span: winding * offset_at(p.x).abs(),
+                        ..g
+                    },
+                    SpectrumGrab::Rotate { held } => PitchGradient {
+                        hue_start: (held - offset_at(p.x)).rem_euclid(360.0),
+                        ..g
+                    },
+                };
+                if next != *self.gradient {
+                    *self.gradient = next;
+                    response.mark_changed();
+                }
+            }
+        }
+        if response.drag_stopped() {
+            ui.data_mut(|d| d.remove_temp::<SpectrumGrab>(grab_id));
+        }
+
+        // ---- Paint ----------------------------------------------------------
+        let lut = pitch_ramp_lut(g);
+        let circle = hue_circle(g.lightness, g.chroma);
+        let radius = CornerRadius::same(bar_radius(scale));
+        let painter = ui.painter();
+        painter.rect_filled(track_rect, radius, theme::well());
+        // The colors go inside that well, which is what rounds them: a mesh
+        // has square corners, and the ring of well left showing reads as the
+        // track's own border rather than as a gap.
+        let inner = track_rect.shrink(scale.max(1.0));
+        let mut mesh = egui::Mesh::default();
+        for i in 0..=SPECTRUM_SEGMENTS {
+            let p = i as f32 / SPECTRUM_SEGMENTS as f32;
+            let x = inner.left() + inner.width() * p;
+            let color = if claimed > 0.0 && p <= claimed {
+                // Along the gradient, not around the circle: the two agree by
+                // construction here, and reading the table is what keeps them
+                // agreeing if they ever stop.
+                let f = (p / claimed).clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
+                let i0 = f.floor() as usize;
+                to_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 255)
+            } else {
+                // The hues the gradient does not reach, held back far enough
+                // to read as ground. Through alpha over the well rather than a
+                // blend toward a fixed grey, so the bar sits on whatever the
+                // pane is instead of ringing itself in a slightly wrong color.
+                let hue = g.hue_start + p * 360.0 * winding;
+                let f = hue.rem_euclid(360.0) / 360.0 * HUE_CIRCLE_N as f32;
+                let i0 = f.floor() as usize % HUE_CIRCLE_N;
+                to_color(circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()), 74)
+            };
+            let v = mesh.vertices.len() as u32;
+            mesh.colored_vertex(egui::pos2(x, inner.top()), color);
+            mesh.colored_vertex(egui::pos2(x, inner.bottom()), color);
+            if i > 0 {
+                mesh.add_triangle(v - 2, v - 1, v);
+                mesh.add_triangle(v - 1, v + 1, v);
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+
+        // How far round the circle the arc reaches, read out on the dimmed
+        // side of the handle where it sits on flat color — and on the claimed
+        // side when the arc has grown too wide to leave room there, which is
+        // the same bargain a RangeBar's ends make. The sign is the direction,
+        // and it is spelled out because the track cannot show it: an arc and
+        // its flip claim exactly the same colors.
+        let font = TextStyle::Monospace.resolve(ui.style());
+        let text_color = if response.hovered() || response.dragged() {
+            theme::text()
+        } else {
+            theme::text_dim()
+        };
+        let galley =
+            painter.layout_no_wrap(format!("{:+.0}°", g.hue_span), font, text_color);
+        let gap = TEXT_GAP * scale;
+        let reach = HANDLE_W * 0.5 * scale + gap;
+        let outside = handle_x + reach;
+        let left = if outside + galley.size().x <= track_rect.right() - gap {
+            outside
+        } else {
+            handle_x - reach - galley.size().x
+        };
+        let left = left.clamp(
+            track_rect.left() + gap,
+            (track_rect.right() - gap - galley.size().x).max(track_rect.left() + gap),
+        );
+        let y = track_rect.center().y - galley.size().y * 0.5;
+        painter.galley(egui::pos2(left, y), galley, text_color);
+
+        // The handle on top of everything, readout included: it is the part
+        // you operate, and a digit sliding under it beats it disappearing
+        // behind one.
+        painter.rect_filled(
+            egui::Rect::from_center_size(
+                egui::pos2(handle_x, track_rect.center().y),
+                Vec2::new(HANDLE_W * scale, track_rect.height() - 3.0 * scale),
+            ),
+            CornerRadius::same(theme::scaled_points(2, scale)),
+            theme::text(),
+        );
+
+        // ---- The same gradient, in pitch order ------------------------------
+        let strip = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - strip_h),
+            egui::pos2(rect.right(), rect.bottom()),
+        );
+        painter.rect_filled(strip, CornerRadius::same(bar_radius(scale)), theme::well());
+        let inner = strip.shrink(scale.max(1.0));
+        let mut bar = egui::Mesh::default();
+        for (i, entry) in lut.iter().enumerate() {
+            let x = inner.left() + inner.width() * i as f32 / (PITCH_LUT_N - 1) as f32;
+            let color = to_color(*entry, 255);
+            let v = bar.vertices.len() as u32;
+            bar.colored_vertex(egui::pos2(x, inner.top()), color);
+            bar.colored_vertex(egui::pos2(x, inner.bottom()), color);
+            if i > 0 {
+                bar.add_triangle(v - 2, v - 1, v);
+                bar.add_triangle(v - 1, v + 1, v);
+            }
+        }
+        painter.add(egui::Shape::mesh(bar));
+
+        // The cursor says which gesture a press would start before committing
+        // to a drag, as a RangeBar's does: the handle resizes the arc, the
+        // track turns the circle under it.
+        let aimed_at_handle = response
+            .hover_pos()
+            .is_some_and(|p| track_rect.contains(p) && (p.x - handle_x).abs() <= GRAB_PX * scale);
+        if aimed_at_handle {
+            response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
+        } else {
+            response.on_hover_cursor(egui::CursorIcon::Grab)
+        }
+    }
+}
+
+/// A scene color as an egui one, at an alpha of the caller's choosing. Scene
+/// colors are opaque and every 2D use of them wants its own transparency.
+fn to_color(c: glam::Vec4, alpha: u8) -> egui::Color32 {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+    egui::Color32::from_rgba_unmultiplied(byte(c.x), byte(c.y), byte(c.z), alpha)
 }
 
 /// A horizontal row of controls in a settings column, sized up front to
