@@ -1,54 +1,38 @@
 # Harmonigraph
 
-A harmony visualizer that runs as an audio plugin (CLAP + VST3).
+A harmony visualizer that runs as an audio plugin (CLAP + VST3). I use it for checking my tuning when composing in my DAW, and for generating visualizations of my pieces.
 
-It draws what you play on a **Tonnetz**. That is a lattice with three
-directions: a perfect fifth, a major third, and a harmonic seventh. Notes
-close in harmony land close together, so a chord reads as a shape. Each axis
-has its own tuning, so the lattice can be just, equal-tempered, or anywhere
-between.
+The plugin draws incoming MIDI on a 3-dimensional [Tonnetz](https://en.wikipedia.org/wiki/Tonnetz).
 
-MIDI lights the lattice up. The audio input drives a spectrum analyzer and
-spectrogram beside it. A piano roll keeps what was already played.
+- That is, a lattice with three directions: a perfect fifth, a major third, and a harmonic seventh.
+- Each lattice node represents a pitch class. Pitch height of individual voices is represented by circular "slices".
+- Each axis has its own tuning, so the lattice can be just, equal-tempered, or anywhere between.
+
+It also includes a spectrum analyzer for incoming audio, which feeds a spectrogram overlayed with incoming MIDI.
 
 Demonstration: [slipstream (5-limit just intonation)](https://www.youtube.com/watch?v=VuD9JOmi6_o).
 
 Successor to [midi_lattice](https://github.com/yan-h/midi_lattice).
 
-Almost every line here was written by Claude Code sessions, directed and
-reviewed by one human. [`CLAUDE.md`](CLAUDE.md) is the house style they work
-under; `./ci.sh` is the gate every push clears.
+Almost every line here was written by Claude Code sessions, directed and reviewed by one human. [`CLAUDE.md`](CLAUDE.md) is the house style they work under; `./ci.sh` is the gate every push clears.
 
-Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the
-community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's
-wgpu backend in the plugin, eframe's in the standalone harness).
+Stack: Rust, [nice-plug](https://codeberg.org/RustAudio/nice-plug) (the community continuation of nih-plug), egui 0.35, wgpu 29 (egui-baseview's wgpu backend in the plugin, eframe's in the standalone harness).
 
-**Tested only on macOS, in Bitwig Studio.** No other OS or host has been
-tried. Several [`vendor/`](vendor) patches are macOS-only too — `cfg`-gated,
-so elsewhere it still builds, just without those fixes
-([`PATCHES.md`](PATCHES.md)).
+**Tested only on macOS, in Bitwig Studio.** No other OS or host has been tried. Several [`vendor/`](vendor) patches are macOS-only too — `cfg`-gated, so elsewhere it still builds, just without those fixes ([`PATCHES.md`](PATCHES.md)).
 
 ## Setup
 
-The Rust toolchain is pinned by `rust-toolchain.toml` (1.92). rustup
-installs it on the first build.
+The Rust toolchain is pinned by `rust-toolchain.toml` (1.92). rustup installs it on the first build.
 
-**`sccache` has to be on `PATH`, or nothing builds.** `.cargo/config.toml`
-sets `rustc-wrapper = "sccache"` for the whole workspace. Without it, every
-cargo command here dies with `could not execute process sccache`.
+**`sccache` has to be on `PATH`, or nothing builds.** `.cargo/config.toml` sets `rustc-wrapper = "sccache"` for the whole workspace. Without it, every cargo command here dies with `could not execute process sccache`.
 
 ```sh
 brew install sccache
 ```
 
-Why it is there: every worktree keeps its own `target/`, so parallel branches
-never wait on a shared build lock. The cost is that each one would otherwise
-recompile all ~465 dependencies from scratch. sccache serves those from a
-single store, so only this repo's own crates recompile. To rule it out while
-debugging a build failure, run `RUSTC_WRAPPER="" cargo build ...`.
+Why it is there: every worktree keeps its own `target/`, so parallel branches never wait on a shared build lock. The cost is that each one would otherwise recompile all ~465 dependencies from scratch. sccache serves those from a single store, so only this repo's own crates recompile. To rule it out while debugging a build failure, run `RUSTC_WRAPPER="" cargo build ...`.
 
-`ffmpeg` is only for video export, and only if you want a playable file
-rather than a frame sequence (`brew install ffmpeg`).
+`ffmpeg` is only for video export, and only if you want a playable file rather than a frame sequence (`brew install ffmpeg`).
 
 ## Everyday commands
 
@@ -75,25 +59,16 @@ cargo xtask bundle harmonigraph-plugin --release
 ./read-plugin-state.py
 ```
 
-To gate every `git push` on `./ci.sh` automatically, enable the tracked hook
-once per clone: `git config core.hooksPath .githooks` (skip a one-off push
-with `git push --no-verify`). With Actions off, this hook is what actually
-gates anything.
+To gate every `git push` on `./ci.sh` automatically, enable the tracked hook once per clone: `git config core.hooksPath .githooks` (skip a one-off push with `git push --no-verify`). With Actions off, this hook is what actually gates anything.
 
 ## Getting a build into the DAW
 
-The DAW scans exactly one place: the **main checkout's** `target/bundled/`.
-Two things hide a branch build from it.
+The DAW scans exactly one place: the **main checkout's** `target/bundled/`. Two things hide a branch build from it.
 
 - Each worktree has its own `target/`. The DAW never looks there.
-- `cargo xtask bundle` run from a worktree bundles the *main* sources, not
-  the branch's. It walks up to the topmost `Cargo.toml`, which for a nested
-  worktree is the main repo. The bundle looks fresh and holds none of your
-  changes.
+- `cargo xtask bundle` run from a worktree bundles the *main* sources, not the branch's. It walks up to the topmost `Cargo.toml`, which for a nested worktree is the main repo. The bundle looks fresh and holds none of your changes.
 
-Two scripts sidestep both. Each copies the binary into the bundles the DAW
-loads, then re-signs it ad-hoc — Apple Silicon requires that. Rescan or
-restart the plugin afterwards.
+Two scripts sidestep both. Each copies the binary into the bundles the DAW loads, then re-signs it ad-hoc — Apple Silicon requires that. Rescan or restart the plugin afterwards.
 
 ```sh
 # Build the current checkout — branch or main — and load it. One shot.
@@ -105,15 +80,11 @@ restart the plugin afterwards.
 ./load-plugin.sh <branch>     # load that branch's build (substring ok)
 ```
 
-The two differ in one way: `update-plugin.sh` builds, `load-plugin.sh` only
-copies. That split exists because the bundle slot is shared. With several
-branches in flight, each build stays in its own worktree. You then pick which
-one goes live, rather than having them overwrite each other.
+The two differ in one way: `update-plugin.sh` builds, `load-plugin.sh` only copies. That split exists because the bundle slot is shared. With several branches in flight, each build stays in its own worktree. You then pick which one goes live, rather than having them overwrite each other.
 
 ## Architecture
 
-Dependencies point strictly downward; the fun layers never touch plugin
-plumbing.
+Dependencies point strictly downward; the fun layers never touch plugin plumbing.
 
 ```
 harmonigraph-core        pure logic, no dependencies at all. PitchClass
@@ -156,55 +127,30 @@ harmonigraph-plugin      nice-plug shell: params, MIDI + audio → two rtrb ring
                          host-native window resizing, CLAP/VST3 exports.
 ```
 
-Data flow in the plugin: the audio thread converts host MIDI to `NoteEvent`s
-and pushes them into a lock-free ring buffer; the GUI thread drains it into
-the `NoteTracker`, derives a `Scene`, and paints it. Parameters flow the
-other way through `ParamBackend` (a `ParamSetter` in the plugin, plain
-values in the harness), so every pane runs unmodified in both shells.
+Data flow in the plugin: the audio thread converts host MIDI to `NoteEvent`s and pushes them into a lock-free ring buffer; the GUI thread drains it into the `NoteTracker`, derives a `Scene`, and paints it. Parameters flow the other way through `ParamBackend` (a `ParamSetter` in the plugin, plain values in the harness), so every pane runs unmodified in both shells.
 
 ## Working on visuals
 
 - `harmonigraph-render/src/shaders/lattice.wgsl` — node look, glow, animation.
 - `harmonigraph-scene` — colors, envelopes, layout, camera behavior.
-- Run the standalone harness; it uses the identical render path. No DAW
-  needed until you're testing host integration.
+- Run the standalone harness; it uses the identical render path. No DAW needed until you're testing host integration.
 
 ## Version coupling
 
-`egui-baseview 0.3` pins egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview
-0.1; `eframe` and `egui_dock` must match the egui version. All of this is
-centralized in the workspace `Cargo.toml` — bump the whole cluster
-together. `vendor/baseview` and `vendor/egui-baseview` both carry local
-patches (see PATCHES.md).
+`egui-baseview 0.3` pins egui 0.35 / egui-wgpu 0.35 / wgpu 29 / baseview 0.1; `eframe` and `egui_dock` must match the egui version. All of this is centralized in the workspace `Cargo.toml` — bump the whole cluster together. `vendor/baseview` and `vendor/egui-baseview` both carry local patches (see PATCHES.md).
 
 ## License
 
 Copyright (C) 2026 Yan Han.
 
-Harmonigraph is free software: you can redistribute it and/or modify it
-under the terms of the GNU General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option)
-any later version. See [`LICENSE`](LICENSE) for the full text.
+Harmonigraph is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [`LICENSE`](LICENSE) for the full text.
 
-This program is distributed in the hope that it will be useful, but WITHOUT
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
-more details.
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 ### Exceptions
 
-[`crates/harmonigraph-core`](crates/harmonigraph-core) is **`MIT OR Apache-2.0`**, not
-GPL. It is the one general-purpose library here — dependency-free
-just-intonation math, Tonnetz coordinates, and note spelling — and much of
-that math descends from the permissively licensed
-[midi_lattice v1](https://github.com/yan-h/midi_lattice), so it stays
-permissive too. `ci.sh` enforces the property that justifies the split: the
-crate must remain dependency-free. See
-[its README](crates/harmonigraph-core/README.md).
+[`crates/harmonigraph-core`](crates/harmonigraph-core) is **`MIT OR Apache-2.0`**, not GPL. It is the one general-purpose library here — dependency-free just-intonation math, Tonnetz coordinates, and note spelling — and much of that math descends from the permissively licensed [midi_lattice v1](https://github.com/yan-h/midi_lattice), so it stays permissive too. `ci.sh` enforces the property that justifies the split: the crate must remain dependency-free. See [its README](crates/harmonigraph-core/README.md).
 
-The vendored forks under [`vendor/`](vendor) (`baseview`, `egui-baseview`)
-are likewise **not** covered by the GPL — they remain under their upstream
-`MIT OR Apache-2.0` terms, with their own license files in each directory.
-See [`PATCHES.md`](PATCHES.md) for what was changed and why.
+The vendored forks under [`vendor/`](vendor) (`baseview`, `egui-baseview`) are likewise **not** covered by the GPL — they remain under their upstream `MIT OR Apache-2.0` terms, with their own license files in each directory. See [`PATCHES.md`](PATCHES.md) for what was changed and why.
 
 VST is a trademark of Steinberg Media Technologies GmbH.
