@@ -20,7 +20,7 @@
 //!
 //! **Why the buffer is still rewritten every frame.** The obvious next step
 //! is an append-and-evict ring — settled notes never change, so they could
-//! be uploaded once. They are not, deliberately. At 40 bytes per note a busy
+//! be uploaded once. They are not, deliberately. At 36 bytes per note a busy
 //! roll is tens of kilobytes a frame against the megabytes that were the
 //! whole problem, so a ring would be optimizing three orders of magnitude
 //! below the cost it was built for, and it would have to carry the far-edge
@@ -69,22 +69,19 @@ pub struct RollInstance {
     /// non-zero for a glide, which makes the box a parallelogram rather than
     /// needing a second shape.
     pub shear: f32,
-    /// Width of the rim's two bands in points, `[inner, outer]`, and 0 for a
-    /// band that is not drawn: [`inner`](Self::inner) runs from the note's own
-    /// edge out by the first, [`outer`](Self::outer) from there out by the
-    /// second.
-    ///
-    /// Two widths rather than one, because the bands answer to different
-    /// constraints and a single width ties them together at the widths that
-    /// matter. A zero inner band is a rim of the outer band alone, standing
-    /// directly against the note — not a gap where the inner band would have
-    /// been. Which band gives way where is the pane's call (see
-    /// `panes::spectral::roll`); this crate draws the widths it is handed.
+    /// Width of EACH rim band in points, and 0 when the rim is turned off.
+    /// One width for both: [`inner`](Self::inner) runs from the note's edge out
+    /// to it, [`outer`](Self::outer) from there out to twice it.
     ///
     /// The rim rides the note's two LONG edges only, and never its ends — see
     /// `rail_mask` in the shader for why that is the shape rather than a
     /// choice.
-    pub bands: [f32; 2],
+    ///
+    /// A flat width, not a distance the shader scales: on a sheared note the
+    /// bands are measured perpendicular to the long edges they ride, so this is
+    /// their true thickness at any angle, and it is `vs_note`'s job to grow the
+    /// quad by however far along pitch that reaches.
+    pub keyline: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
     /// The rim's two bands: `inner` against the note's edge, `outer` beyond it.
@@ -104,7 +101,7 @@ impl RollInstance {
             0 => Float32x2, // center
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
-            3 => Float32x2, // bands
+            3 => Float32,   // keyline
             4 => Unorm8x4,  // core
             5 => Unorm8x4,  // inner
             6 => Unorm8x4,  // outer
@@ -489,7 +486,7 @@ mod tests {
             center: [128.0, 128.0],
             half_extent: [12.0, 60.0],
             shear: 0.0,
-            bands: [2.0, 2.0],
+            keyline: 2.0,
             core: [255, 0, 0, 255],
             inner: [0, 0, 0, 255],
             outer: [255, 255, 255, 255],
@@ -653,7 +650,7 @@ mod tests {
         // a thick ribbon. No keyline, so the sample reads the shape alone.
         let tap = RollInstance {
             half_extent: [20.0, 3.0],
-            bands: [0.0, 0.0],
+            keyline: 0.0,
             ..centered_note()
         };
         let frame = draw(&device, &queue, vec![tap], bg_color());
@@ -720,7 +717,7 @@ mod tests {
         };
         // White, no rim: every painted byte is the fill's own coverage.
         let bare = RollInstance {
-            bands: [0.0, 0.0],
+            keyline: 0.0,
             core: [255, 255, 255, 255],
             inner: [0, 0, 0, 0],
             outer: [0, 0, 0, 0],
@@ -866,7 +863,7 @@ mod tests {
         // Only the rim paints, and in black: over a white background its
         // coverage is then exactly `1 - r/255` in every pixel it touched.
         let bare = RollInstance {
-            bands: [1.0, 1.0],
+            keyline: 1.0,
             core: [0, 0, 0, 0],
             inner: [0, 0, 0, 255],
             outer: [0, 0, 0, 255],

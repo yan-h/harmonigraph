@@ -39,10 +39,10 @@ struct VertexOut {
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
-    /// Width of the rim's two bands in points, `(inner, outer)`, either of
-    /// which may be zero. Both ride the note's long edges only — see
-    /// [`rail_mask`].
-    @location(3) @interpolate(flat) bands: vec2<f32>,
+    /// Width of EACH rim band in points — the two are the same thickness — and
+    /// zero when Edge turns the rim off. Both ride the note's long edges only
+    /// — see [`rail_mask`].
+    @location(3) @interpolate(flat) keyline: f32,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(4) @interpolate(flat) core: vec4<f32>,
     /// The band against the note's edge, and the one beyond it.
@@ -56,7 +56,7 @@ fn vs_note(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
-    @location(3) bands: vec2<f32>,
+    @location(3) keyline: f32,
     @location(4) core: vec4<f32>,
     @location(5) inner: vec4<f32>,
     @location(6) outer: vec4<f32>,
@@ -85,7 +85,7 @@ fn vs_note(
     // (`rail_mask`), so the rim spends none of its width on this axis, and
     // nothing paints past the box plus half a ramp either side.
     let skew = sqrt(1.0 + slope * slope);
-    let rim = bands.x + bands.y + 0.5 * locals.feather;
+    let rim = 2.0 * keyline + 0.5 * locals.feather;
     let extent = vec2<f32>(
         half_extent.x + abs(slope) * (half_extent.y + 0.5 * locals.feather) + skew * rim,
         half_extent.y + locals.feather,
@@ -104,7 +104,7 @@ fn vs_note(
     out.local = local;
     out.half_extent = half_extent;
     out.shear = shear;
-    out.bands = bands;
+    out.keyline = keyline;
     out.core = core;
     out.inner = inner;
     out.outer = outer;
@@ -178,8 +178,7 @@ fn note_color(in: VertexOut) -> vec4<f32> {
 
     // Reading outward: the note, solid in its own color right to its edge, the
     // inner band standing against that edge, then the outer band standing
-    // against it — each its own width, and a zero-width band simply drops out,
-    // leaving the next one where it stood.
+    // against it — one keyline width each.
     //
     // Every band is a window on the same box filter as the fill, so they tile
     // the distance without ever overlapping — which is what keeps them OUTSIDE
@@ -193,8 +192,8 @@ fn note_color(in: VertexOut) -> vec4<f32> {
     // coverages add to at most one and premultiplied colors add with them.
     let rail = rail_mask(in);
     var out = in.core * inside(d, 0.0);
-    out += in.inner * band(d, 0.0, in.bands.x) * rail;
-    out += in.outer * band(d, in.bands.x, in.bands.x + in.bands.y) * rail;
+    out += in.inner * band(d, 0.0, in.keyline) * rail;
+    out += in.outer * band(d, in.keyline, 2.0 * in.keyline) * rail;
     return out;
 }
 

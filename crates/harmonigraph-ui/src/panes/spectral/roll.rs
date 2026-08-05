@@ -76,19 +76,29 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
-/// How wide the LIGHT band riding a note's outer edge is, in points.
+/// How wide each of the two bands riding a note's outer edge is, in points —
+/// the black one against the note, and the white one outside it.
 ///
-/// Fixed rather than a setting, and fixed rather than scaled with the ribbon:
-/// a full point is the only width worth having. The white band is the
-/// brightest thing on a note, and a *bright* sub-point line shimmers as the
-/// roll scrolls, its peak intensity wobbling with every sub-pixel step across
-/// the grid (worst on a Hi-DPI display, where 0.6 points is barely over one
-/// physical pixel). Wider, and a highlight on a ribbon a few points thick
-/// starts reading as a second ribbon.
+/// Fixed rather than a setting: a full point is the only width worth having.
+/// The white band is the brightest thing on a note, and a *bright* sub-point
+/// line shimmers as the roll scrolls, its peak intensity wobbling with every
+/// sub-pixel step across the grid (worst on a Hi-DPI display, where 0.6 points
+/// is barely over one physical pixel).
 ///
-/// It is also the ceiling on the dark band inside it (see [`keyline_bands`]),
-/// which is what keeps the rim a matched pair where a note is wide enough to
-/// carry both.
+/// One width for both bands and the same width at every zoom, so the rim is a
+/// constant: a note carries two points of it per flank whatever the ribbon
+/// behind it measures and however far the pitch range is opened. A rim scaled
+/// to the ribbon would hold a steadier ratio between the two, and that is the
+/// trade being refused — the zoom would then change what a note IS rather than
+/// how much of the axis it covers, and an edge that thins as you pull back is
+/// an edge that stops doing its job exactly where the picture gets busiest.
+///
+/// What it costs is at the wide end, where the ribbon floors at
+/// [`MIN_RIBBON_PX`] and the rim is wider than the gap a semitone leaves
+/// between two of them: neighbours' rims then reach over each other's ribbons,
+/// and since the bands are opaque and instances rasterize in buffer order, the
+/// note drawn later wins. A tight cluster reads as rim with the ribbons showing
+/// through it.
 const KEYLINE_PX: f32 = 1.0;
 
 /// The light edge drawn along the spectrum's profile, at `cfg.keyline`
@@ -102,7 +112,7 @@ const KEYLINE_PX: f32 = 1.0;
 /// the even ramps leave standing.
 ///
 /// The threshold is a fade-out floor, which is a thing only a STRENGTH has: the
-/// roll's rim reads the same setting as a switch (see [`keyline_bands`]) and so
+/// roll's rim reads the same setting as a switch (see [`keyline_band`]) and so
 /// has none.
 ///
 /// The roll's notes carry an opaque version of this; the profile keeps the
@@ -113,9 +123,8 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
     (strength > 0.004).then_some(Color32::WHITE.gamma_multiply(strength))
 }
 
-/// The two bands standing outside a note: `([dark, light], dark, light)`,
-/// widths in points, for a ribbon `half_pitch` points from its center line to
-/// its edge.
+/// The two bands standing outside a note: `(width, inner, outer)` — black
+/// against the note, white beyond it, one width each (see [`KEYLINE_PX`]).
 ///
 /// Both are OPAQUE. A translucent rim takes its color from whatever the
 /// spectrogram is doing behind it, so the same note comes out with a different
@@ -131,16 +140,10 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// background it is the brighter contrast of the two. The other order gives the
 /// note a white halo that its own color has to fight through.
 ///
-/// The dark band is the one that YIELDS, because its job is the one that stops
-/// existing first: it holds a note's color off the white, so it is worth a
-/// point where there is a color to hold and nothing where the note is thinner
-/// than the rim it would carry. Two fixed points of rim per flank around the
-/// 1.5-point ribbon this pane's own default zoom produces is a note read as a
-/// bright line with a thread of color in it — the ribbon is the picture, and
-/// the rim is there to let it be seen, not to be seen instead. So it grows
-/// with the ribbon: nothing up to a half-width of [`KEYLINE_PX`], a full point
-/// from twice that, and the ramp between. The light band never yields, being
-/// the one that cannot go sub-point without shimmering.
+/// Neither band scales with anything. Both are [`KEYLINE_PX`] at every zoom and
+/// every ribbon width, which is what makes the rim a constant of the picture
+/// rather than a reading of it — see that constant for the trade, which is real
+/// and is at the wide end.
 ///
 /// This crate decides all of it, and hands the shader two bands named for
 /// position alone — the look does not belong half here and half in a fragment
@@ -151,12 +154,11 @@ pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32
 /// transparent, never one or the other: the width is what the quad grows by to
 /// make room for the bands (and what the far-edge cull keeps a leaving note
 /// alive for), so a band that will not paint must not be paid for either.
-fn keyline_bands(cfg: &crate::SpectrumConfig, half_pitch: f32) -> ([f32; 2], Color32, Color32) {
+fn keyline_band(cfg: &crate::SpectrumConfig) -> (f32, Color32, Color32) {
     if cfg.keyline <= 0.0 {
-        return ([0.0, 0.0], Color32::TRANSPARENT, Color32::TRANSPARENT);
+        return (0.0, Color32::TRANSPARENT, Color32::TRANSPARENT);
     }
-    let dark = (half_pitch - KEYLINE_PX).clamp(0.0, KEYLINE_PX);
-    ([dark, KEYLINE_PX], Color32::BLACK, Color32::WHITE)
+    (KEYLINE_PX, Color32::BLACK, Color32::WHITE)
 }
 
 /// Draw every remembered note that falls inside the pane's time window and
@@ -260,7 +262,7 @@ pub(super) fn note_instances(
     // The whole look of a note, decided once for the roll rather than per
     // note: the two bands standing outside its long edges. The note itself is a
     // solid rectangle of its own color and has nothing else to decide.
-    let (bands, inner, outer) = keyline_bands(cfg, half_pitch);
+    let (keyline_px, inner, outer) = keyline_band(cfg);
     // The antialiasing ramp the shader feathers every edge with — one physical
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
@@ -314,7 +316,7 @@ pub(super) fn note_instances(
     // actually occupies at a wide zoom, and converted through the scale — so
     // the margin shrinks as the zoom tightens instead of staying a fixed number
     // of semitones.
-    let reach_px = half_pitch + bands[0] + bands[1] + 0.5 * feather_px;
+    let reach_px = half_pitch + 2.0 * keyline_px + 0.5 * feather_px;
     let pitch_margin = reach_px / axes.pitch_len().max(1.0) * scale.span;
     let mut notes: Vec<&RollNote> = roll
         .notes()
@@ -457,7 +459,7 @@ pub(super) fn note_instances(
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
-                bands,
+                keyline: keyline_px,
                 core: core.to_array(),
                 inner: inner.to_array(),
                 outer: outer.to_array(),
@@ -598,52 +600,39 @@ mod tests {
         &rects[0]
     }
 
-    /// The LIGHT band holds its thickness at any note width; the DARK band
-    /// inside it gives way as the ribbon thins, and is gone by the width this
-    /// pane's own default zoom produces.
+    /// The rim is the same thickness at every zoom and every note width — an
+    /// edge does not thin out because the ribbon it wraps did, and does not
+    /// thicken because the range was zoomed in. One width covers both bands, so
+    /// the pair cannot drift apart either.
     ///
-    /// Both bands stand OUTSIDE the note, so every point of rim is width the
-    /// note does not get. A fixed pair puts four points of rim around the
-    /// 1.5-point ribbon a wide zoom floors to — a note read as a bright line
-    /// with a thread of color in it, which inverts what the ribbon is for. The
-    /// dark band is the one that yields because its job, holding the note's
-    /// color off the white, is the one that stops existing when there is no
-    /// color left to hold. The light band never yields: sub-point and bright,
-    /// it shimmers as the roll scrolls.
+    /// Constant is the requirement, not a simplification of one. A rim tied to
+    /// the ribbon would hold a steadier ratio between the two, at the price of
+    /// making the zoom change what a note IS rather than how much of the axis
+    /// it covers — and the wide end, where a scaled rim would give way, is
+    /// exactly where a picture full of notes needs its edges most.
     ///
-    /// Neither can reach back INSIDE the ribbon at any width — that is
-    /// structural now, since the shader reads both off distances outside the
-    /// note's own edge.
+    /// It is expressed as a DISTANCE OUTSIDE the note's outline, never as a
+    /// wider stroke of it; that distinction is the flood fix, and it is
+    /// structural, since the shader reads both bands off distances outside the
+    /// note's own edge. What is left to check here is that the thickness is
+    /// handed over unscaled.
     #[test]
-    fn the_dark_band_gives_way_on_a_thin_ribbon_and_the_light_one_never_does() {
+    fn the_rim_is_the_same_thickness_at_any_note_width() {
         let thick = ribbon_with_range(0.5, 12.0);
-        // ~120 semitones over 100 points: the ribbon floors at MIN_RIBBON_PX,
-        // narrower than the rim a fixed pair would stand around it.
+        // ~120 semitones over 100 points: the ribbon is under 2 points thick,
+        // which is where centered strokes meet in the middle and paint the
+        // interior white.
         let thin = ribbon_with_range(0.5, 120.0);
-        assert_eq!(
-            one(&thick).bands,
-            [KEYLINE_PX, KEYLINE_PX],
-            "a ribbon with room for both bands did not get both",
-        );
-        assert_eq!(
-            one(&thin).bands,
-            [0.0, KEYLINE_PX],
-            "a hairline ribbon still carries a dark band, or lost its light one",
-        );
+        assert_eq!(one(&thick).keyline, KEYLINE_PX, "the keyline is not the width it is fixed at");
+        assert_eq!(one(&thin).keyline, one(&thick).keyline, "the keyline thinned with the note");
         assert!(
             one(&thin).half_extent[0] < one(&thick).half_extent[0],
             "the two notes are the same thickness; the comparison is vacuous",
         );
-
-        // And a ramp between the two, so the dark band fades in with the ribbon
-        // rather than appearing whole as the zoom crosses a threshold: 2
-        // semitones over 66.7 makes a 3-point ribbon, half way there.
+        // And nothing in between is a ramp: the width is one number, not a
+        // reading of the ribbon it stands against.
         let middling = ribbon_with_range(0.5, 200.0 / 3.0);
-        let dark = one(&middling).bands[0];
-        assert!(
-            (dark - 0.5 * KEYLINE_PX).abs() < 1e-3,
-            "the dark band is {dark} on a ribbon half way to carrying it, not a half width",
-        );
+        assert_eq!(one(&middling).keyline, KEYLINE_PX, "the keyline scaled with the ribbon");
     }
 
     /// Both bands are OPAQUE, black inside and white outside, at every Edge
@@ -670,8 +659,7 @@ mod tests {
             let lit = ribbon(edge);
             let note = one(&lit);
             assert_eq!(
-                note.bands,
-                [KEYLINE_PX, KEYLINE_PX],
+                note.keyline, KEYLINE_PX,
                 "the rim is not the width it is fixed at, at Edge {edge}",
             );
             assert_eq!(
@@ -690,66 +678,9 @@ mod tests {
 
         let off = ribbon(0.0);
         let note = one(&off);
-        assert_eq!(note.bands, [0.0, 0.0], "Edge 0 still made room for a rim");
+        assert_eq!(note.keyline, 0.0, "Edge 0 still made room for a rim");
         assert_eq!(note.inner[3], 0, "Edge 0 left an inner band behind");
         assert_eq!(note.outer[3], 0, "Edge 0 left an outer band behind");
-    }
-
-    /// A note's rim must stop short of the note a semitone away.
-    ///
-    /// The bands are opaque and instances rasterize in buffer order, so a rim
-    /// that reaches past a neighbour's edge does not tint that note — it erases
-    /// it, and whichever note is drawn later wins. The pane's own default zoom
-    /// is where this bites: the whole analyzer axis is ~123 semitones, so a
-    /// semitone is a few points and the rim is the same order of size as the
-    /// gap between two ribbons.
-    #[test]
-    fn a_notes_rim_stops_short_of_the_next_semitone() {
-        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-        state.spectrum_config.orientation = SpectralOrientation::Left;
-        // Everything else left at its default, which is the case under test:
-        // the pitch range is the analyzer's whole axis and the ribbon is the
-        // thin default one.
-        for note in [60, 61] {
-            state.tracker.handle_event(NoteEvent {
-                time: 0.0,
-                channel: 0,
-                note,
-                kind: NoteEventKind::On { velocity: 1.0 },
-            });
-        }
-        // A pane the shape the plugin's own is rather than [`PANE`]: 400 points
-        // across pitch, which over the analyzer's range is ~3.2 points to the
-        // semitone. On a pane too small for two ribbons to be separate at all
-        // there is nothing here to test.
-        let pane = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 400.0));
-        let cfg = &state.spectrum_config;
-        let axes = Axes::new(pane, cfg);
-        let scale = PitchScale {
-            min_midi: cfg.low_midi,
-            max_midi: cfg.high_midi,
-            span: cfg.high_midi - cfg.low_midi,
-        };
-        let split = super::super::axes::spectrum_share(cfg);
-        let notes = note_instances(&axes, &scale, &state, split, 0.05, PPP);
-        assert_eq!(notes.len(), 2, "expected one segment each, got {}", notes.len());
-        let (lower, upper) = (notes[0], notes[1]);
-        let apart = (egui::pos2(upper.center[0], upper.center[1])
-            - egui::pos2(lower.center[0], lower.center[1]))
-        .length();
-        assert!(
-            apart > lower.half_extent[0] + upper.half_extent[0],
-            "the two ribbons overlap at {apart} points apart before any rim; \
-             the comparison is vacuous",
-        );
-        let rim = upper.bands[0] + upper.bands[1];
-        assert!(
-            apart - upper.half_extent[0] - rim >= lower.half_extent[0],
-            "a semitone apart ({apart} points), the upper note's {rim} points of rim \
-             reach into the lower note's ribbon (half-widths {} and {})",
-            lower.half_extent[0],
-            upper.half_extent[0],
-        );
     }
 
     /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a
