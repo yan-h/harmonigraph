@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Local mirror of .github/workflows/ci.yml: the exact three gates the cloud CI
+# Local mirror of .github/workflows/ci.yml: the exact four gates the cloud CI
 # runs — clippy across all targets with warnings denied, the full test suite,
-# then the harmonigraph-core dependency guard. Nothing more, nothing less, on the
-# toolchain pinned by rust-toolchain.toml — so a green run here means a green
-# run there.
+# the doc-link check, then the harmonigraph-core dependency guard. Nothing more,
+# nothing less, on the toolchain pinned by rust-toolchain.toml — so a green run
+# here means a green run there.
 #
 # Run it directly:              ./ci.sh
 # Or gate every push on it:     git config core.hooksPath .githooks
@@ -15,6 +15,23 @@ run() { echo; echo "▶ $*"; "$@"; }
 
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
+
+# Doc links, which is the only mechanical check on comments this tree has.
+# Comments are ~38% of the non-blank lines under crates/ and carry the
+# rationale — measurements taken, alternatives rejected, host quirks worked
+# around — that the code cannot state for itself, so a reference that quietly
+# stops naming anything is a real defect and not a formatting nit.
+#
+# `--document-private-items` is the point rather than a detail: most items here
+# are private, so without it rustdoc checks only the exported surface and
+# ignores the great majority of the doc comments.
+#
+# `private_intra_doc_links` is ALLOWED, and is the one lint whose complaint
+# does not apply. It fires where a public item's docs point at a private one —
+# accurate for anyone reading the source, and only a problem for published
+# HTML, which nothing here produces. Everything else in the group is denied.
+run env RUSTDOCFLAGS="-D rustdoc::all -A rustdoc::private_intra_doc_links" \
+  cargo doc --no-deps --quiet --workspace --document-private-items
 
 # harmonigraph-core is MIT OR Apache-2.0 while the rest of the workspace is GPL.
 # That split is only defensible while the crate stays a self-contained
@@ -35,4 +52,4 @@ fi
 echo "  ok — no dependencies"
 
 echo
-echo "✅ local CI passed (clippy + tests + harmonigraph-core dep guard)"
+echo "✅ local CI passed (clippy + tests + doc links + harmonigraph-core dep guard)"

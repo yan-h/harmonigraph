@@ -267,8 +267,9 @@ pub struct Recorder {
     rolling: Arc<AtomicBool>,
     /// Whether this pass has already declared its audio start.
     audio_started: bool,
-    /// Set by the GUI when [`RenderTrigger::AtLoopEnd`] is chosen: end the
-    /// take on the first loop wrap rather than splitting into another pass.
+    /// Set by the GUI when
+    /// [`RenderTrigger::AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd) is chosen:
+    /// end the take on the first loop wrap rather than splitting into another pass.
     stop_at_loop_end: Arc<AtomicBool>,
     /// Published for the GUI: the loop wrapped under AtLoopEnd, so the take is
     /// done — the GUI reads this, stops, and renders the one pass.
@@ -468,7 +469,8 @@ pub struct Control {
     /// the transport is moving.
     rolling: Arc<AtomicBool>,
     with_audio: Arc<AtomicBool>,
-    /// Mirror of [`RenderTrigger::AtLoopEnd`] for the audio thread.
+    /// Mirror of [`RenderTrigger::AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd)
+    /// for the audio thread.
     stop_at_loop_end: Arc<AtomicBool>,
     /// Set by the audio thread when a loop wrapped under AtLoopEnd: the take is
     /// done and the GUI should stop + render it.
@@ -486,7 +488,8 @@ impl Control {
     }
 
     /// Tell the audio thread whether to end the take at the first loop wrap
-    /// (the [`RenderTrigger::AtLoopEnd`] mode). Called every GUI frame.
+    /// (the [`RenderTrigger::AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd)
+    /// mode). Called every GUI frame.
     pub fn set_stop_at_loop_end(&self, on: bool) {
         self.stop_at_loop_end.store(on, Ordering::Relaxed);
     }
@@ -952,7 +955,7 @@ struct RenderControl {
     /// consecutive recordings are two requests that want two different videos,
     /// and a global newest-wins would have the second silently discard the
     /// first (see
-    /// [`a_render_of_another_take_waits_rather_than_replacing_this_one`]).
+    /// `a_render_of_another_take_waits_rather_than_replacing_this_one`).
     /// Only a second request naming the SAME take is the same video twice,
     /// which is the case "Re-render take" makes.
     ///

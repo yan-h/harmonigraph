@@ -18,6 +18,14 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+      # Doc links are the only mechanical check on comments, which are ~38% of
+      # the non-blank lines under crates/. --document-private-items is what
+      # makes it cover more than the exported surface; private_intra_doc_links
+      # is allowed because it only matters for published HTML. See ci.sh.
+      - name: Doc links
+        run: cargo doc --no-deps --workspace --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::all -A rustdoc::private_intra_doc_links"
       # harmonigraph-core is MIT OR Apache-2.0 inside a GPL workspace; that split
       # holds only while it stays self-contained. See ci.sh for the rationale.
       - name: harmonigraph-core dependency guard

@@ -229,7 +229,7 @@ impl PitchGradient {
 
 /// The idle-node marker: a minimal grey mark shown at each home-sheet node
 /// at all times, independent of the active appearance and of whether a note
-/// is playing. Sized by [`ViewConfig::idle_radius`].
+/// is playing. Sized by [`ViewConfig::idle_radius`](crate::ViewConfig::idle_radius).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum IdleMarker {
     /// Nothing.

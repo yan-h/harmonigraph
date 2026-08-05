@@ -24,9 +24,6 @@ pub mod panel;
 /// before rendering. The "Video" tab.
 pub mod render;
 pub mod scene;
-/// The Spectral display. A directory rather than a file: its piano roll,
-/// heatmap and note names are layers over one shared plane rather than panes
-/// of their own, and they live with the plane they read.
 pub mod spectral;
 pub mod tuning;
 
@@ -90,8 +87,8 @@ pub struct Viewer<'a> {
 }
 
 /// Where the settings pane being drawn ends on the right, written by
-/// [`Viewer::ui`] before the body draws anything and read by
-/// [`crate::widgets::bar_width`].
+/// [`Viewer`]'s `ui` before the body draws anything and read by
+/// `widgets::bar_width`.
 ///
 /// A bar fills the pane, so it has to ask how wide the pane is, and neither
 /// obvious answer survives contact with the dock. `max_rect` is no good by the
@@ -240,7 +237,8 @@ pub(super) fn display_note_name(
 /// node is a note the lattice cannot show, and saying so is the point.
 ///
 /// One neighbour is close enough to be reached for by mistake and does not
-/// want the tolerance: [`names::naming_node`](names) takes the same played
+/// want the tolerance: [`names`](crate::panes::spectral::names)'s `naming_node`
+/// takes the same played
 /// pitch but asks what to CALL it, where a collapsed equal temperament makes
 /// the choice AMONG matches the whole problem rather than an afterthought.
 pub(super) fn nearest_visible_node(

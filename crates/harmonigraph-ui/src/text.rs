@@ -1,5 +1,5 @@
 //! Haloed label text: collected as glyphs here, drawn by
-//! [`harmonigraph_render::text`].
+//! `harmonigraph_render`'s own text module.
 //!
 //! Text on either picture pane needs to be lifted off what it lands on —
 //! note names over lit nodes, pitch labels over the spectrogram. Stamping

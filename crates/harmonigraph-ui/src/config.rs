@@ -267,7 +267,8 @@ pub struct SpectrumConfig {
     /// evenly; and a private dB window lets the same bucket mean two things in
     /// one pane. The window is the Spectrum's Level, always: one range means
     /// "loud" is the same claim in the curve and in the heatmap, which is the
-    /// whole reason they share [`loudness_db`].
+    /// whole reason they share
+    /// [`loudness_db`](crate::panes::spectral::axes::loudness_db).
     ///
     /// Their fields are gone from the blob too. That costs nothing on load —
     /// serde ignores keys it has no field for, which

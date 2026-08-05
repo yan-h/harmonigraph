@@ -56,7 +56,7 @@ fn lit(ui: &egui::Ui, dock: &DockState<Tab>, style: &egui_dock::Style, dial: &Di
 /// there would be no way to unfold what was folded. Tab bars are taller than
 /// this in every style the app uses, so the rail is one tab bar thick and the
 /// button fits with room to spare; the number is only needed to repaint the
-/// button's own square in [`paint`].
+/// button's own square in [`paint`](fn@crate::fold::paint).
 const ARROW_BUTTON: f32 = 24.0;
 
 /// Draw what a sideways fold needs and egui_dock cannot know it wants: the
@@ -453,8 +453,8 @@ fn name_bands(tree: &Tree<Tab>, node: NodeIndex) -> Vec<Band<'_>> {
     bands
 }
 
-/// Share a folded subtree's height out among its panes, as [`Fit::rails`]
-/// shares out its width.
+/// Share a folded subtree's height out among its panes, as
+/// [`Points::spread`](super::Points::spread) shares out its width.
 fn divide<'a>(
     tree: &'a Tree<Tab>,
     node: NodeIndex,

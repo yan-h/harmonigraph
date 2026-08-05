@@ -5,14 +5,11 @@
 pub mod layout;
 pub mod params;
 pub mod theme;
-/// Haloed label text, collected as glyphs and drawn by one callback.
 pub(crate) mod text;
 pub mod widgets;
 mod panes;
 mod perf;
 
-/// Folding a pane sideways, which egui_dock's own collapse arrow only does
-/// downwards.
 mod fold;
 
 /// What the UI persists of the analyzer's display settings, with the serde

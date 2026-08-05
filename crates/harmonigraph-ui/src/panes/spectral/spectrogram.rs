@@ -9,7 +9,7 @@
 //! sampled with bilinear filtering, so it reads as one smooth, filled image
 //! rather than a mesh of flat cells (which looked blocky) or interpolated
 //! triangles (which floated and creased). Geometry still comes from
-//! [`Axes`](super::axes::Axes), so it turns and flips with the pane, and
+//! [`Axes`], so it turns and flips with the pane, and
 //! its dB intensity scale is shared with the spectrum curve via
 //! [`loudness`](super::axes::loudness) so "loud" means the same in both.
 
@@ -333,8 +333,9 @@ pub(crate) struct ColumnStyle {
 }
 
 /// How a bucket becomes a colour: the dB window it is read against and the ramp
-/// the result lands on. Exactly the fields [`fill_column`] reaches —
-/// `cell_color`'s ramp, and everything [`loudness_db`] reads — and nothing else.
+/// the result lands on. Exactly the fields [`fill_column_into`] reaches —
+/// `cell_color`'s ramp, and everything [`loudness_db`](super::axes::loudness_db)
+/// reads — and nothing else.
 ///
 /// It is spelled out field by field rather than holding a whole
 /// [`SpectrumConfig`] because the config is also where the pane keeps what it
@@ -1624,7 +1625,8 @@ impl Shades {
         }
     }
 
-    /// The 0..1 loudness row `r` reads a stored byte at — [`loudness_db`]'s
+    /// The 0..1 loudness row `r` reads a stored byte at —
+    /// [`loudness_db`](super::axes::loudness_db)'s
     /// answer for that byte, reached by the affine form and carrying its clamp.
     fn level(&self, r: usize, bucket: BucketDb) -> f32 {
         (self.row0[r] + self.step * bucket as f32).clamp(0.0, 1.0)

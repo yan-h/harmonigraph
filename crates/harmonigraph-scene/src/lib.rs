@@ -6,7 +6,7 @@
 //! What lives where:
 //! - `lib.rs` (this file) — the render-facing types: [`Scene`],
 //!   [`NodeInstance`], [`EdgeInstance`], and the constants they share.
-//! - [`derive`] — the per-frame derivation ([`derive_scene`]): note tracker
+//! - [`derive`](mod@derive) — the per-frame derivation ([`derive_scene`]): note tracker
 //!   + tuning -> node/edge lists. Envelope and animation policy.
 //! - [`view`] — [`ViewConfig`] (persisted visual settings, serde defaults,
 //!   legacy-blob migration) and [`FrameParams`].
@@ -195,7 +195,7 @@ pub struct NodeInstance {
     /// on has been fully lit for a while — the ring has to follow its own
     /// note, not the disc's.
     ///
-    /// Only the fade IN: a mark is held-only (see [`derive`]), so it still
+    /// Only the fade IN: a mark is held-only (see [`derive`](mod@derive)), so it still
     /// comes off with the key rather than trailing the disc's release. The
     /// voice's envelope rides along all the same, for the day a released
     /// voice is allowed to keep an end.
@@ -298,7 +298,7 @@ pub struct Scene {
     /// composited under any active note. See [`ViewConfig::idle_marker`].
     pub idle_marker: IdleMarker,
     pub idle_radius: f32,
-    /// The faint background grid (see [`derive_grid`]): one segment per
+    /// The faint background grid (see [`derive_grid`](derive::derive_grid)): one segment per
     /// adjacent pair of visible positions, inset so every node position
     /// keeps a circular gap where its disc draws while sounding. Reuses
     /// [`EdgeInstance`]; `strength` carries the line opacity.
