@@ -39,10 +39,10 @@ struct VertexOut {
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
-    /// Width of EACH rim band in points — the two are the same thickness — and
-    /// zero when Edge turns the rim off. Both ride the note's long edges only
-    /// — see [`rail_mask`].
-    @location(3) @interpolate(flat) keyline: f32,
+    /// Width of the rim's two bands in points, `(inner, outer)`, either of
+    /// which may be zero. Both ride the note's long edges only — see
+    /// [`rail_mask`].
+    @location(3) @interpolate(flat) bands: vec2<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(4) @interpolate(flat) core: vec4<f32>,
     /// The band against the note's edge, and the one beyond it.
@@ -56,7 +56,7 @@ fn vs_note(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
-    @location(3) keyline: f32,
+    @location(3) bands: vec2<f32>,
     @location(4) core: vec4<f32>,
     @location(5) inner: vec4<f32>,
     @location(6) outer: vec4<f32>,
@@ -68,16 +68,27 @@ fn vs_note(
     );
 
     let slope = shear;
-    // How far outside its own box a note can paint: the two rim bands standing
-    // against it, one keyline wide each, and the antialiasing ramp.
-    let reach = 2.0 * keyline + locals.feather;
-    // The quad is the note's bounding box grown by `reach` on every side.
-    // Growing a box by a disc of radius r grows its bounds by exactly r,
-    // so this covers the rim however the note is slanted; the shear term
-    // is the pitch drift of a bent note's center line between its ends.
+    // How far outside its own box a note can paint, per axis. The quad is its
+    // bounding box grown by that, and a shortfall here CLIPS ink rather than
+    // costing a little fill rate, so each term is the exact one `note_color`
+    // and `rail_mask` can reach to.
+    //
+    // Across pitch: the two rim bands and the antialiasing ramp, all measured
+    // PERPENDICULAR to the note's long edges — which on a sheared note is not
+    // the pitch axis. `note_color` divides by `skew` to get that perpendicular
+    // distance, so a band `w` thick stands `skew * w` out along pitch, and the
+    // rim of a steep glide reaches a multiple of its own thickness. The
+    // `slope` term is the drift of the center line between the note's ends,
+    // and it carries the rail mask's ramp with it.
+    //
+    // Along depth: the ramp alone. Both bands are cut at the note's ends
+    // (`rail_mask`), so the rim spends none of its width on this axis, and
+    // nothing paints past the box plus half a ramp either side.
+    let skew = sqrt(1.0 + slope * slope);
+    let rim = bands.x + bands.y + 0.5 * locals.feather;
     let extent = vec2<f32>(
-        half_extent.x + abs(slope) * half_extent.y + reach,
-        half_extent.y + reach,
+        half_extent.x + abs(slope) * (half_extent.y + 0.5 * locals.feather) + skew * rim,
+        half_extent.y + locals.feather,
     );
 
     let local = corner * extent;
@@ -93,7 +104,7 @@ fn vs_note(
     out.local = local;
     out.half_extent = half_extent;
     out.shear = shear;
-    out.keyline = keyline;
+    out.bands = bands;
     out.core = core;
     out.inner = inner;
     out.outer = outer;
@@ -167,7 +178,8 @@ fn note_color(in: VertexOut) -> vec4<f32> {
 
     // Reading outward: the note, solid in its own color right to its edge, the
     // inner band standing against that edge, then the outer band standing
-    // against it — one keyline width each.
+    // against it — each its own width, and a zero-width band simply drops out,
+    // leaving the next one where it stood.
     //
     // Every band is a window on the same box filter as the fill, so they tile
     // the distance without ever overlapping — which is what keeps them OUTSIDE
@@ -181,8 +193,8 @@ fn note_color(in: VertexOut) -> vec4<f32> {
     // coverages add to at most one and premultiplied colors add with them.
     let rail = rail_mask(in);
     var out = in.core * inside(d, 0.0);
-    out += in.inner * band(d, 0.0, in.keyline) * rail;
-    out += in.outer * band(d, in.keyline, 2.0 * in.keyline) * rail;
+    out += in.inner * band(d, 0.0, in.bands.x) * rail;
+    out += in.outer * band(d, in.bands.x, in.bands.x + in.bands.y) * rail;
     return out;
 }
 

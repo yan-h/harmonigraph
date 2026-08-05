@@ -20,7 +20,7 @@
 //!
 //! **Why the buffer is still rewritten every frame.** The obvious next step
 //! is an append-and-evict ring — settled notes never change, so they could
-//! be uploaded once. They are not, deliberately. At 36 bytes per note a busy
+//! be uploaded once. They are not, deliberately. At 40 bytes per note a busy
 //! roll is tens of kilobytes a frame against the megabytes that were the
 //! whole problem, so a ring would be optimizing three orders of magnitude
 //! below the cost it was built for, and it would have to carry the far-edge
@@ -69,14 +69,22 @@ pub struct RollInstance {
     /// non-zero for a glide, which makes the box a parallelogram rather than
     /// needing a second shape.
     pub shear: f32,
-    /// Width of EACH rim band in points, and 0 when the rim is turned off.
-    /// One width for both: [`inner`](Self::inner) runs from the note's edge out
-    /// to it, [`outer`](Self::outer) from there out to twice it.
+    /// Width of the rim's two bands in points, `[inner, outer]`, and 0 for a
+    /// band that is not drawn: [`inner`](Self::inner) runs from the note's own
+    /// edge out by the first, [`outer`](Self::outer) from there out by the
+    /// second.
+    ///
+    /// Two widths rather than one, because the bands answer to different
+    /// constraints and a single width ties them together at the widths that
+    /// matter. A zero inner band is a rim of the outer band alone, standing
+    /// directly against the note — not a gap where the inner band would have
+    /// been. Which band gives way where is the pane's call (see
+    /// `panes::spectral::roll`); this crate draws the widths it is handed.
     ///
     /// The rim rides the note's two LONG edges only, and never its ends — see
     /// `rail_mask` in the shader for why that is the shape rather than a
     /// choice.
-    pub keyline: f32,
+    pub bands: [f32; 2],
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
     /// The rim's two bands: `inner` against the note's edge, `outer` beyond it.
@@ -96,7 +104,7 @@ impl RollInstance {
             0 => Float32x2, // center
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
-            3 => Float32,   // keyline
+            3 => Float32x2, // bands
             4 => Unorm8x4,  // core
             5 => Unorm8x4,  // inner
             6 => Unorm8x4,  // outer
@@ -481,7 +489,7 @@ mod tests {
             center: [128.0, 128.0],
             half_extent: [12.0, 60.0],
             shear: 0.0,
-            keyline: 2.0,
+            bands: [2.0, 2.0],
             core: [255, 0, 0, 255],
             inner: [0, 0, 0, 255],
             outer: [255, 255, 255, 255],
@@ -645,7 +653,7 @@ mod tests {
         // a thick ribbon. No keyline, so the sample reads the shape alone.
         let tap = RollInstance {
             half_extent: [20.0, 3.0],
-            keyline: 0.0,
+            bands: [0.0, 0.0],
             ..centered_note()
         };
         let frame = draw(&device, &queue, vec![tap], bg_color());
@@ -665,9 +673,9 @@ mod tests {
     /// where it actually bit — a hairline is all edge, so a band that grew
     /// inward would simply paint over the note.
     ///
-    /// The dark band being the inner one makes this the sharper test it was
-    /// before: a black band that leaked inward does not merely tint a hairline,
-    /// it erases the one thing the ribbon is there to say, which is its color.
+    /// The dark band being the inner one is what makes it the sharp test: a
+    /// black band that leaked inward does not merely tint a hairline, it erases
+    /// the one thing the ribbon is there to say, which is its color.
     #[test]
     fn the_rim_does_not_paint_over_a_hairline_note() {
         let Some((device, queue)) = headless_device() else {
@@ -712,7 +720,7 @@ mod tests {
         };
         // White, no rim: every painted byte is the fill's own coverage.
         let bare = RollInstance {
-            keyline: 0.0,
+            bands: [0.0, 0.0],
             core: [255, 255, 255, 255],
             inner: [0, 0, 0, 0],
             outer: [0, 0, 0, 0],
@@ -858,7 +866,7 @@ mod tests {
         // Only the rim paints, and in black: over a white background its
         // coverage is then exactly `1 - r/255` in every pixel it touched.
         let bare = RollInstance {
-            keyline: 1.0,
+            bands: [1.0, 1.0],
             core: [0, 0, 0, 0],
             inner: [0, 0, 0, 255],
             outer: [0, 0, 0, 255],
@@ -882,5 +890,53 @@ mod tests {
             "a 45-degree glide's rim measured {glide} across the scanline, not {expected} — \
              the band thins with the angle instead of keeping its thickness",
         );
+    }
+
+    /// A glide's quad has to hold the whole rim at the note's ENDS, where a
+    /// sheared note's ink reaches furthest along pitch.
+    ///
+    /// The two are one statement: the bands are measured perpendicular to the
+    /// long edges (the test above), so along pitch they stand `sqrt(1+slope^2)`
+    /// times their own thickness out — and the quad the vertex stage grows has
+    /// to cover exactly that, or the fragment stage never runs where the ink
+    /// was owed and the rim is cut off along a straight line at nothing in
+    /// particular. A quad grown by the rim's flat thickness is right at slope 0
+    /// and short by `(skew - 1)` rim widths everywhere else, so a held note
+    /// cannot show it and a steep bend loses points of white.
+    ///
+    /// Sampled at the note's own last row, since the shortfall grows with
+    /// `|local.y|` and is zero at its middle — which is where a scanline
+    /// measurement like the one above would look.
+    #[test]
+    fn a_steep_glides_quad_still_covers_its_rim_at_the_notes_ends() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // 8 points across pitch, 40 along time, bending 3 points of pitch per
+        // point of depth: steep enough that `skew` is 3.16, so the rim stands
+        // 12.6 points out along pitch rather than 4.
+        let steep = RollInstance {
+            half_extent: [4.0, 20.0],
+            shear: 3.0,
+            ..centered_note()
+        };
+        let frame = draw(&device, &queue, vec![steep], bg_color());
+        // Row 147 samples `local.y = 19.5` — inside the note's box, half a
+        // point short of its end, and still under the full rail. There the
+        // note's center line has drifted 58.5 points, so the far flank runs
+        // 190.5..196.8 black and 196.8..203.2 white.
+        let at = |x: u32| pixel(&frame, x, 147);
+        assert!(
+            near(at(193), [0, 0, 0, 255]),
+            "the inner band is missing at the note's end: {:?}",
+            at(193),
+        );
+        assert!(
+            near(at(200), [255, 255, 255, 255]),
+            "the outer band is cut off at the note's end ({:?}) — the quad was grown \
+             by the rim's flat thickness rather than its sheared reach",
+            at(200),
+        );
+        assert!(near(at(206), BG), "the rim reaches further than it should: {:?}", at(206));
     }
 }
