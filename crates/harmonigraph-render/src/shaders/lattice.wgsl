@@ -576,32 +576,44 @@ fn shimmer_sharpness() -> f32 {
 // values this shader works in — which are gamma-encoded, since the targets are
 // UNORM and nothing decodes on the way in.
 //
-// Added and not mixed toward white, and that is what makes the sheet mean one
-// thing across the pitch ramp. A mix is a lerp to a fixed endpoint, so what it
-// does to a color depends on how far that color already is from white: one
-// peak lifted the ramp's dark end by 32 points of `L*` and its bright end by
-// 19, and — the half that actually shows — it spent two thirds of EITHER end's
-// chroma getting there, because a lerp shrinks the gaps between the channels
-// as it goes. A ring under a peak was therefore not so much brightened as
-// bleached, and on a dark saturated color bleaching is most of what there was
-// to see: the violet went pale rather than lit. An equal addition leaves the
-// channel gaps where they are, so the color survives the peak and the light is
-// what changes. Both halves are measured in
+// Added and not mixed toward white, which is what keeps the sheet close to
+// meaning one thing across the pitch ramp. A mix is a lerp to a fixed endpoint,
+// so what it does to a color depends on how far that color already is from
+// white: it lands 54 points of `L*` on the ramp's dark end against 27 on its
+// bright one, twice as much light for the same setting, and — the half that
+// shows — it leaves 15% of the chroma at EVERY point on the ramp, because a
+// lerp shrinks the gaps between the channels as it goes. A ring under such a
+// peak is not so much brightened as bleached, and on a dark saturated color
+// bleaching is most of what there is to see: the violet goes pale rather than
+// lit. An addition leaves the channel gaps where they are until a channel
+// saturates, so 39 lands against 30 and the chroma left runs 44% to 100%. Both
+// halves are measured in
 // `the_sweep_adds_the_same_light_to_a_dark_color_as_to_a_bright_one` and
 // `a_ring_keeps_its_color_under_a_sweep_peak`.
 //
-// Encoded values are also what makes ONE constant enough. The encoding is a
+// Encoded values are what makes ONE constant close to enough. The encoding is a
 // power of 1/2.4 and `L*` is a cube root of luminance, so a fixed step here is
-// a near-fixed step in what the eye reads: the same 0.4 adds 24 points of `L*`
-// at the ramp's dark end and 20 at its bright one, where the mix it replaces
-// ran 32 against 19. Decoding to linear light first would undo exactly that —
-// a fixed step in luminance is a huge one down at the bottom of the ramp and
-// invisible at the top.
+// a near-fixed step in what the eye reads. Decoding to linear light first would
+// undo exactly that — a fixed step in luminance is a huge one down at the
+// bottom of the ramp and invisible at the top.
 //
-// The size is what a peak was worth at the middle of the ramp before, so a
-// view carries its Intensity setting over unchanged; what moved is the two
-// ends, toward each other. Under one an indicator still gives up most of its
-// pitch color, which is the trade the Intensity bar exists to make — see
+// What the size does NOT do is hold a peak where a mix put it: at the middle of
+// the ramp a mix is worth 40 points of `L*` and this is worth 31, so the same
+// Intensity reads as a weaker sweep and matching the old peak would take 0.54.
+// That is the trade taken deliberately, because 0.54 is bought from the two
+// things above — it clips more of the ramp and takes more of the color, which
+// is what the constant exists to stop.
+//
+// Nor is the addition equal all the way up. 0.4 fits in the headroom of exactly
+// one color on the default ramp, so by Intensity 1 the other 63 are clipping in
+// their top channel, and a clip is not symmetric: the channels with room go on
+// rising and the one without does not, which drains chroma and swings hue. The
+// ramp's most saturated color starts that at Intensity 0.39 and its bright end
+// swings 15 degrees of hue by 1. Holding hue AND lightness across the whole bar
+// is a different model — a lift in Oklab `L` rather than in these channels,
+// with a gamut decision attached — and not one this constant can express.
+// Under a peak an indicator still gives up most of its pitch color either way,
+// which is the trade the Intensity bar exists to make: see
 // `ViewConfig::shimmer_intensity`.
 const SHIMMER_LIFT: f32 = 0.4;
 // What the layer's coverage sits at between peaks at intensity 1, against 1
@@ -769,12 +781,15 @@ fn shimmer_terms(mode: u32, field: vec2<f32>, footprint: f32) -> vec2<f32> {
         footprint / period,
     );
     let depth = shimmer_depth() * resolve;
-    // Both clamped into what each term can mean rather than trusted to the
-    // bar's range: light added past 1 would white out the darkest color this
-    // layer can hold and have nowhere left to go, and a coverage scale below 0
-    // would take the layer negative. The peak is clamped BEFORE the band
-    // shapes it, so a clamped intensity is still a band and not a flat lid
-    // over one.
+    // Both clamped into what each term can MEAN rather than trusted to the
+    // bar's range, and the bar is not where either bound bites: a lift past 1
+    // says "whiter than white", which no channel can carry further than 1
+    // anyway, and a coverage scale below 0 would take the layer negative.
+    // `ViewConfig::sanitize` checks this intensity for finiteness and not for
+    // range, so what these hold against is a value arriving from a saved view
+    // rather than from the bar — which tops out at 2, well inside both. The
+    // peak is clamped BEFORE the band shapes it, so a clamped intensity is
+    // still a band and not a flat lid over one.
     let lift = min(SHIMMER_LIFT * depth, 1.0);
     let trough = clamp(1.0 - (1.0 - SHIMMER_TROUGH) * depth, 0.0, 1.0);
     return vec2<f32>(lift * band, mix(trough, 1.0, band));

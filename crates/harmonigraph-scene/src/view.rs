@@ -394,21 +394,23 @@ pub struct ViewConfig {
     /// a shimmer that brightens without dimming or the reverse.
     ///
     /// The light is ADDED rather than mixed toward white (`SHIMMER_LIFT` in
-    /// `lattice.wgsl`), which is what makes one setting mean one thing across
-    /// the pitch ramp: a peak lands the same on a low note's dark color as on
-    /// a high note's bright one, where a mix toward a fixed white would lift
-    /// whichever was further from it by more and spend the color of both
-    /// getting there.
+    /// `lattice.wgsl`), which is what brings one setting close to meaning one
+    /// thing across the pitch ramp: a peak lands within a quarter as much on a
+    /// low note's dark color as on a high note's bright one, where a mix toward
+    /// a fixed white lifts whichever is further from it by twice as much and
+    /// spends the color of both getting there.
     ///
-    /// 0 is the layer drawing exactly as it does unshimmered, from a bar
-    /// rather than from the mode. Past 1 the two stop moving together, and not
-    /// because they are separate: the added light CLIPS, and it clips the
-    /// brightest colors first, so up there a peak goes on lifting the ramp's
-    /// dark end while its bright end is already flattening into white — and
-    /// the trough goes on deepening to the clamp under both. So the top of the
-    /// bar buys its contrast by darkening the layer between bands rather than
-    /// by lighting them evenly: still more shimmer, and worth having, but a
-    /// different trade from the bottom half.
+    /// 0 is the layer drawing exactly as it does unshimmered, from a bar rather
+    /// than from the mode. The two stop moving together well before the top,
+    /// and not because they are separate: the added light CLIPS, first in
+    /// whichever channel is already highest, so the ramp's most saturated color
+    /// starts flattening at about 0.39 and all but its darkest by 1, while the
+    /// trough goes on deepening to the clamp under every one of them. So the
+    /// upper half of the bar buys its contrast by darkening the layer between
+    /// bands rather than by lighting them evenly, and what it takes on the way
+    /// is chroma and a little hue at the ramp's bright end — 15 degrees of it
+    /// by 1. Still more shimmer, and worth having, but a different trade from
+    /// the bottom half.
     ///
     /// What the light costs is real at any setting, and it is the point of
     /// the bar: under a strong band an indicator says "an octave sounds here"
@@ -696,9 +698,9 @@ fn default_shimmer_width() -> f32 {
     5.0
 }
 
-/// The full tuned depth — what the sweep was fixed at before the bar: a band
+/// The full tuned depth — what the sweep is fixed at without the bar: a band
 /// carrying the whole of the light one adds over a shallow dip, which is the
-/// balance the two shader constants were dialed to.
+/// balance the two shader constants are dialed to.
 fn default_shimmer_intensity() -> f32 {
     1.0
 }

@@ -319,12 +319,12 @@ fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .on_hover_text(
                 "How strong the light is: how much brightness a peak adds to \
                  the layer, and how far the layer dims between peaks, \
-                 together. The same amount wherever it lands, so a peak reads \
-                 as strongly on a low note's dark color as on a high note's \
-                 bright one. 0 draws the layer exactly as it is unshimmered; 1 \
-                 is the tuned depth. Past that a peak washes out the brightest \
-                 colors first -- an indicator under it says an octave sounds \
-                 without saying which",
+                 together. Near enough the same amount wherever it lands, so a \
+                 peak reads about as strongly on a low note's dark color as on \
+                 a high note's bright one. 0 draws the layer exactly as it is \
+                 unshimmered; 1 is the tuned depth. From about 0.4 up a peak \
+                 starts washing out the most saturated colors first -- an \
+                 indicator under it says an octave sounds without saying which",
             );
         ValueBar::new(&mut view.shimmer_softness, 0.0..=1.0, "Softness")
             .show(ui)
