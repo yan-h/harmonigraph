@@ -25,7 +25,7 @@ fn drawn_label(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
 ) -> (Vec<(egui::Rect, String)>, Vec<egui::Rect>) {
-    let (pieces, shapes) = label_pieces(name, anchor, 1.0);
+    let (pieces, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
     (pieces.into_iter().map(|(galley, _, text)| (galley, text)).collect(), shapes)
 }
 
@@ -40,7 +40,7 @@ fn drawn_label_ink(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
 ) -> Vec<(egui::Rect, String)> {
-    label_pieces(name, anchor, 1.0).0.into_iter().map(|(_, ink, text)| (ink, text)).collect()
+    label_pieces(name, anchor, 1.0, 1.0).0.into_iter().map(|(_, ink, text)| (ink, text)).collect()
 }
 
 /// A label's ink, drawn at an arbitrary `scale` and pixels-per-point.
@@ -88,19 +88,31 @@ fn label_ink_at(
 /// the text pieces and the drawn marks by two entirely separate routes, the
 /// batch's transform and `paint_mark`'s own, so a fixture that leaves it at 1
 /// is blind to the two of them disagreeing.
+///
+/// `ppp` is the panel's device pixels per point, which the marks cross twice:
+/// they are rasterized in pixels and drawn in points, so `paint_mark` divides
+/// the bitmap's size back out by it. At 1 that division is the identity and a
+/// fixture cannot see it at all.
+///
+/// The third return is what `draw_stacked_name` reports as the label's reach
+/// below the anchor, which is the caller's whole view of the drawn marks: the
+/// cents readout is placed off it and nothing else asks.
 fn label_pieces(
     name: harmonigraph_core::NoteName,
     anchor: egui::Pos2,
     magnify: f32,
-) -> (Vec<(egui::Rect, egui::Rect, String)>, Vec<egui::Rect>) {
+    ppp: f32,
+) -> (Vec<(egui::Rect, egui::Rect, String)>, Vec<egui::Rect>, f32) {
     let ctx = egui::Context::default();
     theme::apply_theme(&ctx); // the real Iosevka metrics, not egui's fallback
+    ctx.set_pixels_per_point(ppp);
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 400.0));
     let mut batch = crate::text::TextBatch::default();
+    let mut reach = 0.0;
     let out = ctx.run_ui(
         egui::RawInput { screen_rect: Some(screen), ..Default::default() },
         |ui| {
-            panes::lattice::draw_stacked_name(
+            reach = panes::lattice::draw_stacked_name(
                 &mut batch,
                 ui.painter(),
                 anchor,
@@ -113,13 +125,17 @@ fn label_pieces(
         },
     );
     let texts = batch.pieces().iter().map(|p| (p.galley, p.ink, p.text.clone())).collect();
+    // Degenerate shapes are dropped rather than measured — but a drawn mark
+    // collapsing to nothing is a defect, not an absence, so every test that
+    // reads this list has to pin how many marks it expects rather than take
+    // the length it is given.
     let shapes = out
         .shapes
         .iter()
         .map(|s| s.shape.visual_bounding_rect())
         .filter(|r| r.is_finite() && r.width() > 0.0 && r.height() > 0.0)
         .collect();
-    (texts, shapes)
+    (texts, shapes, reach)
 }
 
 /// The lattice's note labels stack the accidental over the comma sign in one
@@ -554,7 +570,7 @@ fn the_drawn_marks_magnify_with_the_letters_beside_them() {
         syntonic_commas: 2,
         septimal_commas: -1,
     };
-    let (texts, shapes) = label_pieces(name, anchor, 1.0);
+    let (texts, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
     assert!(!shapes.is_empty(), "the fixture has to carry drawn marks to say anything");
 
     // About the anchor -- the point both `TextBatch::magnified` and
@@ -574,7 +590,7 @@ fn the_drawn_marks_magnify_with_the_letters_beside_them() {
     // fraction of a percent off the rasterized size), and it is also where a
     // wrong transform moves a mark by least.
     for k in [0.9, 1.03, 1.4] {
-        let (texts_k, shapes_k) = label_pieces(name, anchor, k);
+        let (texts_k, shapes_k, _) = label_pieces(name, anchor, k, 1.0);
         assert_eq!(texts_k.len(), texts.len(), "magnifying must not change what is drawn");
         assert_eq!(shapes_k.len(), shapes.len(), "...nor how many marks it takes");
         for ((_, ink, text), (_, ink_k, text_k)) in texts.iter().zip(&texts_k) {
@@ -592,6 +608,108 @@ fn the_drawn_marks_magnify_with_the_letters_beside_them() {
                 scaled(*shape, k),
             );
         }
+    }
+}
+
+/// A drawn mark is rasterized in DEVICE pixels and drawn in POINTS, so its
+/// quad is its bitmap's size divided by the panel's pixel ratio -- and that
+/// division is the whole of what keeps a `+` the same physical size on a
+/// Retina panel and on a 1x monitor.
+///
+/// Invert it and the marks come out four times too big on one of the two and
+/// right on the other, while the letters beside them stay right either way,
+/// because those go through egui's own text path and cross the same boundary
+/// there. Which is a defect that hides: the plugin is used daily on a Retina
+/// display, so the configuration most likely to be seen is the one least
+/// likely to be reasoned about.
+#[test]
+fn a_drawn_mark_holds_its_size_in_points_at_every_pixel_density() {
+    let anchor = egui::pos2(200.0, 200.0);
+    // Both kinds of drawn mark, each with a count beside it: a name with no
+    // comma draws no shapes, and then everything below holds vacuously.
+    let name = harmonigraph_core::NoteName {
+        letter: 'B',
+        sharps: -1,
+        syntonic_commas: 2,
+        septimal_commas: -2,
+    };
+    // Two marks, each a rim and a fill. Pinned as a NUMBER rather than read
+    // off the list, because the failure this is watching for is a quad
+    // collapsing to nothing -- and a collapsed quad leaves the list instead of
+    // failing an assertion about its size (see `label_pieces`).
+    const SHAPES: usize = 4;
+    let (_, shapes, _) = label_pieces(name, anchor, 1.0, 1.0);
+    assert_eq!(shapes.len(), SHAPES, "the fixture has to draw both marks: {shapes:?}");
+
+    // What the raster ladder can move a box by at one density, in points. The
+    // bitmap is a whole number of device pixels (`mark_geometry` ceils) around
+    // a shape whose size was itself rounded to a whole pixel (`mark_key`), and
+    // the rim adds a ring radius rounded the same way on each side -- under
+    // 2.25 device pixels all told, which is that many points at ppp 1 and half
+    // as many at ppp 2. A bound, not a measurement: the widest gap these
+    // densities actually open is 0.7pt, on boxes 7 and 11 points across.
+    let slack = |ppp: f32| 2.25 / ppp;
+
+    // 2 is the Retina panel and the one that matters; 1.5 and 3 are there
+    // because the ladder is not a scaling of the ppp-1 rung and a bug that
+    // happened to divide evenly at 2 would sail through on its own.
+    for ppp in [1.5, 2.0, 3.0] {
+        let (_, at_ppp, _) = label_pieces(name, anchor, 1.0, ppp);
+        assert_eq!(at_ppp.len(), SHAPES, "a mark collapsed at ppp {ppp}: {at_ppp:?}");
+        for (i, (one, dense)) in shapes.iter().zip(&at_ppp).enumerate() {
+            let room = slack(1.0) + slack(ppp);
+            assert!(
+                (one.width() - dense.width()).abs() < room
+                    && (one.height() - dense.height()).abs() < room,
+                "mark {i} at ppp {ppp}: {:?} against {:?} at ppp 1, past {room} points",
+                dense.size(),
+                one.size(),
+            );
+            // The quad's PLACE crosses no such boundary -- it is the label's
+            // layout, in points throughout -- so it holds to within the glyph
+            // rounding that moves the column the mark hangs off.
+            assert!(
+                (one.center() - dense.center()).length() < 0.25,
+                "mark {i} moved at ppp {ppp}: {:?} against {:?}",
+                dense.center(),
+                one.center(),
+            );
+        }
+    }
+}
+
+/// What a label reports as its reach is the bottom of the mark it drew.
+///
+/// The reach is the caller's only view of a drawn mark: the cents readout is
+/// placed off it, and a mark is a bitmap the text pass cannot see. So the
+/// number and the quad are two readings of one bitmap that have to agree --
+/// the same `h / ppp` from opposite ends, and nothing else in the label
+/// compares them.
+#[test]
+fn the_reach_a_label_reports_is_where_its_drawn_mark_ends() {
+    let anchor = egui::pos2(200.0, 200.0);
+    // One bare comma: no count beside it, so the mark's own bitmap is the
+    // lowest thing in the label and the reach is reporting it rather than a
+    // digit's ink.
+    let name = harmonigraph_core::NoteName {
+        letter: 'B',
+        sharps: 0,
+        syntonic_commas: 1,
+        septimal_commas: 0,
+    };
+    for ppp in [1.0, 2.0] {
+        let (_, shapes, reach) = label_pieces(name, anchor, 1.0, ppp);
+        // Rim then fill, and it is the FILL the reach reports: the rim is a
+        // halo the readout is meant to overlap, the way it overlaps a glyph's.
+        assert_eq!(shapes.len(), 2, "one mark, rim and fill, at ppp {ppp}: {shapes:?}");
+        let (rim, fill) = (shapes[0], shapes[1]);
+        assert!(rim.contains_rect(fill), "the rim should be the padded one: {rim:?} {fill:?}");
+        assert!(
+            (anchor.y + reach - fill.bottom()).abs() < 0.01,
+            "at ppp {ppp} the label reports reaching {:.3} where its mark ends at {:.3}",
+            anchor.y + reach,
+            fill.bottom(),
+        );
     }
 }
 
@@ -916,3 +1034,4 @@ fn every_label_names_its_own_node_in_the_panes_own_space() {
         "a label's place in its pane cannot depend on where the pane is: {off:?}",
     );
 }
+
