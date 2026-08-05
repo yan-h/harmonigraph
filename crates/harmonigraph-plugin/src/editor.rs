@@ -293,7 +293,21 @@ impl EditorShared {
         self.clock.observe(newest.time, now);
         for event in &self.drain_buf {
             let mut event = *event;
+            let raw = event.time;
             event.time = self.clock.map(event.time, now);
+            // DIAGNOSTIC (temporary, not for merge): the raw event stream, so a
+            // press that arrives twice can be told from one that does not. Every
+            // note event the audio thread handed over, with the sample-clock
+            // stamp it carried and the GUI time it mapped to.
+            self.ui.console.log(format!(
+                "note ch{} n{} {:?} raw {raw:.4} -> {:.4} (roll {} live, {} past)",
+                event.channel,
+                event.note,
+                event.kind,
+                event.time,
+                self.ui.tracker.roll().notes().filter(|n| n.is_live()).count(),
+                self.ui.tracker.roll().notes().filter(|n| !n.is_live()).count(),
+            ));
             self.ui.tracker.handle_event(event);
         }
         true
