@@ -13,10 +13,10 @@
 //!
 //! **What this does instead.** One quad per note segment, with a box signed
 //! distance field in the fragment shader ([`shaders/roll.wgsl`]). The note's
-//! solid body, the white keyline beside it and the black shade beyond that are
-//! bands of that distance, so a rim band costs a compare rather than a second
-//! and third shape. Four vertices per note against several hundred: the upload
-//! stops mattering rather than getting cheaper.
+//! solid body and the two rim bands beside it are bands of that distance, so a
+//! rim band costs a compare rather than a second and third shape. Four vertices
+//! per note against several hundred: the upload stops mattering rather than
+//! getting cheaper.
 //!
 //! **Why the buffer is still rewritten every frame.** The obvious next step
 //! is an append-and-evict ring — settled notes never change, so they could
@@ -46,6 +46,9 @@ pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &["vs_note", "fs_note_gamma", "fs_
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
 /// color, and the two rim bands standing outside its long edges.
 ///
+/// Reading outward: [`core`](Self::core), [`inner`](Self::inner),
+/// [`outer`](Self::outer).
+///
 /// Screen geometry, in egui POINTS, already resolved through the pane's
 /// `Axes` — this crate never learns which way the pane is turned. Lengths
 /// are along the pane's two axes rather than x/y for the same reason.
@@ -67,8 +70,8 @@ pub struct RollInstance {
     /// needing a second shape.
     pub shear: f32,
     /// Width of EACH rim band in points, and 0 when the rim is turned off.
-    /// One width for both: [`glow`](Self::glow) runs from the note's edge out
-    /// to it, [`shade`](Self::shade) from there out to twice it.
+    /// One width for both: [`inner`](Self::inner) runs from the note's edge out
+    /// to it, [`outer`](Self::outer) from there out to twice it.
     ///
     /// The rim rides the note's two LONG edges only, and never its ends — see
     /// `rail_mask` in the shader for why that is the shape rather than a
@@ -76,11 +79,13 @@ pub struct RollInstance {
     pub keyline: f32,
     /// Premultiplied sRGB bytes, straight out of [`egui::Color32`].
     pub core: [u8; 4],
-    /// The keyline standing against the note's edge, white in this pane.
-    pub glow: [u8; 4],
-    /// The outer band, black in this pane: the dark backing that separates a
-    /// note's keyline from whatever the spectrogram is doing behind it.
-    pub shade: [u8; 4],
+    /// The rim's two bands: `inner` against the note's edge, `outer` beyond it.
+    ///
+    /// Named for where they sit rather than for what they look like. Which is
+    /// dark and which is light is the pane's decision, and it belongs there
+    /// whole — this crate draws the instance it is handed and invents nothing.
+    pub inner: [u8; 4],
+    pub outer: [u8; 4],
 }
 
 impl RollInstance {
@@ -93,8 +98,8 @@ impl RollInstance {
             2 => Float32,   // shear
             3 => Float32,   // keyline
             4 => Unorm8x4,  // core
-            5 => Unorm8x4,  // glow
-            6 => Unorm8x4,  // shade
+            5 => Unorm8x4,  // inner
+            6 => Unorm8x4,  // outer
         ],
     };
 }
@@ -468,9 +473,9 @@ mod tests {
     }
 
     /// A straight note centered in the frame: 24 points thick, 120 long, with
-    /// a 2-point white keyline standing against its long edges and a 2-point
-    /// black shade standing outside that. Wide bands so a sample lands well
-    /// inside each.
+    /// the pane's own rim — a 2-point black band standing against its long
+    /// edges and a 2-point white one outside that. Wide bands so a sample lands
+    /// well inside each.
     fn centered_note() -> RollInstance {
         RollInstance {
             center: [128.0, 128.0],
@@ -478,8 +483,8 @@ mod tests {
             shear: 0.0,
             keyline: 2.0,
             core: [255, 0, 0, 255],
-            glow: [255, 255, 255, 255],
-            shade: [0, 0, 0, 255],
+            inner: [0, 0, 0, 255],
+            outer: [255, 255, 255, 255],
         }
     }
 
@@ -515,39 +520,40 @@ mod tests {
     }
 
     /// A note is a SOLID rectangle of its own color with both rim bands
-    /// standing outside it: reading outward from the middle — the note's color
-    /// right to its edge, the white keyline, the black shade, nothing.
+    /// standing outside it, in the order the instance gives them: reading
+    /// outward from the middle — the note's color right to its edge, `inner`,
+    /// `outer`, nothing.
     ///
     /// The rim standing outside is the flood invariant, and the reason the
     /// bands are read off a distance rather than drawn as a stroke of the
     /// note's path: a centered stroke grows inward exactly as much as outward,
     /// and on a ribbon a few points thick the two long edges met in the middle
-    /// and painted the interior white. A band at distance 0..2 cannot reach
+    /// and painted the interior over. A band at distance 0..2 cannot reach
     /// inside a box whose interior is at negative distance.
     ///
-    /// The ORDER is the other half of it. The dark band is the backing the
-    /// keyline is read against, so it goes outside the light one; inside, it
-    /// would be a dark line eating the note's own color at every ribbon width.
+    /// The colors here are the pane's (black against the note, white outside),
+    /// so this reads as the picture as well as the contract — but what the
+    /// shader owes is the ORDER, not the choice.
     #[test]
     fn a_note_is_solid_and_its_rim_bands_stand_outside_it() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // Distances outward from the note's edge (x = 140): the keyline 0..2,
-        // the shade 2..4.
+        // Distances outward from the note's edge (x = 140): `inner` 0..2,
+        // `outer` 2..4.
         let at = |x: u32| pixel(&frame, x, 128);
         const RED: [u8; 4] = [255, 0, 0, 255];
         assert!(near(at(128), RED), "the note's middle is not painted: {:?}", at(128));
         assert!(near(at(138), RED), "the fill stops short of the note's edge: {:?}", at(138));
         assert!(
-            near(at(141), [255, 255, 255, 255]),
-            "no white keyline standing against the note's edge: {:?}",
+            near(at(141), [0, 0, 0, 255]),
+            "no black band standing against the note's edge: {:?}",
             at(141),
         );
         assert!(
-            near(at(143), [0, 0, 0, 255]),
-            "no black shade standing outside the keyline: {:?}",
+            near(at(143), [255, 255, 255, 255]),
+            "no white band standing outside the black one: {:?}",
             at(143),
         );
         assert!(near(at(145), BG), "the rim reaches further than it should: {:?}", at(145));
@@ -559,30 +565,29 @@ mod tests {
     ///
     /// This is what stops repeats of one key painting their halos over each
     /// other: the rim stands outside the note, and along the time axis a
-    /// note's outside is the next note. A shade capped at the ends would be
-    /// worse than a keyline capped there — it would draw a dark seam across a
-    /// run of one key that was played as a run.
+    /// note's outside is the next note. Either band capped at the ends draws a
+    /// seam across a run of one key that was played as a run.
     #[test]
     fn both_rim_bands_ride_the_long_edges_and_stop_at_the_ends() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // Reading out from the center: the note spans +-12 across pitch (x)
-        // and +-60 along time (y), the keyline the 2 beyond each and the shade
-        // the 2 beyond that.
+        // and +-60 along time (y), `inner` the 2 beyond each and `outer` the 2
+        // beyond that.
         let frame = draw(&device, &queue, vec![centered_note()], bg_color());
-        // (the note's body, the keyline, the shade) on a side, then on an end.
+        // (the note's body, `inner`, `outer`) on a side, then on an end.
         let side = [pixel(&frame, 138, 128), pixel(&frame, 141, 128), pixel(&frame, 143, 128)];
         let end = [pixel(&frame, 128, 186), pixel(&frame, 128, 189), pixel(&frame, 128, 191)];
         const RED: [u8; 4] = [255, 0, 0, 255];
         const WHITE: [u8; 4] = [255, 255, 255, 255];
         const BLACK: [u8; 4] = [0, 0, 0, 255];
         assert!(near(side[0], RED), "the note's body went missing: {:?}", side[0]);
-        assert!(near(side[1], WHITE), "the keyline rail is missing: {:?}", side[1]);
-        assert!(near(side[2], BLACK), "the shade rail is missing: {:?}", side[2]);
+        assert!(near(side[1], BLACK), "the inner rail is missing: {:?}", side[1]);
+        assert!(near(side[2], WHITE), "the outer rail is missing: {:?}", side[2]);
         assert!(near(end[0], RED), "the note's body was cut at its end: {:?}", end[0]);
-        assert!(near(end[1], BG), "the keyline wrapped the end: {:?}", end[1]);
-        assert!(near(end[2], BG), "the shade wrapped the end: {:?}", end[2]);
+        assert!(near(end[1], BG), "the inner band wrapped the end: {:?}", end[1]);
+        assert!(near(end[2], BG), "the outer band wrapped the end: {:?}", end[2]);
     }
 
     /// A rail runs the FULL length of the note it edges — corner to corner,
@@ -606,21 +611,21 @@ mod tests {
         // one along time and 190 is clear of it.
         let lit = |x: u32, y: u32| pixel(&frame, x, y)[1] > (BG[1] + 40);
         let dark = |x: u32, y: u32| pixel(&frame, x, y)[1] < (BG[1] - 40);
-        // Both edges of the 2-point keyline band, which starts at the note's
+        // Both edges of the 2-point `inner` band, which starts at the note's
         // own edge (x = 140): column 140 is its inner half, 141 its OUTER half —
         // the half the band's corner rounding used to take off early.
         for x in [140, 141] {
-            assert!(lit(x, 128), "the rail is missing at the note's middle (x = {x})");
-            assert!(lit(x, 187), "the rail stops short of the note's end (x = {x})");
-            assert!(!lit(x, 190), "the rail runs past the note's end (x = {x})");
+            assert!(dark(x, 128), "the rail is missing at the note's middle (x = {x})");
+            assert!(dark(x, 187), "the rail stops short of the note's end (x = {x})");
+            assert!(!dark(x, 190), "the rail runs past the note's end (x = {x})");
         }
-        // And the shade band beyond it (x = 142, 143), which is cut by the same
-        // mask and so runs exactly as far: a dark rail one band short of the
-        // note's end would read as the note tapering.
+        // And the `outer` band beyond it (x = 142, 143), which is cut by the
+        // same mask and so runs exactly as far: an outer rail one band short of
+        // the note's end would read as the note tapering.
         for x in [142, 143] {
-            assert!(dark(x, 128), "the shade rail is missing at the note's middle (x = {x})");
-            assert!(dark(x, 187), "the shade rail stops short of the note's end (x = {x})");
-            assert!(!dark(x, 190), "the shade rail runs past the note's end (x = {x})");
+            assert!(lit(x, 128), "the outer rail is missing at the note's middle (x = {x})");
+            assert!(lit(x, 187), "the outer rail stops short of the note's end (x = {x})");
+            assert!(!lit(x, 190), "the outer rail runs past the note's end (x = {x})");
         }
     }
 
@@ -655,10 +660,14 @@ mod tests {
     }
 
     /// The rim must still stand OUTSIDE a note floored to its minimum
-    /// thickness: the note's own color at the middle, the white band beyond it,
-    /// the black band beyond that. This is the same invariant at the width
+    /// thickness: the note's own color at the middle, the black band beyond it,
+    /// the white band beyond that. This is the same invariant at the width
     /// where it actually bit — a hairline is all edge, so a band that grew
     /// inward would simply paint over the note.
+    ///
+    /// The dark band being the inner one makes this the sharper test it was
+    /// before: a black band that leaked inward does not merely tint a hairline,
+    /// it erases the one thing the ribbon is there to say, which is its color.
     #[test]
     fn the_rim_does_not_paint_over_a_hairline_note() {
         let Some((device, queue)) = headless_device() else {
@@ -667,16 +676,17 @@ mod tests {
         // 1.5 points across pitch: what `panes::spectral::roll` floors a ribbon too thin
         // to see to (MIN_RIBBON_PX). Narrower than a pixel is wide, so no
         // sample here is purely one thing — what matters is that the middle
-        // still reads as the NOTE rather than as the keyline having flooded
-        // it, which is [255, 255, 255].
+        // still reads as the NOTE rather than as a band having flooded it. Its
+        // own coverage there is 0.75, so a red channel anywhere near that is
+        // the note; near 0 is the black band standing where the note should be.
         let note = RollInstance { half_extent: [0.75, 60.0], ..centered_note() };
         let frame = draw(&device, &queue, vec![note], bg_color());
         let at = |x: u32| pixel(&frame, x, 128);
         let middle = at(128);
-        assert_eq!(middle[0], 255, "the note's own color is missing: {middle:?}");
-        assert!(middle[1] < 128, "the keyline flooded the note's middle: {middle:?}");
-        assert!(near(at(129), [255, 255, 255, 255]), "no keyline beside it: {:?}", at(129));
-        assert!(near(at(131), [0, 0, 0, 255]), "no shade outside the keyline: {:?}", at(131));
+        assert!(middle[0] > 150, "the rim flooded the note's own color: {middle:?}");
+        assert!(middle[1] < 32, "something light flooded the note's middle: {middle:?}");
+        assert!(near(at(129), [0, 0, 0, 255]), "no black band beside it: {:?}", at(129));
+        assert!(near(at(131), [255, 255, 255, 255]), "no white band outside it: {:?}", at(131));
         assert!(near(at(134), BG), "the rim reaches further than it should: {:?}", at(134));
     }
 
@@ -704,8 +714,8 @@ mod tests {
         let bare = RollInstance {
             keyline: 0.0,
             core: [255, 255, 255, 255],
-            glow: [0, 0, 0, 0],
-            shade: [0, 0, 0, 0],
+            inner: [0, 0, 0, 0],
+            outer: [0, 0, 0, 0],
             ..centered_note()
         };
         // The brightest pixel anywhere, over a sweep of sub-pixel scroll
@@ -839,7 +849,7 @@ mod tests {
     /// distance would read 4.0 for both.
     ///
     /// Both bands are in the measurement, since both are cut from the same
-    /// distance and the shade is the one that would have to stretch furthest.
+    /// distance and `outer` is the one that would have to stretch furthest.
     #[test]
     fn a_glides_rim_keeps_its_thickness_instead_of_thinning_with_the_angle() {
         let Some((device, queue)) = headless_device() else {
@@ -850,8 +860,8 @@ mod tests {
         let bare = RollInstance {
             keyline: 1.0,
             core: [0, 0, 0, 0],
-            glow: [0, 0, 0, 255],
-            shade: [0, 0, 0, 255],
+            inner: [0, 0, 0, 255],
+            outer: [0, 0, 0, 255],
             ..centered_note()
         };
         let white = wgpu::Color::WHITE;

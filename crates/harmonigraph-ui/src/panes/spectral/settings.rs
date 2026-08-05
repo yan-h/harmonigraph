@@ -193,10 +193,12 @@ pub(crate) fn spectrum_settings_pane(ui: &mut egui::Ui, state: &mut SharedState)
     });
 
     ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Edge").show(ui).on_hover_text(
-        "A light rim along the spectrum's profile and around each note \
-         ribbon. Both sit over the spectrogram, whose colors run from black \
-         to near-white, so either can end up the same brightness as what is \
-         behind it and lose its shape. 0 draws none.",
+        "A rim along the spectrum's profile and around each note ribbon. \
+         Both sit over the spectrogram, whose colors run from black to \
+         near-white, so either can end up the same brightness as what is \
+         behind it and lose its shape. This sets how bright the profile's \
+         line is; a note's rim is a solid black and white pair, which this \
+         only switches. 0 draws neither.",
     );
 
     // ---- Piano roll -----------------------------------------------------

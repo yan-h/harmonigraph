@@ -77,31 +77,24 @@ const MIN_RIBBON_PX: f32 = 1.5;
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
 /// How wide each of the two bands riding a note's outer edge is, in points —
-/// the white keyline against the note, and the black shade outside it.
+/// the black one against the note, and the white one outside it.
 ///
 /// Fixed rather than a setting: a full point is the only width worth having.
-/// The keyline is the brightest thing on a note, and a *bright* sub-point line
-/// shimmers as the roll scrolls, its peak intensity wobbling with every
+/// The white band is the brightest thing on a note, and a *bright* sub-point
+/// line shimmers as the roll scrolls, its peak intensity wobbling with every
 /// sub-pixel step across the grid (worst on a Hi-DPI display, where 0.6 points
 /// is barely over one physical pixel). Wider, and a highlight on a ribbon a
-/// few points thick starts reading as a second ribbon. Edge is the knob that
-/// matters here, and it sets how BRIGHT the line is.
+/// few points thick starts reading as a second ribbon.
 ///
 /// One width for both bands, so the rim is a matched pair rather than a line
 /// with a fringe: at a point each, a note carries two points of rim per flank
 /// whatever the ribbon behind it measures.
 const KEYLINE_PX: f32 = 1.0;
 
-/// The roll's glow reads this much brighter than the raw Edge fraction, so a
-/// modest Edge setting still lands a crisp highlight over a bright spectrogram.
-/// Only the roll's glow is boosted; the spectrum profile's edge ([`keyline`])
-/// is left at the fraction, since it is one line on a filled slab and does not
-/// have a dark backing to be seen against.
-const GLOW_INTENSITY: f32 = 2.0;
-
 /// How strong the Edge rim is here: the Edge setting scaled by the note's own
-/// opacity, or `None` when there is too little of it to draw. The gate for
-/// both of a note's rim bands — keyline and shade go together.
+/// opacity, or `None` when there is too little of it to draw. On the roll this
+/// is a GATE and nothing more — both bands are opaque, so what Edge decides
+/// there is whether they are drawn, not how strongly.
 fn edge_strength(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<f32> {
     let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
     (strength > 0.004).then_some(strength)
@@ -117,28 +110,32 @@ fn edge_strength(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<f32> {
 /// entirely on which palette is in play — Mono runs to white and swallows a rim
 /// the even ramps leave standing.
 ///
-/// The roll's notes carry a brighter version of this (see [`rim`]); the profile
-/// keeps the plain fraction, being one line on a filled slab rather than a
-/// shape to pick out of a picture.
+/// The roll's notes carry an opaque version of this (see [`keyline_band`]); the
+/// profile keeps the plain fraction, being one line on a filled slab rather than
+/// a shape to pick out of a picture.
 pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
     edge_strength(cfg, alpha).map(|s| Color32::WHITE.gamma_multiply(s))
 }
 
-/// The two bands standing outside a note: `(width, keyline, shade)` — the
-/// white keyline, brighter than the raw Edge fraction (see [`GLOW_INTENSITY`]),
-/// and the black shade standing outside that. One width for both, so the pair
-/// is symmetric (see [`KEYLINE_PX`]).
+/// The two bands standing outside a note: `(width, inner, outer)` — black
+/// against the note, white beyond it, one width each (see [`KEYLINE_PX`]).
 ///
-/// The shade is what the keyline is read against. A white line on the bright
-/// end of a spectrogram palette is white on white, and the keyline is the thing
-/// that says where a note stops; a dark band behind it holds that boundary
-/// whatever the heatmap is doing there, instead of only over a palette's dark
-/// end. It rides OUTSIDE the keyline rather than under it, so the note's own
-/// color still runs to its boundary and the order reading outward is fill,
-/// light, dark — the fill and the rim never trade places.
+/// Both are OPAQUE. A translucent rim takes its color from whatever the
+/// spectrogram is doing behind it, so the same note came out with a different
+/// edge over a loud cell than over a quiet one, and over the bright end of a
+/// palette the light band washed out into it — which is the one place a note
+/// most needs an edge, since that is the cell the note itself is making. Opaque,
+/// the rim is the same two lines everywhere, and a note reads as one object
+/// against a picture rather than as a tint of it.
 ///
-/// Both come from one strength, so Edge fades the pair together rather than
-/// leaving a dark ring around an invisible highlight.
+/// Dark INSIDE and light OUTSIDE. The black separates the note's own color from
+/// the rim, so the ribbon keeps its hue right to its edge; the white then reads
+/// against the spectrogram rather than against the note, and on this pane's dark
+/// background it is the brighter contrast of the two. The other order gives the
+/// note a white halo that its own color has to fight through.
+///
+/// This crate decides both, and hands the shader two bands named for position
+/// alone — the look does not belong half here and half in a fragment shader.
 ///
 /// Off comes back zero-width AND transparent, never one or the other: the width
 /// is what the quad grows by to make room for the bands (and what the far-edge
@@ -148,8 +145,7 @@ fn keyline_band(cfg: &crate::SpectrumConfig, alpha: f32) -> (f32, Color32, Color
     if edge_strength(cfg, alpha).is_none() {
         return (0.0, Color32::TRANSPARENT, Color32::TRANSPARENT);
     }
-    let s = (cfg.keyline.clamp(0.0, 1.0) * GLOW_INTENSITY).min(1.0) * alpha;
-    (KEYLINE_PX, Color32::WHITE.gamma_multiply(s), Color32::BLACK.gamma_multiply(s))
+    (KEYLINE_PX, Color32::BLACK, Color32::WHITE)
 }
 
 /// Draw every remembered note that falls inside the pane's time window and
@@ -253,7 +249,7 @@ pub(super) fn note_instances(
     // The whole look of a note, decided once for the roll rather than per
     // note: the two bands standing outside its long edges. The note itself is a
     // solid rectangle of its own color and has nothing else to decide.
-    let (keyline_px, light, shade) = keyline_band(cfg, 1.0);
+    let (keyline_px, inner, outer) = keyline_band(cfg, 1.0);
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -285,8 +281,8 @@ pub(super) fn note_instances(
     // to nothing — so without it the last sliver of a floored note would appear
     // INSIDE the far edge on the frame before the cull takes it, which is the
     // pop the overhang exists to prevent.
-    // Two bands wide, matching the shader's own `reach`: keyline out to
-    // `keyline_px` and shade out to twice it, plus the one-pixel ramp.
+    // Two bands wide, matching the shader's own `reach`: the inner band out to
+    // `keyline_px` and the outer out to twice it, plus the one-pixel ramp.
     let ink_px = 2.0 * keyline_px + 1.0 + min_half_depth;
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
@@ -338,9 +334,9 @@ pub(super) fn note_instances(
             // and the boundary are one thing, and a heatmap cell showing
             // through a note said neither clearly.
             let core = note_color(note, state, pitch, alpha);
-            // Reading outward: the note, the bright white keyline standing
-            // against its long edges, the black shade standing against that,
-            // then whatever the spectrogram is doing.
+            // Reading outward: the note, the black band standing against its
+            // long edges, the white band standing against that, then whatever
+            // the spectrogram is doing.
             //
             // Both bands stand entirely OUTSIDE the note, never as a stroke of
             // its path — a centered stroke grows inward exactly as much as
@@ -412,8 +408,8 @@ pub(super) fn note_instances(
                 shear: slope,
                 keyline: keyline_px,
                 core: core.to_array(),
-                glow: light.to_array(),
-                shade: shade.to_array(),
+                inner: inner.to_array(),
+                outer: outer.to_array(),
             });
         }
     }
@@ -554,11 +550,11 @@ mod tests {
     /// The rim is a fixed pixel thickness whatever the note's own width — an
     /// outline should not thin out just because the ribbon it wraps did — and
     /// it is expressed as a DISTANCE OUTSIDE the note's outline, never as a
-    /// wider stroke of it. One width covers both bands, so the keyline and the
-    /// shade behind it cannot drift apart in thickness.
+    /// wider stroke of it. One width covers both bands, so the pair cannot
+    /// drift apart in thickness.
     ///
     /// That distinction is the flood fix, and it is now structural: the shader
-    /// reads the keyline off distances `w/2 .. w/2 + keyline`, so it cannot
+    /// reads each band off distances outside the note's own edge, so neither can
     /// reach back inside the ribbon however thin it is. What is left to check
     /// here is that the thickness is handed over unscaled.
     #[test]
@@ -576,46 +572,47 @@ mod tests {
         );
     }
 
-    /// The keyline is bright: reading outward, the note's color, then a punchy
-    /// highlight, then the black shade backing it. The highlight reads stronger
-    /// than the raw Edge fraction — that boost is the "more intense" ask — and
-    /// the shade carries the same strength, so Edge fades the pair together
-    /// instead of leaving a dark ring around an invisible highlight.
+    /// Both bands are OPAQUE, black inside and white outside, at every Edge
+    /// setting that draws them at all.
     ///
-    /// Edge is the gate for the whole rim: at 0 both bands are off, which has
-    /// to mean zero width AND no color, never one or the other. The width is
+    /// Opacity is the point rather than a detail. A translucent rim takes its
+    /// color from the spectrogram behind it, so the same note reads differently
+    /// over a loud cell than a quiet one, and washes out entirely against the
+    /// bright end of a palette — the cell a note makes for itself. Anything
+    /// less than 255 here is that bug returning quietly.
+    ///
+    /// Edge is now a GATE and not a strength: at 0 both bands are off, which
+    /// has to mean zero width AND no color, never one or the other. The width is
     /// what the quad grows by to make room for them (and what keeps a leaving
     /// note alive past the far edge), so a band that will not paint must not be
     /// paid for either.
     #[test]
-    fn the_rim_is_bright_and_edge_turns_it_off_completely() {
-        // A modest Edge, below the point where the boosted keyline clips to
-        // full, so "brighter than the fraction" is a real comparison.
-        let edge = 0.3;
-        let lit = ribbon(edge);
-        let note = one(&lit);
-        let glow_alpha = f32::from(note.glow[3]) / 255.0;
-        assert!(
-            glow_alpha > edge + 0.05,
-            "the keyline ({glow_alpha}) is no brighter than the Edge fraction {edge}",
-        );
-        assert_eq!(note.keyline, KEYLINE_PX, "the keyline is not the width it is fixed at");
-        assert_eq!(
-            [note.shade[0], note.shade[1], note.shade[2]],
-            [0, 0, 0],
-            "the shade is not black: {:?}",
-            note.shade,
-        );
-        assert_eq!(
-            note.shade[3], note.glow[3],
-            "the shade and the keyline carry different strengths, so Edge fades them apart",
-        );
+    fn the_rim_is_two_opaque_bands_and_edge_only_switches_them() {
+        // Two settings well apart, to pin that Edge no longer scales anything
+        // here: a modest one and full.
+        for edge in [0.3, 1.0] {
+            let lit = ribbon(edge);
+            let note = one(&lit);
+            assert_eq!(note.keyline, KEYLINE_PX, "the rim is not the width it is fixed at");
+            assert_eq!(
+                note.inner,
+                [0, 0, 0, 255],
+                "the inner band is not opaque black at Edge {edge}: {:?}",
+                note.inner,
+            );
+            assert_eq!(
+                note.outer,
+                [255, 255, 255, 255],
+                "the outer band is not opaque white at Edge {edge}: {:?}",
+                note.outer,
+            );
+        }
 
         let dark = ribbon(0.0);
         let note = one(&dark);
         assert_eq!(note.keyline, 0.0, "Edge 0 still made room for a rim");
-        assert_eq!(note.glow[3], 0, "Edge 0 left a keyline color behind");
-        assert_eq!(note.shade[3], 0, "Edge 0 left a shade color behind");
+        assert_eq!(note.inner[3], 0, "Edge 0 left an inner band behind");
+        assert_eq!(note.outer[3], 0, "Edge 0 left an outer band behind");
     }
 
     /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a

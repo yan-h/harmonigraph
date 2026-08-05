@@ -198,10 +198,10 @@ pub struct SpectrumConfig {
     /// lattice's: 10pt was the wrong number rather than one of several, and a
     /// blob that kept it would be preserving a mistake.
     pub marking_scale: f32,
-    /// Strength of the light edge drawn along the spectrum's profile and
-    /// around each note ribbon, 0 = none. On a roll note it is the whole of
-    /// the rim — how bright the keyline is, and whether it is drawn at all.
-    /// See `panes::spectral::roll::keyline`.
+    /// Strength of the light edge drawn along the spectrum's profile, 0 = none.
+    /// On a roll note it is a switch rather than a strength: the rim there is a
+    /// pair of OPAQUE bands, so this decides whether they are drawn and nothing
+    /// else. See `panes::spectral::roll::keyline`.
     pub keyline: f32,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
     /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
