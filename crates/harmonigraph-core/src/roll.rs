@@ -179,7 +179,26 @@ impl NoteRoll {
     /// Open an entry for a new press. A retrigger with no intervening
     /// note-off closes the previous entry at the same instant, matching
     /// [`NoteTracker`](crate::NoteTracker)'s replace-the-voice rule.
+    ///
+    /// A second note-on at or before the instant the key already started is
+    /// the SAME press delivered twice, not a retrigger, and is dropped. Two
+    /// delivery paths for one press is a thing a host does — and closing the
+    /// first entry at its own start leaves a note that begins and ends
+    /// together, which never sounded and yet is kept, drawn and named. The
+    /// name is what shows: the ribbon is floored to a couple of pixels and is
+    /// easy to miss, while the name beside it is full size, so one press puts
+    /// a letter on the pane that scrolls away from the letter held at the
+    /// now-line, as though the key had been played twice.
+    ///
+    /// The test is `at <= start` rather than a span short enough to look like
+    /// a duplicate, and that is what keeps it from being a guess: a press
+    /// cannot be retriggered before the moment it began, so nothing a player
+    /// can do reaches this. A real retrigger arrives after its note started,
+    /// however soon after, and still closes the entry it replaces.
     pub fn note_on(&mut self, channel: u8, note: u8, velocity: f32, pitch: f32, at: Time) {
+        if self.live.get(&(channel, note)).is_some_and(|live| at <= live.start) {
+            return;
+        }
         self.close(channel, note, at);
         self.live.insert(
             (channel, note),
@@ -350,6 +369,37 @@ mod tests {
         tracker.handle_event(off(1.0, 60));
         tracker.handle_event(on(2.0, 60));
         tracker.handle_event(off(3.0, 60));
+        assert_eq!(tracker.roll().len(), 2);
+    }
+
+    /// One press delivered twice is one note, not a retrigger.
+    ///
+    /// Two delivery paths for one press is a thing a host does, and closing
+    /// the first entry at its own start leaves a note that begins and ends
+    /// together — one that never sounded, and yet is kept, drawn and named.
+    /// On the pane it shows as the name rather than as the ribbon: the ribbon
+    /// is floored to a couple of pixels, while the name beside it is full
+    /// size, so a single press puts a letter on the roll that scrolls away
+    /// from the letter held at the now-line.
+    #[test]
+    fn one_press_delivered_twice_is_one_note() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(1.0, 60));
+        tracker.handle_event(on(1.0, 60));
+        let roll = tracker.roll();
+        assert_eq!(roll.len(), 1, "the second delivery is the same press");
+        let note = roll.notes().next().unwrap();
+        assert_eq!((note.start, note.end), (1.0, None), "and it is the one still sounding");
+    }
+
+    /// The guard above is exact, not a window: a press cannot be retriggered
+    /// before the moment it began, so a real retrigger — however soon after
+    /// its note started — still closes the entry it replaces.
+    #[test]
+    fn a_retrigger_a_moment_later_is_still_a_retrigger() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(1.0, 60));
+        tracker.handle_event(on(1.001, 60));
         assert_eq!(tracker.roll().len(), 2);
     }
 
