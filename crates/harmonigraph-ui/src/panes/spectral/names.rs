@@ -322,6 +322,16 @@ pub(super) fn plan(
     let room = |name: &NoteName| {
         depth_extent(axes, name, size, label_scale) as f64 * seconds_per_point + gap
     };
+    // Where a name's box ENDS, as seconds past the leading edge it is set from.
+    //
+    // Not [`room`], which is the thinning's figure and carries [`REPEAT_GAP`] on
+    // top: this is the ink alone, and it is what a ribbon has to be long enough
+    // to hold. [`label_rect`] sets the box [`LABEL_INSET`] past the edge and
+    // grows it by its own extent, and the padding is inside that extent at both
+    // ends — so the far corner lands one inset, less one pad, past whatever
+    // [`depth_extent`] measured.
+    let ink = ((LABEL_INSET - LABEL_PAD) * label_scale) as f64 * seconds_per_point;
+    let reach = |room: f64| room - gap + ink;
     // Live, the picture scrolls into the past, so a name lies back over its
     // ribbon; the whole-song layout runs the other way. See [`name_span`].
     let backward = !time.whole_song();
@@ -413,7 +423,36 @@ pub(super) fn plan(
             if !visible {
                 continue;
             }
-            let (name, _) = naming(edge.pitch, &mut names);
+            let (name, room) = naming(edge.pitch, &mut names);
+            // A ribbon has to be long enough to carry its name. A held note's
+            // leading edge is the now-line and its box grows back over the
+            // ribbon, so a note pressed a moment ago has its name written
+            // across the empty ground the ribbon has yet to reach — the name
+            // standing AHEAD of the note it belongs to, in the direction the
+            // note travels, until the ribbon catches it up. Measured on the
+            // pane the sizes are dialled for: the box ends 12.2 points past the
+            // now-line while the ribbon is 0.5 points long, and a 12 s Span
+            // takes 0.30 s to cover it — 1.5 s at a two-octave pitch zoom,
+            // where a name is five times the size.
+            //
+            // So a name waits for its ground. It costs the wait, which is the
+            // name's own length in seconds and grows with the Span and the
+            // pitch zoom together, and there is no placement that avoids it:
+            // the ribbon simply is not there yet, and anywhere else on the pane
+            // that would hold the name is the spectrogram's.
+            //
+            // LIVE notes only. A released note's length is known and honest —
+            // a staccato note really is shorter than its name, so it is named
+            // at once and overhangs, which is what keeps EVERY note named. A
+            // held note is not short, only young, and waiting tells the truth
+            // about it.
+            //
+            // Not in the whole-song layout, where nothing is young: the take is
+            // complete, every note is laid out at the length it had, and the
+            // offline render must draw the same names it always did.
+            if !time.whole_song() && now - note.start < reach(room) {
+                continue;
+            }
             let rect =
                 label_rect(axes, scale.t_of(edge.pitch), time.depth_of(edge.time), &name, size, label_scale);
             // Two keys sounding one pitch — a doubled MIDI source, a layered
@@ -510,6 +549,10 @@ struct Edge {
 /// whole time it was being played — which is exactly when you are looking at
 /// it.
 ///
+/// It also means a freshly pressed note has its whole name to the past of an
+/// edge with almost no ribbon behind it yet, which is why [`plan`] holds a held
+/// note's name back until the ribbon reaches the end of it.
+///
 /// **The pitch has to come from the same end as the depth**, which is the
 /// whole reason this returns a pair. A bent note is at a different pitch at
 /// each end: `settled_pitch` is where it began once its tuning had landed,
@@ -552,6 +595,13 @@ fn leading_edge(time: &TimeAxis, note: &RollNote, now: f64) -> Edge {
 /// lies over its own ribbon rather than over the picture in front of it —
 /// except where the growth runs backward and the name carries marks, which is
 /// the trade named at the bottom of this comment and measured in issue #151.
+///
+/// Growing into the note asks the note to BE that long, and nothing here checks
+/// it: this places a box from an edge and knows only the one end. A note
+/// shorter than its own name therefore has its name overhang the far end, and
+/// which notes those are is decided in [`plan`] — a released note that is
+/// genuinely that short keeps its name and overhangs, a held one waits for the
+/// ribbon instead of being named across ground the ribbon has yet to reach.
 ///
 /// The LETTER's own position inside that box has to be independent of the
 /// growth direction, or `C` and `C♯` disagree about where the letter goes and
@@ -1155,6 +1205,76 @@ mod tests {
         assert!((c - e).abs() < 0.5, "C's letter drawn at {c} but E's (with a comma) at {e}");
     }
 
+    /// A note pressed a moment ago is not named ahead of its own ribbon.
+    ///
+    /// A held note's name is set from the now-line and grows back over the
+    /// ribbon, so until the ribbon has grown that far the name is written
+    /// across empty ground in FRONT of the note — ahead of it in the direction
+    /// it travels, which reads as a name that has come detached from the thing
+    /// it names. On the pane the sizes are dialled for, the box ends 12.2
+    /// points past the now-line while the ribbon is 0.5 points long.
+    ///
+    /// Read off the roll's own geometry, like
+    /// [`a_name_sits_on_the_ribbon_the_roll_drew`]: what the name has to be
+    /// inside is the ribbon that was DRAWN, floors and all, not a length
+    /// recomputed here from the note's times.
+    #[test]
+    fn a_just_pressed_note_is_not_named_ahead_of_its_ribbon() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60));
+
+        let split = super::super::axes::spectrum_share(&state.spectrum_config);
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        // Horizontal pane: depth is x, the head is the near end and the tail
+        // the far one.
+        let tail = |now: f64| {
+            let ribbon = super::super::roll::note_instances(
+                &axes,
+                &scale_of(&state),
+                &state,
+                split,
+                now,
+                2.0,
+            );
+            assert_eq!(ribbon.len(), 1, "one note, one ribbon");
+            ribbon[0].center[0] + ribbon[0].half_extent[1]
+        };
+
+        // Held for a frame, and for long enough to be worth reading: whenever
+        // there is a name at all, the ribbon reaches the end of it.
+        let mut ever_named = false;
+        for held in [0.0, 0.016, 0.05, 0.1, 0.2, 0.3, 0.5, 0.8, 1.5, 3.0] {
+            let now = 1.0 + held;
+            let placed = labels(&state, now);
+            for label in &placed {
+                assert!(
+                    label.rect.max.x <= tail(now) + 0.01,
+                    "held {held}s: the name ends at {} but its ribbon only reaches {}",
+                    label.rect.max.x,
+                    tail(now),
+                );
+            }
+            ever_named |= !placed.is_empty();
+        }
+        assert!(ever_named, "the note is never named at all, which is not the fix");
+    }
+
+    /// A note too short to hold its name is still named — the wait above is
+    /// for a note that is YOUNG, not for one that is short.
+    ///
+    /// Every note is named, which is the whole difference between this and a
+    /// legend, and a staccato note is exactly the one you cannot name any other
+    /// way. Its ribbon really is shorter than its name, so the name overhangs;
+    /// that is honest, where a held note's overhang is a claim about ground the
+    /// ribbon is about to cover.
+    #[test]
+    fn a_note_too_short_to_hold_its_name_is_named_anyway() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60));
+        state.tracker.handle_event(off(1.02, 60));
+        assert_eq!(said(&labels(&state, 2.0)), ["C"], "a 20 ms note still gets its name");
+    }
+
     /// A name sits on the ribbon the ROLL DREW, read from the roll's own
     /// geometry rather than recomputed here.
     ///
@@ -1471,11 +1591,15 @@ mod tests {
             }
             state
         };
-        assert_eq!(labels(&strike(false), 2.0).len(), 1, "released, the second is refused");
-        assert_eq!(labels(&strike(true), 2.0).len(), 2, "held, it is named regardless");
+        // Read once the held note's ribbon is long enough to carry its name
+        // (0.41 s on this pane — see the wait in [`plan`]). The exception being
+        // tested is the THINNING's, so it has to be asked at a moment when the
+        // only thing that could withhold the name is the thinning.
+        assert_eq!(labels(&strike(false), 2.4).len(), 1, "released, the second is refused");
+        assert_eq!(labels(&strike(true), 2.4).len(), 2, "held, it is named regardless");
 
         // ...and it keeps the name for as long as it is held.
-        assert_eq!(labels(&strike(true), 2.4).len(), 2);
+        assert_eq!(labels(&strike(true), 2.9).len(), 2);
     }
 
     /// A held note takes NOTHING out of the running for anyone else — its name
@@ -1512,7 +1636,9 @@ mod tests {
         };
 
         // Every name shown with nothing held is still shown with a key down,
-        // at each of a series of moments as the picture scrolls past it.
+        // at each of a series of moments as the picture scrolls past it —
+        // including while the held note is still waiting for the ribbon that
+        // will carry its own name, which is when it is nearest the others.
         for now in [2.0, 2.3, 2.6, 3.0, 4.0] {
             let alone = labels(&played(false), now);
             let holding = labels(&played(true), now);
@@ -1524,7 +1650,16 @@ mod tests {
                     alone.iter().map(|l| l.rect.min.x).collect::<Vec<_>>(),
                 );
             }
-            assert!(holding.len() > alone.len(), "and the held note is named too");
+        }
+        // ...and the held note is named too, once its ribbon has grown long
+        // enough to hold the name (0.41 s on this pane — see [`plan`]). Asked
+        // past that wait rather than at the press, which is a claim about the
+        // wait and not about the thinning this test is for.
+        for now in [2.4, 3.0, 4.0] {
+            assert!(
+                labels(&played(true), now).len() > labels(&played(false), now).len(),
+                "at {now}s the held note went unnamed",
+            );
         }
     }
 
