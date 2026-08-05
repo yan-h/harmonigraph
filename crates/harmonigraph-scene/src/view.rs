@@ -686,23 +686,24 @@ fn default_outer_gap() -> f32 {
     0.12
 }
 
-/// The rate the sweep was fixed at before it was a bar, and where a fresh
-/// view opens too: about one band every three seconds at the default width,
-/// which is the calm end of what still reads as moving.
+/// The rate the sweep was fixed at before it was a bar: about one band every
+/// three seconds at the width below, which is the calm end of what still reads
+/// as moving. A fresh view opens slower and tighter than this whole set — see
+/// `ViewConfig::default`, which writes its own four.
 fn default_shimmer_speed() -> f32 {
     1.6
 }
 
-/// The band size the sweep was fixed at, and the fresh-view value: about five
-/// nodes at the default spacing, so a band spans several of them and reads as
-/// one crossing the lattice rather than as a marking on each.
+/// The band size the sweep was fixed at: about five nodes at the default
+/// spacing, so a band spans several of them and reads as one crossing the
+/// lattice rather than as a marking on each.
 fn default_shimmer_width() -> f32 {
     5.0
 }
 
-/// The full tuned depth — what the sweep was fixed at before the bar, and
-/// where a fresh view opens: a band most of the way to white over a shallow
-/// dip, which is the balance the two shader constants were dialed to.
+/// The full tuned depth — what the sweep was fixed at before the bar: a band
+/// most of the way to white over a shallow dip, which is the balance the two
+/// shader constants were dialed to.
 fn default_shimmer_intensity() -> f32 {
     1.0
 }
@@ -1037,22 +1038,36 @@ impl Default for ViewConfig {
             // septimal mark spells apart from the node two fifths down (see
             // SevensLabel) rather than repeating it.
             sevens_size: 1.0,
-            // Reach and fade equal, which puts the clearing at full strength
-            // exactly to the node's rim and gone a quarter of a node-width
-            // past it.
-            sevens_gutter: 0.24,
-            sevens_gutter_soft: 0.24,
+            // Reach and fade all but equal, which puts the clearing at full
+            // strength to about the node's rim and gone a bit over a quarter
+            // of a node-width past it.
+            sevens_gutter: 0.278_196_75,
+            sevens_gutter_soft: 0.271_047_7,
             sevens_label: SevensLabel::Name,
             show_labels: true,
             label_scale: default_label_scale(),
             show_cents: true,
-            pitch_gradient: PitchGradient::default(),
+            // Written out rather than taken from `PitchGradient::default()`,
+            // which has the other job: it is the fallback a blob predating the
+            // gradient loads with, and it has to go on naming the retired
+            // CIELAB arc it was converted from
+            // (`the_defaults_are_the_retired_arc_converted`). What a fresh
+            // view opens on is free to move without restyling those blobs, and
+            // this is a shorter arc than the retired one, a dimmer middle over
+            // a shallower brightness ramp, and a little more chroma.
+            pitch_gradient: PitchGradient {
+                hue_start: 257.842_65,
+                hue_span: 190.0,
+                lightness: 53.0,
+                lightness_ramp: 31.0,
+                chroma: 0.601_670_8,
+            },
             // A small, soft core inside the octave band, with the band's
             // silent slots ghosted in: the pitch class reads as a compact
             // center and the octaves carry the node's outline. (The band's
             // own width is set below.)
             core_solidity: 0.4,
-            core_radius: 0.2,
+            core_radius: 0.256_256_76,
             // A narrow octave band, set well off the core and stopping short
             // of the quad edge, with a tight gap between sectors: the octaves
             // read as a ring of distinct marks rather than a solid annulus,
@@ -1074,8 +1089,11 @@ impl Default for ViewConfig {
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
-            // Steady by default: the pulse is an option to reach for, not
-            // the out-of-the-box look.
+            // Steady: the octave glyphs are what says which octaves sound, and
+            // a sheet laid over that reading is an option to reach for rather
+            // than the out-of-the-box look. The mark rings below do shimmer —
+            // they carry no such reading, only which note is the top and which
+            // the bottom.
             pulse_octaves: Pulse::Off,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
@@ -1091,17 +1109,23 @@ impl Default for ViewConfig {
             mark_bass: true,
             legacy_highlight_extremes: None,
             // Thin rings, slit at the marked octave's boundaries.
-            mark_thickness: 0.063_829_795,
-            // Steady here too, for the same reason as pulse_octaves above:
-            // an option to reach for, not the out-of-the-box look.
-            pulse_marks: Pulse::Off,
-            // The sweep opens on the size and pace the mode was tuned at, so
-            // switching a layer to a pattern lands on a look rather than on a
-            // setting to find first; the bars are then a departure from it.
-            shimmer_speed: default_shimmer_speed(),
-            shimmer_width: default_shimmer_width(),
-            shimmer_intensity: default_shimmer_intensity(),
-            shimmer_softness: default_shimmer_softness(),
+            mark_thickness: 0.078_269_88,
+            pulse_marks: Pulse::Bands,
+            // The sheet the rings above wear. A period well under one node's
+            // spacing puts several of them across every ring, so this reads as
+            // a fine texture ON the marks rather than as light crossing the
+            // lattice — which is what keeps it off the octave glyphs' reading
+            // even though the same sheet would cross them. Half depth and a
+            // slow pace hold it there; at the tuned width and depth the
+            // `default_shimmer_*` fns carry it would be a sweep instead.
+            //
+            // Written out rather than taken from those fns, which have the
+            // other job: they are what a blob predating each bar is drawn at,
+            // and they stay where they are.
+            shimmer_speed: 0.335_761_5,
+            shimmer_width: 0.639_271_56,
+            shimmer_intensity: 0.517_033_16,
+            shimmer_softness: 1.0,
             grid_color: default_grid_color(),
             grid_thickness: 1.103_806_3,
             grid_inset: 0.3,
@@ -1122,10 +1146,10 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: default_render_scale(),
-            // A halo just under unit strength: the small soft core and the
-            // thin octave marks are quiet shapes, and the bloom is what
+            // A halo at about four fifths strength: the small soft core and
+            // the thin octave marks are quiet shapes, and the bloom is what
             // gives them presence.
-            bloom_strength: 0.974_009_9,
+            bloom_strength: 0.806_154_85,
         }
     }
 }
