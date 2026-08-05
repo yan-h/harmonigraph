@@ -694,7 +694,7 @@ fn every_shimmer_pattern_draws_a_different_picture() {
 ///   peak taking most of the period instead of a narrow crest;
 /// - and it does that without going any BRIGHTER at its brightest. That last
 ///   is what rules out the wiring this could otherwise have — a bar on
-///   `SHIMMER_WHITE`, raising the peak rather than widening the fall from it,
+///   `SHIMMER_LIFT`, raising the peak rather than widening the fall from it,
 ///   passes the first two and fails this one. The peak is Intensity's to
 ///   move, and the shape's own crest is pinned wherever it lands: `pow(1, n)`
 ///   is 1 for every exponent, so however the profile is dialled the brightest
@@ -778,6 +778,197 @@ fn shimmer_softness_spreads_the_light_without_raising_the_peak() {
 /// The slot mask naming middle C's octave — the one the node below sounds
 /// in, and so the one a mark can link back to.
 const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
+
+/// `L*` of one pixel, sRGB's decode into CIE's lightness curve.
+///
+/// Real colorimetry where the rest of this file reads a channel sum, because
+/// the two tests below are claims about how bright a thing LOOKS, compared
+/// across colors that differ in hue as well: a sum weights a blue channel like
+/// a green one and would call a violet ring and a yellow one the same
+/// brightness. `L*` is a function of luminance alone, which is the same
+/// property the pitch ramp is authored on (`harmonigraph_scene::color`), so a
+/// reading here is in the units the Brightness bars are dialled in.
+fn lightness(px: &[u8]) -> f64 {
+    let decode = |b: u8| {
+        let v = f64::from(b) / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    let y = 0.2126 * decode(px[0]) + 0.7152 * decode(px[1]) + 0.0722 * decode(px[2]);
+    if y > (6.0f64 / 29.0).powi(3) {
+        116.0 * y.cbrt() - 16.0
+    } else {
+        y * (29.0f64 / 3.0).powi(3)
+    }
+}
+
+/// One node wearing both rings in `color`, shot steady and then at eight
+/// moments of one period of the sweep — the same geometry every time, so two
+/// colors' readings line up pixel for pixel and a difference between them is a
+/// difference the COLOR made.
+///
+/// Eight moments rather than one because the sheet is a plane crossing the
+/// lattice: which part of the ring a crest is over depends on where the node
+/// sits under it, and no single instant has every pixel at its own peak. Eight
+/// samples of a cosine leave the sampled peak within 4% of the true one, and
+/// both colors are sampled at the same phases, so what shortfall there is
+/// cancels between them.
+fn sweep_over_color(gpu: &mut Shooter, color: glam::Vec4) -> (Vec<u8>, Vec<Vec<u8>>) {
+    let at = |pulse, time: f32| -> Scene {
+        let mut scene = single_marked_node(MIDDLE_C, MIDDLE_C);
+        scene.nodes[0].melody_color = color;
+        scene.nodes[0].bass_color = color;
+        scene.pulse_marks = pulse;
+        scene.time = time;
+        scene
+    };
+    let period = PARITY_SHIMMER_WIDTH / at(harmonigraph_scene::Pulse::Off, 0.0).shimmer_speed;
+    let steady = gpu.shot(&at(harmonigraph_scene::Pulse::Off, 0.0));
+    let swept = (0..8)
+        .map(|k| gpu.shot(&at(harmonigraph_scene::Pulse::Bands, period * k as f32 / 8.0)))
+        .collect();
+    (steady, swept)
+}
+
+/// The pixels a sweep moves in BOTH shots, and how bright each is steady and
+/// at its own brightest moment. The intersection rather than either shot's own
+/// set, so the two readings are over one set of pixels and neither is averaged
+/// over ground the other never covered.
+fn lifted_pixels(
+    a: &(Vec<u8>, Vec<Vec<u8>>),
+    b: &(Vec<u8>, Vec<Vec<u8>>),
+) -> Vec<usize> {
+    let moved = |(steady, swept): &(Vec<u8>, Vec<Vec<u8>>), i: usize| {
+        let base = lightness(&steady[i * 4..i * 4 + 4]);
+        swept.iter().any(|f| lightness(&f[i * 4..i * 4 + 4]) > base + 1.0)
+    };
+    (0..a.0.len() / 4).filter(|&i| moved(a, i) && moved(b, i)).collect()
+}
+
+/// One sweep peak adds the same brightness to the pitch ramp's dark end as to
+/// its bright one.
+///
+/// This is what `SHIMMER_LIFT` is for, and the property a mix toward white
+/// cannot have: a lerp's step is proportional to how far the color already is
+/// from its endpoint, so the same peak that lifted the ramp's dark end by 30
+/// points of `L*` lifted its bright end by 14 — the sheet meaning two
+/// different things depending on which note it was passing over, which is not
+/// something a Speed, Width, Intensity or Softness setting can correct.
+///
+/// The two colors are the ramp's OWN ends, taken off the table the shader
+/// samples, so this measures the spread the picture actually contains rather
+/// than an arbitrary pair. Bloom is off (`parity_scene`'s own setting): a halo
+/// clips the bright end to white and would answer this question with the post
+/// pass's soft knee rather than with the sheet.
+#[test]
+fn the_sweep_adds_the_same_light_to_a_dark_color_as_to_a_bright_one() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let lut = harmonigraph_scene::pitch_ramp_lut(
+        harmonigraph_scene::ViewConfig::default().pitch_gradient,
+    );
+    let (dark, bright) = (lut[0], lut[harmonigraph_scene::PITCH_LUT_N - 1]);
+
+    let dim = sweep_over_color(&mut gpu, dark);
+    let lit = sweep_over_color(&mut gpu, bright);
+    let shared = lifted_pixels(&dim, &lit);
+    assert!(
+        shared.len() > 200,
+        "only {} pixels shimmered in both shots — the fixture stopped sweeping the \
+         rings and the reading below would be noise",
+        shared.len(),
+    );
+
+    let added = |(steady, swept): &(Vec<u8>, Vec<Vec<u8>>)| -> f64 {
+        let sum: f64 = shared
+            .iter()
+            .map(|&i| {
+                let base = lightness(&steady[i * 4..i * 4 + 4]);
+                let peak = swept
+                    .iter()
+                    .map(|f| lightness(&f[i * 4..i * 4 + 4]))
+                    .fold(base, f64::max);
+                peak - base
+            })
+            .sum();
+        sum / shared.len() as f64
+    };
+    let (dim_lift, lit_lift) = (added(&dim), added(&lit));
+    eprintln!("peak adds L* {dim_lift:.1} to the ramp's dark end, {lit_lift:.1} to its bright end");
+    // A fifth, which is well inside what the two ends can be told apart by and
+    // a long way under what the mix this replaced was out by (better than 2x).
+    // Some spread is inherent and not worth chasing: the encoding this adds in
+    // is a power of 1/2.4 where `L*` is a cube root, so equal steps in one are
+    // near-equal rather than equal in the other.
+    let spread = (dim_lift - lit_lift).abs() / dim_lift.max(lit_lift);
+    assert!(
+        spread < 0.2,
+        "a peak added L* {dim_lift:.1} to the ramp's dark end but {lit_lift:.1} to its \
+         bright end ({:.0}% apart): the sheet is lifting one end of the ramp harder \
+         than the other, which is what an added light exists to stop",
+        spread * 100.0,
+    );
+}
+
+/// A ring keeps its color under a peak — the sweep lights it rather than
+/// bleaching it.
+///
+/// The other half of what the added light buys, and the half that shows: an
+/// addition leaves the gaps BETWEEN the channels where they were, where a mix
+/// toward white shrinks all three toward each other and spent two thirds of a
+/// ring's chroma at every setting that was bright enough to see. A ring going
+/// pale grey reads as the octave color failing rather than as light passing
+/// over it, which is most of why the sheet was hard to see on the ramp's dark
+/// end at all: down there a lerp toward white has far more color to take than
+/// brightness to give.
+///
+/// The chroma reading is the spread between a pixel's channels, which is not a
+/// perceptual chroma and does not need to be: it is zero exactly when the
+/// color is grey, it moves monotonically with how far from grey the color is,
+/// and both shots are read the same way.
+#[test]
+fn a_ring_keeps_its_color_under_a_sweep_peak() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let lut = harmonigraph_scene::pitch_ramp_lut(
+        harmonigraph_scene::ViewConfig::default().pitch_gradient,
+    );
+    let color = lut[0];
+
+    let shot = sweep_over_color(&mut gpu, color);
+    let shared = lifted_pixels(&shot, &shot);
+    assert!(shared.len() > 200, "only {} pixels shimmered", shared.len());
+
+    let chroma = |px: &[u8]| {
+        let (r, g, b) = (f64::from(px[0]), f64::from(px[1]), f64::from(px[2]));
+        (r.max(g).max(b) - r.min(g).min(b)) / 255.0
+    };
+    let (steady, swept) = &shot;
+    let (mut base_sum, mut peak_sum) = (0.0f64, 0.0f64);
+    for &i in &shared {
+        let px = &steady[i * 4..i * 4 + 4];
+        // The color at the pixel's OWN brightest moment, which is the moment
+        // the claim is about — the chroma of some other frame would be a
+        // reading of a peak that was somewhere else.
+        let at = swept
+            .iter()
+            .map(|f| &f[i * 4..i * 4 + 4])
+            .max_by(|a, b| lightness(a).total_cmp(&lightness(b)))
+            .expect("eight frames");
+        base_sum += chroma(px);
+        peak_sum += chroma(at);
+    }
+    let (base, peak) = (base_sum / shared.len() as f64, peak_sum / shared.len() as f64);
+    eprintln!("chroma {base:.3} steady, {peak:.3} at the peak");
+    assert!(
+        peak > base * 0.7,
+        "a peak left {peak:.3} of the ring's {base:.3} chroma: the sheet is bleaching \
+         the color out rather than adding light to it",
+    );
+}
 
 /// Bloom must add light (halo energy over the bloom-off output) —
 /// and only when asked: strength 0 keeps the parity test above valid.
