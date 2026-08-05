@@ -727,13 +727,11 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
         (0..OCTAVE_SLOTS).filter(|&s| origin.melody_slots >> s & 1 == 1).collect();
     assert_eq!(marked, lit, "the melody ring marks the octave that sounds");
     let frame = FrameParams::default();
+    // The gradient the scene was built with — `view`'s, which is not
+    // `PitchGradient::default()`: that is the fallback for a blob predating
+    // the gradient, and a fresh view is free to open elsewhere.
     let want =
-        pitch_lut_color(
-            drawn,
-            frame.darkest_pitch,
-            frame.brightest_pitch,
-            PitchGradient::default(),
-        );
+        pitch_lut_color(drawn, frame.darkest_pitch, frame.brightest_pitch, view.pitch_gradient);
     assert!(
         (origin.melody_color - want).length() < 1e-5,
         "the ring is coloured for a slot the indicator is not drawn at",

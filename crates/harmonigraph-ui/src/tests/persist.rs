@@ -1096,6 +1096,13 @@ fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
     // In serialization order, which is the order the probe reports them.
     const LEGACY: &[&str] = &[
         "sevens_gutter",
+        "sevens_gutter_soft",
+        // A blob with no gradient predates it having knobs at all, and reloads
+        // on the arc the retired CIELAB one converts to
+        // (`the_defaults_are_the_retired_arc_converted`, which is what pins
+        // `PitchGradient::default()` there). A fresh view opens on a shorter,
+        // dimmer arc of its own — see `impl Default for ViewConfig`.
+        "pitch_gradient",
         "core_solidity",
         "core_radius",
         "outer_inner",
@@ -1116,6 +1123,19 @@ fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
         "idle_marker",
         "idle_radius",
         "mark_thickness",
+        // A blob with no pattern on the mark rings predates the sheet being
+        // laid over them, and reloads steady; a fresh view opens with the
+        // rings in Bands. The octave layer's `pulse_octaves` is NOT here — it
+        // reloads steady and opens steady.
+        "pulse_marks",
+        // And a blob with no shimmer keys predates each bar, so it reloads at
+        // the width and depth the sweep was fixed at (the `default_shimmer_*`
+        // fns), where a fresh view opens on the tight, slow, half-depth
+        // texture the mark rings above wear.
+        "shimmer_speed",
+        "shimmer_width",
+        "shimmer_intensity",
+        "shimmer_softness",
         "grid_thickness",
         "grid_inset",
         "trail_mark",
