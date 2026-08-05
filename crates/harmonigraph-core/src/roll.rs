@@ -178,7 +178,9 @@ impl NoteRoll {
 
     /// Open an entry for a new press. A retrigger with no intervening
     /// note-off closes the previous entry at the same instant, matching
-    /// [`NoteTracker`](crate::NoteTracker)'s replace-the-voice rule.
+    /// [`NoteTracker`](crate::NoteTracker)'s replace-the-voice rule — and if
+    /// that instant is the previous entry's own onset, [`close`](Self::close)
+    /// drops it, the note having never sounded.
     pub fn note_on(&mut self, channel: u8, note: u8, velocity: f32, pitch: f32, at: Time) {
         self.close(channel, note, at);
         self.live.insert(
@@ -216,9 +218,36 @@ impl NoteRoll {
         self.enforce_cap();
     }
 
+    /// Retire the entry for one key — but only if it sounded.
+    ///
+    /// A note whose off lands at or before its own on never sounded, and the
+    /// roll drops it rather than remembering a note of no duration. Hosts do
+    /// emit these: one press can arrive as an on, an off and a second on all
+    /// stamped at the same sample, and the pair in the middle leaves an entry
+    /// that begins and ends together.
+    ///
+    /// It has to be dropped rather than merely drawn small, because what shows
+    /// is not the ribbon. A ribbon of no length is floored to a couple of
+    /// pixels and reads as grain, while the NAME the roll writes on it is full
+    /// size and anchored at the moment it ended — so a single press leaves a
+    /// letter scrolling away from the letter held at the now-line, as though
+    /// the key had been played twice.
+    ///
+    /// The test is `at <= start`, which is a fact about the note rather than a
+    /// span short enough to look wrong: a key cannot be released before it was
+    /// pressed, and the shortest note anyone can play still ends after it
+    /// began. A staccato note is untouched however brief it is.
+    ///
+    /// [`all_off`](Self::all_off) deliberately does NOT go through this. Its
+    /// timestamp is a transport event's, not a statement about any one note, so
+    /// a held note it closes did sound — only its length is unknown, and
+    /// clamping that to the onset must not erase it.
     fn close(&mut self, channel: u8, note: u8, at: Time) {
         if let Some(mut note) = self.live.remove(&(channel, note)) {
-            note.end = Some(at.max(note.start));
+            if at <= note.start {
+                return;
+            }
+            note.end = Some(at);
             self.past.push_back(note);
             self.enforce_cap();
         }
@@ -351,6 +380,53 @@ mod tests {
         tracker.handle_event(on(2.0, 60));
         tracker.handle_event(off(3.0, 60));
         assert_eq!(tracker.roll().len(), 2);
+    }
+
+    /// A note switched off the instant it started never sounded, and the roll
+    /// does not remember it.
+    #[test]
+    fn a_note_switched_off_the_instant_it_started_never_sounded() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(1.0, 60));
+        tracker.handle_event(off(1.0, 60));
+        assert!(tracker.roll().is_empty());
+    }
+
+    /// The shortest note anyone can play still ends after it began, and is
+    /// kept — the rule above is a fact about the note, not a span short enough
+    /// to look wrong.
+    #[test]
+    fn a_staccato_note_is_kept_however_brief() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(1.0, 60));
+        tracker.handle_event(off(1.000_001, 60));
+        assert_eq!(tracker.roll().len(), 1);
+    }
+
+    /// One press, as a host really delivers it: an on, an off and a second on
+    /// all stamped at the same sample, then the release nearly two seconds
+    /// later. That is ONE note on the roll.
+    ///
+    /// The pair in the middle otherwise leaves an entry that begins and ends
+    /// together — and what shows is not its ribbon, which is floored to a
+    /// couple of pixels, but the NAME written on it at full size and anchored
+    /// where it ended. So a single press put a letter on the pane that
+    /// scrolled away from the letter held at the now-line, as though the key
+    /// had been played twice.
+    #[test]
+    fn one_press_delivered_as_on_off_on_is_one_note() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(9.9314, 60));
+        tracker.handle_event(off(9.9314, 60));
+        tracker.handle_event(on(9.9314, 60));
+        assert_eq!(tracker.roll().len(), 1, "the off/on pair is not a note of its own");
+        assert!(tracker.roll().notes().next().unwrap().is_live(), "the press is still sounding");
+
+        tracker.handle_event(off(11.6881, 60));
+        let roll = tracker.roll();
+        assert_eq!(roll.len(), 1);
+        let note = roll.notes().next().unwrap();
+        assert_eq!((note.start, note.end), (9.9314, Some(11.6881)));
     }
 
     #[test]

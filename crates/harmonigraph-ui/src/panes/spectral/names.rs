@@ -1213,6 +1213,35 @@ mod tests {
         assert!(at(&state, 7.0) > at(&state, 5.0), "...and keeps travelling");
     }
 
+    /// One press puts ONE name on the roll, even delivered the way a host
+    /// really delivers it: an on, an off and a second on all stamped at the
+    /// same sample.
+    ///
+    /// The off/on pair in the middle otherwise leaves a roll entry that begins
+    /// and ends together, and it is the NAME that shows rather than the
+    /// ribbon — a ribbon of no length is floored to a couple of pixels and
+    /// reads as grain, while the name on it is full size and anchored where it
+    /// ended. So a single press put a second letter on the pane that scrolled
+    /// away from the letter held at the now-line, as though the key had been
+    /// played twice. Asked here rather than only of the roll because the roll
+    /// entry is the cause and this is the symptom.
+    #[test]
+    fn one_press_is_named_once_however_the_host_delivers_it() {
+        let mut state = state(24.0, 10.0);
+        state.tracker.handle_event(on(1.0, 60));
+        state.tracker.handle_event(off(1.0, 60));
+        state.tracker.handle_event(on(1.0, 60));
+
+        let early = labels(&state, 1.5);
+        assert_eq!(said(&early), ["C"], "one press, one name");
+        let later = labels(&state, 3.0);
+        assert_eq!(said(&later), ["C"]);
+        assert_eq!(
+            early[0].rect.min.x, later[0].rect.min.x,
+            "and it holds the now-line while the key is down, rather than travelling",
+        );
+    }
+
     /// A note that began before the window still has a ribbon on the pane, so
     /// it still gets a name. A drone held since before the Span reaches back
     /// is exactly the note whose name is hardest to recover any other way —
