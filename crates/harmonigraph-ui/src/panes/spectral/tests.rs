@@ -608,49 +608,75 @@ fn the_heatmap_image_is_built_at_device_pixels() {
     );
 }
 
-/// A sounding note is marked by its own ribbon crossing the now-line, so
-/// the roll has to be painted after the line rather than before it. Every
-/// separate mark drawn for the job sat wrong against a rounded ribbon end;
-/// the ribbon cannot.
+/// The now-line is painted after the roll that arrives at it.
+///
+/// A sounding note's ribbon ends square ON the line, which makes the roll
+/// the one layer that LANDS on the boundary rather than merely reaching it:
+/// drawn over the line it takes half the line's width away under every note
+/// that is sounding, so the divider frays exactly where the picture is
+/// busiest and the boundary hardest to follow. Painted last, the line stays
+/// one unbroken mark and the ribbon still runs right up to it.
 #[test]
-fn the_roll_paints_over_the_now_line() {
-    let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
-    state.spectrum_config.orientation = SpectralOrientation::Left;
-    state.spectrum_config.low_midi = 60.0;
-    state.spectrum_config.high_midi = 72.0;
-    state.tracker.handle_event(NoteEvent {
-        time: 0.0,
-        channel: 0,
-        note: 69,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    });
-    let ctx = egui::Context::default();
-    crate::theme::apply_theme(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
-    let out = ctx.run_ui(
-        egui::RawInput { screen_rect: Some(screen), ..Default::default() },
-        |ui| {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
-            spectral_pane(&mut child, &mut state, 0.1, 0);
-        },
-    );
-    // The now-line is the one hairline-colored segment clean across the
-    // pitch axis; the roll is one paint callback (its notes are instanced
-    // quads, not shapes) and must come after it — paint callbacks keep
-    // their place in egui's draw order, which is what puts the roll over
-    // the line and under the axis labels.
-    let hairline = out.shapes.iter().position(|s| {
-        matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
-            if stroke.color == theme::hairline())
-    });
-    let note = out
-        .shapes
-        .iter()
-        .rposition(|s| matches!(&s.shape, egui::Shape::Callback(_)));
-    let (Some(hairline), Some(note)) = (hairline, note) else {
-        panic!("expected both a now-line and a note ribbon in the frame");
+fn the_now_line_paints_over_the_roll_that_arrives_at_it() {
+    // Both the roll and the label batch are paint callbacks (the roll's notes
+    // are instanced quads, not shapes), and a callback carries no identity a
+    // test can read off the shape. So the roll is pinned by the note instead:
+    // with no note the roll adds no callback at all, which is what makes the
+    // FIRST callback the roll's rather than a guess. Testing the LAST one
+    // finds the labels and passes whichever order the pane draws in.
+    let frame = |sounding: bool| {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        state.spectrum_config.low_midi = 60.0;
+        state.spectrum_config.high_midi = 72.0;
+        if sounding {
+            state.tracker.handle_event(NoteEvent {
+                time: 0.0,
+                channel: 0,
+                note: 69,
+                kind: NoteEventKind::On { velocity: 1.0 },
+            });
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 500.0));
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(screen), ..Default::default() },
+            |ui| {
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(WIDE));
+                spectral_pane(&mut child, &mut state, 0.1, 0);
+            },
+        );
+        let callbacks: Vec<usize> = out
+            .shapes
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(&s.shape, egui::Shape::Callback(_)))
+            .map(|(i, _)| i)
+            .collect();
+        // The now-line is the one hairline-colored segment clean across the
+        // pitch axis.
+        let hairline = out.shapes.iter().position(|s| {
+            matches!(&s.shape, egui::Shape::LineSegment { stroke, .. }
+                if stroke.color == theme::hairline())
+        });
+        (callbacks, hairline)
     };
-    assert!(note > hairline, "the note paints under the line it arrives at");
+
+    let (quiet, _) = frame(false);
+    let (sounding, hairline) = frame(true);
+    let hairline = hairline.expect("expected a now-line in the frame");
+    assert_eq!(
+        sounding.len(),
+        quiet.len() + 1,
+        "the sounding note did not add the roll's paint callback, so nothing below \
+         identifies the roll",
+    );
+    assert!(
+        hairline > sounding[0],
+        "the roll paints over the line it arrives at, biting half its width out \
+         under every sounding note",
+    );
 }
 
 /// A note sounding where the visible lattice has no node is flagged by a

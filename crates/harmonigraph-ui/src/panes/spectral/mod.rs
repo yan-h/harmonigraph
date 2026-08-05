@@ -298,30 +298,37 @@ pub(crate) fn spectral_pane(
         }
     }
 
-    // The now-line, where the roll hands over to the spectrum — drawn here,
-    // after both things it divides, rather than at the end of the roll. It
-    // marks the boundary between two pictures, so it has to sit ON them: from
-    // inside the roll it goes down before the spectrum curve and the curve's
-    // fill paints over it, and the spectrogram's quad reaches the same line
-    // from the other side. Either one eating into it leaves a divider that
-    // flickers with the music instead of holding still.
-    //
-    // Whole-song mode sweeps a playhead across a static layout instead, and
-    // draws its own mark above. Always drawn (there is no setting): a note
-    // crossing this line out of the roll and into its spectrum peak is how the
-    // pane reads as one picture, so the boundary has to be marked.
-    if !whole_song && split < 1.0 && split > 0.0 {
-        painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
-    }
-
-    // The roll goes on last, over the line it arrives at. A sounding note
-    // reaching the boundary and painting across it IS the mark that it is
-    // sounding — nothing else has to be drawn to say so, and nothing drawn
-    // separately could sit against a rounded ribbon end as exactly as the
-    // ribbon does. (Its ribbons occupy the far side of the split and the
-    // spectrum the near side, so this only changes what happens ON the line.)
+    // The roll. Its ribbons occupy the far side of the split and the spectrum
+    // the near side, so the only thing this shares with the line below is what
+    // happens ON the line: a sounding note's ribbon ends square on it.
     if split < 1.0 && cfg.show_roll {
         roll::draw_roll(&painter, &axes, &scale, state, split, now, surface);
+    }
+
+    // The now-line, where the roll hands over to the spectrum — drawn after
+    // all three things it divides rather than at the end of the roll. It marks
+    // the boundary between two pictures, so it has to sit ON them, and each of
+    // the three arrives at it from its own side: the spectrum curve's fill
+    // paints down to it, the spectrogram's quad reaches it from the far side,
+    // and a sounding note's ribbon stops on it. Any of them eating into the
+    // line leaves a divider that thins and flickers with the music instead of
+    // holding still — and the roll is the worst of the three, taking half the
+    // line's width under every ribbon that is sounding, which is exactly where
+    // the picture is busiest and the boundary hardest to follow.
+    //
+    // The cost is the ribbon end, covered by the line rather than painting
+    // across it. What a sounding note has to show is that it reaches the
+    // boundary and comes out the other side as the spectrum peak it is making,
+    // and it still shows that; an unbroken line is what makes the two sides one
+    // picture to read across, and a line chewed away wherever a note crosses
+    // reads as a drawing error rather than as the note.
+    //
+    // Whole-song mode sweeps a playhead across a static layout instead, and
+    // draws its own mark above. Always drawn (there is no setting): the
+    // handover is what the pane is built around, so the boundary is marked
+    // whether or not anything is sounding on it.
+    if !whole_song && split < 1.0 && split > 0.0 {
+        painter.line_segment(axes.across_pitch(split), egui::Stroke::new(1.0, theme::hairline()));
     }
 
     // Axis labels last, riding on top of the spectrogram, spectrum, and
