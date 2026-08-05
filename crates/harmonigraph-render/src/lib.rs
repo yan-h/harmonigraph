@@ -191,8 +191,15 @@ struct Uniforms {
     view_proj: [f32; 16],
     cam_right: [f32; 4],
     cam_up: [f32; 4],
-    /// x: scene time in seconds; y: base node radius (world units); z unused;
-    /// w unused — it carried the node style, the core orb's paint, back when
+    /// x unused — it carried the scene clock, which no shader stage reads any
+    /// more: the shimmer was its one consumer and it now takes that clock
+    /// already multiplied by its speed and reduced onto one cycle
+    /// (`misc8.x`), which is the only form in which an f32 can carry a song
+    /// position honestly. Retired rather than refilled WITH the clock: two
+    /// spellings of the same time in the same buffer is how a later pattern
+    /// picks the one that stair-steps.
+    /// y: base node radius (world units); z unused;
+    /// w unused — it carried the node style, the core orb's paint, from when
     /// the core had more than one. A retired slot rather than a repack, which
     /// would renumber the ones around it for nothing (as with `misc3.w` and
     /// `misc4.y`).
@@ -262,7 +269,10 @@ struct Uniforms {
     /// z unused (a retired slot rather than a repack, like `misc3.w`); w unused.
     misc7: [f32; 4],
     /// The shimmer's knobs (see
-    /// `Scene::shimmer_speed`). x: travel in world units per second;
+    /// `Scene::shimmer_speed`). x: how far the sheet has travelled, in world
+    /// units, already reduced onto one cycle of the pattern — the SPEED does
+    /// not reach the shader, having been spent producing this (see
+    /// `Scene::shimmer_slide`);
     /// y: the pattern's period in world units, strictly positive; z: how deep
     /// the light is (0 none, 1 the tuned depth); w: how gradually it arrives
     /// across the period (0 a crest, 1 a cosine).
@@ -740,7 +750,7 @@ impl LatticeCallback {
                 view_proj: view_proj.to_cols_array(),
                 cam_right: right.extend(0.0).to_array(),
                 cam_up: up.extend(0.0).to_array(),
-                misc: [scene.time, scene.node_radius, 0.0, 0.0],
+                misc: [0.0, scene.node_radius, 0.0, 0.0],
                 misc2: [
                     scene.darkest_pitch,
                     scene.brightest_pitch,
@@ -766,7 +776,7 @@ impl LatticeCallback {
                 background: scene.background.to_array(),
                 misc7: [scene.octave_layout.span as f32, scene.octave_layout.center, 0.0, 0.0],
                 misc8: [
-                    scene.shimmer_speed,
+                    scene.shimmer_slide(),
                     scene.shimmer_width,
                     scene.shimmer_intensity,
                     scene.shimmer_softness,
