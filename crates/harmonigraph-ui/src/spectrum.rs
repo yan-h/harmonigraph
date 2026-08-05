@@ -47,7 +47,7 @@ pub struct AudioSpectrum {
     /// Timestamped raw spectra, one per FFT, for the spectrogram — oldest
     /// first. Raw (unsmoothed) so time isn't blurred across columns.
     /// Bounded by age and, by construction, by memory: see
-    /// [`SpectrumHistory`](harmonigraph_core::SpectrumHistory) and
+    /// [`SpectrumHistory`] and
     /// [`AudioSpectrum::push_history`].
     pub(crate) history: SpectrumHistory,
     /// One per drawing surface — index 0 the docked Spectral pane (and the

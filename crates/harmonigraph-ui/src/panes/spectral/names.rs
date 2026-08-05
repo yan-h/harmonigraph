@@ -33,7 +33,7 @@
 //! when what is wanted is which node it IS — and for a just third, `E-` says
 //! it where "E +14\u{a2}" does not.
 //!
-//! Geometry comes from [`Axes`](super::axes::Axes) like everything else in
+//! Geometry comes from [`Axes`] like everything else in
 //! the pane, so names turn and flip with it and nothing here names a screen
 //! side.
 
@@ -123,7 +123,8 @@ struct Occupancy {
 /// one with room after the last name taken" is a chain — every answer resting
 /// on the one before it, back to wherever the sweep began. Whatever that
 /// beginning is, it MOVES: the window's oldest note scrolls off, and the
-/// roll's own oldest is evicted by [`NoteRoll::MAX_NOTES`] and
+/// roll's own oldest is evicted by
+/// [`NoteRoll::MAX_NOTES`](harmonigraph_core::NoteRoll::MAX_NOTES) and
 /// [`MAX_AGE`](harmonigraph_core::NoteRoll::MAX_AGE). Move it and the parity of the
 /// whole chain flips behind it — the suppressed name takes the ground, the one
 /// after it loses it, on down the lane — which is names blinking out and back

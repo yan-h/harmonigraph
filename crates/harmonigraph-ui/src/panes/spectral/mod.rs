@@ -3,7 +3,7 @@
 //! and its settings pane.
 //!
 //! Everything is drawn in an abstract *(pitch, depth)* plane and mapped to
-//! the screen by [`Axes`](axes::Axes) at the last moment, so the whole pane
+//! the screen by [`Axes`] at the last moment, so the whole pane
 //! turns together when its orientation changes and no element has to know
 //! which way is up.
 //!
@@ -15,14 +15,8 @@
 
 pub(crate) mod axes;
 mod gestures;
-/// The names written over the pane's note ribbons. A layer of the far depth
-/// region rather than a pane of its own.
 pub(crate) mod names;
-/// The piano roll: the far share of the depth axis, and the biggest single
-/// thing this pane draws.
 pub(crate) mod roll;
-/// The frequency-vs-time heatmap, drawn in the roll's region on the same
-/// time axis.
 pub(crate) mod spectrogram;
 mod settings;
 

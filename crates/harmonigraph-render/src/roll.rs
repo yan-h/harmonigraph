@@ -12,7 +12,7 @@
 //! couple of hundred vertices once its corners and AA ring were subdivided.
 //!
 //! **What this does instead.** One quad per note segment, with a box signed
-//! distance field in the fragment shader ([`shaders/roll.wgsl`]). The note's
+//! distance field in the fragment shader (`shaders/roll.wgsl`). The note's
 //! solid body and the two rim bands beside it are bands of that distance, so a
 //! rim band costs a compare rather than a second and third shape. Four vertices
 //! per note against several hundred: the upload stops mattering rather than

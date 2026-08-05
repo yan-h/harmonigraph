@@ -287,7 +287,7 @@ impl Scene {
     /// within `max_px`. Every pane that wants "hover a pitch class" uses
     /// this and writes the result to the shared UI state.
     ///
-    /// Only [visible](NodeInstance::is_visible) nodes are pickable, so the
+    /// Only [visible](crate::NodeInstance::is_visible) nodes are pickable, so the
     /// pointer can't pull a pitch readout out of an off-sheet node that
     /// draws nothing.
     pub fn pick(&self, viewport_px: Vec2, pointer_px: Vec2, max_px: f32) -> Option<LatticePos> {

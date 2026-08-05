@@ -17,7 +17,7 @@
 //! difference between folding as a way to make the window narrower and folding
 //! as a way to redistribute it: a lattice that doubles because the analyzer
 //! folded is a re-layout nobody asked for. The result reads as a rail down the
-//! edge of the window, so [`paint`] draws the rail as the pane's own tab, name
+//! edge of the window, so [`paint`](fn@paint) draws the rail as the pane's own tab, name
 //! and all.
 //!
 //! ## The layout is points; the rails are a rendering of it
@@ -126,17 +126,19 @@
 //! right is a resize to everyone looking at it, whatever the tree says is
 //! immediately either side, so that is what it does: the drag goes out to the
 //! nearest split that divides two panes which can both change width
-//! ([`shove_target`], [`nudge`]), and the rails travel with the boundary at their
+//! (`shove_target`,
+//! `nudge`), and the rails travel with the boundary at their
 //! own width. Every separator across a run of rails therefore moves the same two
 //! panes, which is the only thing they could all mean.
 //!
 //! Where there is nothing outward to pass it to — a fold holding the whole of one
 //! side of the window, one open pane and the window's own edge — the only width
 //! that can move is the folded pane's, out of the window. So the separator the
-//! rail sits against offers exactly that ([`grab`]): pull it and the pane comes
+//! rail sits against offers exactly that (`grab`): pull it and
+//! the pane comes
 //! back at the width it was pulled to, a pane at a time, as its own arrow would
 //! have. A band between two rails there has nothing left to offer and is inert
-//! ([`deaden`]).
+//! (`deaden`).
 //!
 //! Whether a pane is folded stays egui_dock's own `collapsed` flag, set by its
 //! own arrow: nothing here duplicates that bookkeeping, it only reads it.
@@ -227,7 +229,7 @@ impl Side {
 }
 
 /// A rail the user has pulled out into a pane again, and how wide they pulled
-/// it (see [`grab`]).
+/// it (see `grab`).
 ///
 /// Carried from the pull to the next frame rather than acted on where it
 /// happens, because [`Folds::apply`] is where the layout is, and a width that
@@ -257,7 +259,7 @@ impl Folds {
     ///
     /// Runs BEFORE the dock lays out, because a fraction is layout's input.
     ///
-    /// The layout is [`Dial::points`]: a width per pane, held between frames and
+    /// The layout is [`Dial::panes`]: a width per pane, held between frames and
     /// changed only by something the user did. Three things can have happened
     /// since the last pass, and each is a change to those widths:
     ///
@@ -266,10 +268,10 @@ impl Folds {
     ///   the layout's — a folded pane KEEPS its points and is drawn as a rail
     ///   standing in for them, so unfolding restores nothing and cannot drift;
     /// - the window dragged, which shares itself out over the panes that are
-    ///   visible ([`refit`]) and leaves the folded ones alone. That is the whole
+    ///   visible ([`Points::refit`]) and leaves the folded ones alone. That is the whole
     ///   of "a resize does not scale a collapsed pane".
     ///
-    /// What is DRAWN is then those points fitted to `area` ([`spread`]): the
+    /// What is DRAWN is then those points fitted to `area` ([`Points::spread`]): the
     /// rails at a fixed number of points, whatever is left shared out among the
     /// panes in proportion to what they are dialled at. When the window is the
     /// one the layout wants, that is the layout exactly; when it is not — a host
@@ -776,7 +778,7 @@ pub struct Dial {
     /// The boundary this gesture has hold of, if it has hold of one.
     grip: Option<Grip>,
     /// A rail pulled open, waiting for the frame that can price it. Set by
-    /// [`paint`], which is where the pull is let go of, and taken by
+    /// [`paint`](fn@paint), which is where the pull is let go of, and taken by
     /// [`Folds::apply`], which is where a width becomes layout.
     pull: Option<Pull>,
     /// A fold or an unfold waiting for the window its layout needs.
@@ -968,7 +970,7 @@ struct Points {
 
 impl Dial {
     /// The boundary a gesture has hold of, for the chrome that has to show it
-    /// (see [`paint`]).
+    /// (see [`paint`](fn@paint)).
     pub(crate) fn held(&self) -> Option<(SurfaceIndex, NodeIndex)> {
         self.grip.map(|grip| (SurfaceIndex(grip.surface), NodeIndex(grip.node)))
     }

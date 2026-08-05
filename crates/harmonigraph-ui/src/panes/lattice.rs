@@ -1003,7 +1003,7 @@ fn mark_key(kind: MarkKind, size: f32, weight: f32, ppp: f32) -> MarkKey {
 /// The two comma signs are DRAWN and the accidental is typeset, which is not
 /// an inconsistency but the point: `♯` and `♭` are real musical symbols with
 /// 878 and 818 units of ink, and they survive the size. The comma signs are
-/// bars, and Iosevka has no bar thicker than 70 units. See [`comma_sign`].
+/// bars, and Iosevka has no bar thicker than 70 units. See [`mark_geometry`].
 ///
 /// The septimal mark takes its direction twice over -- from the shape it is
 /// drawn as, and from which end of the column it sits at. The second cue is
@@ -1218,7 +1218,7 @@ fn stacked_name(
 /// the two can be stacked against each other: returns how far its ink reaches
 /// below `anchor.y`. Used for the label lines that are numbers rather than
 /// note names — an off-sheet node's cents, and its comma (see
-/// [`SevensLabel`](harmonigraph_scene::SevensLabel)).
+/// [`SevensLabel`]).
 #[allow(clippy::too_many_arguments)]
 fn draw_plain_name(
     batch: &mut crate::text::TextBatch,

@@ -120,7 +120,7 @@ impl Sink {
     /// soundtrack ends before the visuals (a one-loop take: audio is the loop,
     /// the picture keeps fading out past it). Whether that early stop was
     /// success or a crash is ffmpeg's call, read from its exit status in
-    /// [`finish`]; the caller just stops feeding on `Ok(false)`.
+    /// [`Self::finish`]; the caller just stops feeding on `Ok(false)`.
     pub fn push(&mut self, frame: &[u8]) -> Result<bool, String> {
         match self {
             Sink::Video { child } => {

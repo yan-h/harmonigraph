@@ -394,7 +394,7 @@ fn pitch_ramp_color(t: f64, gradient: PitchGradient) -> Vec4 {
 /// The three coordinates [`pitch_ramp_color`] converts, before the conversion:
 /// `L*`, an Oklab hue, and an absolute Oklab chroma.
 ///
-/// Split out for [`ramp_sample_in_gamut`], which has to ask about the color
+/// Split out for `ramp_sample_in_gamut`, which has to ask about the color
 /// that was REQUESTED: [`oklab_srgb`] clamps, so a color read back out of the
 /// table is inside sRGB whatever was asked for, and a clamp cannot also be the
 /// check on whether it was needed.
@@ -402,7 +402,7 @@ fn pitch_ramp_color(t: f64, gradient: PitchGradient) -> Vec4 {
 /// Takes an already-sanitized gradient and does not re-sanitize. The invariant
 /// has boundaries rather than a scattering of owners — [`with_lut`] applies it
 /// once for a whole table (and keys the memo on the result),
-/// [`designed_pitch_ramp`] does it for the test path, and
+/// `designed_pitch_ramp` does it for the test path, and
 /// [`PitchGradient::lightness_and_hue`] holds up its own public end. Only
 /// `chroma` is read raw here, which is what lets the gamut test hand in the
 /// out-of-range fraction a control cannot produce.

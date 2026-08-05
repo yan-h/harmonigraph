@@ -7,7 +7,7 @@
 //! the keys rather than being quantized onto one. What it keeps from the
 //! DAW idea is the shape: pitch across, time along, one ribbon per note.
 //!
-//! Geometry comes entirely from [`Axes`](super::axes::Axes), so the roll
+//! Geometry comes entirely from [`Axes`], so the roll
 //! turns with the rest of the pane and this file never names a screen side.
 //! Its share of the depth axis runs from `split` (now) to 1 (the
 //! oldest note still on screen), so time flows *away* from the spectrum

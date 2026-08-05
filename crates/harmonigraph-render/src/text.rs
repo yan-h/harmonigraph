@@ -185,7 +185,7 @@ struct TextResources {
 /// holds what WE put there — so the atlas is mirrored. Both renderers that draw
 /// glyphs keep one of these: the callback below, and the lattice, which draws
 /// its node names inside its own scene pass. Each mirror is the thing an
-/// [`crate::AtlasMirror`]-side key answers for, so a renderer with its own
+/// [`MirroredAtlas`]-side key answers for, so a renderer with its own
 /// texture needs its own key sequence upstream too — two consumers sharing one
 /// publisher would each see half the publications and hold half an atlas.
 pub(crate) struct MirroredAtlas {
