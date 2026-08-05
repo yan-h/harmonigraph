@@ -419,12 +419,6 @@ pub fn derive_scene(
         outer_outer,
         outer_gap,
         octave_layout,
-        // Straight through, with no fold of its own: every pattern lays a
-        // sheet over the whole octave layer, which always draws, so there is
-        // no state of the view in which one of them animates something other
-        // than what it says. The mark side below is the one that needs the
-        // fold, its sheet reaching a layer that can be switched off.
-        pulse_octaves: view.pulse_octaves,
         idle_marker: view.idle_marker,
         idle_radius: view.idle_radius.clamp(0.0, 0.9),
         grid,

@@ -62,15 +62,11 @@ fn main() -> Result<(), String> {
             "outer_outer" => view.outer_outer = num()?,
             "outer_gap" => view.outer_gap = num()?,
             "mark_thickness" => view.mark_thickness = num()?,
-            // Which shimmer sweeps the octave glyphs and the mark rings, and
-            // how that sheet is sized, paced, lit and shaped. A still frame of
-            // a moving look is a real question — the pattern itself is what
-            // the four `shimmer_*` keys below size — and the scene's clock is
-            // what decides which instant of it the frame lands on.
-            "pulse_octaves" => {
-                view.pulse_octaves =
-                    ron::from_str(value).map_err(|e| format!("`pulse_octaves`: {e}"))?
-            }
+            // Which shimmer sweeps the mark rings, and how that sheet is
+            // sized, paced, lit and shaped. A still frame of a moving look is a
+            // real question — the pattern itself is what the four `shimmer_*`
+            // keys below size — and the scene's clock is what decides which
+            // instant of it the frame lands on.
             "pulse_marks" => {
                 view.pulse_marks =
                     ron::from_str(value).map_err(|e| format!("`pulse_marks`: {e}"))?

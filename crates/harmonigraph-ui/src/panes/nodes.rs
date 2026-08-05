@@ -12,10 +12,9 @@ use harmonigraph_scene::{Pulse, ViewConfig, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FL
 
 /// The sounding-note controls, top to bottom as the note reads outward: the
 /// Core mark at its center, the Octaves ring around it, the melody/bass marks
-/// on the outer notes, the sweep either of those two layers can be set to
-/// run, and then the settings that are not about any one of those layers but
-/// about all of them at once. Scrolls so the full list is reachable in a
-/// short pane.
+/// on the outer notes, the sweep those marks can be set to run, and then the
+/// settings that are not about any one of those layers but about all of them
+/// at once. Scrolls so the full list is reachable in a short pane.
 pub(super) fn nodes_pane(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -167,15 +166,12 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // always the crisp classic shapes, and the silent octaves always ghost
     // in behind the sounding ones — that backdrop is what completes the
     // ring, so a lone octave still reads as a whole note.
-
-    // Off is its own option rather than a checkbox beside a pattern row:
-    // there is no separate bar the pattern would otherwise gray out, so one
-    // row says both whether the layer shimmers and how.
     //
-    // Ungated, and the whole row live whatever else the view holds: every
-    // pattern lays a sheet over the octave layer, and the octave layer always
-    // draws. The Melody/bass row below is the one with a precondition.
-    choice_row(ui, "Shimmer", &mut view.pulse_octaves, SHIMMER_PATTERNS);
+    // No Shimmer row either: the glyphs are what says which octaves sound, and
+    // a sheet laid over that reading costs it — so the sweep belongs to the
+    // marks, which carry no such reading. What reaches this layer is the mark
+    // sheet crossing the one slice each ring points at, from the row in
+    // Melody/bass below.
 }
 
 /// Melody / bass: mark the outer held notes so a chord's top and bottom line
@@ -210,36 +206,35 @@ fn melody_bass_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  values grow the bass ring in over the core, so raise \
                  Band inner to make room",
             );
-        // The same pattern row as the Octaves section above, on the layer this
-        // section is about — the sheet takes both rings and the octave slice
-        // each one points at. Off is a pattern rather than a separate
-        // checkbox, as it is up there.
+        // The sweep, on the only layer that runs one — the sheet takes both
+        // rings and the octave slice each one points at. Off is its own option
+        // rather than a checkbox beside the row: there is no separate bar the
+        // pattern would otherwise gray out, so one row says both whether the
+        // marks shimmer and how.
         //
-        // Gated where the Octaves row is not: a ring has to be DRAWN for a
-        // sheet over it to mean anything. Thickness 0 is the documented off
-        // position, where `mark_ring` returns no coverage (the Core section
-        // gates its own Solidity and Style on a radius of 0 the same way).
-        // The enclosing block already grays this on both marks being off, so
-        // what the row is gated on either way is `mark_rings_draw` — the same
-        // predicate `derive_scene` folds the pattern on, and the one the
-        // Shimmer section reads. Written as the thickness alone because that
-        // is the half this row adds; the pair is what has to agree.
+        // Gated, because a ring has to be DRAWN for a sheet over it to mean
+        // anything. Thickness 0 is the documented off position, where
+        // `mark_ring` returns no coverage (the Core section gates its own
+        // Solidity and Style on a radius of 0 the same way). The enclosing
+        // block already grays this on both marks being off, so what the row is
+        // gated on either way is `mark_rings_draw` — the same predicate
+        // `derive_scene` folds the pattern on, and the one the Shimmer section
+        // reads. Written as the thickness alone because that is the half this
+        // row adds; the pair is what has to agree.
         ui.add_enabled_ui(view.mark_thickness > 0.0, |ui| {
             choice_row(ui, "Shimmer", &mut view.pulse_marks, SHIMMER_PATTERNS);
         });
     });
 }
 
-/// The patterns a layer's sheet can be laid in, for both rows above.
+/// The patterns the mark rings' sheet can be laid in, for the row above.
 ///
-/// ONE table, not one per layer: a pattern is a shape the light takes, and it
-/// is the same shape wherever it is laid — a row per layer would be two
-/// places to describe a checkerboard, which is two places for the
-/// descriptions to drift apart. What differs BETWEEN the layers is which
-/// pixels the sheet reaches, and that belongs to the sections, not to the
-/// patterns.
+/// A table beside the row rather than six arms written into it: a pattern is a
+/// shape the light takes, and each one's description is a sentence about that
+/// shape rather than about the marks, so it belongs next to the others it is
+/// told apart from.
 const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
-    (Pulse::Off, "Off", "Steady — no sweep on this layer"),
+    (Pulse::Off, "Off", "Steady — no sweep on the marks"),
     (
         Pulse::Bands,
         "Bands",
@@ -273,30 +268,26 @@ const SHIMMER_PATTERNS: &[(Pulse, &str, &str)] = &[
     ),
 ];
 
-/// Shimmer: how the sheet both rows above can lay is sized and paced.
+/// Shimmer: how the sheet the Melody/bass row lays is sized and paced.
 ///
-/// Its own section rather than a set of bars under either row, because these
-/// are ONE sheet crossing the whole lattice — shared by the octave glyphs and
-/// the mark rings, whatever mix of the two is running it. Under the Octaves
-/// row they would look like the octave layer's, and a user who reached a
-/// pattern from the Melody/bass row would be hunting for them in a section
-/// about something else; duplicated under both they would be two controls for
-/// one value.
+/// Its own section rather than four more bars under that row, because these
+/// size ONE sheet crossing the whole lattice while the row picks its shape,
+/// and because the row sits inside the marks' own gating where a bar about the
+/// light itself does not belong. It stays at the foot of the pane for that
+/// reason.
 ///
 /// Grayed until something is actually shimmering, on the same grounds every
-/// other gate in this pane uses: the bars do nothing at all with both layers
+/// other gate in this pane uses: the bars do nothing at all with the pattern
 /// Off.
 ///
-/// "Actually" is the load-bearing word, and it is why the mark side is not
-/// just a mode check: `derive_scene` folds `pulse_marks` off with the ring
-/// layer itself ([`ViewConfig::mark_rings_draw`]), so a view carrying a
-/// pattern with no end marked, or no ring thickness, is not shimmering — and
-/// these bars would otherwise be live with nothing to move. The octave side
-/// has no such gate: its layer always draws, and its pattern never folds.
+/// "Actually" is the load-bearing word, and it is why this is not just a mode
+/// check: `derive_scene` folds `pulse_marks` off with the ring layer itself
+/// ([`ViewConfig::mark_rings_draw`]), so a view carrying a pattern with no end
+/// marked, or no ring thickness, is not shimmering — and these bars would
+/// otherwise be live with nothing to move.
 fn shimmer_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Shimmer");
-    let shimmering =
-        view.pulse_octaves.sweeps() || (view.pulse_marks.sweeps() && view.mark_rings_draw());
+    let shimmering = view.pulse_marks.sweeps() && view.mark_rings_draw();
     ui.add_enabled_ui(shimmering, |ui| {
         ValueBar::new(&mut view.shimmer_speed, 0.0..=6.0, "Speed")
             .show(ui)

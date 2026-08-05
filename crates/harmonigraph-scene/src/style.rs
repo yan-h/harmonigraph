@@ -252,9 +252,9 @@ impl IdleMarker {
     }
 }
 
-/// Which shimmer a layer — the octave glyphs, or the melody/bass rings —
-/// runs: one sheet of soft white light laid over the whole lattice, in the
-/// pattern this names, or [`Off`](Pulse::Off) for the steady picture.
+/// Which shimmer the melody/bass rings run: one sheet of soft white light
+/// laid over the lattice, in the pattern this names, or [`Off`](Pulse::Off)
+/// for the steady picture.
 ///
 /// Every live mode is the same animation with a different shape to it, which
 /// is what lets one set of knobs size all of them
@@ -263,19 +263,14 @@ impl IdleMarker {
 /// spanning the whole lattice rather than a copy per node — every node
 /// samples it at its own place on the plane the billboards face — so the
 /// light reads as raking over the picture instead of as many small identical
-/// animations. A mode works on a node with no mark on it at all.
+/// animations.
 ///
-/// The two layers run their sheets a quarter turn apart, so a node wearing
-/// both crosses two of them and the brighter wins the pixel.
-/// ([`Rings`](Pulse::Rings) is the one a turn cannot separate, a circle
-/// turned being the same circle, and takes half a period instead.) The mark
-/// rings' sheet also reaches OUT of its own layer, onto the octave slice each
+/// The sheet also reaches OUT of the ring layer, onto the octave slice each
 /// ring points at — a mark being the ring together with the octave it names.
-/// All of that lives in `lattice.wgsl`'s Shimmer section.
-///
-/// One enum for both layers: the states mean the same thing wherever they're
-/// read, and reading them off one shared clock keeps a node whose octaves
-/// and marks are both animating in step.
+/// That reach is the whole of what it touches outside the rings: the octave
+/// glyphs draw steady everywhere no ring points, which is what keeps them
+/// readable as which octaves sound. All of it lives in `lattice.wgsl`'s
+/// Shimmer section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Pulse {
     /// Steady — no animation, the look every earlier build drew.
@@ -316,10 +311,9 @@ pub enum Pulse {
 }
 
 impl Pulse {
-    /// Index the shader reads (`misc6.w` for the mark rings, `misc7.z` for
-    /// the octave glyphs — see `Uniforms` in harmonigraph-render). 0 is the
-    /// steady layer and every other value picks a pattern out of
-    /// `shimmer_terms`.
+    /// Index the shader reads (`misc6.w` — see `Uniforms` in
+    /// harmonigraph-render). 0 is the steady layer and every other value picks
+    /// a pattern out of `shimmer_terms`.
     pub fn shader_index(self) -> u32 {
         match self {
             Pulse::Off => 0,

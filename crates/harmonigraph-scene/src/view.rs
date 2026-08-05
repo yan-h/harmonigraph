@@ -249,16 +249,12 @@ pub struct ViewConfig {
     /// strength — and it is inert without two extras to differ.
     #[serde(default = "default_octave_extra_blend")]
     pub octave_extra_blend: f32,
-    /// Which shimmer sweeps the octave glyphs (see [`Pulse`]) — the pattern
-    /// alone, sized and paced by the shared knobs below. It reaches the whole
-    /// layer whatever is playing and whatever is marked, so this switch
-    /// stands on nothing but itself.
-    /// [`Pulse::Off`] is the steady look every earlier build drew, which is
-    /// also what a blob predating this field was drawn with — so a bare
-    /// `#[serde(default)]` is both fallbacks at once and needs no named
-    /// `default_*` fn.
-    #[serde(default)]
-    pub pulse_octaves: Pulse,
+    // Which shimmer sweeps the octave glyphs has no field here: the sheet is
+    // the melody/bass rings' alone (`pulse_marks`), and the octave layer draws
+    // steady whatever those are doing. Saved blobs still carry the
+    // `pulse_octaves` key, naming any of the six patterns `Pulse` answers to;
+    // serde ignores unknown keys, so such a blob loads intact, opens on the
+    // steady octave layer, and drops the key on the next save.
     // ---- Idle (unlit) node marker ----------------------------------------
     // A minimal grey marker at each home-sheet node, drawn ALWAYS —
     // independent of both the active appearance and whether a note is
@@ -328,29 +324,20 @@ pub struct ViewConfig {
     #[serde(default = "default_mark_thickness")]
     pub mark_thickness: f32,
     /// Which shimmer sweeps the melody/bass rings (see [`Pulse`]): the sheet
-    /// takes both rings AND the octave slice each one points at, a quarter
-    /// turn from the octave band's own. That reach into the other layer is
-    /// the mark being the ring together with the slice it names, so light
-    /// crossing one crosses the other. Shares [`Pulse`] with
-    /// [`pulse_octaves`](Self::pulse_octaves) but is its own switch — a
-    /// chord's outer voices and its octave glyphs are read at a glance
-    /// independently, so animating one was never a reason to animate the
-    /// other. [`Pulse::Off`] is both the fresh-view and the old-blob
-    /// fallback, so a bare `#[serde(default)]` covers it.
+    /// takes both rings AND the octave slice each one points at. That reach
+    /// into the other layer is the mark being the ring together with the slice
+    /// it names, so light crossing one crosses the other — and it is the whole
+    /// of where the sheet goes, the octave layer drawing steady everywhere a
+    /// ring does not point. [`Pulse::Off`] is both the fresh-view and the
+    /// old-blob fallback, so a bare `#[serde(default)]` covers it.
     #[serde(default)]
     pub pulse_marks: Pulse,
 
     // ---- Shimmer ---------------------------------------------------------
-    // The sweep's knobs, and ONE set for both layers that can run it. The
-    // pattern is per layer because a chord's outer voices and its octave
-    // glyphs are read independently; the sizing is not, because it is one
-    // sheet of light crossing the whole lattice — two layers sweeping at
-    // different sizes or rates would read as two animations stacked on one
-    // picture rather than as light passing over it. What the layers do differ
-    // in is where the sheet is laid — a quarter turn apart, which is the
-    // shader's own constant and not a setting.
+    // The sweep's knobs: what the pattern above is sized and paced by, one
+    // sheet of light crossing the whole lattice.
     //
-    // All four are inert while both layers are Off.
+    // All four are inert while the pattern is Off.
     /// How fast the shimmer travels, in world units per second — the
     /// lattice's own units, so the DAW window and an exported video sweep at
     /// the same rate across the same nodes, where a rate in screen pixels
@@ -810,12 +797,12 @@ impl ViewConfig {
     ///
     /// One predicate because three places have to agree on it — the pane
     /// grays the ring's own controls, `derive_scene` folds
-    /// [`pulse_marks`](Self::pulse_marks) off, and the Shimmer bars gray with
-    /// whatever is left running — and three copies of a two-term condition is
-    /// how they come to disagree. They did: the fold tested the thickness
-    /// alone, so a saved view with both marks off kept shipping a live pulse
-    /// mode, and the Shimmer bars tested neither and stayed draggable with
-    /// nothing to drag.
+    /// [`pulse_marks`](Self::pulse_marks) off, and the Shimmer bars gray on
+    /// the same thing, that pattern being the only thing they size — and three
+    /// copies of a two-term condition is how they come to disagree. They did:
+    /// the fold tested the thickness alone, so a saved view with both marks off
+    /// kept shipping a live pulse mode, and the Shimmer bars tested neither and
+    /// stayed draggable with nothing to drag.
     ///
     /// Says nothing about whether a ring is drawn NOW — that is a held note's
     /// business, per node. This is whether the layer is switched on.
@@ -981,8 +968,8 @@ impl ViewConfig {
         // through a clamp untouched, because every comparison against it is
         // false. From there it is a divide (the period), a `pow` exponent
         // (the softness) and two mixes, so ONE non-finite number in a
-        // hand-edited blob NaNs the sheet, and a NaN sheet takes the whole
-        // octave layer with it wherever the mode is on. Repaired here rather
+        // hand-edited blob NaNs the sheet, and a NaN sheet takes the rings and
+        // the slices they name with it wherever the mode is on. Repaired here rather
         // than in `derive_scene` because this is the blob's own door: the bars
         // cannot reach these values, so a view that holds one got it from a
         // file.
@@ -1089,12 +1076,6 @@ impl Default for ViewConfig {
             octave_extras: 2,
             octave_extra_size: 0.387_534_47,
             octave_extra_blend: 0.562_241_4,
-            // Steady: the octave glyphs are what says which octaves sound, and
-            // a sheet laid over that reading is an option to reach for rather
-            // than the out-of-the-box look. The mark rings below do shimmer —
-            // they carry no such reading, only which note is the top and which
-            // the bottom.
-            pulse_octaves: Pulse::Off,
             // No idle marker: the grid lines alone carry the lattice's
             // shape where nothing is playing, leaving the node positions
             // themselves empty. (`idle_radius` rides along inert, so
@@ -1114,8 +1095,9 @@ impl Default for ViewConfig {
             // The sheet the rings above wear. A period well under one node's
             // spacing puts several of them across every ring, so this reads as
             // a fine texture ON the marks rather than as light crossing the
-            // lattice — which is what keeps it off the octave glyphs' reading
-            // even though the same sheet would cross them. Half depth and a
+            // lattice — which is what keeps it off the reading of the octave
+            // slice each ring points at, the one place the sheet touches the
+            // glyph layer. Half depth and a
             // slow pace hold it there; at the tuned width and depth the
             // `default_shimmer_*` fns carry it would be a sweep instead.
             //

@@ -186,6 +186,43 @@ fn a_blob_written_against_the_taper_opens_on_an_even_wheel() {
     assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
+/// The octave glyphs' own shimmer is gone, and a project saved against it
+/// carries a `pulse_octaves` key nothing reads now. It has to open with the
+/// glyphs steady and every other setting intact — including the mark rings'
+/// pattern, which is the one that survived and which sits next to it in the
+/// blob, so a reader that choked on the retired key would take the live one
+/// down with it.
+///
+/// Worth a blob rather than a comment for the same reason the taper's is: that
+/// an unknown field is ignored rather than refused is a property of how the
+/// blob is read, not something this crate spells out, and a saved project
+/// failing to parse loses the user's layout and camera along with it.
+#[test]
+fn a_blob_written_against_the_octave_shimmer_opens_with_the_glyphs_steady() {
+    let mut state = SharedState::new(TextureFormat::Bgra8Unorm);
+    state.camera.yaw = 1.23;
+    state.view.pulse_marks = harmonigraph_scene::Pulse::Hex;
+    let saved = state.save_persist();
+    // Where the retired key sat: beside the mark rings' own pattern, written
+    // bare as RON writes a unit variant.
+    let marks = "pulse_marks:Hex,";
+    let with_octaves = saved.replace(marks, &format!("pulse_octaves:Bands,{marks}"));
+    assert_ne!(with_octaves, saved, "`{marks}` is not in the blob to splice against");
+
+    let mut restored = SharedState::new(TextureFormat::Bgra8Unorm);
+    restored.load_persist(&with_octaves);
+    assert_eq!(
+        restored.view.pulse_marks,
+        harmonigraph_scene::Pulse::Hex,
+        "the pattern that survived the retirement came back changed",
+    );
+    assert_eq!(restored.camera.yaw, 1.23, "the rest of the blob still restores");
+    assert!(
+        !restored.save_persist().contains("pulse_octaves"),
+        "the retired key was written back out; it should drop on the next save",
+    );
+}
+
 /// The keys a blob written against an older wheel carries instead of the count
 /// and center, and what they have to open on.
 fn opens_as(keys: &str, count: u32, center: f32) {
@@ -1125,8 +1162,7 @@ fn the_view_fields_an_old_blob_reloads_differently_are_exactly_these() {
         "mark_thickness",
         // A blob with no pattern on the mark rings predates the sheet being
         // laid over them, and reloads steady; a fresh view opens with the
-        // rings in Bands. The octave layer's `pulse_octaves` is NOT here — it
-        // reloads steady and opens steady.
+        // rings in Bands.
         "pulse_marks",
         // And a blob with no shimmer keys predates each bar, so it reloads at
         // the width and depth the sweep was fixed at (the `default_shimmer_*`

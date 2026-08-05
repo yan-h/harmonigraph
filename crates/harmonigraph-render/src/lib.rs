@@ -259,10 +259,9 @@ struct Uniforms {
     /// how far its ring is turned to put them on their pitches — so the shader
     /// derives them per node from these two.
     ///
-    /// z: the octave glyphs' shimmer pattern (0 off, then one index per
-    /// pattern — see `Pulse::shader_index`); w unused.
+    /// z unused (a retired slot rather than a repack, like `misc3.w`); w unused.
     misc7: [f32; 4],
-    /// The shimmer's knobs, shared by both layers that can run it (see
+    /// The shimmer's knobs (see
     /// `Scene::shimmer_speed`). x: travel in world units per second;
     /// y: the pattern's period in world units, strictly positive; z: how deep
     /// the light is (0 none, 1 the tuned depth); w: how gradually it arrives
@@ -765,12 +764,7 @@ impl LatticeCallback {
                     scene.pulse_marks.shader_index() as f32,
                 ],
                 background: scene.background.to_array(),
-                misc7: [
-                    scene.octave_layout.span as f32,
-                    scene.octave_layout.center,
-                    scene.pulse_octaves.shader_index() as f32,
-                    0.0,
-                ],
+                misc7: [scene.octave_layout.span as f32, scene.octave_layout.center, 0.0, 0.0],
                 misc8: [
                     scene.shimmer_speed,
                     scene.shimmer_width,
