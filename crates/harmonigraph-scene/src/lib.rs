@@ -293,9 +293,6 @@ pub struct Scene {
     /// its own octaves fall against the center pitch, which is what makes an
     /// indicator's ANGLE mean an absolute pitch.
     pub octave_layout: OctaveLayout,
-    /// Which shimmer sweeps the octave glyphs (see [`Pulse`] and
-    /// [`ViewConfig::pulse_octaves`]).
-    pub pulse_octaves: Pulse,
     /// The idle (unlit home-sheet node) marker, independent of the active
     /// appearance and of the playing state; drawn in the idle grey and
     /// composited under any active note. See [`ViewConfig::idle_marker`].
@@ -352,9 +349,7 @@ pub struct Scene {
     /// period is (world units), how deep the light it carries is (0 none, 1
     /// the tuned depth) and how gradually that light arrives across the
     /// period (0 a crest, 1 a cosine) — see [`ViewConfig::shimmer_speed`].
-    /// ONE set for both layers that can run the sweep, it being a single
-    /// sheet crossing the lattice. Already clamped, the width to strictly
-    /// positive.
+    /// Already clamped, the width to strictly positive.
     pub shimmer_speed: f32,
     pub shimmer_width: f32,
     pub shimmer_intensity: f32,
