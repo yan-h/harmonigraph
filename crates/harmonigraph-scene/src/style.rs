@@ -252,9 +252,9 @@ impl IdleMarker {
     }
 }
 
-/// Which shimmer the melody/bass rings run: one sheet of soft white light
-/// laid over the lattice, in the pattern this names, or [`Off`](Pulse::Off)
-/// for the steady picture.
+/// Which shimmer the melody/bass rings run: one sheet of soft light laid over
+/// the lattice, in the pattern this names, or [`Off`](Pulse::Off) for the
+/// steady picture.
 ///
 /// Every live mode is the same animation with a different shape to it, which
 /// is what lets one set of knobs size all of them

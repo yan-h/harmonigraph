@@ -81,6 +81,27 @@ fn luminance_of_lightness(l_star: f64) -> f64 {
     }
 }
 
+/// The `L*` an encoded sRGB triple carries — [`luminance_of_lightness`] run
+/// backwards, with the transfer function undone first.
+///
+/// Public because reading a rendered pixel back is the only way to check a
+/// claim about how bright the picture LOOKS, and that reading has to be in the
+/// units the ramp is authored in or it answers a different question: a channel
+/// sum weights blue like green and calls a violet and a yellow of the same sum
+/// equally bright, which they are not. Sharing the curve rather than restating
+/// it is the point — a copy that drifted from these constants would agree with
+/// itself and disagree with the picture.
+pub fn lightness_of_encoded(r: f64, g: f64, b: f64) -> f64 {
+    let y = 0.2126 * linear_of_encoded(r)
+        + 0.7152 * linear_of_encoded(g)
+        + 0.0722 * linear_of_encoded(b);
+    if y > (6.0 / 29.0f64).powi(3) {
+        116.0 * y.cbrt() - 16.0
+    } else {
+        y * (29.0 / 3.0f64).powi(3)
+    }
+}
+
 /// Linear sRGB from Oklab, by Ottosson's matrices.
 ///
 /// Linear and not encoded, deliberately: the gamut test below runs on this,
