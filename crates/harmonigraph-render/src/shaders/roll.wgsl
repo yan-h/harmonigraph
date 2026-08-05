@@ -1,6 +1,10 @@
 // The piano roll's notes: one instanced quad per note segment — a solid
-// rectangle in the note's own color, with a white keyline along its long
-// edges, both falling out of a signed distance field.
+// rectangle in the note's own color, with two rim bands along its long edges,
+// all falling out of a signed distance field.
+//
+// The rim's two bands are `inner` and `outer`, named for where they sit and
+// nothing else: which one is dark and which is light is the pane's choice, and
+// naming them for it here would put half of that decision in this file.
 //
 // Nothing here is tessellated. A note is four vertices whatever its shape,
 // and the bands the egui path drew as separate stroked rounded rects are read
@@ -35,12 +39,15 @@ struct VertexOut {
     /// The center line's pitch drift per point of depth: 0 for a held note,
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
-    /// White keyline width in points, zero when Edge turns it off. It rides
-    /// the note's long edges only — see [`rail_mask`].
+    /// Width of EACH rim band in points — the two are the same thickness — and
+    /// zero when Edge turns the rim off. Both ride the note's long edges only
+    /// — see [`rail_mask`].
     @location(3) @interpolate(flat) keyline: f32,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(4) @interpolate(flat) core: vec4<f32>,
-    @location(5) @interpolate(flat) glow: vec4<f32>,
+    /// The band against the note's edge, and the one beyond it.
+    @location(5) @interpolate(flat) inner: vec4<f32>,
+    @location(6) @interpolate(flat) outer: vec4<f32>,
 };
 
 @vertex
@@ -51,7 +58,8 @@ fn vs_note(
     @location(2) shear: f32,
     @location(3) keyline: f32,
     @location(4) core: vec4<f32>,
-    @location(5) glow: vec4<f32>,
+    @location(5) inner: vec4<f32>,
+    @location(6) outer: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -60,16 +68,27 @@ fn vs_note(
     );
 
     let slope = shear;
-    // How far outside its own box a note can paint: the keyline standing
-    // against it, and the antialiasing ramp.
-    let reach = keyline + locals.feather;
-    // The quad is the note's bounding box grown by `reach` on every side.
-    // Growing a box by a disc of radius r grows its bounds by exactly r,
-    // so this covers the rim however the note is slanted; the shear term
-    // is the pitch drift of a bent note's center line between its ends.
+    // How far outside its own box a note can paint, per axis. The quad is its
+    // bounding box grown by that, and a shortfall here CLIPS ink rather than
+    // costing a little fill rate, so each term is the exact one `note_color`
+    // and `rail_mask` can reach to.
+    //
+    // Across pitch: the two rim bands and the antialiasing ramp, all measured
+    // PERPENDICULAR to the note's long edges — which on a sheared note is not
+    // the pitch axis. `note_color` divides by `skew` to get that perpendicular
+    // distance, so a band `w` thick stands `skew * w` out along pitch, and the
+    // rim of a steep glide reaches a multiple of its own thickness. The
+    // `slope` term is the drift of the center line between the note's ends,
+    // and it carries the rail mask's ramp with it.
+    //
+    // Along depth: the ramp alone. Both bands are cut at the note's ends
+    // (`rail_mask`), so the rim spends none of its width on this axis, and
+    // nothing paints past the box plus half a ramp either side.
+    let skew = sqrt(1.0 + slope * slope);
+    let rim = 2.0 * keyline + 0.5 * locals.feather;
     let extent = vec2<f32>(
-        half_extent.x + abs(slope) * half_extent.y + reach,
-        half_extent.y + reach,
+        half_extent.x + abs(slope) * (half_extent.y + 0.5 * locals.feather) + skew * rim,
+        half_extent.y + locals.feather,
     );
 
     let local = corner * extent;
@@ -87,7 +106,8 @@ fn vs_note(
     out.shear = shear;
     out.keyline = keyline;
     out.core = core;
-    out.glow = glow;
+    out.inner = inner;
+    out.outer = outer;
     return out;
 }
 
@@ -114,16 +134,18 @@ fn inside(d: f32, edge: f32) -> f32 {
     return clamp((edge - d) / f + 0.5, 0.0, 1.0);
 }
 
-/// How much of the keyline survives at this fragment: it rides the note's two
-/// LONG edges and is cut at its ends, leaving rails that stop where the note
-/// does.
+/// How much of the rim survives at this fragment: both bands ride the note's
+/// two LONG edges and are cut at its ends, leaving rails that stop where the
+/// note does.
 ///
-/// Not a choice. The keyline stands OUTSIDE the note, so along whichever axis
-/// it is allowed to grow it reaches into the note's surroundings — and along
+/// Not a choice. The rim stands OUTSIDE the note, so along whichever axis it
+/// is allowed to grow it reaches into the note's surroundings — and along
 /// time those surroundings are the next note. Repeats of one key butt together
-/// there, so a keyline that wrapped the ends painted each note's halo over its
+/// there, so a rim that wrapped the ends paints each note's halo over its
 /// neighbour, and the ends are also where a note is shortest, so a cap there
-/// is a highlight the length of the note itself.
+/// is an edge the length of the note itself. That holds for both bands
+/// whatever colors they carry: capped, they would draw a seam across a run of
+/// one key that was played as a run.
 ///
 /// The cut is at the note's box, which is exactly where its ink ends now that
 /// a note is a plain solid rectangle — so a rail runs the full length of the
@@ -154,17 +176,24 @@ fn note_color(in: VertexOut) -> vec4<f32> {
     let q = vec2<f32>(abs(across) - half_across, abs(in.local.y) - in.half_extent.y);
     let d = min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
 
-    // Reading outward: the note, solid in its own color right to its edge,
-    // then the white keyline standing against that edge.
+    // Reading outward: the note, solid in its own color right to its edge, the
+    // inner band standing against that edge, then the outer band standing
+    // against it — one keyline width each.
     //
-    // The keyline is a window on the same box filter as the fill, so the two
-    // tile the distance without ever overlapping — which is what keeps it
-    // OUTSIDE the note however thin the ribbon is. A centered stroke would
-    // grow inward exactly as much as outward, and at the ribbon widths this
-    // pane is used at the two long edges would meet in the middle and paint
-    // the note white.
+    // Every band is a window on the same box filter as the fill, so they tile
+    // the distance without ever overlapping — which is what keeps them OUTSIDE
+    // the note however thin the ribbon is. A centered stroke would grow inward
+    // exactly as much as outward, and at the ribbon widths this pane is used at
+    // the two long edges would meet in the middle and flood the note with the
+    // rim's own color.
+    //
+    // Summed rather than composited in order, which is exact here and only
+    // here: the bands are disjoint windows on one distance, so each fragment's
+    // coverages add to at most one and premultiplied colors add with them.
+    let rail = rail_mask(in);
     var out = in.core * inside(d, 0.0);
-    out += in.glow * band(d, 0.0, in.keyline) * rail_mask(in);
+    out += in.inner * band(d, 0.0, in.keyline) * rail;
+    out += in.outer * band(d, in.keyline, 2.0 * in.keyline) * rail;
     return out;
 }
 

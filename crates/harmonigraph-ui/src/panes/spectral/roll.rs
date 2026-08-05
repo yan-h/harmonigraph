@@ -76,34 +76,33 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// nothing sounded.
 const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 
-/// How wide the white keyline riding a note's outer edge is, in points.
+/// How wide each of the two bands riding a note's outer edge is, in points —
+/// the black one against the note, and the white one outside it.
 ///
 /// Fixed rather than a setting: a full point is the only width worth having.
-/// The keyline is the brightest thing on a note, and a *bright* sub-point line
-/// shimmers as the roll scrolls, its peak intensity wobbling with every
+/// The white band is the brightest thing on a note, and a *bright* sub-point
+/// line shimmers as the roll scrolls, its peak intensity wobbling with every
 /// sub-pixel step across the grid (worst on a Hi-DPI display, where 0.6 points
-/// is barely over one physical pixel). Wider, and a highlight on a ribbon a
-/// few points thick starts reading as a second ribbon. Edge is the knob that
-/// matters here, and it sets how BRIGHT the line is.
+/// is barely over one physical pixel).
+///
+/// One width for both bands and the same width at every zoom, so the rim is a
+/// constant: a note carries two points of it per flank whatever the ribbon
+/// behind it measures and however far the pitch range is opened. A rim scaled
+/// to the ribbon would hold a steadier ratio between the two, and that is the
+/// trade being refused — the zoom would then change what a note IS rather than
+/// how much of the axis it covers, and an edge that thins as you pull back is
+/// an edge that stops doing its job exactly where the picture gets busiest.
+///
+/// What it costs is at the wide end, where the ribbon floors at
+/// [`MIN_RIBBON_PX`] and the rim is wider than the gap a semitone leaves
+/// between two of them: neighbours' rims then reach over each other's ribbons,
+/// and since the bands are opaque and instances rasterize in buffer order, the
+/// note drawn later wins. A tight cluster reads as rim with the ribbons showing
+/// through it.
 const KEYLINE_PX: f32 = 1.0;
 
-/// The roll's glow reads this much brighter than the raw Edge fraction, so a
-/// modest Edge setting still lands a crisp highlight over a bright spectrogram.
-/// Only the roll's glow is boosted; the spectrum profile's edge ([`keyline`])
-/// is left at the fraction, since it is one line on a filled slab and does not
-/// have a dark backing to be seen against.
-const GLOW_INTENSITY: f32 = 2.0;
-
-/// How strong the Edge rim is here: the Edge setting scaled by the note's own
-/// opacity, or `None` when there is too little of it to draw. The gate for the
-/// keyline, which is the whole of a note's rim.
-fn edge_strength(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<f32> {
-    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
-    (strength > 0.004).then_some(strength)
-}
-
 /// The light edge drawn along the spectrum's profile, at `cfg.keyline`
-/// strength — `None` when the setting is off.
+/// strength — `None` when the setting is off or too faint to be worth a shape.
 ///
 /// The curve's own colors come from the spectrogram palette, so where it is
 /// quiet it is drawn in that palette's dark end against the pane's dark
@@ -112,32 +111,54 @@ fn edge_strength(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<f32> {
 /// entirely on which palette is in play — Mono runs to white and swallows a rim
 /// the even ramps leave standing.
 ///
-/// The roll's notes carry a brighter version of this (see [`rim`]); the profile
-/// keeps the plain fraction, being one line on a filled slab rather than a
-/// shape to pick out of a picture.
+/// The threshold is a fade-out floor, which is a thing only a STRENGTH has: the
+/// roll's rim reads the same setting as a switch (see [`keyline_band`]) and so
+/// has none.
+///
+/// The roll's notes carry an opaque version of this; the profile keeps the
+/// plain fraction, being one line on a filled slab rather than a shape to pick
+/// out of a picture.
 pub(super) fn keyline(cfg: &crate::SpectrumConfig, alpha: f32) -> Option<Color32> {
-    edge_strength(cfg, alpha).map(|s| Color32::WHITE.gamma_multiply(s))
+    let strength = cfg.keyline.clamp(0.0, 1.0) * alpha;
+    (strength > 0.004).then_some(Color32::WHITE.gamma_multiply(strength))
 }
 
-/// The one band standing outside a note: `(width, color)` of the white
-/// keyline, brighter than the raw Edge fraction (see [`GLOW_INTENSITY`]).
+/// The two bands standing outside a note: `(width, inner, outer)` — black
+/// against the note, white beyond it, one width each (see [`KEYLINE_PX`]).
 ///
-/// A note carries no solid black outline under this. A solid note is its own
-/// separation from whatever the spectrogram is doing behind it, and a black
-/// outline reads as a second, heavier one around every note — most of all on
-/// the thin ribbons this pane is used at, where two dark lines and a bright one
-/// is more edge than note.
+/// Both are OPAQUE. A translucent rim takes its color from whatever the
+/// spectrogram is doing behind it, so the same note comes out with a different
+/// edge over a loud cell than over a quiet one, and over the bright end of a
+/// palette the light band washes out into it — which is the one place a note
+/// most needs an edge, since that is the cell the note itself is making. Opaque,
+/// the rim is the same two lines everywhere, and a note reads as one object
+/// against a picture rather than as a tint of it.
 ///
-/// Off comes back zero-width AND transparent, never one or the other: the width
-/// is what the quad grows by to make room for the band (and what the far-edge
-/// cull keeps a leaving note alive for), so a band that will not paint must not
-/// be paid for either.
-fn keyline_band(cfg: &crate::SpectrumConfig, alpha: f32) -> (f32, Color32) {
-    if edge_strength(cfg, alpha).is_none() {
-        return (0.0, Color32::TRANSPARENT);
+/// Dark INSIDE and light OUTSIDE. The black separates the note's own color from
+/// the rim, so the ribbon keeps its hue right to its edge; the white then reads
+/// against the spectrogram rather than against the note, and on this pane's dark
+/// background it is the brighter contrast of the two. The other order gives the
+/// note a white halo that its own color has to fight through.
+///
+/// Neither band scales with anything. Both are [`KEYLINE_PX`] at every zoom and
+/// every ribbon width, which is what makes the rim a constant of the picture
+/// rather than a reading of it — see that constant for the trade, which is real
+/// and is at the wide end.
+///
+/// This crate decides all of it, and hands the shader two bands named for
+/// position alone — the look does not belong half here and half in a fragment
+/// shader.
+///
+/// Edge is a SWITCH here rather than a strength: the bands are opaque, so what
+/// it decides is whether they are drawn. Off comes back zero-width AND
+/// transparent, never one or the other: the width is what the quad grows by to
+/// make room for the bands (and what the far-edge cull keeps a leaving note
+/// alive for), so a band that will not paint must not be paid for either.
+fn keyline_band(cfg: &crate::SpectrumConfig) -> (f32, Color32, Color32) {
+    if cfg.keyline <= 0.0 {
+        return (0.0, Color32::TRANSPARENT, Color32::TRANSPARENT);
     }
-    let s = (cfg.keyline.clamp(0.0, 1.0) * GLOW_INTENSITY).min(1.0) * alpha;
-    (KEYLINE_PX, Color32::WHITE.gamma_multiply(s))
+    (KEYLINE_PX, Color32::BLACK, Color32::WHITE)
 }
 
 /// Draw every remembered note that falls inside the pane's time window and
@@ -239,9 +260,13 @@ pub(super) fn note_instances(
         None => state.tracker.roll(),
     };
     // The whole look of a note, decided once for the roll rather than per
-    // note: the keyline standing outside its long edges. The note itself is a
+    // note: the two bands standing outside its long edges. The note itself is a
     // solid rectangle of its own color and has nothing else to decide.
-    let (keyline_px, light) = keyline_band(cfg, 1.0);
+    let (keyline_px, inner, outer) = keyline_band(cfg);
+    // The antialiasing ramp the shader feathers every edge with — one physical
+    // pixel, in points at this display's density, the same figure it takes as
+    // `feather`. Ink reaches half of it past whatever it edges.
+    let feather_px = 1.0 / ppp.max(1e-3);
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -251,11 +276,11 @@ pub(super) fn note_instances(
     //   - entirely off the octave zoom (both endpoints outside and on the
     //     same side, so a note that merely crosses an edge still draws its
     //     visible part).
-    // A note paints past its own box: the keyline standing against it, and the
-    // antialiasing ramp (`reach` in roll.wgsl). The box
-    // is what the window is tested against, so without the overhang below a
-    // note vanishes while that ink is still owed — the ribbon pops out of
-    // existence a few points short of the edge instead of sliding under it.
+    // A note paints past its own box, and the box is what the window is tested
+    // against — so without an overhang a note vanishes while that ink is still
+    // owed, popping out of existence short of the edge instead of sliding under
+    // it. How far past differs by axis, and each margin below is its own axis'
+    // answer rather than one figure used twice.
     // In time that is the span divided by the roll's own length, so it grows
     // with the Span: ~200 ms across 10 s, over a second across a minute.
     //
@@ -273,7 +298,10 @@ pub(super) fn note_instances(
     // to nothing — so without it the last sliver of a floored note would appear
     // INSIDE the far edge on the frame before the cull takes it, which is the
     // pop the overhang exists to prevent.
-    let ink_px = keyline_px + 1.0 + min_half_depth;
+    // The ramp alone, and no rim: both bands are cut at the note's ENDS
+    // (`rail_mask` in roll.wgsl), so along depth the rim spends none of its
+    // width and a note's ink stops half a ramp past its box.
+    let ink_px = min_half_depth + 0.5 * feather_px;
     // Seconds per point of the roll — the pane's depth axis is shared with the
     // spectrum, so it is the ROLL's share of it that a point is measured
     // against. What every screen-space length here (the ink overhang) is
@@ -281,6 +309,15 @@ pub(super) fn note_instances(
     let per_point = f64::from(1.0 / (axes.depth_len() * (1.0 - split)).max(1.0)) * time.window();
     let ink_seconds = if time.whole_song() { 0.0 } else { f64::from(ink_px) * per_point };
     let edge = oldest - ink_seconds;
+    // Across pitch the same argument in that axis' own units, and here the rim
+    // is the whole of it: the bands ride a note's long edges, which are the
+    // edges that face the pitch range's ends. Measured off the DRAWN ribbon
+    // rather than `roll_thickness`, since the width floor is what a note
+    // actually occupies at a wide zoom, and converted through the scale — so
+    // the margin shrinks as the zoom tightens instead of staying a fixed number
+    // of semitones.
+    let reach_px = half_pitch + 2.0 * keyline_px + 0.5 * feather_px;
+    let pitch_margin = reach_px / axes.pitch_len().max(1.0) * scale.span;
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| {
@@ -289,7 +326,7 @@ pub(super) fn note_instances(
             }
             let (a, b) = (note.start_pitch(), note.end_pitch());
             let (lo, hi) = (a.min(b), a.max(b));
-            hi >= scale.min_midi - cfg.roll_thickness && lo <= scale.max_midi + cfg.roll_thickness
+            hi >= scale.min_midi - pitch_margin && lo <= scale.max_midi + pitch_margin
         })
         .collect();
     notes.sort_unstable_by(|a, b| {
@@ -303,6 +340,32 @@ pub(super) fn note_instances(
     // note count is the right first guess at how many instances this makes.
     let mut instances = Vec::with_capacity(notes.len());
     for note in notes {
+        // The length floor is the NOTE's, not each segment's.
+        //
+        // A note's segments tile its own span end to end, so flooring them one
+        // by one makes consecutive boxes OVERLAP by nearly the whole floor —
+        // and an overlap is the later segment's rim painted over the earlier
+        // one's color, which draws a bent note as a ladder of rim rather than a
+        // ribbon. A note bent under per-note tuning is the ordinary case: the
+        // tuning lands a block after the note-on (`RollNote::SETTLE`), so the
+        // opening segment is milliseconds long and the floor is many times its
+        // length.
+        //
+        // Stretched about the note's own midpoint instead, the segments still
+        // tile: the floor decides how much of the depth axis the NOTE covers,
+        // and never how much of one segment another segment covers too. A note
+        // long enough to draw honestly is left alone, however brief its
+        // segments are — a segment shorter than a pixel inside a long ribbon is
+        // covered by its neighbours, which is the flicker the floor exists for.
+        let opens = time.depth_of_unclamped(note.start.max(edge));
+        let closes = time.depth_of_unclamped(note.stop(now).max(edge));
+        let mid = (opens + closes) * 0.5;
+        let span_px = ((closes - opens) * axes.depth_len()).abs();
+        // A note with no duration at all — pressed this frame — has nothing to
+        // scale up, so the floor reaches its one segment directly instead.
+        let zero_span = span_px <= 1e-6;
+        let stretch =
+            if zero_span { 1.0 } else { (2.0 * min_half_depth / span_px).max(1.0) };
         for ((t0, p0), (t1, p1)) in note.segments(now) {
             let (t0, t1) = (t0.max(edge), t1.max(edge));
             if t1 < edge {
@@ -312,6 +375,11 @@ pub(super) fn note_instances(
             // can reach, and clamping is what squashed the leaving ribbon
             // against the far end rather than letting it slide out.
             let (d0, d1) = (time.depth_of_unclamped(t0), time.depth_of_unclamped(t1));
+            // The note's floor, carried to this segment: an affine map about
+            // the note's midpoint, so a brief note reads half the floor either
+            // side of the moment it was rather than being pushed off it in one
+            // direction, and the segments keep their proportions inside it.
+            let (d0, d1) = (mid + (d0 - mid) * stretch, mid + (d1 - mid) * stretch);
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
             // Notes always draw fully opaque — how much of the heatmap comes
@@ -324,23 +392,23 @@ pub(super) fn note_instances(
             // and the boundary are one thing, and a heatmap cell showing
             // through a note said neither clearly.
             let core = note_color(note, state, pitch, alpha);
-            // Reading outward: the note, the bright white keyline standing
-            // against its long edges, then whatever the spectrogram is doing.
+            // Reading outward: the note, the black band standing against its
+            // long edges, the white band standing against that, then whatever
+            // the spectrogram is doing.
             //
-            // The keyline stands entirely OUTSIDE the note, never as a stroke
-            // of its path — a centered stroke grows inward exactly as much as
+            // Both bands stand entirely OUTSIDE the note, never as a stroke of
+            // its path — a centered stroke grows inward exactly as much as
             // outward, and a note is only a few pixels thick at the pitch
             // ranges this pane is actually used at, so the two long edges meet
             // in the middle and paint over it. Here that is structural: the
-            // shader reads the band off the DISTANCE to the note's edge, and a
-            // band at distance 0..1 cannot reach back inside it whatever the
-            // ribbon's thickness.
+            // shader reads each band off the DISTANCE to the note's edge, and a
+            // band read off a positive distance cannot reach back inside it
+            // whatever the ribbon's thickness.
             //
-            // Nothing else rides the rim — no solid black outline under the
-            // keyline, and none approximating the lattice's bloom. The bloom
-            // is the lattice's alone (there it is a real post-process pass,
-            // not hand-placed bands standing in for one), and the black is
-            // edge a solid note does not need.
+            // Nothing else rides the rim — in particular, no band approximating
+            // the lattice's bloom. The bloom is the lattice's alone: there it is
+            // a real post-process pass, not hand-placed bands standing in for
+            // one.
 
             // Geometry in the pane's own two axes, which is all the shader is
             // told: `Axes` maps those onto perpendicular screen axes, so
@@ -356,39 +424,34 @@ pub(super) fn note_instances(
             // placement is now simply what it does.
             let center = axes.at((a0 + a1) * 0.5, (d0 + d1) * 0.5);
             let depth_px = (d1 - d0) * axes.depth_len();
-            // Floored the same way the width is, and centered the same way — on
-            // the middle of what the segment actually was, so a brief note reads
-            // up to half the floor early at one end and late at the other rather
-            // than being pushed off its own moment in one direction.
-            let half_depth = (depth_px.abs() * 0.5).max(min_half_depth);
+            // The stretch above is where the floor already landed, so this is
+            // the drawn length and not a second floor. Flooring here as well is
+            // what makes the boxes overlap.
+            let half_depth = if zero_span { min_half_depth } else { depth_px.abs() * 0.5 };
             // How far the note's center line drifts along the pitch axis per
             // point of depth: 0 for a held note, non-zero for a glide, which
             // shears the box into the parallelogram the ribbon follows. Guarded
             // because a segment can have no duration at all — a note pressed
             // this frame is one — and a slope is meaningless there.
             //
-            // Taken against the box's OWN depth, which is why it is derived
-            // after the floor. The shader reaches `|shear| * half_extent[1]`
-            // along pitch, so the shear and the length are one product: a shear
-            // left at the segment's true rate while the floor lengthens the box
-            // multiplies that reach by however much the floor won by, which is
-            // unbounded as the segment shortens. Per-note tuning hands us that
-            // case on every retuned note — the tuning lands a block after the
-            // note-on (`RollNote::SETTLE`), so the opening segment is
-            // milliseconds long and carries the whole offset — and it drew a
-            // diagonal streak, keyline and all, through pitches nothing
-            // sounded. Scaled to the drawn box, the reach is the segment's real
-            // drift at every length.
+            // Taken against the box as DRAWN. The shader reaches
+            // `|shear| * half_extent[1]` along pitch, so the shear and the
+            // length are one product: a shear left at the segment's true rate
+            // while the floor lengthens the box multiplies that reach by
+            // however much the floor won by, which is unbounded as the segment
+            // shortens — it would draw a diagonal streak, rim and all, through
+            // pitches nothing sounded. Against the drawn length, the reach is
+            // the segment's real drift whatever the floor did.
             //
-            // What that costs is the shear itself: a segment the floor
-            // lengthened draws its drift spread over the floored length, so it
-            // reads as a shallower bend than it was. That is the honest way
-            // round. A slope is a ratio of two things, and the floor has
-            // already overstated the denominator on purpose; overstating the
-            // numerator to match would put ink where no note was, and pitch is
-            // the axis this pane exists to be read precisely on.
+            // What that costs is the shear itself: a note the floor stretched
+            // draws its drift spread over the stretched length, so it reads as
+            // a shallower bend than it was. That is the honest way round. A
+            // slope is a ratio of two things, and the floor has already
+            // overstated the denominator on purpose; overstating the numerator
+            // to match would put ink where no note was, and pitch is the axis
+            // this pane exists to be read precisely on.
             let slope = if depth_px.abs() > 1e-6 {
-                (a1 - a0) * axes.pitch_len() / depth_px * (depth_px.abs() * 0.5 / half_depth)
+                (a1 - a0) * axes.pitch_len() / depth_px
             } else {
                 0.0
             };
@@ -398,7 +461,8 @@ pub(super) fn note_instances(
                 shear: slope,
                 keyline: keyline_px,
                 core: core.to_array(),
-                glow: light.to_array(),
+                inner: inner.to_array(),
+                outer: outer.to_array(),
             });
         }
     }
@@ -536,15 +600,22 @@ mod tests {
         &rects[0]
     }
 
-    /// The rim is a fixed pixel thickness whatever the note's own width — an
-    /// outline should not thin out just because the ribbon it wraps did — and
-    /// it is expressed as a DISTANCE OUTSIDE the note's outline, never as a
-    /// wider stroke of it.
+    /// The rim is the same thickness at every zoom and every note width — an
+    /// edge does not thin out because the ribbon it wraps did, and does not
+    /// thicken because the range was zoomed in. One width covers both bands, so
+    /// the pair cannot drift apart either.
     ///
-    /// That distinction is the flood fix, and it is now structural: the shader
-    /// reads the keyline off distances `w/2 .. w/2 + keyline`, so it cannot
-    /// reach back inside the ribbon however thin it is. What is left to check
-    /// here is that the thickness is handed over unscaled.
+    /// Constant is the requirement, not a simplification of one. A rim tied to
+    /// the ribbon would hold a steadier ratio between the two, at the price of
+    /// making the zoom change what a note IS rather than how much of the axis
+    /// it covers — and the wide end, where a scaled rim would give way, is
+    /// exactly where a picture full of notes needs its edges most.
+    ///
+    /// It is expressed as a DISTANCE OUTSIDE the note's outline, never as a
+    /// wider stroke of it; that distinction is the flood fix, and it is
+    /// structural, since the shader reads both bands off distances outside the
+    /// note's own edge. What is left to check here is that the thickness is
+    /// handed over unscaled.
     #[test]
     fn the_rim_is_the_same_thickness_at_any_note_width() {
         let thick = ribbon_with_range(0.5, 12.0);
@@ -558,35 +629,58 @@ mod tests {
             one(&thin).half_extent[0] < one(&thick).half_extent[0],
             "the two notes are the same thickness; the comparison is vacuous",
         );
+        // And nothing in between is a ramp: the width is one number, not a
+        // reading of the ribbon it stands against.
+        let middling = ribbon_with_range(0.5, 200.0 / 3.0);
+        assert_eq!(one(&middling).keyline, KEYLINE_PX, "the keyline scaled with the ribbon");
     }
 
-    /// The keyline is bright: reading outward, the note's color, then a punchy
-    /// highlight. It reads stronger than the raw Edge fraction — that boost is
-    /// the "more intense" ask.
+    /// Both bands are OPAQUE, black inside and white outside, at every Edge
+    /// setting that draws them at all.
     ///
-    /// Edge is the whole of the gate now that the black outline is gone: at 0
-    /// the band is off, which has to mean zero width AND no color, never one
-    /// or the other. The width is what the quad grows by to make room for the
-    /// band (and what keeps a leaving note alive past the far edge), so a band
-    /// that will not paint must not be paid for either.
+    /// Opacity is the point rather than a detail. A translucent rim takes its
+    /// color from the spectrogram behind it, so the same note reads differently
+    /// over a loud cell than a quiet one, and washes out entirely against the
+    /// bright end of a palette — the cell a note makes for itself. Anything
+    /// less than 255 here is that bug returning quietly.
+    ///
+    /// Edge is a GATE and not a strength, and the gate is OFF: at 0 both bands
+    /// go, which has to mean zero width AND no color, never one or the other.
+    /// The width is what the quad grows by to make room for them (and what
+    /// keeps a leaving note alive past the far edge), so a band that will not
+    /// paint must not be paid for either. Anything above 0 draws the same rim —
+    /// a switch whose throw sits anywhere else is a switch nobody can find.
     #[test]
-    fn the_keyline_is_bright_and_edge_turns_it_off_completely() {
-        // A modest Edge, below the point where the boosted keyline clips to
-        // full, so "brighter than the fraction" is a real comparison.
-        let edge = 0.3;
-        let lit = ribbon(edge);
-        let note = one(&lit);
-        let glow_alpha = f32::from(note.glow[3]) / 255.0;
-        assert!(
-            glow_alpha > edge + 0.05,
-            "the keyline ({glow_alpha}) is no brighter than the Edge fraction {edge}",
-        );
-        assert_eq!(note.keyline, KEYLINE_PX, "the keyline is not the width it is fixed at");
+    fn the_rim_is_two_opaque_bands_and_edge_only_switches_them() {
+        // Three settings across the bar's whole travel, to pin that Edge scales
+        // nothing here and that only 0 turns it off: the least it can be set to
+        // above nothing, a modest one, and full.
+        for edge in [0.002, 0.3, 1.0] {
+            let lit = ribbon(edge);
+            let note = one(&lit);
+            assert_eq!(
+                note.keyline, KEYLINE_PX,
+                "the rim is not the width it is fixed at, at Edge {edge}",
+            );
+            assert_eq!(
+                note.inner,
+                [0, 0, 0, 255],
+                "the inner band is not opaque black at Edge {edge}: {:?}",
+                note.inner,
+            );
+            assert_eq!(
+                note.outer,
+                [255, 255, 255, 255],
+                "the outer band is not opaque white at Edge {edge}: {:?}",
+                note.outer,
+            );
+        }
 
-        let dark = ribbon(0.0);
-        let note = one(&dark);
-        assert_eq!(note.keyline, 0.0, "Edge 0 still made room for a keyline");
-        assert_eq!(note.glow[3], 0, "Edge 0 left a keyline color behind");
+        let off = ribbon(0.0);
+        let note = one(&off);
+        assert_eq!(note.keyline, 0.0, "Edge 0 still made room for a rim");
+        assert_eq!(note.inner[3], 0, "Edge 0 left an inner band behind");
+        assert_eq!(note.outer[3], 0, "Edge 0 left an outer band behind");
     }
 
     /// Note width is in SEMITONES, so a wide zoom takes a ribbon under a
@@ -658,7 +752,15 @@ mod tests {
         let floor = 0.5 * MIN_LENGTH_DEVICE_PX / PPP;
         let (brief, true_half) = tap(0.02);
         assert!(true_half * 0.5 < floor, "the brief note ({true_half} pt) is not under the floor");
-        assert_eq!(brief.half_extent[1], floor, "a brief note was left to flicker");
+        // Within float error rather than to the bit: the floor reaches a
+        // segment by scaling the note's own span up to it, so the arithmetic
+        // that lands on it is a multiply and a pair of subtractions rather than
+        // a `max` against the constant.
+        assert!(
+            (brief.half_extent[1] - floor).abs() < 1e-3,
+            "a brief note was left to flicker: {} against a floor of {floor}",
+            brief.half_extent[1],
+        );
 
         let (held, true_half) = tap(2.0);
         assert!(true_half * 0.5 > floor, "the held note ({true_half} pt) is not over the floor");
@@ -721,19 +823,25 @@ mod tests {
             let notes = note_instances(&axes, &scale, &state, split, 5.0, ppp);
             one(&notes).half_extent[1]
         };
-        assert_eq!(at(1.0), 0.5 * MIN_LENGTH_DEVICE_PX, "1x: two points");
-        assert_eq!(at(2.0), 0.25 * MIN_LENGTH_DEVICE_PX, "2x: one point");
+        // To float error rather than to the bit: the floor is reached by
+        // scaling the note's own span up to it, not by a `max` against it.
+        assert!((at(1.0) - 0.5 * MIN_LENGTH_DEVICE_PX).abs() < 1e-3, "1x: two points, {}", at(1.0));
+        assert!(
+            (at(2.0) - 0.25 * MIN_LENGTH_DEVICE_PX).abs() < 1e-3,
+            "2x: one point, {}",
+            at(2.0),
+        );
         assert!(at(1.0) > at(2.0), "the floor did not follow the density at all");
     }
 
-    /// A floored segment must not paint outside the pitch it covered.
+    /// A floored note's segments must not paint outside the pitch they covered.
     ///
     /// `shear` is a RATE — pitch points per point of depth — and the shader
     /// reaches `|shear| * half_extent[1]` along pitch, so the length floor and
     /// the shear are one product. Leaving the shear at the true rate while the
     /// floor lengthens the box multiplies that reach by however much the floor
     /// won by, which is unbounded as the segment shortens: it draws a diagonal
-    /// streak, keyline and all, through pitches the note never sounded.
+    /// streak, rim and all, through pitches the note never sounded.
     ///
     /// Per-note tuning makes that the ordinary case rather than a corner. A
     /// note-on arrives at the key's pitch and the tuning expression lands a
@@ -743,7 +851,7 @@ mod tests {
     /// drawn reach against 0.4 of real drift, and 49 semitones at the Span
     /// bar's top.
     #[test]
-    fn a_floored_segment_stays_inside_the_pitch_it_covered() {
+    fn a_floored_note_stays_inside_the_pitch_it_covered() {
         let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
         state.spectrum_config.orientation = SpectralOrientation::Left;
         state.spectrum_config.roll_seconds = 60.0;
@@ -763,6 +871,15 @@ mod tests {
             note: 60,
             kind: NoteEventKind::Tuning { semitones: 0.3 },
         });
+        // Released almost at once, so the NOTE is under the length floor and
+        // the floor is what draws it — which is the case this is about, now
+        // that a segment is only stretched as its note is.
+        state.tracker.handle_event(NoteEvent {
+            time: 2.02,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Off,
+        });
         let axes = Axes::new(PANE, &state.spectrum_config);
         // The whole drift any segment of this note can carry, as a half-extent
         // in points: 0.3 semitones of a 36-semitone axis. No segment may reach
@@ -771,20 +888,82 @@ mod tests {
 
         let notes = instances(&state, 5.0);
         assert!(notes.len() >= 2, "the tuning should have split the note into segments");
-        let mut floored = 0;
+        let drawn: f32 = notes.iter().map(|n| n.half_extent[1] * 2.0).sum();
+        assert!(
+            (drawn - 2.0 * min_half_depth_for(PPP)).abs() < 1e-3,
+            "the note drew {drawn} points along depth rather than the floor it is too \
+             brief for; nothing here is floored and the test is vacuous",
+        );
         for note in &notes {
             let reach = note.shear.abs() * note.half_extent[1];
             assert!(
                 reach <= bound + 1e-3,
                 "a segment reaches {reach} points along pitch, against {bound} of real drift",
             );
-            if note.half_extent[1] > min_half_depth_for(2.0) - 1e-6
-                && note.half_extent[1] < min_half_depth_for(2.0) + 1e-6
-            {
-                floored += 1;
+        }
+    }
+
+    /// The segments of one note TILE the depth it covers — they may touch, and
+    /// they must never overlap.
+    ///
+    /// The floor is the note's, not each segment's, for exactly this reason.
+    /// Segments run end to end, so flooring them one by one pushes each box
+    /// past its neighbour's start by nearly the whole floor; and since the rim
+    /// is opaque, the later box's dark band lands on the earlier one's color
+    /// and takes its hue out. A bent note comes out a ladder of rim rather than
+    /// a ribbon, worst on the vibrato and fast bends that make the most
+    /// segments.
+    ///
+    /// A long note with segments far under the floor is the ordinary shape of
+    /// this: the note has no flicker to fix, and its short segments are covered
+    /// by their neighbours rather than being alone on the axis.
+    #[test]
+    fn the_segments_of_a_bent_note_tile_instead_of_overlapping() {
+        let mut state = SharedState::new(harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm);
+        state.spectrum_config.orientation = SpectralOrientation::Left;
+        // 60 s over the roll's share of 300 points: about 0.44 s to the point,
+        // so the 20 ms steps below are each a twentieth of the length floor.
+        state.spectrum_config.roll_seconds = 60.0;
+        state.spectrum_config.low_midi = 48.0;
+        state.spectrum_config.high_midi = 84.0;
+        state.tracker.handle_event(NoteEvent {
+            time: 2.0,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::On { velocity: 1.0 },
+        });
+        for (i, at) in [2.02, 2.04, 2.06, 2.08].into_iter().enumerate() {
+            state.tracker.handle_event(NoteEvent {
+                time: at,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 0.2 * (i + 1) as f32 },
+            });
+        }
+        let notes = instances(&state, 5.0);
+        assert!(notes.len() >= 5, "expected a segment per bend, got {}", notes.len());
+        // Along the depth axis, whichever way the pane has it running.
+        let axes = Axes::new(PANE, &state.spectrum_config);
+        let dir = axes.dir_depth();
+        let along = |n: &RollInstance| n.center[0] * dir.x + n.center[1] * dir.y;
+        let mut brief = 0;
+        for pair in notes.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            let clear = (along(b) - along(a)).abs() - (a.half_extent[1] + b.half_extent[1]);
+            assert!(
+                clear >= -1e-3,
+                "two consecutive segments overlap by {} points; the later one's rim \
+                 paints over the earlier one's color",
+                -clear,
+            );
+            if a.half_extent[1] < min_half_depth_for(PPP) {
+                brief += 1;
             }
         }
-        assert!(floored > 0, "no segment was short enough to be floored; the test is vacuous");
+        assert!(
+            brief > 0,
+            "no segment is shorter than the floor, so nothing here could have overlapped",
+        );
     }
 
     /// [`note_instances`]' length floor in points, for a test that needs to

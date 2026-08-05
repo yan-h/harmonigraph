@@ -54,8 +54,8 @@ keep sitting there unused at zero cost.
 - **The piano roll's geometry** (was two entries here: baking settled notes
   into cached meshes, then superseding that with a wgpu callback). **Built.**
   The roll now draws as one instanced quad per note segment through
-  `roll_paint_callback`, with a rounded-box SDF painting the core, the black
-  outline and the white keyline as bands of one distance — the reasoning, the
+  `roll_paint_callback`, with a square-cornered box SDF painting the note's
+  body and the two rim bands beside it as bands of one distance — the reasoning, the
   measurement it came from, and why the instance buffer is still rewritten
   every frame all live in `crates/harmonigraph-render/src/roll.rs`'s module doc,
   which is where they belong now that there is code to read them against.
